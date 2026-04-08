@@ -1,0 +1,65 @@
+kind: AdaptiveDialog
+modelDescription: |-
+  You will respond to requests about the user's IT support tickets from ServiceNow ITSM.
+  This returns a list of the user's open and recent incident tickets.
+
+  Example valid requests:
+  "Show me my IT tickets"
+  "What are my open incidents?"
+  "Do I have any IT support tickets?"
+  "List my helpdesk tickets"
+
+  Example invalid requests:
+  "Show me someone else's tickets"
+  "Create an IT ticket" (use Create Ticket instead)
+
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent:
+    triggerQueries:
+      - Show me my IT tickets
+      - What are my open incidents?
+      - Do I have any IT support tickets?
+      - List my helpdesk tickets
+      - What IT tickets do I have?
+
+  actions:
+    - kind: SendActivity
+      id: sendIntro
+      activity: "Let me look up your IT tickets..."
+
+    - kind: BeginDialog
+      id: callSharedFlow
+      displayName: Redirect to ServiceNow ITSM System Common Execution
+      input:
+        binding:
+          scenarioName: msdyn_ITServiceNowITSMGetUserTickets
+          parameters: ="{""params"":[{""key"":""{Caller}"",""value"":""" & Global.ESS_UserContext_Alias & """}]}"
+      dialog: msdyn_copilotforemployeeselfserviceit.topic.ServiceNowITSMSystemCommonExecution
+      output:
+        binding:
+          isSuccess: Topic.isSuccess
+          responseData: Topic.responseData
+          errorResponse: Topic.errorResponse
+
+    - kind: ConditionGroup
+      id: checkResult
+      conditions:
+        - id: success
+          condition: =Topic.isSuccess = true
+          actions:
+            - kind: AnswerQuestionWithAI
+              id: formatResponse
+              autoSend: true
+              userInput: =Topic.responseData
+              additionalInstructions: Format the IT tickets as a table or numbered list showing Ticket Number, Summary, Status, Priority, and Last Updated for each ticket. If no tickets are found, tell the user they have no open IT tickets.
+        - id: failure
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendError
+              activity: "I wasn't able to retrieve your IT tickets right now. Please try again later."
+
+    - kind: EndDialog
+      id: endTopic

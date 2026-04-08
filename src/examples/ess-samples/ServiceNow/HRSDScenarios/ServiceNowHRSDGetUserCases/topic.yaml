@@ -1,0 +1,65 @@
+kind: AdaptiveDialog
+modelDescription: |-
+  You will respond to requests about the user's HR cases from ServiceNow HRSD.
+  This returns a list of the user's open and recent HR cases.
+
+  Example valid requests:
+  "Show me my HR cases"
+  "What are my open HR cases?"
+  "Do I have any HR cases?"
+  "List my HR service requests"
+
+  Example invalid requests:
+  "Show me someone else's HR cases"
+  "Create an HR case" (use Create HR Case instead)
+
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent:
+    triggerQueries:
+      - Show me my HR cases
+      - What are my open HR cases?
+      - Do I have any HR cases?
+      - List my HR service requests
+      - Check my HR case status
+
+  actions:
+    - kind: SendActivity
+      id: sendIntro
+      activity: "Let me look up your HR cases..."
+
+    - kind: BeginDialog
+      id: callSharedFlow
+      displayName: Redirect to ServiceNow HRSD System Common Execution
+      input:
+        binding:
+          scenarioName: msdyn_HRServiceNowHRSDGetUserCases
+          parameters: ="{""params"":[{""key"":""{Opened_By}"",""value"":""" & Global.ESS_UserContext_Alias & """}]}"
+      dialog: msdyn_copilotforemployeeselfservicehr.topic.ServiceNowHRSDSystemCommonExecution
+      output:
+        binding:
+          isSuccess: Topic.isSuccess
+          responseData: Topic.responseData
+          errorResponse: Topic.errorResponse
+
+    - kind: ConditionGroup
+      id: checkResult
+      conditions:
+        - id: success
+          condition: =Topic.isSuccess = true
+          actions:
+            - kind: AnswerQuestionWithAI
+              id: formatResponse
+              autoSend: true
+              userInput: =Topic.responseData
+              additionalInstructions: Format the HR cases as a numbered list showing Case Number, Subject, Status, and Priority for each case. If no cases are found, tell the user they have no open HR cases.
+        - id: failure
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendError
+              activity: "I wasn't able to retrieve your HR cases right now. Please try again later."
+
+    - kind: EndDialog
+      id: endTopic
