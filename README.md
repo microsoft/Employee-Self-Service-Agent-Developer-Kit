@@ -103,7 +103,7 @@ This kit relies on structured instructions and multi-step tool use. Not all mode
 | Model | Status | Notes |
 |-------|--------|-------|
 | **Claude Sonnet 4.6** | ✅ Recommended | Reliable tool use, follows multi-step instructions accurately |
-| **Claude Opus 4** | ✅ Recommended | Reliable tool use, follows multi-step instructions accurately |
+| **Claude Opus 4.6** | ✅ Recommended | Reliable tool use, follows multi-step instructions accurately |
 | **Codex 5.4 Medium** | ✅ Recommended | Successfully handles MCP tool detection and setup flows |
 | **GPT-4o** | ⚠️ Not recommended | Fails to detect MCP tools reliably, struggles with multi-step setup flows |
 | **GPT-4.1** | ⚠️ Not recommended | Unreliable string substitution, fails MCP tool detection, produces malformed URLs |

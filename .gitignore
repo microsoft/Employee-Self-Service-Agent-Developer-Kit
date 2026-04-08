@@ -10,6 +10,8 @@
 !scripts/
 !src/
 !README.md
+!LICENSE
+!SECURITY.md
 !no-commit/
 
 # User-specific state — scaffold folders are committed, contents are not
