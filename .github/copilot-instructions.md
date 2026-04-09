@@ -249,7 +249,9 @@ After a successful push, `.baseline/` is updated to match the new state.
 | Delete/remove a topic | `src/skills/topics/delete/SKILL.md` |
 | Delete/remove a workflow | `src/skills/workflows/delete/SKILL.md` |
 | Fix compile errors | `src/skills/cleanup/SKILL.md` |
-| Generate evaluation test sets | `src/skills/evaluate/SKILL.md` |
+| Generate evaluation test sets | `src/skills/evaluations/create/SKILL.md` |
+| Update/modify evaluation test cases | `src/skills/evaluations/update/SKILL.md` |
+| Delete evaluation test sets/cases | `src/skills/evaluations/delete/SKILL.md` |
 
 **When the user asks to modify, delete, rename, or otherwise change an agent
 component, ALWAYS load and follow the corresponding skill file.** The skill

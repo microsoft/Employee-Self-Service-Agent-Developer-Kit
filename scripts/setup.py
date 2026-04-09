@@ -45,6 +45,7 @@ TYPE_MAP = {
     18: (None, "settings.mcs.yml"),
     16: ("knowledge", ".mcs.yml"),
     14: ("attachments", ".mcs.yml"),
+    19: ("evaluations", ".mcs.yml"),
 }
 
 CATEGORY_RULES = [
@@ -118,6 +119,7 @@ def extract_components(components, output_dir):
 
     topics = []
     variables = []
+    evaluations = []  # type-19 evaluation test sets and cases
     other_items = []
     component_map = {}  # relative_path -> {botcomponentid, schemaname, ...}
     topic_data = {}     # schemaname -> data blob (for flow cross-reference)
@@ -161,12 +163,17 @@ def extract_components(components, output_dir):
         written += 1
 
         # Track component mapping for push-back capability
-        component_map[relative_path] = {
+        map_entry = {
             "botcomponentid": botcomponentid,
             "schemaname": schemaname,
             "componenttype": ctype,
             "name": name,
         }
+        # Store parent link for evaluation test cases (type 19)
+        parent_id = comp.get("parentbotcomponentid")
+        if parent_id:
+            map_entry["parentbotcomponentid"] = parent_id
+        component_map[relative_path] = map_entry
 
         if ctype == 9:
             topics.append({"name": name, "schema": schemaname,
@@ -174,6 +181,9 @@ def extract_components(components, output_dir):
             topic_data[schemaname] = data
         elif ctype == 12:
             variables.append({"name": name, "schema": schemaname})
+        elif ctype == 19:
+            evaluations.append({"name": name, "schema": schemaname,
+                                "parentbotcomponentid": comp.get("parentbotcomponentid")})
         else:
             other_items.append({"name": name, "schema": schemaname,
                                 "type": ctype})
@@ -183,6 +193,7 @@ def extract_components(components, output_dir):
         "skipped": skipped,
         "topics": topics,
         "variables": variables,
+        "evaluations": evaluations,
         "other": other_items,
         "component_map": component_map,
         "_topic_data": topic_data,
@@ -341,6 +352,10 @@ def write_snapshot(output_dir, agent_info, stats, template_configs=None,
     """Generate snapshot.md with agent inventory."""
     tc_count = len(template_configs) if template_configs else 0
     wf_count = len(workflows) if workflows else 0
+    eval_sets = [e for e in stats.get('evaluations', [])
+                 if not e.get('parentbotcomponentid')]
+    eval_cases = [e for e in stats.get('evaluations', [])
+                  if e.get('parentbotcomponentid')]
 
     lines = [
         f"# Agent Snapshot: {agent_info['name']}",
@@ -361,6 +376,7 @@ def write_snapshot(output_dir, agent_info, stats, template_configs=None,
         f"- **Variables**: {len(stats['variables'])}",
         f"- **Template Configs**: {tc_count}",
         f"- **Workflows**: {wf_count}",
+        f"- **Evaluation Sets**: {len(eval_sets)} ({len(eval_cases)} test cases)",
         f"- **Other**: {len(stats['other'])}",
         "",
     ]
@@ -419,6 +435,32 @@ def write_snapshot(output_dir, agent_info, stats, template_configs=None,
             lines.append(f"| {name} | {wfid[:8]}... | {status} | {ref_str} |")
         lines.append("")
 
+    if eval_sets:
+        lines.append("## Evaluation Test Sets")
+        lines.append("")
+        lines.append("| Set Name | Test Cases |")
+        lines.append("|----------|------------|")
+        # Build parent→child count mapping
+        parent_counts = {}
+        for e in stats.get('evaluations', []):
+            pid = e.get('parentbotcomponentid')
+            if pid:
+                parent_counts[pid] = parent_counts.get(pid, 0) + 1
+        # Map schema→botcomponentid for parent lookup
+        for es in eval_sets:
+            es_name = es.get('name', 'Unnamed')
+            # Find the botcomponentid for this set from the component_map
+            es_count = 0
+            for path, entry in stats['component_map'].items():
+                if (entry.get('schemaname') == es.get('schema')
+                        and entry.get('componenttype') == 19
+                        and not entry.get('parentbotcomponentid')):
+                    es_count = parent_counts.get(
+                        entry.get('botcomponentid'), 0)
+                    break
+            lines.append(f"| {es_name} | {es_count} |")
+        lines.append("")
+
     filepath = os.path.join(output_dir, "snapshot.md")
     with open(filepath, "w", encoding="utf-8") as f:
         f.write("\n".join(lines))
@@ -440,7 +482,8 @@ def _build_flow_topic_map(topics, topic_data):
 
 
 def write_config(agent_info, slug, output_dir, template_configs_discovered,
-                 template_config_count=0, workflow_count=0):
+                 template_config_count=0, workflow_count=0,
+                 evaluation_count=0):
     """Write my/config.json with setup = complete."""
     bot_id = agent_info["botId"]
     config = {
@@ -457,6 +500,7 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
         "templateConfigsDiscovered": template_configs_discovered,
         "templateConfigCount": template_config_count,
         "workflowCount": workflow_count,
+        "evaluationCount": evaluation_count,
     }
     os.makedirs("my", exist_ok=True)
     with open(os.path.join("my", "config.json"), "w", encoding="utf-8") as f:
@@ -475,6 +519,11 @@ def print_summary(stats, template_configs, workflows=None):
     if workflows:
         total_extracted += len(workflows)
 
+    eval_sets = [e for e in stats.get('evaluations', [])
+                 if not e.get('parentbotcomponentid')]
+    eval_cases = [e for e in stats.get('evaluations', [])
+                  if e.get('parentbotcomponentid')]
+
     print("")
     print("=" * 50)
     print("SETUP COMPLETE")
@@ -486,6 +535,8 @@ def print_summary(stats, template_configs, workflows=None):
     for cat in sorted(cats.keys()):
         print(f"  {cat}: {cats[cat]}")
     print(f"Variables: {len(stats['variables'])}")
+    if eval_sets or eval_cases:
+        print(f"Evaluations: {len(eval_sets)} sets, {len(eval_cases)} test cases")
     if stats["other"]:
         print(f"Other: {len(stats['other'])}")
     if template_configs:
@@ -642,9 +693,10 @@ def main():
     # Write config
     tc_count = len(template_configs) if template_configs else 0
     wf_count = len(workflows) if workflows else 0
+    eval_count = len(stats.get('evaluations', []))
     write_config(agent_info, slug, output_dir,
                  template_configs is not None and tc_count > 0,
-                 tc_count, wf_count)
+                 tc_count, wf_count, eval_count)
     print("Config:   my/config.json")
 
     # Create baseline copy (immutable safety net)

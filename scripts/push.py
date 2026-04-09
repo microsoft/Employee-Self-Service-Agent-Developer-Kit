@@ -18,6 +18,7 @@ import json
 import os
 import subprocess
 import sys
+import uuid
 
 # Add scripts/ to path so we can import siblings
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -331,8 +332,17 @@ def main():
                 print(f"  ❌ Failed: {filepath}: {e}")
                 errors += 1
 
-    # Push new files
+    # Push new files — separate evaluations for two-pass parent→child ordering
+    eval_new = []
+    non_eval_new = []
     for filepath in new:
+        parts = filepath.replace("\\", "/").split("/")
+        if parts[0] == "evaluations":
+            eval_new.append(filepath)
+        else:
+            non_eval_new.append(filepath)
+
+    for filepath in non_eval_new:
         ctype = classify_path(filepath)
         content = working_files[filepath]
 
@@ -450,8 +460,111 @@ def main():
                 print(f"  ❌ Failed: {filepath}: {e}")
                 errors += 1
 
-    # Push deletions
+    # Push new evaluations (two-pass: parents first, then children)
+    if eval_new:
+        eval_parents = []
+        eval_children = []
+        for filepath in eval_new:
+            content = working_files[filepath]
+            if "kind: EvaluationSet" in content:
+                eval_parents.append(filepath)
+            else:
+                eval_children.append(filepath)
+
+        # Pass 1: Create parent EvaluationSet records
+        # Map local filepath → new botcomponentid for child linking
+        eval_parent_ids = {}
+        for filepath in eval_parents:
+            content = working_files[filepath]
+            fname = filepath.replace("\\", "/").split("/")[-1].replace(".mcs.yml", "")
+            schema = f"mspva_{uuid.uuid4()}"
+            record_data = {
+                "componenttype": 19,
+                "data": content,
+                "name": fname.replace("-", " ").title(),
+                "schemaname": schema,
+                "parentbotid@odata.bind": f"/bots({bot_id})",
+            }
+            try:
+                new_id = create_record(env_url, token,
+                                       "botcomponents", record_data)
+                print(f"  ✅ Created: {filepath} (ID: {new_id})")
+                component_map[filepath] = {
+                    "botcomponentid": new_id,
+                    "schemaname": schema,
+                    "componenttype": 19,
+                    "name": record_data["name"],
+                }
+                eval_parent_ids[filepath] = new_id
+                success += 1
+            except Exception as e:
+                print(f"  ❌ Failed: {filepath}: {e}")
+                errors += 1
+
+        # Pass 2: Create child EvaluationData records
+        for filepath in eval_children:
+            content = working_files[filepath]
+            fname = filepath.replace("\\", "/").split("/")[-1].replace(".mcs.yml", "")
+            schema = f"mspva_{uuid.uuid4()}"
+
+            # Determine parent ID: check component_map for existing parent,
+            # or match against just-created parents by folder convention
+            parent_id = None
+            entry = component_map.get(filepath)
+            if entry and entry.get("parentbotcomponentid"):
+                parent_id = entry["parentbotcomponentid"]
+            else:
+                # Find parent set in same evaluations/ folder or by
+                # scanning eval_parent_ids for newly created parents
+                for p_path, p_id in eval_parent_ids.items():
+                    parent_id = p_id
+                    break  # Use the first (usually only) newly created parent
+
+            record_data = {
+                "componenttype": 19,
+                "data": content,
+                "name": fname.replace("-", " ").title(),
+                "schemaname": schema,
+                "parentbotid@odata.bind": f"/bots({bot_id})",
+            }
+            if parent_id:
+                record_data["ParentBotComponentId@odata.bind"] = \
+                    f"/botcomponents({parent_id})"
+            try:
+                new_id = create_record(env_url, token,
+                                       "botcomponents", record_data)
+                print(f"  ✅ Created: {filepath} (ID: {new_id})")
+                component_map[filepath] = {
+                    "botcomponentid": new_id,
+                    "schemaname": schema,
+                    "componenttype": 19,
+                    "name": record_data["name"],
+                    "parentbotcomponentid": parent_id,
+                }
+                success += 1
+            except Exception as e:
+                print(f"  ❌ Failed: {filepath}: {e}")
+                errors += 1
+
+    # Push deletions — order evaluations: children before parents
+    eval_deleted = []
+    non_eval_deleted = []
     for filepath in deleted:
+        parts = filepath.replace("\\", "/").split("/")
+        entry = component_map.get(filepath, {})
+        if parts[0] == "evaluations" or entry.get("componenttype") == 19:
+            eval_deleted.append(filepath)
+        else:
+            non_eval_deleted.append(filepath)
+
+    # Sort evaluation deletions: children (have parentbotcomponentid) first
+    eval_children_del = [f for f in eval_deleted
+                         if component_map.get(f, {}).get("parentbotcomponentid")]
+    eval_parents_del = [f for f in eval_deleted
+                        if not component_map.get(f, {}).get("parentbotcomponentid")]
+    ordered_deleted = eval_children_del + eval_parents_del + non_eval_deleted
+
+    for filepath in ordered_deleted:
         ctype = classify_path(filepath)
         entry = component_map.get(filepath)
 

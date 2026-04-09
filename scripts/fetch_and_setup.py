@@ -41,6 +41,8 @@ def normalize_components(raw_records):
     """Map Dataverse REST API field names to the format setup.py expects.
 
     REST API returns _parentbotid_value for lookups and lowercased names.
+    _parentbotcomponentid_value is the lookup column for parent-child
+    relationships (used by evaluation test cases, componenttype 19).
     """
     normalized = []
     for r in raw_records:
@@ -50,6 +52,7 @@ def normalize_components(raw_records):
             "schemaname": r.get("schemaname"),
             "componenttype": r.get("componenttype"),
             "data": r.get("data"),
+            "parentbotcomponentid": r.get("_parentbotcomponentid_value"),
         })
     return normalized
 
@@ -124,7 +127,7 @@ def fetch_all(env_url, token, bot_id, components=None):
         raw_components = query_all(
             env_url, token,
             entity_set="botcomponents",
-            select="botcomponentid,name,schemaname,componenttype,data",
+            select="botcomponentid,name,schemaname,componenttype,data,_parentbotcomponentid_value",
             filter_expr=f"_parentbotid_value eq '{bot_id}'",
         )
         components = normalize_components(raw_components)
