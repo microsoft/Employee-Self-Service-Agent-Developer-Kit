@@ -45,9 +45,10 @@ by "Picking up at Step {N}." Then go to the matching step below.
 
 | # | Task | Status |
 |---|------|--------|
-| 1 | Dataverse MCP connected | ⬜ |
+| 1 | Dataverse configured | ⬜ |
 | 2 | Agent discovered | ⬜ |
-| 3 | Setup complete | ⬜ |
+| 3 | Agent extracted | ⬜ |
+| 4 | MCP server started | ⬜ |
 
 Let's get your environment set up. This takes about 5 minutes.
 
@@ -62,11 +63,11 @@ Go to Step 1.
 Read `src/skills/onboarding/step1.md` and follow it.
 
 (Step 1 handles connecting to Dataverse. When it finishes, it tells you to
-read step1b.md, which verifies the connection and discovers agents. When that
-finishes, it tells you to read step2.md.)
+read step1b.md, which discovers agents. When that finishes, it tells you to
+read step2.md, which extracts the agent and starts the MCP server.)
 
 ---
 
-## Step 3
+## Step 3 or Step 4
 
 Read `src/skills/onboarding/step2.md` and follow it.

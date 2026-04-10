@@ -60,18 +60,9 @@ Type **done** when that's set up, or **skip** if it's already enabled.
 
 Wait for the user.
 
-## 1.3 — Start the server
+## 1.3 — Proceed to agent discovery
 
-**Message:**
+The MCP config file is written and admin steps are done. The Dataverse MCP
+server will be started later — it's not needed for discovery or setup.
 
-Now start the Dataverse server:
-
-1. Press **Ctrl+Shift+P** → type **MCP: List Servers** → select it
-2. Click **Dataverse** → click **Start**
-3. Sign in with your Microsoft account when the browser opens
-
-Type **done** when Dataverse shows as Running.
-
-**End message.**
-
-Wait for the user. Then read `src/skills/onboarding/step1b.md` and follow it.
+Read `src/skills/onboarding/step1b.md` and follow it.

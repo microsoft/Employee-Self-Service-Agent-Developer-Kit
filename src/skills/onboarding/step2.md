@@ -1,4 +1,4 @@
-# Step 2: Extract and Configure
+# Step 2: Extract, Configure, and Start MCP
 
 Every **Message** block is the exact text to show the user. Copy it verbatim.
 Do not rephrase, add commentary, or tell the user what tools you are calling.
@@ -23,11 +23,50 @@ and runs setup.py automatically. No MCP queries needed.
 If the script fails with an auth error, tell the user to check they selected
 the correct account with access to the environment, and re-run the command.
 
-## 2.2 — Finish
+When the script completes successfully, update `my/onboarding/tasks.md` —
+change step 3 from `- [ ]` to `- [x]`.
 
-Update `my/onboarding/tasks.md` — change step 3 from `- [ ]` to `- [x]`.
+**Message:**
 
-Show this message, pasting the script's terminal output where indicated:
+✅ Agent extracted.
+
+{paste the script's summary output here}
+
+One more step — we need to start the Dataverse MCP server so the kit can
+work with your environment going forward.
+
+| # | Task | Status |
+|---|------|--------|
+| 1 | Dataverse configured | ✅ |
+| 2 | Agent discovered | ✅ |
+| 3 | Agent extracted | ✅ |
+| 4 | MCP server started | ⬜ |
+
+**End message.**
+
+---
+
+## 2.2 — Start the Dataverse MCP server
+
+**Message:**
+
+Start the Dataverse MCP server:
+
+1. Press **Ctrl+Shift+P** → type **MCP: List Servers** → select it
+2. Click **Dataverse** → click **Start**
+3. Sign in with your Microsoft account when the browser opens
+
+Type **done** when Dataverse shows as Running.
+
+**End message.**
+
+Wait for the user to respond.
+
+---
+
+## 2.3 — Finish
+
+Update `my/onboarding/tasks.md` — change step 4 from `- [ ]` to `- [x]`.
 
 **Message:**
 
@@ -35,11 +74,10 @@ Show this message, pasting the script's terminal output where indicated:
 
 | # | Task | Status |
 |---|------|--------|
-| 1 | Dataverse MCP connected | ✅ |
+| 1 | Dataverse configured | ✅ |
 | 2 | Agent discovered | ✅ |
-| 3 | Setup complete | ✅ |
-
-{paste the script's summary output here}
+| 3 | Agent extracted | ✅ |
+| 4 | MCP server started | ✅ |
 
 Here's what you can do next:
 
