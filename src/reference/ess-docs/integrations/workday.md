@@ -637,6 +637,8 @@ The following error codes may be returned from the Invoke Workday API flow. By d
 
 ## Troubleshooting guide
 
+> For ISU-specific authentication debugging ("works for makers but not end users"), see the comprehensive [Workday ISU Authentication Debugging Guide](workday-isu-debugging.md). It covers the full authentication chain (Workday → Entra → Power Platform → Copilot Studio), all error codes, and Okta-federated environments.
+
 - Entra Authentication fails.
   - Refer to the [Set up SSO for Workday with Entra](#set-up-sso-for-workday-with-entra) section.
 

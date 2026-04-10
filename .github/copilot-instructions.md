@@ -252,6 +252,14 @@ After a successful push, `.baseline/` is updated to match the new state.
 | Generate evaluation test sets | `src/skills/evaluations/create/SKILL.md` |
 | Update/modify evaluation test cases | `src/skills/evaluations/update/SKILL.md` |
 | Delete evaluation test sets/cases | `src/skills/evaluations/delete/SKILL.md` |
+| Troubleshoot connectivity/auth issues | `src/skills/troubleshoot/SKILL.md` |
+| Debug Workday ISU errors | `src/skills/troubleshoot/SKILL.md` |
+
+**Trigger phrases for troubleshooting:** "Workday error", "ISU not working",
+"invalid_client", "invalid username or password", "SOAP failure", "maker works
+but users don't", "authentication error", "connection not working",
+"executeGenericSOAPFailure", "executeContextSOAPFailure", "Response is not in
+JSON format", "something went wrong with Workday".
 
 **When the user asks to modify, delete, rename, or otherwise change an agent
 component, ALWAYS load and follow the corresponding skill file.** The skill
