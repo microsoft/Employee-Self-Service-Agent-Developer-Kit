@@ -67,30 +67,9 @@ Strip trailing slashes and paths. Build canonical URL:
 
 ---
 
-## 1.2 — Handle Entra selection
+## 1.2 — (Reserved)
 
-**If SNOW_AUTH is `entra`:**
-
-Entra ID SSO setup is not yet available in the toolkit. Use
-`vscode_askQuestions` to offer alternatives:
-
-```json
-[
-  {
-    "header": "Alternative auth",
-    "question": "Entra ID SSO isn't automated yet. Which alternative would you prefer?",
-    "options": [
-      { "label": "OAuth2", "description": "Fully automated, takes about 60 seconds", "recommended": true },
-      { "label": "Basic auth", "description": "Simplest setup for dev/test" }
-    ],
-    "allowFreeformInput": false
-  }
-]
-```
-
-Update SNOW_AUTH to `oauth2` or `basic` based on the answer.
-
-**If SNOW_AUTH is not `entra`, skip this step.**
+No action needed. Proceed to 1.3.
 
 ---
 
@@ -220,6 +199,9 @@ Update `my/connect/servicenow/tasks.md` — change step 1 from
 ---
 
 ## 1.7 — Route by auth type
+
+- If SNOW_AUTH is `entra`:
+  Read `src/skills/connect/servicenow/step2-entra.md` and follow it.
 
 - If SNOW_AUTH is `oauth2`:
   Read `src/skills/connect/servicenow/step2-oauth2.md` and follow it.
