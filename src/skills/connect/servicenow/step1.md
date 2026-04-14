@@ -11,13 +11,23 @@ chat. The user should only see Message blocks and tool output tables.
 
 ## 1.1 — Collect instance info (single prompt)
 
-Use the `vscode_askQuestions` tool with these three questions in one call:
+Use the `vscode_askQuestions` tool with these four questions in one call:
 
 ```json
 [
   {
     "header": "Instance URL",
     "question": "What's your ServiceNow instance URL? (e.g. https://yourcompany.service-now.com)"
+  },
+  {
+    "header": "Connector",
+    "question": "How are you connecting ServiceNow to your agent?",
+    "options": [
+      { "label": "Actions", "description": "Create tickets, get cases, take actions (Power Platform connector)", "recommended": true },
+      { "label": "Knowledge search", "description": "Search ServiceNow KB articles via Microsoft 365 Graph connector" },
+      { "label": "Both", "description": "Set up actions first, then knowledge search" }
+    ],
+    "allowFreeformInput": false
   },
   {
     "header": "Usage",
@@ -54,16 +64,27 @@ From the answers, extract:
 Strip trailing slashes and paths. Build canonical URL:
 `https://{INSTANCE_NAME}.service-now.com`
 
-**Usage** → Map to SNOW_USAGE:
+**Connector** → Map to SNOW_CONNECTOR:
+- "Actions" → `powerplatform`
+- "Knowledge search" → `graph`
+- "Both" → `both`
+
+**Usage** → Map to SNOW_USAGE (only relevant for Power Platform connector):
 - "IT tickets" → `itsm`
 - "HR cases" → `hrsd`
 - "Both" → `both`
 
-**Authentication** → Map to SNOW_AUTH:
+If SNOW_CONNECTOR is `graph`, ignore the Usage answer — set SNOW_USAGE
+to `none`.
+
+**Authentication** → Map to SNOW_AUTH (only relevant for Power Platform connector):
 - "Microsoft account (Entra ID)" → `entra`
 - "ServiceNow username and password" → `oauth2`
 - "I'm not sure" → `entra`
 - "Dev/test instance" → `basic`
+
+If SNOW_CONNECTOR is `graph`, ignore the Authentication answer — set
+SNOW_AUTH to `federated` (Graph connector uses Federated Auth).
 
 ---
 
@@ -81,14 +102,16 @@ Write `my/connect/servicenow/config.json`:
 {
   "instanceName": "{INSTANCE_NAME}",
   "instanceUrl": "https://{INSTANCE_NAME}.service-now.com",
+  "connectorType": "{SNOW_CONNECTOR}",
   "usage": "{SNOW_USAGE}",
   "authType": "{SNOW_AUTH}",
   "packs": {}
 }
 ```
 
-If SNOW_USAGE is `itsm` or `both`, add `"itsm": "pending"` to packs.
-If SNOW_USAGE is `hrsd` or `both`, add `"hrsd": "pending"` to packs.
+If SNOW_CONNECTOR is `powerplatform` or `both`:
+  If SNOW_USAGE is `itsm` or `both`, add `"itsm": "pending"` to packs.
+  If SNOW_USAGE is `hrsd` or `both`, add `"hrsd": "pending"` to packs.
 
 ---
 
@@ -198,7 +221,18 @@ Update `my/connect/servicenow/tasks.md` — change step 1 from
 
 ---
 
-## 1.7 — Route by auth type
+## 1.7 — Route by connector type and auth type
+
+### If SNOW_CONNECTOR is `graph`:
+
+Skip steps 2 and 3 for Power Platform. Go directly to the Graph
+connector setup:
+
+Read `src/skills/connect/servicenow/step2-graph.md` and follow it.
+
+### If SNOW_CONNECTOR is `powerplatform` or `both`:
+
+Route by SNOW_AUTH for the Power Platform connector:
 
 - If SNOW_AUTH is `entra`:
   Read `src/skills/connect/servicenow/step2-entra.md` and follow it.
@@ -209,6 +243,11 @@ Update `my/connect/servicenow/tasks.md` — change step 1 from
 - If SNOW_AUTH is `basic`:
   Update step 2 from `- [ ]` to `- [x]` in `my/connect/servicenow/tasks.md`.
   Read `src/skills/connect/servicenow/step3-basic.md` and follow it.
+
+When the Power Platform flow completes (step 4 finishes), check
+SNOW_CONNECTOR. If it is `both`, continue to the Graph connector:
+
+Read `src/skills/connect/servicenow/step2-graph.md` and follow it.
 
 ---
 

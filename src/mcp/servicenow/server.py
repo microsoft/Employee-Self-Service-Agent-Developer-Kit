@@ -698,6 +698,30 @@ async def set_system_property(sys_id: str, value: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════
+#  GENERIC API CALL
+# ═══════════════════════════════════════════════════════════════
+
+
+@mcp.tool()
+async def call_api(method: str, path: str, data: str = "") -> str:
+    """Call any REST API path on the ServiceNow instance.
+    Uses the same authenticated session as all other tools.
+    Useful for calling custom Scripted REST APIs.
+
+    Args:
+        method: HTTP method (GET, POST, PUT, PATCH, DELETE)
+        path: API path starting with / (e.g., /api/now/table/incident or /api/x_abc/my_api/run)
+        data: Optional JSON string body for POST/PUT/PATCH requests
+    """
+    client = get_client()
+    kwargs = {}
+    if data and method.upper() in ("POST", "PUT", "PATCH"):
+        kwargs["json"] = json.loads(data)
+    result = await client._request(method.upper(), path, **kwargs)
+    return json.dumps(result, indent=2, default=str)
+
+
+# ═══════════════════════════════════════════════════════════════
 #  ENTRY POINT
 # ═══════════════════════════════════════════════════════════════
 
