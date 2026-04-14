@@ -47,7 +47,7 @@ Update `my/config.json` — add or update a `connections` object:
 ```json
 {
   "connections": {
-    "servicenow": {
+    "ServiceNow": {
       "instanceName": "{INSTANCE_NAME}",
       "instanceUrl": "https://{INSTANCE_NAME}.service-now.com",
       "usage": "{SNOW_USAGE}",

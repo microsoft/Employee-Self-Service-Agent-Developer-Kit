@@ -126,7 +126,7 @@ If pip fails, show the error and suggest `python -m pip install ...` instead.
 Read `.vscode/mcp.json`. If it exists, parse it. If it doesn't exist,
 start with an empty `{ "servers": {} }` object.
 
-Add a `servicenow` entry to the `servers` object. **Keep all existing
+Add a `ServiceNow` entry to the `servers` object. **Keep all existing
 entries (like Dataverse) intact.**
 
 Also ensure the top-level `inputs` array contains the ServiceNow input
@@ -152,7 +152,7 @@ Write the merged result back to `.vscode/mcp.json`:
     }
   ],
   "servers": {
-    "servicenow": {
+    "ServiceNow": {
       "command": "python",
       "args": ["server.py"],
       "cwd": "${workspaceFolder}/src/mcp/servicenow",
@@ -177,7 +177,7 @@ Replace `{INSTANCE_NAME}` with the actual instance name from step 1.1.
 I've configured the ServiceNow connector. Let's start it up:
 
 1. Press **Ctrl+Shift+P** → type **MCP: List Servers** → select it
-2. Find **servicenow** in the list → click the **Start** button
+2. Find **ServiceNow** in the list → click the **Start** button
 3. VS Code will prompt for your **ServiceNow admin username** and
    **password** at the top of the screen — type them in
 
@@ -242,7 +242,7 @@ I couldn't reach your ServiceNow instance. Common causes:
   log in via browser first to wake it up
 
 To retry: press **Ctrl+Shift+P** → **MCP: List Servers** → stop and
-restart the **servicenow** server.
+restart the **ServiceNow** server.
 
 Type **retry** to test again, or **back** to re-enter the instance URL.
 
