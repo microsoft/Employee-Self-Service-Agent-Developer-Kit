@@ -65,14 +65,17 @@ Save the answer as TENANT_ID. Validate it looks like a GUID
 
 ## A.3 — Sign in with device code
 
-Run in the terminal using **async mode** (do NOT use sync mode — it
-will block waiting for the user to authenticate in the browser):
+Run this command in the terminal using `run_in_terminal` with
+**`mode=async`**. You MUST use async mode — sync mode will block
+forever waiting for the user to authenticate in the browser:
 
 ```
 az login --tenant {TENANT_ID} --use-device-code
 ```
 
-Read the terminal output. It will contain a line like:
+After the async call returns, read the terminal output (use
+`get_terminal_output` with the returned terminal ID). The output will
+contain a line like:
 
 ```
 To sign in, use a web browser to open the page https://microsoft.com/devicelogin and enter the code E4YVMPKHB to authenticate.
@@ -85,9 +88,12 @@ pattern to find them:
 open the page (https://\S+) and enter the code (\S+)
 ```
 
-If the terminal output does not yet contain the URL and code, use
-`get_terminal_output` to check again. The output appears within a
-few seconds.
+If the terminal output does not yet contain the URL and code, call
+`get_terminal_output` again with the same terminal ID. The output
+appears within a few seconds.
+
+Once you have the URL and code, show them to the user **in chat** (NOT
+in the terminal). The user must never need to look at the terminal.
 
 **Message:**
 

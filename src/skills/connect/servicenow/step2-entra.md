@@ -11,6 +11,9 @@ chat. The user should only see Message blocks and tool output tables.
 
 Read `my/connect/servicenow/config.json` for INSTANCE_NAME.
 
+**Do NOT ask the user any questions or show any messages before reading
+login.md in section 2.1.** Go directly to 2.1.
+
 ---
 
 ## 2.1 — Azure login
