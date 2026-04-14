@@ -125,7 +125,9 @@ installed pack from `"pending"` to `"installed"` in the `packs` object.
 | 3 | Extension installed | ✅ |
 | 4 | Connection verified | ⬜ |
 
-One more step — let's verify everything is working. Type **go** to continue.
+Now I'll pull your updated agent from Dataverse to bring in all the new
+ServiceNow topics, flows, and template configurations. Type **go** to
+continue.
 
 **End message.**
 

@@ -14,6 +14,12 @@ agent.name, agent.schemaName, agent.isManaged).
 
 ## 4.1 — Re-extract the agent
 
+**Message:**
+
+Pulling your updated agent from Dataverse...
+
+**End message.**
+
 Read `my/config.json` to get the agent details. Set:
 - ENV_URL = `dataverseEndpoint`
 - BOT_ID = `agent.botId`
