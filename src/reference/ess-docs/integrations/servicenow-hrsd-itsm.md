@@ -56,10 +56,10 @@ Refer to the Employee Self-Service agent [deployment guide](deploy-overview-alm.
 
 This section outlines the tasks an administrator needs to configure in ServiceNow. ServiceNow integration supports several types of authentications:
 
-- Basic authentication
+- Microsoft Entra ID User sign in (recommended for production)
 - Microsoft Entra ID OAuth using certificates
-- Microsoft Entra ID User sign in
-- User Oauth2
+- OAuth2
+- Basic authentication
 
 > [!NOTE]
 > For all security related tasks in ServiceNow, the logged in user with `admin` or `security_admin` role must elevate their access using "Elevate role" option from the profile menu in the top right of navigation bar.
@@ -67,82 +67,88 @@ This section outlines the tasks an administrator needs to configure in ServiceNo
 > [!TIP]
 > Without elevating access, the new security objects can't be created. If **New** button in the top right of configuration pane is missing, then the role isn't elevated to "`security_admin`".
 
-### Basic authentication
+### Microsoft Entra ID User Sign In
 
-This method of authentication involves a ServiceNow username and password to authenticate API requests. This method is simple to use and is primarily suggested for testing purposes, as it offers lower security compared to other authentication methods.
+This is the **recommended production method**. Users sign in with their Microsoft work account (Entra ID), and the Power Platform ServiceNow connector obtains a delegated access token. No certificates, no client secrets — only a single Entra app registration is needed.
+
+#### Task 1: Register an application in Microsoft Entra ID
+
+1. Sign into the [Microsoft Entra admin center](https://entra.microsoft.com) as an Application Administrator, Cloud App Administrator, or Global Administrator.
+2. Go to **Applications** > **App registrations** > **New registration**.
+3. Fill in:
+   - **Name:** A meaningful name (e.g., `ESS Copilot - ServiceNow OIDC (contoso)`)
+   - **Supported account types:** Accounts in this organizational directory only (Single tenant)
+   - **Redirect URI:** Leave blank
+4. Select **Register**.
+5. Note the **Application (client) ID** and **Object ID** from the overview page.
+
+#### Task 2: Add optional claims
+
+1. In the app registration, go to **Token configuration** > **Add optional claim**.
+2. Select **Access** token type.
+3. Select **email** and **upn** claims.
+4. Select **Add**. If prompted to enable Microsoft Graph permissions, check the box and confirm.
+
+#### Task 3: Expose API scope and pre-authorize the Power Platform connector
+
+1. Go to **Expose an API**.
+2. Set **Application ID URI** to `api://{Application (client) ID}`.
+3. Select **Add a scope**:
+   - **Scope name:** `user_impersonation`
+   - **Who can consent:** Admins and users
+   - **Admin consent display name:** Access ServiceNow
+   - **Admin consent description:** Access ServiceNow on behalf of the user
+   - **User consent display name:** Access ServiceNow
+   - **User consent description:** Access ServiceNow on your behalf
+   - **State:** Enabled
+4. Select **Add scope**.
+5. Select **Add a client application**:
+   - **Client ID:** `c26b24aa-7874-4e06-ad55-7d06b1f79b63` (this is the Power Platform ServiceNow connector)
+   - Check the `user_impersonation` scope
+6. Select **Add application**.
+
+#### Task 4: Create service principal
+
+The service principal is typically created automatically when the app registration is created. Verify it exists:
+
+1. In the Entra admin center, go to **Enterprise applications**.
+2. Search for the app name from Task 1.
+3. If it doesn't appear, go back to **App registrations** > your app > **Overview** and note the Application (client) ID. Then use the Azure CLI: `az ad sp create --id {Application (client) ID}`.
+
+#### Task 5: Register OIDC provider in ServiceNow
+
+1. Sign in to the ServiceNow instance as an admin with elevated privileges (**Elevate role** from the profile menu).
+2. Navigate to **System OAuth** > **Application Registry**.
+3. Select **New** > **Configure an OIDC provider to verify ID tokens**.
+4. Fill in:
+
+   | Field | Value |
+   |-------|-------|
+   | **Name** | A meaningful name (e.g., `Microsoft Entra ID - ESS Copilot`) |
+   | **Client ID** | The Application (client) ID from Task 1 |
+   | **Client Secret** | `not-used` (this field is required but the value is not used for User Login auth) |
+
+5. For **OAuth OIDC Provider Configuration**, select the search icon and choose the built-in **Azure AD** record. Update it with:
+
+   | Field | Value |
+   |-------|-------|
+   | **OIDC Metadata URL** | `https://login.microsoftonline.com/{tenant-id}/.well-known/openid-configuration` |
+   | **User Claim** | `upn` |
+   | **User Field** | `user_name` |
+
+6. Select **Submit** to save the OIDC entity.
+
+> [!NOTE]
+> The `upn` → `user_name` mapping requires that ServiceNow users have usernames in UPN format (e.g., `user@contoso.com`). Enterprise instances using Entra Connect or SCIM provisioning typically have this already. Developer instances may need a matching user created manually.
+
+> [!IMPORTANT]
+> The `oidc_provider_configuration` table does not allow creating new records via the API (returns 403). Always update the built-in "Azure AD" configuration record rather than attempting to create a new one.
 
 ### Microsoft Entra ID OAuth using Certificate
 
-This authentication uses app tokens, allowing a registered Microsoft Entra ID application to access ServiceNow with a token specifying the ServiceNow Microsoft Entra ID app as the resource.
+This authentication uses app tokens, allowing a registered Microsoft Entra ID application to access ServiceNow with a certificate-based credential. This method requires **two** Entra app registrations and is more complex than User Sign In. Use this method when service-level (non-interactive) authentication is required.
 
-#### Task 1: Register an application in Microsoft Entra ID for OIDC integration with ServiceNow
-
-[Learn how to register an app in Microsoft Entra ID.](/entra/identity-platform/quickstart-register-app)
-
-1. Sign into the Microsoft Entra admin center as a Global Administrator or Cloud App Administrator.
-2. Go to **Applications** then **App registrations**.
-3. Select **New registration.**
-4. In the new registration form, fill in the following fields:
-   - **Name:** Any name that represents the purpose of app registration
-   - **Redirect URL:** Not needed
-5. Choose **Register** to complete the creation of the new app registration.
-6. Select **Token configuration** then **Add optional claim** for adding claims setting.
-7. Select **Token type** as **Access** and choose the following claims:
-   - *Aud* - for audience validation
-   - *Email* - addressable email for user
-   - *UPN* - an identifier for the user
-8. Select **Add** to complete adding the claims.
-9. If it's the first time OpenId Connect being setup using claims like email, UPN, there's a confirmation screen to turn on the Microsoft Graph permissions. If you see the confirmation, check the box, and then select **Add**.
-
-This flow completes the Microsoft Entra piece of configuration.
-
-#### Task 2: Register OIDC provider in ServiceNow
-
-1. Sign in to the ServiceNow instance that needs to be integrated with the Employee Self-Service agent.
-2. Elevate access permissions using **Elevate role**. Refer to the section **Error! Reference source not found.** - only the first part and not the tasks.
-3. Select **All** in the top navigation bar.
-4. Search for "OAuth" in the search box within dropdown navigation menu.
-5. Select **System OAuth à Application Registry** from the search results (if you don't see this option, you don't have sufficient privileges).
-6. Select **New** in the configuration section pane.
-7. Select **Configure an OIDC provider to verify ID tokens**.
-8. Fill in the following information for the new application registry:
-
-   |Configuration |Description |
-   |--------------|------------|
-   |Name |a meaningful name to identify that this OIDC provider was created for the Employee Self-Service agent |
-   |Client ID |The client ID of Microsoft Entra Application created in Task 1 above |
-   |Client secret |This value isn't used; can be any value |
-   |OAuth OIDC provider configuration |Add a new OIDC provider configuration by selecting the search icon and choosing **New** in the search popup. Fill in the fields as follows:</br> **OIDC Provider:** A name that represents the Microsoft Entra tenant from task 1 above.</br> **OIDC Metadata URL:** `login.microsoftonline.com/<tenant ID>/.well-known/openid-configuration`</br> Replace < tenant ID > with the Microsoft Entra tenant ID from task 1 above.</br> **OIDC Configuration Cache Life Span:** 120</br> **Application:** Global</br> **User Claim:** oid</br> **User Field:** User ID</br> **Enable JTI claim verification:** disabled</br> Select **Submit** and update the OIDC Entity form. |
-
-#### Task 3: Register an Application in Microsoft Entra ID for connector usage
-
-This application plays the role of a user with elevated permissions in the ServiceNow instance.
-
-1. Sign into the Microsoft Entra admin center as a Global Administrator or Cloud App Administrator.
-2. Go to **Applications** > **App registrations**.
-3. Select **New registration**.
-4. In the new registration form, fill in the following fields:
-   - **Name:** any name that represents the purpose of app registration.
-   - **Redirect URI:** Not needed.
-5. Select **Register** to complete the creation of new app registration.
-6. Select **Certificates and secrets** then upload the `.cer` file of the certificate. If there's an SNI certificate, just add `trustedCertificateSubjects` in the manifest of the application with the relevant `authorityId` and `subjectName`.
-
-#### Task 4: Create a System User in ServiceNow
-
-In this task, you add a user to the Application created in task 3, earlier in this article.
-
-1. Go to **User Administration** > **Users** to create a new user.
-2. For **User ID**, use the object ID of the service principal of the application that was created in the previous task.
-3. Check **Web service access only**.
-
-### Microsoft Entra ID OAuth User sign in
-
-The user-token based authentication where the end user can sign into Microsoft Entra ID using the ServiceNow connector, and get an access token with scope for the ServiceNow representative Microsoft Entra ID app.
-
-Perform tasks 1 and 2 from the previous section, [Microsoft Entra ID OAuth using Certificate](#microsoft-entra-id-oauth-using-certificate).
-
-- In task 1, add the application using the ServiceNow connector to the permission scope with Client ID = `c26b24aa-7874-4e06-ad55-7d06b1f79b63`.
-- In task 2, update the user claim to UPN or any other custom claim property from the token in ServiceNow. The user field should match the ServiceNow system user table field containing the UPN or user ID.
+For detailed steps, see [Steps to create Microsoft Entra ID OAuth using Certificates](/connectors/service-now/#steps-to-create-microsoft-entra-id-oauth-using-certificates) in the Power Platform connector documentation.
 
 ### OAuth2 authentication - Create an OAuth Application Registry
 
@@ -170,6 +176,10 @@ Perform tasks 1 and 2 from the previous section, [Microsoft Entra ID OAuth using
    | **Client Type** | Integration as a Service |
 
 9. Select **Submit** or **Update** button to save the changes.
+
+### Basic authentication
+
+This method of authentication involves a ServiceNow username and password to authenticate API requests. This method is simple to use and is primarily suggested for testing purposes, as it offers lower security compared to other authentication methods.
 
 ### Share connection parameters
 
