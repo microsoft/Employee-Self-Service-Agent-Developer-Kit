@@ -63,14 +63,32 @@ Save the answer as TENANT_ID. Validate it looks like a GUID
 
 ---
 
-## A.3 — Sign in with device code
+## A.3 — Check if already logged into the correct tenant
+
+Run in the terminal (do not show this command to the user):
+
+```
+az account show --query tenantId -o tsv
+```
+
+**If the command succeeds AND the output matches TENANT_ID**
+(case-insensitive): skip A.4 entirely. Go straight to A.5.
+
+**If the command fails OR the tenant doesn't match**: proceed to A.4.
+
+---
+
+## A.4 — Sign in with device code
 
 Run this command in the terminal using `run_in_terminal` with
 **`mode=async`**. You MUST use async mode — sync mode will block
-forever waiting for the user to authenticate in the browser:
+forever waiting for the user to authenticate in the browser.
+
+Use `--allow-no-subscriptions` to prevent an interactive subscription
+selection prompt that would block the terminal:
 
 ```
-az login --tenant {TENANT_ID} --use-device-code
+az login --tenant {TENANT_ID} --use-device-code --allow-no-subscriptions
 ```
 
 After the async call returns, read the terminal output (use
@@ -112,7 +130,7 @@ Wait for the user.
 
 ---
 
-## A.4 — Verify tenant
+## A.5 — Verify tenant
 
 Run in the terminal:
 
@@ -142,7 +160,7 @@ Run:
 az logout
 ```
 
-Go back to A.3 and retry.
+Go back to A.4 and retry.
 
 **If `az account show` fails** (not logged in):
 
@@ -152,7 +170,7 @@ The sign-in didn't complete. Let's try again.
 
 **End message.**
 
-Go back to A.3 and retry. If this is the second failure, stop and show:
+Go back to A.4 and retry. If this is the second failure, stop and show:
 
 **Message:**
 
