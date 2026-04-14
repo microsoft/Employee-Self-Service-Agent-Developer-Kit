@@ -27,17 +27,27 @@ A browser window will open for sign-in. Wait for the script to finish.
 
 ## 1.5 — Ask the user to pick an agent
 
-**Message:**
+Build options from the discovery script's agent table. Each row becomes an
+option with the agent name as the label and any extra details (schema name,
+managed/unmanaged) as the description.
 
-Here are the agents in your environment:
+Use the `vscode_askQuestions` tool:
 
-{paste the agent table from the script output}
+```json
+[
+  {
+    "header": "Select agent",
+    "question": "Which agent do you want to customize?",
+    "options": [
+      { "label": "{agent 1 name}", "description": "{schema name, managed/unmanaged}" },
+      { "label": "{agent 2 name}", "description": "{schema name, managed/unmanaged}" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
 
-Which one do you want to customize? Enter the number.
-
-**End message.**
-
-Wait for the user to respond with a number.
+Map the selected agent name back to its row number from the discovery output.
 
 ---
 

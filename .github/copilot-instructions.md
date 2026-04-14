@@ -242,6 +242,7 @@ After a successful push, `.baseline/` is updated to match the new state.
 
 | User intent | Skill to read |
 |-------------|--------------|
+| Connect to ServiceNow/Workday | `src/skills/connect/SKILL.md` |
 | Create a topic | `src/skills/topics/create/SKILL.md` |
 | Create a workflow | `src/skills/workflows/create/SKILL.md` |
 | Update/modify a topic | `src/skills/topics/update/SKILL.md` |
@@ -254,6 +255,10 @@ After a successful push, `.baseline/` is updated to match the new state.
 | Delete evaluation test sets/cases | `src/skills/evaluations/delete/SKILL.md` |
 | Troubleshoot connectivity/auth issues | `src/skills/troubleshoot/SKILL.md` |
 | Debug Workday ISU errors | `src/skills/troubleshoot/SKILL.md` |
+
+**Trigger phrases for connect:** "connect ServiceNow", "set up ServiceNow",
+"integrate ServiceNow", "connect Workday", "set up Workday", "add ServiceNow",
+"I want to connect to ServiceNow", "ServiceNow integration".
 
 **Trigger phrases for troubleshooting:** "Workday error", "ISU not working",
 "invalid_client", "invalid username or password", "SOAP failure", "maker works

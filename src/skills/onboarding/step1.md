@@ -7,17 +7,18 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 
 ## 1.1 — Ask for the environment URL
 
-**Message:**
+Use the `vscode_askQuestions` tool:
 
-What's the URL of your Power Platform environment?
+```json
+[
+  {
+    "header": "Environment URL",
+    "question": "What's your Power Platform environment URL? (e.g. https://yourorg.crm.dynamics.com — find it in the Power Platform admin center)"
+  }
+]
+```
 
-It looks like `https://yourorg.crm.dynamics.com`. You can find it in the
-[Power Platform admin center](https://admin.powerplatform.microsoft.com)
-under your environment's details.
-
-**End message.**
-
-Wait for the user to respond. Save their URL as ENV_URL. **Strip any trailing
+Save their answer as ENV_URL. **Strip any trailing
 slash** from ENV_URL before using it (e.g., `https://org.crm.dynamics.com/`
 becomes `https://org.crm.dynamics.com`).
 
