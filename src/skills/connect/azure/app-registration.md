@@ -44,6 +44,58 @@ to the user and stop.
 
 ## B.2 — Create app registration
 
+**Message:**
+
+I'm going to create an app registration called **{APP_DISPLAY_NAME}** in
+your Entra tenant. This lets the Power Platform connector authenticate
+employees through Microsoft when they use the agent.
+
+**End message.**
+
+Use the `vscode_askQuestions` tool:
+
+```json
+[
+  {
+    "header": "Create app registration",
+    "question": "OK to create this app registration in your Entra tenant?",
+    "options": [
+      { "label": "Yes, create it", "recommended": true },
+      { "label": "No, I'll do it manually" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+**If the user chose "No, I'll do it manually":**
+
+**Message:**
+
+No problem. Create the app registration manually:
+
+1. Open https://entra.microsoft.com
+2. Go to **App registrations** → **New registration**
+3. Name: `{APP_DISPLAY_NAME}`
+4. Supported account types: **Single tenant**
+5. Click **Register**
+
+Copy the **Application (client) ID** and **Object ID** from the
+overview page and paste them here.
+
+**End message.**
+
+Wait for the user to provide the IDs. Save as APP_CLIENT_ID and
+APP_OBJECT_ID. Skip to B.3.
+
+**If the user chose "Yes, create it":**
+
+**Message (do NOT wait for user response — continue immediately):**
+
+Creating the app registration...
+
+**End message.**
+
 Run in the terminal:
 
 ```
@@ -73,9 +125,44 @@ Stop here. Do not proceed.
 
 For any other error, retry once. If still fails, show the error and stop.
 
+**Immediately save APP_CLIENT_ID and APP_OBJECT_ID** to
+`my/connect/servicenow/config.json` under the relevant auth section
+(e.g., `entra.appClientId`, `entra.appObjectId`). This preserves state
+if the session breaks before the calling file's final config save.
+
 ---
 
 ## B.3 — Add optional claims (email, upn)
+
+Before running any commands in B.3–B.6, show this message and get
+confirmation:
+
+**Message:**
+
+App created. Now I'll configure it — adding token claims, exposing
+an API scope, and pre-authorizing the Power Platform connector. This
+involves a few commands and takes about 15 seconds.
+
+**End message.**
+
+Use the `vscode_askQuestions` tool:
+
+```json
+[
+  {
+    "header": "Configure app",
+    "question": "OK to configure the app registration?",
+    "options": [
+      { "label": "Go ahead", "recommended": true },
+      { "label": "Wait, let me check something first" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+If the user chose "Wait", pause and wait for them to say they're ready.
+If they chose "Go ahead", proceed.
 
 Build a JSON temp file and use `az rest` to patch the application. This
 is more reliable than inline JSON on Windows/PowerShell.
@@ -267,8 +354,38 @@ calling file:
 
 **Message:**
 
-✅ Entra app registration configured.
+✅ Entra app registration configured:
+
+- **App**: {APP_DISPLAY_NAME}
+- **Scope**: `user_impersonation` exposed
+- **Power Platform connector**: pre-authorized
+- **Service principal**: created
 
 **End message.**
 
 The calling file will continue with integration-specific configuration.
+
+---
+
+## B.8 — Cleanup on failure (reference)
+
+This section is NOT part of the normal flow. Use it only if a step
+after B.2 fails permanently and the user wants to start over.
+
+If the app was created in B.2 but a later step (B.3–B.6) cannot be
+completed:
+
+**Message:**
+
+If you need to start over, you can delete the app registration I
+created:
+
+```
+az ad app delete --id {APP_OBJECT_ID}
+```
+
+Then run `/connect` again to restart the process.
+
+**End message.**
+
+Stop here.

@@ -63,6 +63,76 @@ Wait for the user. Then retry the `az rest` command.
 
 ## 2.3 — Create OIDC provider entity in ServiceNow
 
+Before making any changes to ServiceNow, explain what will happen
+and get confirmation.
+
+**Message:**
+
+Setting up the Graph Connector requires creating several records in
+your ServiceNow instance:
+
+- An **OIDC provider entity** (for Microsoft authentication)
+- A **provider configuration** (claims mapping)
+- An **integration user** (machine account for the connector)
+- **6 role assignments**
+- **Read ACLs on 20 tables** (so the connector can index knowledge articles)
+
+This is all automated and takes about 30 seconds.
+
+**End message.**
+
+Use the `vscode_askQuestions` tool:
+
+```json
+[
+  {
+    "header": "Set up Graph Connector",
+    "question": "OK to create these records in ServiceNow?",
+    "options": [
+      { "label": "Go ahead, set it all up", "recommended": true },
+      { "label": "Wait, tell me more first" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+If the user chose "Wait, tell me more first":
+
+**Message:**
+
+Here's what each piece does:
+
+- **OIDC provider**: Tells ServiceNow how to verify tokens from
+  Microsoft's Graph Connector service
+- **Claims mapping**: Maps the `oid` claim in the token to a
+  ServiceNow user account
+- **Integration user**: A machine account whose username matches the
+  Graph Connector's service principal ID — this is how ServiceNow
+  identifies the connector
+- **Roles**: The integration user needs `knowledge`, `knowledge_admin`,
+  `knowledge_manager`, `catalog_admin`, `user_criteria_admin`, and
+  `user_admin` to read knowledge base content
+- **ACLs**: Explicit read permissions on 20 tables that the connector
+  indexes (knowledge articles, user criteria, attachments, etc.)
+
+All records are tagged with "Created by ESS Copilot Kit" so they're
+easy to find and remove later if needed.
+
+Type **go** when you're ready to proceed.
+
+**End message.**
+
+Wait for the user.
+
+---
+
+**Message (do NOT wait for user response — continue immediately):**
+
+Creating OIDC provider...
+
+**End message.**
+
 First, check if an OIDC entity already exists for the Graph Connector
 (idempotency).
 
@@ -92,8 +162,17 @@ Note the **v2.0** endpoint — this differs from the Power Platform path.
 
 Extract `sys_id` from the response → save as OIDC_ENTITY_SYS_ID.
 
+**Immediately save OIDC_ENTITY_SYS_ID** to
+`my/connect/servicenow/config.json` under `graph.oidcEntitySysId`.
+
 **If the call fails**: retry once. If still fails, show the error and
 suggest manual creation in ServiceNow admin.
+
+**Message (do NOT wait for user response — continue immediately):**
+
+✅ OIDC provider created.
+
+**End message.**
 
 ---
 
@@ -128,6 +207,9 @@ create_record(table="oidc_provider_configuration", data="{\"name\": \"Microsoft 
 
 Extract `sys_id` from the response → save as OIDC_CONFIG_SYS_ID.
 
+**Immediately save OIDC_CONFIG_SYS_ID** to
+`my/connect/servicenow/config.json` under `graph.oidcConfigSysId`.
+
 **If create returns 403**: fall back to querying for the built-in
 "Azure AD" config and updating it:
 
@@ -158,6 +240,12 @@ suggest manual linking in ServiceNow admin.
 
 ## 2.6 — Create integration user
 
+**Message (do NOT wait for user response — continue immediately):**
+
+Creating integration user...
+
+**End message.**
+
 The Graph Connector authenticates as a machine user whose `user_name`
 matches the `oid` claim in the OIDC token (which is the service
 principal object ID).
@@ -178,9 +266,18 @@ create_record(table="sys_user", data="{\"user_name\": \"{SP_OBJECT_ID}\", \"firs
 
 Extract `sys_id` from the response → save as GRAPH_USER_SYS_ID.
 
+**Immediately save GRAPH_USER_SYS_ID** to
+`my/connect/servicenow/config.json` under `graph.userSysId`.
+
 ---
 
 ## 2.7 — Assign roles
+
+**Message (do NOT wait for user response — continue immediately):**
+
+Assigning roles...
+
+**End message.**
 
 The integration user needs ALL 6 of these roles:
 
@@ -211,9 +308,21 @@ Repeat for all 6 roles.
 **Roles alone are NOT sufficient.** You MUST also do section 2.8 to
 create explicit table ACLs.
 
+**Message (do NOT wait for user response — continue immediately):**
+
+✅ 6 roles assigned.
+
+**End message.**
+
 ---
 
 ## 2.8 — Create ACLs via temporary Scripted REST API
+
+**Message (do NOT wait for user response — continue immediately):**
+
+Setting up table ACLs (this takes a few seconds)...
+
+**End message.**
 
 **This is the most critical step.** The Graph Connector requires
 explicit read ACLs on 20 tables. Without them, the M365 Admin Center
@@ -424,6 +533,10 @@ Wait for the user.
 
 ### 2.8e — Clean up the temporary API
 
+**IMPORTANT: This cleanup MUST run regardless of whether 2.8d succeeded
+or failed.** Do not skip this step on failure — orphaned API records
+will remain in the user's ServiceNow instance.
+
 Delete the resource and API definition:
 
 ```
@@ -431,11 +544,24 @@ delete_record(table="sys_ws_operation", sys_id="{RESOURCE_SYS_ID}")
 delete_record(table="sys_ws_definition", sys_id="{API_SYS_ID}")
 ```
 
+If the deletes fail, note the sys_ids and inform the user:
+
+**Message:**
+
+I couldn't clean up the temporary API records. You can delete them
+manually in ServiceNow:
+
+- **Scripted REST Services** → find "Copilot ACL Setup" → delete it
+
+**End message.**
+
 ---
 
 ## 2.9 — Save config and display results
 
-Update `my/connect/servicenow/config.json` — add a `graph` object:
+Update `my/connect/servicenow/config.json` — add or update the `graph`
+object. Some fields may already be saved from incremental saves above;
+ensure all fields are present:
 
 ```json
 {
@@ -451,8 +577,17 @@ Update `my/connect/servicenow/config.json` — add a `graph` object:
 
 **Message:**
 
-✅ ServiceNow is configured for the Graph Connector. The OIDC provider,
-integration user, roles, and table ACLs are all set up.
+✅ ServiceNow is configured for the Graph Connector.
+
+Here's what was set up:
+
+| Record | Status |
+|--------|--------|
+| OIDC provider | ✅ Created |
+| Claims configuration | ✅ Configured |
+| Integration user | ✅ Created |
+| Role assignments | ✅ 6 roles assigned |
+| Table ACLs | ✅ 20 tables configured |
 
 Now you need to create the connection in the Microsoft 365 Admin Center.
 Type **go** to continue.
@@ -461,3 +596,33 @@ Type **go** to continue.
 
 Wait for the user. Then read `src/skills/connect/servicenow/step3-graph.md`
 and follow it.
+
+---
+
+## 2.10 — Cleanup on failure (reference)
+
+This section is NOT part of the normal flow. Use it only if a step
+fails permanently and the user wants to start over.
+
+Records created during this flow (check config.json for sys_ids):
+
+| Table | Record | Config key |
+|-------|--------|------------|
+| `oauth_oidc_entity` | OIDC provider | `graph.oidcEntitySysId` |
+| `oidc_provider_configuration` | Claims config | `graph.oidcConfigSysId` |
+| `sys_user` | Integration user | `graph.userSysId` |
+| `sys_user_has_role` | 6 role assignments | (query by user sys_id) |
+| `sys_security_acl` | ~40 ACL records | (query by description marker) |
+| `sys_ws_definition` | Temp API | Should already be cleaned up in 2.8e |
+| `sys_ws_operation` | Temp API resource | Should already be cleaned up in 2.8e |
+
+To clean up ACLs, query:
+```
+query_table(table="sys_security_acl", query="descriptionLIKEESS Copilot Kit", fields="sys_id", limit=50)
+```
+Then delete each record.
+
+To deactivate the integration user:
+```
+update_record(table="sys_user", sys_id="{GRAPH_USER_SYS_ID}", data="{\"active\": \"false\"}")
+```

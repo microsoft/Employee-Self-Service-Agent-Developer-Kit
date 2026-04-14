@@ -9,6 +9,13 @@ You should already have ENV_URL from Step 1.
 
 ## 1.4 — Run the discovery script
 
+**Message (do NOT wait for user response — continue immediately):**
+
+Looking for ESS agents in your environment — this takes a few
+seconds...
+
+**End message.**
+
 Run this command in the terminal (substitute ENV_URL):
 
 ```

@@ -80,6 +80,58 @@ into Copilot Studio.
 
 ## 2.3 — Create the OAuth application via MCP
 
+**Message:**
+
+I'm going to create an OAuth application called **ESS Copilot** in your
+ServiceNow instance. This enables the Power Platform connector to
+authenticate users when they interact with the agent.
+
+**End message.**
+
+Use the `vscode_askQuestions` tool:
+
+```json
+[
+  {
+    "header": "Create OAuth app",
+    "question": "OK to create the OAuth application in ServiceNow?",
+    "options": [
+      { "label": "Create it", "recommended": true },
+      { "label": "I'll do it manually" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+**If the user chose "I'll do it manually":**
+
+**Message:**
+
+No problem. In ServiceNow:
+
+1. Go to **System OAuth** → **Application Registry**
+2. Click **New** → **Create an OAuth API endpoint for external clients**
+3. Set:
+   - **Name**: `ESS Copilot`
+   - **Redirect URL**: `{REDIRECT_URL}`
+   - **Client Secret**: `{CLIENT_SECRET}`
+4. Click **Submit**
+
+Copy the **Client ID** from the new record and paste it here.
+
+**End message.**
+
+Wait for the user to provide CLIENT_ID. Save the value and skip to 2.4.
+
+**If the user chose "Create it":**
+
+**Message (do NOT wait for user response — continue immediately):**
+
+Creating the OAuth application...
+
+**End message.**
+
 Call the ServiceNow MCP `register_oauth_application` tool:
 
 - `name`: `"ESS Copilot"`

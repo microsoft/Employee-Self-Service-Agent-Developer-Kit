@@ -10,6 +10,12 @@ SCHEMA_NAME, IS_MANAGED.
 
 ## 2.1 — Fetch components and run setup
 
+**Message (do NOT wait for user response — continue immediately):**
+
+Extracting your agent — this usually takes 10–20 seconds...
+
+**End message.**
+
 Run this single command in the terminal (substitute all values):
 
 ```

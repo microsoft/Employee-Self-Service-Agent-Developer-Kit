@@ -63,7 +63,43 @@ query_table(table="sys_user", query="user_name={ENTRA_UPN}", fields="sys_id,user
 
 **If a matching user is found**: proceed to 2.4.
 
-**If no matching user is found**: create one.
+**If no matching user is found**:
+
+Use the `vscode_askQuestions` tool:
+
+```json
+[
+  {
+    "header": "Create test user",
+    "question": "Your ServiceNow instance doesn't have a user matching this Microsoft account. I can create a test user so the connection can be verified.",
+    "options": [
+      { "label": "Create the user", "recommended": true },
+      { "label": "I'll create it manually in ServiceNow" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+**If the user chose "I'll create it manually in ServiceNow":**
+
+**Message:**
+
+No problem. In ServiceNow, go to **User Administration** → **Users** →
+**New** and create a user with:
+
+| Field | Value |
+|-------|-------|
+| **User ID** | `{ENTRA_UPN}` |
+| **Email** | `{ENTRA_UPN}` |
+
+Type **done** when you've created the user.
+
+**End message.**
+
+Wait for the user. Then proceed to 2.4.
+
+**If the user chose "Create the user":**
 
 Call the ServiceNow MCP `create_record` tool:
 
@@ -73,7 +109,11 @@ create_record(table="sys_user", data="{\"user_name\": \"{ENTRA_UPN}\", \"email\"
 
 Save the `sys_id` from the response as CREATED_USER_SYS_ID.
 
-**Message:**
+**Immediately save CREATED_USER_SYS_ID** to
+`my/connect/servicenow/config.json` under `entra.createdUserSysId`.
+This ensures the created user is tracked for cleanup if later steps fail.
+
+**Message (do NOT wait for user response — continue immediately):**
 
 Your ServiceNow instance didn't have a user matching `{ENTRA_UPN}`, so
 I've created one. You can update the name and details later in ServiceNow
@@ -88,6 +128,33 @@ Users → New).
 ---
 
 ## 2.4 — Register OIDC provider entity
+
+**Message:**
+
+Next I'll configure the OIDC authentication link between Entra and
+ServiceNow. This creates an OIDC provider record and updates the
+claims mapping in your ServiceNow instance.
+
+**End message.**
+
+Use the `vscode_askQuestions` tool:
+
+```json
+[
+  {
+    "header": "Configure OIDC",
+    "question": "OK to set up OIDC authentication in ServiceNow?",
+    "options": [
+      { "label": "Go ahead", "recommended": true },
+      { "label": "Wait" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+If the user chose "Wait", pause and wait for them to say they're ready.
+If they chose "Go ahead", proceed.
 
 First, check if an OIDC entity already exists for this tenant (idempotency).
 
@@ -267,3 +334,27 @@ continue.
 
 Wait for the user. Then read `src/skills/connect/servicenow/step3-entra.md`
 and follow it.
+
+---
+
+## 2.8 — Cleanup on failure (reference)
+
+This section is NOT part of the normal flow. Use it only if a step
+fails permanently and the user wants to start over.
+
+If a test user was created in 2.3 (CREATED_USER_SYS_ID is set), it
+can be deactivated:
+
+```
+update_record(table="sys_user", sys_id="{CREATED_USER_SYS_ID}", data="{\"active\": \"false\"}")
+```
+
+If the OIDC entity was created in 2.4 (OIDC_ENTITY_SYS_ID is set),
+it can be deleted:
+
+```
+delete_record(table="oauth_oidc_entity", sys_id="{OIDC_ENTITY_SYS_ID}")
+```
+
+The Entra app registration can be deleted using the cleanup command
+in `azure/app-registration.md` section B.8.

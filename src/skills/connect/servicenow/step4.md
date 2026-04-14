@@ -14,9 +14,10 @@ agent.name, agent.schemaName, agent.isManaged).
 
 ## 4.1 — Re-extract the agent
 
-**Message:**
+**Message (do NOT wait for user response — continue immediately):**
 
-Pulling your updated agent from Dataverse...
+Re-extracting your agent to pull in the new ServiceNow components.
+This takes about 10–20 seconds...
 
 **End message.**
 
