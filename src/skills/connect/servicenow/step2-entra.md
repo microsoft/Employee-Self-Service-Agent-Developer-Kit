@@ -202,7 +202,7 @@ suggest manual update in ServiceNow admin.
 Call the ServiceNow MCP `update_record` tool:
 
 ```
-update_record(table="oauth_oidc_entity", sys_id="{OIDC_ENTITY_SYS_ID}", data="{\"oidc_provider\": \"{OIDC_CONFIG_SYS_ID}\"}")
+update_record(table="oauth_oidc_entity", sys_id="{OIDC_ENTITY_SYS_ID}", data="{\"oidc_provider_configuration\": \"{OIDC_CONFIG_SYS_ID}\"}")
 ```
 
 **If the update fails**: retry once. If still fails, show the error
@@ -257,8 +257,8 @@ Here are the values you'll need for the next step:
 | Field | Value |
 |-------|-------|
 | **Authentication Type** | Microsoft Entra ID User Login |
-| **Instance Name** | `{INSTANCE_NAME}` |
 | **Resource URI** | `{APP_CLIENT_ID}` |
+| **Instance Name** | `{INSTANCE_NAME}` |
 
 Ready to install the integration in Copilot Studio? Type **go** to
 continue.

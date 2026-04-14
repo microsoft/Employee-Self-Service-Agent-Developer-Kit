@@ -42,8 +42,8 @@ Time to install the ServiceNow integration in Copilot Studio.
    | Field | Value |
    |-------|-------|
    | **Authentication Type** | Microsoft Entra ID User Login |
-   | **Instance Name** | `{INSTANCE_NAME}` |
    | **Resource URI** | `{APP_CLIENT_ID}` |
+   | **Instance Name** | `{INSTANCE_NAME}` |
 
 6. Sign in with your Microsoft account when prompted
 7. If it asks for a **Microsoft Dataverse** connection, sign in with your
