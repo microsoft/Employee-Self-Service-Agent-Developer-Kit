@@ -39,7 +39,7 @@ For detailed documentation about the connector, see [ServiceNow - Connectors](/c
 - Have a ServiceNow HRSD/ITSM instance
 - Have a Microsoft 365 tenant
 - Install the Employee Self-Service agent
-- Install the HRMS plugin
+- Activate the **Human Resources Scoped App: Core** plugin (`com.sn_hr_core`) in ServiceNow. This plugin provides the `sn_hr_core_case` table and other HR tables required by HRSD scenarios. To activate: navigate to **System Definition → Plugins**, search for `com.sn_hr_core`, and click **Activate**. On developer instances, this plugin is available but inactive by default.
 
 Refer to the Employee Self-Service agent [deployment guide](deploy-overview-alm.md) for installation of the agent and subscription requirements required for the Employee Self-Service agent.
 
@@ -142,7 +142,7 @@ The service principal is typically created automatically when the app registrati
 > The `upn` → `user_name` mapping requires that ServiceNow users have usernames in UPN format (e.g., `user@contoso.com`). Enterprise instances using Entra Connect or SCIM provisioning typically have this already. Developer instances may need a matching user created manually.
 
 > [!IMPORTANT]
-> The `oidc_provider_configuration` table does not allow creating new records via the API (returns 403). Always update the built-in "Azure AD" configuration record rather than attempting to create a new one.
+> The `oidc_provider_configuration` table may restrict creating new records via the API on some ServiceNow instances (returns 403). If create fails, update the built-in "Azure AD" configuration record instead. Newer instances and PDIs typically allow creating new records.
 
 ### Microsoft Entra ID OAuth using Certificate
 

@@ -8,6 +8,11 @@ or what files you are reading.
 
 ## Start
 
+If the user specified an integration as an argument (e.g., the user said
+"servicenow" or "workday", or the prompt was invoked as `/connect servicenow`),
+pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
+"which system" question and go directly to routing for that integration.
+
 Read `src/skills/connect/step1.md` and follow it.
 
 (Step 1 asks which integration. It checks `my/connect/{integration}/tasks.md`
@@ -25,7 +30,11 @@ Each integration has its own folder with its own tasks.md and step files:
   - State file: `my/connect/servicenow/tasks.md`
   - Config file: `my/connect/servicenow/config.json`
   - Step 1: `step1.md` — instance info, MCP setup, connectivity check
+  - Step 2 (Entra): `step2-entra.md` — create Entra app registration for user login
+  - Step 2 (Certificate): `step2-certificate.md` — create two Entra apps + OIDC + system user
   - Step 2 (OAuth2): `step2-oauth2.md` — create OAuth app via MCP
+  - Step 3 (Entra): `step3-entra.md` — install extension pack (Entra fields)
+  - Step 3 (Certificate): `step3-certificate.md` — install extension pack (Certificate fields)
   - Step 3 (OAuth2): `step3-oauth2.md` — install extension pack (OAuth2 fields)
   - Step 3 (Basic): `step3-basic.md` — install extension pack (Basic fields)
   - Step 4: `step4.md` — verify connection

@@ -44,6 +44,7 @@ Use the `vscode_askQuestions` tool with these four questions in one call:
     "question": "How do your employees sign into ServiceNow?",
     "options": [
       { "label": "Microsoft account (Entra ID)", "description": "Employees use their Microsoft work account" },
+      { "label": "Certificate (service-to-service)", "description": "Non-interactive, uses Entra app certificate" },
       { "label": "ServiceNow username and password", "description": "Separate ServiceNow login" },
       { "label": "I'm not sure" },
       { "label": "Dev/test instance", "description": "Simplest setup" }
@@ -79,6 +80,7 @@ to `none`.
 
 **Authentication** → Map to SNOW_AUTH (only relevant for Power Platform connector):
 - "Microsoft account (Entra ID)" → `entra`
+- "Certificate (service-to-service)" → `certificate`
 - "ServiceNow username and password" → `oauth2`
 - "I'm not sure" → `entra`
 - "Dev/test instance" → `basic`
@@ -236,6 +238,9 @@ Route by SNOW_AUTH for the Power Platform connector:
 
 - If SNOW_AUTH is `entra`:
   Read `src/skills/connect/servicenow/step2-entra.md` and follow it.
+
+- If SNOW_AUTH is `certificate`:
+  Read `src/skills/connect/servicenow/step2-certificate.md` and follow it.
 
 - If SNOW_AUTH is `oauth2`:
   Read `src/skills/connect/servicenow/step2-oauth2.md` and follow it.
