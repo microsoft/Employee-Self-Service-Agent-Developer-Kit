@@ -44,8 +44,8 @@ class WorkdayClient:
 
     Required env vars:
         WORKDAY_BASE_URL       — SOAP base URL (e.g. https://wd2-impl-services1.workday.com/ccx/service)
-        WORKDAY_TENANT         — Workday tenant name (e.g. microsoft_dpt6)
-        WORKDAY_USERNAME       — ISU account username (e.g. isu_wql_copilot@employeehub.onmicrosoft.com@microsoft_dpt6)
+        WORKDAY_TENANT         — Workday tenant name (e.g. contoso_prod)
+        WORKDAY_USERNAME       — ISU account username (format: user@domain@tenant)
         WORKDAY_PASSWORD       — ISU account password
 
     Optional env vars (for OAuth 2.0 user-context operations):

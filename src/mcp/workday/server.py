@@ -248,7 +248,7 @@ async def run_report(
 
     Args:
         report_owner: The ISU account that owns the report
-                     (e.g., ISU_WQL_COPILOT@EmployeeHub.onmicrosoft.com)
+                     (e.g., ISU_WQL_COPILOT@contoso.com)
         report_name: Name of the report (e.g., WD_User_Context)
         report_instance: Report instance name (e.g., Report2). Empty if not applicable.
         params: JSON string of query parameters to pass to the report
