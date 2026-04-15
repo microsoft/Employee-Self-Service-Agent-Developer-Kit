@@ -87,6 +87,82 @@ The `/push` command compares your local files against the last-known baseline, d
 
 ---
 
+## Integrations
+
+The ESS agent connects to external HR systems through Power Platform connectors and shared orchestrator flows. The kit automates the setup process — gathering credentials, configuring identity providers, creating service accounts, and installing extension packs — so you can go from zero to a working integration without reading platform docs.
+
+### ServiceNow (HRSD / ITSM)
+
+Connect your agent to ServiceNow for IT tickets, HR cases, and service catalog items. Run `/connect servicenow` to start.
+
+**What the kit sets up:**
+- **Entra ID app registration** for SSO — employees use their Microsoft work account to authenticate, with automatic token refresh
+- **OAuth or Certificate auth** for service-to-service flows — configurable per environment
+- **Power Platform connector** — the `shared_service-now` connector, pre-authorized against your Entra app
+- **Extension pack installation** — installs the ServiceNow HRSD/ITSM extension in Copilot Studio with all connection references wired up
+
+**Supported auth methods:**
+| Method | Use case |
+|--------|----------|
+| Microsoft Entra ID (interactive) | Production — employees SSO through Microsoft |
+| Certificate (service-to-service) | Non-interactive integrations |
+| OAuth2 (ServiceNow credentials) | Separate ServiceNow login |
+| Basic auth | Dev/test only |
+
+**What you can build after connecting:**
+- Look up or create ServiceNow incidents, HR cases, and catalog requests
+- Query CMDB items, knowledge articles, and user records
+- New scenarios use the **template config + shared flow** pattern — no standalone workflows needed
+
+### Workday (HCM / Payroll / Absence)
+
+Connect your agent to Workday for employee data, compensation, time off, and org lookups. Run `/connect workday` to start.
+
+**What the kit sets up:**
+- **SAML SSO via Entra ID** — verifies or creates the Entra enterprise app, configures SAML trust with Workday, and pre-authorizes the Power Platform connector
+- **Integration System Users (ISUs)** — automatically creates `ISU_WQL_COPILOT` (for reports) and `ISU_GENERIC_COPILOT` (for API calls) via the Workday SOAP API
+- **Security groups and domain permissions** — guides you through creating `ISSG_WQL_COPILOT` and `ISSG_GENERIC_COPILOT` with the correct domain policies
+- **OAuth API client** — walks you through registering a SAML Bearer Grant client (for Entra SSO) or Authorization Code Grant client (for Basic auth)
+- **WD_User_Context RaaS report** — verifies or guides creation of the custom report that maps Workday usernames to employee context data
+- **Extension pack installation** — installs the Workday extension in Copilot Studio with all three SOAP connection references configured
+
+**Supported auth methods:**
+| Method | Use case |
+|--------|----------|
+| Microsoft Entra ID Integrated | Production — employees SSO through Microsoft, SAML token exchange with Workday |
+| Basic auth | Dev/test only — ISU username/password directly |
+
+**Verify-first approach:** The kit runs API checks against your Workday tenant before asking you to configure anything. If ISU accounts, auth policies, permissions, or the RaaS report are already set up (common on shared tenants), those tasks are automatically skipped.
+
+**What you can build after connecting:**
+- Look up employee information, compensation, service anniversary, cost center
+- Check time off balances and request time off
+- Query emergency contacts, national IDs, passports, visas, certifications
+- Update email and phone number
+- New scenarios use the **template config + shared flow** pattern — no standalone workflows needed
+
+### Workday MCP Server
+
+The kit includes a local Workday MCP server (`src/mcp/workday/`) that enables direct Workday API access from VS Code during setup and development. It supports:
+
+- **SOAP API** — Create integration systems, ISU accounts, and call any Workday web service
+- **RaaS (Reports as a Service)** — Query custom reports like `WD_User_Context`
+- **Worker data** — Get employee details, time off balances, org data
+- **Connection testing** — Verify ISU authentication and permissions
+
+The MCP server uses Basic auth with ISU credentials and is configured automatically during `/connect workday`.
+
+### ServiceNow MCP Server
+
+The kit also includes a local ServiceNow MCP server (`src/mcp/servicenow/`) for direct ServiceNow API access:
+
+- **REST API** — Query and create records in any ServiceNow table
+- **Connection testing** — Verify instance connectivity and credentials
+
+Configured automatically during `/connect servicenow`.
+
+---
+
 ## Getting Started
 
 ### Prerequisites
@@ -127,6 +203,7 @@ Setup connects to your Power Platform environment, discovers your ESS agent, and
 | Command | What it does |
 |---------|-------------|
 | `/setup` | First-time environment setup — authenticate, discover agent, extract, configure |
+| `/connect` | Connect an external system (ServiceNow, Workday) — guided setup with MCP verification |
 | `/create` | Create a new topic or workflow |
 | `/update` | Modify an existing topic or workflow |
 | `/delete` | Delete a topic or workflow from your agent |

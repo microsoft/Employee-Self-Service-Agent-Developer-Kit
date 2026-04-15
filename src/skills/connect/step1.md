@@ -194,14 +194,78 @@ Now read `src/skills/connect/servicenow/step1.md` and follow it.
 
 ### If the user chose Workday (2 or "workday")
 
+Check if `my/connect/workday/tasks.md` exists.
+
+**If it exists and all items are checked:**
+
+Read `my/connect/workday/config.json` to get the current tenant name.
+
 **Message:**
 
-Workday integration is coming soon. For now, you can start with ServiceNow,
-or type `/menu` to see other things you can do.
+Workday is already connected (tenant: **{tenant}**).
+
+1. **Keep current setup** — run `/create` to start building topics
+2. **Reconnect from scratch** — reset everything and start over
 
 **End message.**
 
-Stop here.
+Wait for the user.
+
+**If the user chose 1 (keep):** Stop here.
+
+**If the user chose 2 (reconnect):**
+
+Reset `my/connect/workday/tasks.md` — all steps to `- [ ]`.
+
+Delete `my/connect/workday/config.json`.
+
+Copy `src/skills/connect/workday/tasks.md` to
+`my/connect/workday/tasks.md`.
+
+**Message:**
+
+| # | Task | Status |
+|---|------|--------|
+| 1 | Environment configured | ⬜ |
+| 2 | Admin setup complete | ⬜ |
+| 3 | Connection verified | ⬜ |
+
+Starting fresh. Let's reconnect Workday to your agent.
+
+**End message.**
+
+Now read `src/skills/connect/workday/step1.md` and follow it.
+
+**If it exists and some items are unchecked:**
+
+Show the checklist from `my/connect/workday/tasks.md` (✅ for checked,
+⬜ for unchecked) followed by "Picking up where we left off."
+
+Read `my/connect/workday/config.json` to restore saved values. Then
+find the first unchecked step and route:
+
+- **Step 1 unchecked** → read `src/skills/connect/workday/step1.md`
+- **Step 2 unchecked** → read `src/skills/connect/workday/step2.md`
+- **Step 3 unchecked** → read `src/skills/connect/workday/step3.md`
+
+**If it does not exist:**
+
+Copy `src/skills/connect/workday/tasks.md` to
+`my/connect/workday/tasks.md`.
+
+**Message:**
+
+| # | Task | Status |
+|---|------|--------|
+| 1 | Environment configured | ⬜ |
+| 2 | Admin setup complete | ⬜ |
+| 3 | Connection verified | ⬜ |
+
+Let's connect Workday to your agent.
+
+**End message.**
+
+Now read `src/skills/connect/workday/step1.md` and follow it.
 
 ### If the user said something else
 
