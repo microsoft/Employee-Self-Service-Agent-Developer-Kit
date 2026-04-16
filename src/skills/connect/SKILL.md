@@ -43,26 +43,33 @@ Each integration has its own folder with its own tasks.md and step files:
   - Tasks template: `src/skills/connect/workday/tasks.md`
   - State file: `my/connect/workday/tasks.md`
   - Config file: `my/connect/workday/config.json`
-  - Step 1: `step1.md` — gather info, MCP setup, connectivity check
-  - Step 2: `step2.md` — guided admin setup (ISU accounts, security groups, permissions, report)
-  - Step 3: `step3.md` — final verification, extension pack install, agent re-extraction
+  - Step 1: `step1.md` — gather info, MCP setup, connectivity check, detect existing state (Entra app, extension pack, RaaS report)
+  - Step 2: `step2.md` — Entra SSO setup (mandatory), ISU accounts, security groups, auth policies, API client, domain permissions, RaaS report
+  - Step 3: `step3.md` — extension pack install (or diagnose existing), connection setup (3 different auth types), post-install verification, topic redirect auto-push, end-to-end test
 
 **Workday key principles:**
-- **Verify before acting.** Step 2 runs a pre-flight sweep using MCP
-  tools (test_connection, get_worker, get_time_off_balance, run_report)
-  to detect what's already configured. Only portal-guide tasks that fail
-  verification.
-- **Two API client types.** Entra ID Integrated auth requires a
-  "Register API Client" (first tab) with SAML Bearer Grant + "Use
-  Configured IdPs." Basic auth uses "Register API Client for
-  Integrations" (second tab) with Authorization Code Grant. These are
-  completely different forms with different fields.
-- **Check Workday SAML before creating Entra apps.** If a SAML Identity
-  Provider already exists in Workday for the user's tenant, find the
-  matching Entra app instead of creating a new one.
-- **Extension pack install is part of step 3.** Verification alone is
-  not enough — the Copilot Studio extension pack must be installed with
-  correct connections, environment variables, and cloud flow activation.
+- **Entra SSO is MANDATORY.** The Workday extension pack's OAuthUser
+  connection (`ff0df`) uses `runtimeSource: invoker` — it authenticates
+  to Workday AS the employee via Entra SSO. Do NOT offer to skip SSO
+  setup. Do NOT use Basic auth for all 3 connections.
+- **Three connections, three configs.** The 3 Workday SOAP connections
+  need DIFFERENT auth types:
+  - `d6081` (Context Generic) = Basic auth with ISU_WQL credentials
+  - `0786a` (Generic User) = Basic auth with ISU_GENERIC credentials
+  - `ff0df` (OAuthUser) = Microsoft Entra ID Integrated (employee SSO)
+- **Never skip tasks based on MCP pre-flight.** The Workday MCP uses
+  the user's admin credentials. The Power Platform flows use ISU
+  accounts. These have different permissions. A passing MCP check does
+  NOT mean ISU accounts work at runtime.
+- **Verify-then-create pattern.** Use idempotent creation (Add_Only=true,
+  catch "already exists") to detect existing ISU accounts and security
+  groups without asking the user to search the Workday UI.
+- **Auto-push the topic redirect.** The `[Admin] - User Context - Setup`
+  topic must redirect to `WorkdaySystemGetUserContext`. Push this via
+  push.py automatically — do NOT leave as a manual portal step.
+- **Post-install verification.** After extension pack install, verify
+  ALL 7 items programmatically: 3 connection refs, 2 flows, 1 env var,
+  1 topic redirect. Do NOT accept "done" without checking.
 
 Each integration's tasks.md and config.json persist after completion.
 Running `/connect` again lets the user add a different integration
