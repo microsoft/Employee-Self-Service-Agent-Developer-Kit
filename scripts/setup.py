@@ -484,26 +484,61 @@ def _build_flow_topic_map(topics, topic_data):
 def write_config(agent_info, slug, output_dir, template_configs_discovered,
                  template_config_count=0, workflow_count=0,
                  evaluation_count=0):
-    """Write my/config.json with setup = complete."""
+    """Write my/config.json with setup = complete.
+
+    Supports multiple agents: maintains an `agents` array with all discovered
+    agents, `activeAgent` pointing to the current slug, and a backward-compat
+    `agent` field that mirrors the active agent.
+    """
     bot_id = agent_info["botId"]
+    agent_entry = {
+        "name": agent_info["name"],
+        "botId": bot_id,
+        "schemaName": agent_info["schema"],
+        "isManaged": agent_info["managed"],
+        "slug": slug,
+        "folder": output_dir.replace("\\", "/"),
+    }
+
+    # Load existing config to preserve other agents and connections
+    config_path = os.path.join("my", "config.json")
+    existing = {}
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, "r", encoding="utf-8") as f:
+                existing = json.load(f)
+        except (json.JSONDecodeError, OSError):
+            existing = {}
+
+    # Build or update agents array
+    agents = existing.get("agents", [])
+
+    # Remove existing entry for this slug if present (update case)
+    agents = [a for a in agents if a.get("slug") != slug]
+    agents.append(agent_entry)
+
+    # Sort by name for consistent ordering
+    agents.sort(key=lambda a: a.get("name", ""))
+
     config = {
         "setup": "complete",
-        "agent": {
-            "name": agent_info["name"],
-            "botId": bot_id,
-            "schemaName": agent_info["schema"],
-            "isManaged": agent_info["managed"],
-            "slug": slug,
-            "folder": output_dir.replace("\\", "/"),
-        },
+        "agent": agent_entry,             # backward compat: active agent
+        "activeAgent": slug,              # slug of the active agent
+        "agents": agents,                 # all discovered agents
         "dataverseEndpoint": agent_info["url"],
         "templateConfigsDiscovered": template_configs_discovered,
         "templateConfigCount": template_config_count,
         "workflowCount": workflow_count,
         "evaluationCount": evaluation_count,
     }
+
+    # Preserve existing connections and other user-set fields
+    for key in ("connections", "workdayTestEmployeeId"):
+        if key in existing and key not in config:
+            config[key] = existing[key]
+
     os.makedirs("my", exist_ok=True)
-    with open(os.path.join("my", "config.json"), "w", encoding="utf-8") as f:
+    with open(config_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
 
 

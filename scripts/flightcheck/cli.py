@@ -91,11 +91,25 @@ def main():
         sys.exit(1)
 
     # --- Banner ---
+    agents = config.get("agents", [])
+    active = config.get("activeAgent", config.get("agent", {}).get("slug", ""))
+    if not agents:
+        # Backward compat: single agent in config
+        agent_entry = config.get("agent", {})
+        if agent_entry:
+            agents = [agent_entry]
+
     print()
     print("=" * 64)
     print("  ESS FLIGHTCHECK — Pre-deployment Validation")
     print("=" * 64)
-    print(f"  Agent:       {config.get('agent', {}).get('name', 'N/A')}")
+    if len(agents) == 1:
+        print(f"  Agent:       {agents[0].get('name', 'N/A')}")
+    else:
+        print(f"  Agents:      {len(agents)} discovered")
+        for a in agents:
+            marker = "→" if a.get("slug") == active else " "
+            print(f"    {marker} {a.get('name', 'Unknown')}")
     print(f"  Environment: {env_url}")
     print(f"  Scope:       {args.scope}")
     print("=" * 64)

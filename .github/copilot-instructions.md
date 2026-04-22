@@ -300,6 +300,25 @@ The file `my/config.json` stores the user's setup state and agent details:
     "slug": "employee-self-service-hr",
     "folder": "my/agents/employee-self-service-hr"
   },
+  "activeAgent": "employee-self-service-hr",
+  "agents": [
+    {
+      "name": "Employee Self-Service HR",
+      "botId": "...",
+      "schemaName": "msdyn_copilotforemployeeselfservicehr",
+      "isManaged": true,
+      "slug": "employee-self-service-hr",
+      "folder": "my/agents/employee-self-service-hr"
+    },
+    {
+      "name": "Employee Self-Service IT",
+      "botId": "...",
+      "schemaName": "msdyn_copilotforemployeeselfserviceit",
+      "isManaged": true,
+      "slug": "employee-self-service-it",
+      "folder": "my/agents/employee-self-service-it"
+    }
+  ],
   "dataverseEndpoint": "https://org.crm.dynamics.com",
   "templateConfigsDiscovered": true,
   "templateConfigCount": 42,
@@ -307,4 +326,8 @@ The file `my/config.json` stores the user's setup state and agent details:
 }
 ```
 
-Skills read this file to find the agent folder, schema name, and other context. The snapshot at `my/agents/{slug}/` contains detailed analysis of the agent's topics, workflows, variables, connections, and template configurations.
+The `agent` field is a backward-compatible copy of whichever agent is active
+(pointed to by `activeAgent` slug). All discovered agents are in the `agents`
+array. When setup runs for a new agent, it's added to `agents` and set as
+active. Skills read `agent.*` for the current agent; FlightCheck scans all
+agents under `my/agents/` regardless of which is active.
