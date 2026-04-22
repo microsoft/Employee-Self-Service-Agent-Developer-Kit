@@ -97,4 +97,4 @@ Or just describe what you need in plain English.
 
 **End message.**
 
-Stop here. Do not continue.
+Now read `src/skills/onboarding/step3-flightcheck.md` and follow it.

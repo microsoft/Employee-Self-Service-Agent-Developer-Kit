@@ -71,3 +71,9 @@ read step2.md, which extracts the agent and starts the MCP server.)
 ## Step 3 or Step 4
 
 Read `src/skills/onboarding/step2.md` and follow it.
+
+---
+
+## Step 5
+
+Read `src/skills/onboarding/step3-flightcheck.md` and follow it.

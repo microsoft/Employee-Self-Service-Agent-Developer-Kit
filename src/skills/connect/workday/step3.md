@@ -441,6 +441,7 @@ Here's what you can do next:
 
 | Command | What it does |
 |---------|-------------|
+| `/flightcheck` | Verify Workday connections, flows, and permissions are healthy |
 | `/create` | Create a new topic that uses Workday data |
 | `/scan` | Check your agent for any errors |
 | `/connect` | Connect another system (e.g., ServiceNow) |

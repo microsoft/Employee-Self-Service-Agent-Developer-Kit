@@ -251,6 +251,7 @@ After a successful push, `.baseline/` is updated to match the new state.
 | Update/modify a workflow | `src/skills/workflows/update/SKILL.md` |
 | Delete/remove a topic | `src/skills/topics/delete/SKILL.md` |
 | Delete/remove a workflow | `src/skills/workflows/delete/SKILL.md` |
+| Run pre-deployment readiness check | `src/skills/flightcheck/SKILL.md` |
 | Fix compile errors | `src/skills/cleanup/SKILL.md` |
 | Generate evaluation test sets | `src/skills/evaluations/create/SKILL.md` |
 | Update/modify evaluation test cases | `src/skills/evaluations/update/SKILL.md` |
@@ -267,6 +268,10 @@ After a successful push, `.baseline/` is updated to match the new state.
 but users don't", "authentication error", "connection not working",
 "executeGenericSOAPFailure", "executeContextSOAPFailure", "Response is not in
 JSON format", "something went wrong with Workday".
+
+**Trigger phrases for flightcheck:** "readiness check", "pre-deployment check",
+"flightcheck", "flight check", "is my agent ready", "validate my environment",
+"check my setup", "pre-flight", "deployment readiness", "run validation".
 
 **When the user asks to modify, delete, rename, or otherwise change an agent
 component, ALWAYS load and follow the corresponding skill file.** The skill

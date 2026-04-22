@@ -18,6 +18,7 @@ Here's what I can help you with:
 | `/delete` | Type Enter to delete a topic or workflow from your agent |
 | `/scan` | Type Enter to scan your agent for compile errors and fix them |
 | `/evaluate` | Type Enter to generate evaluation test sets for your agent |
+| `/flightcheck` | Type Enter to run a pre-deployment readiness check |
 | `/push` | Type Enter to push all local changes to Copilot Studio |
 
 Tip: Switch to **Plan** mode (type `/plan`) if you'd like to brainstorm or discuss changes before making them.

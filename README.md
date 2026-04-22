@@ -85,6 +85,46 @@ Checkpoint (backup) → Local edit → Error scan → Dry-run diff → Push → 
 
 The `/push` command compares your local files against the last-known baseline, detects new/modified/deleted components, and syncs them to your Copilot Studio environment via the Dataverse API. Rollback is always one command away.
 
+### ✈️ FlightCheck — Pre-Deployment Readiness Validation
+
+Run a comprehensive readiness check against your live environment and all extracted agents before going to production. FlightCheck validates licensing, identity, infrastructure, integrations, agent configuration, and publishing readiness — then generates an HTML report you can share with stakeholders.
+
+Run `/flightcheck` from Copilot Chat, or directly from the CLI:
+
+```bash
+python scripts/flightcheck/cli.py --scope full
+```
+
+**What it checks (41+ automated checks across 8 categories):**
+
+| Category | What's validated |
+|----------|------------------|
+| Prerequisites | M365 Copilot, Copilot Studio, and Teams licenses; Global Admin and PP Admin roles |
+| Environment | Power Platform environment, Dataverse provisioning, DLP policies |
+| Authentication | Entra ID configuration, Conditional Access policies, user sync |
+| External Systems | Workday, ServiceNow, and SAP flow discovery and status |
+| Workday Deep | Environment variables, connection references, flow status, 17 SOAP workflow tests |
+| Agent Files | Agent instructions, starter prompts, required topics, variables, template configs |
+| Configuration | Per-agent validation across all extracted agents (HR and IT) |
+| Publishing | Golden prompts, UAT sign-off, managed solution export, admin approval |
+
+**Key capabilities:**
+- **Multi-agent** — automatically scans every agent under `my/agents/`, not just the active one
+- **HTML report** — opens in your browser with color-coded results, priority highlighting, and clickable remediation links
+- **Run history** — every run is archived in `my/flightcheck/history/` for trend tracking
+- **Workday SOAP tests** — tests all 17 ESS workflows against the actual Workday API (reads credentials from `.vscode/mcp.json`, prompts for ISU password at runtime — never saved to disk)
+- **Auto-fix offer** — after presenting results, the agent offers to fix issues it can handle (run `/connect`, `/scan`, enable flows) and re-runs the check
+- **Graceful degradation** — runs whatever checks your permissions allow; skips the rest with clear messages
+
+**Scopes** for targeted re-runs:
+
+| Scope | What it checks |
+|-------|----------------|
+| `full` | Everything (default) |
+| `workday` | Workday connections, flows, env vars, and SOAP workflow tests |
+| `local` | Agent files only — no API calls |
+| `prerequisites` | Licenses and roles only |
+
 ---
 
 ## Integrations
@@ -209,6 +249,7 @@ Setup connects to your Power Platform environment, discovers your ESS agent, and
 | `/delete` | Delete a topic or workflow from your agent |
 | `/scan` | Scan your agent for compile errors and fix them |
 | `/evaluate` | Generate evaluation test sets for your agent |
+| `/flightcheck` | Run pre-deployment readiness validation — licenses, environment, integrations, agent files |
 | `/push` | Push all local changes to Copilot Studio |
 | `/menu` | See all available commands |
 

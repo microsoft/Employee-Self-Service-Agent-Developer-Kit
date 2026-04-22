@@ -10,6 +10,10 @@ checkpoint required.
   run scripts, or create checkpoints.
 - Do NOT narrate your internal process. Say "Let me help you diagnose this"
   not "I'm loading the troubleshooting reference doc."
+- **Before starting diagnosis**, suggest running `/flightcheck` first if the
+  user hasn't recently. FlightCheck's automated checks often surface the root
+  cause faster than manual walkthrough. If the user says they already ran it,
+  ask them to share the results from `my/flightcheck/results.json`.
 - Track progress with todos if the diagnosis spans multiple configs.
 - Always read the relevant reference doc BEFORE presenting guidance — do not
   guess or paraphrase from memory.
