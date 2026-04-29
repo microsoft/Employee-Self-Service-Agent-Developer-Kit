@@ -1,0 +1,34 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+name: CI
+
+on:
+  push:
+    branches: [ "main", "main2" ]
+  pull_request:
+    branches: [ "main", "main2" ]
+
+jobs:
+  lint:
+    name: Lint Python
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.11'
+
+    - name: Install ruff
+      run: pip install ruff
+
+    - name: Lint with ruff
+      run: ruff check solutions/ess-agent-kit/scripts/ solutions/ess-agent-kit/src/mcp/ --output-format=github
+      continue-on-error: true
+
+    - name: Check Python syntax
+      run: |
+        python -m compileall -q solutions/ess-agent-kit/scripts/ solutions/ess-agent-kit/src/mcp/

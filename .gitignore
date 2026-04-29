@@ -1,0 +1,45 @@
+# ===== Allowlist approach =====
+# Ignore everything at root by default, then explicitly allow our folders.
+# This keeps dynamically-named cloned agent folders out of git automatically.
+/*
+
+# Allow our kit folders and files
+!.github/
+!.gitignore
+!.vscode/
+!scripts/
+!src/
+!README.md
+!LICENSE
+!SECURITY.md
+!CONTRIBUTING.md
+!CODE_OF_CONDUCT.md
+!SUPPORT.md
+!no-commit/
+
+# User-specific state — scaffold folders are committed, contents are not
+!my/
+my/**
+!my/onboarding/
+!my/agents/
+!my/**/.gitkeep
+
+# Internal planning docs (not for distribution)
+no-commit/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/.ropeproject
+.vscode/mcp.json
+*.code-workspace
+
+# Node (if added later)
+node_modules/
+
+# Python (if added later)
+__pycache__/
+*.pyc
+.env
