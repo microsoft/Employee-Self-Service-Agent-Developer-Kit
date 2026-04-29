@@ -129,6 +129,28 @@ python scripts/flightcheck/cli.py --scope full
 
 ---
 
+## Supported scenarios
+
+This toolkit is designed for:
+
+- **Authoring Copilot Studio topics** for ESS agents (Workday, ServiceNow HRSD/ITSM, custom integrations)
+- **Generating Power Automate workflow JSON** for connector integrations that don't have an ESS shared orchestrator
+- **Authoring template config records** for shared ESS orchestrators (Workday and ServiceNow)
+- **Local validation** via `/flightcheck` and `/scan` before pushing to Copilot Studio
+- **Working in a single Copilot Studio environment** (dev, test, or prod tenant of your choice)
+
+## Unsupported scenarios
+
+This toolkit does NOT:
+
+- Replace Copilot Studio's own validation, evaluation, or runtime safety controls
+- Provide hosted runtime, SLAs, or ongoing operations for the agents you build
+- Manage cross-tenant or cross-environment promotion (no built-in CI/CD for Copilot Studio)
+- Ship a production-ready packaged agent — you are authoring components in your own tenant
+- Provide official Microsoft support beyond what is described in [SUPPORT.md](SUPPORT.md)
+
+---
+
 ## Integrations
 
 The ESS agent connects to external HR systems through Power Platform connectors and shared orchestrator flows. The kit automates the setup process — gathering credentials, configuring identity providers, creating service accounts, and installing extension packs — so you can go from zero to a working integration without reading platform docs.

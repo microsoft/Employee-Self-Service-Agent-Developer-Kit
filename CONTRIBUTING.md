@@ -34,3 +34,56 @@ If a future change would expand the project beyond that scope — for example:
 - Adding **functionality outside the original approval scope** (a new product surface, a service component, packaged/redistributed binaries, etc.) —
 
 then maintainers **must file a new release request** in the [Open Source Portal](https://repos.opensource.microsoft.com/release) before merging that change. Routine bug fixes, dependency updates, documentation improvements, new prompt files, new sample topics, and additional connector reference content are in-scope and do not require a new release request.
+
+## Privacy
+
+This toolkit:
+
+- **Collects no telemetry.** Microsoft does not receive any data from your use of this kit. There is no telemetry SDK, no usage reporting, no crash reporting, and no opt-in/opt-out switch because there is nothing to switch off.
+- **Stores no data on Microsoft systems.** All data flows are between your local VS Code workspace and your own Power Platform / Copilot Studio tenant.
+- **Processes no personal data on Microsoft's behalf.** Any customer data you author or test against (topic content, evaluation prompts, sample employee records) stays in your tenant under your existing Copilot Studio / Power Platform license terms.
+
+For privacy questions about Copilot Studio, Power Platform, or GitHub Copilot themselves, see the [Microsoft Privacy Statement](https://privacy.microsoft.com).
+
+## Service dependencies
+
+The toolkit's scripts call the following Microsoft services on your behalf. Every call goes from your machine to your own tenant under your existing license — no data is sent to Microsoft beyond standard authentication exchanges with the services listed below.
+
+| Service | Purpose | Auth | Tenant |
+|---|---|---|---|
+| Power Platform / Dataverse Web API | Read agent components, push template config records | MSAL (delegated, your identity) | Your Power Platform environment |
+| Copilot Studio (via Dataverse) | Read/update topics, push changes | MSAL (delegated) | Your Copilot Studio environment |
+| ServiceNow REST API (optional) | Topic integration testing | User-provided OAuth / basic | Your ServiceNow tenant |
+| Workday SOAP / REST API (optional) | Topic integration testing | User-provided | Your Workday tenant |
+| GitHub Copilot (in VS Code) | LLM that reads prompt and instruction files and generates content | GitHub Copilot license | N/A — GitHub Copilot service |
+
+The toolkit does not call any other Microsoft services.
+
+## Validating your changes
+
+This is a sample/learning toolkit with no formal unit-test suite — the inputs (Copilot Studio topic YAML, Power Automate JSON) are validated end-to-end by `/flightcheck` rather than via unit tests. Before opening a PR:
+
+### 1. Lint and syntax check (matches CI)
+
+```pwsh
+ruff check scripts/ src/mcp/
+python -m compileall -q scripts/ src/mcp/
+```
+
+GitHub Actions runs the same commands on every PR (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+
+### 2. Smoke test the affected command
+
+If your change touches a Copilot Chat command (`/create`, `/update`, `/flightcheck`, etc.), run that command in VS Code against a **non-production** Copilot Studio environment and confirm:
+
+- It produces the expected file output
+- `/flightcheck` returns no errors on the resulting topic / workflow
+- `/scan` reports no regressions
+
+### 3. CodeQL
+
+CodeQL runs on every PR (see [`.github/workflows/codeql.yml`](.github/workflows/codeql.yml)). Wait for the check to pass. If CodeQL flags an issue, address it or document why it is a false positive in the PR description.
+
+### 4. CLA bot
+
+The Microsoft CLA bot will comment on your PR if you are an external contributor. You must accept the CLA before the PR can be merged.
