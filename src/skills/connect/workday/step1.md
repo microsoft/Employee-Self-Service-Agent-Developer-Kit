@@ -39,8 +39,8 @@ The Workday web URL follows one of these patterns:
 - `https://{host}.workday.com/{tenant}/d/...` (other data centers)
 
 Extract WD_TENANT from the first path segment after the domain.
-Example: `https://impl.workday.com/microsoft_dpt6/d/home.htmld`
-→ WD_TENANT = `microsoft_dpt6`
+Example: `https://impl.workday.com/contoso_impl/d/home.htmld`
+→ WD_TENANT = `contoso_impl`
 
 Derive the SOAP base URL and OAuth token host from the web host:
 - `impl.workday.com` → SOAP: `https://wd2-impl-services1.workday.com/ccx/service` / Token host: `wd2-impl-services1.workday.com`
