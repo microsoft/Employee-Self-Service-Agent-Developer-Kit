@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """
 ESS FlightCheck — Environment Configuration Validation (ENV-xxx)
 

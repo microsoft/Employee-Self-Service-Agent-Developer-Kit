@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """
 ESS Copilot Kit — Microsoft Graph REST API Client
 

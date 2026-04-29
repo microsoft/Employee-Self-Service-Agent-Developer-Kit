@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """ServiceNow MCP Server
 
 Exposes ServiceNow REST APIs as MCP tools for ITSM, HRSD, CMDB,

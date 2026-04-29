@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """
 ESS FlightCheck — External Systems Discovery (WD-001, SN-001, SAP-001)
 

@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Workday MCP Server
 
 Exposes Workday SOAP and RaaS APIs as MCP tools for HR data retrieval,

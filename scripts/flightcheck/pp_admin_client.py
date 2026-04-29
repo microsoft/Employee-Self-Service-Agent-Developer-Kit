@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """
 ESS Copilot Kit — Power Platform Admin REST API Client
 

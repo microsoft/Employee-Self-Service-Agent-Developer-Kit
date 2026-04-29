@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """Workday SOAP API client with Basic Auth, OAuth 2.0, retry, and XML parsing."""
 
 import asyncio

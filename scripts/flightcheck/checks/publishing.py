@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """
 ESS FlightCheck — Publishing & QA Validation (PUB-xxx, QA-xxx)
 

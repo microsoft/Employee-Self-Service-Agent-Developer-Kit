@@ -1,3 +1,6 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
 """ServiceNow REST API client with env-based auth, retry, and pagination."""
 
 import asyncio
