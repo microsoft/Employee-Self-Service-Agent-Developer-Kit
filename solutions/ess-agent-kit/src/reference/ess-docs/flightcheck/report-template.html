@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>ESS Pre-flight Validation Report</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background-color: #f5f5f5; }
+        .header { background-color: #0078d4; color: white; padding: 20px; border-radius: 5px; }
+        .summary { background-color: white; padding: 20px; margin: 20px 0; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        .summary-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
+        .summary-item { text-align: center; padding: 15px; border-radius: 5px; }
+        .passed { background-color: #d4edda; color: #155724; }
+        .failed { background-color: #f8d7da; color: #721c24; }
+        .warning { background-color: #fff3cd; color: #856404; }
+        .notconfigured { background-color: #e7e7e7; color: #666; }
+        .results { background-color: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+        th { background-color: #0078d4; color: white; padding: 12px; text-align: left; }
+        td { padding: 10px; border-bottom: 1px solid #ddd; }
+        tr:hover { background-color: #f5f5f5; }
+        .status-passed { color: #28a745; font-weight: bold; }
+        .status-failed { color: #dc3545; font-weight: bold; }
+        .status-warning { color: #ffc107; font-weight: bold; }
+        .status-notconfigured { color: #6c757d; font-weight: bold; }
+        .priority-critical { background-color: #ffe6e6; }
+        .priority-high { background-color: #fff4e6; }
+        .footer { margin-top: 20px; text-align: center; color: #666; }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>ESS Pre-flight Deployment Validation Report</h1>
+        <p>Generated: 2026-01-30 09:33:25</p>
+        <p>Validation Scope: Full</p>
+    </div>
+    
+    <div class="summary">
+        <h2>Validation Summary</h2>
+        <div class="summary-grid">
+            <div class="summary-item passed">
+                <h3>33</h3>
+                <p>Passed</p>
+            </div>
+            <div class="summary-item failed">
+                <h3>25</h3>
+                <p>Failed</p>
+            </div>
+            <div class="summary-item warning">
+                <h3>1</h3>
+                <p>Warnings</p>
+            </div>
+            <div class="summary-item notconfigured">
+                <h3>25</h3>
+                <p>Not Configured</p>
+            </div>
+        </div>
+    </div>
+    
+    <div class="results">
+        <h2>Detailed Results</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th>Checkpoint</th>
+                    <th>Category</th>
+                    <th>Priority</th>
+                    <th>Status</th>
+                    <th>Result</th>
+                    <th>Remediation</th>
+                </tr>
+            </thead>
+            <tbody>                <tr class="priority-critical">
+                    <td>PRE-001</td>
+                    <td>Prerequisites</td>
+                    <td>Critical</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Microsoft 365 Copilot licenses found: 33 consumed out of 50 enabled</td>
+                    <td></td>
+                </tr>                <tr class="priority-critical">
+                    <td>PRE-002</td>
+                    <td>Prerequisites</td>
+                    <td>Critical</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Copilot Studio licenses found: Power_Virtual_Agents</td>
+                    <td></td>
+                </tr>                <tr class="priority-critical">
+                    <td>PRE-003</td>
+                    <td>Prerequisites</td>
+                    <td>Critical</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Microsoft Teams licenses found: 5 0 users licensed</td>
+                    <td></td>
+                </tr>                <tr class="priority-critical">
+                    <td>PRE-008</td>
+                    <td>Prerequisites</td>
+                    <td>Critical</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Global Admin role assigned to 19 user(s)</td>
+                    <td></td>
+                </tr>                <tr class="priority-critical">
+                    <td>ENV-001</td>
+                    <td>Environment</td>
+                    <td>Critical</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Power Platform environment exists: [PROD] - ESS + Workday + ServiceNow</td>
+                    <td></td>
+                </tr>                <tr class="priority-critical">
+                    <td>ENV-002</td>
+                    <td>Environment</td>
+                    <td>Critical</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Dataverse database is enabled and provisioned</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>ENV-003</td>
+                    <td>Environment</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Environment type: Production - Managed Environment not required for ESS</td>
+                    <td>Optional: Enable Managed Environment for enhanced governance features (not required for ESS functionality).</td>
+                </tr>                <tr class="priority-high">
+                    <td>ENV-008</td>
+                    <td>Environment</td>
+                    <td>High</td>
+                    <td class="status-warning">Warning</td>
+                    <td>DLP policy check skipped - requires Power Platform Administrator permissions</td>
+                    <td>Grant Power Platform Administrator role and re-run validation to verify DLP policies.</td>
+                </tr>                <tr class="priority-critical">
+                    <td>AUTH-001</td>
+                    <td>Authentication</td>
+                    <td>Critical</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Microsoft Entra ID configured: EmployeeHub (Tenant: 935884d7-bdee-469b-a461-fcc530a3ac83)</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>AUTH-002</td>
+                    <td>Authentication</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Conditional Access policies configured: 3 enabled, 0 report-only</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>AUTH-004</td>
+                    <td>Authentication</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>User identity synchronization verified: 10 sample users found</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>SAP-001</td>
+                    <td>External Systems</td>
+                    <td>High</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>SAP SuccessFactors solution package not installed</td>
+                    <td>If you plan to integrate with SAP SuccessFactors, install the accelerator package from the ESS installation process.</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-001</td>
+                    <td>External Systems</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Workday solution components found: 2 flow(s)</td>
+                    <td></td>
+                </tr>                <tr class="priority-critical">
+                    <td>WD-ENV-001</td>
+                    <td>Workday</td>
+                    <td>Critical</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>VERIFY: 'EmployeeContextRequestAccountName' must be manually configured with ISU account name</td>
+                    <td>In Power Platform > Solutions > Workday Solution > Environment Variables, set 'Account Name' to your Workday ISU service account</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-ENV-002</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>VERIFY: 'EmployeeContextRequestReportName' should be 'WD User Context' (auto-populated default)</td>
+                    <td>Verify in Power Platform that this value is set to 'WD User Context' unless intentionally changed</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-ENV-003</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>VERIFY: 'EmployeeContextRequestReportInstanceName' should be 'Report2' (auto-populated default)</td>
+                    <td>Verify in Power Platform that this value is set to 'Report2' unless intentionally changed</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-1</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Connection 'Workday SOAP': Connected</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-2</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Connection 'Workday SOAP': Connected</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-3</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Connection 'Workday SOAP': Connected</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-4</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-5</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-6</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-7</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-8</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-9</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-10</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-11</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-12</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-13</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-14</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-15</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-16</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-17</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-18</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-19</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-20</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-21</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-22</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-23</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-24</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Connection 'Workday SOAP': Connected</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-25</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Connection 'Workday SOAP': Connected</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-26</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-27</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-28</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Connection 'Workday SOAP': Connected</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-29</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Connection 'Workday SOAP': Connected</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-30</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Connection 'isu wql': Connected</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-31</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Connection 'oauth user': Connected</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-32</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Connection 'isu wql entra': Connected</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-33</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Connection 'isu generic entra': Connected</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-34</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-35</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Connection 'WQL - 6081': Connected</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-36</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Connection 'LMoulet ': Connected</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-37</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-38</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-failed">Failed</td>
+                    <td>Connection 'Workday SOAP': Error</td>
+                    <td>Re-authenticate the Workday connection in Power Platform > Connections</td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-39</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Connection 'Tang': Connected</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-40</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Connection 'WQL': Connected</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-41</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Connection 'Workday SOAP': Connected</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-42</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Connection 'Workday SOAP': Connected</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-43</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Connection 'Generic - 786': Connected</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>WD-CONN-REF-44</td>
+                    <td>Workday</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Connection 'Workday SOAP': Connected</td>
+                    <td></td>
+                </tr>                <tr class="priority-critical">
+                    <td>WD-FLOW-001</td>
+                    <td>Workday</td>
+                    <td>Critical</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Flow 'Workday Get User Context': Enabled</td>
+                    <td></td>
+                </tr>                <tr class="priority-critical">
+                    <td>WD-FLOW-002</td>
+                    <td>Workday</td>
+                    <td>Critical</td>
+                    <td class="status-passed">Passed</td>
+                    <td>Flow 'Workday': Enabled</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>SN-001</td>
+                    <td>External Systems</td>
+                    <td>High</td>
+                    <td class="status-passed">Passed</td>
+                    <td>ServiceNow solution components found: 14 flow(s)</td>
+                    <td></td>
+                </tr>                <tr class="priority-high">
+                    <td>CONT-001</td>
+                    <td>Content</td>
+                    <td>High</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Check knowledge sources in Copilot Studio</td>
+                    <td>In Copilot Studio, navigate to Knowledge tab and verify SharePoint sites/libraries are configured.</td>
+                </tr>                <tr class="priority-high">
+                    <td>CONT-004</td>
+                    <td>Content</td>
+                    <td>High</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Verify semantic indexing limits (< 200 pages per source)</td>
+                    <td>Check each knowledge source to ensure it contains fewer than 200 pages. This is a known limitation.</td>
+                </tr>                <tr class="priority-critical">
+                    <td>TOPIC-001</td>
+                    <td>Topics</td>
+                    <td>Critical</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Check '[Admin] User Context - Setup' topic configuration</td>
+                    <td>In Copilot Studio, navigate to Topics and verify '[Admin] User Context - Setup' is properly configured.</td>
+                </tr>                <tr class="priority-critical">
+                    <td>TOPIC-002</td>
+                    <td>Topics</td>
+                    <td>Critical</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Check '[System] Response Preparation' topic configuration</td>
+                    <td>In Copilot Studio, navigate to Topics and verify '[System] Response Preparation' is properly configured.</td>
+                </tr>                <tr class="priority-high">
+                    <td>TOPIC-004</td>
+                    <td>Topics</td>
+                    <td>High</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Check '[Example] Sensitive Topics' topic configuration</td>
+                    <td>In Copilot Studio, navigate to Topics and verify '[Example] Sensitive Topics' is properly configured.</td>
+                </tr>                <tr class="priority-high">
+                    <td>TOPIC-005</td>
+                    <td>Topics</td>
+                    <td>High</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Check '[System] On Error' topic configuration</td>
+                    <td>In Copilot Studio, navigate to Topics and verify '[System] On Error' is properly configured.</td>
+                </tr>                <tr class="priority-high">
+                    <td>TOPIC-009</td>
+                    <td>Topics</td>
+                    <td>High</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Check 'Emotional Intelligence topic' topic configuration</td>
+                    <td>In Copilot Studio, navigate to Topics and verify 'Emotional Intelligence topic' is properly configured.</td>
+                </tr>                <tr class="priority-high">
+                    <td>TOPIC-010</td>
+                    <td>Topics</td>
+                    <td>High</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Check 'Ambiguity clarification' topic configuration</td>
+                    <td>In Copilot Studio, navigate to Topics and verify 'Ambiguity clarification' is properly configured.</td>
+                </tr>                <tr class="priority-medium">
+                    <td>CONFIG-001</td>
+                    <td>Configuration</td>
+                    <td>Medium</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Verify 'Agent name customized'</td>
+                    <td>In Copilot Studio, navigate to Overview/Configure tab and verify this setting.</td>
+                </tr>                <tr class="priority-medium">
+                    <td>CONFIG-002</td>
+                    <td>Configuration</td>
+                    <td>Medium</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Verify 'Agent logo uploaded'</td>
+                    <td>In Copilot Studio, navigate to Overview/Configure tab and verify this setting.</td>
+                </tr>                <tr class="priority-high">
+                    <td>CONFIG-005</td>
+                    <td>Configuration</td>
+                    <td>High</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Verify 'Starter prompts configured (up to 12)'</td>
+                    <td>In Copilot Studio, navigate to Overview/Configure tab and verify this setting.</td>
+                </tr>                <tr class="priority-critical">
+                    <td>CONFIG-007</td>
+                    <td>Configuration</td>
+                    <td>Critical</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Verify 'Agent global instructions written'</td>
+                    <td>In Copilot Studio, navigate to Overview/Configure tab and verify this setting.</td>
+                </tr>                <tr class="priority-high">
+                    <td>CONFIG-008</td>
+                    <td>Configuration</td>
+                    <td>High</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Verify 'Agent personality defined'</td>
+                    <td>In Copilot Studio, navigate to Overview/Configure tab and verify this setting.</td>
+                </tr>                <tr class="priority-critical">
+                    <td>CONFIG-012</td>
+                    <td>Configuration</td>
+                    <td>Critical</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Verify 'User Context variables created'</td>
+                    <td>In Copilot Studio, navigate to Overview/Configure tab and verify this setting.</td>
+                </tr>                <tr class="priority-critical">
+                    <td>QA-001</td>
+                    <td>Publishing</td>
+                    <td>Critical</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Verify 'Golden prompts library created (50+ prompts)'</td>
+                    <td>Complete this step according to deployment checklist and ALM guidelines.</td>
+                </tr>                <tr class="priority-critical">
+                    <td>QA-002</td>
+                    <td>Publishing</td>
+                    <td>Critical</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Verify 'Core functionality prompts tested'</td>
+                    <td>Complete this step according to deployment checklist and ALM guidelines.</td>
+                </tr>                <tr class="priority-critical">
+                    <td>QA-012</td>
+                    <td>Publishing</td>
+                    <td>Critical</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Verify 'Accuracy validation completed'</td>
+                    <td>Complete this step according to deployment checklist and ALM guidelines.</td>
+                </tr>                <tr class="priority-critical">
+                    <td>PUB-001</td>
+                    <td>Publishing</td>
+                    <td>Critical</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Verify 'Solution exported as managed'</td>
+                    <td>Complete this step according to deployment checklist and ALM guidelines.</td>
+                </tr>                <tr class="priority-critical">
+                    <td>PUB-002</td>
+                    <td>Publishing</td>
+                    <td>Critical</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Verify 'Test environment deployment completed'</td>
+                    <td>Complete this step according to deployment checklist and ALM guidelines.</td>
+                </tr>                <tr class="priority-critical">
+                    <td>PUB-003</td>
+                    <td>Publishing</td>
+                    <td>Critical</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Verify 'UAT testing completed with sign-off'</td>
+                    <td>Complete this step according to deployment checklist and ALM guidelines.</td>
+                </tr>                <tr class="priority-critical">
+                    <td>PUB-006</td>
+                    <td>Publishing</td>
+                    <td>Critical</td>
+                    <td class="status-notconfigured">NotConfigured</td>
+                    <td>Manual verification required: Verify 'Microsoft 365 admin approval obtained'</td>
+                    <td>Complete this step according to deployment checklist and ALM guidelines.</td>
+                </tr>            </tbody>
+        </table>
+    </div>
+    
+    <div class="footer">
+        <p>ESS Pre-flight Deployment Validator v1.0.0</p>
+        <p>For more information, visit: <a href="https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/">Microsoft Learn - Employee Self-Service</a></p>
+    </div>
+</body>
+</html>
