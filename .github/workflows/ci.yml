@@ -26,9 +26,9 @@ jobs:
       run: pip install ruff
 
     - name: Lint with ruff
-      run: ruff check solutions/ess-agent-kit/scripts/ solutions/ess-agent-kit/src/mcp/ --output-format=github
+      run: ruff check solutions/ess-maker-skills/scripts/ solutions/ess-maker-skills/src/mcp/ --output-format=github
       continue-on-error: true
 
     - name: Check Python syntax
       run: |
-        python -m compileall -q solutions/ess-agent-kit/scripts/ solutions/ess-agent-kit/src/mcp/
+        python -m compileall -q solutions/ess-maker-skills/scripts/ solutions/ess-maker-skills/src/mcp/

@@ -8,7 +8,7 @@ A monorepo of solutions, samples, and tooling for the Microsoft Employee Self-Se
 
 | Solution | Description |
 |----------|-------------|
-| [`solutions/ess-agent-kit/`](solutions/ess-agent-kit/) | VS Code workspace toolkit. Customize and deploy your ESS agent using GitHub Copilot — no deep platform knowledge required. |
+| [`solutions/ess-maker-skills/`](solutions/ess-maker-skills/) | VS Code workspace toolkit. Customize and deploy your ESS agent using GitHub Copilot — no deep platform knowledge required. |
 
 More solutions (sample topics, FlightCheck standalone, etc.) will be added under `solutions/` over time.
 
@@ -17,7 +17,7 @@ More solutions (sample topics, FlightCheck standalone, etc.) will be added under
 ```
 .github/                Repo-level CI, CodeQL, Dependabot, issue templates
 solutions/
-  ess-agent-kit/        VS Code workspace toolkit (scripts, prompts, MCP servers, samples)
+  ess-maker-skills/        VS Code workspace toolkit (scripts, prompts, MCP servers, samples)
 LICENSE                 MIT
 SECURITY.md             Microsoft MSRC reporting path
 CODE_OF_CONDUCT.md      Microsoft Open Source Code of Conduct
