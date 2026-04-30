@@ -45,6 +45,18 @@ def get_client() -> WorkdayClient:
     return _client
 
 
+def _parse_json(raw: str, field_name: str) -> dict:
+    """Parse a JSON-string tool argument with a friendly error.
+
+    LLM tool calls supply these as strings; raw json.loads errors surface as
+    Python tracebacks instead of recoverable MCP errors.
+    """
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in '{field_name}': {e}") from e
+
+
 def _xml_to_json(element: ET.Element) -> str:
     """Convert XML element to formatted JSON string."""
     data = WorkdayClient.xml_to_dict(element)
@@ -257,7 +269,7 @@ async def run_report(
         params: JSON string of query parameters to pass to the report
     """
     client = get_client()
-    parsed_params = json.loads(params) if params != "{}" else None
+    parsed_params = _parse_json(params, "params") if params != "{}" else None
     result = await client.raas_query(
         report_owner=report_owner,
         report_name=report_name,
@@ -357,7 +369,7 @@ async def extract_from_xml(
     """
     client = get_client()
     result = await client.raw_soap(service_name, body_xml, version)
-    paths = json.loads(extract_paths)
+    paths = _parse_json(extract_paths, "extract_paths")
 
     extracted = {}
     for key, xpath in paths.items():

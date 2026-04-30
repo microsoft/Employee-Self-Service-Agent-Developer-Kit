@@ -5,10 +5,12 @@
 
 import asyncio
 import base64
+import json
 import logging
 import os
 from typing import Optional
 from xml.etree import ElementTree as ET
+from xml.sax.saxutils import escape as xml_escape
 
 import httpx
 from dotenv import load_dotenv
@@ -146,13 +148,17 @@ class WorkdayClient:
         Workday requires WS-Security UsernameToken for SOAP authentication.
         HTTP Basic Auth is rejected by this tenant's auth policy.
         """
+        # Escape username/password so XML special chars (e.g. & in passwords)
+        # do not produce malformed envelopes.
+        safe_user = xml_escape(self._username)
+        safe_pass = xml_escape(self._password)
         return f"""<?xml version="1.0" encoding="UTF-8"?>
 <soapenv:Envelope xmlns:soapenv="{SOAP_NS}" xmlns:bsvc="{BSVC_NS}">
   <soapenv:Header>
     <wsse:Security soapenv:mustUnderstand="1" xmlns:wsse="{WSSE_NS}">
       <wsse:UsernameToken>
-        <wsse:Username>{self._username}</wsse:Username>
-        <wsse:Password>{self._password}</wsse:Password>
+        <wsse:Username>{safe_user}</wsse:Username>
+        <wsse:Password>{safe_pass}</wsse:Password>
       </wsse:UsernameToken>
     </wsse:Security>
   </soapenv:Header>
@@ -302,6 +308,9 @@ class WorkdayClient:
         version: str = "v42.0",
     ) -> ET.Element:
         """Call the Human_Resources Get_Workers operation."""
+        # Escape LLM/tool-supplied values that get interpolated into XML.
+        employee_id = xml_escape(employee_id) if employee_id else employee_id
+        as_of_date = xml_escape(as_of_date) if as_of_date else as_of_date
         # Build request references
         ref_xml = ""
         if employee_id:
@@ -358,6 +367,9 @@ class WorkdayClient:
 
         Returns time off plan balances for a worker (vacation, sick, PTO, etc.).
         """
+        # Escape LLM/tool-supplied values that get interpolated into XML.
+        employee_id = xml_escape(employee_id) if employee_id else employee_id
+        as_of_date = xml_escape(as_of_date) if as_of_date else as_of_date
         date_xml = ""
         if as_of_date:
             date_xml = f"<bsvc:As_Of_Effective_Date>{as_of_date}</bsvc:As_Of_Effective_Date>"
@@ -392,13 +404,19 @@ class WorkdayClient:
 
         Uses the correct Enter_Time_Off_Data wrapper per the official WSDL.
         """
+        # Escape LLM/tool-supplied values that get interpolated into XML.
+        employee_id = xml_escape(employee_id)
+        date = xml_escape(date)
+        time_off_type_id = xml_escape(time_off_type_id)
+        hours = xml_escape(hours)
+        comment_safe = xml_escape(comment) if comment else comment
         comment_xml = ""
-        if comment:
+        if comment_safe:
             comment_xml = (
                 "<bsvc:Business_Process_Parameters>"
                 "<bsvc:Auto_Complete>true</bsvc:Auto_Complete>"
                 "<bsvc:Comment_Data>"
-                f"<bsvc:Comment>{comment}</bsvc:Comment>"
+                f"<bsvc:Comment>{comment_safe}</bsvc:Comment>"
                 "</bsvc:Comment_Data>"
                 "</bsvc:Business_Process_Parameters>"
             )
@@ -432,6 +450,9 @@ class WorkdayClient:
 
         Note: Requires the account to have organization domain permissions.
         """
+        # Escape LLM/tool-supplied values that get interpolated into XML.
+        organization_id = xml_escape(organization_id) if organization_id else organization_id
+        organization_type = xml_escape(organization_type)
         ref_xml = ""
         if organization_id:
             ref_xml = f"""
@@ -551,8 +572,10 @@ class WorkdayClient:
             r"/{*}\1[@{*}\2='\3']",
             et_xpath,
         )
-        # Remove /text() suffix (ET returns text via .text)
-        et_xpath = et_xpath.rstrip("/text()")
+        # Remove /text() suffix (ET returns text via .text).
+        # Use removesuffix() — rstrip("/text()") would strip individual chars, not the substring,
+        # so an XPath ending in 'e' (e.g. .//{*}SomeType) would lose the 'e'.
+        et_xpath = et_xpath.removesuffix("/text()")
 
         try:
             matches = element.findall(et_xpath)
