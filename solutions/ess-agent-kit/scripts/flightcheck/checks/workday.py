@@ -16,6 +16,7 @@ import json
 import os
 import sys
 from xml.etree import ElementTree as ET
+from xml.sax.saxutils import escape as xml_escape
 
 from ..runner import CheckResult, Status, Priority
 
@@ -623,13 +624,17 @@ WSSE = "http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secex
 
 
 def _build_soap_envelope(username: str, password: str, body_xml: str) -> str:
+    # Escape username/password so XML special characters in credentials
+    # (notably & in passwords) do not produce malformed XML.
+    safe_user = xml_escape(username)
+    safe_pass = xml_escape(password)
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <env:Envelope xmlns:env="{SOAP}" xmlns:bsvc="{BSVC}">
   <env:Header>
     <wsse:Security env:mustUnderstand="1" xmlns:wsse="{WSSE}">
       <wsse:UsernameToken>
-        <wsse:Username>{username}</wsse:Username>
-        <wsse:Password>{password}</wsse:Password>
+        <wsse:Username>{safe_user}</wsse:Username>
+        <wsse:Password>{safe_pass}</wsse:Password>
       </wsse:UsernameToken>
     </wsse:Security>
   </env:Header>
