@@ -70,11 +70,23 @@ python -c "import secrets; print(secrets.token_hex(16))"
 
 Save the output as CLIENT_SECRET.
 
+**Pre-step:** Write the generated value to an environment variable so
+the ServiceNow MCP server can read it without the secret crossing the
+MCP tool boundary. In the SAME VS Code terminal where the ServiceNow
+MCP server runs (or restart the MCP after setting it):
+
+```
+$env:SERVICENOW_OAUTH_CLIENT_SECRET = "{CLIENT_SECRET}"
+```
+
 **Why pre-generate?** The ServiceNow API masks auto-generated secrets
 (returns encrypted gibberish). By passing a known value during creation,
 we avoid a manual step where the user has to open the ServiceNow UI to
 reveal the secret. The user will copy this value directly from chat
 into Copilot Studio.
+
+**Why env var?** The ServiceNow MCP server takes the env var NAME, not
+the secret value, so the secret never appears in MCP logs or LLM context.
 
 ---
 
@@ -136,7 +148,7 @@ Call the ServiceNow MCP `register_oauth_application` tool:
 
 - `name`: `"ESS Copilot"`
 - `client_id`: `""` (empty — ServiceNow auto-generates)
-- `client_secret`: `"{CLIENT_SECRET}"` (the value from 2.2)
+- `client_secret_env_var`: `"SERVICENOW_OAUTH_CLIENT_SECRET"` (the env var you set in 2.2)
 - `redirect_url`: `"{REDIRECT_URL}"` (the value from 2.1)
 - `grant_type`: `"authorization_code"`
 - `comments`: `"OAuth endpoint for ESS Copilot agent — Power Platform connector"`

@@ -459,13 +459,27 @@ its `sys_id` as OIDC_ENTITY_SYS_ID. Skip to 2.8.
 
 **If no match**: create a new one.
 
-Call the ServiceNow MCP `register_oidc_provider` tool:
+Call the ServiceNow MCP `register_oidc_provider` tool.
+
+**Pre-step:** OIDC verification with Entra ID does not actually use the
+client secret (ID tokens are verified via the JWKS endpoint), but the
+ServiceNow record requires the field to be non-empty. Set a sentinel
+env var first so the MCP server can read it:
+
+In the same VS Code terminal where the ServiceNow MCP server runs (or
+restart the MCP after setting it):
+
+```
+$env:SERVICENOW_OIDC_CLIENT_SECRET_NOT_USED = "not-used"
+```
+
+Then call the tool:
 
 ```
 register_oidc_provider(
   name="Microsoft Entra ID - ESS Copilot Certificate",
   client_id="{APP_A_CLIENT_ID}",
-  client_secret="not-used",
+  client_secret_env_var="SERVICENOW_OIDC_CLIENT_SECRET_NOT_USED",
   well_known_url="https://login.microsoftonline.com/{TENANT_ID}/.well-known/openid-configuration"
 )
 ```
