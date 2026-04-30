@@ -56,7 +56,11 @@ class ServiceNowClient:
                     resp = await client.request(method, path, **kwargs)
 
                     if resp.status_code == 429:
-                        wait = int(resp.headers.get("Retry-After", str(2**attempt)))
+                        retry_after = resp.headers.get("Retry-After")
+                        wait = int(retry_after) if retry_after else 2**attempt
+                        last_error = Exception(
+                            f"Rate limited (429), Retry-After={retry_after}"
+                        )
                         logger.warning(
                             "Rate limited (attempt %d/%d), waiting %ds",
                             attempt + 1,

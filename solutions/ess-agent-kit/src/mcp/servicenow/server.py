@@ -12,6 +12,7 @@ Usage:
 """
 
 import json
+import os
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -50,6 +51,41 @@ def _fmt(data: dict) -> str:
             )
         return json.dumps(results, indent=2, default=str)
     return json.dumps(data, indent=2, default=str)
+
+
+def _parse_json(raw: str, field_name: str) -> dict:
+    """Parse a JSON-string tool argument with a friendly error.
+
+    LLM tool calls supply these as strings; raw json.loads errors surface as
+    Python tracebacks instead of recoverable MCP errors.
+    """
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in '{field_name}': {e}") from e
+
+
+def _resolve_secret_from_env(env_var: str, field_name: str) -> str:
+    """Read a secret from a named environment variable.
+
+    Tools that need to send secrets to ServiceNow (OAuth client_secret, OIDC
+    client_secret, etc.) take the env var NAME as a tool argument rather than
+    the secret value itself, so the secret never appears in MCP logs or LLM
+    context. The MCP server process reads the secret from its own environment
+    at execution time.
+    """
+    if not env_var:
+        raise ValueError(
+            f"{field_name} is required: pass the NAME of the env var that holds the secret "
+            "(e.g. 'SERVICENOW_OAUTH_CLIENT_SECRET'), not the secret value itself."
+        )
+    value = os.environ.get(env_var)
+    if not value:
+        raise ValueError(
+            f"Env var '{env_var}' is not set or empty. "
+            f"Set it in the MCP server environment before invoking this tool."
+        )
+    return value
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -106,7 +142,7 @@ async def create_record(table: str, data: str) -> str:
         data: JSON string of field name/value pairs
     """
     client = get_client()
-    parsed = json.loads(data)
+    parsed = _parse_json(data, "data")
     result = await client.create_record(table, parsed)
     return _fmt(result)
 
@@ -121,7 +157,7 @@ async def update_record(table: str, sys_id: str, data: str) -> str:
         data: JSON string of field name/value pairs to update
     """
     client = get_client()
-    parsed = json.loads(data)
+    parsed = _parse_json(data, "data")
     result = await client.update_record(table, sys_id, parsed)
     return _fmt(result)
 
@@ -500,7 +536,7 @@ async def log_copilot_summary(
     if resolution:
         data["u_resolution"] = resolution
 
-    extra = json.loads(additional_fields) if additional_fields != "{}" else {}
+    extra = _parse_json(additional_fields, "additional_fields") if additional_fields != "{}" else {}
     data.update(extra)
 
     client = get_client()
@@ -537,7 +573,7 @@ async def list_oauth_applications(query: str = "", limit: int = 10) -> str:
 async def register_oauth_application(
     name: str,
     client_id: str,
-    client_secret: str,
+    client_secret_env_var: str,
     redirect_url: str = "",
     auth_url: str = "",
     token_url: str = "",
@@ -546,16 +582,24 @@ async def register_oauth_application(
 ) -> str:
     """Register a new OAuth application in the OAuth Application Registry.
 
+    The OAuth client_secret is NOT passed as a tool argument. Instead, set the
+    secret in an environment variable on the MCP server process and pass the env
+    var NAME via client_secret_env_var. This keeps the secret out of MCP logs
+    and LLM context.
+
     Args:
         name: Application name (e.g., 'Microsoft Entra ID')
         client_id: OAuth client ID from the identity provider
-        client_secret: OAuth client secret
+        client_secret_env_var: NAME of env var holding the OAuth client secret
+            (e.g., 'SERVICENOW_OAUTH_CLIENT_SECRET'). The MCP server reads the
+            actual value from os.environ at execution.
         redirect_url: OAuth redirect/callback URL
         auth_url: Authorization endpoint URL
         token_url: Token endpoint URL
         grant_type: Grant type (authorization_code, client_credentials, password, implicit)
         comments: Additional notes
     """
+    client_secret = _resolve_secret_from_env(client_secret_env_var, "client_secret_env_var")
     data: dict = {
         "name": name,
         "client_id": client_id,
@@ -600,7 +644,7 @@ async def list_oidc_providers(query: str = "", limit: int = 10) -> str:
 async def register_oidc_provider(
     name: str,
     client_id: str,
-    client_secret: str,
+    client_secret_env_var: str,
     well_known_url: str = "",
     oidc_provider: str = "",
     comments: str = "",
@@ -608,14 +652,22 @@ async def register_oidc_provider(
     """Register a new OIDC identity provider for user authentication.
     Typically used to configure Entra ID (Azure AD) SSO.
 
+    The OIDC client_secret is NOT passed as a tool argument. Instead, set the
+    secret in an environment variable on the MCP server process and pass the env
+    var NAME via client_secret_env_var. This keeps the secret out of MCP logs
+    and LLM context.
+
     Args:
         name: Provider name (e.g., 'Microsoft Entra ID')
         client_id: OIDC client ID from Entra app registration
-        client_secret: OIDC client secret
+        client_secret_env_var: NAME of env var holding the OIDC client secret
+            (e.g., 'SERVICENOW_OIDC_CLIENT_SECRET'). The MCP server reads the
+            actual value from os.environ at execution.
         well_known_url: OpenID Connect discovery URL
         oidc_provider: OIDC provider sys_id (if linking to existing config)
         comments: Additional notes
     """
+    client_secret = _resolve_secret_from_env(client_secret_env_var, "client_secret_env_var")
     data: dict = {
         "name": name,
         "client_id": client_id,
@@ -701,26 +753,63 @@ async def set_system_property(sys_id: str, value: str) -> str:
 
 
 # ═══════════════════════════════════════════════════════════════
-#  GENERIC API CALL
+#  GENERIC API CALL (escape hatch — restricted)
 # ═══════════════════════════════════════════════════════════════
+
+# Path allowlist for call_api: only data-plane REST endpoints.
+# Admin / scripting / security paths are intentionally NOT in this list.
+_CALL_API_PATH_ALLOWLIST = (
+    "/api/now/table/",
+    "/api/now/stats/",
+    "/api/now/import/",
+    "/api/now/attachment",
+    "/api/now/v1/table/",
+    "/api/now/v2/table/",
+)
+
+# Method allowlist for call_api: standard CRUD methods only.
+_CALL_API_METHOD_ALLOWLIST = ("GET", "POST", "PATCH", "DELETE")
 
 
 @mcp.tool()
 async def call_api(method: str, path: str, data: str = "") -> str:
-    """Call any REST API path on the ServiceNow instance.
-    Uses the same authenticated session as all other tools.
-    Useful for calling custom Scripted REST APIs.
+    """Call a ServiceNow data-plane REST endpoint (escape hatch).
+
+    EXPLORATION ONLY — not for production use. Prefer the typed tools
+    (query_table, get_record, create_record, update_record, delete_record, etc.)
+    which cover the supported scenarios.
+
+    For safety, this tool restricts:
+      - Path: must start with one of the data-plane prefixes
+        (/api/now/table/, /api/now/stats/, /api/now/import/, /api/now/attachment,
+         /api/now/v1/table/, /api/now/v2/table/).
+        Admin endpoints (auth, sys_security, sys_script, etc.) are blocked.
+      - Method: must be one of GET, POST, PATCH, DELETE.
 
     Args:
-        method: HTTP method (GET, POST, PUT, PATCH, DELETE)
-        path: API path starting with / (e.g., /api/now/table/incident or /api/x_abc/my_api/run)
-        data: Optional JSON string body for POST/PUT/PATCH requests
+        method: HTTP method (GET, POST, PATCH, DELETE)
+        path: API path starting with /api/now/...
+        data: Optional JSON string body for POST/PATCH requests
     """
+    method_upper = method.upper()
+    if method_upper not in _CALL_API_METHOD_ALLOWLIST:
+        raise ValueError(
+            f"call_api: method '{method}' not allowed. "
+            f"Allowed methods: {', '.join(_CALL_API_METHOD_ALLOWLIST)}."
+        )
+    if not any(path.startswith(prefix) for prefix in _CALL_API_PATH_ALLOWLIST):
+        raise ValueError(
+            f"call_api: path '{path}' not on the allowlist. "
+            f"Allowed prefixes: {', '.join(_CALL_API_PATH_ALLOWLIST)}. "
+            "Admin and scripting endpoints are intentionally blocked. "
+            "Use the typed tools (query_table, get_record, etc.) for supported scenarios."
+        )
+
     client = get_client()
     kwargs = {}
-    if data and method.upper() in ("POST", "PUT", "PATCH"):
-        kwargs["json"] = json.loads(data)
-    result = await client._request(method.upper(), path, **kwargs)
+    if data and method_upper in ("POST", "PATCH"):
+        kwargs["json"] = _parse_json(data, "data")
+    result = await client._request(method_upper, path, **kwargs)
     return json.dumps(result, indent=2, default=str)
 
 
