@@ -2,10 +2,12 @@
 # Licensed under the MIT License.
 
 """
-ESS FlightCheck — Workday Deep Validation (WD-ENV-xxx, WD-CONN-xxx, WD-FLOW-xxx, WD-WF-xxx)
+ESS FlightCheck — Workday Deep Validation (WD-ENV-xxx, WD-CONN-xxx, WD-FLOW-xxx, WD-WF-xxx, WD-SEC-xxx)
 
 Validates Workday environment variables, connection references, flow status,
-and tests all 17 ESS SOAP workflows against the actual Workday API.
+tests all 17 ESS SOAP workflows against the actual Workday API, and verifies
+that the Integration System Security Group (ISSG) has the required domain
+permissions for all ESS functional areas.
 
 The SOAP tests reuse the Kit's Workday MCP client (src/mcp/workday/client.py)
 or, when running standalone, build SOAP envelopes directly with httpx.
@@ -130,6 +132,36 @@ WORKFLOWS = [
     },
 ]
 
+# Required ISSG domain permissions for ESS functional areas.
+# Each entry maps a domain name to a description and a test operation that
+# exercises that domain (used to probe whether access is granted).
+REQUIRED_ISSG_DOMAINS = {
+    "Benefits": {
+        "description": "Required for Add/Update Dependents, Benefits enrollment",
+        "service": "Benefits_Administration",
+        "test_operation": "Get_Benefit_Plans",
+        "test_body_fn": "_build_get_benefit_plans_body",
+    },
+    "Personal Data": {
+        "description": "Required for address updates, personal info changes",
+        "service": "Human_Resources",
+        "test_operation": "Get_Workers",
+        "response_group": "<bsvc:Include_Personal_Information>true</bsvc:Include_Personal_Information>",
+    },
+    "Dependents / Emergency Contacts": {
+        "description": "Required for dependent management",
+        "service": "Human_Resources",
+        "test_operation": "Get_Workers",
+        "response_group": "<bsvc:Include_Related_Persons>true</bsvc:Include_Related_Persons>",
+    },
+    "Payroll": {
+        "description": "Required for payroll-related queries",
+        "service": "Payroll",
+        "test_operation": "Get_Payroll_Results",
+        "test_body_fn": "_build_get_payroll_results_body",
+    },
+}
+
 
 def run_workday_checks(runner) -> list[CheckResult]:
     """Execute Workday-specific deep validation.
@@ -156,6 +188,9 @@ def run_workday_checks(runner) -> list[CheckResult]:
 
     # --- SOAP Workflow Tests (only if Workday MCP creds available) ---
     results.extend(_check_workflows(runner))
+
+    # --- ISSG Domain Permission Checks ---
+    results.extend(_check_issg_domain_permissions(runner))
 
     return results
 
@@ -700,3 +735,186 @@ def _soap_call(
                 return {"success": False, "error": resp.text[:500]}
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+# ---- ISSG Domain Permission Validation ----
+
+def _check_issg_domain_permissions(runner) -> list[CheckResult]:
+    """Validate that the Workday ISSG has domain-level permissions for all ESS functional areas.
+
+    Probes each required domain by making a targeted SOAP call that exercises
+    that domain. If the call returns a permission error, the domain is flagged
+    as missing from the ISSG configuration.
+    """
+    results = []
+
+    # Resolve credentials (same logic as workflow tests)
+    wd_base_url, wd_tenant, wd_username, wd_password, test_employee = (
+        _resolve_workday_creds(runner)
+    )
+
+    if not wd_base_url or not wd_tenant:
+        results.append(CheckResult(
+            checkpoint_id="WD-SEC-001", category="Workday Security",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description="ISSG domain permissions",
+            result="Workday not configured — skipping ISSG domain permission checks",
+            remediation="Run /connect workday first, then re-run /flightcheck.",
+        ))
+        return results
+
+    if not wd_username or not wd_password:
+        results.append(CheckResult(
+            checkpoint_id="WD-SEC-001", category="Workday Security",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description="ISSG domain permissions",
+            result="ISU credentials not provided — skipping ISSG domain checks",
+            remediation="Re-run flightcheck and enter ISU credentials when prompted.",
+        ))
+        return results
+
+    if not test_employee:
+        results.append(CheckResult(
+            checkpoint_id="WD-SEC-001", category="Workday Security",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description="ISSG domain permissions",
+            result="No test employee ID — skipping ISSG domain checks",
+            remediation="Re-run flightcheck and enter a test employee ID when prompted.",
+        ))
+        return results
+
+    try:
+        import httpx  # noqa: F401
+    except ImportError:
+        results.append(CheckResult(
+            checkpoint_id="WD-SEC-001", category="Workday Security",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description="ISSG domain permissions",
+            result="httpx not installed — skipping",
+            remediation="pip install httpx",
+        ))
+        return results
+
+    print("  Checking ISSG domain permissions for ESS functional areas...")
+
+    import datetime
+    effective_date = datetime.date.today().isoformat()
+
+    missing_domains = []
+    domain_index = 0
+
+    for domain_name, domain_info in REQUIRED_ISSG_DOMAINS.items():
+        domain_index += 1
+        cid = f"WD-SEC-{domain_index:03d}"
+        service = domain_info["service"]
+
+        # Build the appropriate probe request body
+        if "test_body_fn" in domain_info:
+            body = globals()[domain_info["test_body_fn"]](test_employee)
+        else:
+            body = _build_get_workers_body(
+                test_employee, effective_date, domain_info["response_group"]
+            )
+
+        result = _soap_call(wd_base_url, wd_tenant, wd_username, wd_password, service, body)
+
+        if result["success"]:
+            results.append(CheckResult(
+                checkpoint_id=cid, category="Workday Security",
+                priority=Priority.HIGH.value, status=Status.PASSED.value,
+                description=f"ISSG domain: {domain_name}",
+                result=f"Access confirmed — {domain_info['description']}",
+                doc_link=f"{DOC_BASE}/workday#security-configuration",
+            ))
+        else:
+            error = result.get("error", "")
+            is_permission_error = any(
+                k in error.lower()
+                for k in ("permission", "unauthorized", "not authorized", "security", "access denied")
+            )
+            if is_permission_error:
+                missing_domains.append(domain_name)
+                results.append(CheckResult(
+                    checkpoint_id=cid, category="Workday Security",
+                    priority=Priority.HIGH.value, status=Status.FAILED.value,
+                    description=f"ISSG domain: {domain_name}",
+                    result=f"Permission denied — {domain_info['description']}",
+                    remediation=(
+                        f"In Workday, add the '{domain_name}' security domain to "
+                        f"your ESS Integration System Security Group (ISSG). "
+                        f"Navigate to: Integration System > Security > "
+                        f"Domain Security Policies and grant Get/Put access."
+                    ),
+                    doc_link=f"{DOC_BASE}/workday#security-configuration",
+                ))
+            else:
+                # Non-permission error (e.g. service not available) — treat as warning
+                results.append(CheckResult(
+                    checkpoint_id=cid, category="Workday Security",
+                    priority=Priority.HIGH.value, status=Status.WARNING.value,
+                    description=f"ISSG domain: {domain_name}",
+                    result=f"Unable to verify: {error[:120]}",
+                    remediation=(
+                        f"Manually verify that the '{domain_name}' domain is "
+                        f"assigned to your ESS ISSG in Workday."
+                    ),
+                    doc_link=f"{DOC_BASE}/workday#security-configuration",
+                ))
+
+    # Summary checkpoint
+    if missing_domains:
+        results.insert(0, CheckResult(
+            checkpoint_id="WD-SEC-001", category="Workday Security",
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            description="ISSG domain permissions summary",
+            result=f"Missing domains: {', '.join(missing_domains)}",
+            remediation=(
+                "The ESS Integration System Security Group (ISSG) is missing "
+                "required domain permissions. Add the listed domains in Workday: "
+                "Integration System > Security > Domain Security Policies."
+            ),
+            doc_link=f"{DOC_BASE}/workday#security-configuration",
+        ))
+    else:
+        has_warnings = any(
+            r.status == Status.WARNING.value for r in results
+            if r.category == "Workday Security"
+        )
+        results.insert(0, CheckResult(
+            checkpoint_id="WD-SEC-001", category="Workday Security",
+            priority=Priority.HIGH.value,
+            status=Status.WARNING.value if has_warnings else Status.PASSED.value,
+            description="ISSG domain permissions summary",
+            result=(
+                "All required ESS domains accessible"
+                if not has_warnings
+                else "Some domains could not be verified — see individual results"
+            ),
+            doc_link=f"{DOC_BASE}/workday#security-configuration",
+        ))
+
+    return results
+
+
+def _build_get_benefit_plans_body(employee_id: str) -> str:
+    """Build a SOAP body to probe the Benefits_Administration domain."""
+    return f"""
+<bsvc:Get_Benefit_Plans_Request xmlns:bsvc="{BSVC}" bsvc:version="v42.0">
+  <bsvc:Request_References>
+    <bsvc:Benefit_Plan_Reference>
+      <bsvc:ID bsvc:type="Employee_ID">{employee_id}</bsvc:ID>
+    </bsvc:Benefit_Plan_Reference>
+  </bsvc:Request_References>
+</bsvc:Get_Benefit_Plans_Request>"""
+
+
+def _build_get_payroll_results_body(employee_id: str) -> str:
+    """Build a SOAP body to probe the Payroll domain."""
+    return f"""
+<bsvc:Get_Payroll_Results_Request xmlns:bsvc="{BSVC}" bsvc:version="v42.0">
+  <bsvc:Request_References>
+    <bsvc:Payroll_Result_Reference>
+      <bsvc:ID bsvc:type="Employee_ID">{employee_id}</bsvc:ID>
+    </bsvc:Payroll_Result_Reference>
+  </bsvc:Request_References>
+</bsvc:Get_Payroll_Results_Request>"""
