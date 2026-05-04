@@ -1,0 +1,38 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+# Sync repo labels from .github/labels.yml using EndBug/label-sync.
+# Runs on changes to labels.yml on the default branch and can be triggered
+# manually. Uses the default GITHUB_TOKEN so no extra secrets are required.
+
+name: Sync labels
+
+on:
+  push:
+    branches:
+      - main
+      - main2
+    paths:
+      - .github/labels.yml
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  sync:
+    name: Sync labels from labels.yml
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+
+      - name: Apply labels
+        uses: EndBug/label-sync@v2
+        with:
+          config-file: .github/labels.yml
+          # delete-other-labels: true would prune labels not in labels.yml.
+          # Leaving false for now so manually-created labels (e.g. workflow
+          # state labels added by other tooling) are not removed unintentionally.
+          delete-other-labels: false
