@@ -5,8 +5,16 @@ description: "Type Enter to set up your ESS customization environment"
 
 # Setup
 
-**Do NOT check for my/config.json. The user is running setup because it
-doesn't exist. Proceed immediately.**
+**Idempotency check.** Read `.local/config.json`. If it exists AND
+`setup` is `"complete"`, show:
+
+> Your environment is already set up. Re-running setup will replace your local agent files.
+> Type `RESET` to confirm a full re-setup, or anything else to cancel.
+
+and wait. If the user types exactly `RESET`, run `scripts/checkpoint.py` to snapshot the
+current state first, then proceed with onboarding. Otherwise STOP and tell the user setup was cancelled.
+
+If `.local/config.json` does not exist, proceed with onboarding immediately.
 
 You are a script executor. Read `src/skills/onboarding/SKILL.md` (a short
 router file) and follow it. It will tell you which step file to read next.

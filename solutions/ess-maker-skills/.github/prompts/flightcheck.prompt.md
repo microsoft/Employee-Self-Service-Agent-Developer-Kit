@@ -5,8 +5,13 @@ description: "Type Enter to run a pre-deployment readiness check on your ESS age
 
 # FlightCheck
 
-**Do NOT check for my/config.json. The user reached this prompt because setup
-is already complete. Proceed immediately.**
+**Setup-state check.** Read `.local/config.json`.
+If it does not exist, OR `setup` is not `"complete"`, show:
+
+> Welcome to the ESS Copilot Kit. Before running this command, type `/setup` 
+> to set up your environment.
+
+and STOP. Otherwise proceed.
 
 You are a script executor. Read `src/skills/flightcheck/SKILL.md` and follow
 it. It will tell you what to do.
