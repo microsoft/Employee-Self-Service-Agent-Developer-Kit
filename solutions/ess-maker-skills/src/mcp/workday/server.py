@@ -17,7 +17,9 @@ Usage:
 import json
 import os
 from typing import Optional
-from xml.etree import ElementTree as ET
+
+# Use defusedxml for parsing untrusted XML coming back from Workday tools.
+from defusedxml import ElementTree as ET
 
 from mcp.server.fastmcp import FastMCP
 
@@ -32,6 +34,25 @@ mcp = FastMCP(
         "Requires Integration System User (ISU) credentials."
     ),
 )
+
+# Read-only Workday SOAP services that call_soap_api is allowed to invoke.
+# Services that can mutate worker compensation, employment status, direct
+# deposit, etc. are intentionally excluded so prompt-injection cannot drive
+# destructive operations through this MCP. Use the typed tools (or extend
+# this allowlist explicitly with team review) for write operations.
+_READONLY_SOAP_SERVICES = frozenset({
+    "Human_Resources",
+    "Absence_Management",
+    "Compensation",
+    "Staffing",
+    "Talent",
+    "Talent_Management",
+    "Performance_Management",
+    "Benefits_Administration",
+    "Payroll",
+    "Integrations",
+    "Recruiting",
+})
 
 # ── Lazy client singleton ───────────────────────────────────────
 
@@ -193,10 +214,15 @@ async def request_time_off(
     time_off_type_id: str,
     hours: str = "8",
     comment: str = "",
+    confirm: bool = False,
 ) -> str:
-    """Submit a time off request for a worker.
+    """Submit a time off request for a worker (WRITE operation).
 
-    Calls the Absence_Management Enter_Time_Off SOAP API.
+    Calls the Absence_Management Enter_Time_Off SOAP API. Because this is
+    a write that immediately mutates Workday, the LLM must pass
+    `confirm=True` after explicitly confirming the request with the user
+    (employee, date, hours). Calling without `confirm=True` returns a
+    no-op preview the LLM should show to the user for confirmation.
 
     Args:
         employee_id: The Workday Employee ID
@@ -204,7 +230,26 @@ async def request_time_off(
         time_off_type_id: Workday Time Off Type ID (e.g., the ID for Vacation, Sick, etc.)
         hours: Hours of time off (default "8" for a full day)
         comment: Optional comment for the time off request
+        confirm: Must be explicitly True to submit. Default False returns
+                 a preview; the LLM should show that preview to the user
+                 and only re-call with confirm=True after explicit user OK.
     """
+    if not confirm:
+        return json.dumps({
+            "status": "preview",
+            "message": (
+                "Preview only. Show this to the user and re-call with "
+                "confirm=True after they explicitly confirm the request."
+            ),
+            "request": {
+                "employee_id": employee_id,
+                "date": date,
+                "time_off_type_id": time_off_type_id,
+                "hours": hours,
+                "comment": comment,
+            },
+        }, indent=2)
+
     client = get_client()
     result = await client.enter_time_off(
         employee_id=employee_id,
@@ -322,22 +367,37 @@ async def call_soap_api(
     body_xml: str,
     version: str = "v42.0",
 ) -> str:
-    """Send a raw SOAP request to any Workday service.
+    """Send a raw SOAP request to a read-only Workday service.
 
     The body_xml should be the inner request element (e.g., a Get_Workers_Request).
     The server wraps it in a SOAP envelope with WS-Security UsernameToken headers.
 
-    This is the escape hatch for calling any Workday API not covered by the
-    typed tools above.
-
-    Common services: Human_Resources, Absence_Management, Compensation,
-    Staffing, Payroll, Benefits, Talent_Management, Performance_Management
+    SECURITY: This tool is restricted to a read-only service allowlist
+    (Human_Resources, Absence_Management, Compensation, Staffing, Talent,
+    Talent_Management, Performance_Management, Benefits_Administration,
+    Payroll, Integrations, Recruiting). Services outside this set
+    (e.g., the ones that drive Terminate_Employee, Change_Compensation,
+    Cancel_Direct_Deposit) are rejected to prevent prompt-injection from
+    triggering destructive Workday operations. Even within these services,
+    individual operations may still be writes - prefer the typed tools above
+    for any documented use case.
 
     Args:
-        service_name: Workday web service name (e.g., Human_Resources)
+        service_name: Workday web service name (must be in the read-only allowlist)
         body_xml: XML body of the SOAP request (inner element, no envelope)
         version: API version (default v42.0)
     """
+    if service_name not in _READONLY_SOAP_SERVICES:
+        return json.dumps({
+            "error": f"service_name {service_name!r} is not in the read-only allowlist",
+            "allowed_services": sorted(_READONLY_SOAP_SERVICES),
+            "hint": (
+                "call_soap_api is restricted to read-only services. To invoke a "
+                "write or non-allowlisted service, add it to _READONLY_SOAP_SERVICES "
+                "in server.py (with team review) or wire a typed tool that gates the "
+                "call behind explicit user confirmation."
+            ),
+        }, indent=2)
     client = get_client()
     result = await client.raw_soap(
         service_name=service_name,
@@ -360,13 +420,24 @@ async def extract_from_xml(
     pattern used by ESS template configurations. Returns a JSON object
     mapping each key to the extracted values.
 
+    SECURITY: Subject to the same read-only allowlist as call_soap_api -
+    service_name must be in _READONLY_SOAP_SERVICES. The XPath expressions
+    in extract_paths are LLM-supplied; they cannot mutate state but they
+    can read across the entire returned document, so do not include
+    extract_paths derived from untrusted input.
+
     Args:
-        service_name: Workday web service name
+        service_name: Workday web service name (must be in the read-only allowlist)
         body_xml: XML body of the SOAP request
         extract_paths: JSON string mapping keys to XPath expressions.
                       Example: {"JobTitle": "//*[local-name()='Position_Title']/text()"}
         version: API version (default v42.0)
     """
+    if service_name not in _READONLY_SOAP_SERVICES:
+        return json.dumps({
+            "error": f"service_name {service_name!r} is not in the read-only allowlist",
+            "allowed_services": sorted(_READONLY_SOAP_SERVICES),
+        }, indent=2)
     client = get_client()
     result = await client.raw_soap(service_name, body_xml, version)
     paths = _parse_json(extract_paths, "extract_paths")

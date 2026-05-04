@@ -8,8 +8,15 @@ import base64
 import json
 import logging
 import os
+import random
 from typing import Optional
+
+# Use the stdlib ElementTree for BUILDING XML (defusedxml does not implement
+# the full constructor / serialization API). Use defusedxml.ElementTree for
+# PARSING any untrusted XML coming back from Workday so the parser is
+# protected against billion-laughs / quadratic-blowup entity expansion.
 from xml.etree import ElementTree as ET
+from defusedxml import ElementTree as DET
 from xml.sax.saxutils import escape as xml_escape
 
 import httpx
@@ -18,6 +25,12 @@ from dotenv import load_dotenv
 load_dotenv()
 
 logger = logging.getLogger("workday-mcp")
+
+# Silence httpx and httpcore loggers - if a downstream operator enables global
+# DEBUG logging they would otherwise echo full HTTP requests including
+# Authorization headers (Basic auth credentials).
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 # Workday SOAP namespace
 BSVC_NS = "urn:com.workday/bsvc"
@@ -67,6 +80,11 @@ class WorkdayClient:
 
         if not self.base_url:
             raise ValueError("WORKDAY_BASE_URL environment variable is required")
+        if not self.base_url.lower().startswith("https://"):
+            raise ValueError(
+                "WORKDAY_BASE_URL must use https:// - refusing to send ISU "
+                "credentials over an unencrypted channel."
+            )
         if not self.tenant:
             raise ValueError("WORKDAY_TENANT environment variable is required")
         if not username or not password:
@@ -105,10 +123,20 @@ class WorkdayClient:
         kwargs = {
             "timeout": self.timeout,
             "headers": {"Content-Type": "text/xml; charset=utf-8"},
+            # Disable redirect-following so a 302 response cannot replay our
+            # Authorization header to an attacker-controlled host.
+            "follow_redirects": False,
         }
         if use_auth:
             kwargs["auth"] = self._auth
         return httpx.AsyncClient(**kwargs)
+
+    def __repr__(self) -> str:
+        # Hide password from repr / tracebacks.
+        return (
+            f"<WorkdayClient base_url={self.base_url!r} "
+            f"tenant={self.tenant!r} user={self._username!r}>"
+        )
 
     def _service_url(self, service_name: str, version: str = "v42.0") -> str:
         """Build the SOAP service endpoint URL."""
@@ -194,32 +222,48 @@ class WorkdayClient:
 
                     if resp.status_code == 429:
                         wait = int(resp.headers.get("Retry-After", str(2 ** attempt)))
+                        # Add jitter to avoid thundering-herd retries when many
+                        # tools hit the rate limit at once.
+                        wait += random.uniform(0, 1)
                         logger.warning(
-                            "Rate limited (attempt %d/%d), waiting %ds",
+                            "Rate limited (attempt %d/%d), waiting %.1fs",
                             attempt + 1, self.max_retries, wait,
                         )
                         await asyncio.sleep(wait)
                         continue
 
                     if resp.status_code >= 400:
-                        # Try to extract SOAP fault
+                        # Try to extract SOAP fault. Only surface the
+                        # faultstring (and status code) - never the <detail>
+                        # element, which can contain customer PII (employee
+                        # IDs, names, validation messages) that would flow
+                        # into the LLM context. Log the full body locally
+                        # for the operator at DEBUG level, never higher.
                         try:
-                            root = ET.fromstring(resp.text)
+                            root = DET.fromstring(resp.text)
                             fault = root.find(f".//{{{SOAP_NS}}}Fault")
                             if fault is not None:
                                 faultstring = fault.findtext("faultstring", "Unknown SOAP fault")
-                                detail = fault.find("detail")
-                                detail_text = ET.tostring(detail, encoding="unicode") if detail is not None else ""
-                                raise Exception(
-                                    f"Workday SOAP fault ({resp.status_code}): {faultstring}\n{detail_text}"
+                                logger.debug(
+                                    "Full SOAP fault response (operator-only): %s",
+                                    resp.text,
                                 )
-                        except ET.ParseError:
+                                raise Exception(
+                                    f"Workday SOAP fault ({resp.status_code}): {faultstring}"
+                                )
+                        except DET.ParseError:
                             pass
+                        # Generic non-SOAP-fault error - return only the
+                        # status code, not the body.
+                        logger.debug(
+                            "Workday API error body (operator-only): %s",
+                            resp.text,
+                        )
                         raise Exception(
-                            f"Workday API error ({resp.status_code}): {resp.text[:500]}"
+                            f"Workday API error ({resp.status_code})"
                         )
 
-                    root = ET.fromstring(resp.text)
+                    root = DET.fromstring(resp.text)
                     body = root.find(f"{{{SOAP_NS}}}Body")
                     if body is None:
                         raise Exception("No SOAP Body in response")
@@ -233,7 +277,7 @@ class WorkdayClient:
                 except httpx.RequestError as e:
                     last_error = e
                     if attempt < self.max_retries - 1:
-                        await asyncio.sleep(2 ** attempt)
+                        await asyncio.sleep((2 ** attempt) + random.uniform(0, 1))
                         continue
                     raise
 
