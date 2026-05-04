@@ -376,37 +376,26 @@ def _check_workflows(runner) -> list[CheckResult]:
     Resolves credentials from multiple sources (in priority order):
       1. Environment variables (if already set, e.g. from a parent process)
       2. .vscode/mcp.json (base URL + tenant are stored as plain strings)
-      3. .local/config.json → connections.Workday (tenant, base URL)
-      4. Interactive prompt (username + password only — never cached to disk)
-      5. .local/config.json → workdayTestEmployeeId (cached after first prompt)
+      3. .local/config.json -> connections.Workday (tenant, base URL)
+      4. Interactive prompt (username + password only - never cached to disk)
+      5. .local/config.json -> workdayTestEmployeeId (cached after first prompt)
     """
     results = []
 
-    # --- Resolve credentials from available sources ---
-    wd_base_url, wd_tenant, wd_username, wd_password, test_employee = (
-        _resolve_workday_creds(runner)
-    )
+    # --- Resolve non-sensitive metadata first (URL, tenant, employee). ---
+    # CodeQL clear-text logging rule taints every output of any function that
+    # also returns sensitive data. Splitting metadata from credentials keeps
+    # the metadata path off the taint graph so we can safely print the tenant
+    # name in status messages.
+    wd_base_url, wd_tenant, test_employee = _resolve_workday_metadata(runner)
 
     if not wd_base_url or not wd_tenant:
         results.append(CheckResult(
             checkpoint_id="WD-WF-000", category="Workday Workflows",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="Workday SOAP workflow tests",
-            result="Workday not configured — skipping 17 workflow tests",
+            result="Workday not configured - skipping 17 workflow tests",
             remediation="Run /connect workday first, then re-run /flightcheck.",
-        ))
-        return results
-
-    if not wd_username or not wd_password:
-        results.append(CheckResult(
-            checkpoint_id="WD-WF-000", category="Workday Workflows",
-            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
-            description="Workday SOAP workflow tests",
-            result="Workday ISU credentials not provided — skipping workflow tests",
-            remediation=(
-                "Re-run flightcheck; when prompted, enter your ISU "
-                "username and password to test the 17 workflows."
-            ),
         ))
         return results
 
@@ -415,22 +404,41 @@ def _check_workflows(runner) -> list[CheckResult]:
             checkpoint_id="WD-WF-000", category="Workday Workflows",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="Workday SOAP workflow tests",
-            result="No test employee ID provided — skipping workflow tests",
+            result="No test employee ID provided - skipping workflow tests",
             remediation="Re-run flightcheck and enter a test employee ID when prompted.",
         ))
         return results
 
+    # Safe to log here - tenant is from the metadata-only resolver and was
+    # never bound in a scope that holds credentials.
     print(f"  Testing 17 Workday workflows (tenant: {wd_tenant})...")
 
     try:
-        import httpx
+        import httpx  # noqa: F401  (used inside _soap_call)
     except ImportError:
         results.append(CheckResult(
             checkpoint_id="WD-WF-000", category="Workday Workflows",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="Workday SOAP workflow tests",
-            result="httpx not installed — skipping",
+            result="httpx not installed - skipping",
             remediation="pip install httpx",
+        ))
+        return results
+
+    # --- Now resolve credentials. From this point on the local scope holds
+    # sensitive values; do not add print/log statements that reference any
+    # local variable. ---
+    wd_username, wd_password = _resolve_workday_credentials(runner, wd_tenant)
+    if not wd_username or not wd_password:
+        results.append(CheckResult(
+            checkpoint_id="WD-WF-000", category="Workday Workflows",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description="Workday SOAP workflow tests",
+            result="Workday ISU credentials not provided - skipping workflow tests",
+            remediation=(
+                "Re-run flightcheck; when prompted, enter your ISU "
+                "username and password to test the 17 workflows."
+            ),
         ))
         return results
 
@@ -520,16 +528,15 @@ def _check_workflows(runner) -> list[CheckResult]:
 
 # ---- Credential Resolution ----
 
-def _resolve_workday_creds(runner) -> tuple[str, str, str, str, str]:
-    """Resolve Workday credentials from all available sources.
+def _resolve_workday_metadata(runner) -> tuple[str, str, str]:
+    """Resolve non-sensitive Workday metadata: (base_url, tenant, test_employee_id).
 
-    Returns (base_url, tenant, username, password, test_employee_id).
-    Never writes secrets to disk. Prompts interactively for creds only.
+    Deliberately split from credential resolution so CodeQL's data-flow
+    analysis does not taint the metadata via tuple-unpacking with sensitive
+    return values (clear-text logging rule).
     """
     base_url = os.environ.get("WORKDAY_BASE_URL", "")
     tenant = os.environ.get("WORKDAY_TENANT", "")
-    username = os.environ.get("WORKDAY_USERNAME", "")
-    password = os.environ.get("WORKDAY_PASSWORD", "")
     test_employee = os.environ.get("WORKDAY_TEST_EMPLOYEE_ID", "")
 
     # --- Source 2: .vscode/mcp.json (non-secret values only) ---
@@ -540,7 +547,7 @@ def _resolve_workday_creds(runner) -> tuple[str, str, str, str, str]:
         if not tenant:
             tenant = mcp_env.get("WORKDAY_TENANT", "")
 
-    # --- Source 3: .local/config.json → connections.Workday ---
+    # --- Source 3: .local/config.json -> connections.Workday ---
     config = getattr(runner, "config", {})
     wd_config = config.get("connections", {}).get("Workday", {})
     if not base_url:
@@ -550,31 +557,51 @@ def _resolve_workday_creds(runner) -> tuple[str, str, str, str, str]:
     if not test_employee:
         test_employee = config.get("workdayTestEmployeeId", "")
 
-    # If we don't even have base_url/tenant, Workday isn't configured
-    if not base_url or not tenant:
-        return "", "", "", "", ""
-
-    # --- Source 4: Interactive prompt for secrets ---
-    if not username or not password:
-        # Only prompt if this is an interactive terminal
-        if sys.stdin.isatty():
-            print("\n  Workday SOAP workflow tests need ISU credentials.")
-            print(f"  Tenant: {tenant}")
-            print("  (Credentials are used for this run only — never saved to disk)\n")
-            if not username:
-                username = input("  ISU Username (without @tenant): ").strip()
-                if username and "@" not in username:
-                    username = f"{username}@{tenant}"
-            if not password:
-                password = getpass.getpass("  ISU Password: ")
-
     # --- Source 5: Test employee ID (prompt + cache in config) ---
     if not test_employee and sys.stdin.isatty():
         test_employee = input("  Test Employee ID (e.g. 21508): ").strip()
         if test_employee:
-            # Cache to config so they don't have to enter it again
             _cache_test_employee_id(test_employee)
 
+    return base_url, tenant, test_employee
+
+
+def _resolve_workday_credentials(runner, tenant: str) -> tuple[str, str]:
+    """Resolve sensitive Workday credentials: (username, password).
+
+    Reads from env first, then prompts interactively. Never returns metadata,
+    so CodeQL won't propagate password taint into URL/tenant variables in
+    the caller. Caller MUST NOT introduce print/log statements that
+    reference local variables after calling this function.
+    """
+    username = os.environ.get("WORKDAY_USERNAME", "")
+    password = os.environ.get("WORKDAY_PASSWORD", "")
+
+    # --- Source 4: Interactive prompt for secrets ---
+    if (not username or not password) and sys.stdin.isatty():
+        print("\n  Workday SOAP workflow tests need ISU credentials.")
+        print(f"  Tenant: {tenant}")
+        print("  (Credentials are used for this run only - never saved to disk)\n")
+        if not username:
+            username = input("  ISU Username (without @tenant): ").strip()
+            if username and "@" not in username:
+                username = f"{username}@{tenant}"
+        if not password:
+            password = getpass.getpass("  ISU Password: ")
+
+    return username, password
+
+
+def _resolve_workday_creds(runner) -> tuple[str, str, str, str, str]:
+    """Compatibility shim: combine metadata + credentials in the legacy
+    5-tuple shape. Prefer the split _resolve_workday_metadata /
+    _resolve_workday_credentials pair in new code; this shim exists for
+    callers (or tests) that still expect the old signature.
+    """
+    base_url, tenant, test_employee = _resolve_workday_metadata(runner)
+    if not base_url or not tenant:
+        return "", "", "", "", ""
+    username, password = _resolve_workday_credentials(runner, tenant)
     return base_url, tenant, username, password, test_employee
 
 
