@@ -63,9 +63,13 @@ body:
     id: model
     attributes:
       label: Copilot model used
+      description: |
+        Which model was selected when you hit the bug? You can find this in the model picker at the
+        bottom of the Copilot Chat panel in VS Code (the model name appears next to the dropdown).
+        Helpful for diagnosing model-specific issues, but not required.
       placeholder: "e.g., Claude Sonnet 4.6"
     validations:
-      required: true
+      required: false
   - type: textarea
     id: environment
     attributes:

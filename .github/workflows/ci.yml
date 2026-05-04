@@ -27,7 +27,6 @@ jobs:
 
     - name: Lint with ruff
       run: ruff check solutions/ess-maker-skills/scripts/ solutions/ess-maker-skills/src/mcp/ --output-format=github
-      continue-on-error: true
 
     - name: Check Python syntax
       run: |

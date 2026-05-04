@@ -18,20 +18,20 @@ contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additio
 
 This is a non-production sample/learning toolkit. Maintainers commit to:
 
-- **Dependabot alerts** — review and merge weekly Dependabot PRs (Python and GitHub Actions); resolve dependency security alerts promptly.
-- **CodeQL alerts** — triage CodeQL findings on the default branch on each push.
-- **Dependency hygiene** — bump dependencies to the latest stable versions at minimum every 6 months.
-- **Vulnerability reports** — security issues are routed to the Microsoft Security Response Center (MSRC) per [SECURITY.md](SECURITY.md). Do **not** open public GitHub issues for vulnerabilities.
-- **Private fix process** — for confirmed vulnerabilities, follow the [Microsoft Open Source private fix process](https://docs.opensource.microsoft.com/security/playbook-security/).
+- **Dependabot alerts** - Dependabot opens weekly PRs for Python and GitHub Actions. Maintainers acknowledge new alerts within **5 business days** and merge or assign a fix branch within **15 business days** for High/Critical severity, **30 business days** for Medium/Low.
+- **CodeQL alerts** - CodeQL runs on every push and PR to the default branch. Maintainers triage new alerts within **5 business days**: confirm/dismiss false positives, file an issue for confirmed findings, and aim to land a fix within **30 business days** for High/Critical.
+- **Dependency hygiene** - Dependabot is the primary cadence (weekly). The 6-month floor only applies to dependencies Dependabot does not track (e.g., pinned tooling versions in docs); for those, maintainers refresh at least every 6 months.
+- **Vulnerability reports** - security issues are routed to the Microsoft Security Response Center (MSRC) per [SECURITY.md](SECURITY.md). Do **not** open public GitHub issues for vulnerabilities.
+- **Private fix process** - for confirmed vulnerabilities, follow the [Microsoft Open Source private fix process](https://docs.opensource.microsoft.com/security/playbook-security/).
 
 ### Scope management
 
 This project's release was registered with the Microsoft Open Source Office (OSS Portal review [55042](https://dev.azure.com/ossmsft/Reviews/_workitems/edit/55042)) under a defined scope: **a VS Code workspace toolkit and reference content for customizing Employee Self-Service (ESS) agents using GitHub Copilot.**
 
-If a future change would expand the project beyond that scope — for example:
+If a future change would expand the project beyond that scope - for example:
 
 - Adding **non-open-source Microsoft code** to the repo, or
-- Adding **functionality outside the original approval scope** (a new product surface, a service component, packaged/redistributed binaries, etc.) —
+- Adding **functionality outside the original approval scope** (a new product surface, a service component, packaged/redistributed binaries, etc.) -
 
 then maintainers **must file a new release request** in the [Open Source Portal](https://repos.opensource.microsoft.com/release) before merging that change. Routine bug fixes, dependency updates, documentation improvements, new prompt files, new sample topics, and additional connector reference content are in-scope and do not require a new release request.
 
@@ -47,7 +47,7 @@ For privacy questions about Copilot Studio, Power Platform, or GitHub Copilot th
 
 ## Service dependencies
 
-The toolkit's scripts call the following Microsoft services on your behalf. Every call goes from your machine to your own tenant under your existing license — no data is sent to Microsoft beyond standard authentication exchanges with the services listed below.
+The toolkit's scripts call the following Microsoft services on your behalf. Every call goes from your machine to your own tenant under your existing license - no data is sent to Microsoft beyond standard authentication exchanges with the services listed below.
 
 | Service | Purpose | Auth | Tenant |
 |---|---|---|---|
@@ -55,22 +55,24 @@ The toolkit's scripts call the following Microsoft services on your behalf. Ever
 | Copilot Studio (via Dataverse) | Read/update topics, push changes | MSAL (delegated) | Your Copilot Studio environment |
 | ServiceNow REST API (optional) | Topic integration testing | User-provided OAuth / basic | Your ServiceNow tenant |
 | Workday SOAP / REST API (optional) | Topic integration testing | User-provided | Your Workday tenant |
-| GitHub Copilot (in VS Code) | LLM that reads prompt and instruction files and generates content | GitHub Copilot license | N/A — GitHub Copilot service |
+| GitHub Copilot (in VS Code) | LLM that reads prompt and instruction files and generates content | GitHub Copilot license | N/A - GitHub Copilot service |
 
 The toolkit does not call any other Microsoft services.
 
 ## Validating your changes
 
-This is a sample/learning toolkit with no formal unit-test suite — the inputs (Copilot Studio topic YAML, Power Automate JSON) are validated end-to-end by `/flightcheck` rather than via unit tests. Before opening a PR:
+This is a sample/learning toolkit with no formal unit-test suite - the inputs (Copilot Studio topic YAML, Power Automate JSON) are validated end-to-end by `/flightcheck` rather than via unit tests. Before opening a PR:
 
 ### 1. Lint and syntax check (matches CI)
 
+Run from the repository root so the paths match what CI runs:
+
 ```pwsh
-ruff check scripts/ src/mcp/
-python -m compileall -q scripts/ src/mcp/
+ruff check solutions/ess-maker-skills/scripts/ solutions/ess-maker-skills/src/mcp/
+python -m compileall -q solutions/ess-maker-skills/scripts/ solutions/ess-maker-skills/src/mcp/
 ```
 
-GitHub Actions runs the same commands on every PR (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+GitHub Actions runs the same commands on every PR (see [`.github/workflows/ci.yml`](.github/workflows/ci.yml)). Lint failures are blocking - fix them before requesting review.
 
 ### 2. Smoke test the affected command
 

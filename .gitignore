@@ -1,14 +1,16 @@
 # ===== Allowlist approach =====
-# Ignore everything at root by default, then explicitly allow our folders.
-# This keeps dynamically-named cloned agent folders out of git automatically.
+# Ignore everything at root by default, then explicitly allow our top-level folders.
+# This keeps dynamically-named cloned agent folders (workspace/agents/<slug>/) out of
+# git automatically; user-specific state in workspace/ and .local/ is governed by
+# .gitignore files inside solutions/ess-maker-skills/ where the layout actually lives.
 /*
 
-# Allow our kit folders and files
+# Allow our top-level folders and root files
 !.github/
 !.gitignore
 !.vscode/
-!scripts/
-!src/
+!solutions/
+!samples/
 !README.md
 !LICENSE
 !SECURITY.md
@@ -16,13 +18,6 @@
 !CODE_OF_CONDUCT.md
 !SUPPORT.md
 !no-commit/
-
-# User-specific state — scaffold folders are committed, contents are not
-!my/
-my/**
-!my/onboarding/
-!my/agents/
-!my/**/.gitkeep
 
 # Internal planning docs (not for distribution)
 no-commit/

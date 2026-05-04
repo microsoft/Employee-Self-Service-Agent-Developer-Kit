@@ -1,5 +1,9 @@
-# Standard labels for ess-copilot-kit-MSFT
-# Apply via: gh label create -R microsoft/ess-copilot-kit-MSFT <name> --color <color> --description "<desc>"
+# Standard labels for microsoft/Employee-Self-Service-Agent-Developer-Kit
+# This file is the source of truth for repo labels. Sync via the label-sync workflow
+# (.github/workflows/label-sync.yml) which runs on changes to this file.
+#
+# Manual one-off apply (for bootstrap):
+#   gh label create -R microsoft/Employee-Self-Service-Agent-Developer-Kit <name> --color <color> --description "<desc>"
 
 - name: bug
   color: d73a4a
