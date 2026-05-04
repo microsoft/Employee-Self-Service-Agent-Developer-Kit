@@ -25,10 +25,52 @@ import uuid
 
 # Add scripts/ to path so we can import siblings
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from auth import authenticate, update_record, create_record, delete_record, load_config
+from auth import (
+    authenticate,
+    update_record,
+    create_record,
+    delete_record,
+    load_config,
+    AuthExpiredError,
+)
 
 EXCLUDE_DIRS = {".baseline", ".checkpoints"}
 EXCLUDE_FILES = {"snapshot.md", "_meta.json"}
+
+
+class _AuthHolder:
+    """Mutable token wrapper so the 401-retry helper can refresh in place.
+
+    A long push (200+ components) can outlive an MSAL access token (~1 hour),
+    so update/create/delete calls go through _call_with_refresh which catches
+    AuthExpiredError, re-authenticates, and retries the call once.
+    """
+
+    def __init__(self, env_url):
+        self.env_url = env_url
+        self.token = None
+
+    def acquire(self):
+        self.token = authenticate(self.env_url)
+        return self.token
+
+    def refresh(self):
+        print("  ! Access token expired - re-authenticating...")
+        return self.acquire()
+
+
+def _call_with_refresh(auth, fn, *args, **kwargs):
+    """Call a Dataverse helper with one auto-retry on 401."""
+    try:
+        return fn(*args, **kwargs)
+    except AuthExpiredError:
+        auth.refresh()
+        # Replace the stale token positional - by convention the second
+        # positional arg of update/create/delete_record is `token`.
+        new_args = list(args)
+        if len(new_args) >= 2:
+            new_args[1] = auth.token
+        return fn(*new_args, **kwargs)
 
 
 def classify_path(filepath):
@@ -150,6 +192,7 @@ def update_baseline(agent_dir):
 def main():
     dry_run = "--dry-run" in sys.argv
     auto_yes = "--yes" in sys.argv
+    force_delete = "--force-delete" in sys.argv
 
     config = load_config()
     agent_dir = config["agent"]["folder"]
@@ -220,11 +263,32 @@ def main():
         print("\n(Dry run — no changes pushed)")
         return
 
-    # Confirm
+    # Confirm general push
     if not auto_yes:
         response = input("\nPush these changes to Copilot Studio? (yes/no): ").strip().lower()
         if response not in ("yes", "y"):
             print("Push cancelled.")
+            return
+
+    # Separate confirmation for destructive operations. --yes covers
+    # creates and updates; deletes additionally require --force-delete
+    # OR an interactive 'delete' confirmation.
+    if deleted and not force_delete:
+        if auto_yes:
+            print(
+                f"\nERROR: Refusing to delete {len(deleted)} component(s) without"
+                " --force-delete. Re-run with --force-delete (alongside --yes)"
+                " if you really want to delete these:"
+            )
+            for d in deleted:
+                print(f"  - {d}")
+            sys.exit(2)
+        print(f"\nWARNING: this will DELETE {len(deleted)} component(s):")
+        for d in deleted:
+            print(f"  - {d}")
+        confirm = input("\nType 'delete' to confirm deletion, or anything else to abort: ").strip().lower()
+        if confirm != "delete":
+            print("Push cancelled (deletes not confirmed).")
             return
 
     # Checkpoint before pushing
@@ -232,7 +296,8 @@ def main():
 
     # Authenticate
     print("\nAuthenticating to Dataverse...")
-    token = authenticate(env_url)
+    auth = _AuthHolder(env_url)
+    token = auth.acquire()
     print("Authenticated.\n")
 
     success = 0
@@ -622,11 +687,21 @@ def main():
                 errors += 1
 
     # Save updated component map
-    save_component_map(agent_dir, component_map)
-
     # Update baseline to match what was pushed
-    if success > 0:
+    # CRITICAL: do these only on full success. Updating baseline on partial
+    # success silently loses customer edits - the next push won't see the
+    # failed components as changed because the baseline was refreshed for
+    # all of them. Same logic for the component map (which gets mutated
+    # in-memory during CREATE/DELETE above).
+    if errors == 0 and success > 0:
+        save_component_map(agent_dir, component_map)
         update_baseline(agent_dir)
+    elif errors > 0:
+        print(
+            f"\nBaseline NOT updated: {errors} component(s) failed. Re-run"
+            " push to retry; baseline will be updated only after a fully"
+            " successful push."
+        )
 
     # Summary
     print(f"\n{'=' * 50}")
@@ -635,6 +710,7 @@ def main():
     print(f"Success: {success}")
     if errors:
         print(f"Errors:  {errors}")
+        sys.exit(1)
     print("")
 
 

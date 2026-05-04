@@ -29,17 +29,17 @@ REQUIRED_TOPICS = [
 
 
 def run_local_file_checks(runner) -> list[CheckResult]:
-    """Validate local agent files for ALL agents under my/agents/."""
+    """Validate local agent files for ALL agents under workspace/agents/."""
     results: list[CheckResult] = []
 
-    # Discover all agent folders under my/agents/
-    agents_root = Path("my/agents")
+    # Discover all agent folders under workspace/agents/
+    agents_root = Path("workspace/agents")
     if not agents_root.exists():
         results.append(CheckResult(
             checkpoint_id="LOCAL-001", category="Local Files",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="Agent files available",
-            result="my/agents/ directory not found",
+            result="workspace/agents/ directory not found",
             remediation="Run /setup to extract agent files.",
         ))
         return results
@@ -51,7 +51,7 @@ def run_local_file_checks(runner) -> list[CheckResult]:
             checkpoint_id="LOCAL-001", category="Local Files",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="Agent files available",
-            result="No agent folders found under my/agents/",
+            result="No agent folders found under workspace/agents/",
             remediation="Run /setup to extract agent files.",
         ))
         return results

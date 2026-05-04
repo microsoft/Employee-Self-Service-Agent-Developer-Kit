@@ -200,24 +200,24 @@ def fetch_all(env_url, token, bot_id, components=None):
 
 def save_temp_files(components, template_configs, workflows):
     """Write fetched data to temp JSON files. Returns paths dict."""
-    os.makedirs(os.path.join("my", "agents"), exist_ok=True)
+    os.makedirs(os.path.join("workspace", "agents"), exist_ok=True)
     paths = {}
 
-    comp_path = os.path.join("my", "agents", "components.json")
+    comp_path = os.path.join("workspace", "agents", "components.json")
     with open(comp_path, "w", encoding="utf-8") as f:
         json.dump(components, f, indent=2)
     print(f"Saved components to {comp_path}")
     paths["components"] = comp_path
 
     if template_configs is not None:
-        tc_path = os.path.join("my", "agents", "template-configs.json")
+        tc_path = os.path.join("workspace", "agents", "template-configs.json")
         with open(tc_path, "w", encoding="utf-8") as f:
             json.dump(template_configs, f, indent=2)
         print(f"Saved template configs to {tc_path}")
         paths["template_configs"] = tc_path
 
     if workflows:
-        wf_path = os.path.join("my", "agents", "workflows.json")
+        wf_path = os.path.join("workspace", "agents", "workflows.json")
         with open(wf_path, "w", encoding="utf-8") as f:
             json.dump(workflows, f, indent=2)
         print(f"Saved workflows to {wf_path}")

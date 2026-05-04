@@ -8,7 +8,7 @@ One-shot script that handles everything after agent discovery:
   1. Derives agent slug from display name
   2. Extracts components from Dataverse JSON export to local files
   3. Generates snapshot.md with categorized topic/variable inventory
-  4. Writes my/config.json with setup = "complete"
+  4. Writes .local/config.json with setup = "complete"
   5. Cleans up temp files
   6. Prints a summary the agent shows to the user
 
@@ -19,8 +19,8 @@ Usage:
         --name "Employee Self-Service IT" \
         --schema msdyn_ESSAgent \
         --managed \
-        --components my/agents/components.json \
-        [--template-configs my/agents/template-configs.json]
+        --components workspace/agents/components.json \
+        [--template-configs workspace/agents/template-configs.json]
 
 Called by the onboarding skill Step 3. The agent:
   1. Queries Dataverse for components and template configs
@@ -487,7 +487,11 @@ def _build_flow_topic_map(topics, topic_data):
 def write_config(agent_info, slug, output_dir, template_configs_discovered,
                  template_config_count=0, workflow_count=0,
                  evaluation_count=0):
-    """Write my/config.json with setup = complete.
+    """Write .local/config.json with setup = complete.
+
+    Atomic: writes to a .tmp sibling and os.replace()s into place so a
+    crash mid-write cannot leave a corrupted half-JSON file that bricks
+    the kit (the file gates every subsequent kit operation).
 
     Supports multiple agents: maintains an `agents` array with all discovered
     agents, `activeAgent` pointing to the current slug, and a backward-compat
@@ -504,7 +508,8 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
     }
 
     # Load existing config to preserve other agents and connections
-    config_path = os.path.join("my", "config.json")
+    local_dir = ".local"
+    config_path = os.path.join(local_dir, "config.json")
     existing = {}
     if os.path.exists(config_path):
         try:
@@ -540,9 +545,18 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
         if key in existing and key not in config:
             config[key] = existing[key]
 
-    os.makedirs("my", exist_ok=True)
-    with open(config_path, "w", encoding="utf-8") as f:
+    os.makedirs(local_dir, exist_ok=True)
+    tmp_path = config_path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
         json.dump(config, f, indent=2)
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except OSError:
+            # Some filesystems (e.g. certain network mounts) don't support
+            # fsync. The os.replace below is still atomic on POSIX/Windows.
+            pass
+    os.replace(tmp_path, config_path)
 
 
 def print_summary(stats, template_configs, workflows=None):
@@ -660,7 +674,7 @@ def main():
 
     # Derive slug and output path
     slug = slugify(args.name)
-    output_dir = os.path.join("my", "agents", slug)
+    output_dir = os.path.join("workspace", "agents", slug)
 
     agent_info = {
         "name": args.name,
@@ -735,7 +749,7 @@ def main():
     write_config(agent_info, slug, output_dir,
                  template_configs is not None and tc_count > 0,
                  tc_count, wf_count, eval_count)
-    print("Config:   my/config.json")
+    print("Config:   .local/config.json")
 
     # Create baseline copy (immutable safety net)
     create_baseline(output_dir)

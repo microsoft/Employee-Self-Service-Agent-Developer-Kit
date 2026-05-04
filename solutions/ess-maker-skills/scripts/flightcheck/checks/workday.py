@@ -376,9 +376,9 @@ def _check_workflows(runner) -> list[CheckResult]:
     Resolves credentials from multiple sources (in priority order):
       1. Environment variables (if already set, e.g. from a parent process)
       2. .vscode/mcp.json (base URL + tenant are stored as plain strings)
-      3. my/config.json → connections.Workday (tenant, base URL)
+      3. .local/config.json → connections.Workday (tenant, base URL)
       4. Interactive prompt (username + password only — never cached to disk)
-      5. my/config.json → workdayTestEmployeeId (cached after first prompt)
+      5. .local/config.json → workdayTestEmployeeId (cached after first prompt)
     """
     results = []
 
@@ -540,7 +540,7 @@ def _resolve_workday_creds(runner) -> tuple[str, str, str, str, str]:
         if not tenant:
             tenant = mcp_env.get("WORKDAY_TENANT", "")
 
-    # --- Source 3: my/config.json → connections.Workday ---
+    # --- Source 3: .local/config.json → connections.Workday ---
     config = getattr(runner, "config", {})
     wd_config = config.get("connections", {}).get("Workday", {})
     if not base_url:
@@ -604,8 +604,8 @@ def _read_mcp_workday_env() -> dict:
 
 
 def _cache_test_employee_id(employee_id: str):
-    """Save the test employee ID to my/config.json for future runs."""
-    config_path = os.path.join("my", "config.json")
+    """Save the test employee ID to .local/config.json for future runs."""
+    config_path = os.path.join(".local", "config.json")
     try:
         with open(config_path, "r", encoding="utf-8") as f:
             config = json.load(f)

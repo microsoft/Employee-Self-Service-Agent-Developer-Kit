@@ -5,7 +5,7 @@
 ESS Copilot Kit - Checkpoint Script
 
 Creates, restores, and manages snapshots of the agent's working files.
-All operations are relative to the agent folder in my/config.json.
+All operations are relative to the agent folder in .local/config.json.
 
 Usage:
     python scripts/checkpoint.py "reason for checkpoint"
@@ -25,9 +25,9 @@ EXCLUDE_DIRS = {".baseline", ".checkpoints"}
 
 
 def load_config():
-    config_path = os.path.join("my", "config.json")
+    config_path = os.path.join(".local", "config.json")
     if not os.path.exists(config_path):
-        print("ERROR: my/config.json not found. Run /setup first.")
+        print("ERROR: .local/config.json not found. Run /setup first.")
         sys.exit(1)
     with open(config_path, "r", encoding="utf-8") as f:
         return json.load(f)

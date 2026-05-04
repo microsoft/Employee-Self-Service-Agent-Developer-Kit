@@ -74,15 +74,15 @@ def main():
         help="Validation scope (default: full)",
     )
     parser.add_argument(
-        "--output", default="my/flightcheck",
-        help="Output directory (default: my/flightcheck)",
+        "--output", default="workspace/flightcheck",
+        help="Output directory (default: workspace/flightcheck)",
     )
     args = parser.parse_args()
 
     # Load config
-    config_path = os.path.join("my", "config.json")
+    config_path = os.path.join(".local", "config.json")
     if not os.path.exists(config_path):
-        print("ERROR: my/config.json not found. Run /setup first.")
+        print("ERROR: .local/config.json not found. Run /setup first.")
         sys.exit(1)
 
     with open(config_path, "r", encoding="utf-8") as f:
@@ -90,7 +90,7 @@ def main():
 
     env_url = config.get("dataverseEndpoint", "")
     if not env_url:
-        print("ERROR: No dataverseEndpoint in my/config.json.")
+        print("ERROR: No dataverseEndpoint in .local/config.json.")
         sys.exit(1)
 
     # --- Banner ---

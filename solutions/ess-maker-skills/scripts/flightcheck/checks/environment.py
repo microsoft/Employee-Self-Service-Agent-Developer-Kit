@@ -24,7 +24,7 @@ def run_environment_checks(runner) -> list[CheckResult]:
             priority=Priority.CRITICAL.value, status=Status.FAILED.value,
             description="Power Platform environment exists",
             result="Could not derive environment ID from Dataverse URL",
-            remediation="Verify the environment URL in my/config.json.",
+            remediation="Verify the environment URL in .local/config.json.",
         ))
         return results
 

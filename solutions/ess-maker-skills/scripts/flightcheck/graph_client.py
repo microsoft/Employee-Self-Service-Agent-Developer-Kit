@@ -54,7 +54,7 @@ class GraphClient:
         """Acquire a Graph access token, reusing the shared MSAL cache."""
         authority = f"https://login.microsoftonline.com/{self.tenant_id}"
         cache = msal.SerializableTokenCache()
-        cache_path = os.path.join("my", ".token_cache.bin")
+        cache_path = os.path.join(".local", ".token_cache.bin")
 
         if os.path.exists(cache_path):
             with open(cache_path, "r") as f:
@@ -80,10 +80,20 @@ class GraphClient:
             error = result.get("error_description", result.get("error", "Unknown"))
             raise RuntimeError(f"Graph authentication failed: {error}")
 
-        # Persist cache
+        # Persist cache with strict 0o600 permissions on POSIX. The cache
+        # holds MSAL refresh tokens; default umask (0o644) would expose them
+        # to other users on shared dev VMs.
         if cache.has_state_changed:
-            os.makedirs("my", exist_ok=True)
-            with open(cache_path, "w") as f:
+            os.makedirs(".local", exist_ok=True)
+            try:
+                os.chmod(".local", 0o700)
+            except OSError:
+                pass  # Windows ignores chmod for directories
+            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+            if hasattr(os, "O_BINARY"):
+                flags |= os.O_BINARY
+            fd = os.open(cache_path, flags, 0o600)
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(cache.serialize())
 
         self._token = result["access_token"]

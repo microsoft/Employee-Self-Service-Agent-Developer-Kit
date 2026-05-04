@@ -153,7 +153,7 @@ class FlightCheckRunner:
         )
 
 
-def save_results(run_result: RunResult, output_dir: str = "my/flightcheck"):
+def save_results(run_result: RunResult, output_dir: str = "workspace/flightcheck"):
     """Persist run results to JSON, tasks.md, and HTML report."""
     os.makedirs(output_dir, exist_ok=True)
     os.makedirs(os.path.join(output_dir, "history"), exist_ok=True)
