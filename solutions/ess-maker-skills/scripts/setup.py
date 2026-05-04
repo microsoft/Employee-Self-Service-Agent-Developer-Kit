@@ -35,7 +35,7 @@ import re
 import shutil
 import subprocess
 import sys
-from datetime import date# Remove the import above
+from datetime import date
 
 # ---------------------------------------------------------------------------
 # Constants

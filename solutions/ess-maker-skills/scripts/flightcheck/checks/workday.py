@@ -681,11 +681,74 @@ def _build_write_test_body(employee_id: str) -> str:
 </bsvc:Get_Change_Work_Contact_Information_Event_Request>"""
 
 
+def _redact_ws_security(xml_text: str) -> str:
+    """Remove any WS-Security UsernameToken block from XML before logging.
+
+    Workday occasionally echoes parts of the request envelope into responses
+    (especially in error responses). The envelope contains the ISU password
+    in the wsse:UsernameToken element. Strip the entire Security header
+    block before any logging or return-to-caller path so the password
+    cannot leak into FlightCheck reports or error messages.
+    """
+    if not xml_text or 'wsse:Security' not in xml_text and 'UsernameToken' not in xml_text:
+        return xml_text
+    import re
+    # Drop any <*:Security>...</*:Security> block (any namespace prefix).
+    xml_text = re.sub(
+        r'<[^/>]*:?Security[^>]*>.*?</[^>]*:?Security>',
+        '<Security>[REDACTED]</Security>',
+        xml_text,
+        flags=re.DOTALL,
+    )
+    # Belt-and-suspenders: also strip any standalone UsernameToken or Password tag.
+    xml_text = re.sub(
+        r'<[^/>]*:?UsernameToken[^>]*>.*?</[^>]*:?UsernameToken>',
+        '<UsernameToken>[REDACTED]</UsernameToken>',
+        xml_text,
+        flags=re.DOTALL,
+    )
+    xml_text = re.sub(
+        r'<[^/>]*:?Password[^>]*>.*?</[^>]*:?Password>',
+        '<Password>[REDACTED]</Password>',
+        xml_text,
+    )
+    return xml_text
+
+
+def _summarize_soap_error(status_code: int, resp_text: str) -> str:
+    """Extract a safe-to-log summary from an error SOAP response.
+
+    Returns the SOAP faultstring if present (Workday faultstrings describe
+    the error condition without echoing the request body), otherwise just
+    the HTTP status code. Never returns raw response text - error responses
+    can include echoed request content that contains the WS-Security
+    UsernameToken (CodeQL: clear-text logging of sensitive information).
+    """
+    if not resp_text:
+        return f"HTTP {status_code}"
+    try:
+        from defusedxml import ElementTree as _DET
+        root = _DET.fromstring(resp_text)
+        # SOAP 1.1 faultstring (no namespace) and SOAP 1.2 fault Reason/Text
+        for path in ('.//{*}faultstring', './/{*}Reason/{*}Text', './/faultstring'):
+            el = root.find(path)
+            if el is not None and el.text:
+                return f"HTTP {status_code}: {el.text.strip()[:200]}"
+    except Exception:
+        pass
+    return f"HTTP {status_code}"
+
+
 def _soap_call(
     base_url: str, tenant: str, username: str, password: str,
     service: str, body_xml: str,
 ) -> dict:
-    """Make a synchronous SOAP call to Workday. Returns {success, response|error}."""
+    """Make a synchronous SOAP call to Workday. Returns {success, response|error}.
+
+    Both the response and error returns are scrubbed of WS-Security
+    UsernameToken content before being handed back to the caller, so the
+    ISU password cannot end up in FlightCheck reports or stdout.
+    """
     import httpx
 
     url = f"{base_url}/{tenant}/{service}/v42.0"
@@ -693,15 +756,25 @@ def _soap_call(
     envelope = _build_soap_envelope(full_user, password, body_xml)
 
     try:
-        with httpx.Client(timeout=30.0) as client:
+        with httpx.Client(timeout=30.0, follow_redirects=False) as client:
             resp = client.post(
                 url,
                 content=envelope,
                 headers={"Content-Type": "text/xml; charset=utf-8"},
             )
             if resp.status_code < 400:
-                return {"success": True, "response": resp.text}
-            else:
-                return {"success": False, "error": resp.text[:500]}
+                # Even on success, scrub WS-Security in case Workday echoes it
+                # (defense-in-depth - the success body normally doesn't include it).
+                return {"success": True, "response": _redact_ws_security(resp.text)}
+            return {
+                "success": False,
+                "error": _summarize_soap_error(resp.status_code, resp.text),
+            }
     except Exception as e:
-        return {"success": False, "error": str(e)}
+        # Don't echo str(e) verbatim if it looks like it might contain the URL
+        # with embedded credentials; httpx errors don't normally include them
+        # but be cautious.
+        msg = str(e)
+        if password and password in msg:
+            msg = msg.replace(password, '[REDACTED]')
+        return {"success": False, "error": msg}
