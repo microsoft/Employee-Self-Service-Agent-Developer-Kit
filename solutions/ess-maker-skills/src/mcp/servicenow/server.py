@@ -110,6 +110,65 @@ def _q(value: str) -> str:
     return value.replace("^", " ").replace("\x00", "").replace("\r", " ").replace("\n", " ").strip()
 
 
+# Feature flag for admin tools (register_oauth_application,
+# register_oidc_provider, set_system_property). These tools mutate ServiceNow
+# security/auth configuration and should normally be invoked from the
+# /connect skill via explicit human-driven scripts, not from the LLM tool
+# surface. Default: OFF. Set SERVICENOW_MCP_ENABLE_ADMIN_TOOLS=1 (or true)
+# to enable for one-off setup work.
+_ADMIN_TOOLS_ENABLED = os.environ.get(
+    "SERVICENOW_MCP_ENABLE_ADMIN_TOOLS", ""
+).lower() in ("1", "true", "yes", "on")
+
+
+def _require_admin_tools(tool_name: str) -> None:
+    """Raise a clear error when an admin tool is invoked without the flag."""
+    if not _ADMIN_TOOLS_ENABLED:
+        raise PermissionError(
+            f"{tool_name} is an admin tool and is disabled by default. "
+            "It mutates ServiceNow security / auth configuration and should be "
+            "driven from the /connect skill (explicit human action) rather than "
+            "the LLM tool surface. To enable for one-off setup, set the env var "
+            "SERVICENOW_MCP_ENABLE_ADMIN_TOOLS=1 in the MCP server environment, "
+            "restart the server, then disable again after the setup completes."
+        )
+
+
+# Tables on which non-GET methods (POST/PATCH/DELETE) are forbidden via the
+# table API surface (call_api with table-API path prefixes). Read-only access
+# is permitted because the typed tools (resolve_user, etc.) need to query
+# sys_user records, but mutation through the generic table API would let
+# prompt injection delete admin users, modify security ACLs, or escalate
+# privileges by inserting into sys_user_grmember.
+_CALL_API_TABLE_DENYLIST_NON_GET = frozenset({
+    "sys_user",
+    "sys_user_grmember",
+    "sys_user_group",
+    "sys_user_role",
+    "sys_user_has_role",
+    "sys_properties",
+    "sys_audit",
+    "sys_audit_delete",
+    "sys_security_acl",
+    "sys_security_diag",
+    "oauth_entity",
+    "oauth_entity_profile",
+    "sys_oidc_provider",
+    "sys_certificate",
+    "sys_script",
+    "sys_script_include",
+    "sys_script_action",
+    "sys_script_client",
+    "sys_ws_operation",
+})
+
+
+import re as _re
+_CALL_API_TABLE_PATH_RE = _re.compile(
+    r"^/api/now/(?:v[12]/)?table/([a-z][a-z0-9_]{0,63})(?:/|$|\?)"
+)
+
+
 # ═══════════════════════════════════════════════════════════════
 #  GENERIC TABLE TOOLS
 # ═══════════════════════════════════════════════════════════════
@@ -604,6 +663,11 @@ async def register_oauth_application(
 ) -> str:
     """Register a new OAuth application in the OAuth Application Registry.
 
+    ADMIN TOOL - disabled by default. Set the env var
+    SERVICENOW_MCP_ENABLE_ADMIN_TOOLS=1 on the MCP server process to enable
+    for one-off setup work, then unset it again. The /connect skill is the
+    intended entry point for this operation.
+
     The OAuth client_secret is NOT passed as a tool argument. Instead, set the
     secret in an environment variable on the MCP server process and pass the env
     var NAME via client_secret_env_var. This keeps the secret out of MCP logs
@@ -621,6 +685,7 @@ async def register_oauth_application(
         grant_type: Grant type (authorization_code, client_credentials, password, implicit)
         comments: Additional notes
     """
+    _require_admin_tools("register_oauth_application")
     client_secret = _resolve_secret_from_env(client_secret_env_var, "client_secret_env_var")
     data: dict = {
         "name": name,
@@ -674,6 +739,11 @@ async def register_oidc_provider(
     """Register a new OIDC identity provider for user authentication.
     Typically used to configure Entra ID (Azure AD) SSO.
 
+    ADMIN TOOL - disabled by default. Set the env var
+    SERVICENOW_MCP_ENABLE_ADMIN_TOOLS=1 on the MCP server process to enable
+    for one-off setup work, then unset it again. The /connect skill is the
+    intended entry point for this operation.
+
     The OIDC client_secret is NOT passed as a tool argument. Instead, set the
     secret in an environment variable on the MCP server process and pass the env
     var NAME via client_secret_env_var. This keeps the secret out of MCP logs
@@ -689,6 +759,7 @@ async def register_oidc_provider(
         oidc_provider: OIDC provider sys_id (if linking to existing config)
         comments: Additional notes
     """
+    _require_admin_tools("register_oidc_provider")
     client_secret = _resolve_secret_from_env(client_secret_env_var, "client_secret_env_var")
     data: dict = {
         "name": name,
@@ -765,10 +836,17 @@ async def set_system_property(sys_id: str, value: str) -> str:
     """Update a ServiceNow system property value.
     Use get_system_properties to find the sys_id first.
 
+    ADMIN TOOL - disabled by default. System properties control auth modes,
+    security policies, and integration toggles; arbitrary mutation can
+    disable security controls. Set the env var
+    SERVICENOW_MCP_ENABLE_ADMIN_TOOLS=1 on the MCP server process to enable
+    for one-off setup work, then unset it again.
+
     Args:
         sys_id: sys_id of the system property record
         value: New value to set
     """
+    _require_admin_tools("set_system_property")
     client = get_client()
     result = await client.update_record("sys_properties", sys_id, {"value": value})
     return _fmt(result)
@@ -826,6 +904,19 @@ async def call_api(method: str, path: str, data: str = "") -> str:
             "Admin and scripting endpoints are intentionally blocked. "
             "Use the typed tools (query_table, get_record, etc.) for supported scenarios."
         )
+
+    # Table-API denylist: even though /api/now/table/* is on the path
+    # allowlist, prevent non-GET methods from touching admin/security/audit
+    # tables. GET (read) is permitted - the typed tools need to query sys_user
+    # for resolve_user, etc.
+    if method_upper != "GET":
+        m = _CALL_API_TABLE_PATH_RE.match(path)
+        if m and m.group(1) in _CALL_API_TABLE_DENYLIST_NON_GET:
+            raise PermissionError(
+                f"call_api: {method_upper} on table '{m.group(1)}' is forbidden. "
+                "This table holds security/auth/audit configuration. Use a "
+                "typed tool or the /connect skill for legitimate changes."
+            )
 
     client = get_client()
     kwargs = {}
