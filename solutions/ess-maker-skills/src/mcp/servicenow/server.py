@@ -88,6 +88,28 @@ def _resolve_secret_from_env(env_var: str, field_name: str) -> str:
     return value
 
 
+def _q(value: str) -> str:
+    """Escape a value for ServiceNow encoded-query interpolation.
+
+    The encoded-query syntax uses ``^`` as the AND operator and ``^OR`` for OR.
+    Embedding either inside a value lets an attacker break out of a single
+    filter clause and append additional ones (e.g. ``query='x^OR1=1'`` becomes
+    a tautology that returns all records, or ``query='x^ORassigned_to=admin'``
+    leaks records assigned to a different user).
+
+    There is no documented official escape; the safe approach is to drop
+    ``^`` characters (and the bare-newline / null bytes that some clients
+    treat as separators) entirely from values supplied by the LLM/user. Tools
+    must call this on every interpolated value going into a ``parts.append``.
+    """
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        value = str(value)
+    # Drop ^ (encoded-query AND/OR delimiter), null, CR, LF.
+    return value.replace("^", " ").replace("\x00", "").replace("\r", " ").replace("\n", " ").strip()
+
+
 # ═══════════════════════════════════════════════════════════════
 #  GENERIC TABLE TOOLS
 # ═══════════════════════════════════════════════════════════════
@@ -201,15 +223,15 @@ async def search_incidents(
     """
     parts = []
     if query:
-        parts.append(f"short_descriptionLIKE{query}")
+        parts.append(f"short_descriptionLIKE{_q(query)}")
     if state:
-        parts.append(f"state={state}")
+        parts.append(f"state={_q(state)}")
     if priority:
-        parts.append(f"priority={priority}")
+        parts.append(f"priority={_q(priority)}")
     if assigned_to:
-        parts.append(f"assigned_to={assigned_to}")
+        parts.append(f"assigned_to={_q(assigned_to)}")
     if category:
-        parts.append(f"category={category}")
+        parts.append(f"category={_q(category)}")
 
     encoded_query = "^".join(parts) if parts else ""
     fields = (
@@ -310,13 +332,13 @@ async def search_hr_cases(
     """
     parts = []
     if query:
-        parts.append(f"subjectLIKE{query}")
+        parts.append(f"subjectLIKE{_q(query)}")
     if state:
-        parts.append(f"state={state}")
+        parts.append(f"state={_q(state)}")
     if hr_service:
-        parts.append(f"hr_service={hr_service}")
+        parts.append(f"hr_service={_q(hr_service)}")
     if opened_for:
-        parts.append(f"opened_for={opened_for}")
+        parts.append(f"opened_for={_q(opened_for)}")
 
     encoded_query = "^".join(parts) if parts else ""
     fields = (
@@ -380,9 +402,9 @@ async def browse_service_catalog(
     """
     parts = []
     if query:
-        parts.append(f"nameLIKE{query}")
+        parts.append(f"nameLIKE{_q(query)}")
     if category:
-        parts.append(f"category={category}")
+        parts.append(f"category={_q(category)}")
     if active:
         parts.append("active=true")
 
@@ -418,9 +440,9 @@ async def search_cmdb_items(
     """
     parts = []
     if query:
-        parts.append(f"nameLIKE{query}")
+        parts.append(f"nameLIKE{_q(query)}")
     if operational_status:
-        parts.append(f"operational_status={operational_status}")
+        parts.append(f"operational_status={_q(operational_status)}")
 
     encoded_query = "^".join(parts) if parts else ""
     fields = (
@@ -459,13 +481,13 @@ async def resolve_user(
     """
     parts = []
     if name:
-        parts.append(f"nameLIKE{name}")
+        parts.append(f"nameLIKE{_q(name)}")
     if email:
-        parts.append(f"email={email}")
+        parts.append(f"email={_q(email)}")
     if user_name:
-        parts.append(f"user_name={user_name}")
+        parts.append(f"user_name={_q(user_name)}")
     if employee_number:
-        parts.append(f"employee_number={employee_number}")
+        parts.append(f"employee_number={_q(employee_number)}")
 
     encoded_query = "^".join(parts) if parts else ""
     fields = "sys_id,name,email,user_name,employee_number,department,title,active"
@@ -499,11 +521,11 @@ async def search_interactions(
     """
     parts = []
     if query:
-        parts.append(f"short_descriptionLIKE{query}")
+        parts.append(f"short_descriptionLIKE{_q(query)}")
     if state:
-        parts.append(f"state={state}")
+        parts.append(f"state={_q(state)}")
     if channel:
-        parts.append(f"channel={channel}")
+        parts.append(f"channel={_q(channel)}")
 
     encoded_query = "^".join(parts) if parts else ""
 
