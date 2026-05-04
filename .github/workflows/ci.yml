@@ -25,9 +25,21 @@ jobs:
     - name: Install ruff
       run: pip install ruff
 
+    - name: Check for Python source files
+      id: check_python
+      run: |
+        if find solutions/ess-maker-skills/scripts solutions/ess-maker-skills/src/mcp -type f -name "*.py" 2>/dev/null | grep -q .; then
+          echo "has_python=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "has_python=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::No Python files in this branch under solutions/ess-maker-skills/scripts/ or src/mcp/ - skipping lint and syntax check. (Expected on review/01-skeleton + review/02-solutions-layout; the Python lands in PR #3-#5.)"
+        fi
+
     - name: Lint with ruff
+      if: steps.check_python.outputs.has_python == 'true'
       run: ruff check solutions/ess-maker-skills/scripts/ solutions/ess-maker-skills/src/mcp/ --output-format=github
 
     - name: Check Python syntax
+      if: steps.check_python.outputs.has_python == 'true'
       run: |
         python -m compileall -q solutions/ess-maker-skills/scripts/ solutions/ess-maker-skills/src/mcp/
