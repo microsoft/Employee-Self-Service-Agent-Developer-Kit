@@ -2,7 +2,9 @@
 
 Customize your Employee Self-Service (ESS) agent using GitHub Copilot in VS Code — no deep platform knowledge required. Describe what you need in plain English and the kit generates topic YAML, workflow JSON, adaptive cards, and integration configurations for you.
 
-> **This repo is intended as an example or learning tool.** It demonstrates how to customize Employee Self-Service (ESS) agents using GitHub Copilot in VS Code. It is not a Microsoft product or a supported service. See [SUPPORT.md](SUPPORT.md) for the support model and [SECURITY.md](SECURITY.md) for reporting security issues.
+> **This repo is intended as an example or learning tool.** It demonstrates how to customize Employee Self-Service (ESS) agents using GitHub Copilot in VS Code. It is not a Microsoft product or a supported service. See [SUPPORT.md](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/blob/main/SUPPORT.md) for the support model and [SECURITY.md](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/blob/main/SECURITY.md) for reporting security issues.
+
+> **About this README.** This document describes the complete kit. While the modular review (PRs #1-#10) is in flight, some features below land in subsequent PRs of the stack and may not be available on `main2` yet.
 
 ## Why This Kit
 
@@ -75,7 +77,7 @@ Create structured CSV test sets that you upload to the Copilot Studio Evaluation
 - **Integration Data** — Validates external system data retrieval with placeholder-based expected responses
 - **General Knowledge** — Open-ended quality checks against loaded knowledge sources
 
-Test sets are written to `my/tests/{date}/` in the exact CSV format Copilot Studio expects (`Prompt, Expected response, Test Method Type, Passing Score`). Run `/evaluate` to generate them.
+Test sets are written to `workspace/tests/{date}/` in the exact CSV format Copilot Studio expects (`Prompt, Expected response, Test Method Type, Passing Score`). Run `/evaluate` to generate them.
 
 ### 🚀 Push to Copilot Studio
 
@@ -91,9 +93,10 @@ The `/push` command compares your local files against the last-known baseline, d
 
 Run a comprehensive readiness check against your live environment and all extracted agents before going to production. FlightCheck validates licensing, identity, infrastructure, integrations, agent configuration, and publishing readiness — then generates an HTML report you can share with stakeholders.
 
-Run `/flightcheck` from Copilot Chat, or directly from the CLI:
+Run `/flightcheck` from Copilot Chat, or directly from the CLI (run from this solution's directory):
 
 ```bash
+cd solutions/ess-maker-skills
 python scripts/flightcheck/cli.py --scope full
 ```
 
@@ -111,9 +114,9 @@ python scripts/flightcheck/cli.py --scope full
 | Publishing | Golden prompts, UAT sign-off, managed solution export, admin approval |
 
 **Key capabilities:**
-- **Multi-agent** — automatically scans every agent under `my/agents/`, not just the active one
+- **Multi-agent** — automatically scans every agent under `workspace/agents/`, not just the active one
 - **HTML report** — opens in your browser with color-coded results, priority highlighting, and clickable remediation links
-- **Run history** — every run is archived in `my/flightcheck/history/` for trend tracking
+- **Run history** — every run is archived in `workspace/flightcheck/history/` for trend tracking
 - **Workday SOAP tests** — tests all 17 ESS workflows against the actual Workday API (reads credentials from `.vscode/mcp.json`, prompts for ISU password at runtime — never saved to disk)
 - **Auto-fix offer** — after presenting results, the agent offers to fix issues it can handle (run `/connect`, `/scan`, enable flows) and re-runs the check
 - **Graceful degradation** — runs whatever checks your permissions allow; skips the rest with clear messages
@@ -147,7 +150,7 @@ This toolkit does NOT:
 - Provide hosted runtime, SLAs, or ongoing operations for the agents you build
 - Manage cross-tenant or cross-environment promotion (no built-in CI/CD for Copilot Studio)
 - Ship a production-ready packaged agent — you are authoring components in your own tenant
-- Provide official Microsoft support beyond what is described in [SUPPORT.md](SUPPORT.md)
+- Provide official Microsoft support beyond what is described in [SUPPORT.md](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/blob/main/SUPPORT.md)
 
 ---
 
@@ -238,7 +241,9 @@ Configured automatically during `/connect servicenow`.
 
 ### Recommended Models
 
-This kit relies on structured instructions and multi-step tool use. Not all models handle this reliably.
+This kit relies on structured instructions and multi-step tool use. Not all models handle this reliably. Behaviors below were observed during kit development; results may change as models are updated.
+
+**Last tested:** 2026-05-04
 
 | Model | Status | Notes |
 |-------|--------|-------|
@@ -298,25 +303,29 @@ Changes are pushed to Copilot Studio via the Dataverse API
 ## Repository Structure
 
 ```
-src/
-├── reference/      ESS documentation, integration guides, customization patterns
-├── skills/         Step-by-step instructions the agent follows for each command
-├── examples/       Official samples — topics, template configs, evaluation test sets
-└── templates/      Starting points for topics and workflows
-my/                 Your local config, agent files, and test outputs (gitignored)
+solutions/ess-maker-skills/
+  .github/             Per-solution copilot-instructions and prompt files
+  .vscode/             VS Code workspace settings + recommended extensions
+  scripts/             Python automation: setup.py, push.py, checkpoint.py, flightcheck/
+  src/
+    reference/         ESS docs, integration guides, customization patterns
+    skills/            Step-by-step instructions the agent follows for each command
+    mcp/               Workday + ServiceNow MCP servers
+    templates/         Starting points for topics and workflows
+  workspace/           Your files (gitignored): agents/, tests/, flightcheck/history/
+  .local/              Kit-internal state (gitignored): .baseline/, .checkpoints/,
+                       .token_cache.bin, .component-map.json, config.json
 ```
+
+`workspace/` and `.local/` scaffold dirs are committed (just `.gitkeep` files); contents are gitignored. Reference samples (topic YAMLs, template configs, evaluation test sets) live at the repo root in [`samples/`](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/tree/main/samples), peer to `solutions/`.
 
 ## Contributing
 
-This project welcomes contributions and suggestions. Most contributions require you to agree to a
-Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us
-the rights to use your contribution. For details, visit https://cla.microsoft.com.
-
-Please read our [Contributing Guide](CONTRIBUTING.md) for more information.
+See the repository [Contributing Guide](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/blob/main/CONTRIBUTING.md) for the contribution model, the Microsoft CLA process, security maintenance commitments, scope policy, and validation guide.
 
 ## License
 
-This project is licensed under the [MIT License](LICENSE).
+This project is licensed under the [MIT License](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/blob/main/LICENSE).
 
 ## Trademarks
 

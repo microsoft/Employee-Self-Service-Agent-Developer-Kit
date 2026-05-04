@@ -1,5 +1,8 @@
 {
   "recommendations": [
-    "GitHub.copilot-chat"
+    "GitHub.copilot-chat",
+    "redhat.vscode-yaml",
+    "ms-python.python",
+    "ms-python.ruff"
   ]
 }
