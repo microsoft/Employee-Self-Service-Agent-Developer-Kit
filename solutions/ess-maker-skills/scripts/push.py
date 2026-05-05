@@ -352,6 +352,8 @@ def main():
     pending_creates: dict = {}     # filepath -> component_map entry
     pending_deletes: set = set()   # filepaths to remove from component_map
     pending_meta_writes: list = []  # list[(meta_full_path, meta_data_dict)]
+    pending_renames: dict = {}     # filepath -> new name (workflow-meta
+                                   # rename mutations staged for the gate)
 
     # Push modified files
     for filepath in changed:
@@ -453,7 +455,14 @@ def main():
                                    entry["workflowid"], record)
                 print(f"  ✅ Updated: {filepath}")
                 if "name" in record:
-                    entry["name"] = record["name"]
+                    # Stage the rename for the success gate. Round 4 moved
+                    # every other CRUD-side mutation off the in-loop path;
+                    # this one slipped because it's a rename inside a
+                    # workflow-meta update branch, not a CRUD on
+                    # component_map[filepath] directly. Apply at the gate
+                    # alongside pending_creates / pending_deletes for
+                    # consistency.
+                    pending_renames[filepath] = record["name"]
                 success += 1
             except Exception as e:
                 print(f"  ❌ Failed: {filepath}: {e}")
@@ -647,17 +656,27 @@ def main():
             # Determine parent ID: prefer the parent created in this run
             # whose path lives in the SAME evaluations/<set-name>/ folder.
             # Falling back to "first parent in dict iteration order" silently
-            # corrupts evaluation hierarchies when multiple new sets push at
-            # once - every child got attached to the first parent. Folder
-            # match is the only correct disambiguator.
+            # Resolve the parent for this child. Three lookup paths in
+            # priority order; fail closed (do NOT create the child) if all
+            # three miss. Round 3 picked the first parent in dict order;
+            # round 4 narrowed to same-folder parents created in this push,
+            # but missed the most common case (a new test case added under
+            # an evaluation set whose parent already exists remotely).
+            # Round 5 adds the third lookup against the existing
+            # component_map and fails loud if no parent matches the child's
+            # folder.
             parent_id = None
+            child_folder = "/".join(
+                filepath.replace("\\", "/").split("/")[:-1]
+            )
+
+            # 1. Re-pushing a known child? Use its stored parent.
             entry = component_map.get(filepath)
             if entry and entry.get("parentbotcomponentid"):
                 parent_id = entry["parentbotcomponentid"]
-            else:
-                child_folder = "/".join(
-                    filepath.replace("\\", "/").split("/")[:-1]
-                )
+
+            # 2. Parent created in THIS push, same folder.
+            if parent_id is None:
                 for p_path, p_id in eval_parent_ids.items():
                     p_folder = "/".join(
                         p_path.replace("\\", "/").split("/")[:-1]
@@ -666,6 +685,34 @@ def main():
                         parent_id = p_id
                         break
 
+            # 3. Existing parent already in component_map, same folder.
+            #    This is the common case: customer adds a new test case
+            #    under an evaluation set that was extracted by /setup.
+            if parent_id is None:
+                for p_path, p_entry in component_map.items():
+                    if p_entry.get("componenttype") != 19:
+                        continue
+                    if p_entry.get("parentbotcomponentid"):
+                        continue  # this is a child, not a parent
+                    p_folder = "/".join(
+                        p_path.replace("\\", "/").split("/")[:-1]
+                    )
+                    if p_folder == child_folder:
+                        parent_id = p_entry.get("botcomponentid")
+                        break
+
+            if parent_id is None:
+                # Fail closed: don't create an orphan eval case in
+                # Dataverse. The customer needs a parent eval set in this
+                # folder before the case can be pushed.
+                print(
+                    f"  ❌ Failed: {filepath}: no eval parent found in "
+                    f"{child_folder}/. Add a parent eval set in this folder "
+                    f"before pushing the case."
+                )
+                errors += 1
+                continue
+
             record_data = {
                 "componenttype": 19,
                 "data": content,
@@ -673,9 +720,8 @@ def main():
                 "schemaname": schema,
                 "parentbotid@odata.bind": f"/bots({bot_id})",
             }
-            if parent_id:
-                record_data["ParentBotComponentId@odata.bind"] = \
-                    f"/botcomponents({parent_id})"
+            record_data["ParentBotComponentId@odata.bind"] = \
+                f"/botcomponents({parent_id})"
             try:
                 new_id = _call_with_refresh(auth, create_record,
                                             env_url, auth.token,
@@ -782,15 +828,36 @@ def main():
     # against records that no longer existed (delete) or duplicated them
     # (create). The atomic gate preserves the contract.
     if errors == 0 and success > 0:
-        for path, entry in pending_creates.items():
-            component_map[path] = entry
-        for path in pending_deletes:
-            component_map.pop(path, None)
-        for meta_full, meta_data in pending_meta_writes:
-            with open(meta_full, "w", encoding="utf-8") as mf:
-                json.dump(meta_data, mf, indent=2)
-        save_component_map(agent_dir, component_map)
-        update_baseline(agent_dir)
+        # Atomic-ish persist: API operations have already committed
+        # remotely, so a disk-write failure mid-gate would leave us in the
+        # same wedge state the round-4 fix closed for the API side. Catch
+        # any exception, surface a clear recovery message, and exit
+        # non-zero so the customer knows local state did not catch up to
+        # remote state. The next /pull (or hand-running of /setup --refresh)
+        # resyncs the baseline. Tracked follow-up: stage meta + map writes
+        # to *.tmp + os.replace for true atomicity.
+        try:
+            for path, entry in pending_creates.items():
+                component_map[path] = entry
+            for path in pending_deletes:
+                component_map.pop(path, None)
+            for path, new_name in pending_renames.items():
+                if path in component_map:
+                    component_map[path]["name"] = new_name
+            for meta_full, meta_data in pending_meta_writes:
+                with open(meta_full, "w", encoding="utf-8") as mf:
+                    json.dump(meta_data, mf, indent=2)
+            save_component_map(agent_dir, component_map)
+            update_baseline(agent_dir)
+        except OSError as exc:
+            print(
+                "\nERROR: local persist failed mid-gate after API operations"
+                f" succeeded. Remote state is committed but local map and"
+                f" baseline are stale. Detail: {exc}\n"
+                "Run '/setup --refresh' to resync the baseline against the"
+                " current remote state before the next push."
+            )
+            sys.exit(3)
     elif errors > 0:
         print(
             f"\nBaseline NOT updated: {errors} component(s) failed. Re-run"
