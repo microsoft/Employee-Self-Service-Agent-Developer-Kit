@@ -4,8 +4,6 @@
 """Workday SOAP API client with Basic Auth, OAuth 2.0, retry, and XML parsing."""
 
 import asyncio
-import base64
-import json
 import logging
 import os
 import random
