@@ -25,14 +25,14 @@ The documentation covers:
 
 ## 📂 Repository Structure
 
-### 1. StarterTestSets (Ready to Use)
+### 1. starter/ (Ready to Use)
 
 Fully prepared test sets you can upload directly into Copilot Studio's Evaluation tool.
 
 - No changes needed.
 - Helpful for quick validation, demos, and baseline evaluations.
 
-### 2. TemplatedTestSets (Partially Ready – Requires Input)
+### 2. templated/ (Partially Ready – Requires Input)
 
 These test sets include predefined templates with placeholder values that **you must fill** before use.
 
@@ -61,7 +61,7 @@ Contains guidance and explanations for effectively using the provided test sets.
 
 ## 📄 CSV Structure Used in Test Sets
 
-Both **StarterTestSets** and **TemplatedTestSets** follow a consistent CSV format used by Copilot Studio Evaluation.
+Both **starter/** and **templated/** follow a consistent CSV format used by Copilot Studio Evaluation.
 
 ### CSV Columns
 
@@ -88,8 +88,8 @@ What is my Cost Center?, Cost center <1234-5678 + Name>, CompareMeaning, 70
 ## 🚀 How to Use These Test Sets
 
 1. Pick a test set depending on your need:
-   - Use **StarterTestSets** for immediate evaluation.
-   - Use **TemplatedTestSets** if you want to tailor test data.
+   - Use **starter/** for immediate evaluation.
+   - Use **templated/** if you want to tailor test data.
 2. Upload the CSV files into Copilot Studio’s **Evaluation** tool.
 3. Review results across:
    - Response correctness  

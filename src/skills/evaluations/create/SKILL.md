@@ -10,7 +10,7 @@ via Dataverse. Test cases are stored as `botcomponent` records with
 - ALWAYS read `my/config.json` to get the agent folder name and slug.
 - ALWAYS read all topic files in the agent folder to understand what the agent does before generating tests.
 - Write evaluation files to `{agent.folder}/evaluations/` as `.mcs.yml` YAML files.
-- Use the existing starter test sets in `src/examples/ess-samples/ESSEvaluationSamples/StarterTestSets/` as exemplar patterns for each test category.
+- Use the existing starter test sets in `src/samples/evaluations/starter/` as exemplar patterns for each test category.
 - Follow the standard mutation pipeline: **checkpoint → write files → scan → dry run → push → verify**.
 - **TRACK PROGRESS**: Use the todo list tool to track your progress through this skill's steps. Create a todo list at the start with all the steps, mark each in-progress as you start it, and mark completed when done.
 
@@ -139,7 +139,7 @@ Generate one EvaluationSet file + child EvaluationData files for each applicable
 
 #### AmbiguousTopic
 
-1. Read the exemplar: `src/examples/ess-samples/ESSEvaluationSamples/StarterTestSets/AmbiguousTopic-IT.csv`
+1. Read the exemplar: `src/samples/evaluations/starter/AmbiguousTopic-IT.csv`
 2. Identify topics whose domains could overlap
 3. Generate 10-15 vague prompts that could plausibly match multiple topics
 4. `expectedOutput` should indicate the agent **asks a clarifying question**
@@ -148,7 +148,7 @@ Generate one EvaluationSet file + child EvaluationData files for each applicable
 
 **ALWAYS generate this category** — every agent needs RAI guardrails.
 
-1. Read the exemplar: `src/examples/ess-samples/ESSEvaluationSamples/StarterTestSets/RAI-IT.csv` or `RAI-HR.csv`
+1. Read the exemplar: `src/samples/evaluations/starter/RAI-IT.csv` or `RAI-HR.csv`
 2. Generate 15-20 test cases covering: security exploits, prompt injection, policy bypass, discrimination, data exfiltration
 3. `expectedOutput` should indicate refusal
 
@@ -156,7 +156,7 @@ Generate one EvaluationSet file + child EvaluationData files for each applicable
 
 **Only generate if** the agent has a sensitive-topics topic.
 
-1. Read the exemplar: `src/examples/ess-samples/ESSEvaluationSamples/StarterTestSets/SensitiveTopic.csv`
+1. Read the exemplar: `src/samples/evaluations/starter/SensitiveTopic.csv`
 2. Generate 10-15 prompts about sensitive workplace situations
 3. `expectedOutput` should indicate escalation
 
@@ -164,7 +164,7 @@ Generate one EvaluationSet file + child EvaluationData files for each applicable
 
 **Only generate if** the agent has an emotional intelligence topic.
 
-1. Read the exemplar: `src/examples/ess-samples/ESSEvaluationSamples/StarterTestSets/EQTopic-IT.csv` or `EQTopic-HR.csv`
+1. Read the exemplar: `src/samples/evaluations/starter/EQTopic-IT.csv` or `EQTopic-HR.csv`
 2. Generate 10-15 prompts with emotional undertones
 3. `expectedOutput` should acknowledge the emotion AND offer help
 
