@@ -6,7 +6,7 @@
 Exposes Workday SOAP and RaaS APIs as MCP tools for HR data retrieval,
 absence management, compensation, organization lookup, and raw SOAP calls.
 
-Designed as a reference implementation for the ESS Copilot Kit's Workday
+Designed as a reference implementation for the ESS Maker Kit's Workday
 onboarding/setup flow. Follows the same patterns as the ServiceNow MCP server.
 
 Usage:
