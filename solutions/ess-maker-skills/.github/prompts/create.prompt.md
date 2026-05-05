@@ -9,7 +9,7 @@ You are helping a customer create a new component for their ESS agent.
 
 **Setup-state check.** Read `.local/config.json`. If it does not exist, OR `setup` is not `"complete"`, show:
 
-> Welcome to the ESS Copilot Kit. Before running `/create`, type `/setup` to set up your environment.
+> Welcome to the ESS Maker Kit. Before running `/create`, type `/setup` to set up your environment.
 
 and STOP. Otherwise proceed.
 

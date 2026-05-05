@@ -7,7 +7,7 @@ description: "Type Enter to scan your agent for errors and fix them"
 
 **Setup-state check.** Read `.local/config.json`. If it does not exist, OR `setup` is not `"complete"`, show:
 
-> Welcome to the ESS Copilot Kit. Before running `/scan`, type `/setup` to set up your environment.
+> Welcome to the ESS Maker Kit. Before running `/scan`, type `/setup` to set up your environment.
 
 and STOP. Otherwise proceed with the skill instructions below.
 

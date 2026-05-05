@@ -10,7 +10,7 @@ This edits the local working copy AND pushes the change to Copilot Studio.
 
 **Setup-state check.** Read `.local/config.json`. If it does not exist, OR `setup` is not `"complete"`, show:
 
-> Welcome to the ESS Copilot Kit. Before running `/update`, type `/setup` to set up your environment.
+> Welcome to the ESS Maker Kit. Before running `/update`, type `/setup` to set up your environment.
 
 and STOP. Otherwise proceed.
 
