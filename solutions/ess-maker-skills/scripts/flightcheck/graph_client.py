@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 
 """
-ESS Copilot Kit — Microsoft Graph REST API Client
+ESS Maker Kit — Microsoft Graph REST API Client
 
 Provides authenticated access to Microsoft Graph for FlightCheck checks
 (licenses, roles, Entra ID, conditional access, user sync).

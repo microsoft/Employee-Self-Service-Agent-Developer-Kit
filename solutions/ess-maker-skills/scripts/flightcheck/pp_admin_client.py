@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 
 """
-ESS Copilot Kit — Power Platform Admin REST API Client
+ESS Maker Kit — Power Platform Admin REST API Client
 
 Provides authenticated access to Power Platform Admin (BAP) APIs and
 PowerApps APIs for FlightCheck checks (environments, flows, connections, DLP).

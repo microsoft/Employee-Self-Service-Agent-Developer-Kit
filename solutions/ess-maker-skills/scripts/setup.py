@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 
 """
-ESS Copilot Kit - Setup Script
+ESS Maker Kit - Setup Script
 
 One-shot script that handles everything after agent discovery:
   1. Derives agent slug from display name
@@ -652,7 +652,7 @@ def create_baseline(output_dir):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="ESS Copilot Kit — one-shot setup")
+        description="ESS Maker Kit — one-shot setup")
     parser.add_argument("--url", required=True,
                         help="Power Platform environment URL")
     parser.add_argument("--bot-id", required=True,

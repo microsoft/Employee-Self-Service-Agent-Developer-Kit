@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 
 """
-ESS Copilot Kit - Agent Discovery Script
+ESS Maker Kit - Agent Discovery Script
 
 Authenticates to Dataverse via MSAL and lists available agents (bots).
 Designed to be called by the onboarding flow so that any model — including

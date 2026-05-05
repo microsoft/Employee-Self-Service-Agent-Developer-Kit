@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 
 """
-ESS Copilot Kit - Shared Dataverse Authentication
+ESS Maker Kit - Shared Dataverse Authentication
 
 Provides MSAL-based interactive browser auth with token caching and
 Dataverse REST API helpers. Used by fetch_and_setup.py and push.py.

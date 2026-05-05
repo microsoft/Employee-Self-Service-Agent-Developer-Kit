@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 
 """
-ESS Copilot Kit - Bulk Extract Script
+ESS Maker Kit - Bulk Extract Script
 
 Reads a JSON file containing agent components from Dataverse and writes
 each component's data to a local file.

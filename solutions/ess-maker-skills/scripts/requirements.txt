@@ -1,4 +1,4 @@
-# ESS Copilot Kit - Python script dependencies
+# ESS Maker Kit - Python script dependencies
 #
 # Pinned to known-good versions. Dependabot keeps these current via the
 # pip ecosystem grouping in .github/dependabot.yml.

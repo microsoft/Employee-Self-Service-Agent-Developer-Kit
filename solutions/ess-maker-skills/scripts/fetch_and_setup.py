@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 
 """
-ESS Copilot Kit - Dataverse Extraction Script
+ESS Maker Kit - Dataverse Extraction Script
 
 Authenticates to Dataverse via MSAL and fetches all agent components,
 template configs, and workflows using the REST API with automatic

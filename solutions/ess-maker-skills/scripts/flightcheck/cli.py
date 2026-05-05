@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 
 """
-ESS Copilot Kit — FlightCheck CLI
+ESS Maker Kit — FlightCheck CLI
 
 Entry point for running pre-deployment validation checks.
 

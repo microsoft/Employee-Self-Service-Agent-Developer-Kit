@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 
 """
-ESS Copilot Kit — FlightCheck Runner
+ESS Maker Kit — FlightCheck Runner
 
 Orchestrates all validation checks, aggregates results, and reports.
 """
@@ -309,7 +309,7 @@ def _generate_html_report(r: RunResult) -> str:
     </div>
 
     <div class="footer">
-        <p>ESS Copilot Kit — FlightCheck v1.0</p>
+        <p>ESS Maker Kit — FlightCheck v1.0</p>
         <p>For more information, visit: <a href="https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/">Microsoft Learn - Employee Self-Service</a></p>
     </div>
 </body>

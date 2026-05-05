@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 
 """
-ESS Copilot Kit - Push Script
+ESS Maker Kit - Push Script
 
 Compares local working files against the baseline and pushes changes to
 Copilot Studio via the Dataverse REST API.

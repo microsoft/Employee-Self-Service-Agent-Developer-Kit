@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 
 """
-ESS Copilot Kit - Checkpoint Script
+ESS Maker Kit - Checkpoint Script
 
 Creates, restores, and manages snapshots of the agent's working files.
 All operations are relative to the agent folder in .local/config.json.
