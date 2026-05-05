@@ -671,6 +671,13 @@ def _build_soap_envelope(username: str, password: str, body_xml: str) -> str:
 
 
 def _build_get_workers_body(employee_id: str, effective_date: str, response_group: str) -> str:
+    # Defense-in-depth: escape the values that come from .local/config.json /
+    # env vars. response_group is intentionally left raw - it is a static XML
+    # fragment from the WORKFLOWS table by design (e.g.,
+    # '<bsvc:Include_Reference>true</bsvc:Include_Reference>'); escaping it
+    # would corrupt the envelope.
+    employee_id = xml_escape(employee_id)
+    effective_date = xml_escape(effective_date)
     return f"""
 <bsvc:Get_Workers_Request xmlns:bsvc="{BSVC}" bsvc:version="v42.0">
   <bsvc:Request_References bsvc:Skip_Non_Existing_Instances="false">
@@ -688,6 +695,7 @@ def _build_get_workers_body(employee_id: str, effective_date: str, response_grou
 
 
 def _build_compensation_body(employee_id: str) -> str:
+    employee_id = xml_escape(employee_id)
     return f"""
 <bsvc:Get_Compensation_Plans_Request xmlns:bsvc="{BSVC}" bsvc:version="v42.0">
   <bsvc:Request_References>
@@ -699,6 +707,7 @@ def _build_compensation_body(employee_id: str) -> str:
 
 
 def _build_write_test_body(employee_id: str) -> str:
+    employee_id = xml_escape(employee_id)
     return f"""
 <bsvc:Get_Change_Work_Contact_Information_Event_Request xmlns:bsvc="{BSVC}" bsvc:version="v42.0">
   <bsvc:Request_References>

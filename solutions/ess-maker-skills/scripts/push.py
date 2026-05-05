@@ -23,6 +23,12 @@ import subprocess
 import sys
 import uuid
 
+try:
+    import yaml
+except ImportError:
+    print("ERROR: 'PyYAML' package not found. Run: pip install -r scripts/requirements.txt")
+    sys.exit(1)
+
 # Add scripts/ to path so we can import siblings
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import (
@@ -273,11 +279,7 @@ def main():
         if ctype in ("botcomponent", "workflow-meta") or filepath.endswith(".mcs.yml"):
             # YAML parse-check (use the safe loader to avoid arbitrary code exec).
             try:
-                import yaml  # local import keeps yaml an optional dep
                 yaml.safe_load(content)
-            except ImportError:
-                # PyYAML not installed - skip silently; CI requirements pins it.
-                pass
             except yaml.YAMLError as exc:
                 parse_errors.append(f"  YAML parse error in {filepath}: {exc}")
         elif ctype == "workflow":
@@ -334,11 +336,22 @@ def main():
     # Authenticate
     print("\nAuthenticating to Dataverse...")
     auth = _AuthHolder(env_url)
-    token = auth.acquire()
+    auth.acquire()
     print("Authenticated.\n")
 
     success = 0
     errors = 0
+
+    # Side-collections for the partial-failure gate. Mutating component_map
+    # in-loop and only saving the file on full success leaves the in-memory
+    # map and the on-disk map out of sync after a partial failure: the next
+    # /push retries already-completed CRUD operations against records that
+    # no longer exist (delete) or duplicates them (create). Track creates,
+    # deletes, and post-create meta-file writes here; apply only inside the
+    # `errors == 0 and success > 0` block at the end.
+    pending_creates: dict = {}     # filepath -> component_map entry
+    pending_deletes: set = set()   # filepaths to remove from component_map
+    pending_meta_writes: list = []  # list[(meta_full_path, meta_data_dict)]
 
     # Push modified files
     for filepath in changed:
@@ -352,8 +365,9 @@ def main():
                 errors += 1
                 continue
             try:
-                update_record(env_url, token, "botcomponents",
-                              entry["botcomponentid"], {"data": content})
+                _call_with_refresh(auth, update_record,
+                                   env_url, auth.token, "botcomponents",
+                                   entry["botcomponentid"], {"data": content})
                 print(f"  ✅ Updated: {filepath}")
                 success += 1
             except Exception as e:
@@ -379,10 +393,10 @@ def main():
             if meta_data.get("msdyn_description"):
                 record["msdyn_description"] = meta_data["msdyn_description"]
             try:
-                update_record(
-                    env_url, token,
-                    "msdyn_employeeselfservicetemplateconfigs",
-                    entry["templateconfigid"], record)
+                _call_with_refresh(auth, update_record,
+                                   env_url, auth.token,
+                                   "msdyn_employeeselfservicetemplateconfigs",
+                                   entry["templateconfigid"], record)
                 print(f"  ✅ Updated: {filepath}")
                 success += 1
             except Exception as e:
@@ -395,9 +409,10 @@ def main():
                 errors += 1
                 continue
             try:
-                update_record(env_url, token, "workflows",
-                              entry["workflowid"],
-                              {"clientdata": content})
+                _call_with_refresh(auth, update_record,
+                                   env_url, auth.token, "workflows",
+                                   entry["workflowid"],
+                                   {"clientdata": content})
                 print(f"  ✅ Updated: {filepath}")
                 success += 1
             except Exception as e:
@@ -414,21 +429,28 @@ def main():
                 print(f"  SKIP {filepath}: no workflow ID in map")
                 errors += 1
                 continue
-            # Parse name/description from metadata.yml
+            # Parse name/description from metadata.yml using yaml.safe_load
+            # (was hand-rolled startswith; broke on quoted values, leading
+            # whitespace, and inline comments). PyYAML is already required
+            # by the pre-push schema validation step above; reuse it here.
+            try:
+                parsed_meta = yaml.safe_load(content) or {}
+            except yaml.YAMLError as exc:
+                print(f"  ❌ Failed: {filepath}: invalid YAML: {exc}")
+                errors += 1
+                continue
             record = {}
-            for line in content.splitlines():
-                if line.startswith("name: "):
-                    record["name"] = line[6:].strip()
-                elif line.startswith("description: "):
-                    val = line[13:].strip().strip('"')
-                    if val:
-                        record["description"] = val
+            if parsed_meta.get("name"):
+                record["name"] = str(parsed_meta["name"])
+            if parsed_meta.get("description"):
+                record["description"] = str(parsed_meta["description"])
             if not record:
                 print(f"  SKIP {filepath}: no pushable metadata changes")
                 continue
             try:
-                update_record(env_url, token, "workflows",
-                              entry["workflowid"], record)
+                _call_with_refresh(auth, update_record,
+                                   env_url, auth.token, "workflows",
+                                   entry["workflowid"], record)
                 print(f"  ✅ Updated: {filepath}")
                 if "name" in record:
                     entry["name"] = record["name"]
@@ -472,10 +494,11 @@ def main():
                 "parentbotid@odata.bind": f"/bots({bot_id})",
             }
             try:
-                new_id = create_record(env_url, token,
-                                       "botcomponents", record_data)
+                new_id = _call_with_refresh(auth, create_record,
+                                            env_url, auth.token,
+                                            "botcomponents", record_data)
                 print(f"  ✅ Created: {filepath} (ID: {new_id})")
-                component_map[filepath] = {
+                pending_creates[filepath] = {
                     "botcomponentid": new_id,
                     "schemaname": schema,
                     "componenttype": comp_type,
@@ -503,23 +526,25 @@ def main():
                 "msdyn_description": meta_data.get("msdyn_description", ""),
             }
             try:
-                new_id = create_record(
-                    env_url, token,
+                new_id = _call_with_refresh(
+                    auth, create_record,
+                    env_url, auth.token,
                     "msdyn_employeeselfservicetemplateconfigs",
                     record_data)
                 print(f"  ✅ Created: {filepath} (ID: {new_id})")
-                component_map[filepath] = {
+                pending_creates[filepath] = {
                     "templateconfigid": new_id,
                     "msdyn_uniquename": record_data["msdyn_uniquename"],
                     "entity_set": "msdyn_employeeselfservicetemplateconfigs",
                     "name": record_data["msdyn_name"],
                     "meta_file": meta_rel,
                 }
-                # Update meta file with new ID
-                meta_data[
-                    "msdyn_employeeselfservicetemplateconfigid"] = new_id
-                with open(meta_full, "w", encoding="utf-8") as mf:
-                    json.dump(meta_data, mf, indent=2)
+                # Defer the meta-file write back to disk until the final
+                # success gate. Otherwise a partial-failure leaves the meta
+                # file stamped with a new ID while the on-disk component_map
+                # is unchanged - next push picks the file up as new again.
+                meta_data["msdyn_employeeselfservicetemplateconfigid"] = new_id
+                pending_meta_writes.append((meta_full, dict(meta_data)))
                 success += 1
             except Exception as e:
                 print(f"  ❌ Failed: {filepath}: {e}")
@@ -529,7 +554,7 @@ def main():
             continue  # new metadata.yml handled by workflow.json creation
 
         elif ctype == "workflow":
-            # Read companion metadata.yml for name/description
+            # Read companion metadata.yml for name/description (yaml-safe).
             parts = filepath.replace("\\", "/").split("/")
             folder = "/".join(parts[:-1])
             meta_rel = f"{folder}/metadata.yml"
@@ -538,11 +563,16 @@ def main():
             wf_desc = ""
             if os.path.exists(meta_full):
                 with open(meta_full, "r", encoding="utf-8") as mf:
-                    for line in mf:
-                        if line.startswith("name: "):
-                            wf_name = line[6:].strip()
-                        elif line.startswith("description: "):
-                            wf_desc = line[13:].strip().strip('"')
+                    try:
+                        parsed_wf_meta = yaml.safe_load(mf) or {}
+                    except yaml.YAMLError as exc:
+                        print(f"  ❌ Failed: {filepath}: invalid YAML in {meta_rel}: {exc}")
+                        errors += 1
+                        continue
+                if parsed_wf_meta.get("name"):
+                    wf_name = str(parsed_wf_meta["name"])
+                if parsed_wf_meta.get("description"):
+                    wf_desc = str(parsed_wf_meta["description"])
             record_data = {
                 "name": wf_name,
                 "clientdata": content,
@@ -551,10 +581,11 @@ def main():
                 "description": wf_desc,
             }
             try:
-                new_id = create_record(env_url, token, "workflows",
-                                       record_data)
+                new_id = _call_with_refresh(auth, create_record,
+                                            env_url, auth.token, "workflows",
+                                            record_data)
                 print(f"  ✅ Created: {filepath} (ID: {new_id})")
-                component_map[filepath] = {
+                pending_creates[filepath] = {
                     "workflowid": new_id,
                     "entity_set": "workflows",
                     "name": wf_name,
@@ -591,10 +622,11 @@ def main():
                 "parentbotid@odata.bind": f"/bots({bot_id})",
             }
             try:
-                new_id = create_record(env_url, token,
-                                       "botcomponents", record_data)
+                new_id = _call_with_refresh(auth, create_record,
+                                            env_url, auth.token,
+                                            "botcomponents", record_data)
                 print(f"  ✅ Created: {filepath} (ID: {new_id})")
-                component_map[filepath] = {
+                pending_creates[filepath] = {
                     "botcomponentid": new_id,
                     "schemaname": schema,
                     "componenttype": 19,
@@ -612,18 +644,27 @@ def main():
             fname = filepath.replace("\\", "/").split("/")[-1].replace(".mcs.yml", "")
             schema = f"mspva_{uuid.uuid4()}"
 
-            # Determine parent ID: check component_map for existing parent,
-            # or match against just-created parents by folder convention
+            # Determine parent ID: prefer the parent created in this run
+            # whose path lives in the SAME evaluations/<set-name>/ folder.
+            # Falling back to "first parent in dict iteration order" silently
+            # corrupts evaluation hierarchies when multiple new sets push at
+            # once - every child got attached to the first parent. Folder
+            # match is the only correct disambiguator.
             parent_id = None
             entry = component_map.get(filepath)
             if entry and entry.get("parentbotcomponentid"):
                 parent_id = entry["parentbotcomponentid"]
             else:
-                # Find parent set in same evaluations/ folder or by
-                # scanning eval_parent_ids for newly created parents
+                child_folder = "/".join(
+                    filepath.replace("\\", "/").split("/")[:-1]
+                )
                 for p_path, p_id in eval_parent_ids.items():
-                    parent_id = p_id
-                    break  # Use the first (usually only) newly created parent
+                    p_folder = "/".join(
+                        p_path.replace("\\", "/").split("/")[:-1]
+                    )
+                    if p_folder == child_folder:
+                        parent_id = p_id
+                        break
 
             record_data = {
                 "componenttype": 19,
@@ -636,10 +677,11 @@ def main():
                 record_data["ParentBotComponentId@odata.bind"] = \
                     f"/botcomponents({parent_id})"
             try:
-                new_id = create_record(env_url, token,
-                                       "botcomponents", record_data)
+                new_id = _call_with_refresh(auth, create_record,
+                                            env_url, auth.token,
+                                            "botcomponents", record_data)
                 print(f"  ✅ Created: {filepath} (ID: {new_id})")
-                component_map[filepath] = {
+                pending_creates[filepath] = {
                     "botcomponentid": new_id,
                     "schemaname": schema,
                     "componenttype": 19,
@@ -679,10 +721,11 @@ def main():
                 errors += 1
                 continue
             try:
-                delete_record(env_url, token, "botcomponents",
-                              entry["botcomponentid"])
+                _call_with_refresh(auth, delete_record,
+                                   env_url, auth.token, "botcomponents",
+                                   entry["botcomponentid"])
                 print(f"  ✅ Deleted: {filepath}")
-                del component_map[filepath]
+                pending_deletes.add(filepath)
                 success += 1
             except Exception as e:
                 print(f"  ❌ Failed: {filepath}: {e}")
@@ -694,12 +737,13 @@ def main():
                 errors += 1
                 continue
             try:
-                delete_record(
-                    env_url, token,
+                _call_with_refresh(
+                    auth, delete_record,
+                    env_url, auth.token,
                     "msdyn_employeeselfservicetemplateconfigs",
                     entry["templateconfigid"])
                 print(f"  ✅ Deleted: {filepath}")
-                del component_map[filepath]
+                pending_deletes.add(filepath)
                 success += 1
             except Exception as e:
                 print(f"  ❌ Failed: {filepath}: {e}")
@@ -714,30 +758,44 @@ def main():
                 errors += 1
                 continue
             try:
-                delete_record(env_url, token, "workflows",
-                              entry["workflowid"])
+                _call_with_refresh(auth, delete_record,
+                                   env_url, auth.token, "workflows",
+                                   entry["workflowid"])
                 print(f"  ✅ Deleted: {filepath}")
-                del component_map[filepath]
+                pending_deletes.add(filepath)
                 success += 1
             except Exception as e:
                 print(f"  ❌ Failed: {filepath}: {e}")
                 errors += 1
 
-    # Save updated component map
-    # Update baseline to match what was pushed
-    # CRITICAL: do these only on full success. Updating baseline on partial
-    # success silently loses customer edits - the next push won't see the
-    # failed components as changed because the baseline was refreshed for
-    # all of them. Same logic for the component map (which gets mutated
-    # in-memory during CREATE/DELETE above).
+    # Apply pending state mutations atomically with the baseline + map save.
+    # The full-success gate is the contract: if everything pushed, persist
+    # the new component_map (with creates merged in and deletes removed),
+    # write back any template-config meta-files with their new IDs, and
+    # refresh the baseline. On partial failure, do NONE of these and warn
+    # the user. The next /push then sees an unchanged baseline and retries
+    # the failed operations against an unchanged remote state.
+    #
+    # Why side-collections instead of mutating component_map / disk in-loop:
+    # a partial failure used to leave the in-memory map and on-disk map out
+    # of sync, so the next push retried already-completed CRUD operations
+    # against records that no longer existed (delete) or duplicated them
+    # (create). The atomic gate preserves the contract.
     if errors == 0 and success > 0:
+        for path, entry in pending_creates.items():
+            component_map[path] = entry
+        for path in pending_deletes:
+            component_map.pop(path, None)
+        for meta_full, meta_data in pending_meta_writes:
+            with open(meta_full, "w", encoding="utf-8") as mf:
+                json.dump(meta_data, mf, indent=2)
         save_component_map(agent_dir, component_map)
         update_baseline(agent_dir)
     elif errors > 0:
         print(
             f"\nBaseline NOT updated: {errors} component(s) failed. Re-run"
-            " push to retry; baseline will be updated only after a fully"
-            " successful push."
+            " push to retry; baseline, component map, and template-config"
+            " meta files will be updated only after a fully successful push."
         )
 
     # Summary

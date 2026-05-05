@@ -62,11 +62,19 @@ class AuthExpiredError(RuntimeError):
 # Power Platform throttles aggressively; one transient 503 mid-push otherwise
 # leaves the customer in partial state. The session lives for the process so
 # connection pools and retry adapters are reused across all Dataverse calls.
+#
+# IMPORTANT: allowed_methods is restricted to read-only verbs. urllib3 will
+# replay any method in this set on 429/5xx, which is unsafe for POST (could
+# create duplicate records when the first request landed but the response
+# packet was lost) and unsafe for PATCH/DELETE in the response-lost scenario
+# (caller can't tell whether the original write succeeded). Mutating verbs
+# need throttle handling at the call site with explicit logic - they are NOT
+# automatically retried by this Session.
 _RETRY = Retry(
     total=3,
     backoff_factor=1,
     status_forcelist=(429, 500, 502, 503, 504),
-    allowed_methods=frozenset(["GET", "HEAD", "OPTIONS", "PATCH", "POST", "DELETE"]),
+    allowed_methods=frozenset(["GET", "HEAD", "OPTIONS"]),
     respect_retry_after_header=True,
 )
 _SESSION = requests.Session()
