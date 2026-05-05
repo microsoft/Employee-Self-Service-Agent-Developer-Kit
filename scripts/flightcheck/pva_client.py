@@ -165,13 +165,12 @@ class PVAClient:
             "x-cci-cdsbotid": bot_id,
         }
 
-        try:
-            resp = requests.post(url, headers=headers, json={}, timeout=60)
-            if not resp.ok:
-                return []
-            data = resp.json()
-        except Exception:
-            return []
+        resp = requests.post(url, headers=headers, json={}, timeout=60)
+        if not resp.ok:
+            raise RuntimeError(
+                f"Island Gateway returned {resp.status_code}: {resp.text[:200]}"
+            )
+        data = resp.json()
 
         # Extract KnowledgeSourceComponent entries
         knowledge_sources = []
