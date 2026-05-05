@@ -58,12 +58,12 @@ def run_local_file_checks(runner) -> list[CheckResult]:
     # Run checks for each agent
     for agent_path in sorted(agent_folders):
         agent_name = agent_path.name
-        results.extend(_check_single_agent(agent_path, agent_name))
+        results.extend(_check_single_agent(agent_path, agent_name, runner))
 
     return results
 
 
-def _check_single_agent(agent_path: Path, agent_name: str) -> list[CheckResult]:
+def _check_single_agent(agent_path: Path, agent_name: str, runner=None) -> list[CheckResult]:
     """Run all local file checks for a single agent."""
     results: list[CheckResult] = []
 
@@ -81,6 +81,9 @@ def _check_single_agent(agent_path: Path, agent_name: str) -> list[CheckResult]:
 
     # ---- Variables ----
     results.extend(_check_variables(agent_path, label))
+
+    # ---- Topic description quality ----
+    results.extend(_check_topic_descriptions(agent_path, label, runner, agent_name))
 
     # ---- Template configs ----
     results.extend(_check_template_configs(agent_path, label))
@@ -264,6 +267,199 @@ def _check_variables(agent_path: Path, label: str) -> list[CheckResult]:
         remediation="Create User Context variables for employee data." if not var_files else "",
         doc_link=f"{DOC_BASE}/customize",
     ))
+
+    return results
+
+
+# Minimum word count for a useful topic description
+_MIN_DESCRIPTION_WORDS = 20
+
+# System topics that don't use AI-based routing (no description needed)
+_SYSTEM_TOPIC_PATTERNS = [
+    r"conversation-start",
+    r"on-error",
+    r"reset-conversation",
+    r"log-telemetry",
+    r"microsoft-self-help",
+    r"response-preparation",
+]
+
+# Placeholder phrases that indicate the description was never filled in
+_PLACEHOLDER_PATTERNS = [
+    r"\[add\s+keywords",
+    r"\[add\s+.*here\]",
+    r"\[describe",
+    r"\[placeholder",
+    r"\btodo\b",
+    r"\bplaceholder\b",
+    r"describe\s+this\s+topic",
+    r"add\s+your\s+description",
+]
+
+
+def _friendly_filename(name: str) -> str:
+    """Convert a Dataverse topic name to the local filename stem (matching extract.py logic)."""
+    raw = re.sub(r"^\[.*?\]\s*[-\u2013\u2014]\s*", "", name)
+    slug = raw.strip().replace("_", "-")
+    slug = re.sub(r"[^a-zA-Z0-9\s-]", "", slug)
+    slug = re.sub(r"[\s]+", "-", slug)
+    slug = re.sub(r"-+", "-", slug).strip("-").lower()
+    return slug
+
+
+def _get_disabled_topic_names(runner, agent_name: str) -> set[str]:
+    """Query Dataverse for disabled topics and return their local filenames (lowercased)."""
+    if not runner or not getattr(runner, 'dv_token', None) or not getattr(runner, 'env_url', None):
+        return set()
+
+    # Find botId from config
+    import json
+    try:
+        config = json.load(open("my/config.json"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return set()
+
+    bot_id = None
+    for agent in config.get("agents", []):
+        if agent.get("slug") == agent_name:
+            bot_id = agent.get("botId")
+            break
+    if not bot_id:
+        return set()
+
+    try:
+        from auth import query_all
+        # componenttype 9 = Topic/Dialog, statecode 1 = Inactive/Disabled
+        components = query_all(
+            runner.env_url, runner.dv_token,
+            "botcomponents",
+            "name,schemaname,statecode",
+            filter_expr=f"_parentbotid_value eq '{bot_id}' and componenttype eq 9 and statecode eq 1",
+        )
+        # Convert Dataverse names to local filenames for matching
+        disabled = set()
+        for c in components:
+            name = c.get("name", "")
+            if name:
+                disabled.add(_friendly_filename(name))
+        return disabled
+    except Exception:
+        return set()
+
+
+def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_name: str = "") -> list[CheckResult]:
+    """CONFIG-014: Check that topic descriptions are specific enough for AI routing."""
+    results = []
+    topics_dir = agent_path / "topics"
+
+    if not topics_dir.exists():
+        results.append(CheckResult(
+            checkpoint_id="CONFIG-014", category=f"Topics ({label})",
+            priority=Priority.MEDIUM.value, status=Status.SKIPPED.value,
+            description=f"{label}: Topic description quality",
+            result="Topics directory not found",
+        ))
+        return results
+
+    too_short: list[str] = []
+    has_placeholder: list[str] = []
+    checked = 0
+
+    # Query Dataverse for disabled topics to skip them
+    disabled_topics = _get_disabled_topic_names(runner, agent_name)
+
+    for tf in sorted(topics_dir.glob("*.mcs.yml")):
+        filename = tf.name.lower()
+
+        # Skip system topics that don't use AI-based routing
+        if any(re.search(pat, filename) for pat in _SYSTEM_TOPIC_PATTERNS):
+            continue
+
+        # Skip disabled topics (match filename stem against Dataverse-derived names)
+        stem = tf.stem.replace(".mcs", "").lower()
+        if stem in disabled_topics:
+            continue
+
+        content = tf.read_text(encoding="utf-8", errors="replace")
+
+        # Extract modelDescription (multiline block scalar or inline)
+        # The pattern allows blank lines within the indented block
+        desc_match = re.search(
+            r'modelDescription:\s*\|[\-\+]?\s*\n((?:(?:[ \t]+.+|[ \t]*)\n?)+)', content
+        )
+        if desc_match:
+            desc_text = desc_match.group(1).strip()
+        else:
+            inline_match = re.search(r'modelDescription:\s*(?!\|)(.+)', content)
+            if inline_match:
+                desc_text = inline_match.group(1).strip()
+            else:
+                # No modelDescription ??? topic may use triggerQueries only
+                continue
+
+        checked += 1
+
+        # Get the display name shown in Copilot Studio
+        name_match = re.search(r'modelDisplayName:\s*(.+)', content)
+        if name_match:
+            display_name = name_match.group(1).strip()
+        else:
+            # Fall back to filename, formatted as a readable topic name
+            display_name = tf.stem.replace(".mcs", "").replace("-", " ").title()
+            display_name = f"{display_name} (file: {tf.name})"
+
+        # Check for placeholder text
+        if any(re.search(pat, desc_text, re.IGNORECASE) for pat in _PLACEHOLDER_PATTERNS):
+            has_placeholder.append(display_name)
+            continue
+
+        # Check word count
+        word_count = len(desc_text.split())
+        if word_count < _MIN_DESCRIPTION_WORDS:
+            too_short.append(f"{display_name} ({word_count} words)")
+
+    if not checked:
+        results.append(CheckResult(
+            checkpoint_id="CONFIG-014", category=f"Topics ({label})",
+            priority=Priority.MEDIUM.value, status=Status.SKIPPED.value,
+            description=f"{label}: Topic description quality",
+            result="No AI-routed topics with modelDescription found",
+        ))
+        return results
+
+    # Report placeholder issues (higher severity)
+    if has_placeholder:
+        topic_list = "; ".join(has_placeholder[:5])
+        if len(has_placeholder) > 5:
+            topic_list += "..."
+        results.append(CheckResult(
+            checkpoint_id="CONFIG-014", category=f"Topics ({label})",
+            priority=Priority.MEDIUM.value, status=Status.FAILED.value,
+            description=f"{label}: Topic descriptions contain placeholders",
+            result=f"{len(has_placeholder)} topic(s) have placeholder text instead of a real description. Topics: {topic_list}",
+            remediation="Open these topics in Copilot Studio and replace the placeholder text in the Description field with specific trigger conditions and examples.",
+            doc_link=f"{DOC_BASE}/customize#customize-topics",
+        ))
+
+    # Report too-short descriptions
+    if too_short:
+        results.append(CheckResult(
+            checkpoint_id="CONFIG-014", category=f"Topics ({label})",
+            priority=Priority.MEDIUM.value, status=Status.WARNING.value,
+            description=f"{label}: Topic descriptions too short",
+            result=f"{len(too_short)} topic(s) under {_MIN_DESCRIPTION_WORDS} words: {', '.join(too_short[:5])}{'...' if len(too_short) > 5 else ''}",
+            remediation="Expand descriptions with trigger conditions, valid examples, and exclusion criteria for better routing.",
+            doc_link=f"{DOC_BASE}/customize#customize-topics",
+        ))
+
+    if not has_placeholder and not too_short:
+        results.append(CheckResult(
+            checkpoint_id="CONFIG-014", category=f"Topics ({label})",
+            priority=Priority.MEDIUM.value, status=Status.PASSED.value,
+            description=f"{label}: Topic description quality",
+            result=f"All {checked} AI-routed topic(s) have descriptions >= {_MIN_DESCRIPTION_WORDS} words with no placeholders",
+            doc_link=f"{DOC_BASE}/customize#customize-topics",
+        ))
 
     return results
 
