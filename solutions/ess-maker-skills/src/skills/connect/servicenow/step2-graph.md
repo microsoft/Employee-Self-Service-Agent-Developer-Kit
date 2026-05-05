@@ -116,7 +116,7 @@ Here's what each piece does:
 - **ACLs**: Explicit read permissions on 20 tables that the connector
   indexes (knowledge articles, user criteria, attachments, etc.)
 
-All records are tagged with "Created by ESS Copilot Kit" so they're
+All records are tagged with "Created by ESS Maker Kit" so they're
 easy to find and remove later if needed.
 
 Type **go** when you're ready to proceed.
@@ -381,7 +381,7 @@ with the actual value:
         'sys_properties', 'sys_db_object', 'sys_dictionary',
         'cmn_department', 'cmn_location', 'core_company'
     ];
-    var MARKER = 'Created by ESS Copilot Kit - Graph Connector ACL Setup';
+    var MARKER = 'Created by ESS Maker Kit - Graph Connector ACL Setup';
     var roleName = 'copilot_graph_connector';
     var userSysId = '{GRAPH_USER_SYS_ID}';
     var results = [];
@@ -632,7 +632,7 @@ Records created during this flow (check config.json for sys_ids):
 
 To clean up ACLs, query:
 ```
-query_table(table="sys_security_acl", query="descriptionLIKEESS Copilot Kit", fields="sys_id", limit=50)
+query_table(table="sys_security_acl", query="descriptionLIKEESS Maker Kit", fields="sys_id", limit=50)
 ```
 Then delete each record.
 
