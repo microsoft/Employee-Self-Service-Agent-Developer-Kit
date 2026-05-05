@@ -18,13 +18,18 @@ from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
 
-from client import ServiceNowClient
+from client import ServiceNowClient, EXCLUDED_TABLES
 
 mcp = FastMCP(
     "servicenow",
     instructions=(
         "ServiceNow REST API integration for ITSM incidents, HR cases, "
-        "CMDB, service catalog, user lookup, live agent, and OAuth/OIDC setup"
+        "CMDB, service catalog, user lookup, live agent, and OAuth/OIDC setup. "
+        "Always prefer the typed tool that names the resource "
+        "(search_incidents, search_hr_cases, search_cmdb_items, browse_service_catalog, "
+        "resolve_user). The generic CRUD tools (query_table, get_record, create_record, "
+        "update_record, delete_record) and the call_api escape hatch are for "
+        "unsupported scenarios only - use them last, not first."
     ),
 )
 
@@ -141,27 +146,10 @@ def _require_admin_tools(tool_name: str) -> None:
 # sys_user records, but mutation through the generic table API would let
 # prompt injection delete admin users, modify security ACLs, or escalate
 # privileges by inserting into sys_user_grmember.
-_CALL_API_TABLE_DENYLIST_NON_GET = frozenset({
-    "sys_user",
-    "sys_user_grmember",
-    "sys_user_group",
-    "sys_user_role",
-    "sys_user_has_role",
-    "sys_properties",
-    "sys_audit",
-    "sys_audit_delete",
-    "sys_security_acl",
-    "sys_security_diag",
-    "oauth_entity",
-    "oauth_entity_profile",
-    "sys_oidc_provider",
-    "sys_certificate",
-    "sys_script",
-    "sys_script_include",
-    "sys_script_action",
-    "sys_script_client",
-    "sys_ws_operation",
-})
+#
+# Imported from client.EXCLUDED_TABLES so the two layers cannot drift; the
+# canonical list lives in client.py with the typed-CRUD validator.
+_CALL_API_TABLE_DENYLIST_NON_GET = EXCLUDED_TABLES
 
 
 _CALL_API_TABLE_PATH_RE = _re.compile(
@@ -184,6 +172,11 @@ async def query_table(
     order_by: str = "",
 ) -> str:
     """Query any ServiceNow table using encoded query syntax.
+
+    Prefer typed tools (search_incidents, search_hr_cases, search_cmdb_items,
+    browse_service_catalog, resolve_user) when one fits - they encode field
+    lists, sensible limits, and result shapes. Use query_table only for
+    tables without a typed tool.
 
     Args:
         table: Table name (e.g., incident, sys_user, cmdb_ci)
@@ -218,6 +211,11 @@ async def get_record(table: str, sys_id: str, fields: str = "") -> str:
 async def create_record(table: str, data: str) -> str:
     """Create a new record in any ServiceNow table.
 
+    Prefer the typed creators (create_incident, create_hr_case,
+    log_copilot_summary, etc.) when one fits - they validate required fields
+    and apply sensible defaults. Use create_record only for tables without a
+    typed tool.
+
     Args:
         table: Table name
         data: JSON string of field name/value pairs
@@ -231,6 +229,9 @@ async def create_record(table: str, data: str) -> str:
 @mcp.tool()
 async def update_record(table: str, sys_id: str, data: str) -> str:
     """Update an existing record in any ServiceNow table.
+
+    Prefer typed updaters when available. Use update_record only when the
+    typed tools do not cover the field you need to change.
 
     Args:
         table: Table name
@@ -246,6 +247,10 @@ async def update_record(table: str, sys_id: str, data: str) -> str:
 @mcp.tool()
 async def delete_record(table: str, sys_id: str) -> str:
     """Delete a record from any ServiceNow table.
+
+    Destructive. Prefer state-change updates over deletion. Use delete_record
+    only when no typed tool covers the case and the user has explicitly
+    confirmed the deletion.
 
     Args:
         table: Table name
@@ -276,7 +281,10 @@ async def search_incidents(
         query: Free text search in short_description
         state: Filter by state (1=New, 2=In Progress, 3=On Hold, 6=Resolved, 7=Closed)
         priority: Filter by priority (1=Critical, 2=High, 3=Moderate, 4=Low, 5=Planning)
-        assigned_to: Filter by assigned user display name or sys_id
+        assigned_to: Filter by assigned user sys_id (32 hex chars). ServiceNow
+            matches sys_id only on this field; passing a display name silently
+            returns zero results. If you only have a name, call resolve_user
+            first to get the sys_id.
         category: Filter by category
         limit: Max results (default 10)
     """
@@ -608,7 +616,13 @@ async def log_copilot_summary(
         interaction_id: sys_id of the related interaction record
         summary: Summary of the copilot conversation
         resolution: Resolution or outcome description
-        additional_fields: JSON string of extra field/value pairs
+        additional_fields: JSON object of extra field/value pairs (must be a
+            JSON object, not array). Tool-controlled fields (u_interaction,
+            u_summary, u_resolution) cannot be overwritten via this map; if
+            present they are silently ignored. Supported optional u_*
+            columns: u_channel (str), u_outcome (str), u_session_id (str),
+            u_disposition (str). Unknown columns will surface as ServiceNow
+            validation errors at create time.
     """
     data: dict = {
         "u_interaction": interaction_id,
@@ -618,7 +632,16 @@ async def log_copilot_summary(
         data["u_resolution"] = resolution
 
     extra = _parse_json(additional_fields, "additional_fields") if additional_fields != "{}" else {}
-    data.update(extra)
+    if not isinstance(extra, dict):
+        raise ValueError(
+            "additional_fields must be a JSON object (not array or scalar)."
+        )
+    # Reverse merge order: tool-controlled fields win. LLM-supplied entries
+    # in additional_fields cannot clobber u_interaction / u_summary /
+    # u_resolution. Without this, prompt injection like
+    # {"u_interaction": "<other_sys_id>"} would write the summary against
+    # the wrong record.
+    data = {**extra, **data}
 
     client = get_client()
     result = await client.create_record("u_ess_copilot_summary", data)
@@ -638,7 +661,7 @@ async def list_oauth_applications(query: str = "", limit: int = 10) -> str:
         query: Free text search in application name
         limit: Max results
     """
-    encoded_query = f"nameLIKE{query}" if query else ""
+    encoded_query = f"nameLIKE{_q(query)}" if query else ""
     fields = (
         "sys_id,name,client_id,redirect_url,token_url,auth_url,grant_type,active"
     )
@@ -718,7 +741,7 @@ async def list_oidc_providers(query: str = "", limit: int = 10) -> str:
         query: Free text search in provider name
         limit: Max results
     """
-    encoded_query = f"nameLIKE{query}" if query else ""
+    encoded_query = f"nameLIKE{_q(query)}" if query else ""
 
     client = get_client()
     result = await client.query_table(
@@ -805,7 +828,7 @@ async def check_plugin_active(plugin_id: str) -> str:
     client = get_client()
     result = await client.query_table(
         "sys_plugins",
-        f"source={plugin_id}",
+        f"source={_q(plugin_id)}",
         "sys_id,source,name,active",
         limit=1,
     )
@@ -821,7 +844,7 @@ async def get_system_properties(query: str = "", limit: int = 10) -> str:
         query: Search in property name (e.g., 'glide.authenticate.sso', 'oauth')
         limit: Max results
     """
-    encoded_query = f"nameLIKE{query}" if query else ""
+    encoded_query = f"nameLIKE{_q(query)}" if query else ""
     fields = "sys_id,name,value,description"
 
     client = get_client()
@@ -922,7 +945,9 @@ async def call_api(method: str, path: str, data: str = "") -> str:
     kwargs = {}
     if data and method_upper in ("POST", "PATCH"):
         kwargs["json"] = _parse_json(data, "data")
-    result = await client._request(method_upper, path, **kwargs)
+    # Use the public client.request - the underlying _request alias is kept
+    # only for backward compat; new code routes through the public surface.
+    result = await client.request(method_upper, path, **kwargs)
     return json.dumps(result, indent=2, default=str)
 
 
