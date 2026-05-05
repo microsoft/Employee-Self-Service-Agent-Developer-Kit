@@ -27,8 +27,17 @@ except ImportError:
     print("ERROR: 'requests' package not found. Run: pip install requests")
     sys.exit(1)
 
+try:
+    from urllib3.util.retry import Retry
+    from requests.adapters import HTTPAdapter
+except ImportError:
+    print("ERROR: 'urllib3' / 'requests' not found. Run: pip install requests")
+    sys.exit(1)
 
-# Well-known first-party client ID for Power Platform / Dynamics tools.
+
+# Microsoft public client ID for Power Platform CLI / Dataverse delegated access.
+# Source: https://learn.microsoft.com/power-platform/admin/programmability-authentication-v2
+# Scope: user_impersonation only (delegated, no admin consent).
 CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d"
 
 # Kit-internal state directory (token cache, component maps, config).
@@ -49,6 +58,21 @@ class AuthExpiredError(RuntimeError):
     re-authenticate without losing in-flight push state."""
 
 
+# Module-level requests Session with bounded retry-with-backoff for 429/5xx.
+# Power Platform throttles aggressively; one transient 503 mid-push otherwise
+# leaves the customer in partial state. The session lives for the process so
+# connection pools and retry adapters are reused across all Dataverse calls.
+_RETRY = Retry(
+    total=3,
+    backoff_factor=1,
+    status_forcelist=(429, 500, 502, 503, 504),
+    allowed_methods=frozenset(["GET", "HEAD", "OPTIONS", "PATCH", "POST", "DELETE"]),
+    respect_retry_after_header=True,
+)
+_SESSION = requests.Session()
+_SESSION.mount("https://", HTTPAdapter(max_retries=_RETRY))
+
+
 def _validate_https_url(env_url):
     """Reject http:// URLs - sending tokens over cleartext is unacceptable."""
     if not env_url.lower().startswith("https://"):
@@ -61,7 +85,7 @@ def _validate_https_url(env_url):
 def discover_tenant(env_url):
     """Discover the tenant ID from the environment's auth challenge."""
     _validate_https_url(env_url)
-    resp = requests.get(
+    resp = _SESSION.get(
         f"{env_url}/api/data/v9.2/",
         headers={"Accept": "application/json"},
         allow_redirects=False,
@@ -162,7 +186,7 @@ def query_all(env_url, token, entity_set, select, filter_expr=None):
     page = 0
     while url:
         page += 1
-        resp = requests.get(url, headers=headers, timeout=120, verify=True)
+        resp = _SESSION.get(url, headers=headers, timeout=120, verify=True)
         if resp.status_code == 401:
             raise AuthExpiredError("Dataverse returned 401 (token expired or invalid)")
         resp.raise_for_status()
@@ -179,11 +203,13 @@ def query_all(env_url, token, entity_set, select, filter_expr=None):
     return all_records
 
 
-def update_record(env_url, token, entity_set, record_id, data, etag=None):
+def update_record(env_url, token, entity_set, record_id, data):
     """Update a single Dataverse record via PATCH.
 
-    If etag is provided, sets If-Match for optimistic concurrency. Raises on
-    412 Precondition Failed so the caller can detect concurrent edits.
+    Note: optimistic-concurrency etag support was removed in round-3 review
+    (the parameter was plumbed but no call site used it - half-built
+    protection is worse than no protection). Re-add when push.py is wired to
+    capture and pass the @odata.etag annotation from the original GET.
     """
     _validate_https_url(env_url)
     headers = {
@@ -191,10 +217,8 @@ def update_record(env_url, token, entity_set, record_id, data, etag=None):
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
     }
-    if etag:
-        headers["If-Match"] = etag
     url = f"{env_url}/api/data/v9.2/{entity_set}({record_id})"
-    resp = requests.patch(url, headers=headers, json=data, timeout=60, verify=True)
+    resp = _SESSION.patch(url, headers=headers, json=data, timeout=60, verify=True)
     if resp.status_code == 401:
         raise AuthExpiredError("Dataverse returned 401 (token expired or invalid)")
     resp.raise_for_status()
@@ -211,7 +235,7 @@ def create_record(env_url, token, entity_set, data):
         "Prefer": "return=representation",
     }
     url = f"{env_url}/api/data/v9.2/{entity_set}"
-    resp = requests.post(url, headers=headers, json=data, timeout=60, verify=True)
+    resp = _SESSION.post(url, headers=headers, json=data, timeout=60, verify=True)
     if resp.status_code == 401:
         raise AuthExpiredError("Dataverse returned 401 (token expired or invalid)")
     resp.raise_for_status()
@@ -227,7 +251,7 @@ def delete_record(env_url, token, entity_set, record_id):
         "Authorization": f"Bearer {token}",
     }
     url = f"{env_url}/api/data/v9.2/{entity_set}({record_id})"
-    resp = requests.delete(url, headers=headers, timeout=60, verify=True)
+    resp = _SESSION.delete(url, headers=headers, timeout=60, verify=True)
     if resp.status_code == 401:
         raise AuthExpiredError("Dataverse returned 401 (token expired or invalid)")
     resp.raise_for_status()

@@ -263,6 +263,43 @@ def main():
         print("\n(Dry run — no changes pushed)")
         return
 
+    # Pre-push schema validation: parse-check each file we're about to send
+    # so a malformed YAML/JSON surfaces a clear local error rather than a
+    # cryptic Dataverse 400/500 mid-push.
+    parse_errors = []
+    for filepath in changed + new:
+        ctype = classify_path(filepath)
+        content = working_files[filepath]
+        if ctype in ("botcomponent", "workflow-meta") or filepath.endswith(".mcs.yml"):
+            # YAML parse-check (use the safe loader to avoid arbitrary code exec).
+            try:
+                import yaml  # local import keeps yaml an optional dep
+                yaml.safe_load(content)
+            except ImportError:
+                # PyYAML not installed - skip silently; CI requirements pins it.
+                pass
+            except yaml.YAMLError as exc:
+                parse_errors.append(f"  YAML parse error in {filepath}: {exc}")
+        elif ctype == "workflow":
+            try:
+                json.loads(content)
+            except json.JSONDecodeError as exc:
+                parse_errors.append(f"  JSON parse error in {filepath}: {exc}")
+        elif ctype == "template-config":
+            # Either JSON or XML; only validate JSON, XML may be templated.
+            stripped = content.lstrip()
+            if stripped.startswith("{") or stripped.startswith("["):
+                try:
+                    json.loads(content)
+                except json.JSONDecodeError as exc:
+                    parse_errors.append(f"  JSON parse error in {filepath}: {exc}")
+
+    if parse_errors:
+        print("\nERROR: pre-push schema validation failed. Fix these and re-run:")
+        for err in parse_errors:
+            print(err)
+        sys.exit(2)
+
     # Confirm general push
     if not auto_yes:
         response = input("\nPush these changes to Copilot Studio? (yes/no): ").strip().lower()

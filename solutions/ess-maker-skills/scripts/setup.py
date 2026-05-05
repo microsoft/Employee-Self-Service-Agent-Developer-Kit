@@ -529,6 +529,7 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
     agents.sort(key=lambda a: a.get("name", ""))
 
     config = {
+        "configVersion": 1,               # bump on schema change; consumers gate
         "setup": "complete",
         "agent": agent_entry,             # backward compat: active agent
         "activeAgent": slug,              # slug of the active agent
@@ -684,8 +685,19 @@ def main():
         "url": args.url,
     }
 
-    # --- Refresh: checkpoint before overwriting ---
-    if args.refresh and os.path.exists(output_dir):
+    # --- Idempotency gate: refuse silent overwrite of existing agent dir ---
+    # If the agent dir already exists, require --refresh. Otherwise the
+    # script would silently overwrite local edits when the LLM forgets to
+    # pass --refresh on a re-run. With --refresh, checkpoint first then
+    # proceed.
+    if os.path.exists(output_dir):
+        if not args.refresh:
+            print(
+                f"ERROR: {output_dir} already exists. Re-running setup will\n"
+                "overwrite local files. Pass --refresh to checkpoint and\n"
+                "overwrite, or remove the directory first."
+            )
+            sys.exit(1)
         print("Creating checkpoint before refresh...")
         result = subprocess.run(
             [sys.executable, "scripts/checkpoint.py",
