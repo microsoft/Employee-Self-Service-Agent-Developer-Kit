@@ -7,7 +7,7 @@ ESS FlightCheck — Publishing & QA Validation (PUB-xxx, QA-xxx)
 Mostly manual checklist items — presents as NotConfigured with remediation.
 """
 
-from ..runner import CheckResult, Status, Priority
+from ..runner import CheckResult, Status
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
 

@@ -10,9 +10,7 @@ PowerApps APIs for FlightCheck checks (environments, flows, connections, DLP).
 Authentication uses the same MSAL cache as auth.py / graph_client.py.
 """
 
-import json
 import os
-import re
 import sys
 
 try:

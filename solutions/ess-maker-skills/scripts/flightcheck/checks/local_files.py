@@ -9,7 +9,6 @@ agent identity, knowledge, variables). This covers checks that FlightCheck
 marked as "NotConfigured" because it had no access to the actual files.
 """
 
-import os
 import re
 from pathlib import Path
 

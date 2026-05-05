@@ -176,8 +176,8 @@ def update_baseline(agent_dir):
                 if attempt < 2:
                     time.sleep(1)
                 else:
-                    print(f"Warning: could not remove old baseline "
-                          f"(file locked). Overwriting in place.")
+                    print("Warning: could not remove old baseline "
+                          "(file locked). Overwriting in place.")
                     # Fall through — copytree with dirs_exist_ok will overlay
 
     def _ignore(directory, contents):

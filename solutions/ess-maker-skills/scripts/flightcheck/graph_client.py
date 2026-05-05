@@ -10,7 +10,6 @@ Provides authenticated access to Microsoft Graph for FlightCheck checks
 Reuses the same MSAL token cache as auth.py so users don't sign in twice.
 """
 
-import json
 import os
 import sys
 

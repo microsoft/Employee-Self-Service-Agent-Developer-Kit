@@ -14,7 +14,10 @@ The agent calls this during onboarding Step 4. The agent:
 2. Writes the JSON result to a temp file
 3. Runs this script to write all files at once
 """
-import json, os, re, sys
+import json
+import os
+import re
+import sys
 
 TYPE_MAP = {
     9:  ("topics", ".mcs.yml"),

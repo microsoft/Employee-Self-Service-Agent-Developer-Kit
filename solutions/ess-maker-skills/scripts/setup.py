@@ -306,15 +306,15 @@ def extract_workflows(workflows, output_dir):
             f"jsonFileName: workflows/{folder_name}/workflow.json",
             f"workflowId: {wfid}",
             f"name: {name}",
-            f"type: 1",
+            "type: 1",
             f"description: \"{wf.get('description', '') or ''}\"",
             f"subprocess: {'true' if wf.get('subprocess') else 'false'}",
             f"category: {wf.get('category', 5)}",
-            f"mode: 0",
-            f"scope: 4",
+            "mode: 0",
+            "scope: 4",
             f"stateCode: {state}",
             f"statusCode: {status_map.get(state, 1)}",
-            f"isTransacted: true",
+            "isTransacted: true",
         ]
         meta_path = os.path.join(folder_path, "metadata.yml")
         with open(meta_path, "w", encoding="utf-8") as f:
