@@ -12,6 +12,7 @@ marked as "NotConfigured" because it had no access to the actual files.
 import os
 import re
 from pathlib import Path
+from urllib.parse import urljoin
 
 from ..runner import CheckResult, Status, Priority
 
@@ -59,12 +60,12 @@ def run_local_file_checks(runner) -> list[CheckResult]:
     # Run checks for each agent
     for agent_path in sorted(agent_folders):
         agent_name = agent_path.name
-        results.extend(_check_single_agent(agent_path, agent_name))
+        results.extend(_check_single_agent(agent_path, agent_name, runner))
 
     return results
 
 
-def _check_single_agent(agent_path: Path, agent_name: str) -> list[CheckResult]:
+def _check_single_agent(agent_path: Path, agent_name: str, runner=None) -> list[CheckResult]:
     """Run all local file checks for a single agent."""
     results: list[CheckResult] = []
 
@@ -85,6 +86,9 @@ def _check_single_agent(agent_path: Path, agent_name: str) -> list[CheckResult]:
 
     # ---- Template configs ----
     results.extend(_check_template_configs(agent_path, label))
+
+    # ---- Knowledge source readiness ----
+    results.extend(_check_knowledge_sources(agent_path, label, runner))
 
     return results
 
@@ -288,3 +292,152 @@ def _check_template_configs(agent_path: Path, label: str) -> list[CheckResult]:
     ))
 
     return results
+
+
+# Knowledge source statuses that indicate readiness
+_READY_STATUSES = {"active", "completed", "indexed", "ready", "succeeded"}
+# Statuses that indicate a knowledge source is not ready for deployment
+_NOT_READY_STATUSES = {"pending", "crawling", "queued", "provisioning", "failed", "error", "inactive"}
+
+
+def _check_knowledge_sources(agent_path: Path, label: str, runner=None) -> list[CheckResult]:
+    """
+    CONFIG-013: Verify that all configured knowledge sources have completed
+    their initial crawl and are fully indexed.
+
+    Uses the Copilot Studio Island Gateway API to get live status when available,
+    otherwise falls back to local file validation only.
+    """
+    results = []
+    knowledge_dir = agent_path / "knowledge"
+
+    if not knowledge_dir.exists():
+        results.append(CheckResult(
+            checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=f"{label}: Knowledge source readiness",
+            result="No knowledge directory found — no sources configured",
+        ))
+        return results
+
+    knowledge_files = list(knowledge_dir.glob("*.mcs.yml"))
+    if not knowledge_files:
+        results.append(CheckResult(
+            checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=f"{label}: Knowledge source readiness",
+            result="No knowledge source files found",
+        ))
+        return results
+
+    # Require the Island Gateway API for live status
+    pva = getattr(runner, "pva", None) if runner else None
+    bot_id = None
+    if runner and hasattr(runner, "config"):
+        bot_id = runner.config.get("agent", {}).get("botId")
+
+    if not pva or not hasattr(pva, "is_configured") or not pva.is_configured or not bot_id:
+        results.append(CheckResult(
+            checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=f"{label}: Knowledge source readiness",
+            result="Cannot verify — Copilot Studio API authentication required",
+        ))
+        return results
+
+    return _check_knowledge_sources_via_gateway(pva, bot_id, knowledge_files, label)
+
+
+def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list, label: str) -> list[CheckResult]:
+    """Check knowledge source status using the Island Gateway API."""
+    results = []
+
+    try:
+        sources = pva.get_knowledge_sources(bot_id)
+    except Exception as e:
+        results.append(CheckResult(
+            checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=f"{label}: Knowledge source crawl status",
+            result=f"Could not query Copilot Studio API: {e}",
+            remediation="Check authentication and retry. Verify status manually in Copilot Studio → Knowledge.",
+        ))
+        return results
+
+    if not sources:
+        results.append(CheckResult(
+            checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=f"{label}: Knowledge source readiness",
+            result=f"{len(knowledge_files)} local knowledge file(s) but no matching components returned from API",
+            remediation="Knowledge sources may not be published yet. Publish the agent in Copilot Studio.",
+        ))
+        return results
+
+    all_ready = True
+    for source in sources:
+        name = source.get("displayName", "Unknown")
+        status_value = (source.get("status") or source.get("state") or "unknown").lower()
+        source_kind = ""
+        config = source.get("configuration", {})
+        if config:
+            src = config.get("source", {})
+            source_kind = src.get("$kind", "")
+
+        # Determine source type for display
+        source_type = _format_source_type(source_kind)
+
+        if status_value in _READY_STATUSES:
+            results.append(CheckResult(
+                checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
+                priority=Priority.HIGH.value, status=Status.PASSED.value,
+                description=f"{label}: '{name}' ({source_type})",
+                result=f"Status: {status_value} — indexed and ready",
+            ))
+        elif status_value in _NOT_READY_STATUSES:
+            all_ready = False
+            results.append(CheckResult(
+                checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
+                priority=Priority.HIGH.value, status=Status.FAILED.value,
+                description=f"{label}: '{name}' ({source_type})",
+                result=f"Status: {status_value} — not ready for deployment",
+                remediation=(
+                    f"Knowledge source '{name}' has not completed indexing. "
+                    "Wait for the crawl to finish, or check for errors in "
+                    "Copilot Studio → Knowledge."
+                ),
+            ))
+        else:
+            all_ready = False
+            results.append(CheckResult(
+                checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
+                priority=Priority.HIGH.value, status=Status.WARNING.value,
+                description=f"{label}: '{name}' ({source_type})",
+                result=f"Status: '{status_value}' — verify in Copilot Studio",
+                remediation=(
+                    "Could not confirm index readiness. "
+                    "Verify knowledge source status in Copilot Studio → Knowledge."
+                ),
+            ))
+
+    if all_ready and sources:
+        results.append(CheckResult(
+            checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
+            description=f"{label}: All knowledge sources indexed",
+            result=f"{len(sources)} knowledge source(s) fully indexed and ready",
+        ))
+
+    return results
+
+
+def _format_source_type(source_kind: str) -> str:
+    """Convert a $kind value to a human-readable source type."""
+    mapping = {
+        "SharePointSearchSource": "SharePoint",
+        "GraphConnectorSearchSource": "Graph Connector",
+        "FileSource": "File Upload",
+        "WebSearchSource": "Web",
+        "DataverseSource": "Dataverse",
+    }
+    return mapping.get(source_kind, source_kind or "Unknown")

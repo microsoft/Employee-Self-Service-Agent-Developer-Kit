@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from flightcheck.runner import FlightCheckRunner, save_results, Status
 from flightcheck.graph_client import GraphClient
 from flightcheck.pp_admin_client import PPAdminClient, derive_environment_id
+from flightcheck.pva_client import PVAClient
 
 # Check modules
 from flightcheck.checks.prerequisites import run_prerequisites_checks
@@ -154,6 +155,20 @@ def main():
         print(f"  Power Platform: WARNING — {e}")
         print("  (Some checks will be skipped)")
 
+    print("Authenticating to Copilot Studio (Island Gateway)...")
+    pva = PVAClient(tenant_id, env_url)
+    try:
+        pva.authenticate()
+        if pva.is_configured:
+            print("  Copilot Studio: OK")
+        else:
+            print("  Copilot Studio: WARNING — Could not discover gateway URL")
+            print("  (Knowledge source status check will use local-only validation)")
+    except Exception as e:
+        print(f"  Copilot Studio: WARNING — {e}")
+        print("  (Knowledge source status check will use local-only validation)")
+        pva = None
+
     # --- Build runner ---
     runner = FlightCheckRunner(scope=args.scope)
     runner.config = config
@@ -162,6 +177,7 @@ def main():
     runner.env_id = env_id
     runner.graph = graph
     runner.pp_admin = pp_admin
+    runner.pva = pva
 
     # Register checks based on scope
     if args.scope == "full":

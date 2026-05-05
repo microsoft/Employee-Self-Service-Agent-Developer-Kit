@@ -285,6 +285,39 @@ partial workflow.
 3. **Test in Copilot Studio**: Open [Copilot Studio](https://copilotstudio.microsoft.com/) to test conversations
 4. **Publish**: Publish the agent in the Copilot Studio portal to make changes live
 
+## Code Quality Rules
+
+### No fabricated URLs
+
+**NEVER invent, guess, or hallucinate URLs.** Every URL in code (doc_link fields,
+remediation messages, comments, README references) must point to a page you have
+confirmed exists — either by finding it in the existing codebase or by verifying
+it with a web fetch.
+
+**If no verified URL exists for a given concept:**
+
+1. Use the `DOC_BASE` constant already defined in the file (if applicable) but
+   do NOT append a made-up path segment.
+2. Add a `# TODO: create doc page` comment next to the empty/placeholder link.
+3. In your PR description or commit message, note that a documentation page is
+   needed. Specify:
+   - The URL path where the page should live (following existing URL patterns)
+   - A 1–2 sentence description of what content the page should contain
+   - Who should create it (e.g., "docs team" or "PM")
+
+**Example (good):**
+```python
+doc_link="",  # TODO: create doc page at /manage-knowledge-sources covering crawl status troubleshooting
+```
+
+**Example (bad):**
+```python
+doc_link=f"{DOC_BASE}/manage-knowledge-sources",  # this page doesn't exist!
+```
+
+This rule exists because fabricated links erode customer trust and create
+support burden when they 404. A missing link is always better than a broken one.
+
 ## User Config
 
 The file `my/config.json` stores the user's setup state and agent details:
