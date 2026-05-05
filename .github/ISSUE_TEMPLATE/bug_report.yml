@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a bug or unexpected behavior in the ESS Copilot Kit
+description: Report a bug or unexpected behavior in the ESS Maker Kit
 title: "[Bug]: "
 labels: ["bug", "needs-triage"]
 body:
