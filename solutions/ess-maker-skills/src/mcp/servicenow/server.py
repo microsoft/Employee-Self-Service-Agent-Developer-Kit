@@ -13,6 +13,7 @@ Usage:
 
 import json
 import os
+import re as _re
 from typing import Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -163,7 +164,6 @@ _CALL_API_TABLE_DENYLIST_NON_GET = frozenset({
 })
 
 
-import re as _re
 _CALL_API_TABLE_PATH_RE = _re.compile(
     r"^/api/now/(?:v[12]/)?table/([a-z][a-z0-9_]{0,63})(?:/|$|\?)"
 )
