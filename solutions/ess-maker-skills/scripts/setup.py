@@ -37,6 +37,8 @@ import subprocess
 import sys
 from datetime import date
 
+from auth import EXPECTED_CONFIG_VERSION
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -518,6 +520,18 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
         except (json.JSONDecodeError, OSError):
             existing = {}
 
+    # Detect schema migration. write_config always stamps the current
+    # EXPECTED_CONFIG_VERSION; if the existing file was on an older
+    # version, surface that to the operator so they know /setup just
+    # rewrote the schema. (Future migrations that need field-level
+    # transforms should branch here on existing_version before merging.)
+    existing_version = existing.get("configVersion") if existing else None
+    if existing_version is not None and existing_version != EXPECTED_CONFIG_VERSION:
+        print(
+            f"NOTE: .local/config.json was schema v{existing_version}; "
+            f"updating to v{EXPECTED_CONFIG_VERSION}."
+        )
+
     # Build or update agents array
     agents = existing.get("agents", [])
 
@@ -529,7 +543,7 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
     agents.sort(key=lambda a: a.get("name", ""))
 
     config = {
-        "configVersion": 1,               # bump on schema change; consumers gate
+        "configVersion": EXPECTED_CONFIG_VERSION,  # gated by auth.load_config
         "setup": "complete",
         "agent": agent_entry,             # backward compat: active agent
         "activeAgent": slug,              # slug of the active agent

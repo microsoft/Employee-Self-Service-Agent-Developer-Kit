@@ -45,6 +45,12 @@ CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d"
 # from user-edited files (which live under "workspace/").
 LOCAL_STATE_DIR = ".local"
 
+# Schema version stamped into .local/config.json by setup.py and gated by
+# load_config() below. Bump this when the on-disk schema changes in a way
+# old consumers can't tolerate, AND update setup.py to migrate or rewrite
+# config.json on the next run.
+EXPECTED_CONFIG_VERSION = 1
+
 HEADERS_BASE = {
     "Accept": "application/json",
     "OData-MaxVersion": "4.0",
@@ -267,10 +273,24 @@ def delete_record(env_url, token, entity_set, record_id):
 
 
 def load_config():
-    """Load .local/config.json. Returns the parsed dict or exits on error."""
+    """Load .local/config.json. Returns the parsed dict or exits on error.
+
+    Gates on `configVersion`: if the on-disk version doesn't match
+    `EXPECTED_CONFIG_VERSION`, exits with a clear instruction to re-run
+    setup. This catches the case where a kit upgrade changed the schema
+    and a downstream script would otherwise KeyError on a missing field.
+    """
     config_path = os.path.join(LOCAL_STATE_DIR, "config.json")
     if not os.path.exists(config_path):
         print(f"ERROR: {config_path} not found. Run /setup first.")
         sys.exit(1)
     with open(config_path, "r", encoding="utf-8") as f:
-        return json.load(f)
+        cfg = json.load(f)
+    ver = cfg.get("configVersion", 0)
+    if ver != EXPECTED_CONFIG_VERSION:
+        print(
+            f"ERROR: {config_path} is schema v{ver}, expected "
+            f"v{EXPECTED_CONFIG_VERSION}. Run `/setup --refresh` to migrate."
+        )
+        sys.exit(1)
+    return cfg
