@@ -42,14 +42,18 @@ jobs:
           echo "::notice::Linting Python in: $paths"
         else
           echo "has_python=false" >> "$GITHUB_OUTPUT"
-          echo "::notice::No Python files under $candidates - skipping lint and syntax check. (Expected on branches that don't yet include Python sources.)"
+          echo "::notice::No Python files under $candidates - skipping lint and syntax check. (Expected on branches that don't yet include Python sources; the slice PRs #29/#30/#31 add them.)"
         fi
 
     - name: Lint with ruff
       if: steps.discover.outputs.has_python == 'true'
-      run: ruff check ${{ steps.discover.outputs.paths }} --output-format=github
+      env:
+        PATHS: ${{ steps.discover.outputs.paths }}
+      run: ruff check $PATHS --output-format=github
 
     - name: Check Python syntax
       if: steps.discover.outputs.has_python == 'true'
+      env:
+        PATHS: ${{ steps.discover.outputs.paths }}
       run: |
-        python -m compileall -q ${{ steps.discover.outputs.paths }}
+        python -m compileall -q $PATHS
