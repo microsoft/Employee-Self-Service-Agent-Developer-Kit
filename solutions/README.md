@@ -1,6 +1,6 @@
 # Solutions
 
-This folder contains the individual solutions in the Employee Self-Service Agent Toolkit monorepo.
+This folder contains the individual solutions in the Employee Self-Service Agent Developer Kit monorepo.
 
 A **solution** is a self-contained, customer-runnable artifact: a VS Code workspace, a CLI, an evaluation harness, etc. Each solution lives in its own subfolder with its own README, dependencies, and license header. Solutions are independently versioned and installable.
 
