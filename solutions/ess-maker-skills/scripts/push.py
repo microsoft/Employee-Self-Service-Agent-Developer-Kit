@@ -922,11 +922,26 @@ def main():
         # component_map.json last. os.replace is atomic on the same
         # filesystem; if a rename does fail mid-loop, the customer still
         # has a usable component_map (old or new) plus the recovery hint.
+        # Track which tmps we've already committed so a partial failure
+        # can clean up the leftovers (otherwise `/setup --refresh` fixes
+        # the baseline but the next `/push` would re-encounter the stale
+        # *.tmp siblings on disk).
+        committed = 0
         try:
             for meta_full, meta_tmp in meta_tmps:
                 os.replace(meta_tmp, meta_full)
+                committed += 1
             os.replace(map_tmp, map_path)
         except OSError as exc:
+            for _, meta_tmp in meta_tmps[committed:]:
+                try:
+                    os.remove(meta_tmp)
+                except OSError:
+                    pass
+            try:
+                os.remove(map_tmp)
+            except OSError:
+                pass
             print(
                 "\nERROR: local persist failed committing tmp files after"
                 f" API operations succeeded. Remote state is committed"
