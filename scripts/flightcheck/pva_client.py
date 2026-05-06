@@ -99,10 +99,17 @@ class PVAClient:
         return self._pva_token
 
     def _discover_gateway(self, bap_token: str):
-        """Find the PVA gateway URL and BAP environment ID for this environment."""
+        """Find the PVA gateway URL and BAP environment ID for this environment.
+
+        Raises:
+            RuntimeError: when the BAP environment list cannot be fetched, or
+                when no environment matches the configured Dataverse URL. The
+                caller surfaces this as a WARNING with the actual reason.
+        """
         headers = {"Authorization": f"Bearer {bap_token}", "Accept": "application/json"}
 
-        # List environments and find the one matching our Dataverse URL
+        # List environments and find the one matching our Dataverse URL.
+        # Try admin endpoint first, fall back to non-admin on 401/403.
         url = (
             f"{BAP_BASE}/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments"
             "?api-version=2021-04-01"
@@ -110,16 +117,18 @@ class PVAClient:
         try:
             resp = requests.get(url, headers=headers, timeout=30)
             if resp.status_code in (401, 403):
-                # Try non-admin endpoint
                 url = (
                     f"{BAP_BASE}/providers/Microsoft.BusinessAppPlatform/environments"
                     "?api-version=2021-04-01"
                 )
                 resp = requests.get(url, headers=headers, timeout=30)
-            if not resp.ok:
-                return
-        except Exception:
-            return
+        except requests.RequestException as e:
+            raise RuntimeError(f"BAP environments request failed: {e}") from e
+
+        if not resp.ok:
+            raise RuntimeError(
+                f"BAP environments returned {resp.status_code}: {resp.text[:200]}"
+            )
 
         # Extract the org name from our env_url for matching
         # e.g., "https://orgb78b4a3b.crm.dynamics.com" → "orgb78b4a3b"
@@ -134,7 +143,13 @@ class PVAClient:
                 self._bap_env_id = env.get("name")
                 runtime = props.get("runtimeEndpoints", {})
                 self._gateway_url = runtime.get("microsoft.PowerVirtualAgents")
-                break
+                return
+
+        raise RuntimeError(
+            f"No BAP environment matched Dataverse org '{org_match}'. "
+            "User may not have access to this environment, or the environment "
+            "type is not Copilot Studio-enabled."
+        )
 
     @property
     def is_configured(self) -> bool:

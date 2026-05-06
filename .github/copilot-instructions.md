@@ -291,8 +291,14 @@ partial workflow.
 
 **NEVER invent, guess, or hallucinate URLs.** Every URL in code (doc_link fields,
 remediation messages, comments, README references) must point to a page you have
-confirmed exists — either by finding it in the existing codebase or by verifying
-it with a web fetch.
+confirmed exists. Verify by ANY of:
+
+- Finding the same URL already cited elsewhere in the repo (`git grep` / repo search)
+- Fetching the URL over HTTP and confirming a 2xx response (if your tooling supports it)
+- Pulling the page from an official Microsoft Learn / Docs reference you already trust
+
+Pick whichever is available — the rule is "don't ship unverified URLs", not "use a
+specific verification tool".
 
 **If no verified URL exists for a given concept:**
 

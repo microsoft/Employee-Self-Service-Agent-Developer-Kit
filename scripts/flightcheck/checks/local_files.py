@@ -9,7 +9,6 @@ agent identity, knowledge, variables). This covers checks that FlightCheck
 marked as "NotConfigured" because it had no access to the actual files.
 """
 
-import os
 import re
 from pathlib import Path
 
@@ -293,10 +292,11 @@ def _check_template_configs(agent_path: Path, label: str) -> list[CheckResult]:
     return results
 
 
-# Knowledge source statuses that indicate readiness
-_READY_STATUSES = {"active", "completed", "indexed", "ready", "succeeded"}
-# Statuses that indicate a knowledge source is not ready for deployment
-_NOT_READY_STATUSES = {"pending", "crawling", "queued", "provisioning", "failed", "error", "inactive"}
+# Knowledge source crawl readiness statuses (the `status` field on the API response).
+# These represent the indexing lifecycle, distinct from the lifecycle `state` field.
+_READY_STATUSES = {"completed", "indexed", "ready", "succeeded"}
+# Statuses that indicate the source is not yet ready for deployment.
+_NOT_READY_STATUSES = {"pending", "crawling", "queued", "provisioning", "failed", "error"}
 
 
 def _check_knowledge_sources(agent_path: Path, label: str, runner=None) -> list[CheckResult]:
@@ -348,7 +348,14 @@ def _check_knowledge_sources(agent_path: Path, label: str, runner=None) -> list[
 
 
 def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list, label: str) -> list[CheckResult]:
-    """Check knowledge source status using the Island Gateway API."""
+    """Check knowledge source status using the Island Gateway API.
+
+    Note on local-to-remote matching: the local filename is derived from the
+    Dataverse `botcomponents.name` field, while the Island Gateway returns
+    `displayName` (which for SharePoint sources is the site URL, not a stable
+    identifier). There is no reliable join key to match individual files to
+    components, so we use a count comparison plus per-remote status check.
+    """
     results = []
 
     try:
@@ -363,20 +370,39 @@ def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list
         ))
         return results
 
-    if not sources:
+    # Count comparison: warn if local files outnumber remote components.
+    # This catches the case where a local source was never published (false PASSED
+    # in the previous implementation when local>0 and remote=0 only).
+    if len(knowledge_files) > len(sources):
         results.append(CheckResult(
             checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
-            description=f"{label}: Knowledge source readiness",
-            result=f"{len(knowledge_files)} local knowledge file(s) but no matching components returned from API",
-            remediation="Knowledge sources may not be published yet. Publish the agent in Copilot Studio.",
+            description=f"{label}: Local/remote knowledge source count mismatch",
+            result=(
+                f"{len(knowledge_files)} local knowledge file(s) but only {len(sources)} "
+                "component(s) returned from Copilot Studio. Some sources may not be published."
+            ),
+            remediation=(
+                "Publish the agent in Copilot Studio to provision missing sources, "
+                "or remove the local file if it should not exist. Identify mismatched "
+                "sources by comparing filenames in my/agents/{slug}/knowledge/ against "
+                "Copilot Studio → Knowledge."
+            ),
         ))
+
+    if not sources:
+        # No remote sources at all — nothing more to check beyond the count warning above.
         return results
 
     all_ready = True
     for source in sources:
         name = source.get("displayName", "Unknown")
-        status_value = (source.get("status") or source.get("state") or "unknown").lower()
+        # `status` is the crawl/index readiness signal we want.
+        # `state` is lifecycle (Active/Inactive/Provisioning/etc.) and does NOT
+        # tell us whether indexing finished. Falling back to `state` here would
+        # be a false-pass: an Active-but-still-crawling source could be PASSED.
+        crawl_status = (source.get("status") or "").strip().lower()
+        lifecycle_state = (source.get("state") or "").strip().lower()
         source_kind = ""
         config = source.get("configuration", {})
         if config:
@@ -386,40 +412,60 @@ def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list
         # Determine source type for display
         source_type = _format_source_type(source_kind)
 
-        if status_value in _READY_STATUSES:
+        if crawl_status in _READY_STATUSES:
             results.append(CheckResult(
                 checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
                 priority=Priority.HIGH.value, status=Status.PASSED.value,
                 description=f"{label}: '{name}' ({source_type})",
-                result=f"Status: {status_value} — indexed and ready",
+                result=f"Status: {crawl_status} — indexed and ready",
             ))
-        elif status_value in _NOT_READY_STATUSES:
+        elif crawl_status in _NOT_READY_STATUSES:
             all_ready = False
             results.append(CheckResult(
                 checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
                 priority=Priority.HIGH.value, status=Status.FAILED.value,
                 description=f"{label}: '{name}' ({source_type})",
-                result=f"Status: {status_value} — not ready for deployment",
+                result=f"Status: {crawl_status} — not ready for deployment",
                 remediation=(
                     f"Knowledge source '{name}' has not completed indexing. "
                     "Wait for the crawl to finish, or check for errors in "
                     "Copilot Studio → Knowledge."
                 ),
             ))
-        else:
+        elif crawl_status:
+            # Unknown status string, but the API DID return a status field.
+            # WARNING with the raw value so we learn the new status over time.
             all_ready = False
             results.append(CheckResult(
                 checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
                 priority=Priority.HIGH.value, status=Status.WARNING.value,
                 description=f"{label}: '{name}' ({source_type})",
-                result=f"Status: '{status_value}' — verify in Copilot Studio",
+                result=f"Unknown crawl status: {crawl_status}",
                 remediation=(
-                    "Could not confirm index readiness. "
-                    "Verify knowledge source status in Copilot Studio → Knowledge."
+                    "Verify in Copilot Studio → Knowledge whether the source has "
+                    "finished indexing. File an issue so this status string can be "
+                    "added to the readiness allowlist."
+                ),
+            ))
+        else:
+            # No `status` returned at all — we only have lifecycle `state`.
+            # That is NOT proof of indexing; surface as WARNING, not PASSED.
+            all_ready = False
+            results.append(CheckResult(
+                checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
+                priority=Priority.HIGH.value, status=Status.WARNING.value,
+                description=f"{label}: '{name}' ({source_type})",
+                result=(
+                    f"Crawl readiness unknown (lifecycle state={lifecycle_state or 'unknown'}). "
+                    "API did not return a `status` field for this source."
+                ),
+                remediation=(
+                    "Verify in Copilot Studio → Knowledge whether the source has "
+                    "finished indexing before deploying."
                 ),
             ))
 
-    if all_ready and sources:
+    if all_ready and sources and len(knowledge_files) <= len(sources):
         results.append(CheckResult(
             checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
             priority=Priority.HIGH.value, status=Status.PASSED.value,

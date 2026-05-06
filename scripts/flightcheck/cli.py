@@ -155,19 +155,27 @@ def main():
         print(f"  Power Platform: WARNING — {e}")
         print("  (Some checks will be skipped)")
 
-    print("Authenticating to Copilot Studio (Island Gateway)...")
-    pva = PVAClient(tenant_id, env_url)
-    try:
-        pva.authenticate()
-        if pva.is_configured:
-            print("  Copilot Studio: OK")
-        else:
-            print("  Copilot Studio: WARNING — Could not discover gateway URL")
+    # Gate PVA (Copilot Studio Island Gateway) auth on scope.
+    # Only CONFIG-013 needs PVA today, and it lives in run_local_file_checks.
+    # Authenticating unconditionally would prompt for a second interactive login
+    # on scopes like --scope prerequisites that don't need it.
+    pva = None
+    if args.scope in ("full", "local"):
+        print("Authenticating to Copilot Studio (Island Gateway)...")
+        pva = PVAClient(tenant_id, env_url)
+        try:
+            pva.authenticate()
+            if pva.is_configured:
+                print("  Copilot Studio: OK")
+            else:
+                print("  Copilot Studio: WARNING — Could not discover gateway URL")
+                print("  (Knowledge source status check will use local-only validation)")
+        except Exception as e:
+            print(f"  Copilot Studio: WARNING — {e}")
             print("  (Knowledge source status check will use local-only validation)")
-    except Exception as e:
-        print(f"  Copilot Studio: WARNING — {e}")
-        print("  (Knowledge source status check will use local-only validation)")
-        pva = None
+            pva = None
+    else:
+        print("Skipping Copilot Studio auth (not required for this scope).")
 
     # --- Build runner ---
     runner = FlightCheckRunner(scope=args.scope)
