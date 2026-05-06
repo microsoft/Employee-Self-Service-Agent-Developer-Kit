@@ -1,4 +1,4 @@
-# ESS Copilot Kit
+# Employee Self-Service Agent Developer Kit
 
 A monorepo of solutions, samples, and tooling for the Microsoft Employee Self-Service (ESS) agent built on Microsoft Copilot Studio.
 

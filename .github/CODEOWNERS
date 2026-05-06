@@ -3,23 +3,23 @@
 
 # Default reviewers for any path not explicitly matched.
 #
-# TODO: Replace @microsoft/ess-copilot-kit-maintainers with the actual GitHub
-# team that owns this kit. Created as a stub so review routing is automatic
-# from PR #12 onward; the team can be fanned out per area as ownership
-# crystallizes.
+# TODO: Replace @microsoft/ess-developer-kit-maintainers with the actual
+# GitHub team that owns this kit. Created as a stub so review routing is
+# automatic from PR #12 onward; the team can be fanned out per area as
+# ownership crystallizes.
 
-*                                                                @microsoft/ess-copilot-kit-maintainers
+*                                                                @microsoft/ess-developer-kit-maintainers
 
 # Repo infrastructure (CI, CodeQL, Dependabot, issue templates, this file)
-/.github/                                                        @microsoft/ess-copilot-kit-maintainers
+/.github/                                                        @microsoft/ess-developer-kit-maintainers
 
 # Per-area owners (per-solution layout - kept aligned with PR #2's structure)
-/solutions/ess-maker-skills/scripts/                             @microsoft/ess-copilot-kit-maintainers
-/solutions/ess-maker-skills/src/skills/                          @microsoft/ess-copilot-kit-maintainers
-/solutions/ess-maker-skills/src/mcp/servicenow/                  @microsoft/ess-copilot-kit-maintainers
-/solutions/ess-maker-skills/src/mcp/workday/                     @microsoft/ess-copilot-kit-maintainers
-/solutions/ess-maker-skills/.github/copilot-instructions.md      @microsoft/ess-copilot-kit-maintainers
+/solutions/ess-maker-skills/scripts/                             @microsoft/ess-developer-kit-maintainers
+/solutions/ess-maker-skills/src/skills/                          @microsoft/ess-developer-kit-maintainers
+/solutions/ess-maker-skills/src/mcp/servicenow/                  @microsoft/ess-developer-kit-maintainers
+/solutions/ess-maker-skills/src/mcp/workday/                     @microsoft/ess-developer-kit-maintainers
+/solutions/ess-maker-skills/.github/copilot-instructions.md      @microsoft/ess-developer-kit-maintainers
 
 # Reference content + samples (lower review velocity)
-/solutions/ess-maker-skills/src/reference/                       @microsoft/ess-copilot-kit-maintainers
-/samples/                                                        @microsoft/ess-copilot-kit-maintainers
+/solutions/ess-maker-skills/src/reference/                       @microsoft/ess-developer-kit-maintainers
+/samples/                                                        @microsoft/ess-developer-kit-maintainers

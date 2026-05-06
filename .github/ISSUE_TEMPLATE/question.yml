@@ -1,5 +1,5 @@
 name: Question / help
-description: Ask a question about how to use the ESS Copilot Kit
+description: Ask a question about how to use the ESS Maker Kit
 title: "[Question]: "
 labels: ["question", "needs-triage"]
 body:
