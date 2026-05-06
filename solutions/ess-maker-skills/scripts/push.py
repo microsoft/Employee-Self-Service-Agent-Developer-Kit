@@ -149,10 +149,30 @@ def load_component_map(agent_dir):
         return json.load(f)
 
 
+def _atomic_write_text(path, text):
+    """Write text to *.tmp sibling and os.replace() into place.
+
+    Mirrors the write_config pattern in setup.py. Use this for any file
+    that gates subsequent kit operations (.component-map.json, template
+    config meta files): a crash mid-write must not leave a half-written
+    file on disk.
+    """
+    tmp_path = path + ".tmp"
+    with open(tmp_path, "w", encoding="utf-8") as f:
+        f.write(text)
+        f.flush()
+        try:
+            os.fsync(f.fileno())
+        except OSError:
+            # Some filesystems don't support fsync; the os.replace below
+            # is still atomic on POSIX/Windows.
+            pass
+    os.replace(tmp_path, path)
+
+
 def save_component_map(agent_dir, component_map):
     map_path = os.path.join(agent_dir, ".component-map.json")
-    with open(map_path, "w", encoding="utf-8") as f:
-        json.dump(component_map, f, indent=2)
+    _atomic_write_text(map_path, json.dumps(component_map, indent=2))
 
 
 def run_checkpoint(reason):
@@ -455,14 +475,14 @@ def main():
                                    entry["workflowid"], record)
                 print(f"  ✅ Updated: {filepath}")
                 if "name" in record:
-                    # Stage the rename for the success gate. Round 4 moved
-                    # every other CRUD-side mutation off the in-loop path;
-                    # this one slipped because it's a rename inside a
-                    # workflow-meta update branch, not a CRUD on
-                    # component_map[filepath] directly. Apply at the gate
-                    # alongside pending_creates / pending_deletes for
-                    # consistency.
-                    pending_renames[filepath] = record["name"]
+                    # Stage the rename for the success gate, keyed by the
+                    # workflow.json path because that is how component_map
+                    # tracks workflow entries (the metadata.yml path is
+                    # NOT a component_map key). Keying by `filepath` here
+                    # would silently drop the rename at the gate, leaving
+                    # the on-disk map with the old name even after a
+                    # successful Dataverse PATCH.
+                    pending_renames[wf_json_path] = record["name"]
                 success += 1
             except Exception as e:
                 print(f"  ❌ Failed: {filepath}: {e}")
@@ -653,18 +673,21 @@ def main():
             fname = filepath.replace("\\", "/").split("/")[-1].replace(".mcs.yml", "")
             schema = f"mspva_{uuid.uuid4()}"
 
-            # Determine parent ID: prefer the parent created in this run
-            # whose path lives in the SAME evaluations/<set-name>/ folder.
-            # Falling back to "first parent in dict iteration order" silently
             # Resolve the parent for this child. Three lookup paths in
-            # priority order; fail closed (do NOT create the child) if all
-            # three miss. Round 3 picked the first parent in dict order;
-            # round 4 narrowed to same-folder parents created in this push,
-            # but missed the most common case (a new test case added under
-            # an evaluation set whose parent already exists remotely).
-            # Round 5 adds the third lookup against the existing
-            # component_map and fails loud if no parent matches the child's
-            # folder.
+            # priority order, all scoped to the child's evaluations/<set>/
+            # folder. Fail closed (do NOT create the child as an orphan)
+            # if all three miss.
+            #
+            #   1. Re-pushing a known child -> use its stored parent
+            #      (component_map[filepath].parentbotcomponentid).
+            #   2. Parent created earlier in THIS push, same folder ->
+            #      eval_parent_ids lookup.
+            #   3. Existing parent already in component_map, same folder
+            #      (the common case: customer adds a new test case under
+            #      an eval set previously extracted by /setup).
+            #
+            # If you change the priority or add a fourth path, update
+            # this block at the same time.
             parent_id = None
             child_folder = "/".join(
                 filepath.replace("\\", "/").split("/")[:-1]
@@ -828,36 +851,103 @@ def main():
     # against records that no longer existed (delete) or duplicated them
     # (create). The atomic gate preserves the contract.
     if errors == 0 and success > 0:
-        # Atomic-ish persist: API operations have already committed
-        # remotely, so a disk-write failure mid-gate would leave us in the
-        # same wedge state the round-4 fix closed for the API side. Catch
-        # any exception, surface a clear recovery message, and exit
-        # non-zero so the customer knows local state did not catch up to
-        # remote state. The next /pull (or hand-running of /setup --refresh)
-        # resyncs the baseline. Tracked follow-up: stage meta + map writes
-        # to *.tmp + os.replace for true atomicity.
+        # Atomic two-phase persist:
+        #   Phase 1: mutate the in-memory component_map.
+        #   Phase 2: write every disk artifact to a *.tmp sibling first.
+        #            On any failure here, clean up tmps and abort BEFORE
+        #            any rename happens, so on-disk state is unchanged.
+        #   Phase 3: os.replace each tmp into place. The atomic renames
+        #            commit the new state. component_map.json is renamed
+        #            LAST because it is the file the next /push reads to
+        #            know what is already in Dataverse; if a meta file
+        #            commits but component_map does not, the next push
+        #            sees the template config as `new` and duplicates it.
+        #   Phase 4: refresh the baseline (best-effort directory copy;
+        #            failure here only causes the next diff to over-report).
+        #
+        # API operations have already committed remotely at this point.
+        # If we cannot persist locally, surface a clear recovery message
+        # and exit non-zero so the customer knows local state did not
+        # catch up to remote state. The next /setup --refresh resyncs.
+        for path, entry in pending_creates.items():
+            component_map[path] = entry
+        for path in pending_deletes:
+            component_map.pop(path, None)
+        for path, new_name in pending_renames.items():
+            if path in component_map:
+                component_map[path]["name"] = new_name
+
+        # Phase 2: stage every write to a .tmp sibling.
+        map_path = os.path.join(agent_dir, ".component-map.json")
+        map_tmp = map_path + ".tmp"
+        meta_tmps = []  # list[(meta_full, meta_tmp)]
         try:
-            for path, entry in pending_creates.items():
-                component_map[path] = entry
-            for path in pending_deletes:
-                component_map.pop(path, None)
-            for path, new_name in pending_renames.items():
-                if path in component_map:
-                    component_map[path]["name"] = new_name
             for meta_full, meta_data in pending_meta_writes:
-                with open(meta_full, "w", encoding="utf-8") as mf:
+                meta_tmp = meta_full + ".tmp"
+                with open(meta_tmp, "w", encoding="utf-8") as mf:
                     json.dump(meta_data, mf, indent=2)
-            save_component_map(agent_dir, component_map)
-            update_baseline(agent_dir)
+                    mf.flush()
+                    try:
+                        os.fsync(mf.fileno())
+                    except OSError:
+                        pass
+                meta_tmps.append((meta_full, meta_tmp))
+            with open(map_tmp, "w", encoding="utf-8") as mf:
+                json.dump(component_map, mf, indent=2)
+                mf.flush()
+                try:
+                    os.fsync(mf.fileno())
+                except OSError:
+                    pass
         except OSError as exc:
+            for _, meta_tmp in meta_tmps:
+                try:
+                    os.remove(meta_tmp)
+                except OSError:
+                    pass
+            try:
+                os.remove(map_tmp)
+            except OSError:
+                pass
             print(
-                "\nERROR: local persist failed mid-gate after API operations"
-                f" succeeded. Remote state is committed but local map and"
-                f" baseline are stale. Detail: {exc}\n"
+                "\nERROR: local persist failed staging tmp files after API"
+                f" operations succeeded. Remote state is committed but"
+                f" local map and baseline are stale. Detail: {exc}\n"
                 "Run '/setup --refresh' to resync the baseline against the"
                 " current remote state before the next push."
             )
             sys.exit(3)
+
+        # Phase 3: commit all renames atomically. Meta files first, then
+        # component_map.json last. os.replace is atomic on the same
+        # filesystem; if a rename does fail mid-loop, the customer still
+        # has a usable component_map (old or new) plus the recovery hint.
+        try:
+            for meta_full, meta_tmp in meta_tmps:
+                os.replace(meta_tmp, meta_full)
+            os.replace(map_tmp, map_path)
+        except OSError as exc:
+            print(
+                "\nERROR: local persist failed committing tmp files after"
+                f" API operations succeeded. Remote state is committed"
+                f" but local map and baseline may be partially updated."
+                f" Detail: {exc}\n"
+                "Run '/setup --refresh' to resync the baseline against"
+                " the current remote state before the next push."
+            )
+            sys.exit(3)
+
+        # Phase 4: refresh baseline. Directory copy isn't atomic; failure
+        # here only causes the next diff to over-report (false changes).
+        try:
+            update_baseline(agent_dir)
+        except OSError as exc:
+            print(
+                "\nWARNING: baseline refresh failed; component map and"
+                f" remote state are in sync. Detail: {exc}\n"
+                "The next /push may report stale changes; run"
+                " /setup --refresh to resync."
+            )
     elif errors > 0:
         print(
             f"\nBaseline NOT updated: {errors} component(s) failed. Re-run"
