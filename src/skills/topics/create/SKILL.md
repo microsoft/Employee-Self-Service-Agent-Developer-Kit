@@ -44,14 +44,14 @@ Based on the user's description, select a starting template:
 If the topic involves ServiceNow, also read `src/reference/ess-docs/integrations/servicenow.md` and `src/reference/ess-docs/integrations/servicenow-hrsd-itsm.md` for integration-specific guidance.
 If the topic involves Workday, also read `src/reference/ess-docs/integrations/workday.md` and `src/reference/ess-docs/integrations/workday-extensibility.md` for integration-specific guidance.
 
-**Official samples**: Before generating YAML, read a relevant sample from `src/examples/ess-samples/` to use as a real-world reference:
-- **Workday employee scenarios**: `src/examples/ess-samples/Workday/EmployeeScenarios/` — contains topic.yaml + template config XML for vacation balance, time off requests, contact info, education, government IDs, job taxonomy, emergency contacts
-- **Workday manager scenarios**: `src/examples/ess-samples/Workday/ManagerScenarios/` — company code, cost center, job taxonomy, service anniversary, time in position
-- **ServiceNow HRSD scenarios**: `src/examples/ess-samples/ServiceNow/HRSDScenarios/` — create HR case, get user cases (JSON template configs)
-- **ServiceNow ITSM scenarios**: `src/examples/ess-samples/ServiceNow/ITSMScenarios/` — create incident, get user tickets, get ticket details (JSON template configs)
-- **ServiceNow Catalog/CMDB scenarios**: `src/examples/ess-samples/ServiceNow/CatalogScenarios/` — browse service catalog, CMDB asset lookup
-- **Facilities scenarios**: `src/examples/ess-samples/Facilities/` — facilities tickets, dining, guest invitations, vehicle registration
-- **Evaluation test sets**: `src/examples/ess-samples/ESSEvaluationSamples/` — starter and templated CSV test sets for HR/IT scenarios
+**Official samples**: Before generating YAML, read a relevant sample from `src/samples/` to use as a real-world reference:
+- **Workday employee scenarios**: `src/samples/workday/employee/` — contains topic.yaml + template config XML for vacation balance, time off requests, contact info, education, government IDs, job taxonomy, emergency contacts
+- **Workday manager scenarios**: `src/samples/workday/manager/` — company code, cost center, job taxonomy, service anniversary, time in position
+- **ServiceNow HRSD scenarios**: `src/samples/servicenow/hrsd/` — create HR case, get user cases (JSON template configs)
+- **ServiceNow ITSM scenarios**: `src/samples/servicenow/itsm/` — create incident, get user tickets, get ticket details (JSON template configs)
+- **ServiceNow Catalog/CMDB scenarios**: `src/samples/servicenow/catalog/` — browse service catalog, CMDB asset lookup
+- **Facilities scenarios**: `src/samples/facilities/` — facilities tickets, dining, guest invitations, vehicle registration
+- **Evaluation test sets**: `src/samples/evaluations/` — starter and templated CSV test sets for HR/IT scenarios
 
 Tell the user which approach you're taking and why.
 

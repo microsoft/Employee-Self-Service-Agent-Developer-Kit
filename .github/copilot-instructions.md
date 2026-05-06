@@ -145,7 +145,7 @@ Power Platform Maker portal.
 See `src/reference/ess-docs/customization/customize.md` for the full customization
 reference.
 
-**Official samples** are available at `src/examples/ess-samples/` — these contain
+**Official samples** are available at `src/samples/` — these contain
 real topic YAMLs, template config XMLs, and evaluation test sets from the
 `microsoft/CopilotStudioSamples` repo. Use them as authoritative examples when
 creating new topics or template configs.

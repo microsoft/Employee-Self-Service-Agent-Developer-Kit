@@ -6,7 +6,7 @@ ESS Copilot Kit - Sync Official ESS Samples
 
 Fetches the latest Employee Self-Service samples from the
 microsoft/CopilotStudioSamples repo and saves them to
-src/examples/ess-samples/.
+src/samples/.
 
 Usage:
     python scripts/sync_samples.py          — Fetch all samples
@@ -31,7 +31,33 @@ SOURCE_PATH = "EmployeeSelfServiceAgent"
 API_BASE = f"https://api.github.com/repos/{REPO}/contents"
 RAW_BASE = f"https://raw.githubusercontent.com/{REPO}/{BRANCH}"
 
-OUTPUT_DIR = os.path.join("src", "examples", "ess-samples")
+OUTPUT_DIR = os.path.join("src", "samples")
+
+# Maps upstream folder paths (relative to SOURCE_PATH) to local renamed paths.
+# Upstream uses PascalCase + verbose suffixes; local uses lowercase + concise names.
+# Longest prefixes must come first so they match before their parents.
+PATH_RENAMES = [
+    ("ServiceNow/CatalogScenarios", "servicenow/catalog"),
+    ("ServiceNow/HRSDScenarios",    "servicenow/hrsd"),
+    ("ServiceNow/ITSMScenarios",    "servicenow/itsm"),
+    ("ServiceNow",                  "servicenow"),
+    ("Workday/EmployeeScenarios",   "workday/employee"),
+    ("Workday/ManagerScenarios",    "workday/manager"),
+    ("Workday",                     "workday"),
+    ("Facilities",                  "facilities"),
+    ("ESSEvaluationSamples/StarterTestSets",   "evaluations/starter"),
+    ("ESSEvaluationSamples/TemplatedTestSets", "evaluations/templated"),
+    ("ESSEvaluationSamples",                   "evaluations"),
+]
+
+
+def rename_upstream_path(rel_path):
+    """Translate an upstream-relative path to its local equivalent."""
+    norm = rel_path.replace("\\", "/")
+    for upstream, local in PATH_RENAMES:
+        if norm == upstream or norm.startswith(upstream + "/"):
+            return local + norm[len(upstream):]
+    return norm
 
 SKIP_FILES = {".gitignore", "LICENSE"}
 # Skip media/image files — not useful for agent context
@@ -95,9 +121,10 @@ def walk_and_fetch(github_path, local_base, force=False):
         item_type = item["type"]
         item_path = item["path"]  # full path in repo
 
-        # Compute local destination relative to SOURCE_PATH
+        # Compute local destination relative to SOURCE_PATH, applying renames
         rel_path = item_path[len(SOURCE_PATH):].lstrip("/")
-        local_path = os.path.join(local_base, rel_path)
+        local_rel = rename_upstream_path(rel_path)
+        local_path = os.path.join(local_base, local_rel.replace("/", os.sep))
 
         if item_type == "dir":
             # Recurse into subdirectory
