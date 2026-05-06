@@ -47,6 +47,7 @@ work with your environment going forward.
 | 2 | Agent discovered | ✅ |
 | 3 | Agent extracted | ✅ |
 | 4 | MCP server started | ⬜ |
+| 5 | Readiness check (optional) | ⬜ |
 
 **End message.**
 
@@ -76,7 +77,7 @@ Update `my/onboarding/tasks.md` — change step 4 from `- [ ]` to `- [x]`.
 
 **Message:**
 
-✅ Setup complete!
+✅ Core setup complete!
 
 | # | Task | Status |
 |---|------|--------|
@@ -84,16 +85,9 @@ Update `my/onboarding/tasks.md` — change step 4 from `- [ ]` to `- [x]`.
 | 2 | Agent discovered | ✅ |
 | 3 | Agent extracted | ✅ |
 | 4 | MCP server started | ✅ |
+| 5 | Readiness check (optional) | ⬜ |
 
-Here's what you can do next:
-
-| Command | What it does |
-|---------|-------------|
-| `/scan` | Scan your agent for compile errors and fix them |
-| `/create` | Create a new topic or workflow |
-| `/menu` | See all available commands |
-
-Or just describe what you need in plain English.
+One optional step left — a quick environment readiness check.
 
 **End message.**
 

@@ -80,8 +80,35 @@ az account show --query tenantId -o tsv
 
 ## A.4 — Sign in with device code
 
-Run this command in the terminal using `run_in_terminal` with
-**`mode=async`**. You MUST use async mode — sync mode will block
+**Track attempts.** Read `my/.azure-login-attempts.json` if it exists.
+If it does not exist, treat the current attempt count as `0`. Increment
+the counter and write it back:
+
+```json
+{ "tenantId": "{TENANT_ID}", "attempts": <new count> }
+```
+
+If the attempt count reaches `3`, do NOT issue another device code.
+Stop and show:
+
+**Message:**
+
+Three sign-in attempts have failed for tenant `{TENANT_ID}`. Common causes:
+
+- The account does not have **Application Administrator** or
+  **Global Administrator** in this tenant
+- A Conditional Access policy is blocking the sign-in
+- The wrong tenant ID was entered (double-check it in the Azure portal)
+
+Talk to your tenant admin and then run `/connect` again to retry.
+
+**End message.**
+
+Delete `my/.azure-login-attempts.json` so the next `/connect` run
+starts a fresh count, then stop here. Do not proceed.
+
+Otherwise, run this command in the terminal using `run_in_terminal`
+with **`mode=async`**. You MUST use async mode — sync mode will block
 forever waiting for the user to authenticate in the browser.
 
 Use `--allow-no-subscriptions` to prevent an interactive subscription
@@ -140,8 +167,9 @@ az account show --query tenantId -o tsv
 
 Compare the output to TENANT_ID (case-insensitive).
 
-**If they match**: Azure login is complete. Return TENANT_ID to the
-calling file.
+**If they match**: Azure login is complete. Delete
+`my/.azure-login-attempts.json` (success — clear the counter). Return
+TENANT_ID to the calling file.
 
 **If they don't match**:
 
@@ -164,23 +192,34 @@ Go back to A.4 and retry.
 
 **If `az account show` fails** (not logged in):
 
+Read `my/.azure-login-attempts.json` to determine the current attempt
+count. If `attempts < 2`:
+
 **Message:**
 
 The sign-in didn't complete. Let's try again.
 
 **End message.**
 
-Go back to A.4 and retry. If this is the second failure, stop and show:
+Go back to A.4 and retry.
+
+If `attempts == 2` (the second device-code attempt failed), do NOT
+issue a third device code. Fall back to the manual flow:
 
 **Message:**
 
-Having trouble signing in. You can try manually:
+Having trouble with the device-code sign-in. Let's try it manually:
 
 1. Open a terminal
-2. Run: `az login --tenant {TENANT_ID}`
+2. Run: `az login --tenant {TENANT_ID} --allow-no-subscriptions`
 3. Complete the sign-in in your browser
 4. Then come back here and type **done**
 
 **End message.**
 
-Wait for the user, then go to A.4 to verify.
+Wait for the user. Once they reply **done**, return to the top of A.5
+to verify (NOT A.4 — A.4 would reissue a fresh device code and
+overwrite the manual sign-in). If A.5 still fails after the manual
+fallback, the next loop iteration will treat this as the third failure
+and the cap in A.4 will stop with the "talk to your tenant admin"
+message.

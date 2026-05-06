@@ -128,6 +128,7 @@ other values. Then route by the new SNOW_AUTH:
 - If `entra` → read `src/skills/connect/servicenow/step2-entra.md`
 - If `certificate` → read `src/skills/connect/servicenow/step2-certificate.md`
 - If `oauth2` → read `src/skills/connect/servicenow/step2-oauth2.md`
+- If `federated` → read `src/skills/connect/servicenow/step2-graph.md`
 - If `basic` → mark step 2 complete, read `src/skills/connect/servicenow/step3-basic.md`
 
 **If the user chose 3 (reconnect from scratch):**
@@ -165,10 +166,16 @@ step and route as follows:
 
 - **Step 1 unchecked** → read `src/skills/connect/servicenow/step1.md`
 - **Step 2 unchecked** → check `authType` in config.json:
+  - If `entra` → read `src/skills/connect/servicenow/step2-entra.md`
+  - If `certificate` → read `src/skills/connect/servicenow/step2-certificate.md`
   - If `oauth2` → read `src/skills/connect/servicenow/step2-oauth2.md`
+  - If `federated` → read `src/skills/connect/servicenow/step2-graph.md`
   - If `basic` → mark step 2 complete, then route to step 3
 - **Step 3 unchecked** → check `authType` in config.json:
+  - If `entra` → read `src/skills/connect/servicenow/step3-entra.md`
+  - If `certificate` → read `src/skills/connect/servicenow/step3-certificate.md`
   - If `oauth2` → read `src/skills/connect/servicenow/step3-oauth2.md`
+  - If `federated` → read `src/skills/connect/servicenow/step3-graph.md`
   - If `basic` → read `src/skills/connect/servicenow/step3-basic.md`
 - **Step 4 unchecked** → read `src/skills/connect/servicenow/step4.md`
 

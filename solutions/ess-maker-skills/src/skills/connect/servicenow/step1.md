@@ -82,11 +82,51 @@ to `none`.
 - "Microsoft account (Entra ID)" → `entra`
 - "Certificate (service-to-service)" → `certificate`
 - "ServiceNow username and password" → `oauth2`
-- "I'm not sure" → `entra`
+- "I'm not sure" → see 1.1b
 - "Dev/test instance" → `basic`
 
 If SNOW_CONNECTOR is `graph`, ignore the Authentication answer — set
 SNOW_AUTH to `federated` (Graph connector uses Federated Auth).
+
+---
+
+## 1.1b — Disambiguate "I'm not sure"
+
+Only run this section if the user picked **"I'm not sure"** in 1.1.
+Otherwise skip to 1.2.
+
+Defaulting silently to Entra ID would launch the heavy multi-app
+registration flow in `step2-entra.md`. One follow-up question avoids
+that.
+
+Use the `vscode_askQuestions` tool:
+
+```json
+[
+  {
+    "header": "Sign-in",
+    "question": "When you sign in to ServiceNow today, do you go through a Microsoft sign-in page (e.g., a page that says 'Sign in with your work or school account')?",
+    "options": [
+      { "label": "Yes" },
+      { "label": "No" },
+      { "label": "Still not sure" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Map the answer:
+- **Yes** → SNOW_AUTH = `entra`
+- **No** → SNOW_AUTH = `basic`
+- **Still not sure** → SNOW_AUTH = `entra`. After saving, show:
+
+  **Message:**
+
+  I'll set up Entra ID for now — it's the more common path. You can
+  switch later by running `/connect` again.
+
+  **End message.**
 
 ---
 

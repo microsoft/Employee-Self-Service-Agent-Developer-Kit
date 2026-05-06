@@ -12,9 +12,25 @@ display text like "INSTANCE_NAME = ..." or "PACK_NAME = ..." in chat.
 Read `my/connect/servicenow/config.json` to restore INSTANCE_NAME,
 SNOW_USAGE (from `usage`), TENANT_ID (from `certificate.tenantId`),
 APP_A_CLIENT_ID (from `certificate.appAClientId`),
-APP_B_CLIENT_ID (from `certificate.appBClientId`),
-CERT_PFX_PATH (from `certificate.certPfxPath`),
-and CERT_PASSWORD (from `certificate.certPassword`).
+APP_B_CLIENT_ID (from `certificate.appBClientId`), and
+CERT_PFX_PATH (from `certificate.certPfxPath`).
+
+**CERT_PASSWORD is not stored on disk.** If you already have it from
+the same session that ran step2-certificate.md, use that value.
+Otherwise (this is a resumed session), prompt for it now via
+`vscode_askQuestions`:
+
+```json
+[
+  {
+    "header": "PFX password",
+    "question": "What's the password for `{CERT_PFX_PATH}`? It was shown to you when the certificate was generated and is not saved by this kit."
+  }
+]
+```
+
+Save the answer as CERT_PASSWORD (session memory only — do not write
+to `my/connect/servicenow/config.json`).
 
 ---
 

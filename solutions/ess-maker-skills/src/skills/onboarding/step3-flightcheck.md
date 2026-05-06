@@ -18,7 +18,7 @@ Use the `vscode_askQuestions` tool:
     "question": "Want to run a quick readiness check on your environment? (~2-3 min, optional)",
     "options": [
       { "label": "Yes — run readiness check", "recommended": true },
-      { "label": "Skip — I'll do this later" }
+      { "label": "Skip — remind me later" }
     ],
     "allowFreeformInput": false
   }
@@ -27,11 +27,13 @@ Use the `vscode_askQuestions` tool:
 
 **If they choose "Skip":**
 
-Update `my/onboarding/tasks.md` — change step 5 from `- [ ]` to `- [x]`.
+Do NOT update `my/onboarding/tasks.md`. Step 5 stays unchecked so
+`/setup` will offer the readiness check again on the next run.
 
 **Message:**
 
-No problem! You can run `/flightcheck` anytime to check your environment.
+No problem — I'll keep this on your checklist. You can run
+`/flightcheck` any time, or `/setup` will offer it again.
 
 **End message.**
 

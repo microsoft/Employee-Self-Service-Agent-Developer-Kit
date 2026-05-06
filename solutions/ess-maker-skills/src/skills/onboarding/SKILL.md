@@ -49,8 +49,10 @@ by "Picking up at Step {N}." Then go to the matching step below.
 | 2 | Agent discovered | ⬜ |
 | 3 | Agent extracted | ⬜ |
 | 4 | MCP server started | ⬜ |
+| 5 | Readiness check (optional) | ⬜ |
 
-Let's get your environment set up. This takes about 5 minutes.
+Let's get your environment set up. The first 4 steps take about 5 minutes;
+the optional readiness check at the end is another 2-3 minutes.
 
 **End message.**
 

@@ -138,13 +138,18 @@ Replace `{INSTANCE_NAME}` with the actual instance name.
 From the terminal output, extract:
 - The PFX path → save as CERT_PFX_PATH
 - The CER path → save as CERT_CER_PATH
-- The password → save as CERT_PASSWORD
+- The password → save as CERT_PASSWORD (session memory only — do NOT write to disk)
 - The thumbprint → save as CERT_THUMBPRINT
 
-**Immediately save CERT_PFX_PATH and CERT_PASSWORD** to
-`my/connect/servicenow/config.json` under `certificate.certPfxPath`
-and `certificate.certPassword`. This ensures the password is tracked
-if the session breaks.
+**Save CERT_PFX_PATH, CERT_CER_PATH, and CERT_THUMBPRINT** to
+`my/connect/servicenow/config.json` under `certificate.certPfxPath`,
+`certificate.certCerPath`, and `certificate.certThumbprint`.
+
+**Do NOT write CERT_PASSWORD to disk.** The PFX password is a reusable
+credential — persisting it to `my/connect/servicenow/config.json` would
+leave it sitting in the workspace even after the session ends. Keep it
+in session memory for the rest of this flow. If the session breaks,
+resume code in step3-certificate.md will re-prompt the user.
 
 **If the command fails**: show the error and suggest the user generate
 a certificate manually using their organization's certificate process,
@@ -160,8 +165,10 @@ then come back and choose "I have my own certificate".
 | **CER file** | `{CERT_CER_PATH}` |
 | **Password** | `{CERT_PASSWORD}` |
 
-> **Save the password now** — you'll need it when installing the
-> extension pack. The certificate expires in 2 years.
+> **Save the password in your password manager now** — it is NOT
+> persisted by this kit, and you'll need it when installing the
+> extension pack and on any future `/connect` resume. The certificate
+> expires in 2 years.
 
 **End message.**
 
@@ -208,9 +215,15 @@ Extract the CER path from the output → save as CERT_CER_PATH.
 **If the export fails**: show the error and ask the user to provide the
 .cer file path directly.
 
-**Immediately save CERT_PFX_PATH and CERT_PASSWORD** to
+**Save CERT_PFX_PATH and CERT_CER_PATH** to
 `my/connect/servicenow/config.json` under `certificate.certPfxPath`
-and `certificate.certPassword`.
+and `certificate.certCerPath`. Compute and save CERT_THUMBPRINT to
+`certificate.certThumbprint` (use
+`(Get-PfxCertificate -FilePath '{CERT_PFX_PATH}').Thumbprint` if not
+already captured).
+
+**Do NOT write CERT_PASSWORD to disk.** Keep it in session memory only.
+Resume in step3-certificate.md re-prompts.
 
 Proceed to 2.4.
 
@@ -718,12 +731,16 @@ Update `my/connect/servicenow/config.json` — add a `certificate` object
     "appBSpObjectId": "{APP_B_SP_OBJECT_ID}",
     "appBDisplayName": "{APP_B_DISPLAY_NAME}",
     "certPfxPath": "{CERT_PFX_PATH}",
-    "certPassword": "{CERT_PASSWORD}",
+    "certCerPath": "{CERT_CER_PATH}",
+    "certThumbprint": "{CERT_THUMBPRINT}",
     "oidcEntitySysId": "{OIDC_ENTITY_SYS_ID}",
     "oidcConfigSysId": "{OIDC_CONFIG_SYS_ID}"
   }
 }
 ```
+
+**Do NOT add `certPassword` to this object.** The PFX password stays in
+session memory only. step3-certificate.md re-prompts on resume.
 
 If CREATED_SVC_USER_SYS_ID was set (user was created in step 2.10),
 also add:
