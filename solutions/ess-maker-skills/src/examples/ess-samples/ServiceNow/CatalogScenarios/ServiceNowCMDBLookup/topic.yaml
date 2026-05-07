@@ -1,0 +1,94 @@
+kind: AdaptiveDialog
+inputs:
+  - kind: AutomaticTaskInput
+    propertyName: AssetName
+    description: The name or identifier of the asset/CI to look up. Extract from the user's request if provided.
+    entity: StringPrebuiltEntity
+    shouldPromptUser: false
+
+modelDescription: |-
+  You will respond to requests about looking up a configuration item (CI) or
+  asset in the ServiceNow CMDB. This finds devices, servers, applications,
+  and other IT assets.
+
+  Example valid requests:
+  "Look up my laptop in the CMDB"
+  "Find asset LAPTOP-12345"
+  "What's the status of server PROD-WEB-01?"
+  "Show me CI details for my workstation"
+  "Look up a configuration item"
+
+  Example invalid requests:
+  "Create a ticket" (use Create Ticket instead)
+  "Order new hardware" (use Browse Catalog instead)
+
+beginDialog:
+  kind: OnRecognizedIntent
+  id: main
+  intent:
+    triggerQueries:
+      - Look up my laptop in the CMDB
+      - Find asset LAPTOP-12345
+      - What's the status of server PROD-WEB-01?
+      - Show me CI details
+      - Look up a configuration item
+      - Search for an IT asset
+
+  actions:
+    - kind: ConditionGroup
+      id: checkAssetName
+      conditions:
+        - id: needsInput
+          condition: =IsBlank(Topic.AssetName)
+          actions:
+            - kind: Question
+              id: askAssetName
+              variable: Topic.AssetName
+              prompt: "What's the name or identifier of the asset you're looking for?"
+              entity: StringPrebuiltEntity
+
+    - kind: SendActivity
+      id: sendSearching
+      activity: ="Looking up \"" & Topic.AssetName & "\" in the CMDB..."
+
+    - kind: BeginDialog
+      id: callSharedFlow
+      displayName: Redirect to ServiceNow System Common Execution
+      input:
+        binding:
+          scenarioName: msdyn_ITServiceNowCMDBLookup
+          parameters: ="{""params"":[{""key"":""{AssetName}"",""value"":""" & Topic.AssetName & """}]}"
+      dialog: msdyn_copilotforemployeeselfserviceit.topic.ServiceNowITSMSystemCommonExecution
+      output:
+        binding:
+          isSuccess: Topic.isSuccess
+          responseData: Topic.responseData
+          errorResponse: Topic.errorResponse
+
+    - kind: ConditionGroup
+      id: checkResult
+      conditions:
+        - id: success
+          condition: =Topic.isSuccess = true
+          actions:
+            - kind: AnswerQuestionWithAI
+              id: formatResponse
+              autoSend: true
+              userInput: =Topic.responseData
+              additionalInstructions: Display the asset details clearly showing Name, Class, Status, Assigned To, Location, Serial Number, and Model if available. If multiple items match, show them as a numbered list. If no items are found, suggest the user verify the asset name.
+        - id: failure
+          condition: =Topic.isSuccess = false
+          actions:
+            - kind: SendActivity
+              id: sendError
+              activity: "I couldn't find that asset in the CMDB. Please check the name and try again."
+
+    - kind: EndDialog
+      id: endTopic
+
+inputType:
+  properties:
+    AssetName:
+      displayName: AssetName
+      description: Name or identifier of the CI/asset to look up
+      type: String
