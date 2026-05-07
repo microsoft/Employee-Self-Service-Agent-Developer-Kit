@@ -15,8 +15,14 @@ import getpass
 import json
 import os
 import sys
-from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape as xml_escape
+
+# Use defusedxml everywhere we parse SOAP responses. Workday talks to us over
+# HTTPS, but stdlib xml.etree is XXE-vulnerable and the FlightCheck CLI also
+# parses operator-supplied error payloads. defusedxml.ElementTree.ParseError
+# is a subclass of stdlib ET.ParseError, so existing except-handlers still
+# work unchanged.
+from defusedxml import ElementTree as ET
 
 from ..runner import CheckResult, Status, Priority
 
@@ -764,8 +770,7 @@ def _summarize_soap_error(status_code: int, resp_text: str) -> str:
     if not resp_text:
         return f"HTTP {status_code}"
     try:
-        from defusedxml import ElementTree as _DET
-        root = _DET.fromstring(resp_text)
+        root = ET.fromstring(resp_text)
         # SOAP 1.1 faultstring (no namespace) and SOAP 1.2 fault Reason/Text
         for path in ('.//{*}faultstring', './/{*}Reason/{*}Text', './/faultstring'):
             el = root.find(path)
