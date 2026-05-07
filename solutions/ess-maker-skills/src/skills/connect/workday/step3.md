@@ -206,10 +206,14 @@ If any show `statuscode != 1`, note which ones are broken.
 
 ### 3.5b — Verify flows are enabled
 
-Use the PowerApps Admin API (run in terminal, do not show to user):
+Use the PowerApps Admin API (run in terminal, do not show to user).
+Resolve the PowerShell binary off `PATH` so this works for every
+contributor and on macOS / Linux. Try `pwsh` first; if it is not
+installed, fall back to `powershell` (Windows-only); if neither is on
+`PATH`, fall through to the Dataverse MCP block below.
 
 ```
-C:\Users\saengland\AppData\Local\Microsoft\WindowsApps\pwsh.exe -ExecutionPolicy Bypass -NoProfile -Command "Import-Module Microsoft.PowerApps.Administration.PowerShell -Force -WarningAction SilentlyContinue; Add-PowerAppsAccount; Get-AdminFlow -EnvironmentName '{ENV_ID}' | Where-Object { `$_.DisplayName -match 'workday|WD_|Workday' } | Select-Object DisplayName, @{n='State';e={`$_.Internal.properties.state}} | Format-Table"
+pwsh -ExecutionPolicy Bypass -NoProfile -Command "Import-Module Microsoft.PowerApps.Administration.PowerShell -Force -WarningAction SilentlyContinue; Add-PowerAppsAccount; Get-AdminFlow -EnvironmentName '{ENV_ID}' | Where-Object { `$_.DisplayName -match 'workday|WD_|Workday' } | Select-Object DisplayName, @{n='State';e={`$_.Internal.properties.state}} | Format-Table"
 ```
 
 If pwsh is not available, use the Dataverse MCP to check the `workflow`
@@ -255,8 +259,7 @@ If this fails (table not available for reports), tell the user:
 Verify the environment variable is set:
 
 1. Go to **make.powerapps.com** → your environment
-2. **Solutions** → **Default Solution** → search for **Connection references**
-   → no, search for **Environment variables**
+2. **Solutions** → **Default Solution** → search for **Environment variables**
 3. Find **EmployeeContextRequestAccountName**
 4. Set the value to: `ISU_WQL_COPILOT@{DOMAIN_NAME}`
 
@@ -283,6 +286,21 @@ Check if it already contains a `BeginDialog` action pointing to
 **If the redirect already exists:** Good, skip this step.
 
 **If the file is empty (just `OnRedirect` with no actions):**
+
+Before making any change to the agent, surface the consent to the
+user. This step writes to their live agent and is hard to undo without
+the checkpoint.
+
+**Message:**
+
+Wiring the **User Context** topic to call the Workday flow on every
+conversation. Without this, Workday topics fail with "This feature
+isn't available yet."
+
+I'll save a checkpoint named `Add User Context redirect to Workday`
+first so you can roll back if anything looks off.
+
+**End message.**
 
 Create a checkpoint:
 ```

@@ -408,9 +408,18 @@ which will verify authentication actually works.
 
 **End message.**
 
-Save ISU_WQL_PASSWORD and ISU_GENERIC_PASSWORD to
-`my/connect/workday/config.json` under `isuWqlPassword` and
-`isuGenericPassword`. These are needed for connection setup in step 3.
+**Hold ISU_WQL_PASSWORD and ISU_GENERIC_PASSWORD in session memory only**
+for use in step 3 connection setup. Do NOT write them to
+`my/connect/workday/config.json` - ISU credentials are full reusable
+Workday user accounts (worse risk profile than the cert PFX passphrase
+in `step2-certificate.md`, which we also keep off disk), and `my/` is a
+working directory contributors share, debug from, and occasionally
+commit by accident. The Power Platform connection ref encrypts and
+stores them server-side once step 3 wires the connections, so the
+on-disk copy in `my/` would be a duplicate worth eliminating.
+
+If the user comes back to step 3 in a new session and the passwords
+are gone from session memory, re-prompt for them at that point.
 
 ---
 

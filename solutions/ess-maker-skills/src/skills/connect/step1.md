@@ -97,7 +97,9 @@ Use the `vscode_askQuestions` tool:
 ]
 ```
 
-Map the answer to SNOW_AUTH using the same rules as step1.md section 1.1.
+Map the answer to SNOW_AUTH using the same rules as
+`src/skills/connect/servicenow/step1.md` section 1.1 (the per-product
+step1, NOT this top-level routing file).
 
 Update `my/connect/servicenow/config.json` — set `authType` to the new
 value. Set `status` to `"in-progress"`. Reset all pack statuses in

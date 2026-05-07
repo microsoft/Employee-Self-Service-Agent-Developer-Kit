@@ -120,7 +120,7 @@ Generating a self-signed certificate...
 Run in the terminal:
 
 ```powershell
-$password = [System.Guid]::NewGuid().ToString().Substring(0,16)
+$password = [Convert]::ToBase64String([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(24))
 $cert = New-SelfSignedCertificate -Subject "CN=ESS Copilot ServiceNow ({INSTANCE_NAME})" -CertStoreLocation "Cert:\CurrentUser\My" -KeyExportPolicy Exportable -KeySpec Signature -KeyLength 2048 -NotAfter (Get-Date).AddYears(2)
 $pfxPath = "$env:TEMP\ess-copilot-servicenow-{INSTANCE_NAME}.pfx"
 $cerPath = "$env:TEMP\ess-copilot-servicenow-{INSTANCE_NAME}.cer"
