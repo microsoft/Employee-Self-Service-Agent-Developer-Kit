@@ -217,9 +217,37 @@ Having trouble with the device-code sign-in. Let's try it manually:
 
 **End message.**
 
+**Bump the counter before waiting on the user.** Write
+`my/.azure-login-attempts.json`:
+
+```
+{ "tenantId": "{TENANT_ID}", "attempts": 3 }
+```
+
+This is the cap. The manual fallback gets exactly one chance; if it
+also fails we stop instead of looping. (Without this bump, the next
+A.5 iteration re-reads `attempts == 2` and routes back into the manual
+flow forever.)
+
 Wait for the user. Once they reply **done**, return to the top of A.5
-to verify (NOT A.4 — A.4 would reissue a fresh device code and
-overwrite the manual sign-in). If A.5 still fails after the manual
-fallback, the next loop iteration will treat this as the third failure
-and the cap in A.4 will stop with the "talk to your tenant admin"
-message.
+to verify (NOT A.4 - A.4 would reissue a fresh device code and
+overwrite the manual sign-in).
+
+If A.5 still fails on this iteration, `attempts == 3` and the
+"three failed attempts" branch fires:
+
+**Message:**
+
+Three sign-in attempts have failed for tenant `{TENANT_ID}`,
+including the manual fallback. Common causes:
+
+- The account doesn't exist in this tenant (Guest vs Member, MSA vs work)
+- Conditional Access policy blocks command-line sign-in
+- The tenant requires a managed device
+
+Talk to your tenant admin and try `/connect` again once resolved.
+
+**End message.**
+
+Delete `my/.azure-login-attempts.json` so the next `/connect` run
+starts clean. Stop. Do NOT route back into A.4 or the manual flow.
