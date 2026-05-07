@@ -1,0 +1,52 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+name: "CodeQL"
+
+on:
+  push:
+    branches: [ "main", "main2" ]
+  pull_request:
+    branches: [ "main", "main2" ]
+  schedule:
+    - cron: '30 5 * * 1'
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        language: [ 'python' ]
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v6
+
+    - name: Check for Python source files
+      id: check_python
+      run: |
+        if find . -type f -name "*.py" -not -path "./.git/*" | grep -q .; then
+          echo "has_python=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "has_python=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::No Python files in this branch — skipping CodeQL Python analysis."
+        fi
+
+    - name: Initialize CodeQL
+      if: steps.check_python.outputs.has_python == 'true'
+      uses: github/codeql-action/init@v4
+      with:
+        languages: ${{ matrix.language }}
+
+    - name: Perform CodeQL Analysis
+      if: steps.check_python.outputs.has_python == 'true'
+      uses: github/codeql-action/analyze@v4
+      with:
+        category: "/language:${{ matrix.language }}"

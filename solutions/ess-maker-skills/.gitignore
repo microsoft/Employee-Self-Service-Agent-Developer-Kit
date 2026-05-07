@@ -1,0 +1,10 @@
+# Ignore everything in workspace/ and .local/ EXCEPT the .gitkeep scaffolds
+workspace/**
+!workspace/
+!workspace/onboarding/
+!workspace/agents/
+!workspace/**/.gitkeep
+
+.local/**
+!.local/
+!.local/.gitkeep
