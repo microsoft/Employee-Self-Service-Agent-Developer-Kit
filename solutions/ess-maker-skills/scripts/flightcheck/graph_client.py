@@ -25,6 +25,13 @@ except ImportError:
     print("ERROR: 'requests' package not found. Run: pip install requests")
     sys.exit(1)
 
+try:
+    from urllib3.util.retry import Retry
+    from requests.adapters import HTTPAdapter
+except ImportError:
+    print("ERROR: 'urllib3' / 'requests' not found. Run: pip install requests")
+    sys.exit(1)
+
 
 # Well-known Microsoft client IDs.
 # Use the Microsoft Graph Command Line Tools app ID, which is a well-known
@@ -40,6 +47,21 @@ GRAPH_SCOPES = [
     "https://graph.microsoft.com/User.Read.All",
     "https://graph.microsoft.com/Policy.Read.All",
 ]
+
+# Module-level requests Session with bounded retry-with-backoff for 429/5xx.
+# Mirrors the auth.py pattern - Graph throttles on /users and /servicePrincipals
+# in larger tenants, and one transient 503 mid-FlightCheck would otherwise blow
+# up the whole readiness report. Read-only verbs only; FlightCheck never
+# mutates tenant state through this client.
+_RETRY = Retry(
+    total=3,
+    backoff_factor=1,
+    status_forcelist=(429, 500, 502, 503, 504),
+    allowed_methods=frozenset(["GET", "HEAD", "OPTIONS"]),
+    respect_retry_after_header=True,
+)
+_SESSION = requests.Session()
+_SESSION.mount("https://", HTTPAdapter(max_retries=_RETRY))
 
 
 class GraphClient:
@@ -76,8 +98,10 @@ class GraphClient:
             )
 
         if "access_token" not in result:
-            error = result.get("error_description", result.get("error", "Unknown"))
-            raise RuntimeError(f"Graph authentication failed: {error}")
+            # Don't echo error_description - it can include tenant IDs and
+            # internal flow details (CWE-209). Mirrors the auth.py pattern.
+            error = result.get("error", "unknown_error")
+            raise RuntimeError(f"Graph authentication failed ({error}).")
 
         # Persist cache with strict 0o600 permissions on POSIX. The cache
         # holds MSAL refresh tokens; default umask (0o644) would expose them
@@ -113,7 +137,7 @@ class GraphClient:
     def get(self, path: str, params: dict | None = None) -> dict:
         """GET a Graph endpoint. Returns parsed JSON."""
         url = f"{GRAPH_BASE}{path}"
-        resp = requests.get(url, headers=self.headers, params=params, timeout=30)
+        resp = _SESSION.get(url, headers=self.headers, params=params, timeout=30)
         if resp.status_code == 403:
             return {"_error": "insufficient_permissions", "_status": 403}
         if resp.status_code == 401:
@@ -126,7 +150,7 @@ class GraphClient:
         items: list = []
         url = f"{GRAPH_BASE}{path}"
         while url:
-            resp = requests.get(url, headers=self.headers, params=params, timeout=30)
+            resp = _SESSION.get(url, headers=self.headers, params=params, timeout=30)
             if resp.status_code in (401, 403):
                 return items  # partial results
             resp.raise_for_status()

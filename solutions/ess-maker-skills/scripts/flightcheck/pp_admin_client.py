@@ -25,6 +25,13 @@ except ImportError:
     print("ERROR: 'requests' package not found. Run: pip install requests")
     sys.exit(1)
 
+try:
+    from urllib3.util.retry import Retry
+    from requests.adapters import HTTPAdapter
+except ImportError:
+    print("ERROR: 'urllib3' / 'requests' not found. Run: pip install requests")
+    sys.exit(1)
+
 
 CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d"
 
@@ -33,6 +40,21 @@ POWERAPPS_BASE = "https://api.powerapps.com"
 
 # The BAP / PowerApps APIs use this resource scope.
 PP_SCOPE = "https://service.powerapps.com//.default"
+
+# Module-level requests Session with bounded retry-with-backoff for 429/5xx.
+# Mirrors the auth.py pattern - BAP and PowerApps APIs throttle aggressively
+# enough that a single transient 503 mid-FlightCheck would otherwise blow up
+# the whole readiness report. Read-only verbs only; FlightCheck never mutates
+# tenant state through these clients.
+_RETRY = Retry(
+    total=3,
+    backoff_factor=1,
+    status_forcelist=(429, 500, 502, 503, 504),
+    allowed_methods=frozenset(["GET", "HEAD", "OPTIONS"]),
+    respect_retry_after_header=True,
+)
+_SESSION = requests.Session()
+_SESSION.mount("https://", HTTPAdapter(max_retries=_RETRY))
 
 
 class PPAdminClient:
@@ -68,8 +90,10 @@ class PPAdminClient:
             )
 
         if "access_token" not in result:
-            error = result.get("error_description", result.get("error", "Unknown"))
-            raise RuntimeError(f"Power Platform auth failed: {error}")
+            # Don't echo error_description - it can include tenant IDs and
+            # internal flow details (CWE-209). Mirrors the auth.py pattern.
+            error = result.get("error", "unknown_error")
+            raise RuntimeError(f"Power Platform auth failed ({error}).")
 
         if cache.has_state_changed:
             os.makedirs(".local", exist_ok=True)
@@ -98,7 +122,7 @@ class PPAdminClient:
 
     def _get(self, base: str, path: str, params: dict | None = None) -> dict:
         url = f"{base}{path}"
-        resp = requests.get(url, headers=self.headers, params=params, timeout=60)
+        resp = _SESSION.get(url, headers=self.headers, params=params, timeout=60)
         if resp.status_code in (401, 403):
             return {"_error": "insufficient_permissions", "_status": resp.status_code}
         resp.raise_for_status()
@@ -109,7 +133,7 @@ class PPAdminClient:
         items: list = []
         url = f"{base}{path}"
         while url:
-            resp = requests.get(url, headers=self.headers, params=params, timeout=60)
+            resp = _SESSION.get(url, headers=self.headers, params=params, timeout=60)
             if resp.status_code in (401, 403):
                 return items
             resp.raise_for_status()
@@ -199,11 +223,20 @@ def derive_environment_id(env_url: str, dataverse_token: str) -> str | None:
     Calls the Dataverse WhoAmI endpoint, then uses the OrganizationId
     to query the BAP API for the matching environment.
     """
+    # HARD GATE: refuse to attach the Dataverse bearer to a non-HTTPS URL.
+    # env_url is config-supplied so a misconfigured or hostile value could
+    # otherwise exfiltrate the token over cleartext. Mirrors the
+    # _validate_https_url gate in auth.py.
+    if not env_url.lower().startswith("https://"):
+        raise ValueError(
+            f"env_url must use https:// (got: {env_url!r}). Refusing to send "
+            "the Dataverse bearer token over an unencrypted channel."
+        )
     headers = {
         "Authorization": f"Bearer {dataverse_token}",
         "Accept": "application/json",
     }
-    resp = requests.get(
+    resp = _SESSION.get(
         f"{env_url}/api/data/v9.2/WhoAmI()",
         headers=headers,
         timeout=15,

@@ -508,7 +508,13 @@ def _check_workflows(runner) -> list[CheckResult]:
                         description=desc,
                         result="API accessible (no data for this employee)",
                     ))
-            except ET.ParseError:
+            except (ET.ParseError, DefusedXmlException):
+                # ET.ParseError = malformed XML.
+                # DefusedXmlException = attack-path construct rejected by
+                # defusedxml (EntitiesForbidden, ExternalReferenceForbidden,
+                # DTDForbidden, NotSupportedError). Both should fall through
+                # to the structured "unparseable XML" result instead of
+                # surfacing as an unhandled traceback to the user.
                 results.append(CheckResult(
                     checkpoint_id=cid, category="Workday Workflows",
                     priority=Priority.HIGH.value, status=Status.PASSED.value,
