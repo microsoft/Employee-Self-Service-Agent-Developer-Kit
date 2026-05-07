@@ -1,0 +1,36 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      gha-deps:
+        patterns: ["*"]
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "github-actions"
+
+  - package-ecosystem: "pip"
+    # Uses the directories: array (Dependabot 2024+) so a single ecosystem
+    # entry covers every requirements.txt across the kit. The paths below
+    # come online as PRs #3, #4, and #5 land their respective
+    # requirements.txt files; Dependabot tolerates missing dirs gracefully
+    # until those PRs merge.
+    directories:
+      - "/solutions/ess-maker-skills/scripts"
+      - "/solutions/ess-maker-skills/src/mcp/workday"
+      - "/solutions/ess-maker-skills/src/mcp/servicenow"
+    schedule:
+      interval: "weekly"
+    groups:
+      python-deps:
+        patterns: ["*"]
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "python"

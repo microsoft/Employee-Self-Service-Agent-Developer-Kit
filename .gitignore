@@ -1,0 +1,40 @@
+# ===== Allowlist approach =====
+# Ignore everything at root by default, then explicitly allow our top-level folders.
+# This keeps dynamically-named cloned agent folders (workspace/agents/<slug>/) out of
+# git automatically; user-specific state in workspace/ and .local/ is governed by
+# .gitignore files inside solutions/ess-maker-skills/ where the layout actually lives.
+/*
+
+# Allow our top-level folders and root files
+!.github/
+!.gitignore
+!.vscode/
+!solutions/
+!samples/
+!README.md
+!LICENSE
+!SECURITY.md
+!CONTRIBUTING.md
+!CODE_OF_CONDUCT.md
+!SUPPORT.md
+!no-commit/
+
+# Internal planning docs (not for distribution)
+no-commit/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# VS Code
+.vscode/.ropeproject
+.vscode/mcp.json
+*.code-workspace
+
+# Node (if added later)
+node_modules/
+
+# Python (if added later)
+__pycache__/
+*.pyc
+.env

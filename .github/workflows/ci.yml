@@ -1,0 +1,59 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+name: CI
+
+on:
+  push:
+    branches: [ "main", "main2" ]
+  pull_request:
+    branches: [ "main", "main2" ]
+
+jobs:
+  lint:
+    name: Lint Python
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.11'
+
+    - name: Install ruff
+      run: pip install ruff
+
+    - name: Discover Python source paths
+      id: discover
+      run: |
+        candidates="solutions/ess-maker-skills/scripts solutions/ess-maker-skills/src/mcp"
+        paths=""
+        for d in $candidates; do
+          if [ -d "$d" ] && find "$d" -type f -name "*.py" 2>/dev/null | grep -q .; then
+            paths="$paths $d"
+          fi
+        done
+        paths=$(echo "$paths" | xargs)
+        echo "paths=$paths" >> "$GITHUB_OUTPUT"
+        if [ -n "$paths" ]; then
+          echo "has_python=true" >> "$GITHUB_OUTPUT"
+          echo "::notice::Linting Python in: $paths"
+        else
+          echo "has_python=false" >> "$GITHUB_OUTPUT"
+          echo "::notice::No Python files under $candidates - skipping lint and syntax check. (Expected on branches that don't yet include Python sources; the slice PRs #29/#30/#31 add them.)"
+        fi
+
+    - name: Lint with ruff
+      if: steps.discover.outputs.has_python == 'true'
+      env:
+        PATHS: ${{ steps.discover.outputs.paths }}
+      run: ruff check $PATHS --output-format=github
+
+    - name: Check Python syntax
+      if: steps.discover.outputs.has_python == 'true'
+      env:
+        PATHS: ${{ steps.discover.outputs.paths }}
+      run: |
+        python -m compileall -q $PATHS

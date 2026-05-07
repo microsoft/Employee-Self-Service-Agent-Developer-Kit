@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://msrc.microsoft.com/create-report
+    about: Report security vulnerabilities privately to MSRC. Do NOT open a GitHub issue.
+  - name: Microsoft Open Source Code of Conduct
+    url: https://opensource.microsoft.com/codeofconduct/
+    about: Read the Code of Conduct that governs this project.

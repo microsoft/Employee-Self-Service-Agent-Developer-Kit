@@ -1,0 +1,55 @@
+# Standard labels for microsoft/Employee-Self-Service-Agent-Developer-Kit
+# This file is the source of truth for repo labels. Sync via the label-sync workflow
+# (.github/workflows/label-sync.yml) which runs on changes to this file.
+#
+# Manual one-off apply (for bootstrap):
+#   gh label create -R microsoft/Employee-Self-Service-Agent-Developer-Kit <name> --color <color> --description "<desc>"
+
+- name: bug
+  color: d73a4a
+  description: Something is not working
+- name: enhancement
+  color: a2eeef
+  description: New feature or request
+- name: question
+  color: d876e3
+  description: Further information is requested
+- name: documentation
+  color: 0075ca
+  description: Improvements or additions to documentation
+- name: needs-triage
+  color: ededed
+  description: Awaiting initial review
+- name: good first issue
+  color: 7057ff
+  description: Good for newcomers
+- name: help wanted
+  color: 008672
+  description: Extra attention is needed
+- name: dependencies
+  color: 0366d6
+  description: Pull requests that update a dependency file
+- name: github-actions
+  color: 000000
+  description: GitHub Actions workflow updates
+- name: python
+  color: 3572A5
+  description: Python code changes
+- name: integration:servicenow
+  color: 00b8d9
+  description: ServiceNow connector / integration
+- name: integration:workday
+  color: f48024
+  description: Workday connector / integration
+- name: area:flightcheck
+  color: bfd4f2
+  description: FlightCheck pre-deployment validation
+- name: area:mcp
+  color: c2e0c6
+  description: MCP server (ServiceNow / Workday)
+- name: area:topics
+  color: fef2c0
+  description: Topic create/update/delete commands
+- name: area:setup
+  color: e99695
+  description: /setup and onboarding flow

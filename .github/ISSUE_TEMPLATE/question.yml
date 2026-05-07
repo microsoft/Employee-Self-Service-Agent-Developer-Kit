@@ -1,0 +1,23 @@
+name: Question / help
+description: Ask a question about how to use the ESS Maker Kit
+title: "[Question]: "
+labels: ["question", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before asking, please search existing issues and check the README for guidance.
+  - type: textarea
+    id: question
+    attributes:
+      label: Your question
+      description: What would you like to know?
+    validations:
+      required: true
+  - type: textarea
+    id: tried
+    attributes:
+      label: What have you tried?
+      description: Steps you have already taken.
+    validations:
+      required: false
