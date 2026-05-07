@@ -18,11 +18,16 @@ import sys
 from xml.sax.saxutils import escape as xml_escape
 
 # Use defusedxml everywhere we parse SOAP responses. Workday talks to us over
-# HTTPS, but stdlib xml.etree is XXE-vulnerable and the FlightCheck CLI also
-# parses operator-supplied error payloads. defusedxml.ElementTree.ParseError
-# is a subclass of stdlib ET.ParseError, so existing except-handlers still
-# work unchanged.
+# the public internet via WS-Security; treat every response as untrusted, even
+# the success path. defusedxml.ElementTree.ParseError is a subclass of stdlib
+# ET.ParseError, so existing except-handlers still catch malformed XML, but
+# attack-path constructs (entity expansion, external references, DTDs) raise
+# DefusedXmlException subclasses instead - those need to be caught too or a
+# hostile Workday payload would propagate as an unhandled exception out of
+# FlightCheck instead of falling through to the structured "unparseable XML"
+# result path.
 from defusedxml import ElementTree as ET
+from defusedxml.common import DefusedXmlException
 
 from ..runner import CheckResult, Status, Priority
 
