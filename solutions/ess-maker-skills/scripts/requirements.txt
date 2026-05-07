@@ -1,0 +1,18 @@
+# ESS Maker Kit - Python script dependencies
+#
+# Pinned to known-good versions. Dependabot keeps these current via the
+# pip ecosystem grouping in .github/dependabot.yml.
+
+# Auth + HTTP
+msal>=1.31.0,<2.0
+requests>=2.32.0,<3.0
+urllib3>=2.2.0,<3.0
+
+# YAML parse for pre-push schema validation
+PyYAML>=6.0.2,<7.0
+
+# Safe XML parsing for Workday SOAP responses (XXE / billion-laughs hardened).
+defusedxml>=0.7.1,<0.8
+
+# FlightCheck only - safe defaults; the flightcheck CLI is opt-in.
+# (msal/requests/defusedxml already covered above; no flightcheck-specific deps yet.)
