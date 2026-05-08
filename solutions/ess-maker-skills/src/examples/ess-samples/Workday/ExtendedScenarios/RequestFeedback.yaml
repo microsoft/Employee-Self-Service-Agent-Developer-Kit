@@ -284,12 +284,14 @@ beginDialog:
       value: =If(IsBlank(Topic.selectedResponderId), Topic.responderName, LookUp(Topic.parsedResponder.data, id = Topic.selectedResponderId).descriptor)
 
     # Map feedbackSharing choice to Workday fields:
-    # "shareWithMe"      - feedbackConfidential=false, showFeedbackProviderName=true
-    # "shareWithManager" - feedbackConfidential=true,  showFeedbackProviderName=true
+    # In Workday, feedbackConfidential=true means the request stays private to the
+    # requester; feedbackConfidential=false means the manager also sees the feedback.
+    # "shareWithMe"      - feedbackConfidential=true,  showFeedbackProviderName=true
+    # "shareWithManager" - feedbackConfidential=false, showFeedbackProviderName=true
     - kind: SetVariable
       id: set_confidential
       variable: Topic.feedbackConfidential
-      value: =If(Topic.feedbackSharing = "shareWithManager", "true", "false")
+      value: =If(Topic.feedbackSharing = "shareWithMe", "true", "false")
 
     # Step 3 - Submit the feedback request
     - kind: BeginDialog
