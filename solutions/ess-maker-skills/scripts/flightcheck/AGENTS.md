@@ -17,7 +17,7 @@ requires its own authentication and has different data available:
 
 > **Note:** `../auth.py` lives at `scripts/auth.py`, outside the flightcheck
 > folder. It's importable as `from auth import authenticate, query_all` because
-> `cli.py` adds `scripts/` to `sys.path` at startup (line 29).
+> `cli.py` adds `scripts/` to `sys.path` at startup.
 
 **Critical distinction ??? three data layers:**
 
