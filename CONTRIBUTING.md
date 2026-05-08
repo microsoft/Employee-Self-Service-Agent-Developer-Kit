@@ -89,3 +89,7 @@ CodeQL runs on every PR via the workflow seeded on `main2` (see the [repo's Code
 ### 4. CLA bot
 
 The Microsoft CLA bot will comment on your PR if you are an external contributor. You must accept the CLA before the PR can be merged.
+
+### 5. Code quality
+
+- **No fabricated URLs.** Every URL in code (doc links, remediation messages, comments, README references) must point to a page you have confirmed exists. See [`.github/copilot-instructions.md`](.github/copilot-instructions.md#no-fabricated-urls) → "No fabricated URLs" for the verification rule.
