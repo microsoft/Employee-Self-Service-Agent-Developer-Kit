@@ -385,7 +385,7 @@ def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list
             remediation=(
                 "Publish the agent in Copilot Studio to provision missing sources, "
                 "or remove the local file if it should not exist. Identify mismatched "
-                "sources by comparing filenames in my/agents/{slug}/knowledge/ against "
+                "sources by comparing filenames in workspace/agents/{slug}/knowledge/ against "
                 "Copilot Studio → Knowledge."
             ),
         ))
