@@ -335,7 +335,7 @@ def _check_knowledge_sources(agent_path: Path, label: str, runner=None) -> list[
     if runner and hasattr(runner, "config"):
         bot_id = runner.config.get("agent", {}).get("botId")
 
-    if not pva or not hasattr(pva, "is_configured") or not pva.is_configured or not bot_id:
+    if not pva or not pva.is_configured or not bot_id:
         results.append(CheckResult(
             checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
