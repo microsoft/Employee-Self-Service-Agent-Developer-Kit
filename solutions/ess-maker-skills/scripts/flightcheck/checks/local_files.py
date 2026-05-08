@@ -12,6 +12,8 @@ marked as "NotConfigured" because it had no access to the actual files.
 import re
 from pathlib import Path
 
+import yaml
+
 from ..runner import CheckResult, Status, Priority
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
@@ -274,24 +276,33 @@ def _check_variables(agent_path: Path, label: str) -> list[CheckResult]:
 # Minimum word count for a useful topic description
 _MIN_DESCRIPTION_WORDS = 20
 
-# System topics that don't use AI-based routing (no description needed)
-_SYSTEM_TOPIC_PATTERNS = [
-    r"conversation-start",
-    r"on-error",
-    r"reset-conversation",
-    r"log-telemetry",
-    r"microsoft-self-help",
-    r"response-preparation",
-]
+# System topics that don't use AI-based routing (no description needed).
+# Match against the exact filename stem (without ".mcs.yml") so we don't
+# accidentally skip topics whose filename merely contains one of these words
+# (e.g. "handle-checkout-error.mcs.yml" must not match "on-error").
+_SYSTEM_TOPIC_STEMS = {
+    "conversation-start",
+    "on-error",
+    "reset-conversation",
+    "log-telemetry-event",
+    "microsoft-self-help",
+    "response-preparation",
+}
 
-# Placeholder phrases that indicate the description was never filled in
+# Placeholder marker patterns that indicate the description was never filled in.
+# Use specific marker forms (TODO:, [TODO], <placeholder>, etc.) — a simple
+# \btodo\b would false-flag legitimate topics like "Today's tasks" or
+# descriptions that mention the word "todo" in normal sentences.
 _PLACEHOLDER_PATTERNS = [
     r"\[add\s+keywords",
     r"\[add\s+.*here\]",
     r"\[describe",
     r"\[placeholder",
-    r"\btodo\b",
-    r"\bplaceholder\b",
+    r"\bTODO:",
+    r"\[TODO\]",
+    r"\bTBD\b",
+    r"<placeholder>",
+    r"\bPLACEHOLDER\b",
     r"describe\s+this\s+topic",
     r"add\s+your\s+description",
 ]
@@ -363,50 +374,56 @@ def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_n
 
     too_short: list[str] = []
     has_placeholder: list[str] = []
+    parse_errors: list[str] = []
     checked = 0
 
     # Query Dataverse for disabled topics to skip them
     disabled_topics = _get_disabled_topic_names(runner, agent_name)
 
     for tf in sorted(topics_dir.glob("*.mcs.yml")):
-        filename = tf.name.lower()
-
-        # Skip system topics that don't use AI-based routing
-        if any(re.search(pat, filename) for pat in _SYSTEM_TOPIC_PATTERNS):
+        # Match the exact filename stem against the system-topic set — a
+        # substring/regex match would skip legitimate topics whose names
+        # merely contain one of these words.
+        stem = tf.name.replace(".mcs.yml", "")
+        if stem in _SYSTEM_TOPIC_STEMS:
             continue
 
         # Skip disabled topics (match filename stem against Dataverse-derived names)
-        stem = tf.stem.replace(".mcs", "").lower()
-        if stem in disabled_topics:
+        if stem.lower() in disabled_topics:
             continue
 
         content = tf.read_text(encoding="utf-8", errors="replace")
 
-        # Extract modelDescription (multiline block scalar or inline)
-        # The pattern allows blank lines within the indented block
-        desc_match = re.search(
-            r'modelDescription:\s*\|[\-\+]?\s*\n((?:(?:[ \t]+.+|[ \t]*)\n?)+)', content
-        )
-        if desc_match:
-            desc_text = desc_match.group(1).strip()
-        else:
-            inline_match = re.search(r'modelDescription:\s*(?!\|)(.+)', content)
-            if inline_match:
-                desc_text = inline_match.group(1).strip()
-            else:
-                # No modelDescription ??? topic may use triggerQueries only
-                continue
+        # Parse the YAML rather than regex-matching the modelDescription
+        # key: that way we correctly handle every valid scalar form
+        # (literal `|`, folded `>`, single/double-quoted, plain) and any
+        # trailing-comment / odd-indentation cases the regex would miss.
+        try:
+            doc = yaml.safe_load(content) or {}
+        except yaml.YAMLError as e:
+            parse_errors.append(f"{stem} ({e.__class__.__name__})")
+            continue
 
+        if not isinstance(doc, dict):
+            # Topic file isn't a YAML mapping — nothing to check.
+            continue
+
+        desc_raw = doc.get("modelDescription")
+        if desc_raw is None or not str(desc_raw).strip():
+            # No modelDescription — topic may use triggerQueries only.
+            continue
+
+        desc_text = str(desc_raw).strip()
         checked += 1
 
         # Get the display name shown in Copilot Studio
-        name_match = re.search(r'modelDisplayName:\s*(.+)', content)
-        if name_match:
-            display_name = name_match.group(1).strip()
+        display_name_raw = doc.get("modelDisplayName")
+        if display_name_raw and str(display_name_raw).strip():
+            display_name = str(display_name_raw).strip()
         else:
             # Fall back to filename, formatted as a readable topic name
-            display_name = tf.stem.replace(".mcs", "").replace("-", " ").title()
-            display_name = f"{display_name} (file: {tf.name})"
+            readable = stem.replace("-", " ").title()
+            display_name = f"{readable} (file: {tf.name})"
 
         # Check for placeholder text
         if any(re.search(pat, desc_text, re.IGNORECASE) for pat in _PLACEHOLDER_PATTERNS):
@@ -417,6 +434,16 @@ def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_n
         word_count = len(desc_text.split())
         if word_count < _MIN_DESCRIPTION_WORDS:
             too_short.append(f"{display_name} ({word_count} words)")
+
+    # Report YAML parse errors so they don't silently skip checks
+    if parse_errors:
+        results.append(CheckResult(
+            checkpoint_id="CONFIG-014", category=f"Topics ({label})",
+            priority=Priority.MEDIUM.value, status=Status.WARNING.value,
+            description=f"{label}: Topic YAML parse errors",
+            result=f"{len(parse_errors)} topic file(s) failed to parse: {', '.join(parse_errors[:5])}{'...' if len(parse_errors) > 5 else ''}",
+            remediation="Open the listed files and fix the YAML syntax errors so they can be validated.",
+        ))
 
     if not checked:
         results.append(CheckResult(
