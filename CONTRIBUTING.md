@@ -84,7 +84,7 @@ If your change touches a Copilot Chat command (`/create`, `/update`, `/flightche
 
 ### 3. CodeQL
 
-CodeQL runs on every PR via the workflow seeded on `main2` (see the [repo's CodeQL alerts](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/security/code-scanning) for current state). Wait for the check to pass. If CodeQL flags an issue, address it or document why it is a false positive in the PR description. The kit's own `codeql.yml` will be re-introduced as part of the post-rename CI consolidation tracked in [#27](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/issues/27); link the path-relative file once it lands.
+CodeQL runs on every PR. See the [repo's CodeQL alerts](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/security/code-scanning) for current state. Wait for the check to pass. If CodeQL flags an issue, address it or document why it is a false positive in the PR description.
 
 ### 4. CLA bot
 

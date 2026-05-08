@@ -4,8 +4,6 @@ Customize your Employee Self-Service (ESS) agent using GitHub Copilot in VS Code
 
 > **This repo is intended as an example or learning tool.** It demonstrates how to customize Employee Self-Service (ESS) agents using GitHub Copilot in VS Code. It is not a Microsoft product or a supported service. See [SUPPORT.md](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/blob/main/SUPPORT.md) for the support model and [SECURITY.md](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/blob/main/SECURITY.md) for reporting security issues.
 
-> **About this README.** This document describes the complete kit. While the modular review (PRs #1-#10) is in flight, some features below land in subsequent PRs of the stack and may not be available on `main2` yet.
-
 ## Why This Kit
 
 Building and customizing an ESS agent means working across topic YAML, Power Automate workflow schemas, ServiceNow/Workday connector patterns, adaptive card JSON, and Dataverse template configurations. The ESS Maker Kit packages all of that domain knowledge into a VS Code workspace so GitHub Copilot can do the heavy lifting — you describe the scenario, and the agent builds it.
