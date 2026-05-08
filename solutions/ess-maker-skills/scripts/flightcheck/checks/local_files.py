@@ -280,31 +280,41 @@ _MIN_DESCRIPTION_WORDS = 20
 # Match against the exact filename stem (without ".mcs.yml") so we don't
 # accidentally skip topics whose filename merely contains one of these words
 # (e.g. "handle-checkout-error.mcs.yml" must not match "on-error").
+# Both `log-telemetry` and `log-telemetry-event` are included since different
+# ESS template versions use either name.
 _SYSTEM_TOPIC_STEMS = {
     "conversation-start",
     "on-error",
     "reset-conversation",
+    "log-telemetry",
     "log-telemetry-event",
     "microsoft-self-help",
     "response-preparation",
 }
 
-# Placeholder marker patterns that indicate the description was never filled in.
-# Use specific marker forms (TODO:, [TODO], <placeholder>, etc.) — a simple
-# \btodo\b would false-flag legitimate topics like "Today's tasks" or
-# descriptions that mention the word "todo" in normal sentences.
-_PLACEHOLDER_PATTERNS = [
+# Placeholder patterns are split into two groups because the matching loops
+# below use different case-sensitivity rules:
+#
+# _PLACEHOLDER_PATTERNS_INSENSITIVE: bracketed/markup forms and full phrases
+#   that are unambiguous markers regardless of how they're cased.
+# _PLACEHOLDER_PATTERNS_SENSITIVE: all-caps marker forms that authors actually
+#   leave behind (TODO:, TBD, PLACEHOLDER). These MUST stay case-sensitive —
+#   matching them under re.IGNORECASE would false-flag legitimate sentences
+#   like "this topic acts as a placeholder until ..." or "today's todo list".
+_PLACEHOLDER_PATTERNS_INSENSITIVE = [
     r"\[add\s+keywords",
     r"\[add\s+.*here\]",
     r"\[describe",
     r"\[placeholder",
+    r"<placeholder>",
+    r"describe\s+this\s+topic",
+    r"add\s+your\s+description",
+]
+_PLACEHOLDER_PATTERNS_SENSITIVE = [
     r"\bTODO:",
     r"\[TODO\]",
     r"\bTBD\b",
-    r"<placeholder>",
     r"\bPLACEHOLDER\b",
-    r"describe\s+this\s+topic",
-    r"add\s+your\s+description",
 ]
 
 
@@ -323,13 +333,11 @@ def _get_disabled_topic_names(runner, agent_name: str) -> set[str]:
     if not runner or not getattr(runner, 'dv_token', None) or not getattr(runner, 'env_url', None):
         return set()
 
-    # Find botId from config
-    import json
-    try:
-        config = json.load(open("my/config.json"))
-    except (FileNotFoundError, json.JSONDecodeError):
-        return set()
-
+    # Find botId from config. Prefer the already-parsed runner.config attached
+    # by cli.py — re-reading from disk hardcodes the config path and breaks
+    # whenever the kit's layout changes (regression after the folder reorg
+    # moved my/config.json to .local/config.json).
+    config = getattr(runner, "config", None) or {}
     bot_id = None
     for agent in config.get("agents", []):
         if agent.get("slug") == agent_name:
@@ -425,8 +433,14 @@ def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_n
             readable = stem.replace("-", " ").title()
             display_name = f"{readable} (file: {tf.name})"
 
-        # Check for placeholder text
-        if any(re.search(pat, desc_text, re.IGNORECASE) for pat in _PLACEHOLDER_PATTERNS):
+        # Check for placeholder text. Two passes because the marker patterns
+        # (TODO:, TBD, PLACEHOLDER) MUST stay case-sensitive — matching them
+        # under IGNORECASE would re-introduce the false-flag bug from round 1.
+        is_placeholder = (
+            any(re.search(pat, desc_text, re.IGNORECASE) for pat in _PLACEHOLDER_PATTERNS_INSENSITIVE)
+            or any(re.search(pat, desc_text) for pat in _PLACEHOLDER_PATTERNS_SENSITIVE)
+        )
+        if is_placeholder:
             has_placeholder.append(display_name)
             continue
 
