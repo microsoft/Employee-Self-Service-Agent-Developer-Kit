@@ -48,7 +48,7 @@ def rename_upstream_path(rel_path):
     return rel_path.replace("\\", "/")
 
 SKIP_FILES = {".gitignore", "LICENSE"}
-# Skip media/image files ΓÇö not useful for agent context
+# Skip media/image files - not useful for agent context
 SKIP_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".svg", ".ico"}
 
 
@@ -75,7 +75,7 @@ def list_contents(path):
 def fetch_raw_file(github_path):
     """Download a file from raw.githubusercontent.com."""
     url = f"{RAW_BASE}/{github_path}"
-    resp = requests.get(url, timeout=30)
+    resp = requests.get(url, headers=get_headers(), timeout=30)
     resp.raise_for_status()
     return resp.text
 
@@ -145,7 +145,7 @@ def walk_and_fetch(github_path, local_base, force=False):
                 os.makedirs(os.path.dirname(local_path), exist_ok=True)
                 with open(local_path, "w", encoding="utf-8") as f:
                     f.write(raw)
-                print(f"ΓåÆ {local_path}")
+                print(f"-> {local_path}")
                 created += 1
             except Exception as e:
                 print(f"FAILED: {e}")

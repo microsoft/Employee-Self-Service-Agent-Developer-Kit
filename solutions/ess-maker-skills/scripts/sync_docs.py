@@ -52,12 +52,11 @@ CATEGORY_MAP = {
     "customization": [
         "customize", "agent-handoff", "design-best-practices",
         "emotional-quotient-ambiguity", "employee-self-service-multilingual",
-        "optimization-sharepoint", "sharepoint-filtering",
+        "optimization-sharepoint",
     ],
 }
 
 SKIP_FILES = {"TOC.yml"}
-SKIP_DIRS = {"media"}
 
 
 def categorize(filename):
@@ -91,7 +90,7 @@ def clean_content(content):
     content = re.sub(r'::: ?zone-end\n?', '', content)
 
     # Clean up image references to just show alt text
-    # :::image ... alt-text="..." ... :::  ΓåÆ  [Image: alt-text]
+    # :::image ... alt-text="..." ... :::  ->  [Image: alt-text]
     content = re.sub(
         r':::image[^:]*?alt-text="([^"]*)"[^:]*?:::',
         r'[Image: \1]',
@@ -104,15 +103,18 @@ def clean_content(content):
     return content.strip() + "\n"
 
 
-def fetch_file_list():
-    """Get list of files from GitHub API."""
+def get_headers():
+    """Build GitHub API headers, with optional auth token to avoid rate limits."""
     headers = {"Accept": "application/vnd.github.v3+json"}
-    # Check for GH token to avoid rate limits
     token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if token:
         headers["Authorization"] = f"token {token}"
+    return headers
 
-    resp = requests.get(API_URL, headers=headers, timeout=30)
+
+def fetch_file_list():
+    """Get list of files from GitHub API."""
+    resp = requests.get(API_URL, headers=get_headers(), timeout=30)
     if resp.status_code == 403:
         print("ERROR: GitHub API rate limit hit. Set GITHUB_TOKEN env var.")
         sys.exit(1)
@@ -123,7 +125,7 @@ def fetch_file_list():
 def fetch_raw_file(filename):
     """Download a single file from raw.githubusercontent.com."""
     url = f"{RAW_BASE}/{filename}"
-    resp = requests.get(url, timeout=30)
+    resp = requests.get(url, headers=get_headers(), timeout=30)
     resp.raise_for_status()
     return resp.text
 
@@ -168,7 +170,7 @@ def main():
             cleaned = clean_content(raw)
             with open(dest_path, "w", encoding="utf-8") as f:
                 f.write(cleaned)
-            print(f"ΓåÆ {dest_path}")
+            print(f"-> {dest_path}")
             created += 1
         except Exception as e:
             print(f"FAILED: {e}")
