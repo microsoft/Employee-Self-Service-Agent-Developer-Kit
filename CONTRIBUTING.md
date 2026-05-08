@@ -92,4 +92,4 @@ The Microsoft CLA bot will comment on your PR if you are an external contributor
 
 ### 5. Code quality
 
-- **No fabricated URLs.** Every URL in code (doc links, remediation messages, comments, README references) must point to a page you have confirmed exists. See [`.github/copilot-instructions.md`](.github/copilot-instructions.md#no-fabricated-urls) → "No fabricated URLs" for the verification rule.
+- **No fabricated URLs.** Every URL in code (doc links, remediation messages, comments, README references) must point to a page you have confirmed exists. See [solutions/ess-maker-skills/.github/copilot-instructions.md#no-fabricated-urls](solutions/ess-maker-skills/.github/copilot-instructions.md#no-fabricated-urls) for the verification rule.
