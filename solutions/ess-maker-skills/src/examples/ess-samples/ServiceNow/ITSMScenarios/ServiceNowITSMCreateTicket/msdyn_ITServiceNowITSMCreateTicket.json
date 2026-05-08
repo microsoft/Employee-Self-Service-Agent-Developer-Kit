@@ -1,0 +1,26 @@
+{
+  "Scenario": "msdyn_ITServiceNowITSMCreateTicket",
+  "Table": "incident",
+  "Operation": "CREATE",
+  "UserParameters": [
+    { "ParameterName": "ShortDescription", "FieldName": "short_description", "Type": "string" },
+    { "ParameterName": "Description", "FieldName": "description", "Type": "string" },
+    { "ParameterName": "Category", "FieldName": "category", "Type": "string" },
+    { "ParameterName": "Urgency", "FieldName": "urgency", "Type": "string" },
+    { "ParameterName": "Caller", "FieldName": "caller_id", "Type": "string" }
+  ],
+  "GlobalParameters": [
+    { "ParameterName": "AssignmentGroup", "FieldName": "assignment_group", "Value": "<YOUR_IT_ASSIGNMENT_GROUP_SYS_ID>" },
+    { "ParameterName": "ContactType", "FieldName": "contact_type", "Value": "self-service" }
+  ],
+  "OutputFieldMapping": [
+    { "FieldName": "number", "OutputName": "TicketNumber" },
+    { "FieldName": "sys_id", "OutputName": "TicketId" },
+    { "FieldName": "short_description", "OutputName": "Summary" },
+    { "FieldName": "state", "OutputName": "State" },
+    { "FieldName": "priority", "OutputName": "Priority" },
+    { "FieldName": "category", "OutputName": "Category" }
+  ],
+  "DisplaySystemReferences": true,
+  "ExcludeReferenceLinks": true
+}
