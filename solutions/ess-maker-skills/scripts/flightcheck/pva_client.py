@@ -12,6 +12,7 @@ Authentication uses the same MSAL cache as auth.py / graph_client.py.
 
 import os
 import sys
+from urllib.parse import urlparse
 
 try:
     import msal
@@ -140,7 +141,9 @@ class PVAClient:
             props = env.get("properties", {})
             linked = props.get("linkedEnvironmentMetadata", {})
             instance_url = linked.get("instanceUrl", "")
-            if org_match and org_match in instance_url:
+            instance_host = (urlparse(instance_url).hostname or "").lower()
+            # Match on hostname prefix + "." so "org123" doesn't match "org1234contoso".
+            if org_match and instance_host.startswith(org_match.lower() + "."):
                 self._bap_env_id = env.get("name")
                 runtime = props.get("runtimeEndpoints", {})
                 self._gateway_url = runtime.get("microsoft.PowerVirtualAgents")
