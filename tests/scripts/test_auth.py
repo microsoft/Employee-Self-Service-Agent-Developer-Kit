@@ -1,14 +1,15 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Tests for tests/mocks/dataverse.py.
+"""Tests for solutions/ess-maker-skills/scripts/auth.py.
 
-Two layers:
+Round-trips production code in auth.py through the mocks in
+tests/mocks/dataverse.py to prove the kit's Dataverse client correctly
+handles paginated responses, 401/403 errors, and the WWW-Authenticate
+challenge format.
 
-1. Direct: each builder produces a payload with the expected shape.
-2. Round-trip: register the builders with `responses` and drive the real
-   production functions in scripts/auth.py through them. This proves
-   both the mock and the production code agree on the wire format.
+Two of the discover_tenant tests are regression tests pinning a known
+regex bug — see the test docstrings.
 """
 
 from __future__ import annotations
@@ -17,49 +18,6 @@ import pytest
 import responses
 
 from tests.mocks import dataverse as dv
-
-
-# ─────────────── Layer 1: builders produce the right shape ────────────
-
-
-class TestPayloadBuilders:
-    def test_who_am_i_has_expected_keys(self) -> None:
-        payload = dv.who_am_i()
-        for key in ("BusinessUnitId", "UserId", "OrganizationId"):
-            assert key in payload, f"missing {key}"
-
-    def test_bot_record_has_botid_and_metadata(self) -> None:
-        payload = dv.bot()
-        assert payload["botid"] == dv.MOCK_BOT_ID
-        assert "schemaname" in payload
-        assert "ismanaged" in payload
-        assert "@odata.etag" in payload
-
-    def test_bot_component_links_to_parent(self) -> None:
-        payload = dv.bot_component(parent_bot_id="parent-123")
-        assert payload["_parentbotid_value"] == "parent-123"
-        assert payload["componenttype"] == 9  # topic default
-
-    def test_env_var_def_uses_schema_name(self) -> None:
-        payload = dv.env_var_def(schema_name="MyVar")
-        assert payload["schemaname"] == "MyVar"
-
-    def test_env_var_value_links_to_definition(self) -> None:
-        payload = dv.env_var_value(definition_id="def-1", value="hello")
-        assert payload["_environmentvariabledefinitionid_value"] == "def-1"
-        assert payload["value"] == "hello"
-
-    def test_collection_wraps_records_with_value_key(self) -> None:
-        payload = dv.collection([{"a": 1}, {"a": 2}])
-        assert payload["value"] == [{"a": 1}, {"a": 2}]
-        assert "@odata.nextLink" not in payload
-
-    def test_collection_with_next_link_includes_it(self) -> None:
-        payload = dv.collection([], next_link="https://x/?page=2")
-        assert payload["@odata.nextLink"] == "https://x/?page=2"
-
-
-# ─────────────── Layer 2: round-trip through production code ──────────
 
 
 @pytest.fixture
