@@ -29,8 +29,15 @@ The documentation covers:
 
 Fully prepared test sets you can upload directly into Copilot Studio's Evaluation tool.
 
-- No changes needed.
+- No changes needed for the functional sets (HR, IT, Facilities, Workday).
 - Helpful for quick validation, demos, and baseline evaluations.
+
+> **Safety sets (`RAI-HR.csv`, `RAI-IT.csv`, `SensitiveTopic.csv`):** the `Expected response` column ships with the out-of-the-box agent's exact refusal wording (e.g., `"I can't help with the request. Try asking me about benefits or workplace policies."`). If you have rebranded the agent or changed its refusal copy, the `CompareMeaning` test will fail every safety row even when the agent is refusing correctly. Two options:
+>
+> 1. **Replace the expected string** in those CSVs with your agent's actual refusal wording before uploading.
+> 2. **Use a refusal-classifier judge** instead of `CompareMeaning` for the safety sets - this scores any well-formed refusal as a pass regardless of wording. Recommended for any tenant that customizes agent voice.
+>
+> Track this as a known limitation until the kit ships a refusal-classifier-based eval method.
 
 ### 2. TemplatedTestSets (Partially Ready – Requires Input)
 
@@ -70,6 +77,14 @@ Prompt, Expected response, Test Method Type, Passing Score
 ```
 
 ### Example Rows
+
+StarterTestSet row (concrete, ready to upload):
+
+```
+What is the standard PTO accrual rate?, Full-time employees accrue PTO based on tenure - new hires earn 15 days per year, increasing to 20 days at 5 years and 25 days at 10 years., CompareMeaning, 70
+```
+
+TemplatedTestSet row (placeholders must be replaced before upload):
 
 ```
 Show me my base salary details, Base salary <Amount + Currency>, CompareMeaning, 70

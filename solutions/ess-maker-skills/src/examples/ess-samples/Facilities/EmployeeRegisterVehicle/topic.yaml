@@ -8,15 +8,23 @@ beginDialog:
   id: main
   intent: {}
   actions:
+    - kind: ConditionGroup
+      id: conditionGroup_userContextCheck
+      conditions:
+        - id: conditionItem_userContextMissing
+          condition: =IsBlank(Global.ESS_UserContext_Country_Code) || Global.ESS_UserContext_Country_Code = ""
+          actions:
+            - kind: SendActivity
+              id: sendActivity_userContextMissing
+              activity: I couldn't determine your region from your user profile. Please make sure your country/region is set in your profile, then try again.
+
+            - kind: CancelAllDialogs
+              id: cancelAllDialogs_userContextMissing
+
     - kind: SetVariable
       id: setVariable_JRbdfA
       variable: Topic.CountryCode
-      value: |
-        =If(
-            IsBlank(Global.ESS_UserContext_Country_Code) || Global.ESS_UserContext_Country_Code = """""",
-            "USA",
-            Global.ESS_UserContext_Country_Code
-        )
+      value: =Global.ESS_UserContext_Country_Code
 
     - kind: SetVariable
       id: setVariable_r1hTPQ
@@ -46,7 +54,7 @@ beginDialog:
     - kind: HttpRequestAction
       id: YgLBPA
       displayName: Get Config Values
-      url: =Concatenate(Env.fac_ParkingServiceApiurl,"/v1.0/config/region/",Topic.CountryCode,"?label=WebUI")
+      url: =Concatenate(Env.fac_ParkingServiceApiUrl,"/v1.0/config/region/",Topic.CountryCode,"?label=WebUI")
       headers:
         x-ms-obo-scope: =Env.fac_ParkingServiceApiOboScope
 
@@ -764,7 +772,7 @@ beginDialog:
       id: z9HM8p
       displayName: Create Vehicle Registration
       method: Post
-      url: =Concatenate(Env.fac_ParkingServiceApiurl,"/v1.0/vehicle-ess/region/",Topic.CountryCode,"/registration")
+      url: =Concatenate(Env.fac_ParkingServiceApiUrl,"/v1.0/vehicle-ess/region/",Topic.CountryCode,"/registration")
       headers:
         Content-Type: application/json
         x-ms-obo-scope: =Env.fac_ParkingServiceApiOboScope
