@@ -5,9 +5,9 @@ name: CI
 
 on:
   push:
-    branches: [ "main", "main2" ]
+    branches: [ "main" ]
   pull_request:
-    branches: [ "main", "main2" ]
+    branches: [ "main" ]
 
 jobs:
   lint:
