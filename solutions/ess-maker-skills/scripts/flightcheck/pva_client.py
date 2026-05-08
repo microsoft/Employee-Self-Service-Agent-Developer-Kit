@@ -28,7 +28,8 @@ except ImportError:
 
 CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d"
 
-# PVA app ID — used as the token audience for the Island Gateway API
+# 96ff4394-9197-43aa-b393-6a41652e21f8 is the well-known Power Virtual Agents
+# first-party app ID, used as the token audience for the Island Gateway API.
 PVA_SCOPE = "96ff4394-9197-43aa-b393-6a41652e21f8/.default"
 
 # BAP API for discovering the gateway URL
