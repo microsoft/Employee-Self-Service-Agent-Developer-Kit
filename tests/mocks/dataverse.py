@@ -1,0 +1,369 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+"""
+Mock response builders for the Dataverse Web API v9.
+
+Used by unit tests for any module that calls Dataverse (auth.py,
+discover.py, fetch_and_setup.py, push.py, extract.py, setup.py,
+checkpoint.py, plus the FlightCheck checks that read environment
+variable values).
+
+Each builder returns a (url, json_body, status, headers) tuple suitable
+for handing to `responses.add(...)` directly. The intent is that a test
+reads:
+
+    from tests.mocks import dataverse as dv
+
+    @responses.activate
+    def test_query_environment_variables(fake_dataverse_url, fake_token):
+        responses.add(**dv.query(
+            base_url=fake_dataverse_url,
+            entity_set="environmentvariabledefinitions",
+            records=[dv.env_var_def(schema_name="EmployeeContextRequestAccountName")],
+        ))
+        ...
+
+without having to remember OData URL syntax or the exact pagination
+shape.
+
+⚠️ Status: these builders are grounded in the production code's own
+assumptions about response shape (see citations on each function) plus
+public Dataverse Web API docs. Cassettes captured via
+tests/captures/record_dataverse_*.py supersede this when they disagree —
+update the builders to match the cassette.
+
+References:
+- Dataverse Web API: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/perform-operations-web-api
+- WhoAmI function: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/use-web-api-functions
+- Production source: solutions/ess-maker-skills/scripts/auth.py
+"""
+
+from __future__ import annotations
+
+from typing import Any, Iterable, Mapping
+from urllib.parse import quote
+
+# Stable mock identity values, importable so test code never has to repeat them.
+MOCK_USER_ID = "00000000-0000-0000-0000-000000002222"
+MOCK_BUSINESS_UNIT_ID = "00000000-0000-0000-0000-000000004444"
+MOCK_ORGANIZATION_ID = "00000000-0000-0000-0000-000000005555"
+MOCK_BOT_ID = "00000000-0000-0000-0000-000000003333"
+
+DATAVERSE_API_VERSION = "v9.2"
+
+
+# ────────────────────────────────────────────────────────────────────────
+# URL helpers
+# ────────────────────────────────────────────────────────────────────────
+
+def _api(base_url: str, path: str) -> str:
+    """Build a Dataverse Web API URL: base + /api/data/v9.2/ + path."""
+    return f"{base_url.rstrip('/')}/api/data/{DATAVERSE_API_VERSION}/{path.lstrip('/')}"
+
+
+def _query_url(
+    base_url: str,
+    entity_set: str,
+    *,
+    select: str | None = None,
+    filter_expr: str | None = None,
+    top: int | None = None,
+) -> str:
+    """Build an OData query URL. Mirrors the shape auth.query_all builds."""
+    url = _api(base_url, entity_set)
+    qs: list[str] = []
+    if select:
+        qs.append(f"$select={quote(select, safe=',')}")
+    if filter_expr:
+        qs.append(f"$filter={quote(filter_expr, safe='')}")
+    if top is not None:
+        qs.append(f"$top={top}")
+    if qs:
+        url += "?" + "&".join(qs)
+    return url
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Response payload builders (functions that return dicts, not full registrations)
+# ────────────────────────────────────────────────────────────────────────
+
+def who_am_i(
+    *,
+    user_id: str = MOCK_USER_ID,
+    business_unit_id: str = MOCK_BUSINESS_UNIT_ID,
+    organization_id: str = MOCK_ORGANIZATION_ID,
+) -> dict[str, Any]:
+    """Build a WhoAmI() response.
+
+    Cited consumers:
+      - solutions/ess-maker-skills/scripts/flightcheck/pp_admin_client.py:240
+        (derive_environment_id reads OrganizationId)
+      - kit setup flows that use UserId for ownership checks
+
+    Schema reference: https://learn.microsoft.com/dotnet/api/microsoft.crm.sdk.messages.whoamiresponse
+    """
+    return {
+        "@odata.context": "$metadata#Microsoft.Dynamics.CRM.WhoAmIResponse",
+        "BusinessUnitId": business_unit_id,
+        "UserId": user_id,
+        "OrganizationId": organization_id,
+    }
+
+
+def bot(
+    *,
+    bot_id: str = MOCK_BOT_ID,
+    name: str = "Mock ESS Agent",
+    schema_name: str = "msdyn_copilotforemployeeselfservice",
+    is_managed: bool = True,
+    extra_fields: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a single bots() entity record.
+
+    Production consumers read at minimum: botid, name, schemaname, ismanaged.
+    """
+    record = {
+        "@odata.etag": 'W/"123456789"',
+        "botid": bot_id,
+        "name": name,
+        "schemaname": schema_name,
+        "ismanaged": is_managed,
+        "componentstate": 0,  # 0 = Published
+    }
+    if extra_fields:
+        record.update(extra_fields)
+    return record
+
+
+def bot_component(
+    *,
+    component_id: str | None = None,
+    name: str = "MockTopic",
+    schema_name: str = "msdyn_mocktopic",
+    component_type: int = 9,  # 9 = topic; full table at https://learn.microsoft.com/power-platform/admin/manage-bots#bot-component-types
+    parent_bot_id: str = MOCK_BOT_ID,
+    content: str = "kind: Topic\nname: MockTopic\n",
+    extra_fields: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a single botcomponents() entity record.
+
+    Cited consumers:
+      - solutions/ess-maker-skills/scripts/fetch_and_setup.py — downloads
+        botcomponentid, name, content
+      - solutions/ess-maker-skills/scripts/push.py — diffs componentstate,
+        ismanaged, content
+    """
+    record = {
+        "@odata.etag": 'W/"123456789"',
+        "botcomponentid": component_id or f"00000000-0000-0000-0000-{name[:12]:0>12}",
+        "name": name,
+        "schemaname": schema_name,
+        "componenttype": component_type,
+        "_parentbotid_value": parent_bot_id,
+        "componentstate": 0,
+        "ismanaged": False,
+        "content": content,
+    }
+    if extra_fields:
+        record.update(extra_fields)
+    return record
+
+
+def env_var_def(
+    *,
+    definition_id: str | None = None,
+    schema_name: str = "EmployeeContextRequestAccountName",
+    display_name: str = "Mock Env Var",
+    type_value: int = 100000000,  # String
+) -> dict[str, Any]:
+    """Build a single environmentvariabledefinitions record.
+
+    Cited consumers:
+      - flightcheck/checks/workday.py — reads schemaname, definitionid
+        to look up matching environmentvariablevalues
+    """
+    return {
+        "@odata.etag": 'W/"1"',
+        "environmentvariabledefinitionid": definition_id
+        or "00000000-0000-0000-0000-000000006001",
+        "schemaname": schema_name,
+        "displayname": display_name,
+        "type": type_value,
+    }
+
+
+def env_var_value(
+    *,
+    value_id: str | None = None,
+    definition_id: str = "00000000-0000-0000-0000-000000006001",
+    schema_name: str = "EmployeeContextRequestAccountName",
+    value: str = "ISU_MOCK",
+) -> dict[str, Any]:
+    """Build a single environmentvariablevalues record."""
+    return {
+        "@odata.etag": 'W/"1"',
+        "environmentvariablevalueid": value_id
+        or "00000000-0000-0000-0000-000000007001",
+        "_environmentvariabledefinitionid_value": definition_id,
+        "schemaname": schema_name,
+        "value": value,
+    }
+
+
+def collection(
+    records: Iterable[Mapping[str, Any]],
+    *,
+    next_link: str | None = None,
+) -> dict[str, Any]:
+    """Wrap a list of records in the OData v4 collection envelope.
+
+    Pass next_link to test pagination — auth.query_all follows
+    @odata.nextLink until it stops being present.
+    """
+    payload: dict[str, Any] = {
+        "@odata.context": "$metadata#collection",
+        "value": list(records),
+    }
+    if next_link:
+        payload["@odata.nextLink"] = next_link
+    return payload
+
+
+# ────────────────────────────────────────────────────────────────────────
+# `responses` registration helpers
+#
+# Each returns a kwargs dict ready for `responses.add(**foo(...))`. Tests
+# that need fine-grained control can build payloads via the functions
+# above and call `responses.add(...)` directly.
+# ────────────────────────────────────────────────────────────────────────
+
+def query(
+    *,
+    base_url: str,
+    entity_set: str,
+    records: Iterable[Mapping[str, Any]] | None = None,
+    select: str | None = None,
+    filter_expr: str | None = None,
+    next_link: str | None = None,
+    status: int = 200,
+) -> dict[str, Any]:
+    """Mock a paginated table query (auth.query_all).
+
+    The returned URL includes the OData query string so `responses`
+    matches strictly. Tests that need looser matching (e.g. the actual
+    URL the production code builds may have an extra `&pagesize=...`)
+    can build the kwargs by hand using `_query_url` + `collection`.
+    """
+    return {
+        "method": "GET",
+        "url": _query_url(base_url, entity_set, select=select, filter_expr=filter_expr),
+        "json": collection(records or [], next_link=next_link),
+        "status": status,
+    }
+
+
+def whoami(*, base_url: str, **kwargs: Any) -> dict[str, Any]:
+    """Mock the WhoAmI() function call."""
+    return {
+        "method": "GET",
+        "url": _api(base_url, "WhoAmI()"),
+        "json": who_am_i(**kwargs),
+        "status": 200,
+    }
+
+
+def get_bot(*, base_url: str, bot_id: str = MOCK_BOT_ID, **kwargs: Any) -> dict[str, Any]:
+    """Mock GET bots({id}) — single-record retrieval."""
+    return {
+        "method": "GET",
+        "url": _api(base_url, f"bots({bot_id})"),
+        "json": bot(bot_id=bot_id, **kwargs),
+        "status": 200,
+    }
+
+
+def discover_tenant_challenge(
+    *,
+    base_url: str,
+    tenant_id: str = "00000000-0000-0000-0000-000000001111",
+    quoted: bool = False,
+    include_resource_id: bool = False,
+) -> dict[str, Any]:
+    """Mock the auth.discover_tenant() probe.
+
+    auth.discover_tenant sends an unauthenticated GET to /api/data/v9.2/
+    and parses the WWW-Authenticate header in the 401 response to extract
+    the tenant ID. The mock has to return the right header shape or
+    discover_tenant falls back to the literal string "organizations".
+
+    Three header shapes are observed:
+
+      1. Bearer authorization_uri=https://login.microsoftonline.com/<tenant>
+         (unquoted, alone) — what Microsoft actually sends for Dataverse;
+         the kit's discover_tenant parses this correctly.
+
+      2. Bearer authorization_uri=https://login.microsoftonline.com/<tenant>,
+         resource_id=https://<host>
+         (unquoted, with resource_id) — also a valid Microsoft format;
+         kit handles it correctly because the comma stops the regex.
+
+      3. Bearer authorization_uri="https://login.microsoftonline.com/<tenant>"
+         (quoted form, RFC 7235 style) — the kit's regex
+         `login\\.microsoftonline\\.com/([^/]+)` over-captures the closing
+         quote and returns '<tenant>"' as the tenant id. See the
+         regression test in tests/test_mocks_dataverse.py and the TODO
+         in solutions/ess-maker-skills/scripts/auth.py:110.
+
+    Defaults to shape 1 (unquoted, alone) since that's what Dataverse sends
+    in practice. Pass `quoted=True` to exercise the regex bug; pass
+    `include_resource_id=True` to add a `, resource_id=...` suffix.
+
+    See solutions/ess-maker-skills/scripts/auth.py:99-113.
+    """
+    q = '"' if quoted else ""
+    parts = [f"authorization_uri={q}https://login.microsoftonline.com/{tenant_id}{q}"]
+    if include_resource_id:
+        parts.append(f"resource_id={q}{base_url}{q}")
+    header = "Bearer " + ", ".join(parts)
+
+    return {
+        "method": "GET",
+        "url": _api(base_url, ""),  # trailing slash matters
+        "status": 401,
+        "headers": {
+            "WWW-Authenticate": header,
+        },
+    }
+
+
+def auth_expired(
+    *, base_url: str, entity_set: str = "bots"
+) -> dict[str, Any]:
+    """Mock a 401 on a Dataverse query — used to test AuthExpiredError raising."""
+    return {
+        "method": "GET",
+        "url": _api(base_url, entity_set),
+        "json": {
+            "error": {
+                "code": "0x80048306",
+                "message": "Authentication failed.",
+            }
+        },
+        "status": 401,
+    }
+
+
+def forbidden(*, base_url: str, entity_set: str) -> dict[str, Any]:
+    """Mock a 403 — used to test 'managed component' write rejection."""
+    return {
+        "method": "PATCH",
+        "url": _api(base_url, f"{entity_set}(00000000-0000-0000-0000-000000003333)"),
+        "json": {
+            "error": {
+                "code": "0x80060888",
+                "message": "Cannot modify a managed component.",
+            }
+        },
+        "status": 403,
+    }
