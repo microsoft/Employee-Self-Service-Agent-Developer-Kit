@@ -1,0 +1,64 @@
+[project]
+name = "ess-maker-kit-tests"
+version = "0.0.0"
+description = "Internal test suite for the ESS Maker Kit. Not packaged for distribution."
+requires-python = ">=3.11"
+
+# Runtime deps live in solutions/ess-maker-skills/scripts/requirements.txt and
+# solutions/ess-maker-skills/src/mcp/{workday,servicenow}/requirements.txt.
+# This file declares only the *test* dependencies needed by the suite under
+# tests/. Install with: pip install -e .[test]
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0,<9.0",
+    "pytest-cov>=5.0,<7.0",
+    "vcrpy>=6.0,<8.0",
+    "responses>=0.25,<1.0",
+    "respx>=0.21,<1.0",            # for httpx-based code (src/mcp/workday/client.py)
+    "PyYAML>=6.0,<7.0",
+]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+# Surface the production source on sys.path so tests can import without a packaging step.
+# Order matters — the more specific paths come first so per-script imports resolve.
+pythonpath = [
+    "solutions/ess-maker-skills/scripts",
+    "solutions/ess-maker-skills/src/mcp/workday",
+    "solutions/ess-maker-skills/src/mcp/servicenow",
+]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--strict-config",
+    "--showlocals",
+]
+markers = [
+    "vcr: tests that replay a VCR.py cassette (cassette path resolved from test name)",
+    "live: tests that make real network calls (skipped by default; opt in with --run-live)",
+]
+filterwarnings = [
+    "error",
+    # MSAL emits a DeprecationWarning when running under recent Python; not actionable here.
+    "ignore::DeprecationWarning:msal.*",
+]
+
+[tool.coverage.run]
+source = [
+    "solutions/ess-maker-skills/scripts",
+    "solutions/ess-maker-skills/src/mcp",
+]
+omit = [
+    "*/__pycache__/*",
+    "tests/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
