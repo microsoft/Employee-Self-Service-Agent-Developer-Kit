@@ -8,10 +8,10 @@ The Employee Self-Service agent is built on top of Microsoft 365 Copilot. Users 
 
 |Role                          |Workload/tools |Licensing and access |
 |------------------------------|---------------|---------------------|
-|Users                         |Microsoft 365 Copilot |[Microsoft 365 Copilot](../microsoft-365-copilot-licensing.md) |
+|Users                         |Microsoft 365 Copilot |[Microsoft 365 Copilot](https://learn.microsoft.com/microsoft-365-copilot/microsoft-365-copilot-licensing) |
 |Users                         |Microsoft Teams |[Manage user access to Microsoft Teams](/microsoftteams/user-access) |
 |Environment admins and makers |Copilot Studio  |[Copilot Studio licensing and subscriptions](/microsoft-copilot-studio/requirements-licensing-subscriptions) |
-|Environment admins and makers |Microsoft 365 Copilot |[Microsoft 365 Copilot](../microsoft-365-copilot-licensing.md) |
+|Environment admins and makers |Microsoft 365 Copilot |[Microsoft 365 Copilot](https://learn.microsoft.com/microsoft-365-copilot/microsoft-365-copilot-licensing) |
 |Environment admins and makers |Teams          |[Manage user access to Microsoft Teams](/microsoftteams/user-access) |
 
 ## Set up Copilot Studio capacity

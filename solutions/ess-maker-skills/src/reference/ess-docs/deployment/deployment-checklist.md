@@ -88,11 +88,9 @@ This article has a checklist to help you set up and deploy the Employee Self-Ser
 - Start with HR or IT FAQs (for example, "How do I update my benefits?").
 - Test responses in Copilot Studio's test bot.
 
-### Knowledge source Documentation
+### Knowledge source documentation
 
-|Article                                           |Purpose                         |
-|--------------------------------------------------|--------------------------------|
-|[Install Employee Self-Service Agent](install.md) | Covers the installation steps. |
+Follow the in-product flow in Copilot Studio to add a knowledge source: open your agent, select **Knowledge** in the left nav, then **+ Add knowledge** and choose your source type (SharePoint, OneDrive, public website, or uploaded file). For deeper guidance on configuring sources, see the [Copilot Studio knowledge sources documentation](https://learn.microsoft.com/microsoft-copilot-studio/knowledge-add-sharepoint-onedrive).
 
 ## Step 5: Customize Topics 
 
