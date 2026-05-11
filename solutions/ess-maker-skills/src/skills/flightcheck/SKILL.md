@@ -11,7 +11,7 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 
 ## Start
 
-Read `my/config.json` to confirm setup is complete and get the agent context.
+Read `.local/config.json` to confirm setup is complete and get the agent context.
 
 If setup is not complete, show:
 
@@ -75,14 +75,14 @@ Then open the HTML report in the user's default browser. Use Python to
 handle paths with spaces correctly:
 
 ```
-python -c "import webbrowser, os; webbrowser.open('file:///' + os.path.abspath('my/flightcheck/report.html').replace(os.sep, '/'))"
+python -c "import webbrowser, os; webbrowser.open('file:///' + os.path.abspath('workspace/flightcheck/report.html').replace(os.sep, '/'))"
 ```
 
 ---
 
 ## Step 3: Read results and present findings
 
-Read `my/flightcheck/results.json`. Build the output below using the data.
+Read `workspace/flightcheck/results.json`. Build the output below using the data.
 You MUST follow this exact format every time. Do not improvise, add prose
 between sections, or skip any section.
 
@@ -101,7 +101,7 @@ Always show this first:
 | ℹ️ Not Configured | {not_configured} |
 | **Total** | **{total}** |
 
-*Completed in {duration_secs}s — [View full report](my/flightcheck/report.html)*
+*Completed in {duration_secs}s — [View full report](workspace/flightcheck/report.html)*
 ```
 
 Where VERDICT_EMOJI and VERDICT_TEXT are:
@@ -210,7 +210,7 @@ python scripts/flightcheck/cli.py --scope {SCOPE}
 Open the updated report:
 
 ```
-Start-Process "my/flightcheck/report.html"
+Start-Process "workspace/flightcheck/report.html"
 ```
 
 Then present the new results using the same format (3a → 3b → 3c).

@@ -6,7 +6,7 @@ files AND pushing changes to Copilot Studio via push.
 
 ## CRITICAL — Local Files Are a Working Copy
 
-The files in `my/agents/{slug}/evaluations/` are a **working copy** of the
+The files in `workspace/agents/{slug}/evaluations/` are a **working copy** of the
 evaluation test sets deployed in Copilot Studio. Editing a local file is NOT
 the same as updating the live test case. You MUST push the changes via
 `push.py` for them to take effect. **NEVER stop after editing only the local
@@ -14,14 +14,14 @@ file.**
 
 ## Rules
 
-- ALWAYS read `my/config.json` to get the agent folder, slug, and schema name.
+- ALWAYS read `.local/config.json` to get the agent folder, slug, and schema name.
 - ALWAYS checkpoint before making changes.
 - ALWAYS push changes to Copilot Studio after editing.
 - **TRACK PROGRESS**: Use the todo list tool to track your progress.
 
 ## Step 1: Identify the Test Set / Test Cases
 
-Read `my/config.json` to get `agent.folder`.
+Read `.local/config.json` to get `agent.folder`.
 
 List all files in `{agent.folder}/evaluations/`. Two kinds exist:
 

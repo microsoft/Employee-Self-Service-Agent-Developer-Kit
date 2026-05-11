@@ -138,7 +138,7 @@ No action needed. Proceed to 1.3.
 
 ## 1.3 — Save config
 
-Write `my/connect/servicenow/config.json`:
+Write `.local/connect/servicenow/config.json`:
 
 ```json
 {
@@ -245,7 +245,7 @@ query_table(table="sys_user", query="user_name=admin", fields="sys_id,user_name,
 
 **If the query succeeds** (returns at least one record):
 
-Update `my/connect/servicenow/tasks.md` — change step 1 from
+Update `.local/connect/servicenow/tasks.md` — change step 1 from
 `- [ ]` to `- [x]`.
 
 **Message:**
@@ -286,7 +286,7 @@ Route by SNOW_AUTH for the Power Platform connector:
   Read `src/skills/connect/servicenow/step2-oauth2.md` and follow it.
 
 - If SNOW_AUTH is `basic`:
-  Update step 2 from `- [ ]` to `- [x]` in `my/connect/servicenow/tasks.md`.
+  Update step 2 from `- [ ]` to `- [x]` in `.local/connect/servicenow/tasks.md`.
   Read `src/skills/connect/servicenow/step3-basic.md` and follow it.
 
 When the Power Platform flow completes (step 4 finishes), check

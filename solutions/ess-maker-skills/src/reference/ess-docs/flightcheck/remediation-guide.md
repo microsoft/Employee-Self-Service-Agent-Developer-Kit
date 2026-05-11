@@ -44,7 +44,7 @@ verification.
 ### ENV-001: Environment not found
 **Root cause:** Environment ID couldn't be derived, or user lacks admin access.
 **Fix:**
-1. Confirm the Dataverse URL in `my/config.json` is correct
+1. Confirm the Dataverse URL in `.local/config.json` is correct
 2. Ensure you have Environment Admin or PP Admin role
 3. Re-run `/setup` if the URL is wrong
 **Verify:** Re-run `/flightcheck --scope environment`

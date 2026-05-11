@@ -6,7 +6,7 @@ workflow both locally AND from the live environment via push.
 
 ## CRITICAL — Local Files Are a Working Copy
 
-The files in `my/agents/{slug}/` are a **working copy** of what's deployed in
+The files in `workspace/agents/{slug}/` are a **working copy** of what's deployed in
 Copilot Studio. Deleting local files is NOT the same as deleting the workflow
 from the live agent. You MUST push the deletion to Copilot Studio via
 `push.py` for it to take effect. **NEVER stop after deleting only the local
@@ -14,7 +14,7 @@ files.**
 
 ## Rules
 
-- ALWAYS read `my/config.json` to get the agent folder, slug, and schema name.
+- ALWAYS read `.local/config.json` to get the agent folder, slug, and schema name.
 - ALWAYS checkpoint before deleting anything.
 - ALWAYS push the deletion to Copilot Studio after removing local files.
 - NEVER delete without confirming with the user first.
@@ -24,7 +24,7 @@ files.**
 
 ## Step 1: Identify the Workflow
 
-Read `my/config.json` to get `agent.folder` and `agent.slug`.
+Read `.local/config.json` to get `agent.folder` and `agent.slug`.
 
 List the workflow folders in `{agent.folder}/workflows/`. Each workflow is a
 folder containing `metadata.yml` and `workflow.json`.

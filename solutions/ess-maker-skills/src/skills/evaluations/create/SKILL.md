@@ -7,7 +7,7 @@ via Dataverse. Test cases are stored as `botcomponent` records with
 
 ## Rules
 
-- ALWAYS read `my/config.json` to get the agent folder name and slug.
+- ALWAYS read `.local/config.json` to get the agent folder name and slug.
 - ALWAYS read all topic files in the agent folder to understand what the agent does before generating tests.
 - Write evaluation files to `{agent.folder}/evaluations/` as `.mcs.yml` YAML files.
 - Use the existing starter test sets in `src/examples/ess-samples/ESSEvaluationSamples/StarterTestSets/` as exemplar patterns for each test category.
@@ -18,7 +18,7 @@ via Dataverse. Test cases are stored as `botcomponent` records with
 
 ## Step 1: Read Agent Context
 
-1. Read `my/config.json` to get `agent.folder` and `agent.slug`.
+1. Read `.local/config.json` to get `agent.folder` and `agent.slug`.
 2. Read ALL topic files in `{agent.folder}/topics/` — every `.mcs.yml` file.
 3. Classify each topic:
 

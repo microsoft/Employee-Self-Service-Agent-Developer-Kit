@@ -6,14 +6,14 @@ local working copy AND pushing the change to the live environment via push.
 
 ## CRITICAL — Local Files Are a Working Copy
 
-The files in `my/agents/{slug}/` are a **working copy** of what's deployed in
+The files in `workspace/agents/{slug}/` are a **working copy** of what's deployed in
 Copilot Studio. Editing a local file is NOT the same as updating the live
 workflow. You MUST push the changes to Copilot Studio via `push.py` for them
 to take effect. **NEVER stop after editing only the local file.**
 
 ## Rules
 
-- ALWAYS read `my/config.json` to get the agent folder, slug, and schema name.
+- ALWAYS read `.local/config.json` to get the agent folder, slug, and schema name.
 - ALWAYS read existing workflow files in the user's agent folder as schema examples before editing JSON.
 - ALWAYS read the agent's `connectionreferences.mcs.yml` to verify connectors.
 - ALWAYS checkpoint before making changes.
@@ -22,7 +22,7 @@ to take effect. **NEVER stop after editing only the local file.**
 
 ## Step 1: Identify the Workflow
 
-Read `my/config.json` to get `agent.folder` and `agent.slug`.
+Read `.local/config.json` to get `agent.folder` and `agent.slug`.
 
 List workflow folders in `{agent.folder}/workflows/`. Each contains
 `metadata.yml` and `workflow.json`.

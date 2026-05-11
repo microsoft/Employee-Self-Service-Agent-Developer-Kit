@@ -9,7 +9,7 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 **Do NOT show internal variable names or assignments to the user.** Never
 display text like "INSTANCE_NAME = ..." or "PACK_NAME = ..." in chat.
 
-Read `my/connect/servicenow/config.json` to restore INSTANCE_NAME,
+Read `.local/connect/servicenow/config.json` to restore INSTANCE_NAME,
 SNOW_USAGE (from `usage`), TENANT_ID (from `certificate.tenantId`),
 APP_A_CLIENT_ID (from `certificate.appAClientId`),
 APP_B_CLIENT_ID (from `certificate.appBClientId`), and
@@ -30,7 +30,7 @@ Otherwise (this is a resumed session), prompt for it now via
 ```
 
 Save the answer as CERT_PASSWORD (session memory only — do not write
-to `my/connect/servicenow/config.json`).
+to `.local/connect/servicenow/config.json`).
 
 ---
 
@@ -214,10 +214,10 @@ Go back to section 3.2 with CURRENT_PACK set to `hrsd`.
 
 **Otherwise (single pack, or second pack just finished):**
 
-Update `my/connect/servicenow/tasks.md` — change step 3 from
+Update `.local/connect/servicenow/tasks.md` — change step 3 from
 `- [ ]` to `- [x]`.
 
-Update `my/connect/servicenow/config.json` — set the status of each
+Update `.local/connect/servicenow/config.json` — set the status of each
 installed pack from `"pending"` to `"installed"` in the `packs` object.
 
 **Message:**
