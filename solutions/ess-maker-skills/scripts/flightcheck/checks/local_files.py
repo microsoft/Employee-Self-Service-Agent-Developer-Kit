@@ -12,6 +12,8 @@ marked as "NotConfigured" because it had no access to the actual files.
 import re
 from pathlib import Path
 
+import yaml
+
 from ..runner import CheckResult, Status, Priority
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
@@ -81,6 +83,9 @@ def _check_single_agent(agent_path: Path, agent_name: str, runner=None) -> list[
 
     # ---- Variables ----
     results.extend(_check_variables(agent_path, label))
+
+    # ---- Topic description quality ----
+    results.extend(_check_topic_descriptions(agent_path, label, runner, agent_name))
 
     # ---- Template configs ----
     results.extend(_check_template_configs(agent_path, label))
@@ -267,6 +272,238 @@ def _check_variables(agent_path: Path, label: str) -> list[CheckResult]:
         remediation="Create User Context variables for employee data." if not var_files else "",
         doc_link=f"{DOC_BASE}/customize",
     ))
+
+    return results
+
+
+# Minimum word count for a useful topic description
+_MIN_DESCRIPTION_WORDS = 20
+
+# System topics that don't use AI-based routing (no description needed).
+# Match against the exact filename stem (without ".mcs.yml") so we don't
+# accidentally skip topics whose filename merely contains one of these words
+# (e.g. "handle-checkout-error.mcs.yml" must not match "on-error").
+# Both `log-telemetry` and `log-telemetry-event` are included since different
+# ESS template versions use either name.
+_SYSTEM_TOPIC_STEMS = {
+    "conversation-start",
+    "on-error",
+    "reset-conversation",
+    "log-telemetry",
+    "log-telemetry-event",
+    "microsoft-self-help",
+    "response-preparation",
+}
+
+# Placeholder patterns are split into two groups because the matching loops
+# below use different case-sensitivity rules:
+#
+# _PLACEHOLDER_PATTERNS_INSENSITIVE: bracketed/markup forms and full phrases
+#   that are unambiguous markers regardless of how they're cased.
+# _PLACEHOLDER_PATTERNS_SENSITIVE: all-caps marker forms that authors actually
+#   leave behind (TODO:, TBD, PLACEHOLDER). These MUST stay case-sensitive —
+#   matching them under re.IGNORECASE would false-flag legitimate sentences
+#   like "this topic acts as a placeholder until ..." or "today's todo list".
+_PLACEHOLDER_PATTERNS_INSENSITIVE = [
+    r"\[add\s+keywords",
+    r"\[add\s+.*here\]",
+    r"\[describe",
+    r"\[placeholder",
+    r"<placeholder>",
+    r"describe\s+this\s+topic",
+    r"add\s+your\s+description",
+]
+_PLACEHOLDER_PATTERNS_SENSITIVE = [
+    r"\bTODO:",
+    r"\[TODO\]",
+    r"\bTBD\b",
+    r"\bPLACEHOLDER\b",
+]
+
+
+def _friendly_filename(name: str) -> str:
+    """Convert a Dataverse topic name to the local filename stem (matching extract.py logic)."""
+    raw = re.sub(r"^\[.*?\]\s*[-\u2013\u2014]\s*", "", name)
+    slug = raw.strip().replace("_", "-")
+    slug = re.sub(r"[^a-zA-Z0-9\s-]", "", slug)
+    slug = re.sub(r"[\s]+", "-", slug)
+    slug = re.sub(r"-+", "-", slug).strip("-").lower()
+    return slug
+
+
+def _get_disabled_topic_names(runner, agent_name: str) -> set[str]:
+    """Query Dataverse for disabled topics and return their local filenames (lowercased)."""
+    if not runner or not getattr(runner, 'dv_token', None) or not getattr(runner, 'env_url', None):
+        return set()
+
+    # Find botId from config. Prefer the already-parsed runner.config attached
+    # by cli.py — re-reading from disk hardcodes the config path and breaks
+    # whenever the kit's layout changes (regression after the folder reorg
+    # moved my/config.json to .local/config.json).
+    config = getattr(runner, "config", None) or {}
+    bot_id = None
+    for agent in config.get("agents", []):
+        if agent.get("slug") == agent_name:
+            bot_id = agent.get("botId")
+            break
+    if not bot_id:
+        return set()
+
+    try:
+        from auth import query_all
+        # componenttype 9 = Topic/Dialog, statecode 1 = Inactive/Disabled
+        components = query_all(
+            runner.env_url, runner.dv_token,
+            "botcomponents",
+            "name,schemaname,statecode",
+            filter_expr=f"_parentbotid_value eq '{bot_id}' and componenttype eq 9 and statecode eq 1",
+        )
+        # Convert Dataverse names to local filenames for matching
+        disabled = set()
+        for c in components:
+            name = c.get("name", "")
+            if name:
+                disabled.add(_friendly_filename(name))
+        return disabled
+    except Exception:
+        return set()
+
+
+def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_name: str = "") -> list[CheckResult]:
+    """CONFIG-014: Check that topic descriptions are specific enough for AI routing."""
+    results = []
+    topics_dir = agent_path / "topics"
+
+    if not topics_dir.exists():
+        results.append(CheckResult(
+            checkpoint_id="CONFIG-014", category=f"Topics ({label})",
+            priority=Priority.MEDIUM.value, status=Status.SKIPPED.value,
+            description=f"{label}: Topic description quality",
+            result="Topics directory not found",
+        ))
+        return results
+
+    too_short: list[str] = []
+    has_placeholder: list[str] = []
+    parse_errors: list[str] = []
+    checked = 0
+
+    # Query Dataverse for disabled topics to skip them
+    disabled_topics = _get_disabled_topic_names(runner, agent_name)
+
+    for tf in sorted(topics_dir.glob("*.mcs.yml")):
+        # Match the exact filename stem against the system-topic set — a
+        # substring/regex match would skip legitimate topics whose names
+        # merely contain one of these words.
+        stem = tf.name.replace(".mcs.yml", "")
+        if stem in _SYSTEM_TOPIC_STEMS:
+            continue
+
+        # Skip disabled topics (match filename stem against Dataverse-derived names)
+        if stem.lower() in disabled_topics:
+            continue
+
+        content = tf.read_text(encoding="utf-8", errors="replace")
+
+        # Parse the YAML rather than regex-matching the modelDescription
+        # key: that way we correctly handle every valid scalar form
+        # (literal `|`, folded `>`, single/double-quoted, plain) and any
+        # trailing-comment / odd-indentation cases the regex would miss.
+        try:
+            doc = yaml.safe_load(content) or {}
+        except yaml.YAMLError as e:
+            parse_errors.append(f"{stem} ({e.__class__.__name__})")
+            continue
+
+        if not isinstance(doc, dict):
+            # Topic file isn't a YAML mapping — nothing to check.
+            continue
+
+        desc_raw = doc.get("modelDescription")
+        if desc_raw is None or not str(desc_raw).strip():
+            # No modelDescription — topic may use triggerQueries only.
+            continue
+
+        desc_text = str(desc_raw).strip()
+        checked += 1
+
+        # Get the display name shown in Copilot Studio
+        display_name_raw = doc.get("modelDisplayName")
+        if display_name_raw and str(display_name_raw).strip():
+            display_name = str(display_name_raw).strip()
+        else:
+            # Fall back to filename, formatted as a readable topic name
+            readable = stem.replace("-", " ").title()
+            display_name = f"{readable} (file: {tf.name})"
+
+        # Check for placeholder text. Two passes because the marker patterns
+        # (TODO:, TBD, PLACEHOLDER) MUST stay case-sensitive — matching them
+        # under IGNORECASE would re-introduce the false-flag bug from round 1.
+        is_placeholder = (
+            any(re.search(pat, desc_text, re.IGNORECASE) for pat in _PLACEHOLDER_PATTERNS_INSENSITIVE)
+            or any(re.search(pat, desc_text) for pat in _PLACEHOLDER_PATTERNS_SENSITIVE)
+        )
+        if is_placeholder:
+            has_placeholder.append(display_name)
+            continue
+
+        # Check word count
+        word_count = len(desc_text.split())
+        if word_count < _MIN_DESCRIPTION_WORDS:
+            too_short.append(f"{display_name} ({word_count} words)")
+
+    # Report YAML parse errors so they don't silently skip checks
+    if parse_errors:
+        results.append(CheckResult(
+            checkpoint_id="CONFIG-014", category=f"Topics ({label})",
+            priority=Priority.MEDIUM.value, status=Status.WARNING.value,
+            description=f"{label}: Topic YAML parse errors",
+            result=f"{len(parse_errors)} topic file(s) failed to parse: {', '.join(parse_errors[:5])}{'...' if len(parse_errors) > 5 else ''}",
+            remediation="Open the listed files and fix the YAML syntax errors so they can be validated.",
+        ))
+
+    if not checked:
+        results.append(CheckResult(
+            checkpoint_id="CONFIG-014", category=f"Topics ({label})",
+            priority=Priority.MEDIUM.value, status=Status.SKIPPED.value,
+            description=f"{label}: Topic description quality",
+            result="No AI-routed topics with modelDescription found",
+        ))
+        return results
+
+    # Report placeholder issues (higher severity)
+    if has_placeholder:
+        topic_list = "; ".join(has_placeholder[:5])
+        if len(has_placeholder) > 5:
+            topic_list += "..."
+        results.append(CheckResult(
+            checkpoint_id="CONFIG-014", category=f"Topics ({label})",
+            priority=Priority.MEDIUM.value, status=Status.FAILED.value,
+            description=f"{label}: Topic descriptions contain placeholders",
+            result=f"{len(has_placeholder)} topic(s) have placeholder text instead of a real description. Topics: {topic_list}",
+            remediation="Open these topics in Copilot Studio and replace the placeholder text in the Description field with specific trigger conditions and examples.",
+            doc_link=f"{DOC_BASE}/customize#customize-topics",
+        ))
+
+    # Report too-short descriptions
+    if too_short:
+        results.append(CheckResult(
+            checkpoint_id="CONFIG-014", category=f"Topics ({label})",
+            priority=Priority.MEDIUM.value, status=Status.WARNING.value,
+            description=f"{label}: Topic descriptions too short",
+            result=f"{len(too_short)} topic(s) under {_MIN_DESCRIPTION_WORDS} words: {', '.join(too_short[:5])}{'...' if len(too_short) > 5 else ''}",
+            remediation="Expand descriptions with trigger conditions, valid examples, and exclusion criteria for better routing.",
+            doc_link=f"{DOC_BASE}/customize#customize-topics",
+        ))
+
+    if not has_placeholder and not too_short:
+        results.append(CheckResult(
+            checkpoint_id="CONFIG-014", category=f"Topics ({label})",
+            priority=Priority.MEDIUM.value, status=Status.PASSED.value,
+            description=f"{label}: Topic description quality",
+            result=f"All {checked} AI-routed topic(s) have descriptions >= {_MIN_DESCRIPTION_WORDS} words with no placeholders",
+            doc_link=f"{DOC_BASE}/customize#customize-topics",
+        ))
 
     return results
 
