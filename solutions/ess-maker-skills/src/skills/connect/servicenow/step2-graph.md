@@ -14,7 +14,7 @@ chat. The user should only see Message blocks and tool output tables.
 **Do NOT ask the user any questions before reading azure/login.md in
 section 2.1.** Go directly to 2.1.
 
-Read `my/connect/servicenow/config.json` for INSTANCE_NAME and TENANT_ID
+Read `.local/connect/servicenow/config.json` for INSTANCE_NAME and TENANT_ID
 (if already captured from an earlier Entra login). If TENANT_ID is not
 in config, section 2.1 will collect it.
 
@@ -177,7 +177,7 @@ Note the **v2.0** endpoint — this differs from the Power Platform path.
 Extract `sys_id` from the response → save as OIDC_ENTITY_SYS_ID.
 
 **Immediately save OIDC_ENTITY_SYS_ID** to
-`my/connect/servicenow/config.json` under `graph.oidcEntitySysId`.
+`.local/connect/servicenow/config.json` under `graph.oidcEntitySysId`.
 
 **If the call fails**: retry once. If still fails, show the error and
 suggest manual creation in ServiceNow admin.
@@ -222,7 +222,7 @@ create_record(table="oidc_provider_configuration", data="{\"name\": \"Microsoft 
 Extract `sys_id` from the response → save as OIDC_CONFIG_SYS_ID.
 
 **Immediately save OIDC_CONFIG_SYS_ID** to
-`my/connect/servicenow/config.json` under `graph.oidcConfigSysId`.
+`.local/connect/servicenow/config.json` under `graph.oidcConfigSysId`.
 
 **If create returns 403**: fall back to querying for the built-in
 "Azure AD" config and updating it:
@@ -281,7 +281,7 @@ create_record(table="sys_user", data="{\"user_name\": \"{SP_OBJECT_ID}\", \"firs
 Extract `sys_id` from the response → save as GRAPH_USER_SYS_ID.
 
 **Immediately save GRAPH_USER_SYS_ID** to
-`my/connect/servicenow/config.json` under `graph.userSysId`.
+`.local/connect/servicenow/config.json` under `graph.userSysId`.
 
 ---
 
@@ -573,7 +573,7 @@ manually in ServiceNow:
 
 ## 2.9 — Save config and display results
 
-Update `my/connect/servicenow/config.json` — add or update the `graph`
+Update `.local/connect/servicenow/config.json` — add or update the `graph`
 object. Some fields may already be saved from incremental saves above;
 ensure all fields are present:
 

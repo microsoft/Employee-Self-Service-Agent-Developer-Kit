@@ -10,7 +10,7 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 
 **Do NOT show internal variable names or assignments to the user.**
 
-Read `my/connect/servicenow/config.json` for INSTANCE_NAME.
+Read `.local/connect/servicenow/config.json` for INSTANCE_NAME.
 
 ---
 
@@ -128,7 +128,7 @@ Wait for the user.
 
 ## 3.4 — Complete
 
-Update `my/connect/servicenow/config.json` — set
+Update `.local/connect/servicenow/config.json` — set
 `"graph"."status"` to `"connected"`.
 
 **Message:**
@@ -141,7 +141,7 @@ employee questions. The connector will sync articles automatically
 
 **End message.**
 
-Check `my/connect/servicenow/config.json` for `connectorType`. If it
+Check `.local/connect/servicenow/config.json` for `connectorType`. If it
 is `both` AND the Power Platform connector was already set up before
 this flow, stop here — everything is done.
 

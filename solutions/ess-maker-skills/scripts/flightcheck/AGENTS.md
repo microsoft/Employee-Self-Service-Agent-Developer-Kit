@@ -125,7 +125,7 @@ The `botcomponents` entity set stores agent components. Key facts:
 5. **Follow existing client patterns.** New API integrations should follow the
    same structure as `graph_client.py` / `pp_admin_client.py` / `pva_client.py`:
    - Class with `authenticate()` method
-   - Uses shared MSAL token cache at `my/.token_cache.bin`
+   - Uses shared MSAL token cache at `.local/.token_cache.bin`
    - Initialized in `cli.py`, attached to `runner`
    - Gracefully skips if auth fails (print warning, set to None)
 
@@ -148,7 +148,7 @@ attached as ad-hoc attributes in `cli.py`. Available attributes:
 | `runner.graph` | `GraphClient \| None` | Microsoft Graph client |
 | `runner.pp_admin` | `PowerPlatformAdminClient \| None` | BAP admin client |
 | `runner.pva` | `PVAClient \| None` | Island Gateway client |
-| `runner.config` | `dict` | Parsed `my/config.json` |
+| `runner.config` | `dict` | Parsed `.local/config.json` |
 
 Any of the client attributes may be `None` if authentication failed.
 Always check before using (e.g., `if not runner.graph: return skipped`).

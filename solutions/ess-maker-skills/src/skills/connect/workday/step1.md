@@ -76,7 +76,7 @@ If pip fails, try `python -m pip install -r src/mcp/workday/requirements.txt`.
 
 ## 1.3 — Save initial config
 
-Write `my/connect/workday/config.json`:
+Write `.local/connect/workday/config.json`:
 
 ```json
 {
@@ -300,7 +300,7 @@ Save as WD_OAUTH_TOKEN_URL.
 
 ### 1.7e — Update config with discovered state
 
-Update `my/connect/workday/config.json` — merge all discovered values:
+Update `.local/connect/workday/config.json` — merge all discovered values:
 
 ```json
 {
@@ -325,7 +325,7 @@ Update `my/connect/workday/config.json` — merge all discovered values:
 
 ## 1.8 — Show status and proceed
 
-Update `my/connect/workday/tasks.md` — change step 1 from
+Update `.local/connect/workday/tasks.md` — change step 1 from
 `- [ ]` to `- [x]`.
 
 Build a status summary from the detected state.
