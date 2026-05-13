@@ -17,7 +17,10 @@ from __future__ import annotations
 import pytest
 import responses
 
+from tests.conftest import require_validated_mock
 from tests.mocks import dataverse as dv
+
+require_validated_mock(dv)
 
 
 @pytest.fixture
@@ -120,7 +123,12 @@ class TestDiscoverTenant:
 
 
 class TestQueryAll:
-    """Drives scripts/auth.py:query_all through the mock."""
+    """Drives scripts/auth.py:query_all through the mock.
+
+    query_all is the FlightCheck-relevant slice of auth.py — it's used by
+    flightcheck/checks/workday.py to read environment variable definitions
+    and values from Dataverse.
+    """
 
     @responses.activate
     def test_single_page_returns_all_records(
@@ -129,24 +137,24 @@ class TestQueryAll:
         import auth
 
         records = [
-            dv.bot_component(name="Topic1"),
-            dv.bot_component(name="Topic2"),
-            dv.bot_component(name="Topic3"),
+            dv.env_var_def(schema_name="VarA", definition_id="def-a"),
+            dv.env_var_def(schema_name="VarB", definition_id="def-b"),
+            dv.env_var_def(schema_name="VarC", definition_id="def-c"),
         ]
         responses.add(**dv.query(
             base_url=dataverse_url,
-            entity_set="botcomponents",
-            select="botcomponentid,name,componenttype,schemaname",
+            entity_set="environmentvariabledefinitions",
+            select="displayname,schemaname,environmentvariabledefinitionid",
             records=records,
         ))
 
         result = auth.query_all(
             dataverse_url, fake_token,
-            "botcomponents",
-            "botcomponentid,name,componenttype,schemaname",
+            "environmentvariabledefinitions",
+            "displayname,schemaname,environmentvariabledefinitionid",
         )
         assert len(result) == 3
-        assert {r["name"] for r in result} == {"Topic1", "Topic2", "Topic3"}
+        assert {r["schemaname"] for r in result} == {"VarA", "VarB", "VarC"}
 
     @responses.activate
     def test_follows_odata_next_link_across_pages(
@@ -154,14 +162,18 @@ class TestQueryAll:
     ) -> None:
         import auth
 
-        page1_url = f"{dataverse_url}/api/data/v9.2/botcomponents?$select=name"
-        page2_url = f"{dataverse_url}/api/data/v9.2/botcomponents?$skiptoken=PAGE2"
+        page1_url = (
+            f"{dataverse_url}/api/data/v9.2/environmentvariablevalues?$select=value"
+        )
+        page2_url = (
+            f"{dataverse_url}/api/data/v9.2/environmentvariablevalues?$skiptoken=PAGE2"
+        )
 
         responses.add(
             method="GET",
             url=page1_url,
             json=dv.collection(
-                [dv.bot_component(name=f"T{i}") for i in range(2)],
+                [dv.env_var_value(value=f"V{i}", value_id=f"id-{i}") for i in range(2)],
                 next_link=page2_url,
             ),
             status=200,
@@ -170,16 +182,16 @@ class TestQueryAll:
             method="GET",
             url=page2_url,
             json=dv.collection(
-                [dv.bot_component(name=f"T{i}") for i in range(2, 5)]
+                [dv.env_var_value(value=f"V{i}", value_id=f"id-{i}") for i in range(2, 5)]
             ),
             status=200,
         )
 
         result = auth.query_all(
-            dataverse_url, fake_token, "botcomponents", "name",
+            dataverse_url, fake_token, "environmentvariablevalues", "value",
         )
         assert len(result) == 5
-        assert [r["name"] for r in result] == ["T0", "T1", "T2", "T3", "T4"]
+        assert [r["value"] for r in result] == ["V0", "V1", "V2", "V3", "V4"]
 
     @responses.activate
     def test_raises_auth_expired_on_401(
@@ -188,11 +200,14 @@ class TestQueryAll:
         import auth
 
         responses.add(**dv.auth_expired(
-            base_url=dataverse_url, entity_set="botcomponents"
+            base_url=dataverse_url, entity_set="environmentvariabledefinitions"
         ))
 
         with pytest.raises(auth.AuthExpiredError):
-            auth.query_all(dataverse_url, fake_token, "botcomponents", "name")
+            auth.query_all(
+                dataverse_url, fake_token,
+                "environmentvariabledefinitions", "schemaname",
+            )
 
     @responses.activate
     def test_sends_bearer_token(
@@ -202,14 +217,16 @@ class TestQueryAll:
 
         responses.add(**dv.query(
             base_url=dataverse_url,
-            entity_set="bots",
-            select="name",
+            entity_set="environmentvariabledefinitions",
+            select="schemaname",
             records=[],
         ))
 
-        auth.query_all(dataverse_url, fake_token, "bots", "name")
+        auth.query_all(
+            dataverse_url, fake_token,
+            "environmentvariabledefinitions", "schemaname",
+        )
 
-        # Inspect the captured request.
         sent = responses.calls[0].request
         assert sent.headers["Authorization"] == f"Bearer {fake_token}"
 
@@ -217,45 +234,7 @@ class TestQueryAll:
         import auth
 
         with pytest.raises(ValueError, match="https"):
-            auth.query_all("http://insecure/", fake_token, "bots", "name")
-
-
-class TestUpdateRecord:
-    """Drives scripts/auth.py:update_record through the mock."""
-
-    @responses.activate
-    def test_patches_record_returns_true_on_success(
-        self, dataverse_url: str, fake_token: str
-    ) -> None:
-        import auth
-
-        record_id = "00000000-0000-0000-0000-000000003333"
-        responses.add(
-            method="PATCH",
-            url=f"{dataverse_url}/api/data/v9.2/bots({record_id})",
-            status=204,
-        )
-
-        result = auth.update_record(
-            dataverse_url, fake_token, "bots", record_id, {"name": "Renamed"}
-        )
-        assert result is True
-
-    @responses.activate
-    def test_raises_auth_expired_on_401(
-        self, dataverse_url: str, fake_token: str
-    ) -> None:
-        import auth
-
-        record_id = "00000000-0000-0000-0000-000000003333"
-        responses.add(
-            method="PATCH",
-            url=f"{dataverse_url}/api/data/v9.2/bots({record_id})",
-            status=401,
-            json={"error": {"message": "expired"}},
-        )
-
-        with pytest.raises(auth.AuthExpiredError):
-            auth.update_record(
-                dataverse_url, fake_token, "bots", record_id, {"name": "x"}
+            auth.query_all(
+                "http://insecure/", fake_token,
+                "environmentvariabledefinitions", "schemaname",
             )

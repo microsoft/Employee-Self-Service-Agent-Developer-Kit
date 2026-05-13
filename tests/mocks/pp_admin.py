@@ -4,17 +4,19 @@
 """
 Mock response builders for the Power Platform Admin (BAP + PowerApps) APIs.
 
+# ─────────────────────────────────────────────────────────────────
+# MOCK_STATUS = "validated"
+#
+# Backed by a real captured cassette. Safe to use in FlightCheck
+# integration tests under tests/flightcheck/.
+#
+# Cassette: tests/fixtures/cassettes/flightcheck_pp_admin.yaml
+# Endpoints covered: see tests/fixtures/cassettes/INDEX.md
+# ─────────────────────────────────────────────────────────────────
+
 Used by FlightCheck integration tests for any check that reads
 environments, connections, flows, or DLP policies via
 solutions/ess-maker-skills/scripts/flightcheck/pp_admin_client.py.
-
-Each builder either returns a connection/flow/env dict (for assembling
-into a list) or returns a `responses.add(**...)` kwargs dict for direct
-registration.
-
-⚠️ Status: schema-grounded. Cassettes captured via
-tests/captures/record_flightcheck_pp_admin.py supersede this when they
-disagree.
 
 References:
 - BAP environments: https://learn.microsoft.com/power-platform/admin/list-environments
@@ -25,6 +27,10 @@ References:
 from __future__ import annotations
 
 from typing import Any, Iterable, Mapping
+
+# Validation status — read by tests/conftest.py:require_validated_mock().
+MOCK_STATUS = "validated"
+MOCK_CASSETTE = "tests/fixtures/cassettes/flightcheck_pp_admin.yaml"
 
 BAP_BASE = "https://api.bap.microsoft.com"
 POWERAPPS_BASE = "https://api.powerapps.com"
@@ -78,34 +84,89 @@ def connection(
     *,
     name: str = "shared-workdaysoap-mock-001",
     display_name: str = "Mock Workday SOAP",
-    api_id: str = "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
+    api_name: str = "shared_workdaysoap",
+    env_id: str = MOCK_ENV_ID,
     status: str = "Connected",
-    extra_status_fields: Mapping[str, Any] | None = None,
+    error_target: str | None = None,
+    error_code: str | None = None,
+    error_message: str | None = None,
+    extra_properties: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build a single PowerApps connection record.
 
     `status` accepts any of "Connected", "Error", "PendingConfirmation",
-    "Unknown". The check in flightcheck/checks/workday.py:_get_conn_status
-    looks at properties.statuses[0].status only, so additional status
-    entries are ignored.
+    "Unknown". For Error statuses, real responses include a nested
+    `target` + `error.{code, message}` block — pass error_target,
+    error_code, error_message to populate them. Defaults to the
+    "Unauthorized" / "AADSTS50173: grant expired" shape captured from
+    the user's real tenant in
+    tests/fixtures/cassettes/flightcheck_pp_admin.yaml.
+
+    The check in flightcheck/checks/workday.py:_get_conn_status only
+    reads statuses[0].status — the target/error block is included for
+    fidelity to real API responses, not because the kit consumes it.
 
     Cited consumers:
       - flightcheck/pp_admin_client.py:184-190 (get_connections)
       - flightcheck/checks/workday.py:262-342 (_check_connections)
+
+    Reference: tests/fixtures/cassettes/flightcheck_pp_admin.yaml
     """
+    api_id = (
+        f"/providers/Microsoft.PowerApps/scopes/admin/environments/"
+        f"{env_id}/apis/{api_name}"
+    )
     status_entry: dict[str, Any] = {"status": status}
-    if extra_status_fields:
-        status_entry.update(extra_status_fields)
+    if status == "Error":
+        status_entry["target"] = error_target or "token"
+        status_entry["error"] = {
+            "code": error_code or "Unauthorized",
+            "message": error_message or (
+                "Failed to refresh access token. AADSTS50173: The provided "
+                "grant has expired due to it being revoked, a fresh auth "
+                "token is needed."
+            ),
+        }
+
+    properties: dict[str, Any] = {
+        "displayName": display_name,
+        "apiId": api_id,
+        "iconUri": (
+            f"https://static.powerapps.com/resource/ppcr/releases/v1.0.0/"
+            f"{api_name.replace('shared_', '')}/icon.png"
+        ),
+        "statuses": [status_entry],
+        "connectionParameters": {"sku": "Enterprise"},
+        "keywordsRemaining": 78,
+        "isSsoConnection": False,
+        "createdBy": {
+            "id": "00000000-0000-0000-0000-000000002222",
+            "displayName": "Mock User",
+            "email": "mock.user@contoso.com",
+            "type": "User",
+            "tenantId": "00000000-0000-0000-0000-000000001111",
+            "userPrincipalName": "mock.user@contoso.com",
+        },
+        "createdTime": "2026-01-01T00:00:00.0000000Z",
+        "lastModifiedTime": "2026-01-15T00:00:00.0000000Z",
+        "environment": {
+            "id": f"/providers/Microsoft.PowerApps/environments/{env_id}",
+            "name": env_id,
+        },
+        "accountName": "mock.user@contoso.com",
+        "allowSharing": False,
+    }
+    if extra_properties:
+        properties.update(extra_properties)
+
     return {
         "name": name,
-        "id": f"/providers/Microsoft.PowerApps/apis/{api_id.split('/')[-1]}/connections/{name}",
-        "type": "Microsoft.PowerApps/apis/connections",
-        "properties": {
-            "displayName": display_name,
-            "apiId": api_id,
-            "statuses": [status_entry],
-            "createdTime": "2026-01-01T00:00:00.000Z",
-        },
+        "id": (
+            f"/providers/Microsoft.PowerApps/scopes/admin/environments/"
+            f"{env_id}/apis/{api_name}/connections/{name}"
+        ),
+        "type": "Microsoft.PowerApps/scopes/apis/connections",
+        "properties": properties,
     }
 
 
@@ -118,7 +179,7 @@ def workday_connection(
     return connection(
         name=f"workday-{status.lower()}-{display_name[:8].lower().replace(' ', '-')}",
         display_name=display_name,
-        api_id="/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
+        api_name="shared_workdaysoap",
         status=status,
     )
 
@@ -131,7 +192,7 @@ def non_workday_connection(
     return connection(
         name="office365-mock-001",
         display_name=display_name,
-        api_id="/providers/Microsoft.PowerApps/apis/shared_office365",
+        api_name="shared_office365",
         status=status,
     )
 
@@ -271,4 +332,31 @@ def insufficient_permissions(
             }
         },
         "status": 403,
+    }
+
+
+def flows_resource_not_found(*, env_id: str = MOCK_ENV_ID) -> dict[str, Any]:
+    """Mock the 404 ResourceNotFound response that PowerApps ProcessSimple
+    returns when an environment exists in BAP but has no PowerApps
+    runtime registered (Dataverse-only envs).
+
+    Captured behavior — see tests/fixtures/cassettes/flightcheck_pp_admin.yaml
+    line 2578-2621. The real response has an empty body and an
+    ``x-servicefabric: ResourceNotFound`` header. The kit's
+    pp_admin_client._get_all only handles 401/403 specially, so this
+    bubbles up as ``requests.exceptions.HTTPError`` and crashes any
+    FlightCheck check that calls get_flows().
+
+    See bug 4 in plan.md and the regression test in
+    tests/flightcheck/test_pp_admin_client.py.
+    """
+    return {
+        "method": "GET",
+        "url": (
+            f"{POWERAPPS_BASE}/providers/Microsoft.ProcessSimple/scopes/admin/environments/"
+            f"{env_id}/v2/flows"
+        ),
+        "body": "",
+        "status": 404,
+        "headers": {"x-servicefabric": "ResourceNotFound"},
     }

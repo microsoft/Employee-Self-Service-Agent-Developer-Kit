@@ -22,7 +22,10 @@ from typing import Any
 import pytest
 import responses
 
+from tests.conftest import require_validated_mock
 from tests.mocks import pp_admin as pp
+
+require_validated_mock(pp)
 
 
 @dataclass

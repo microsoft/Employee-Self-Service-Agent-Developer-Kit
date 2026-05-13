@@ -37,7 +37,10 @@ from typing import Any
 import pytest
 import responses
 
+from tests.conftest import require_validated_mock
 from tests.mocks import dataverse as dv
+
+require_validated_mock(dv)
 
 
 # Make the production source importable. (The pytest pythonpath in
