@@ -21,11 +21,14 @@ Respond with ONLY this exact message and nothing else:
 
 **The ONLY exception**: If the user typed `/setup` or explicitly asked to run
 setup, proceed with setup — read `src/skills/onboarding/SKILL.md` and follow it.
+If the user typed `/provision`, proceed with provisioning — read
+`src/skills/provision/SKILL.md` and follow it. `/provision` does not require
+prior `/setup` because it installs the agent that `/setup` would later extract.
 
 **This gate applies to ALL user messages** — including "hello", "hi", "help",
 "what can you do", "I need a topic", "create a workflow", or any other request.
-If config doesn't exist or setup isn't complete, and the user didn't say `/setup`,
-show ONLY the welcome message above. No other text. No capabilities list. No greeting.
+If config doesn't exist or setup isn't complete, and the user didn't say `/setup`
+or `/provision`, show ONLY the welcome message above. No other text. No capabilities list. No greeting.
 
 ### If `.local/config.json` exists AND `setup` is `"complete"`:
 

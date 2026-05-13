@@ -18,20 +18,20 @@ from urllib.parse import quote
 try:
     import msal
 except ImportError:
-    print("ERROR: 'msal' package not found. Run: pip install msal")
+    print("ERROR: 'msal' package not found. Run: pip install msal", file=sys.stderr)
     sys.exit(1)
 
 try:
     import requests
 except ImportError:
-    print("ERROR: 'requests' package not found. Run: pip install requests")
+    print("ERROR: 'requests' package not found. Run: pip install requests", file=sys.stderr)
     sys.exit(1)
 
 try:
     from urllib3.util.retry import Retry
     from requests.adapters import HTTPAdapter
 except ImportError:
-    print("ERROR: 'urllib3' / 'requests' not found. Run: pip install requests")
+    print("ERROR: 'urllib3' / 'requests' not found. Run: pip install requests", file=sys.stderr)
     sys.exit(1)
 
 
@@ -141,8 +141,8 @@ def authenticate(env_url):
         result = app.acquire_token_silent([scope], account=accounts[0])
 
     if not result or "access_token" not in result:
-        print(f"Opening browser for sign-in (tenant: {tenant})...")
-        print("Please select the account that has access to this environment.")
+        print(f"Opening browser for sign-in (tenant: {tenant})...", file=sys.stderr)
+        print("Please select the account that has access to this environment.", file=sys.stderr)
         result = app.acquire_token_interactive(
             [scope], prompt="select_account"
         )
@@ -151,8 +151,8 @@ def authenticate(env_url):
         # Don't echo error_description - it can include tenant IDs and
         # internal flow details (CWE-209).
         error = result.get("error", "unknown_error")
-        print(f"ERROR: Authentication failed ({error}).")
-        print("Verify you have access to this environment and try again.")
+        print(f"ERROR: Authentication failed ({error}).", file=sys.stderr)
+        print("Verify you have access to this environment and try again.", file=sys.stderr)
         sys.exit(1)
 
     # Persist cache with strict 0o600 permissions on POSIX. The cache holds
@@ -209,11 +209,11 @@ def query_all(env_url, token, entity_set, select, filter_expr=None):
         all_records.extend(records)
         url = data.get("@odata.nextLink")
         if page == 1:
-            print(f"  Page {page}: {len(records)} records", end="")
+            print(f"  Page {page}: {len(records)} records", end="", file=sys.stderr)
         elif records:
-            print(f" → Page {page}: {len(records)}", end="")
+            print(f" | Page {page}: {len(records)}", end="", file=sys.stderr)
 
-    print(f" → Total: {len(all_records)}")
+    print(f" | Total: {len(all_records)}", file=sys.stderr)
     return all_records
 
 
@@ -282,7 +282,7 @@ def load_config():
     """
     config_path = os.path.join(LOCAL_STATE_DIR, "config.json")
     if not os.path.exists(config_path):
-        print(f"ERROR: {config_path} not found. Run /setup first.")
+        print(f"ERROR: {config_path} not found. Run /setup first.", file=sys.stderr)
         sys.exit(1)
     with open(config_path, "r", encoding="utf-8") as f:
         cfg = json.load(f)
@@ -290,7 +290,8 @@ def load_config():
     if ver != EXPECTED_CONFIG_VERSION:
         print(
             f"ERROR: {config_path} is schema v{ver}, expected "
-            f"v{EXPECTED_CONFIG_VERSION}. Run `/setup --refresh` to migrate."
+            f"v{EXPECTED_CONFIG_VERSION}. Run `/setup --refresh` to migrate.",
+            file=sys.stderr,
         )
         sys.exit(1)
     return cfg

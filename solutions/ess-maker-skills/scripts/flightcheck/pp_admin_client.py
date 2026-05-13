@@ -16,20 +16,20 @@ import sys
 try:
     import msal
 except ImportError:
-    print("ERROR: 'msal' package not found. Run: pip install msal")
+    print("ERROR: 'msal' package not found. Run: pip install msal", file=sys.stderr)
     sys.exit(1)
 
 try:
     import requests
 except ImportError:
-    print("ERROR: 'requests' package not found. Run: pip install requests")
+    print("ERROR: 'requests' package not found. Run: pip install requests", file=sys.stderr)
     sys.exit(1)
 
 try:
     from urllib3.util.retry import Retry
     from requests.adapters import HTTPAdapter
 except ImportError:
-    print("ERROR: 'urllib3' / 'requests' not found. Run: pip install requests")
+    print("ERROR: 'urllib3' / 'requests' not found. Run: pip install requests", file=sys.stderr)
     sys.exit(1)
 
 
@@ -38,8 +38,22 @@ CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d"
 BAP_BASE = "https://api.bap.microsoft.com"
 POWERAPPS_BASE = "https://api.powerapps.com"
 
+# Preprod ring uses different API hosts.
+BAP_BASE_BY_RING = {
+    "preprod": "https://api.preprod.bap.microsoft.com",
+    "prod": BAP_BASE,
+}
+POWERAPPS_BASE_BY_RING = {
+    "preprod": "https://api.preprod.powerapps.com",
+    "prod": POWERAPPS_BASE,
+}
+
 # The BAP / PowerApps APIs use this resource scope.
 PP_SCOPE = "https://service.powerapps.com//.default"
+PP_SCOPE_BY_RING = {
+    "preprod": "https://api.preprod.powerplatform.com/.default",
+    "prod": PP_SCOPE,
+}
 
 # Module-level requests Session with bounded retry-with-backoff for 429/5xx.
 # Mirrors the auth.py pattern - BAP and PowerApps APIs throttle aggressively
@@ -60,8 +74,12 @@ _SESSION.mount("https://", HTTPAdapter(max_retries=_RETRY))
 class PPAdminClient:
     """Power Platform Admin API client for environment and flow queries."""
 
-    def __init__(self, tenant_id: str):
+    def __init__(self, tenant_id: str, ring: str = "prod"):
         self.tenant_id = tenant_id
+        self.ring = ring
+        self.bap_base = BAP_BASE_BY_RING.get(ring, BAP_BASE)
+        self.powerapps_base = POWERAPPS_BASE_BY_RING.get(ring, POWERAPPS_BASE)
+        self._scope = PP_SCOPE_BY_RING.get(ring, PP_SCOPE)
         self._token: str | None = None
 
     def authenticate(self) -> str:
@@ -81,12 +99,12 @@ class PPAdminClient:
         accounts = app.get_accounts()
         result = None
         if accounts:
-            result = app.acquire_token_silent([PP_SCOPE], account=accounts[0])
+            result = app.acquire_token_silent([self._scope], account=accounts[0])
 
         if not result or "access_token" not in result:
             print("Opening browser for Power Platform sign-in...")
             result = app.acquire_token_interactive(
-                [PP_SCOPE], prompt="select_account"
+                [self._scope], prompt="select_account"
             )
 
         if "access_token" not in result:
@@ -128,14 +146,19 @@ class PPAdminClient:
         resp.raise_for_status()
         return resp.json()
 
-    def _get_all(self, base: str, path: str, params: dict | None = None) -> list:
-        """Paginate through results."""
+    def _get_all(self, base: str, path: str, params: dict | None = None) -> list | dict:
+        """Paginate through results.
+
+        Returns a list of items on success, or a dict with `_error` key
+        on 401/403 (matching `_get()` behavior) so callers can distinguish
+        "empty results" from "insufficient permissions".
+        """
         items: list = []
         url = f"{base}{path}"
         while url:
             resp = _SESSION.get(url, headers=self.headers, params=params, timeout=60)
             if resp.status_code in (401, 403):
-                return items
+                return {"_error": "insufficient_permissions", "_status": resp.status_code}
             resp.raise_for_status()
             data = resp.json()
             items.extend(data.get("value", []))
@@ -148,7 +171,7 @@ class PPAdminClient:
     def get_environment(self, env_id: str) -> dict:
         """Get a specific Power Platform environment."""
         return self._get(
-            BAP_BASE,
+            self.bap_base,
             f"/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/{env_id}",
             params={"api-version": "2021-04-01"},
         )
@@ -156,7 +179,7 @@ class PPAdminClient:
     def get_environments(self) -> list:
         """List all environments the user has admin access to."""
         return self._get_all(
-            BAP_BASE,
+            self.bap_base,
             "/providers/Microsoft.BusinessAppPlatform/scopes/admin/environments",
             params={"api-version": "2021-04-01"},
         )
@@ -166,7 +189,7 @@ class PPAdminClient:
     def get_flows(self, env_id: str) -> list:
         """List all flows in an environment (admin scope)."""
         return self._get_all(
-            POWERAPPS_BASE,
+            self.powerapps_base,
             f"/providers/Microsoft.ProcessSimple/scopes/admin/environments/{env_id}/v2/flows",
             params={"api-version": "2016-11-01"},
         )
@@ -174,7 +197,7 @@ class PPAdminClient:
     def get_flow(self, env_id: str, flow_id: str) -> dict:
         """Get a specific flow."""
         return self._get(
-            POWERAPPS_BASE,
+            self.powerapps_base,
             f"/providers/Microsoft.ProcessSimple/scopes/admin/environments/{env_id}/flows/{flow_id}",
             params={"api-version": "2016-11-01"},
         )
@@ -184,7 +207,7 @@ class PPAdminClient:
     def get_connections(self, env_id: str) -> list:
         """List all connections in an environment (admin scope)."""
         return self._get_all(
-            POWERAPPS_BASE,
+            self.powerapps_base,
             f"/providers/Microsoft.PowerApps/scopes/admin/environments/{env_id}/connections",
             params={"api-version": "2016-11-01"},
         )
@@ -194,14 +217,16 @@ class PPAdminClient:
     def get_dlp_policies(self) -> list:
         """List all DLP policies."""
         return self._get_all(
-            BAP_BASE,
+            self.bap_base,
             "/providers/Microsoft.BusinessAppPlatform/scopes/admin/apiPolicies",
             params={"api-version": "2021-04-01"},
         )
 
-    def get_dlp_policies_for_env(self, env_id: str) -> list:
+    def get_dlp_policies_for_env(self, env_id: str) -> list | dict:
         """List DLP policies applied to a specific environment."""
         all_policies = self.get_dlp_policies()
+        if isinstance(all_policies, dict) and "_error" in all_policies:
+            return all_policies
         # Filter to policies that include this environment
         relevant = []
         for p in all_policies:
@@ -220,13 +245,11 @@ class PPAdminClient:
 def derive_environment_id(env_url: str, dataverse_token: str) -> str | None:
     """Derive the Power Platform Environment ID from a Dataverse URL.
 
-    Calls the Dataverse WhoAmI endpoint, then uses the OrganizationId
-    to query the BAP API for the matching environment.
+    Queries the Dataverse `organizations` table for the `environmentid`
+    column, which is the BAP environment GUID. This is more reliable than
+    using WhoAmI().OrganizationId, which is the Dataverse org ID and may
+    differ from the BAP environment ID in some tenants/rings.
     """
-    # HARD GATE: refuse to attach the Dataverse bearer to a non-HTTPS URL.
-    # env_url is config-supplied so a misconfigured or hostile value could
-    # otherwise exfiltrate the token over cleartext. Mirrors the
-    # _validate_https_url gate in auth.py.
     if not env_url.lower().startswith("https://"):
         raise ValueError(
             f"env_url must use https:// (got: {env_url!r}). Refusing to send "
@@ -237,16 +260,17 @@ def derive_environment_id(env_url: str, dataverse_token: str) -> str | None:
         "Accept": "application/json",
     }
     resp = _SESSION.get(
-        f"{env_url}/api/data/v9.2/WhoAmI()",
+        f"{env_url}/api/data/v9.2/organizations?$select=environmentid",
         headers=headers,
         timeout=15,
     )
     if resp.status_code != 200:
         return None
-    org_id = resp.json().get("OrganizationId")
-    if not org_id:
+    rows = resp.json().get("value", [])
+    if not rows:
+        return None
+    env_id = rows[0].get("environmentid")
+    if not env_id:
         return None
 
-    # The environment ID in BAP is the same as the OrganizationId
-    # (lowercase GUID without braces)
-    return org_id.lower().strip("{}")
+    return env_id.lower().strip("{}")

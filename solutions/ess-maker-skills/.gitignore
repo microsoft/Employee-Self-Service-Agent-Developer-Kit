@@ -8,3 +8,9 @@ workspace/**
 .local/**
 !.local/
 !.local/.gitkeep
+
+# my/ holds skill-internal state (per-skill config and tasks.md). Used by
+# /connect, /provision, etc. for resumable run state. Never committed.
+my/**
+!my/
+!my/.gitkeep
