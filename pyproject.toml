@@ -21,12 +21,10 @@ test = [
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
-# Surface the production source on sys.path so tests can import without a packaging step.
-# Order matters — the more specific paths come first so per-script imports resolve.
+# pyproject.toml is configured to add solutions/ess-maker-skills/scripts to
+# pythonpath so tests can `from auth import ...` and `from flightcheck import ...`.
 pythonpath = [
     "solutions/ess-maker-skills/scripts",
-    "solutions/ess-maker-skills/src/mcp/workday",
-    "solutions/ess-maker-skills/src/mcp/servicenow",
 ]
 addopts = [
     "-ra",

@@ -27,6 +27,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).parent))
 from _common import (  # noqa: E402
     SCRUB_HEADERS,
+    _redact_body_text,
     _redact_text,
     _scrub_headers,
 )
@@ -48,9 +49,9 @@ def redact_cassette(src: Path, dst: Path) -> None:
         if "body" in req and req["body"] is not None:
             body = req["body"]
             if isinstance(body, dict) and "string" in body:
-                body["string"] = _redact_text(body["string"] or "")
+                body["string"] = _redact_body_text(body["string"] or "")
             elif isinstance(body, str):
-                req["body"] = _redact_text(body)
+                req["body"] = _redact_body_text(body)
 
         resp = interaction.get("response", {})
         if "headers" in resp:
@@ -58,10 +59,10 @@ def redact_cassette(src: Path, dst: Path) -> None:
         if "body" in resp and resp["body"] is not None:
             body = resp["body"]
             if isinstance(body, dict) and "string" in body:
-                body["string"] = _redact_text(body["string"] or "")
+                body["string"] = _redact_body_text(body["string"] or "")
 
     dst.write_text(yaml.safe_dump(raw, default_flow_style=False), encoding="utf-8")
-    print(f"Redacted: {src.name} → {dst}")
+    print(f"Redacted: {src.name} -> {dst}")
     print(f"  scrubbed headers: {sorted(SCRUB_HEADERS)}")
 
 

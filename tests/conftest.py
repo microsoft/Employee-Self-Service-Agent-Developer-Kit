@@ -234,3 +234,43 @@ def pytest_collection_modifyitems(
     for item in items:
         if "live" in item.keywords:
             item.add_marker(skip_live)
+
+
+def require_validated_mock(mock_module: Any) -> None:
+    """Fail-fast guard for FlightCheck integration tests.
+
+    Call at the top of any test that depends on a mock module to ensure
+    you haven't accidentally written a test against a placeholder mock.
+    Raises pytest.UsageError (which fails collection, not just one test)
+    if the module's ``MOCK_STATUS`` is not ``"validated"``.
+
+    Example:
+        from tests.mocks import dataverse as dv
+        from tests.conftest import require_validated_mock
+
+        def test_my_check(...):
+            require_validated_mock(dv)
+            ...
+
+    See tests/AGENTS.md for the full validation policy.
+    """
+    status = getattr(mock_module, "MOCK_STATUS", None)
+    cassette = getattr(mock_module, "MOCK_CASSETTE", None)
+    if status == "validated":
+        return
+    if status == "placeholder":
+        pytest.fail(
+            f"Mock module {mock_module.__name__!r} is a PLACEHOLDER "
+            f"(no captured cassette). Refusing to use it in an "
+            f"integration test. See tests/AGENTS.md for how to capture "
+            f"a cassette and promote the module to MOCK_STATUS = "
+            f"'validated'. Awaiting cassette: "
+            f"{cassette or '(none referenced)'}",
+            pytrace=False,
+        )
+    pytest.fail(
+        f"Mock module {mock_module.__name__!r} does not declare "
+        f"MOCK_STATUS. Add it per the convention in "
+        f"tests/mocks/README.md.",
+        pytrace=False,
+    )
