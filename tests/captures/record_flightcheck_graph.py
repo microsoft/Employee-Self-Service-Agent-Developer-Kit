@@ -16,29 +16,29 @@ Output: tests/fixtures/cassettes/flightcheck_graph.yaml
 
 from __future__ import annotations
 
-import json
 import sys
-from pathlib import Path
 
-from _common import REPO_ROOT, announce, build_cassette, confirm_or_exit
+from _common import (
+    announce,
+    build_cassette,
+    chdir_kit_root,
+    confirm_or_exit,
+    get_dataverse_url,
+)
 
 
 def main() -> None:
     announce("flightcheck_graph")
 
-    config_path = REPO_ROOT / "solutions" / "ess-maker-skills" / ".local" / "config.json"
-    if not config_path.exists():
-        print(f"ERROR: {config_path} not found. Run /setup first.")
-        sys.exit(1)
-    cfg = json.loads(config_path.read_text(encoding="utf-8"))
-
-    # Tenant ID is derivable from the env URL via auth.discover_tenant.
-    env_url = cfg.get("dataverseEndpoint")
-    if not env_url:
-        print("ERROR: config.json missing dataverseEndpoint.")
-        sys.exit(1)
+    # Tenant ID is derivable from the Dataverse env URL via
+    # auth.discover_tenant.
+    env_url = get_dataverse_url()
 
     confirm_or_exit()
+
+    # The kit's auth.py uses relative paths (.local/...) — switch cwd
+    # before importing or calling production code.
+    chdir_kit_root()
 
     import auth
     from flightcheck.graph_client import GraphClient
@@ -59,6 +59,22 @@ def main() -> None:
 
         cap = client.get_conditional_access_policies()
         print(f"  /identity/conditionalAccess/policies: {len(cap)} policies (may be empty if 403)")
+
+        # Pre-capture endpoints likely future checks will need (license
+        # validation, app-registration validation). The kit doesn't read
+        # these yet but pre-capturing avoids a cassette-cycle the next
+        # time someone adds a check that does.
+        try:
+            skus = client.get_subscribed_skus()
+            print(f"  /subscribedSkus: {len(skus)} SKUs")
+        except Exception as exc:
+            print(f"  /subscribedSkus: SKIPPED — {exc!s}")
+
+        try:
+            sps = client.get_service_principals()
+            print(f"  /servicePrincipals: {len(sps)} service principals")
+        except Exception as exc:
+            print(f"  /servicePrincipals: SKIPPED — {exc!s}")
 
     print()
     print("Cassette written. Inspect tests/fixtures/cassettes/flightcheck_graph.yaml")

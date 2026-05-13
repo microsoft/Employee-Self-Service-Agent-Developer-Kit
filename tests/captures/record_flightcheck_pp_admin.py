@@ -18,59 +18,84 @@ Output: tests/fixtures/cassettes/flightcheck_pp_admin.yaml
 
 from __future__ import annotations
 
-import json
 import sys
-from pathlib import Path
 
-from _common import REPO_ROOT, announce, build_cassette, confirm_or_exit
+from _common import (
+    announce,
+    build_cassette,
+    chdir_kit_root,
+    confirm_or_exit,
+    get_dataverse_url,
+)
 
 
 def main() -> None:
     announce("flightcheck_pp_admin")
 
-    config_path = REPO_ROOT / "solutions" / "ess-maker-skills" / ".local" / "config.json"
-    if not config_path.exists():
-        print(f"ERROR: {config_path} not found. Run /setup first.")
-        sys.exit(1)
-    cfg = json.loads(config_path.read_text(encoding="utf-8"))
-    env_url = cfg.get("dataverseEndpoint")
-    if not env_url:
-        print("ERROR: config.json missing dataverseEndpoint.")
-        sys.exit(1)
-
+    env_url = get_dataverse_url()
     confirm_or_exit()
 
+    # Kit's auth.py / pp_admin_client.py use relative paths.
+    chdir_kit_root()
+
     import auth
-    from flightcheck.pp_admin_client import PPAdminClient, derive_environment_id
+    from urllib.parse import urlparse
+    from flightcheck.pp_admin_client import PPAdminClient
 
     tenant_id = auth.discover_tenant(env_url)
-    dv_token = auth.authenticate(env_url)
 
     client = PPAdminClient(tenant_id=tenant_id)
     client.authenticate()
-    env_id = derive_environment_id(env_url, dv_token)
-    if not env_id:
-        print("ERROR: could not derive Power Platform env id from Dataverse env.")
-        sys.exit(1)
 
     with build_cassette("flightcheck_pp_admin"):
         envs = client.get_environments()
         print(f"  /environments: {len(envs)} envs")
 
-        env = client.get_environment(env_id)
-        print(f"  /environments/{{id}}: {len(env)} fields")
+        # NOTE: bypassing flightcheck.pp_admin_client.derive_environment_id
+        # here because it has a known bug — it assumes the BAP environment
+        # ID equals the Dataverse OrganizationId from WhoAmI(), which is
+        # NOT true in practice (verified by 404 from BAP when called with
+        # OrganizationId). The correct approach, used here and by the older
+        # PVAClient code in PR #63, is to list environments and match by
+        # properties.linkedEnvironmentMetadata.instanceUrl.
+        # TODO: file an issue / fix derive_environment_id to use this logic.
+        target_host = (urlparse(env_url).hostname or "").lower()
+        env_id = None
+        for e in envs:
+            instance_url = (
+                e.get("properties", {})
+                .get("linkedEnvironmentMetadata", {})
+                .get("instanceUrl", "")
+            )
+            host = (urlparse(instance_url).hostname or "").lower()
+            if host == target_host:
+                env_id = e.get("name")
+                break
+        if not env_id:
+            print(f"ERROR: no BAP environment matched Dataverse host {target_host!r}.")
+            sys.exit(1)
+        print(f"  Resolved env_id by instanceUrl match")
 
-        flows = client.get_flows(env_id)
-        print(f"  /flows: {len(flows)} flows")
+        # Each subsequent call is best-effort — if any individual endpoint
+        # 404s or 5xx's we want to keep capturing the others rather than
+        # tank the whole cassette. The kit's _get / _get_all only handle
+        # 401/403 specially; 404s and 5xx's bubble up as HTTPError. (That's
+        # itself worth flagging as a robustness gap in the kit — a real
+        # customer whose tenant returns 404 for an endpoint we don't expect
+        # would see FlightCheck crash mid-run instead of reporting WARNING.)
 
-        conns = client.get_connections(env_id)
-        print(f"  /connections: {len(conns)} connections")
+        def _try(label: str, fn):
+            try:
+                result = fn()
+                count = len(result) if isinstance(result, (list, dict)) else "?"
+                print(f"  {label}: {count}")
+            except Exception as exc:
+                print(f"  {label}: SKIPPED — {type(exc).__name__}: {exc!s}")
 
-        try:
-            dlp = client.get_dlp_policies()
-            print(f"  /apiPolicies (DLP): {len(dlp)} policies")
-        except Exception as e:
-            print(f"  /apiPolicies (DLP): skipped ({e!s})")
+        _try("/environments/{id}", lambda: client.get_environment(env_id))
+        _try("/flows", lambda: client.get_flows(env_id))
+        _try("/connections", lambda: client.get_connections(env_id))
+        _try("/apiPolicies (DLP)", lambda: client.get_dlp_policies())
 
     print()
     print("Cassette written. Inspect tests/fixtures/cassettes/flightcheck_pp_admin.yaml")

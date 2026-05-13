@@ -9,39 +9,45 @@ Smallest possible recording — a single GET to WhoAmI(). Useful as a smoke
 test that the recording pipeline works end-to-end before running the
 heavier wrappers.
 
-Pre-reqs: .local/config.json must be set up (run /setup once) and a valid
-token must already be in .local/.token_cache.bin (run any kit script that
-authenticates and you'll have one).
+In FlightCheck scope because pp_admin_client.derive_environment_id()
+(called during FlightCheck startup to translate the Dataverse env URL
+into a Power Platform environment ID) hits WhoAmI as its first step.
+
+Usage:
+    $env:ESS_DATAVERSE_URL = "https://orgb78b4a3b.crm.dynamics.com"
+    python tests\\captures\\record_dataverse_whoami.py
+
+A browser pops on first run for MSAL interactive auth; subsequent runs
+read the silent token from solutions/ess-maker-skills/.local/.token_cache.bin
+(created on demand). No /setup required.
 """
 
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 
-from _common import REPO_ROOT, announce, build_cassette, confirm_or_exit
+from _common import (
+    announce,
+    build_cassette,
+    chdir_kit_root,
+    confirm_or_exit,
+    get_dataverse_url,
+)
 
 
 def main() -> None:
     announce("dataverse_whoami")
 
-    # Read the real env URL from config so we hit the right tenant.
-    config_path = REPO_ROOT / "solutions" / "ess-maker-skills" / ".local" / "config.json"
-    if not config_path.exists():
-        print(f"ERROR: {config_path} not found. Run /setup first.")
-        sys.exit(1)
-    cfg = json.loads(config_path.read_text(encoding="utf-8"))
-    env_url = cfg.get("dataverseEndpoint")
-    if not env_url:
-        print("ERROR: config.json missing dataverseEndpoint.")
-        sys.exit(1)
-
+    env_url = get_dataverse_url()
     confirm_or_exit()
 
-    # Import the production code AFTER pyproject pythonpath wiring has been
-    # applied by _common.
-    import auth  # solutions/ess-maker-skills/scripts/auth.py
+    # The kit's auth.py uses relative paths (.local/.token_cache.bin) and
+    # assumes cwd is the kit root, not the repo root. Switch before any
+    # production-code import or call.
+    chdir_kit_root()
+
+    import auth
     import requests
 
     token = auth.authenticate(env_url)
