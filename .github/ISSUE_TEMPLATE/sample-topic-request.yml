@@ -1,0 +1,65 @@
+name: Sample topic request or fix
+description: Request a new sample topic or a fix to an existing one under samples/.
+title: "[samples] "
+labels: ["area:samples"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template for requests that affect content under `samples/` only.
+        See [`samples/AGENTS.md`](../blob/main/samples/AGENTS.md) for folder conventions.
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Request type
+      options:
+        - New topic
+        - Fix existing topic
+    validations:
+      required: true
+  - type: input
+    id: area
+    attributes:
+      label: Area / ISV
+      description: e.g. WorkdayCustomEngineAgent, WorkdayDeclarativeAgent, Facilities, ServiceNow
+    validations:
+      required: true
+  - type: dropdown
+    id: subgroup
+    attributes:
+      label: Sub-grouping (if applicable)
+      options:
+        - (flat / none)
+        - Employee
+        - Manager
+        - Extended
+    validations:
+      required: false
+  - type: input
+    id: topic
+    attributes:
+      label: Topic folder
+      description: Existing path under samples/, or a proposed PascalCase folder name for a new topic.
+    validations:
+      required: true
+  - type: textarea
+    id: scenario
+    attributes:
+      label: User scenario / expected behavior
+      description: What should the topic do? For a fix, describe current vs expected behavior.
+    validations:
+      required: true
+  - type: textarea
+    id: utterances
+    attributes:
+      label: Sample user utterances (2+)
+      description: Example phrases a user might say to trigger this topic.
+    validations:
+      required: false
+  - type: textarea
+    id: references
+    attributes:
+      label: References
+      description: Existing sibling topic to model on, docs, API, or system-of-record details.
+    validations:
+      required: false
