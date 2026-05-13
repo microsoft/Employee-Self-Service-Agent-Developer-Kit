@@ -20,7 +20,7 @@ This folder contains sample **Declarative Agent (DA)** assets for Workday-backed
 
 - Each scenario folder contains the declarative assets needed to enable that scenario in your Workday Declarative Agent.
 - Import the scenario into your Copilot Studio Declarative Agent and update any parameter bindings (employee id, manager org id, effective date, etc.) to match your runtime context.
-- Sample prompts inside each scenario folder can be reused as trigger queries and as seeds for evaluation test sets — see [../Evaluations/](../Evaluations/).
+- Sample prompts inside each scenario folder can be reused as trigger queries for validation.
 
 ## Scenarios
 
