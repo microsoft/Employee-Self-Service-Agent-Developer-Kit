@@ -1,10 +1,30 @@
-# Instructions for AI agents working in `tests/`
+# Instructions for AI agents writing FlightCheck tests under `tests/`
 
 If you are an AI coding agent (Copilot CLI, Claude, or any other) working
-on the FlightCheck test suite under this directory, **read this file first
-and follow it strictly.** These rules exist because the test suite is the
-ground truth for what real Microsoft / Workday / ServiceNow APIs return,
-and the kit's correctness depends on tests reflecting reality.
+on the test suite under this directory, **read this file first and follow
+it strictly.**
+
+**This file is the test-authoring companion to
+`solutions/ess-maker-skills/scripts/flightcheck/AGENTS.md`.** That
+sibling file covers the rules for the production checks themselves
+(the code customers run via `/flightcheck`). The cardinal rule applies
+in both places:
+
+> Every FlightCheck check that calls an external API must be backed
+> by a captured cassette of real responses AND a test that exercises
+> the check against the cassette.
+
+The check-author file (`flightcheck/AGENTS.md`) tells you what to do
+when *adding a new check*. This file tells you what to do when *adding
+or modifying tests* — primarily, how to use the existing cassettes and
+mock builders, how to enforce the rule that no integration test runs
+against an unconfirmed API, and how to handle the "the cassette I need
+doesn't exist yet" situation.
+
+If you're here because you're about to add a new check, **stop, read
+`solutions/ess-maker-skills/scripts/flightcheck/AGENTS.md` first**, then
+come back here to write the corresponding test. The two documents
+deliberately cross-reference each other.
 
 ---
 
