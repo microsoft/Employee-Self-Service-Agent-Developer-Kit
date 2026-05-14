@@ -228,7 +228,7 @@ def main() -> None:
         if not token:
             print("  ABORT: no access token; not making WQL calls.")
             return
-        print(f"  Step 1: OK (token starts with {token[:8]}...)")
+        print(f"  Step 1: OK (received {len(token)}-char access token)")
         print()
 
         # Step 2: fetch the WQL data source catalog. This is a separate

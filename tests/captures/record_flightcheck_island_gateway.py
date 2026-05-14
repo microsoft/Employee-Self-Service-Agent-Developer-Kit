@@ -223,7 +223,7 @@ def main() -> None:
         if not token:
             print("  ABORT: no access token; cannot make API call.")
             return
-        print(f"  Step 1: OK (token starts with {token[:12]}...)")
+        print(f"  Step 1: OK (received {len(token)}-char access token)")
         print()
 
         # Identity headers observed in the browser trace. The PVA

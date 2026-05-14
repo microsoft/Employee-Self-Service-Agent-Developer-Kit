@@ -486,7 +486,7 @@ def main() -> None:
         if not token:
             print("  ABORT: no access token; not making admin API calls.")
             return
-        print(f"  Step 1: OK (token starts with {token[:8]}...)")
+        print(f"  Step 1: OK (received {len(token)}-char access token)")
         print()
 
         endpoints = [
