@@ -28,8 +28,35 @@ Topic path patterns:
 
 - `topic.yaml` — Copilot Studio AdaptiveDialog (`kind: AdaptiveDialog`). Defines `inputs`, `modelDescription`, `beginDialog`, etc.
 - One or more `*.xml` files — ESS Template Configuration. Filenames start with `msdyn_` by convention.
-- Optional `README.md`.
-- Optional screenshots (`*.png`).
+- `README.md` — *expected for new topics; preserved as-is for existing topics that already have one or don't.* See **README expectations** below.
+- Optional assets (screenshots, diagrams, sample payloads) referenced by the README. Use lowercase, hyphenated filenames (e.g., `get-vacation-balance.png`).
+
+### README expectations (for new topics)
+
+The README should read as one continuous, easy-to-follow explanation — not a checklist of headings. Write it so a reader who has never seen the topic before can understand *what it does*, *how it works*, and *how to customize it*, in a single read.
+
+Cover the following naturally, in roughly this flow:
+
+- **What the topic does** — one short paragraph in plain language: the user scenario, the persona, and the outcome.
+- **How it works** — a brief walkthrough of the topic's behavior: trigger style, inputs it collects or receives, downstream calls (sibling XML, flows, child topics), and what the user sees back. Keep it conceptual; do not paste the full YAML.
+- **Customization points** — the realistic things a consumer would change, each with a small concrete example. Typical examples:
+  - Trigger phrases or `modelDescription` adjustments for a different vocabulary.
+  - Input bindings (e.g., where employee ID or manager org ID comes from in the customer's environment).
+  - Endpoint / environment values that come from `Env.*`.
+  - Adaptive card field labels, ordering, or optional fields.
+  - Localization or tone changes in user-facing messages.
+- **Assets** — reference any images or sample payloads inline at the point where they help the reader (e.g., a screenshot right after describing the card).
+- **Related topics or dependencies** — name any sibling topics, flows, or XML configs the topic relies on, with relative links.
+
+Style guidance:
+
+- Write in second person, present tense.
+- Prefer short paragraphs over long bullet lists; use bullets only where they genuinely clarify (e.g., a list of inputs).
+- Show small, copy-pasteable snippets for customizations rather than abstract descriptions.
+- Do not duplicate the YAML or XML verbatim — link or excerpt only what the reader needs to understand the customization.
+- No internal URLs, customer-specific IDs, or secrets.
+
+For **existing topics** without a README, do not retrofit one as part of an unrelated change. A README can be added when the topic itself is being modified for another reason, or via a dedicated documentation issue.
 
 ## Naming conventions (observed)
 
