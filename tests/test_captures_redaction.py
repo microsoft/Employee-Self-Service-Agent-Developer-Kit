@@ -10,6 +10,7 @@ confidence that real captures will be scrubbed correctly before write.
 
 from __future__ import annotations
 
+import re
 import sys
 from pathlib import Path
 
@@ -71,7 +72,12 @@ class TestRedactText:
         text = '"instance":"https://dev184242.service-now.com/api"'
         out = _redact_text(text)
         assert "dev184242" not in out.lower()
-        assert "devmocktenant.service-now.com" in out
+        # URL-position match (preceded by ://) — avoids CodeQL's
+        # incomplete-URL-sanitization warning that fires on plain
+        # substring assertions over URL-shaped strings.
+        assert re.search(r"https?://devmocktenant\.service-now\.com\b", out), (
+            f"expected redacted URL with mock hostname, got: {out!r}"
+        )
 
     def test_replaces_servicenow_short_instance_name(self) -> None:
         text = '"instance":"Dev184242"'
@@ -83,7 +89,11 @@ class TestRedactText:
         text = "https://apisalesdemo8.successfactors.com/odata/v2"
         out = _redact_text(text)
         assert "apisalesdemo8" not in out.lower()
-        assert "apisalesdemomock.successfactors.com" in out
+        # URL-position match (preceded by ://) — same rationale as
+        # test_replaces_servicenow_dev_instance_hostname above.
+        assert re.search(r"https?://apisalesdemomock\.successfactors\.com\b", out), (
+            f"expected redacted URL with mock hostname, got: {out!r}"
+        )
 
     def test_replaces_sf_company_id(self) -> None:
         text = '"CompanyId":"SFCPART001804"'

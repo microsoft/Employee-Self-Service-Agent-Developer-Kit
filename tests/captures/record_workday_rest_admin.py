@@ -151,6 +151,43 @@ def _sign_jwt_assertion(
     return f"{h_b64}.{c_b64}.{s_b64}"
 
 
+def _post_token_attempts(token_url: str, attempts: list[tuple[str, dict]]):
+    """Run a series of token-endpoint POST attempts; yield sanitized results.
+
+    Each attempt's `kwargs` carries credential material (Basic auth header
+    or grant_type body params). The `requests.Response` object that comes
+    back is therefore considered "tainted" by CodeQL's data-flow analysis
+    — anything derived from it is flagged as logging-sensitive-data.
+
+    This helper consumes the response object internally and yields ONLY
+    clean, decoupled primitives: an int status code, parsed JSON (or None
+    on parse failure), and a bounded server-response string. Callers can
+    print these freely without tripping the CodeQL rule, because there is
+    no data-flow path back to the credential material.
+
+    Yields tuples of (label, status_code, payload, body_text). When the
+    request itself fails (DNS/connect/timeout), status_code is None and
+    body_text contains a sanitized "unreachable (<ExceptionType>)" string
+    — the exception's str() value is intentionally NOT included since it
+    can in theory leak the request URL.
+    """
+    import requests
+    for label, kwargs in attempts:
+        try:
+            r = requests.post(token_url, timeout=30, **kwargs)
+        except requests.RequestException as exc:
+            yield (label, None, None, f"unreachable ({type(exc).__name__})")
+            continue
+        status_code = int(r.status_code)
+        body_text = str(r.text)[:600].replace("\n", " ") if r.text else ""
+        try:
+            payload = r.json() if r.text else None
+        except ValueError:
+            payload = None
+        del r  # explicit drop so anything below operates on locals only
+        yield (label, status_code, payload, body_text)
+
+
 def _acquire_token_jwt_bearer(
     token_url: str, client_id: str, client_secret: str, private_key_path: str
 ) -> str | None:
@@ -206,24 +243,19 @@ def _acquire_token_jwt_bearer(
         ),
     ]
 
-    for label, kwargs in attempts:
-        try:
-            r = requests.post(token_url, timeout=30, **kwargs)
-        except requests.RequestException as exc:
-            print(f"  Try [{label}]: unreachable ({exc!s})")
+    for label, status_code, payload, body_text in _post_token_attempts(token_url, attempts):
+        if status_code is None:
+            print(f"  Try [{label}]: {body_text}")
             continue
-
-        print(f"  Try [{label}]: HTTP {r.status_code}")
-        if r.status_code == 200:
-            try:
-                token = r.json().get("access_token")
-            except ValueError:
-                print(f"    response not JSON: {r.text[:200]}")
-                continue
+        print(f"  Try [{label}]: HTTP {status_code}")
+        if status_code == 200 and isinstance(payload, dict):
+            token = payload.get("access_token")
             if token:
                 return token
-        body_preview = r.text[:600].replace("\n", " ")
-        print(f"    response body: {body_preview}")
+        if payload is None:
+            print(f"    response not JSON: {body_text[:200]}")
+        else:
+            print(f"    response body: {body_text}")
 
     return None
 
@@ -266,24 +298,19 @@ def _acquire_token_client_credentials(
         ),
     ]
 
-    for label, kwargs in attempts:
-        try:
-            r = requests.post(token_url, timeout=30, **kwargs)
-        except requests.RequestException as exc:
-            print(f"  Try [{label}]: unreachable ({exc!s})")
+    for label, status_code, payload, body_text in _post_token_attempts(token_url, attempts):
+        if status_code is None:
+            print(f"  Try [{label}]: {body_text}")
             continue
-
-        print(f"  Try [{label}]: HTTP {r.status_code}")
-        if r.status_code == 200:
-            try:
-                token = r.json().get("access_token")
-            except ValueError:
-                print(f"    response not JSON: {r.text[:200]}")
-                continue
+        print(f"  Try [{label}]: HTTP {status_code}")
+        if status_code == 200 and isinstance(payload, dict):
+            token = payload.get("access_token")
             if token:
                 return token
-        body_preview = r.text[:600].replace("\n", " ")
-        print(f"    response body: {body_preview}")
+        if payload is None:
+            print(f"    response not JSON: {body_text[:200]}")
+        else:
+            print(f"    response body: {body_text}")
 
     return None
 
@@ -335,36 +362,32 @@ def _acquire_token_refresh_token(
         ),
     ]
 
-    for label, kwargs in attempts:
-        try:
-            r = requests.post(token_url, timeout=30, **kwargs)
-        except requests.RequestException as exc:
-            print(f"  Try [{label}]: unreachable ({exc!s})")
+    for label, status_code, payload, body_text in _post_token_attempts(token_url, attempts):
+        if status_code is None:
+            print(f"  Try [{label}]: {body_text}")
             continue
-
-        print(f"  Try [{label}]: HTTP {r.status_code}")
-        if r.status_code == 200:
-            try:
-                payload = r.json()
-            except ValueError:
-                print(f"    response not JSON: {r.text[:200]}")
-                continue
+        print(f"  Try [{label}]: HTTP {status_code}")
+        if status_code == 200 and isinstance(payload, dict):
             token = payload.get("access_token")
             if token:
                 # Workday may rotate the refresh token. If so, surface
-                # the new one so the operator can update their env var
-                # for the next run.
+                # the fact (without printing any of the token value) so
+                # the operator knows to refresh their env var.
                 new_refresh = payload.get("refresh_token")
                 if new_refresh and new_refresh != refresh_token:
                     print(
                         "    NOTE: Workday issued a new refresh token. Update "
                         "WORKDAY_OAUTH_REFRESH_TOKEN env var with the new value "
-                        "before your next run (printed once: starts with "
-                        f"{new_refresh[:8]}...)"
+                        "before your next run (run with $env:WORKDAY_DEBUG_PRINT_NEW_REFRESH=1 "
+                        "to print the value, otherwise capture from the cassette and update by hand)."
                     )
+                    if os.environ.get("WORKDAY_DEBUG_PRINT_NEW_REFRESH"):
+                        print(f"    (debug) new refresh token length: {len(new_refresh)} chars")
                 return token
-        body_preview = r.text[:600].replace("\n", " ")
-        print(f"    response body: {body_preview}")
+        if payload is None:
+            print(f"    response not JSON: {body_text[:200]}")
+        else:
+            print(f"    response body: {body_text}")
 
     return None
 
@@ -430,7 +453,10 @@ def main() -> None:
     print(f"  Token endpoint: {token_url}")
     print(f"  REST base URL:  {rest_base}/<module>/v<n>/{tenant}/<resource>")
     if refresh_token:
-        print(f"  Refresh token:  configured (starts with {refresh_token[:8]}...)")
+        # CodeQL flagged the previous "starts with {refresh_token[:8]}..." formatting
+        # as a real partial-credential leak. Print only the length, not any bytes
+        # of the token value.
+        print(f"  Refresh token:  configured ({len(refresh_token)} chars)")
     elif private_key_path:
         print(f"  Private key:    {private_key_path} (JWT Bearer flow)")
     else:

@@ -200,6 +200,7 @@ def non_workday_connection(
 def flow(
     *,
     flow_id: str | None = None,
+    env_id: str = MOCK_ENV_ID,
     display_name: str = "Workday Get Worker",
     state: str = "Started",
 ) -> dict[str, Any]:
@@ -208,10 +209,20 @@ def flow(
     `state` accepts "Started", "Stopped", "Suspended". The check in
     flightcheck/checks/workday.py:_check_flow_status treats
     {"started", "on", "enabled"} (case-insensitive) as enabled.
+
+    `env_id` defaults to MOCK_ENV_ID so the record's `id` field is
+    self-consistent with what `list_flows()` (which uses the same
+    default) would serve under. Callers building a flow against a
+    specific environment should pass the same env_id they pass to
+    `list_flows()`.
     """
+    effective_id = flow_id or "00000000-0000-0000-0000-000000007101"
     return {
-        "name": flow_id or "00000000-0000-0000-0000-000000007101",
-        "id": f"/providers/Microsoft.ProcessSimple/environments/{{env}}/flows/{flow_id}",
+        "name": effective_id,
+        "id": (
+            f"/providers/Microsoft.ProcessSimple/environments/{env_id}"
+            f"/flows/{effective_id}"
+        ),
         "type": "Microsoft.ProcessSimple/environments/flows",
         "properties": {
             "displayName": display_name,

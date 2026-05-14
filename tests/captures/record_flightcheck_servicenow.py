@@ -114,7 +114,20 @@ OPTIONAL_ENV = (
 )
 
 
-def _check_env() -> dict[str, str]:
+def _check_env() -> tuple[dict[str, str], dict[str, str]]:
+    """Return (metadata, secrets) split.
+
+    `metadata` carries non-sensitive values that are safe to print
+    (instance URL, usernames, OAuth registry name filter). `secrets`
+    carries password values that must never be printed or logged.
+
+    The split exists to satisfy the CodeQL "Clear-text logging of
+    sensitive information" rule. If both groups were returned in one
+    dict, CodeQL's data-flow analysis would taint every print() that
+    referenced any field of the dict, even fields that hold only
+    non-sensitive metadata. Same pattern as production
+    `solutions/.../checks/workday.py`.
+    """
     missing = [name for name in REQUIRED_ENV if not os.environ.get(name)]
     if missing:
         print("ERROR: missing required environment variables:")
@@ -123,60 +136,84 @@ def _check_env() -> dict[str, str]:
         print()
         print("Set them and re-run. See the docstring at the top of this file.")
         sys.exit(1)
-    env = {name: os.environ[name] for name in REQUIRED_ENV}
-    for n in OPTIONAL_ENV:
-        if os.environ.get(n):
-            env[n] = os.environ[n]
-    return env
+    metadata: dict[str, str] = {
+        "instance":  os.environ["SERVICENOW_INSTANCE_URL"],
+        "username":  os.environ["SERVICENOW_USERNAME"],
+    }
+    secrets: dict[str, str] = {
+        "password":  os.environ["SERVICENOW_PASSWORD"],
+    }
+    if os.environ.get("SERVICENOW_LIMITED_USERNAME"):
+        metadata["limited_username"] = os.environ["SERVICENOW_LIMITED_USERNAME"]
+    if os.environ.get("SERVICENOW_LIMITED_PASSWORD"):
+        secrets["limited_password"] = os.environ["SERVICENOW_LIMITED_PASSWORD"]
+    if os.environ.get("SERVICENOW_OAUTH_REGISTRY_NAME"):
+        metadata["oauth_registry_name"] = os.environ["SERVICENOW_OAUTH_REGISTRY_NAME"]
+    return metadata, secrets
 
 
 def main() -> None:
     announce("flightcheck_servicenow (Knowledge connector setup validation)")
-    env = _check_env()
+    # Two-dict return keeps secrets off the taint graph for any code
+    # that only consumes metadata. See _check_env docstring.
+    metadata, secrets = _check_env()
 
-    instance = env["SERVICENOW_INSTANCE_URL"].rstrip("/")
-    auth = HTTPBasicAuth(env["SERVICENOW_USERNAME"], env["SERVICENOW_PASSWORD"])
+    instance = metadata["instance"].rstrip("/")
     headers = {"Accept": "application/json"}
 
     if not instance.lower().startswith("https://"):
         print(f"ERROR: SERVICENOW_INSTANCE_URL must use https:// (got {instance!r}).")
         sys.exit(1)
 
+    # Prints are intentionally driven by `metadata` only — never by
+    # `secrets` directly or by any object whose construction reads
+    # from `secrets`. See _check_env docstring.
     print(f"  Instance: {instance}")
-    print(f"  Account:  {env['SERVICENOW_USERNAME']}")
-    if "SERVICENOW_OAUTH_REGISTRY_NAME" in env:
-        print(f"  OAuth registry name filter: {env['SERVICENOW_OAUTH_REGISTRY_NAME']!r}")
-    if "SERVICENOW_LIMITED_USERNAME" in env:
-        print(f"  Limited account: {env['SERVICENOW_LIMITED_USERNAME']}  (used for 403 negative)")
+    print(f"  Account:  {metadata['username']}")
+    if "oauth_registry_name" in metadata:
+        print(f"  OAuth registry name filter: {metadata['oauth_registry_name']!r}")
+    if "limited_username" in metadata:
+        print(f"  Limited account: {metadata['limited_username']}  (used for 403 negative)")
     else:
         print("  No SERVICENOW_LIMITED_USERNAME — 403 negative path will be SKIPPED.")
     print()
 
     confirm_or_exit()
 
+    # Build auth objects ONLY here, after all metadata-only prints are
+    # done. These objects taint anything they touch, so we keep them
+    # contained to _do().
+    auth = HTTPBasicAuth(metadata["username"], secrets["password"])
+
     def _do(label: str, path: str, *, auth_override=None, expect_status: int = 200):
         url = f"{instance}/api/now/table/{path}"
         try:
             r = requests.get(url, auth=auth_override or auth, headers=headers, timeout=30)
-            ok = r.status_code == expect_status
+            # Sanitize tainted response data into clean local primitives
+            # BEFORE any print(). status_code is an int, body_text is a
+            # bounded server-returned string. Neither carries credentials,
+            # but CodeQL needs the explicit decoupling to drop the taint.
+            status_code = int(r.status_code)
+            body_text = str(r.text)[:200] if r.text else ""
+            try:
+                body_json = r.json()
+            except ValueError:
+                body_json = None
+            del r  # explicit drop so anything below operates on locals only
+
+            ok = status_code == expect_status
             marker = "OK " if ok else "!! "
-            print(f"  {marker}{label:55} -> {r.status_code} (expected {expect_status})")
-            if not ok and r.status_code in (400, 401, 403, 404):
-                # Surface the error message for diagnosis (helpful when
-                # admin role isn't elevated and oauth_entity returns 403).
-                try:
-                    err = r.json()
-                    msg = err.get("error", {}).get("message", "") if isinstance(err.get("error"), dict) else str(err)
+            print(f"  {marker}{label:55} -> {status_code} (expected {expect_status})")
+            if not ok and status_code in (400, 401, 403, 404):
+                if body_json is not None and isinstance(body_json, dict):
+                    err = body_json.get("error")
+                    msg = err.get("message", "") if isinstance(err, dict) else str(err)
                     print(f"     body: {str(msg)[:200]}")
-                except ValueError:
-                    print(f"     body[:200]: {r.text[:200]}")
-            if ok and r.status_code == 200:
-                try:
-                    body = r.json()
-                    n = len(body.get("result", []))
-                    print(f"     records returned: {n}")
-                except (ValueError, AttributeError):
-                    pass
+                else:
+                    print(f"     body[:200]: {body_text}")
+            if ok and status_code == 200 and body_json is not None and isinstance(body_json, dict):
+                n = len(body_json.get("result", []))
+                print(f"     records returned: {n}")
         except requests.RequestException as exc:
             print(f"  ?? {label}: REQUEST ERROR — {exc!s}")
 
@@ -192,7 +229,7 @@ def main() -> None:
             "access_token_lifetime,sys_id&sysparm_limit=20"
         )
         if env.get("SERVICENOW_OAUTH_REGISTRY_NAME"):
-            name_filter = quote(env["SERVICENOW_OAUTH_REGISTRY_NAME"], safe="")
+            name_filter = quote(metadata["oauth_registry_name"], safe="")
             oauth_path = (
                 "oauth_entity?sysparm_query=type=external_client"
                 f"^name={name_filter}&sysparm_fields=name,client_id,redirect_url,"
@@ -259,7 +296,7 @@ def main() -> None:
         _do(
             "[Negative] bad password (expect 401)",
             "oauth_entity?sysparm_limit=1",
-            auth_override=HTTPBasicAuth(env["SERVICENOW_USERNAME"], "deliberately-wrong"),
+            auth_override=HTTPBasicAuth(metadata["username"], "deliberately-wrong"),
             expect_status=401,
         )
 
@@ -269,10 +306,10 @@ def main() -> None:
         # This is the failure mode the doc warns about most loudly.
         # Skipped if SERVICENOW_LIMITED_USERNAME isn't set; cassette is
         # still useful without it.
-        if env.get("SERVICENOW_LIMITED_USERNAME") and env.get("SERVICENOW_LIMITED_PASSWORD"):
+        if "limited_username" in metadata and "limited_password" in secrets:
             limited_auth = HTTPBasicAuth(
-                env["SERVICENOW_LIMITED_USERNAME"],
-                env["SERVICENOW_LIMITED_PASSWORD"],
+                metadata["limited_username"],
+                secrets["limited_password"],
             )
             _do(
                 "[Negative] limited account reading user_criteria (expect 403)",

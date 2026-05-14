@@ -30,7 +30,6 @@ check, and assert on the CheckResult list it produces.
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from typing import Any
 
@@ -41,16 +40,6 @@ from tests.conftest import require_validated_mock
 from tests.mocks import dataverse as dv
 
 require_validated_mock(dv)
-
-
-# Make the production source importable. (The pytest pythonpath in
-# pyproject.toml already does this, but spell it out so the test file
-# is also runnable in isolation via `python -m tests.flightcheck.checks.test_workday_env_vars`.)
-SCRIPTS_PATH = (
-    pytest.Path(__file__).resolve().parents[3]
-    if hasattr(pytest, "Path")
-    else None
-)
 
 
 # ───────────────────────────────────────────────────────────────────────
