@@ -168,10 +168,17 @@ REDACT_REGEX: list[tuple[re.Pattern[str], str]] = [
     # Replaces every GUID with a stable fake. This is aggressive — if you
     # need to keep specific GUIDs for a test, exempt them by editing the
     # cassette by hand after recording.
+    #
+    # Boundary uses negative lookaround for "not preceded/followed by hex
+    # or dash" rather than \b. Plain \b fails when the GUID is followed
+    # by `_` (PowerShell-pasted SKU IDs like `{tenantGuid}_{skuGuid}`)
+    # because `_` is a word character — so \b doesn't fire between the
+    # final hex char and `_`. The lookaround treats `_` as a boundary,
+    # closing a real PII leak we hit in flightcheck_graph.yaml.
     (
         re.compile(
-            r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
-            r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+            r"(?<![0-9a-fA-F-])[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+            r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?![0-9a-fA-F-])"
         ),
         "00000000-0000-0000-0000-000000001111",
     ),

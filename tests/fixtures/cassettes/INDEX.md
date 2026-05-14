@@ -24,6 +24,9 @@ endpoint it captures.
 | Microsoft Graph v1.0 | `GET /v1.0/users?$top=10` | 200 | `flightcheck_graph.yaml` |
 | Microsoft Graph v1.0 | `GET /v1.0/directoryRoles` | 200 | `flightcheck_graph.yaml` |
 | Microsoft Graph v1.0 | `GET /v1.0/identity/conditionalAccess/policies` | 200 | `flightcheck_graph.yaml` |
+| Microsoft Graph v1.0 | `GET /v1.0/subscribedSkus` | 200 | `flightcheck_graph.yaml` |
+| Microsoft Graph v1.0 | `GET /v1.0/servicePrincipals?$top=10&$select=...` (sample only — full list is too large) | 200 | `flightcheck_graph.yaml` |
+| Microsoft Graph v1.0 | `GET /v1.0/external/connections` (M365 Copilot Connectors — backs future Microsoft-side validation of connectors like ServiceNow Knowledge) | 200 (empty `value` if none registered — captured shape today) | `flightcheck_graph.yaml` |
 | Power Platform Admin (BAP) | `GET /providers/Microsoft.BusinessAppPlatform/scopes/admin/environments` | 200 | `flightcheck_pp_admin.yaml` |
 | Power Platform Admin (BAP) | `GET /providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/{env_id}` | 200 | `flightcheck_pp_admin.yaml` |
 | Power Platform Admin (BAP) | `GET /providers/Microsoft.BusinessAppPlatform/scopes/admin/apiPolicies` | 200 | `flightcheck_pp_admin.yaml` |

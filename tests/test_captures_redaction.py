@@ -43,6 +43,22 @@ class TestRedactText:
         assert "4f24a3e1-9bcd-4f00-aa11-deadbeef0001" not in out
         assert "00000000-0000-0000-0000-000000001111" in out
 
+    def test_replaces_guid_followed_by_underscore(self) -> None:
+        # Regression: Microsoft SKU IDs concatenate two GUIDs with `_`
+        # (e.g. {tenantGuid}_{skuGuid}). The earlier \b boundary failed
+        # because `_` is a word character — \b doesn't fire between hex
+        # and `_`, so the leading GUID was NOT scrubbed and a real
+        # tenant id leaked through into flightcheck_graph.yaml.
+        # Regex now uses lookarounds for "not preceded/followed by
+        # hex-or-dash" which treats `_` as a boundary correctly.
+        sku_id = "4f24a3e1-9bcd-4f00-aa11-deadbeef0001_a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+        text = f'"id":"{sku_id}"'
+        out = _redact_text(text)
+        assert "4f24a3e1-9bcd-4f00-aa11-deadbeef0001" not in out
+        assert "a1b2c3d4-e5f6-7890-abcd-ef1234567890" not in out
+        # Both GUIDs collapse to the same placeholder.
+        assert out.count("00000000-0000-0000-0000-000000001111") == 2
+
     def test_replaces_workday_wid(self) -> None:
         wid = "ab" * 16  # 32 hex chars
         text = f"<wd:ID>{wid}</wd:ID>"
