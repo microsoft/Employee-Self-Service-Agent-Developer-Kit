@@ -99,20 +99,42 @@ per the workflow above.
 
 ## The cardinal rule
 
-> **You may not write FlightCheck integration tests against APIs that have
-> not been confirmed real with a captured cassette.**
+> **You may not write FlightCheck integration tests against APIs whose
+> contracts you have not verified using one of the three permitted
+> tiers (`validated`, `validatable`, `documented`). The `placeholder`
+> tier is NEVER permitted in a FlightCheck test.**
 
-"Confirmed real" means: a cassette in `tests/fixtures/cassettes/` captured
-a real response from that exact endpoint against a live tenant. The
-cassette acts as evidence the endpoint exists, accepts the request shape
-the kit builds, and returns the response shape the kit consumes.
+The full tier definitions live in
+`solutions/ess-maker-skills/scripts/flightcheck/AGENTS.md` →
+"The cardinal rule" / "The four mock tiers." The per-API tier
+assignment lives in `tests/fixtures/cassettes/INDEX.md` →
+"API tier registry." Read both before writing your test.
 
-If you think an endpoint exists but no cassette covers it, **stop, do not
-guess, do not invent a mock, do not write the test.** Tell the user to
-capture a cassette first. A made-up mock that passes a test you wrote is
-worse than no test at all — it gives false confidence that the production
-code works when it may be calling an endpoint that doesn't exist or has
-a different shape than you assumed.
+Quick summary for test authors:
+
+| Tier | What backs the mock | Cassette? |
+|---|---|---|
+| `validated` | Real captured cassette in `tests/fixtures/cassettes/`. Test replays the cassette via `responses` / `respx`. | Required |
+| `validatable` | Public schema (CSDL / OpenAPI / well-known config) + MS Learn doc with example response, both cited in the mock builder docstring. The check author already verified the property names and types against the schema. Your test uses the hand-built mock derived from the schema. | Not required (welcome as supplementary) |
+| `documented` | Verbatim copy of the vendor's documented example response, with the doc URL (anchored) cited in the mock builder docstring. Your test uses the hand-built mock derived from the doc example. | Not required |
+| `placeholder` | Schema-grounded best guess. **Refused by the conftest enforcement helper.** | N/A |
+
+For the `validated` tier, the unit of confirmation is **method + path
++ response shape**, not the exact query string. Server-side query
+parameters that narrow, project, sort, or paginate the same resource
+(`$filter`, `$select`, `$top`, `$orderby`, `$skip`, ServiceNow
+`sysparm_query` / `sysparm_fields`, Workday WQL `WHERE` / `LIMIT`,
+etc.) do NOT require a new cassette — the existing capture for the
+same path + method covers all narrowing variants. See the "What
+counts as the same endpoint" section in
+`solutions/ess-maker-skills/scripts/flightcheck/AGENTS.md` for the
+full rule, including the exceptions (`$expand`, `$count=true`,
+`$apply`, and anything that switches list-shape vs single-item-shape).
+
+If you'd need a `placeholder` mock for any test, **stop, do not
+guess, do not invent a mock.** Either pick a stronger tier and do
+the per-tier verification, or tell the user to capture / promote
+the API surface first.
 
 This rule does not apply to:
 - Tests of the kit's pure-logic helpers (no network).
@@ -128,49 +150,56 @@ It does apply to:
 
 ---
 
-## How to check whether an API is "confirmed real"
+## How to identify which tier an API is in
 
-Three places to look, in this order:
+Two places to look, in this order:
 
-1. **`tests/fixtures/cassettes/INDEX.md`** — the registry. Lists every
-   confirmed endpoint with the cassette filename. If your endpoint is
-   not in the index, it is not confirmed.
+1. **`tests/fixtures/cassettes/INDEX.md` → "API tier registry"** —
+   the canonical per-API tier list (validated / validatable /
+   documented). If the API isn't in the registry, STOP and tell the
+   user; the tier must be decided before you can pick a verification
+   path.
 
-2. **`tests/mocks/<api>.py` module header.** Every mock module declares
-   `MOCK_STATUS = "validated"` (cassette-backed) or
-   `MOCK_STATUS = "placeholder"` (schema-grounded best guess). Validated
-   modules are safe to use in integration tests; placeholder modules
-   are not.
+2. **`tests/mocks/<api>.py` module header.** Every mock module
+   declares `MOCK_STATUS = "validated" | "validatable" | "documented"
+   | "placeholder"`. The first three are usable in FlightCheck tests;
+   the last one is rejected by `require_validated_mock()` at test
+   collection time.
 
-3. **Each mock builder's docstring.** A validated builder cites the
-   cassette + line range it was derived from. A placeholder builder
-   cites the missing cassette path that needs to be captured.
+3. **Each mock builder's docstring.** A `validated` builder cites the
+   cassette + line range. A `validatable` builder cites the schema URL
+   (e.g. `https://graph.microsoft.com/v1.0/$metadata`) + the MS Learn
+   operation doc. A `documented` builder cites the MS Learn doc URL
+   with anchor + has the example response copied verbatim.
 
-If any of these three signals say "not confirmed", treat it as not
-confirmed and stop.
+If the registry tier and the mock module's `MOCK_STATUS` disagree,
+the registry wins — the mock module needs to be updated (or the
+registry corrected with rationale).
 
 ---
 
-## What to do when you need a new API
+## What to do when you need a new endpoint
 
-When a new FlightCheck check needs an endpoint that is not in the index,
-stop and tell the user. **Do not proceed with implementation.** Use this
-template for the message:
+The action depends on which tier the API is in:
+
+**For `validated` APIs:** when a new FlightCheck check needs an
+endpoint that is not in the "Confirmed endpoints" table of `INDEX.md`,
+stop and tell the user. Use this template:
 
 > I need to write a test for FlightCheck check `<checkpoint id>`, which
 > calls `<HTTP method> <full URL pattern>` on `<service name>`. This
-> endpoint is not in `tests/fixtures/cassettes/INDEX.md` and not covered
-> by any existing cassette, so I cannot verify the response shape my mock
-> would produce matches reality.
+> API is in the `validated` tier and no existing cassette covers this
+> path + method. I cannot verify the response shape my mock would
+> produce matches reality.
 >
 > Before I continue, please capture a cassette for this endpoint:
 >
 > 1. If a recording wrapper for this endpoint already exists in
 >    `tests/captures/`, set the required env vars and run it. Otherwise:
 > 2. Create a new recording wrapper modelled on
->    `tests/captures/record_dataverse_whoami.py`. Set
->    `ESS_DATAVERSE_URL` (or the equivalent for the service) and any
->    other required env vars, then run it.
+>    `tests/captures/record_flightcheck_pp_admin.py`. Set the required
+>    env vars (e.g. `ESS_DATAVERSE_URL` for tenant resolution, plus any
+>    service-specific creds) and run it.
 > 3. Review the captured cassette in `tests/fixtures/cassettes/.raw/`
 >    by eyeball for any leftover real names / emails / instance IDs the
 >    redactor missed.
@@ -179,13 +208,31 @@ template for the message:
 >    endpoints the cassette covers.
 > 6. Tell me when done and I'll resume.
 
-Do not invent a wrapper, mock, or cassette on your own. The whole point
-of the cassette is that it came from a real API — synthetic data
-defeats the purpose.
+**For `validatable` APIs:** fetch the published schema yourself and
+verify each property the check consumes — see `flightcheck/AGENTS.md`
+"Workflow" step 2 for the per-API schema URLs. Add a builder to
+`tests/mocks/<api>.py` derived from the schema; cite the schema URL
+and the MS Learn operation doc in the docstring. No need to ask the
+user for anything if the schema covers what you need.
+
+**For `documented` APIs:** fetch the MS Learn (or vendor) operation
+doc, copy the example response verbatim into the new builder
+docstring, cite the doc URL with anchor. Note documented is the
+weakest tier — use it only when validatable and validated aren't
+feasible for that API.
+
+Do not invent a wrapper, mock, or schema fragment. The whole point of
+the tier system is that everything in a builder traces back to a real
+captured response, a published schema, or a vendor-documented example.
 
 ---
 
-## How to add a new mock builder (validated path)
+## How to add a new mock builder
+
+The procedure depends on the API's tier. Look it up in
+`tests/fixtures/cassettes/INDEX.md` → "API tier registry" first.
+
+### Validated tier (cassette-backed)
 
 Once a cassette is captured:
 
@@ -200,26 +247,89 @@ Once a cassette is captured:
        Cited consumers:
          - solutions/ess-maker-skills/scripts/flightcheck/checks/my_check.py:42
 
-       Reference: tests/fixtures/cassettes/my_capture.yaml line 1234-1280
+       Source (validated):
+         tests/fixtures/cassettes/my_capture.yaml line 1234-1280
        """
    ```
-4. If the module was previously a placeholder, flip
-   `MOCK_STATUS = "validated"` and remove the placeholder banner.
-5. Update `tests/fixtures/cassettes/INDEX.md` to record the new
-   endpoint coverage.
+4. Ensure the module declares `MOCK_STATUS = "validated"` and
+   `MOCK_CASSETTE = "tests/fixtures/cassettes/<file>.yaml"`.
+5. Update `tests/fixtures/cassettes/INDEX.md` "Confirmed endpoints"
+   table to record the new endpoint coverage.
+
+### Validatable tier (schema-backed, no cassette)
+
+1. Fetch the API's published schema (see `flightcheck/AGENTS.md`
+   "Workflow" step 2 for per-API schema URLs).
+2. Locate the entity type your builder represents. Read off the field
+   names and types you'll populate.
+3. Add a builder to the appropriate `tests/mocks/<api>.py` module.
+4. In the builder's docstring, cite the schema URL + the MS Learn
+   operation doc. Example:
+   ```python
+   def my_user(*, ...) -> dict[str, Any]:
+       """User response shape used by FOO-NNN.
+
+       Cited consumers:
+         - solutions/ess-maker-skills/scripts/flightcheck/checks/<category>.py:NN
+
+       Source (validatable):
+         Schema: https://graph.microsoft.com/v1.0/$metadata
+                 EntityType Name="user" — fields used:
+                   id (Edm.String)
+                   displayName (Edm.String)
+                   userPrincipalName (Edm.String)
+         Docs: https://learn.microsoft.com/graph/api/user-get
+       """
+   ```
+5. Ensure the module declares `MOCK_STATUS = "validatable"` and
+   `MOCK_SCHEMA_SOURCE = "<schema URL>"`. (The conftest enforcement
+   helper accepts validatable as usable for FlightCheck tests.)
+
+### Documented tier (vendor docs, no schema)
+
+1. Open the vendor's API reference page for the operation.
+2. Locate the example response section. Copy the example JSON
+   verbatim into the builder docstring.
+3. Add a builder that returns a payload with the same shape; allow
+   keyword overrides for the fields a test will want to vary.
+4. Cite the doc URL with anchor in the docstring. Example:
+   ```python
+   def my_env_var(*, name: str = "X", value: str = "v") -> dict:
+       """Dataverse environment variable definition record.
+
+       Cited consumers:
+         - solutions/ess-maker-skills/scripts/flightcheck/checks/workday.py:NN
+
+       Source (documented):
+         https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/environmentvariabledefinition#response
+         Example response copied verbatim 2026-XX-XX.
+       """
+   ```
+5. Ensure the module declares `MOCK_STATUS = "documented"`.
+
+### Promoting a builder to a higher tier
+
+If a `documented` builder later gets cassette coverage, promote it to
+`validated` (and update the docstring + module header). If a
+`placeholder` builder is encountered, it must be promoted before any
+FlightCheck test can use it — pick whichever of the three permitted
+tiers fits the API.
 
 ---
 
-## How to write a FlightCheck integration test (validated path)
+## How to write a FlightCheck integration test
 
 Pattern (mirrors `tests/flightcheck/checks/test_workday_env_vars.py`):
 
 ```python
 import pytest, responses
-from tests.mocks import dataverse as dv  # only validated modules
+from tests.mocks import dataverse as dv  # validated, validatable, or documented — never placeholder
+from tests.conftest import require_validated_mock
 
 @responses.activate
 def test_my_check_passes_when_state_is_good(...):
+    require_validated_mock(dv)  # fails fast if dv.MOCK_STATUS == "placeholder"
+
     # Arrange: register mocks for the desired tenant state.
     responses.add(**dv.query(...))
 
@@ -239,8 +349,9 @@ Each new check needs at minimum:
 - Edge tests for any branches in the check logic (no token, partial data,
   unexpected error response).
 
-If a placeholder mock would be needed for any of the above, **stop and
-request the cassette per the template above.**
+If a `placeholder` mock would be needed for any of the above, **stop
+and follow "What to do when you need a new endpoint" above** to
+promote the builder (or capture a cassette) per the API's tier.
 
 ---
 
@@ -263,11 +374,19 @@ This prevents silent regressions while making the bug visible.
 
 ## Things you should not do
 
-- Don't invent endpoint URLs, method names, or response shapes.
-- Don't assume a placeholder mock is "close enough" to write an
-  integration test against. Either get a cassette or skip the test.
-- Don't disable `require_validated_mock()` enforcement in `conftest.py`
-  to make a test pass.
+- Don't invent endpoint URLs, method names, or response shapes —
+  every field in a mock must trace to a captured cassette, a public
+  schema, or a vendor-documented example.
+- Don't use a `placeholder` mock in a FlightCheck test. The
+  `require_validated_mock()` enforcement helper rejects placeholder
+  at collection time. Promote the builder to validated / validatable /
+  documented first.
+- Don't pick a weaker tier than the API tier registry mandates. If
+  `INDEX.md` says an API is `validated`, treating it as `documented`
+  to avoid capturing a cassette is a violation. Change the registry
+  (with rationale) if you genuinely need a different tier.
+- Don't disable `require_validated_mock()` enforcement in
+  `conftest.py` to make a test pass.
 - Don't redact a cassette by hand without running it through
   `tests/captures/_redact.py` — the script enforces the canonical
   substitution table.

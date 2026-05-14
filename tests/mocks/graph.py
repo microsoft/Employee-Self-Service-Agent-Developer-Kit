@@ -5,17 +5,22 @@
 Mock response builders for Microsoft Graph v1.0.
 
 # ─────────────────────────────────────────────────────────────────
-# MOCK_STATUS = "validated"
+# MOCK_STATUS = "validatable"
 #
-# Backed by a real captured cassette. Safe to use in FlightCheck
-# integration tests under tests/flightcheck/.
+# Backed by the publicly-fetchable Graph CSDL (no auth required).
+# Each builder's response shape is verified against an EntityType in
+# the schema; the cited MS Learn operation page provides the example
+# response body Microsoft itself maintains.
 #
-# Cassette: tests/fixtures/cassettes/flightcheck_graph.yaml
-# Endpoints covered: see tests/fixtures/cassettes/INDEX.md
+# Schema:  https://graph.microsoft.com/v1.0/$metadata
+# Docs:    https://learn.microsoft.com/graph/api/{operation}
+# Tier:    validatable (see tests/fixtures/cassettes/INDEX.md
+#          "API tier registry")
 # ─────────────────────────────────────────────────────────────────
 
 Used by FlightCheck integration tests for any check that reads tenant
-identity, users, directory roles, or Conditional Access policies via
+identity, users, directory roles, Conditional Access policies, or
+service principals via
 solutions/ess-maker-skills/scripts/flightcheck/graph_client.py.
 
 References:
@@ -31,8 +36,8 @@ from __future__ import annotations
 from typing import Any, Iterable, Mapping
 
 # Validation status — read by tests/conftest.py:require_validated_mock().
-MOCK_STATUS = "validated"
-MOCK_CASSETTE = "tests/fixtures/cassettes/flightcheck_graph.yaml"
+MOCK_STATUS = "validatable"
+MOCK_SCHEMA_SOURCE = "https://graph.microsoft.com/v1.0/$metadata"
 
 GRAPH_BASE = "https://graph.microsoft.com/v1.0"
 
@@ -55,8 +60,10 @@ def organization(
     Cited consumers:
       - flightcheck/graph_client.py:169-172 (get_organization).
 
-    Reference: tests/fixtures/cassettes/flightcheck_graph.yaml line 19-46
-    (one record returned in the value array).
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="organization"
+      Docs:   https://learn.microsoft.com/graph/api/organization-get
     """
     return {
         "id": tenant_id,
@@ -107,7 +114,10 @@ def user(
     Cited consumers:
       - flightcheck/graph_client.py:186-189 (get_users_sample).
 
-    Reference: tests/fixtures/cassettes/flightcheck_graph.yaml line 64-99.
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="user"
+      Docs:   https://learn.microsoft.com/graph/api/user-get
     """
     return {
         "businessPhones": [],
@@ -135,7 +145,10 @@ def directory_role(
     Cited consumers:
       - flightcheck/graph_client.py:174-180 (get_directory_roles, get_role_members).
 
-    Reference: tests/fixtures/cassettes/flightcheck_graph.yaml line 119-340.
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="directoryRole"
+      Docs:   https://learn.microsoft.com/graph/api/directoryrole-get
     """
     return {
         "id": role_id,
@@ -157,7 +170,10 @@ def conditional_access_policy(
     Cited consumers:
       - flightcheck/graph_client.py:182-184 (get_conditional_access_policies).
 
-    Reference: tests/fixtures/cassettes/flightcheck_graph.yaml line 359-388.
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="conditionalAccessPolicy"
+      Docs:   https://learn.microsoft.com/graph/api/conditionalaccesspolicy-get
     """
     return {
         "id": policy_id,

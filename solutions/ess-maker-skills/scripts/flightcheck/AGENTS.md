@@ -11,18 +11,68 @@ in `tests/AGENTS.md`. They complement each other; you need both.
 
 ## The cardinal rule
 
-> **Every FlightCheck check that calls an external API must have a
-> captured cassette of real responses from that API, AND a test that
-> exercises the check against the cassette.**
+> **Every FlightCheck check that calls an external API must verify the
+> API contract it depends on before shipping, using one of three
+> permitted tiers (`validated`, `validatable`, `documented`). The
+> `placeholder` tier is NEVER permitted for FlightCheck.**
 
-A check that calls an endpoint nobody has confirmed exists is worse than
-no check at all — it produces a confidently wrong result and erodes the
-trust customers place in FlightCheck.
+A check that calls an endpoint nobody has confirmed is worse than no
+check at all — it produces a confidently wrong result and erodes the
+trust customers place in FlightCheck. Different APIs warrant different
+verification methods; what's not negotiable is that some real
+verification happens for every check.
 
-"Confirmed real" means: there is a cassette in
-`tests/fixtures/cassettes/` listed in `tests/fixtures/cassettes/INDEX.md`
-that captured the exact endpoint + method + response shape from a live
-tenant. If the endpoint isn't in `INDEX.md`, it isn't confirmed.
+### The four mock tiers
+
+| Tier | Verification method | When it applies | Cassette? |
+|---|---|---|---|
+| `validated` | Captured cassette in `tests/fixtures/cassettes/` from a real tenant. The cassette IS the ground truth for response shape. | APIs without public schemas, or where per-tenant variance matters (custom fields, tenant-specific config, undocumented internal APIs). | **Required** |
+| `validatable` | Public machine-readable schema (CSDL / OpenAPI / well-known config) fetched by the check author + cited MS Learn doc URL with example response. The author MUST verify, while writing the check, that every property the check consumes appears in the schema with the expected type. | Microsoft 1st-party APIs that publish schemas at stable, no-auth URLs. | Not required (cassettes still welcome as supplementary evidence) |
+| `documented` | Vendor prose docs + a verbatim copy of the documented example response pasted into the mock builder docstring, with the doc URL (anchored) cited. Weaker tier — only use when neither validatable nor validated is feasible. | APIs with good prose docs but no public machine-readable schema and no interactive test path. | Not required |
+| `placeholder` | Schema-grounded best guess. **NOT permitted in any FlightCheck check.** | Test infrastructure scratch only. | N/A |
+
+The per-API tier assignment is fixed in `tests/fixtures/cassettes/INDEX.md`
+under "API tier registry." Use the tier the registry mandates for each
+API — don't silently pick a weaker one. If you need a different tier
+for an API, change the registry first (with rationale in your PR).
+
+### What counts as the "same endpoint" (validated tier)
+
+For the `validated` tier, the unit of confirmation is **method + path
++ response shape** — NOT the exact query string. Server-side queryparameters that only narrow,
+project, sort, or paginate over the same resource collection do not
+require a new cassette. The same item shape comes back regardless of
+how you filter for it.
+
+Concretely:
+
+- `GET /users?$top=10` and
+  `GET /users?$filter=mail eq '...'` and
+  `GET /users?$select=id,displayName` and
+  `GET /users` (no params) are all the **same endpoint** for
+  cassette purposes. One captured cassette covers all four.
+- Same for ServiceNow `sysparm_query` / `sysparm_fields` / `sysparm_limit`,
+  Dataverse `$filter` / `$select`, Workday WQL `WHERE` / `LIMIT` clauses,
+  and Power Platform Admin API `$filter`. These are server-side narrowing
+  on a captured collection — no new cassette needed.
+
+What DOES require a new cassette:
+
+- A different **path** — `/users/{id}` and
+  `/users/{id}/manager` are distinct from
+  `/users` and each need their own capture.
+- A different **method** — `POST /users` vs `GET`.
+- Query parameters that **change the response shape**, not just narrow it:
+  - `$expand=` (adds nested objects that wouldn't be there otherwise)
+  - `$count=true` (adds an `@odata.count` field at the top level)
+  - `$apply=` (aggregations — completely different shape)
+  - Any param that switches between page-of-items and single-item shapes.
+- A different **response branch** the check must handle (e.g. a 404 or
+  401 you intend to assert against — capture the negative path too).
+
+If you're not sure whether a query param changes the shape, capture it.
+The cost of an unnecessary cassette is a few KB; the cost of a check
+built against a guessed shape is a false-confidence FlightCheck pass.
 
 ---
 
@@ -30,35 +80,64 @@ tenant. If the endpoint isn't in `INDEX.md`, it isn't confirmed.
 
 Do these steps in order. Don't skip any.
 
-### 1. Check whether the API is confirmed real
+### 1. Look up the API tier
 
-Read `tests/fixtures/cassettes/INDEX.md`. Look in the "Confirmed
-endpoints" table for the exact `method + URL pattern` you intend to
-call. If it's there with a green status, proceed to step 4.
+Open `tests/fixtures/cassettes/INDEX.md` → "API tier registry." Find
+the API surface you're calling; the tier (`validated` / `validatable`
+/ `documented`) tells you which verification path is required.
 
-### 2. If the API is NOT in the index — STOP
+If the API is not in the registry, STOP. Tell the user:
 
-Do not write the check. Do not invent a URL based on what seems plausible
-from the docs. Do not copy a snippet from another part of the codebase
-and assume the endpoint works. Do not write a mock builder by hand and
-assume it matches reality. Tell the user:
+> I need to write a FlightCheck check that calls `<API surface>` for
+> `<checkpoint id>`. This API isn't in the API tier registry in
+> `tests/fixtures/cassettes/INDEX.md`. Please decide which tier it
+> belongs in (validated / validatable / documented) and add the row;
+> then I'll resume.
 
-> I need to write a FlightCheck check for `<checkpoint id>` which calls
-> `<HTTP method> <full URL pattern>` on `<service name>`. This endpoint
-> is not in `tests/fixtures/cassettes/INDEX.md`, so I cannot confirm
-> the response shape or even that the endpoint exists.
->
-> Before I continue, please capture a cassette for this endpoint.
-> Follow the steps in `tests/AGENTS.md` under "How to add a new mock
-> builder (validated path)". Then I'll resume.
+### 2. Do the per-tier verification
 
-### 3. After a cassette is captured
+**If the tier is `validated`:** read the "Confirmed endpoints" table
+in `INDEX.md`. Match by method + path (query-string variants of the
+same path are covered — see "What counts as the same endpoint"
+above). If your method + path is missing, STOP and tell the user:
 
-Once the cassette is in `tests/fixtures/cassettes/` and `INDEX.md` is
-updated, you can write the check. The cassette is your ground truth
-for the response shape.
+> I need to write a FlightCheck check for `<checkpoint id>` that calls
+> `<HTTP method> <path>` on `<service name>`. This API is in the
+> `validated` tier but no cassette covers this path + method. Please
+> capture one per `tests/AGENTS.md` "How to add a new mock builder
+> (validated path)." Then I'll resume.
 
-### 4. Write the check
+If the row exists, the cassette is your ground truth. Proceed to step 3.
+
+**If the tier is `validatable`:** fetch the API's public schema and
+verify the specific properties your check will consume against it.
+Schema sources currently approved:
+
+| API | Schema URL (no auth) | Operation docs |
+|---|---|---|
+| Microsoft Graph v1.0 | `https://graph.microsoft.com/v1.0/$metadata` (CSDL XML, ~2.7 MB) | `https://learn.microsoft.com/graph/api/{operation}` |
+| Microsoft Entra OAuth2 | `https://login.microsoftonline.com/common/v2.0/.well-known/openid-configuration` (OpenID discovery) | `https://learn.microsoft.com/entra/identity-platform/v2-oauth2-*` |
+
+Walk through the schema for each entity you'll consume. For every
+field the check reads, confirm:
+- The field exists on the entity.
+- The type matches what the check expects (`Edm.Boolean`, `Edm.String`,
+  collection type, etc.).
+- For enum-typed fields (e.g. `principalType` = `User`/`Group`/...),
+  the enum members include every value your check branches on.
+
+Quote the schema fragment + the MS Learn example response in the
+mock builder docstring. The author's schema walk-through IS the
+validation — you're attesting that the contract you coded against
+came from the schema, not memory or guesswork. Proceed to step 3.
+
+**If the tier is `documented`:** fetch the MS Learn (or vendor) doc
+page for the operation. Locate the "Response" section; copy the
+example JSON verbatim into the mock builder docstring. Cite the doc
+URL with anchor (e.g. `https://learn.microsoft.com/.../create#response-1`).
+Proceed to step 3.
+
+### 3. Write the check
 
 Place the check in the appropriate `checks/{category}.py` module. The
 check function:
@@ -69,39 +148,51 @@ check function:
   `description`, `result`, optional `remediation` and `doc_link`.
 - Maps cleanly to good-state / bad-state / partial-state branches.
 
-### 5. Write the test BEFORE you ship
+### 4. Write the test BEFORE you ship
 
 In `tests/flightcheck/checks/test_{category}.py`:
 - One test for the GOOD state (mock returns valid data → check returns
   PASSED).
-- One test for the BAD state (mock returns missing/invalid data → check
-  returns FAILED with a remediation that points at a real fix path).
+- One test for the BAD state (mock returns missing/invalid data →
+  check returns FAILED with a remediation that points at a real fix
+  path).
 - Edge tests for any branches in the check logic.
 
-If a placeholder mock would be needed for any of the above, **the API
-isn't actually confirmed real for your purpose** — go back to step 2.
+Use the mock builder for that API. Its `MOCK_STATUS` (in the module
+header) MUST be `validated`, `validatable`, or `documented` — never
+`placeholder`. The conftest enforcement helper rejects placeholder
+mocks at collection time.
+
+If you'd need a `placeholder` mock for any of the above, the API
+tier you picked is wrong — go back to step 1, pick the correct tier,
+and do the per-tier verification.
 
 ---
 
 ## Things you must NOT do
 
-- **Don't invent endpoint URLs, methods, or response shapes.** If the
-  docs prescribe a config step you don't have a cassette for, request
-  the cassette per step 2 above.
+- **Don't invent endpoint URLs, methods, or response shapes.** Pick
+  the right tier (validated / validatable / documented) per step 1,
+  do the per-tier verification, and only then code against the result.
 - **Don't import `responses`, `respx`, or VCR from a check file.** Those
   are test-only libraries. Check files use real HTTP clients
   (`requests`, `httpx`, or the kit's `*_client.py` wrappers).
-- **Don't ship a check whose only "test" is a unit test of a hand-rolled
-  mock builder.** If the test doesn't replay a real cassette, it
-  doesn't prove the check works against the API.
+- **Don't use a `placeholder` mock in a FlightCheck integration test.**
+  The conftest enforcement helper rejects this at collection time. If
+  the only mock available is placeholder, the API needs to be promoted
+  to validated / validatable / documented first.
+- **Don't pick a weaker tier than the API tier registry mandates.**
+  If `INDEX.md` says an API is `validated` and you'd rather treat it
+  as `documented` to skip the cassette work, change the registry (with
+  rationale) — don't bypass it silently.
 - **Don't bypass `runner.<client>` and create your own session.** The
   runner clients carry auth, retry, and pagination logic the check
   depends on, plus they're the layer the tests mock.
-- **Don't add a check that depends on an API for which the cassette
-  has a documented blocker.** Example: WQL bearer-only auth requires
-  Workday API Client registration — `tests/fixtures/cassettes/INDEX.md`
-  and the WQL recorder explicitly say "do NOT build a runtime check
-  on this cassette without resolving the chicken-and-egg first." Read
+- **Don't add a check that depends on an API for which a documented
+  blocker exists.** Example: WQL bearer-only auth requires Workday
+  API Client registration — `tests/fixtures/cassettes/INDEX.md` and
+  the WQL recorder explicitly say "do NOT build a runtime check on
+  this cassette without resolving the chicken-and-egg first." Read
   those notes before writing a Workday WQL check.
 
 ---
@@ -142,7 +233,11 @@ deep validation), wire it into `runner.py` alongside the existing ones.
 
 - `tests/AGENTS.md` — the test-authoring companion to this file. Read
   it BEFORE writing the test for your check.
-- `tests/fixtures/cassettes/INDEX.md` — the registry of confirmed-real
-  endpoints. The first thing to check when planning a new check.
-- `tests/mocks/<system>.py` — validated mock builders cited from real
-  cassettes. The vocabulary your test uses to set up mock state.
+- `tests/fixtures/cassettes/INDEX.md` — the **API tier registry**
+  (which API is in which tier) plus the **confirmed cassette
+  endpoints** table (cassettes for the `validated` tier). The first
+  thing to check when planning a new check.
+- `tests/mocks/<system>.py` — mock builders. Each declares
+  `MOCK_STATUS = "validated" | "validatable" | "documented" |
+  "placeholder"`. Only the first three are usable by FlightCheck
+  checks.

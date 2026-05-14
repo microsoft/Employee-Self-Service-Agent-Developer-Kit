@@ -5,13 +5,15 @@
 Mock response builders for the Dataverse Web API v9.
 
 # ─────────────────────────────────────────────────────────────────
-# MOCK_STATUS = "validated"
+# MOCK_STATUS = "documented"
 #
-# Backed by a real captured cassette. Safe to use in FlightCheck
-# integration tests under tests/flightcheck/.
+# Backed by Microsoft Learn prose docs (no public schema URL — the
+# per-org $metadata at {org}/api/data/v9.2/$metadata requires auth).
+# Each builder's response shape comes from the example response in
+# the cited MS Learn operation page.
 #
-# Cassette: tests/fixtures/cassettes/dataverse_whoami.yaml
-# Endpoints covered: see tests/fixtures/cassettes/INDEX.md
+# Tier: documented (see tests/fixtures/cassettes/INDEX.md
+#       "API tier registry")
 # ─────────────────────────────────────────────────────────────────
 
 Used by unit tests for any FlightCheck check that reads Dataverse
@@ -23,6 +25,8 @@ for handing to `responses.add(...)` directly.
 References:
 - Dataverse Web API: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/perform-operations-web-api
 - WhoAmI function: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/use-web-api-functions
+- environmentvariabledefinition: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/environmentvariabledefinition
+- environmentvariablevalue: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/environmentvariablevalue
 - Production source: solutions/ess-maker-skills/scripts/auth.py
 """
 
@@ -32,8 +36,7 @@ from typing import Any, Iterable, Mapping
 from urllib.parse import quote
 
 # Validation status — read by tests/conftest.py:require_validated_mock().
-MOCK_STATUS = "validated"
-MOCK_CASSETTE = "tests/fixtures/cassettes/dataverse_whoami.yaml"
+MOCK_STATUS = "documented"
 
 # Stable mock identity values, importable so test code never has to repeat them.
 MOCK_USER_ID = "00000000-0000-0000-0000-000000002222"

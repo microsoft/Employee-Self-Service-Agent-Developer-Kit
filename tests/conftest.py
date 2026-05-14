@@ -242,7 +242,13 @@ def require_validated_mock(mock_module: Any) -> None:
     Call at the top of any test that depends on a mock module to ensure
     you haven't accidentally written a test against a placeholder mock.
     Raises pytest.UsageError (which fails collection, not just one test)
-    if the module's ``MOCK_STATUS`` is not ``"validated"``.
+    if the module's ``MOCK_STATUS`` is ``"placeholder"`` (or missing).
+
+    Accepts ``"validated"``, ``"validatable"``, and ``"documented"`` —
+    the three tiers permitted in FlightCheck per
+    ``solutions/ess-maker-skills/scripts/flightcheck/AGENTS.md``
+    "The four mock tiers." Rejects ``"placeholder"`` because placeholder
+    mocks are schema-grounded best guesses with no verified backing.
 
     Example:
         from tests.mocks import dataverse as dv
@@ -256,16 +262,16 @@ def require_validated_mock(mock_module: Any) -> None:
     """
     status = getattr(mock_module, "MOCK_STATUS", None)
     cassette = getattr(mock_module, "MOCK_CASSETTE", None)
-    if status == "validated":
+    if status in ("validated", "validatable", "documented"):
         return
     if status == "placeholder":
         pytest.fail(
             f"Mock module {mock_module.__name__!r} is a PLACEHOLDER "
-            f"(no captured cassette). Refusing to use it in an "
-            f"integration test. See tests/AGENTS.md for how to capture "
-            f"a cassette and promote the module to MOCK_STATUS = "
-            f"'validated'. Awaiting cassette: "
-            f"{cassette or '(none referenced)'}",
+            f"(no verified backing). Refusing to use it in a FlightCheck "
+            f"integration test. See tests/AGENTS.md for how to promote "
+            f"the module to one of the three permitted tiers "
+            f"('validated', 'validatable', 'documented'). Awaiting "
+            f"cassette: {cassette or '(none referenced)'}",
             pytrace=False,
         )
     pytest.fail(

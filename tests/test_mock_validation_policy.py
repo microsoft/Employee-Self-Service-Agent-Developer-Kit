@@ -8,8 +8,9 @@ Verifies that:
 1. Every module in tests/mocks/ declares MOCK_STATUS.
 2. The MOCK_STATUS values are all in the allowed set.
 3. Validated modules cite a real cassette file that exists on disk.
-4. require_validated_mock() correctly accepts validated modules and
-   rejects placeholders / undeclared.
+4. Validatable modules cite a public schema source URL.
+5. require_validated_mock() correctly accepts the three usable tiers
+   and rejects placeholder / undeclared.
 
 These are the rails that prevent agents from sneaking placeholder mocks
 into integration tests.
@@ -26,7 +27,8 @@ import pytest
 import tests.mocks
 from tests.conftest import require_validated_mock
 
-ALLOWED_STATUS = {"validated", "placeholder"}
+ALLOWED_STATUS = {"validated", "validatable", "documented", "placeholder"}
+USABLE_IN_FLIGHTCHECK = {"validated", "validatable", "documented"}
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
@@ -68,14 +70,39 @@ class TestMockModuleConvention:
         assert path.exists(), (
             f"{mod.__name__} cites cassette {cassette!r} but the file "
             f"does not exist at {path}. Either add the cassette or "
-            "downgrade the module to MOCK_STATUS='placeholder'."
+            "re-tier the module."
+        )
+
+    @pytest.mark.parametrize("mod", _all_mock_modules(), ids=lambda m: m.__name__)
+    def test_validatable_modules_cite_schema_source(self, mod) -> None:
+        if mod.MOCK_STATUS != "validatable":
+            pytest.skip("only validatable modules require MOCK_SCHEMA_SOURCE")
+        source = getattr(mod, "MOCK_SCHEMA_SOURCE", None)
+        assert source, (
+            f"{mod.__name__} is MOCK_STATUS='validatable' but does not "
+            "set MOCK_SCHEMA_SOURCE pointing at the public schema URL "
+            "(e.g. https://graph.microsoft.com/v1.0/$metadata)."
+        )
+        assert source.startswith("https://"), (
+            f"{mod.__name__} MOCK_SCHEMA_SOURCE={source!r} should be an "
+            "https:// URL to a publicly-fetchable schema."
         )
 
 
 class TestRequireValidatedMock:
     def test_accepts_validated(self) -> None:
+        from tests.mocks import pp_admin as pp
+        # pp_admin is MOCK_STATUS='validated' (cassette-backed)
+        require_validated_mock(pp)
+
+    def test_accepts_validatable(self) -> None:
+        from tests.mocks import graph as g
+        # graph is MOCK_STATUS='validatable' (Graph CSDL-backed)
+        require_validated_mock(g)
+
+    def test_accepts_documented(self) -> None:
         from tests.mocks import dataverse as dv
-        # Should not raise.
+        # dataverse is MOCK_STATUS='documented' (MS Learn doc-backed)
         require_validated_mock(dv)
 
     def test_rejects_placeholder(self) -> None:

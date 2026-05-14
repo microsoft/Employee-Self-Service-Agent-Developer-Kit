@@ -1,32 +1,76 @@
-# Cassette index — confirmed real endpoints
+# Cassette index — API tier registry & confirmed cassette endpoints
 
-Every cassette in this directory is a redacted recording of one real
-session against a live Microsoft / Workday / ServiceNow tenant. The
-cassettes are the ground truth for what the production APIs actually
-return. Mock builders in `tests/mocks/` are derived from these cassettes;
-when a builder and a cassette disagree, the cassette wins.
+This file is the canonical answer to two questions FlightCheck check
+authors and test authors need to ask:
+
+1. **What tier is this API in?** (validated / validatable / documented)
+   — see "API tier registry" below.
+2. **For `validated`-tier APIs: which method + path is covered by which
+   cassette?** — see "Confirmed cassette endpoints" further down.
+
+The full tier definitions and per-tier verification workflow live in
+`solutions/ess-maker-skills/scripts/flightcheck/AGENTS.md` →
+"The cardinal rule" / "The four mock tiers." Read that first if
+you're unfamiliar with the system.
+
+If you (human or agent) need to know whether a given API call is safe
+to use in a FlightCheck check or test, look it up in the registry
+below. If it is not in the registry, it is not approved — see
+`tests/AGENTS.md` for what to do next.
+
+When you add a new cassette, add a row to the "Confirmed cassette
+endpoints" table covering every endpoint it captures.
+
+**For `validated`-tier APIs, match by path + method, not by query
+string.** A row covering `GET /v1.0/users?$top=10` also covers
+`?$filter=mail eq '...'`, `?$select=...`, no params at all, etc. —
+they're all the same endpoint with different server-side narrowing.
+A row covering `GET /v1.0/users/{id}` does NOT cover
+`/users/{id}/manager` because the path is different. The full rule
+(including the exceptions for `$expand`, `$count=true`, `$apply`, and
+shape-changing params) is in
+`solutions/ess-maker-skills/scripts/flightcheck/AGENTS.md` under
+"What counts as the same endpoint."
+
+---
+
+## API tier registry
+
+This is the authoritative tier assignment per API surface. A check or
+test author MUST use the tier listed here when writing a check that
+calls the API. To change a tier, edit this table and explain why in
+the PR.
+
+| API surface | Tier | Verification method | Notes |
+|---|---|---|---|
+| **Microsoft Graph v1.0** | `validatable` | Public CSDL at `https://graph.microsoft.com/v1.0/$metadata` (~2.7 MB, no auth) + MS Learn `https://learn.microsoft.com/graph/api/{operation}` example responses. Check author fetches CSDL, walks the entity, confirms each consumed field name + type. | `tests/mocks/graph.py` derives shapes from the CSDL EntityType for each operation. |
+| **Microsoft Entra OAuth2 token endpoint** | `validatable` | OpenID discovery at `https://login.microsoftonline.com/{tenant or 'common'}/v2.0/.well-known/openid-configuration` (no auth) + RFC 6749 / OpenID Connect Core for response shapes + MS Learn `https://learn.microsoft.com/entra/identity-platform/v2-oauth2-*`. | Token response shape is RFC-defined; very stable. |
+| **Power Platform Admin API (BAP)** | `documented` | MS Learn `https://learn.microsoft.com/power-platform/admin/programmability-resources` + `programmability-authentication-v2`. PowerShell module source at `Microsoft.PowerApps.Administration.PowerShell` is a useful supplementary reference. | No public OpenAPI spec. Probed `https://api.bap.microsoft.com/.../swagger/docs/v1` → 401. |
+| **Dataverse Web API v9.2** | `documented` | MS Learn `https://learn.microsoft.com/power-apps/developer/data-platform/webapi/`. Per-org `$metadata` exists at `{org}/api/data/v9.2/$metadata` but requires auth, so it's not a no-tenant validation path. | Excellent prose docs with example responses for every operation. |
+| **PowerApps Admin API** (`/Microsoft.PowerApps/...`, `/Microsoft.ProcessSimple/.../v2/flows`) | `validated` | Cassette at `flightcheck_pp_admin.yaml`. | The 404-on-Dataverse-only-env behavior is undocumented and discovered empirically; cassette is the only ground truth. |
+| **PVA Island Gateway** (`/api/botmanagement/v1/...`) | `validated` | Cassette at `island_gateway_botcomponents.yaml`. | Internal Copilot Studio API; not publicly documented. |
+| **Workday SOAP** (Human_Resources, Identity_Management, Compensation, Absence_Management, etc.) | `validated` | Cassettes at `flightcheck_workday.yaml`, `workday_config.yaml`. | Vendor docs require Workday Community login; tenant-specific WSDL varies. |
+| **Workday WQL / REST** (`/ccx/api/wql/v1/...`, `/ccx/api/v1/...`) | `validated` | Cassette at `workday_wql_admin.yaml`. **Known auth blocker** — see "Workday WQL config-validation pattern" section below before authoring any runtime check on this cassette. | Per-tenant API client registration creates the chicken-and-egg blocker. |
+| **ServiceNow Table API** | `validated` | Cassette at `flightcheck_servicenow.yaml`. | Per-instance custom field variance + dev portal access required for live testing makes the documented tier insufficient. |
+
+If you need to call an API that isn't in this registry, STOP and tell
+the user — the tier must be decided (and recorded here) before any
+check or test can use the API.
+
+---
+
+## Confirmed cassette endpoints
+
+The table below covers `validated`-tier APIs only. `validatable` and
+`documented` APIs do not need rows here (their evidence is the
+schema URL or doc URL cited in the mock builder docstring).
 
 If you (human or agent) need to know whether a given endpoint is
 confirmed real, look it up in the table below. If it is not in the
 table, it is not confirmed — see `tests/AGENTS.md` for what to do next.
 
-When you add a new cassette, add a row to this table covering every
-endpoint it captures.
-
----
-
-## Confirmed endpoints
-
 | Service | Method + URL pattern | Status seen | Cassette |
 |---|---|---|---|
-| Dataverse Web API v9.2 | `GET /api/data/v9.2/WhoAmI()` | 200 | `dataverse_whoami.yaml` |
-| Microsoft Graph v1.0 | `GET /v1.0/organization` | 200 | `flightcheck_graph.yaml` |
-| Microsoft Graph v1.0 | `GET /v1.0/users?$top=10` | 200 | `flightcheck_graph.yaml` |
-| Microsoft Graph v1.0 | `GET /v1.0/directoryRoles` | 200 | `flightcheck_graph.yaml` |
-| Microsoft Graph v1.0 | `GET /v1.0/identity/conditionalAccess/policies` | 200 | `flightcheck_graph.yaml` |
-| Microsoft Graph v1.0 | `GET /v1.0/subscribedSkus` | 200 | `flightcheck_graph.yaml` |
-| Microsoft Graph v1.0 | `GET /v1.0/servicePrincipals?$top=10&$select=...` (sample only — full list is too large) | 200 | `flightcheck_graph.yaml` |
-| Microsoft Graph v1.0 | `GET /v1.0/external/connections` (M365 Copilot Connectors — backs future Microsoft-side validation of connectors like ServiceNow Knowledge) | 200 (empty `value` if none registered — captured shape today) | `flightcheck_graph.yaml` |
 | Power Platform Admin (BAP) | `GET /providers/Microsoft.BusinessAppPlatform/scopes/admin/environments` | 200 | `flightcheck_pp_admin.yaml` |
 | Power Platform Admin (BAP) | `GET /providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/{env_id}` | 200 | `flightcheck_pp_admin.yaml` |
 | Power Platform Admin (BAP) | `GET /providers/Microsoft.BusinessAppPlatform/scopes/admin/apiPolicies` | 200 | `flightcheck_pp_admin.yaml` |
@@ -221,7 +265,7 @@ demo data.
 **Open follow-up:**
 - Capture the success-shape for Task 1 by setting up an OAuth registry on the dev instance with the Microsoft 365 Copilot callback URL, then re-record. Today's cassette has the empty-result shape.
 - Capture the 403 shape on `user_criteria` by creating a limited-access user on the dev instance and setting `SERVICENOW_LIMITED_USERNAME` / `SERVICENOW_LIMITED_PASSWORD` before re-running. The recorder already supports this; just needs a second account.
-- Microsoft-side validation (the Microsoft 365 Admin Center "Search & intelligence → Data sources" page where the connector itself is registered) is on a different API surface (Microsoft Graph) and would need its own cassette — see the existing `flightcheck_graph.yaml` for a starting point.
+- Microsoft-side validation: `GET /v1.0/external/connections` is a Microsoft Graph endpoint and is therefore in the `validatable` tier — no cassette needed. Verify against `https://graph.microsoft.com/v1.0/$metadata` `EntityType Name="externalConnection"` + MS Learn `https://learn.microsoft.com/graph/api/externalconnectors-externalconnection-get`.
 
 These are not yet captured. If you need to write a check that consumes
 one of these, capture the cassette first and move it to the table above.
@@ -262,10 +306,9 @@ one auth flow, one cassette, simpler request shape.
 | Workday SOAP | `POST /ccx/service/{tenant}/Identity_Management/v40.0` (Get_Domain_Security_Policies) | Legacy Task 6: Domain permissions on each ISSG | same |
 | Workday REST | `GET /ccx/api/v1/{tenant}/workers/me` | Simplified setup user-context lookup (replaces RaaS) | needs new wrapper — different auth flow (OAuth user, not basic ISU) |
 | Workday RaaS | `GET /ccx/service/customreport2/{tenant}/{user}/WD_User_Context` | Legacy: RaaS report exists and runs | needs new wrapper |
-| Microsoft Graph v1.0 | `GET /v1.0/applications?$filter=appId eq '<workday-app-id>'` | Entra: Workday SSO app registered | extend `record_flightcheck_graph.py` |
-| Microsoft Graph v1.0 | `GET /v1.0/applications/{id}` | Entra: app exposes user_impersonation scope; preauthorized clients includes `4e4707ca-5f53-46a6-a819-f7765446e6ff` (Workday connector) | extend `record_flightcheck_graph.py` |
-| Microsoft Graph v1.0 | `GET /v1.0/oauth2PermissionGrants?$filter=clientId eq '...'` | Entra: admin consent granted for openid/profile/User.Read | extend `record_flightcheck_graph.py` |
-| Microsoft Graph v1.0 | `GET /v1.0/subscribedSkus` | License / SKU validation | extend `record_flightcheck_graph.py` (wrapper already updated; needs run) |
-| Microsoft Graph v1.0 | `GET /v1.0/servicePrincipals?$filter=appId eq '...'` | App registration verification | extend `record_flightcheck_graph.py` (wrapper already updated; needs run) |
-| Dataverse | `GET /api/data/v9.2/solutions?$filter=uniquename eq 'WorkdayExt...'` | Workday extension pack installed | already in `record_flightcheck_dataverse.py` |
-| Dataverse | `GET /api/data/v9.2/botcomponents?$filter=name eq 'Workday [System] - 1: Set User Context V2'` | Required Workday topic installed | extend `record_flightcheck_dataverse.py` |
+| Microsoft Graph v1.0 | `GET /v1.0/applications?$filter=appId eq '<workday-app-id>'` | Entra: Workday SSO app registered | **No cassette required** — Graph is `validatable` (see API tier registry above). Verify against `/v1.0/$metadata` `EntityType Name="application"`. |
+| Microsoft Graph v1.0 | `GET /v1.0/applications/{id}` | Entra: app exposes user_impersonation scope; preauthorized clients includes `4e4707ca-5f53-46a6-a819-f7765446e6ff` (Workday connector) | **No cassette required** — `validatable` via Graph CSDL. |
+| Microsoft Graph v1.0 | `GET /v1.0/oauth2PermissionGrants?$filter=clientId eq '...'` | Entra: admin consent granted for openid/profile/User.Read | **No cassette required** — `validatable` via Graph CSDL. |
+| Microsoft Graph v1.0 | `GET /v1.0/subscribedSkus` | License / SKU validation | **No cassette required** — `validatable` via Graph CSDL. |
+| Dataverse | `GET /api/data/v9.2/solutions?$filter=uniquename eq 'WorkdayExt...'` | Workday extension pack installed | **No cassette required** — Dataverse is `documented` (see API tier registry above). Verify against MS Learn `https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/solution`. |
+| Dataverse | `GET /api/data/v9.2/botcomponents?$filter=name eq 'Workday [System] - 1: Set User Context V2'` | Required Workday topic installed | **No cassette required** — `documented`; verify against MS Learn `botcomponent` reference. |
