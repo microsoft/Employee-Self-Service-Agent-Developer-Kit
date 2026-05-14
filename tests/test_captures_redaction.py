@@ -266,7 +266,56 @@ class TestWorkdayPiiScrubbing:
         out = _redact_text(body)
         assert "keep this" in out
 
-    def test_scrubs_worker_descriptor(self) -> None:
+    def test_scrubs_pii_element_with_nested_child_element(self) -> None:
+        """Regression: PII elements that wrap child elements were silently
+        fail-open under the previous `[^<]*` content class because `<`
+        terminated the match. Workday SOAP routinely nests elements
+        inside named PII elements (e.g. `Phone_Number` wrapping
+        `Formatted`, `Address_Line_Data` wrapping `Effective_Date`).
+        The fix uses non-greedy `.*?` with `re.DOTALL`."""
+        body = (
+            "<wd:Address_Line_Data>"
+            "<wd:Effective_Date>2024-01-01</wd:Effective_Date>"
+            "123 Real Street"
+            "</wd:Address_Line_Data>"
+        )
+        out = _redact_text(body)
+        assert "123 Real Street" not in out, (
+            f"PII inside nested-child element leaked: {out!r}"
+        )
+        assert "1 Mock Street" in out
+
+    def test_scrubs_pii_element_wrapping_only_child_element(self) -> None:
+        """Same regression class — element body is *only* a child
+        element (no leaf text). The PII child must still be scrubbed
+        by the regex (or by another rule); the outer PII rule no
+        longer fails open silently."""
+        body = (
+            "<wd:Phone_Number>"
+            "<wd:Formatted>(425) 555-0123</wd:Formatted>"
+            "</wd:Phone_Number>"
+        )
+        out = _redact_text(body)
+        assert "(425) 555-0123" not in out, (
+            f"PII inside child element leaked: {out!r}"
+        )
+
+    def test_scrubs_typed_id_with_nested_child_element(self) -> None:
+        """Same regression for `_WORKDAY_TYPED_ID_PATTERN` — its content
+        group was also `[^<]*` and would fail open on any nested-child
+        ID shape Workday emits."""
+        body = (
+            '<wd:ID wd:type="Employee_ID">'
+            "<wd:Inner>21005</wd:Inner>"
+            "</wd:ID>"
+        )
+        out = _redact_text(body)
+        assert "21005" not in out, (
+            f"PII inside nested typed-ID leaked: {out!r}"
+        )
+        assert "MOCK_ID" in out
+
+
         body = "<wd:Worker_Descriptor>Sarah Connor</wd:Worker_Descriptor>"
         out = _redact_text(body)
         assert "Sarah Connor" not in out

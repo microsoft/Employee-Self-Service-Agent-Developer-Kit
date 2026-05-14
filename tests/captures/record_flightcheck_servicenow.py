@@ -107,11 +107,6 @@ from requests.auth import HTTPBasicAuth
 from _common import announce, build_cassette, confirm_or_exit
 
 REQUIRED_ENV = ("SERVICENOW_INSTANCE_URL", "SERVICENOW_USERNAME", "SERVICENOW_PASSWORD")
-OPTIONAL_ENV = (
-    "SERVICENOW_LIMITED_USERNAME",
-    "SERVICENOW_LIMITED_PASSWORD",
-    "SERVICENOW_OAUTH_REGISTRY_NAME",
-)
 
 
 def _check_env() -> tuple[dict[str, str], dict[str, str]]:
@@ -228,7 +223,7 @@ def main() -> None:
             "&sysparm_fields=name,client_id,redirect_url,active,refresh_lifetime,"
             "access_token_lifetime,sys_id&sysparm_limit=20"
         )
-        if env.get("SERVICENOW_OAUTH_REGISTRY_NAME"):
+        if "oauth_registry_name" in metadata:
             name_filter = quote(metadata["oauth_registry_name"], safe="")
             oauth_path = (
                 "oauth_entity?sysparm_query=type=external_client"

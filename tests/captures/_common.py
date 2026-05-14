@@ -313,7 +313,7 @@ _WORKDAY_TYPED_ID_PATTERN = re.compile(
     r'(<[\w-]+:?ID\s+[\w-]+:?type="(Employee_ID|Position_ID|Manager_ID|'
     r'Organization_Reference_ID|Cost_Center_Reference_ID|Company_Reference_ID|'
     r'Supervisory_Organization_ID|National_ID|Passport_ID|Visa_ID|'
-    r'Government_ID|Personnel_Number)"\s*>)([^<]*)(</[\w-]+:?ID>)',
+    r'Government_ID|Personnel_Number)"\s*>)(.*?)(</[\w-]+:?ID>)',
     re.DOTALL,
 )
 
@@ -517,8 +517,13 @@ def _redact_text(text: str) -> str:
     for element_name, replacement in WORKDAY_PII_ELEMENTS.items():
         # Match <prefix:ElementName ...>contents</prefix:ElementName>
         # with any namespace prefix and any attributes.
+        # Non-greedy `.*?` with re.DOTALL — the previous `[^<]*`
+        # excluded `<`, so any PII element wrapping a child element
+        # (e.g. `<wd:Address_Line_Data><wd:Effective_Date>...</...>123
+        # Real St</wd:Address_Line_Data>`) failed open and the inner
+        # PII reached the cassette unscrubbed.
         pattern = re.compile(
-            rf"(<[\w-]+:?{element_name}(?:\s[^>]*)?>)[^<]*(</[\w-]+:?{element_name}>)",
+            rf"(<[\w-]+:?{element_name}(?:\s[^>]*)?>).*?(</[\w-]+:?{element_name}>)",
             re.DOTALL,
         )
         # Use a lambda so the replacement value isn't interpreted as a
@@ -635,10 +640,19 @@ def build_cassette(name: str) -> Any:
     CASSETTE_DIR.mkdir(parents=True, exist_ok=True)
     cassette_path = CASSETTE_DIR / f"{name}.yaml"
 
+    # Always re-record from scratch on every run. The previous
+    # `new_episodes` mode + stable `match_on` keys silently replayed
+    # prior recordings for any matching request, so re-runs after
+    # credential rotation, redaction-rule changes, or backend response
+    # changes would surface "HTTP 200" while the cassette never updated.
+    # Pre-deleting the file makes it impossible to confuse a stale
+    # replay with a fresh capture; `record_mode="all"` is the matching
+    # vcrpy semantic.
+    cassette_path.unlink(missing_ok=True)
     return vcr.VCR(
         cassette_library_dir=str(CASSETTE_DIR),
         path_transformer=vcr.VCR.ensure_suffix(".yaml"),
-        record_mode="new_episodes",
+        record_mode="all",
         match_on=("method", "scheme", "host", "port", "path", "query"),
         filter_headers=list(SCRUB_HEADERS),
         before_record_request=_before_record_request,

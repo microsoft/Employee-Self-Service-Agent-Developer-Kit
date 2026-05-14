@@ -241,8 +241,11 @@ def require_validated_mock(mock_module: Any) -> None:
 
     Call at the top of any test that depends on a mock module to ensure
     you haven't accidentally written a test against a placeholder mock.
-    Raises pytest.UsageError (which fails collection, not just one test)
-    if the module's ``MOCK_STATUS`` is ``"placeholder"`` (or missing).
+    Calls ``pytest.fail(..., pytrace=False)`` if the module's
+    ``MOCK_STATUS`` is ``"placeholder"`` (or missing). When invoked at
+    module import time (the recommended pattern), the resulting
+    ``Failed`` exception surfaces as a collection error on that single
+    test module — other modules still collect and run normally.
 
     Accepts ``"validated"``, ``"validatable"``, and ``"documented"`` —
     the three tiers permitted in FlightCheck per
