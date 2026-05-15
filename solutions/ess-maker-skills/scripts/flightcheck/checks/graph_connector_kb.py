@@ -168,9 +168,16 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
     for i, src in enumerate(gc_sources, start=1):
         cid = f"EXT-002-{i:03d}"
         ref = _connector_reference(src)
+        # contentSourceDisplayName / connectionName live inside the
+        # configuration.source object, not at the top of the
+        # KnowledgeSourceComponent — the top-level component only has
+        # displayName. Fall back through the most informative options
+        # in order.
+        source_block = (src.get("configuration") or {}).get("source") or {}
         display = (
-            src.get("contentSourceDisplayName")
-            or src.get("connectionName")
+            source_block.get("contentSourceDisplayName")
+            or source_block.get("connectionName")
+            or src.get("displayName")
             or ref
             or f"Knowledge source {i}"
         )

@@ -593,6 +593,38 @@ class TestConnectorResolution:
         assert per_source.status == "Warning"
         assert "no connection identifier" in per_source.result.lower()
 
+    @responses.activate
+    def test_display_name_uses_content_source_display_name(
+        self, fake_token: str
+    ) -> None:
+        """Per the Island Gateway shape, ``contentSourceDisplayName``
+        lives inside ``configuration.source`` (not at the
+        KnowledgeSourceComponent root). The check must read it from the
+        right level so the operator sees the friendly name in result
+        text instead of a connector id."""
+        from flightcheck.checks.graph_connector_kb import run_graph_connector_kb_checks
+
+        responses.add(**g.list_external_connections(connections=[]))
+        responses.add(**g.get_external_connection_not_found(
+            connection_id="ServiceNowKB48",
+        ))
+
+        ks = _gc_knowledge_source(
+            connection_name="ServiceNowKB48",
+            display_name="HR Knowledge Base — ServiceNow",
+        )
+
+        runner = _build_runner(
+            knowledge_sources=[ks],
+            graph=_graph_client(fake_token),
+        )
+        results = run_graph_connector_kb_checks(runner)
+
+        per_source = _result_by_id(results, "EXT-002-001")
+        # Friendly display name appears in description, not the bare connector id.
+        assert "HR Knowledge Base" in per_source.description
+        assert per_source.description != "Graph Connector: ServiceNowKB48"
+
 
 # ───────────────────────────────────────────────────────────────────────
 # Graph-side failures — surface as WARNING with operator guidance, NOT
