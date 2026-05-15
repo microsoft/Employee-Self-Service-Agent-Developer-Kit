@@ -92,10 +92,15 @@ class TestBadConfig:
     def test_aadsts50173_grant_expired_fails_with_pinned_remediation(
         self, runner: _MinimalRunner
     ) -> None:
-        """The canonical scenario from the cassette: AADSTS50173, grant
-        expired/revoked. WD-CONN-101 should FAIL, name the connection,
-        name the connection owner, and quote the AADSTS code in both
-        the result and the remediation."""
+        """The canonical scenario from the cassette: connection in
+        Error state with ``error.code = "Unauthorized"`` and the
+        AADSTS code embedded in the longer ``error.message`` prose
+        (this is the exact shape captured in
+        ``tests/fixtures/cassettes/flightcheck_pp_admin.yaml`` lines
+        2661-2680). WD-CONN-101 should FAIL, name the connection,
+        name the connection owner, extract the AADSTS50173 code from
+        the message, and surface the grant-expired hint — NOT the
+        generic Unauthorized hint."""
         from flightcheck.checks.workday import _check_connection_token_health
 
         responses.add(**pp.list_connections(
@@ -104,10 +109,14 @@ class TestBadConfig:
                 pp.workday_connection(
                     status="Error",
                     display_name="Workday SOAP — ISU",
-                    error_code="AADSTS50173",
+                    # Production shape: code is "Unauthorized" (coarse
+                    # PP classification), AADSTS code lives in message.
+                    error_code="Unauthorized",
                     error_message=(
-                        "Failed to refresh access token. AADSTS50173: The "
-                        "provided grant has expired due to it being revoked."
+                        "Failed to refresh access token for service: "
+                        "aadcertificate. Error: Failed to acquire token "
+                        "from AAD: AADSTS50173: The provided grant has "
+                        "expired due to it being revoked."
                     ),
                     account_name="isu.admin@contoso.com",
                 ),
@@ -119,11 +128,13 @@ class TestBadConfig:
         assert wd_101.status == "Failed"
         assert wd_101.priority == "High"
         assert "1 of 1" in wd_101.result
+        # Result quotes the *AADSTS* code, not the generic "Unauthorized"
+        # — extracted from message rather than blindly read from code.
         assert "AADSTS50173" in wd_101.result
         assert "Workday SOAP — ISU" in wd_101.result
         assert "isu.admin@contoso.com" in wd_101.result
-        # Remediation pins the specific AADSTS hint, not a generic message.
-        assert "AADSTS" not in wd_101.remediation  # hint is text, not the code
+        # Remediation pins the AADSTS-specific hint, not the generic
+        # "Unauthorized" hint that the coarse code would map to.
         assert "grant expired" in wd_101.remediation.lower()
         assert "Re-authenticate" in wd_101.remediation
         assert "isu.admin@contoso.com" in wd_101.remediation
@@ -132,6 +143,8 @@ class TestBadConfig:
     def test_aadsts70008_refresh_token_expired_picks_inactivity_hint(
         self, runner: _MinimalRunner
     ) -> None:
+        """Same realistic shape (code=Unauthorized, AADSTS in message),
+        but a different AADSTS code maps to a different hint."""
         from flightcheck.checks.workday import _check_connection_token_health
 
         responses.add(**pp.list_connections(
@@ -140,8 +153,11 @@ class TestBadConfig:
                 pp.workday_connection(
                     status="Error",
                     display_name="Workday SOAP — User",
-                    error_code="AADSTS70008",
-                    error_message="The refresh token has expired due to inactivity.",
+                    error_code="Unauthorized",
+                    error_message=(
+                        "Failed to acquire token: AADSTS70008: The "
+                        "refresh token has expired due to inactivity."
+                    ),
                     account_name="svc.workday@contoso.com",
                 ),
             ],
@@ -155,12 +171,44 @@ class TestBadConfig:
         assert "svc.workday@contoso.com" in wd_101.remediation
 
     @responses.activate
-    def test_unrecognized_error_code_falls_back_to_generic_hint(
+    def test_unauthenticated_connection_falls_back_to_code_field(
         self, runner: _MinimalRunner
     ) -> None:
-        """If Power Platform surfaces an error code not in our known
-        AADSTS mapping, WD-CONN-101 still fails, surfaces the code
-        verbatim, and tells the operator to re-authenticate."""
+        """The cassette also captures connections that were never
+        authenticated — ``code = "Unauthenticated"``, ``message =
+        "This connection is not authenticated."``. There is NO AADSTS
+        code in the message, so WD-CONN-101 should fall back to
+        looking up the ``code`` field and pick the
+        ``Unauthenticated`` hint (sign-in needed)."""
+        from flightcheck.checks.workday import _check_connection_token_health
+
+        responses.add(**pp.list_connections(
+            env_id=runner.env_id,
+            connections=[
+                pp.workday_connection(
+                    status="Error",
+                    display_name="Workday SOAP — Never Auth'd",
+                    error_code="Unauthenticated",
+                    error_message="This connection is not authenticated.",
+                    account_name="newuser@contoso.com",
+                ),
+            ],
+        ))
+
+        results = _check_connection_token_health(runner)
+        wd_101 = _result_by_id(results, "WD-CONN-101")
+        assert wd_101.status == "Failed"
+        assert "Unauthenticated" in wd_101.result
+        assert "not authenticated" in wd_101.remediation.lower()
+        assert "newuser@contoso.com" in wd_101.remediation
+
+    @responses.activate
+    def test_unrecognized_aadsts_code_in_message_falls_back_to_generic_hint(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """If Power Platform surfaces an AADSTS code we don't have in
+        our mapping, WD-CONN-101 still fails, surfaces the code
+        verbatim from the message, and gives a generic re-auth hint."""
         from flightcheck.checks.workday import _check_connection_token_health
 
         responses.add(**pp.list_connections(
@@ -169,8 +217,11 @@ class TestBadConfig:
                 pp.workday_connection(
                     status="Error",
                     display_name="Workday SOAP — Misc",
-                    error_code="AADSTS99999",
-                    error_message="Some new auth failure mode we have not seen.",
+                    error_code="Unauthorized",
+                    error_message=(
+                        "Failed: AADSTS99999: Some new auth failure mode "
+                        "we have not seen before."
+                    ),
                 ),
             ],
         ))
@@ -178,8 +229,9 @@ class TestBadConfig:
         results = _check_connection_token_health(runner)
         wd_101 = _result_by_id(results, "WD-CONN-101")
         assert wd_101.status == "Failed"
+        # Extracted from message, not the code field.
         assert "AADSTS99999" in wd_101.result
-        assert "unrecognized token-health error" in wd_101.remediation.lower()
+        assert "unrecognized aadsts" in wd_101.remediation.lower()
         assert "Re-authenticate" in wd_101.remediation
 
 
@@ -206,7 +258,11 @@ class TestMixedState:
                 pp.workday_connection(
                     status="Error",
                     display_name="Workday SOAP — Broken",
-                    error_code="AADSTS50173",
+                    error_code="Unauthorized",
+                    error_message=(
+                        "Failed to refresh access token: AADSTS50173: "
+                        "The provided grant has expired."
+                    ),
                     account_name="broken.user@contoso.com",
                 ),
             ],

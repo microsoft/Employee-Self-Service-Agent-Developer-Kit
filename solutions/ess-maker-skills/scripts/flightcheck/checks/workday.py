@@ -14,6 +14,7 @@ or, when running standalone, build SOAP envelopes directly with httpx.
 import getpass
 import json
 import os
+import re
 import sys
 from xml.sax.saxutils import escape as xml_escape
 
@@ -352,10 +353,31 @@ def _get_conn_status(conn: dict) -> str:
 
 
 # OAuth grant-expiry / token-health error codes the Power Platform
-# connection layer surfaces in statuses[0].error.code when the connection
-# creator's Entra OAuth grant has lapsed. Mapping each code to a one-line
-# remediation hint lets WD-CONN-101 tell the operator *what* expired and
-# *what to do*, instead of just "Error". Codes sourced from MS Learn:
+# connection layer surfaces when the connection creator's Entra OAuth
+# grant has lapsed. There are two places to find them:
+#
+#   1. ``statuses[0].error.message`` — contains the actual Entra
+#      ``AADSTSnnnnn`` token-failure code embedded in a longer prose
+#      message, e.g. "Failed to refresh access token... AADSTS50173:
+#      The provided grant has expired due to it being revoked..."
+#      This is where the actionable code actually lives in production
+#      (verified against ``tests/fixtures/cassettes/flightcheck_pp_admin.yaml``
+#      lines 2661-2680).
+#   2. ``statuses[0].error.code`` — a coarser Power-Platform-side
+#      classification: typically ``Unauthorized`` (for token-refresh
+#      failures including AADSTSnnnnn) or ``Unauthenticated`` (for a
+#      connection that was never authenticated). These show up
+#      regardless of whether an AADSTS code is present.
+#
+# WD-CONN-101 inspects (1) first via a regex on the message text, and
+# falls back to (2) only if the message has no recognizable AADSTS
+# code. That order matters: the message-level AADSTS code tells the
+# operator *which* Entra failure mode they hit (grant expired vs MFA
+# required vs refresh-token-too-old) and therefore *what specific
+# action* to take; the code-level "Unauthorized" only tells them
+# something is wrong with the token, generically.
+#
+# Codes sourced from MS Learn:
 # https://learn.microsoft.com/entra/identity-platform/reference-error-codes
 TOKEN_HEALTH_ERROR_CODES = {
     "AADSTS50173": "Auth grant expired (token revoked or password changed). Re-authenticate the connection in Power Platform.",
@@ -365,37 +387,79 @@ TOKEN_HEALTH_ERROR_CODES = {
     "AADSTS700084": "Refresh token used after revocation. Re-authenticate the connection.",
     "AADSTS50076": "MFA challenge required. Have the connection owner re-authenticate and complete MFA.",
     "Unauthorized": "Power Platform marked the credential unauthorized. Re-authenticate the connection.",
+    "Unauthenticated": "Connection is not authenticated. Have the connection owner sign in to Power Platform.",
 }
+
+# Matches Entra error-code identifiers like "AADSTS50173" or "AADSTS700082"
+# anywhere in a string. Anchored to a 5-7 digit AADSTS prefix to avoid
+# matching unrelated digit sequences. Used by _classify_token_health_error
+# to extract the specific failure code from the (often long, prose-y)
+# ``statuses[0].error.message`` field.
+_AADSTS_CODE_RE = re.compile(r"\b(AADSTS\d{5,7})\b")
 
 
 def _classify_token_health_error(conn: dict) -> tuple[str | None, str | None, str]:
     """Inspect ``statuses[0].error`` on a connection record and return
-    ``(error_code, error_message, hint)`` for token-health classification.
+    ``(reported_code, reported_message, hint)`` for token-health
+    classification.
 
     The PowerApps connections API includes a structured ``error`` block
-    on non-Connected statuses (target, code, message). We surface the
-    code and message verbatim so the operator can search/grep for them,
-    and add a one-line hint pulled from TOKEN_HEALTH_ERROR_CODES when we
-    recognize the AADSTS code. Returns (None, None, generic-hint) when
-    the error block is missing or unrecognized.
+    on non-Connected statuses (target, code, message). The actual
+    actionable Entra failure code (e.g. ``AADSTS50173``) is embedded
+    in ``error.message`` rather than ``error.code`` (which is the
+    coarser Power-Platform-side classification — typically
+    ``Unauthorized`` or ``Unauthenticated``). We:
 
-    Cited consumer: this function only.
-    Source (validated): tests/fixtures/cassettes/flightcheck_pp_admin.yaml
-    captures the statuses[0].error shape the live BAP API returns on a
-    Workday SOAP connection whose Entra grant has expired with
-    AADSTS50173.
+      1. First try to extract an ``AADSTSnnnnn`` code from
+         ``error.message``. If found, that becomes the reported code
+         and we look its hint up in TOKEN_HEALTH_ERROR_CODES.
+      2. Otherwise we report the ``error.code`` field verbatim and
+         look that up.
+      3. If neither resolves to a known entry, we fall back to a
+         generic re-authenticate hint and still surface whatever
+         code/message the API returned so the operator can search
+         for it in MS Learn.
+
+    Returns ``(None, None, no-status-hint)`` only when the entire
+    ``statuses`` array is missing or empty.
+
+    Cited consumer: ``_check_connection_token_health`` (this file).
+    Source (validated): ``tests/fixtures/cassettes/flightcheck_pp_admin.yaml``
+    lines 2661-2680 capture the live AADSTS50173-in-message shape;
+    lines 2682-2700+ capture the ``Unauthenticated`` ("never signed in")
+    shape; the production fields used (``status`` / ``target`` / ``code``
+    / ``message``) all appear in the cassette.
     """
     statuses = conn.get("properties", {}).get("statuses", [])
     if not isinstance(statuses, list) or not statuses:
         return None, None, "No status information returned by Power Platform."
     err = statuses[0].get("error") or {}
-    code = err.get("code")
-    message = err.get("message")
-    hint = TOKEN_HEALTH_ERROR_CODES.get(
-        code or "",
-        "Unrecognized token-health error. Re-authenticate the connection in Power Platform.",
+    raw_code = err.get("code")
+    raw_message = err.get("message") or ""
+
+    # Tier 1: extract AADSTS code from message (production shape).
+    aadsts_match = _AADSTS_CODE_RE.search(raw_message)
+    if aadsts_match:
+        aadsts_code = aadsts_match.group(1)
+        hint = TOKEN_HEALTH_ERROR_CODES.get(
+            aadsts_code,
+            "Unrecognized AADSTS error. Re-authenticate the connection in Power Platform.",
+        )
+        return aadsts_code, raw_message, hint
+
+    # Tier 2: fall back to the coarser error.code value.
+    if raw_code:
+        hint = TOKEN_HEALTH_ERROR_CODES.get(
+            raw_code,
+            "Unrecognized token-health error. Re-authenticate the connection in Power Platform.",
+        )
+        return raw_code, raw_message or None, hint
+
+    # Tier 3: error block present but neither an AADSTS code nor a code field.
+    return None, raw_message or None, (
+        "Connection reported an error but Power Platform did not include a "
+        "structured error code. Re-authenticate the connection."
     )
-    return code, message, hint
 
 
 def _check_connection_token_health(runner) -> list[CheckResult]:
