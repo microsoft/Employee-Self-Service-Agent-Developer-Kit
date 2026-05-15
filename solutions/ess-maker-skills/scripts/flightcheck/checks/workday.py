@@ -162,6 +162,7 @@ def run_workday_checks(runner) -> list[CheckResult]:
 
     # --- Connection References ---
     results.extend(_check_connections(runner))
+    results.extend(_check_connection_token_health(runner))
 
     # --- Flow Status ---
     results.extend(_check_flow_status(runner, wd_flows))
@@ -348,6 +349,189 @@ def _get_conn_status(conn: dict) -> str:
     if isinstance(statuses, list) and statuses:
         return statuses[0].get("status", "Unknown")
     return "Unknown"
+
+
+# OAuth grant-expiry / token-health error codes the Power Platform
+# connection layer surfaces in statuses[0].error.code when the connection
+# creator's Entra OAuth grant has lapsed. Mapping each code to a one-line
+# remediation hint lets WD-CONN-101 tell the operator *what* expired and
+# *what to do*, instead of just "Error". Codes sourced from MS Learn:
+# https://learn.microsoft.com/entra/identity-platform/reference-error-codes
+TOKEN_HEALTH_ERROR_CODES = {
+    "AADSTS50173": "Auth grant expired (token revoked or password changed). Re-authenticate the connection in Power Platform.",
+    "AADSTS70008": "Refresh token expired due to inactivity. Re-authenticate the connection in Power Platform.",
+    "AADSTS50058": "Silent sign-in failed (no active Entra session). Have the connection owner re-authenticate.",
+    "AADSTS700082": "Refresh token has expired due to inactivity. Re-authenticate the connection.",
+    "AADSTS700084": "Refresh token used after revocation. Re-authenticate the connection.",
+    "AADSTS50076": "MFA challenge required. Have the connection owner re-authenticate and complete MFA.",
+    "Unauthorized": "Power Platform marked the credential unauthorized. Re-authenticate the connection.",
+}
+
+
+def _classify_token_health_error(conn: dict) -> tuple[str | None, str | None, str]:
+    """Inspect ``statuses[0].error`` on a connection record and return
+    ``(error_code, error_message, hint)`` for token-health classification.
+
+    The PowerApps connections API includes a structured ``error`` block
+    on non-Connected statuses (target, code, message). We surface the
+    code and message verbatim so the operator can search/grep for them,
+    and add a one-line hint pulled from TOKEN_HEALTH_ERROR_CODES when we
+    recognize the AADSTS code. Returns (None, None, generic-hint) when
+    the error block is missing or unrecognized.
+
+    Cited consumer: this function only.
+    Source (validated): tests/fixtures/cassettes/flightcheck_pp_admin.yaml
+    captures the statuses[0].error shape the live BAP API returns on a
+    Workday SOAP connection whose Entra grant has expired with
+    AADSTS50173.
+    """
+    statuses = conn.get("properties", {}).get("statuses", [])
+    if not isinstance(statuses, list) or not statuses:
+        return None, None, "No status information returned by Power Platform."
+    err = statuses[0].get("error") or {}
+    code = err.get("code")
+    message = err.get("message")
+    hint = TOKEN_HEALTH_ERROR_CODES.get(
+        code or "",
+        "Unrecognized token-health error. Re-authenticate the connection in Power Platform.",
+    )
+    return code, message, hint
+
+
+def _check_connection_token_health(runner) -> list[CheckResult]:
+    """WD-CONN-101 — Workday connection token / grant health (deep).
+
+    WD-CONN-001 reports whether each Workday connection is in
+    ``Connected`` state. WD-CONN-101 goes one level deeper: for any
+    Workday connection NOT in ``Connected`` state, it parses the
+    structured ``statuses[0].error.{code,message}`` block the
+    PowerApps connections API returns and surfaces a remediation
+    pinned to the specific Entra error code (e.g. AADSTS50173 grant
+    expired vs AADSTS70008 refresh-token-expired-due-to-inactivity vs
+    AADSTS50076 MFA challenge required). The customer-facing failure
+    mode this catches: a Workday SOAP connection that worked yesterday
+    silently flips to 401/403 at runtime because the connection
+    creator's Entra grant lapsed — WD-CONN-001 says ``Error`` and
+    points at "re-authenticate", WD-CONN-101 names the user, the
+    grant code, and what specifically expired.
+
+    Mock tier (validated): backed by ``tests/mocks/pp_admin.py``
+    (MOCK_STATUS = "validated", cassette
+    ``tests/fixtures/cassettes/flightcheck_pp_admin.yaml``). Same
+    endpoint as WD-CONN-001 — ``GET /providers/Microsoft.PowerApps/
+    scopes/admin/environments/{env_id}/connections`` — so no new
+    cassette is required.
+
+    Scope notes (intentionally narrower than the issue suggested):
+      * The runtime ESS Workday integration uses WS-Security
+        UsernameToken (Basic auth via ISU username + password), so
+        there is no Workday-side OAuth/refresh token to inspect. The
+        OAuth surface that DOES exist is the Power Platform
+        connection's wrapper grant — the Entra token from the user
+        who created the connection ref. That is what WD-CONN-101
+        inspects.
+      * The issue also suggested an active SOAP probe
+        (Get_Server_Timestamp / Get_Workers count=1). That ground is
+        already covered by the existing WD-WF-* checks, which call
+        17 real ESS workflows against the live Workday tenant when
+        ISU credentials are supplied. WD-CONN-101 deliberately stays
+        offline-only against the BAP cassette to avoid duplicating
+        WD-WF-001 and to keep the check fast in CI.
+      * The PowerApps connections API does NOT expose a
+        ``lastRefreshedTimestamp`` field on connection records (not
+        present in the validated cassette), so the issue's
+        "warn-if-token-older-than-IdP-lifetime" branch is not
+        implementable from this surface. Documented as a follow-up.
+    """
+    results: list[CheckResult] = []
+    pp = runner.pp_admin
+    env_id = runner.env_id
+
+    if not env_id or pp is None:
+        return results
+
+    try:
+        all_conns = pp.get_connections(env_id)
+    except Exception as e:
+        results.append(CheckResult(
+            checkpoint_id="WD-CONN-101", category="Workday",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description="Workday connection token health",
+            result=f"Unable to check: {e}",
+        ))
+        return results
+
+    if isinstance(all_conns, dict) and "_error" in all_conns:
+        results.append(CheckResult(
+            checkpoint_id="WD-CONN-101", category="Workday",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description="Workday connection token health",
+            result=f"Unable to list connections: {all_conns['_error']}",
+            remediation="Requires Power Platform Administrator role.",
+        ))
+        return results
+
+    wd_conns = [
+        c for c in all_conns
+        if "workday" in (
+            c.get("properties", {}).get("apiId", "")
+            + c.get("properties", {}).get("displayName", "")
+        ).lower()
+    ]
+
+    if not wd_conns:
+        results.append(CheckResult(
+            checkpoint_id="WD-CONN-101", category="Workday",
+            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            description="Workday connection token health",
+            result="No Workday connections found",
+            remediation="Configure Workday SOAP connections in the environment.",
+            doc_link=f"{DOC_BASE}/workday#step-3-connection-references",
+        ))
+        return results
+
+    unhealthy: list[tuple[dict, str | None, str | None, str]] = []
+    for c in wd_conns:
+        if _get_conn_status(c) == "Connected":
+            continue
+        code, message, hint = _classify_token_health_error(c)
+        unhealthy.append((c, code, message, hint))
+
+    if not unhealthy:
+        results.append(CheckResult(
+            checkpoint_id="WD-CONN-101", category="Workday",
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
+            description="Workday connection token health",
+            result=f"All {len(wd_conns)} Workday connection(s) report healthy auth state",
+            doc_link=f"{DOC_BASE}/workday#step-3-connection-references",
+        ))
+        return results
+
+    detail_lines: list[str] = []
+    remediation_lines: list[str] = []
+    for c, code, message, hint in unhealthy:
+        props = c.get("properties", {})
+        name = props.get("displayName", "(unnamed)")
+        owner = props.get("accountName", "(unknown owner)")
+        code_str = code or "no-error-code"
+        msg_excerpt = (message or "").split("\n", 1)[0][:140]
+        detail_lines.append(
+            f"'{name}' (owner={owner}): {code_str} — {msg_excerpt}".rstrip(" —")
+        )
+        remediation_lines.append(f"'{name}' (owner={owner}): {hint}")
+
+    results.append(CheckResult(
+        checkpoint_id="WD-CONN-101", category="Workday",
+        priority=Priority.HIGH.value, status=Status.FAILED.value,
+        description="Workday connection token health",
+        result=(
+            f"{len(unhealthy)} of {len(wd_conns)} Workday connection(s) have "
+            f"unhealthy auth state: " + "; ".join(detail_lines)
+        ),
+        remediation=" | ".join(remediation_lines),
+        doc_link=f"{DOC_BASE}/workday#step-3-connection-references",
+    ))
+    return results
 
 
 def _check_flow_status(runner, wd_flows: list) -> list[CheckResult]:

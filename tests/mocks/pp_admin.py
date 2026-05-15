@@ -171,16 +171,40 @@ def connection(
 
 
 def workday_connection(
-    *, status: str = "Connected", display_name: str = "Workday SOAP — ISU"
+    *,
+    status: str = "Connected",
+    display_name: str = "Workday SOAP — ISU",
+    error_target: str | None = None,
+    error_code: str | None = None,
+    error_message: str | None = None,
+    account_name: str | None = None,
 ) -> dict[str, Any]:
     """Convenience: a Workday SOAP connection. The check filters by
     'workday' substring in apiId+displayName, so both the api_id and
-    the display_name reference Workday."""
+    the display_name reference Workday.
+
+    `error_target` / `error_code` / `error_message` are forwarded to the
+    underlying ``connection()`` builder when ``status == "Error"`` so
+    callers can simulate the AADSTS50173 / AADSTS70008 / AADSTS50058
+    grant-expiry shapes that WD-CONN-101 inspects. When omitted, the
+    underlying builder falls back to its default AADSTS50173 example.
+
+    `account_name` overrides the connection's ``properties.accountName``
+    field — used by WD-CONN-101's remediation message to tell the
+    operator exactly which user's grant needs refreshing.
+    """
+    extra: dict[str, Any] | None = None
+    if account_name is not None:
+        extra = {"accountName": account_name}
     return connection(
         name=f"workday-{status.lower()}-{display_name[:8].lower().replace(' ', '-')}",
         display_name=display_name,
         api_name="shared_workdaysoap",
         status=status,
+        error_target=error_target,
+        error_code=error_code,
+        error_message=error_message,
+        extra_properties=extra,
     )
 
 
