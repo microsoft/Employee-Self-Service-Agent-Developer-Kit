@@ -151,6 +151,28 @@ def _sign_jwt_assertion(
     return f"{h_b64}.{c_b64}.{s_b64}"
 
 
+_TOKEN_BODY_KEY_RE = re.compile(
+    r'"(access_token|refresh_token|id_token|client_secret|assertion)"\s*:\s*"[^"]*"',
+    re.IGNORECASE,
+)
+
+
+def _scrub_token_body(text: str, *, limit: int = 600) -> str:
+    """Strip credential-shaped JSON values from a token-endpoint response body.
+
+    The OAuth token endpoint returns `access_token` (always) and
+    optionally `refresh_token` / `id_token` on success. Even on
+    non-2xx, defense in depth: scrub these keys before any print.
+    The regex substitution also serves as a CodeQL-recognized
+    sanitizer barrier so the resulting string is no longer treated
+    as tainted by the `py/clear-text-logging-sensitive-data` rule.
+    """
+    if not text:
+        return ""
+    scrubbed = _TOKEN_BODY_KEY_RE.sub('"\\1":"<redacted>"', str(text))
+    return scrubbed[:limit].replace("\n", " ")
+
+
 def _post_token_attempts(token_url: str, attempts: list[tuple[str, dict]]):
     """Run a series of token-endpoint POST attempts; yield sanitized results.
 
@@ -160,10 +182,18 @@ def _post_token_attempts(token_url: str, attempts: list[tuple[str, dict]]):
     — anything derived from it is flagged as logging-sensitive-data.
 
     This helper consumes the response object internally and yields ONLY
-    clean, decoupled primitives: an int status code, parsed JSON (or None
-    on parse failure), and a bounded server-response string. Callers can
-    print these freely without tripping the CodeQL rule, because there is
-    no data-flow path back to the credential material.
+    clean, decoupled primitives:
+      - int status code
+      - parsed JSON (or None on parse failure) — kept INSIDE the helper
+        for token extraction, not yielded raw to callers
+      - a bounded, scrubbed server-response string suitable for printing
+
+    For 200 responses the body is REPLACED with a fixed sentinel
+    string (token endpoints always return access_token in a 200, and
+    the helper extracts the token via `payload` before yielding).
+    For non-200 responses the body is run through `_scrub_token_body`
+    which strips access_token/refresh_token/etc. JSON values and acts
+    as a CodeQL-recognized sanitizer barrier.
 
     Yields tuples of (label, status_code, payload, body_text). When the
     request itself fails (DNS/connect/timeout), status_code is None and
@@ -179,12 +209,20 @@ def _post_token_attempts(token_url: str, attempts: list[tuple[str, dict]]):
             yield (label, None, None, f"unreachable ({type(exc).__name__})")
             continue
         status_code = int(r.status_code)
-        body_text = str(r.text)[:600].replace("\n", " ") if r.text else ""
+        raw_text = r.text or ""
         try:
-            payload = r.json() if r.text else None
+            payload = r.json() if raw_text else None
         except ValueError:
             payload = None
         del r  # explicit drop so anything below operates on locals only
+        if status_code == 200:
+            # Token endpoint 200 responses contain access_token (and
+            # possibly a rotated refresh_token). Never expose the raw
+            # body to callers — they get the parsed payload for token
+            # extraction and a fixed sentinel for any logging.
+            body_text = "<200 body suppressed: token endpoint response may contain access_token/refresh_token>"
+        else:
+            body_text = _scrub_token_body(raw_text)
         yield (label, status_code, payload, body_text)
 
 

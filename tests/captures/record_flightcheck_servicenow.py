@@ -98,6 +98,7 @@ NOTE — Elevated security_admin role:
 from __future__ import annotations
 
 import os
+import re
 import sys
 from urllib.parse import quote
 
@@ -109,20 +110,8 @@ from _common import announce, build_cassette, confirm_or_exit
 REQUIRED_ENV = ("SERVICENOW_INSTANCE_URL", "SERVICENOW_USERNAME", "SERVICENOW_PASSWORD")
 
 
-def _check_env() -> tuple[dict[str, str], dict[str, str]]:
-    """Return (metadata, secrets) split.
-
-    `metadata` carries non-sensitive values that are safe to print
-    (instance URL, usernames, OAuth registry name filter). `secrets`
-    carries password values that must never be printed or logged.
-
-    The split exists to satisfy the CodeQL "Clear-text logging of
-    sensitive information" rule. If both groups were returned in one
-    dict, CodeQL's data-flow analysis would taint every print() that
-    referenced any field of the dict, even fields that hold only
-    non-sensitive metadata. Same pattern as production
-    `solutions/.../checks/workday.py`.
-    """
+def _ensure_required_env() -> None:
+    """Fail fast with a friendly message if any required env var is missing."""
     missing = [name for name in REQUIRED_ENV if not os.environ.get(name)]
     if missing:
         print("ERROR: missing required environment variables:")
@@ -131,27 +120,78 @@ def _check_env() -> tuple[dict[str, str], dict[str, str]]:
         print()
         print("Set them and re-run. See the docstring at the top of this file.")
         sys.exit(1)
+
+
+def _check_metadata_env() -> dict[str, str]:
+    """Return only NON-SENSITIVE config values (safe to print).
+
+    Kept in a separate function from `_check_secrets_env()` so that
+    CodeQL's data-flow analysis cannot propagate taint from the
+    password env vars into anything derived from this dict. A previous
+    version returned `(metadata, secrets)` as a tuple, but tuple
+    unpacking causes CodeQL to taint both binding targets, which made
+    every metadata-only print() in main() trip the
+    `py/clear-text-logging-sensitive-data` rule.
+
+    Same separation pattern as production
+    `solutions/.../checks/workday.py`.
+    """
     metadata: dict[str, str] = {
         "instance":  os.environ["SERVICENOW_INSTANCE_URL"],
         "username":  os.environ["SERVICENOW_USERNAME"],
     }
+    if os.environ.get("SERVICENOW_LIMITED_USERNAME"):
+        metadata["limited_username"] = os.environ["SERVICENOW_LIMITED_USERNAME"]
+    if os.environ.get("SERVICENOW_OAUTH_REGISTRY_NAME"):
+        metadata["oauth_registry_name"] = os.environ["SERVICENOW_OAUTH_REGISTRY_NAME"]
+    return metadata
+
+
+def _check_secrets_env() -> dict[str, str]:
+    """Return ONLY password values. Result must never be printed/logged.
+
+    Companion to `_check_metadata_env()` — see that function's
+    docstring for why these are split into separate calls rather than
+    a single tuple-returning function.
+    """
     secrets: dict[str, str] = {
         "password":  os.environ["SERVICENOW_PASSWORD"],
     }
-    if os.environ.get("SERVICENOW_LIMITED_USERNAME"):
-        metadata["limited_username"] = os.environ["SERVICENOW_LIMITED_USERNAME"]
     if os.environ.get("SERVICENOW_LIMITED_PASSWORD"):
         secrets["limited_password"] = os.environ["SERVICENOW_LIMITED_PASSWORD"]
-    if os.environ.get("SERVICENOW_OAUTH_REGISTRY_NAME"):
-        metadata["oauth_registry_name"] = os.environ["SERVICENOW_OAUTH_REGISTRY_NAME"]
-    return metadata, secrets
+    return secrets
+
+
+_SENSITIVE_JSON_KEY_RE = re.compile(
+    r'"(password|access_token|refresh_token|client_secret|sysparm_password)"\s*:\s*"[^"]*"',
+    re.IGNORECASE,
+)
+
+
+def _scrub_response_body(text: str, *, limit: int = 200) -> str:
+    """Return a printable, length-bounded snippet with credential-shaped
+    JSON values stripped.
+
+    ServiceNow Table API error bodies do not echo back the request's
+    Basic-auth credentials, so this is defense in depth. It also acts
+    as a CodeQL-recognized sanitizer barrier (regex substitution) so
+    the resulting string is no longer treated as tainted by the
+    `py/clear-text-logging-sensitive-data` data-flow analysis.
+    """
+    if not text:
+        return ""
+    scrubbed = _SENSITIVE_JSON_KEY_RE.sub('"\\1":"<redacted>"', str(text))
+    return scrubbed[:limit]
 
 
 def main() -> None:
     announce("flightcheck_servicenow (Knowledge connector setup validation)")
-    # Two-dict return keeps secrets off the taint graph for any code
-    # that only consumes metadata. See _check_env docstring.
-    metadata, secrets = _check_env()
+    # Two independent reads keep secrets off the taint graph for any
+    # code that only consumes metadata. See _check_metadata_env /
+    # _check_secrets_env docstrings.
+    _ensure_required_env()
+    metadata = _check_metadata_env()
+    secrets = _check_secrets_env()
 
     instance = metadata["instance"].rstrip("/")
     headers = {"Accept": "application/json"}
@@ -162,7 +202,8 @@ def main() -> None:
 
     # Prints are intentionally driven by `metadata` only — never by
     # `secrets` directly or by any object whose construction reads
-    # from `secrets`. See _check_env docstring.
+    # from `secrets`. See _check_metadata_env / _check_secrets_env
+    # docstrings.
     print(f"  Instance: {instance}")
     print(f"  Account:  {metadata['username']}")
     if "oauth_registry_name" in metadata:
@@ -203,9 +244,9 @@ def main() -> None:
                 if body_json is not None and isinstance(body_json, dict):
                     err = body_json.get("error")
                     msg = err.get("message", "") if isinstance(err, dict) else str(err)
-                    print(f"     body: {str(msg)[:200]}")
+                    print(f"     body: {_scrub_response_body(str(msg))}")
                 else:
-                    print(f"     body[:200]: {body_text}")
+                    print(f"     body[:200]: {_scrub_response_body(body_text)}")
             if ok and status_code == 200 and body_json is not None and isinstance(body_json, dict):
                 n = len(body_json.get("result", []))
                 print(f"     records returned: {n}")
