@@ -224,6 +224,55 @@ class TestBadConfig:
         assert "Re-authenticate" in sn_002.remediation
         assert "federated identity" not in sn_002.remediation.lower()
 
+    @responses.activate
+    def test_token_target_without_aad_fingerprint_skips_federated_guidance(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """Regression for the PR review finding on SN-002:
+        ``target == "token"`` + ``code == "Unauthorized"`` is NOT enough
+        on its own to attribute the failure to the Entra federation —
+        a connector-backend token rejection (e.g. revoked refresh token
+        on the ServiceNow side, not in AAD) can produce the same shape
+        without any AADSTS / "refresh access token" / "invalid_grant" /
+        "not authenticated" fingerprint in the message. In that case
+        SN-002 must still fail (the connection IS broken) but the
+        remediation must NOT claim the federated identity flow with the
+        external IdP is the cause.
+        """
+        from flightcheck.checks.external_systems import (
+            _check_sn_entra_user_signin_connections,
+        )
+
+        conn = pp.servicenow_entra_user_signin_connection(
+            display_name="ServiceNow", status="Error",
+        )
+        conn["properties"]["statuses"] = [
+            {
+                "status": "Error",
+                "target": "token",
+                "error": {
+                    "code": "Unauthorized",
+                    "message": "ServiceNow rejected the access token.",
+                },
+            }
+        ]
+
+        responses.add(**pp.list_connections(
+            env_id=runner.env_id, connections=[conn],
+        ))
+
+        results = _check_sn_entra_user_signin_connections(runner)
+
+        sn_002 = _result_by_id(results, "SN-002")
+        assert sn_002.status == "Failed"
+        assert "Re-authenticate" in sn_002.remediation
+        assert "federated identity" not in sn_002.remediation.lower(), (
+            "SN-002 should not attribute a generic token rejection "
+            "to the Entra federation without an AAD/refresh fingerprint "
+            "in the error message."
+        )
+        assert "external IdP" not in sn_002.remediation
+
 
 class TestMixedState:
     @responses.activate

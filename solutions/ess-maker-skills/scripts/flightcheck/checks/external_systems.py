@@ -203,13 +203,16 @@ def _is_entra_token_failure(status_entry: dict) -> bool:
     Any of those tokens count  we don't want to over-fit to a single
     AADSTS number because the federated-IdP rejection paths surface
     several different sub-codes.
+
+    We require an actual AAD/refresh fingerprint in the message rather
+    than falling back to ``target == "token"`` or ``code == "Unauthorized"``
+    alone  those shapes are also produced by non-federated token
+    failures (e.g. a connector-backend token rejection that has nothing
+    to do with the Entra federation), and labelling those as federated
+    would surface misleading IdP remediation copy.
     """
     err = status_entry.get("error") or {}
     msg = (err.get("message") or "").lower()
-    code = (err.get("code") or "").lower()
-    target = (status_entry.get("target") or "").lower()
-    if target == "token" or "unauthorized" in code:
-        return True
     return any(
         token in msg
         for token in (
