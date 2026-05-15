@@ -275,7 +275,9 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
 
     Heuristics:
       * No `@` in ISU → WARNING (legacy short-id format — the
-        most-cited misconfiguration root cause).
+        most-cited misconfiguration root cause). Reported even when
+        Graph is unavailable, because this signal needs only the
+        Dataverse env var.
       * `@` present but the domain part is not in the tenant's
         verified-domains list → WARNING (could be legitimate cross-tenant
         federation; surface for the operator to confirm).
@@ -303,17 +305,10 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
         ))
         return results
 
-    graph = getattr(runner, "graph", None)
-    if not graph:
-        results.append(CheckResult(
-            checkpoint_id="WD-ENV-101", category="Workday",
-            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
-            description="ISU username vs Entra UPN format alignment",
-            result="Microsoft Graph client not available — skipping ISU format check",
-            remediation="Re-run flightcheck and complete the Microsoft Graph sign-in prompt.",
-        ))
-        return results
-
+    # ── Step 1: read the ISU env var from Dataverse. We do this FIRST,
+    # before consulting Graph, because the no-`@` legacy-format detection
+    # (the most-cited misconfiguration root cause — the BCBSA scenario)
+    # can be reported off the Dataverse value alone.
     try:
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
         from auth import query_all
@@ -361,6 +356,49 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
         ))
         return results
 
+    # ── Step 2: legacy short-id detection (no Graph required). This is
+    # the most decisive failure mode and must be reported even when
+    # Graph auth has failed.
+    if "@" not in isu_value:
+        results.append(CheckResult(
+            checkpoint_id="WD-ENV-101", category="Workday",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description="ISU username vs Entra UPN format alignment",
+            result=(
+                f"ISU username '{isu_value}' does not contain '@' — does not match "
+                f"the Entra UPN format ESS sends on each request"
+            ),
+            remediation=(
+                "If the tenant federates identity (Okta, Ping, ADFS), set the "
+                "Workday ISU username to the Entra UPN format (e.g. "
+                "isu@<verified-tenant-domain>) so Workday can match incoming "
+                "ESS requests to a Worker. Update "
+                "`EmployeeContextRequestAccountName` in [Power Platform admin "
+                "center](https://admin.powerplatform.microsoft.com)."
+            ),
+            doc_link=f"{DOC_BASE}/workday#step-4-environment-variables",
+        ))
+        return results
+
+    # ── Step 3: verified-domain comparison (requires Graph). If Graph
+    # isn't available, we can't do this comparison — surface that as a
+    # SKIP so the operator knows the deeper check wasn't performed.
+    graph = getattr(runner, "graph", None)
+    if not graph:
+        results.append(CheckResult(
+            checkpoint_id="WD-ENV-101", category="Workday",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description="ISU username vs Entra UPN format alignment",
+            result=(
+                f"ISU username '{isu_value}' is in UPN-style format but Microsoft "
+                f"Graph client is unavailable — cannot verify the domain matches "
+                f"a verified tenant domain"
+            ),
+            remediation="Re-run flightcheck and complete the Microsoft Graph sign-in prompt.",
+            doc_link=f"{DOC_BASE}/workday#step-4-environment-variables",
+        ))
+        return results
+
     try:
         org = graph.get_organization()
     except Exception as e:
@@ -391,27 +429,6 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
         for d in org.get("verifiedDomains", [])
         if d.get("name")
     ]
-
-    if "@" not in isu_value:
-        results.append(CheckResult(
-            checkpoint_id="WD-ENV-101", category="Workday",
-            priority=Priority.HIGH.value, status=Status.WARNING.value,
-            description="ISU username vs Entra UPN format alignment",
-            result=(
-                f"ISU username '{isu_value}' does not contain '@' — does not match "
-                f"the Entra UPN format ESS sends on each request"
-            ),
-            remediation=(
-                "If the tenant federates identity (Okta, Ping, ADFS), set the "
-                "Workday ISU username to the Entra UPN format (e.g. "
-                "isu@<verified-tenant-domain>) so Workday can match incoming "
-                "ESS requests to a Worker. Update "
-                "`EmployeeContextRequestAccountName` in [Power Platform admin "
-                "center](https://admin.powerplatform.microsoft.com)."
-            ),
-            doc_link=f"{DOC_BASE}/workday#step-4-environment-variables",
-        ))
-        return results
 
     domain = isu_value.rsplit("@", 1)[1].lower()
     if not verified:

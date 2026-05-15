@@ -393,17 +393,50 @@ class TestSkipped:
         assert r.status == "Skipped"
         assert "token not available" in r.result.lower()
 
-    def test_skipped_when_no_graph_client(self, fake_dataverse_url: str, fake_token: str) -> None:
+    @responses.activate
+    def test_skipped_when_no_graph_client_and_isu_in_upn_format(
+        self, fake_dataverse_url: str, fake_token: str
+    ) -> None:
+        """ISU is `<x>@<domain>` and Graph is unavailable — we cannot
+        verify domain alignment. SKIP so the operator knows the deeper
+        check wasn't performed."""
         from flightcheck.checks.workday import _check_isu_username_format
 
         runner = _MinimalRunner(env_url=fake_dataverse_url, dv_token=fake_token, graph=None)
 
+        _register_isu(base_url=fake_dataverse_url, isu_value="isu_ess@contoso.com")
         results = _check_isu_username_format(runner)
-        r = _result(results)
 
+        r = _result(results)
         assert r.status == "Skipped"
         assert "graph" in r.result.lower()
         assert "graph sign-in" in r.remediation.lower()
+
+    @responses.activate
+    def test_warns_on_legacy_isu_format_even_when_no_graph_client(
+        self, fake_dataverse_url: str, fake_token: str
+    ) -> None:
+        """Regression: the no-`@` legacy-format detection (the BCBSA
+        scenario) must run off the Dataverse value alone and still
+        WARN even when Graph is unavailable. Earlier revisions short-
+        circuited to SKIPPED on missing Graph and silently dropped
+        this critical signal — pin that this no longer happens.
+        """
+        from flightcheck.checks.workday import _check_isu_username_format
+
+        runner = _MinimalRunner(env_url=fake_dataverse_url, dv_token=fake_token, graph=None)
+
+        _register_isu(base_url=fake_dataverse_url, isu_value="ISU12345")
+        results = _check_isu_username_format(runner)
+
+        r = _result(results)
+        assert r.status == "Warning", (
+            f"Expected legacy ISU format to WARN even without Graph; got "
+            f"status={r.status} result={r.result!r}"
+        )
+        assert "does not contain '@'" in r.result
+        assert "ISU12345" in r.result
+        assert "EmployeeContextRequestAccountName" in r.remediation
 
     @responses.activate
     def test_skipped_when_isu_env_var_missing_defers_to_wd_env_001(
