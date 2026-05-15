@@ -194,3 +194,18 @@ class GraphClient:
         if filter_expr:
             params["$filter"] = filter_expr
         return self.get_all("/servicePrincipals", params=params)
+
+    def get_app_role_assignments(self, sp_id: str) -> list:
+        """List principals (users, groups, service principals) assigned to
+        the resource service principal identified by ``sp_id``.
+
+        Returns the collection from
+        ``GET /servicePrincipals/{id}/appRoleAssignedTo`` — each item is an
+        appRoleAssignment with ``principalId``, ``principalType``
+        (``User`` | ``Group`` | ``ServicePrincipal``), ``principalDisplayName``,
+        and ``appRoleId``. Returns ``[]`` on 401/403 (handled by ``get_all``)
+        so caller can branch on insufficient permissions.
+
+        Docs: https://learn.microsoft.com/graph/api/serviceprincipal-list-approleassignedto
+        """
+        return self.get_all(f"/servicePrincipals/{sp_id}/appRoleAssignedTo")

@@ -192,6 +192,112 @@ def conditional_access_policy(
     }
 
 
+MOCK_WORKDAY_SP_ID = "00000000-0000-0000-0000-000000005001"
+MOCK_WORKDAY_APP_ID = "00000000-0000-0000-0000-000000005002"
+
+
+def service_principal(
+    *,
+    sp_id: str = MOCK_WORKDAY_SP_ID,
+    app_id: str = MOCK_WORKDAY_APP_ID,
+    display_name: str = "Workday",
+    app_role_assignment_required: bool = True,
+    account_enabled: bool = True,
+) -> dict[str, Any]:
+    """Build a single Graph /servicePrincipals record.
+
+    Cited consumers:
+      - flightcheck/graph_client.py (get_service_principals)
+      - flightcheck/checks/authentication.py (AUTH-005)
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="servicePrincipal" — fields used:
+                id (Edm.String)
+                appId (Edm.String)
+                displayName (Edm.String)
+                appRoleAssignmentRequired (Edm.Boolean)
+                accountEnabled (Edm.Boolean)
+      Docs:   https://learn.microsoft.com/graph/api/serviceprincipal-get
+              Example response copied verbatim 2026-05.
+    """
+    return {
+        "accountEnabled": account_enabled,
+        "addIns": [],
+        "alternativeNames": [],
+        "appDisplayName": display_name,
+        "appId": app_id,
+        "appOwnerOrganizationId": MOCK_TENANT_ID,
+        "appRoleAssignmentRequired": app_role_assignment_required,
+        "appRoles": [],
+        "displayName": display_name,
+        "id": sp_id,
+        "info": {
+            "termsOfServiceUrl": None,
+            "supportUrl": None,
+            "privacyStatementUrl": None,
+            "marketingUrl": None,
+            "logoUrl": None,
+        },
+        "keyCredentials": [],
+        "logoutUrl": None,
+        "oauth2PermissionScopes": [],
+        "passwordCredentials": [],
+        "publisherName": None,
+        "replyUrls": [],
+        "servicePrincipalNames": [app_id],
+        "servicePrincipalType": "Application",
+        "signInAudience": "AzureADMyOrg",
+        "tags": ["WindowsAzureActiveDirectoryIntegratedApp"],
+        "tokenEncryptionKeyId": None,
+    }
+
+
+def app_role_assignment(
+    *,
+    assignment_id: str = "00000000-0000-0000-0000-000000005101",
+    principal_id: str = "00000000-0000-0000-0000-000000005102",
+    principal_display_name: str = "ESS Users",
+    principal_type: str = "Group",
+    resource_id: str = MOCK_WORKDAY_SP_ID,
+    resource_display_name: str = "Workday",
+    app_role_id: str = "00000000-0000-0000-0000-000000000000",
+) -> dict[str, Any]:
+    """Build a single Graph /servicePrincipals/{id}/appRoleAssignedTo record.
+
+    ``principal_type`` is one of ``User``, ``Group``, ``ServicePrincipal``
+    per the appRoleAssignment EntityType.
+
+    Cited consumers:
+      - flightcheck/graph_client.py (get_app_role_assignments)
+      - flightcheck/checks/authentication.py (AUTH-005)
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="appRoleAssignment" — fields used:
+                id (Edm.String)
+                principalId (Edm.Guid)
+                principalDisplayName (Edm.String)
+                principalType (Edm.String)
+                resourceId (Edm.Guid)
+                resourceDisplayName (Edm.String)
+                appRoleId (Edm.Guid)
+      Docs:   https://learn.microsoft.com/graph/api/serviceprincipal-list-approleassignedto
+              Example response copied verbatim 2026-05.
+    """
+    return {
+        "id": assignment_id,
+        "deletedDateTime": None,
+        "appRoleId": app_role_id,
+        "createdDateTime": "2025-01-01T00:00:00Z",
+        "principalDisplayName": principal_display_name,
+        "principalId": principal_id,
+        "principalType": principal_type,
+        "resourceDisplayName": resource_display_name,
+        "resourceId": resource_id,
+    }
+
+
 # ────────────────────────────────────────────────────────────────────────
 # Collection wrappers + responses kwargs
 # ────────────────────────────────────────────────────────────────────────
@@ -268,6 +374,49 @@ def list_conditional_access_policies(
         "json": collection(
             policies if policies is not None else [conditional_access_policy()],
             odata_context="$metadata#identity/conditionalAccess/policies",
+        ),
+        "status": 200,
+    }
+
+
+def list_service_principals(
+    *,
+    service_principals: Iterable[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Mock GET /v1.0/servicePrincipals (with or without ``$filter``).
+
+    The production check uses a server-side ``$filter`` to narrow on
+    ``displayName``; per the cassette-tier rule that ``$filter`` /
+    ``$select`` / ``$top`` are server-side narrowing on the same path,
+    one mock covers all narrowing variants.
+    """
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/servicePrincipals",
+        "json": collection(
+            service_principals
+            if service_principals is not None
+            else [service_principal()],
+            odata_context="$metadata#servicePrincipals",
+        ),
+        "status": 200,
+    }
+
+
+def list_app_role_assignments(
+    *,
+    sp_id: str = MOCK_WORKDAY_SP_ID,
+    assignments: Iterable[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Mock GET /v1.0/servicePrincipals/{id}/appRoleAssignedTo."""
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/servicePrincipals/{sp_id}/appRoleAssignedTo",
+        "json": collection(
+            assignments if assignments is not None else [app_role_assignment()],
+            odata_context=(
+                f"$metadata#servicePrincipals('{sp_id}')/appRoleAssignedTo"
+            ),
         ),
         "status": 200,
     }
