@@ -163,18 +163,44 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # --- Connection References ---
     results.extend(_check_connections(runner))
 
+    # --- Connection Ref Bindings (provision scope only) ---
+    # Verify that ESS/Workday connection references are actually bound
+    # to a connection (not left unbound after install). Also checks that
+    # a Dataverse connection exists alongside Workday.
+    if runner.scope == "provision":
+        results.extend(_check_provision_bindings(runner))
+
     # --- Flow Status ---
     results.extend(_check_flow_status(runner, wd_flows))
 
     # --- SOAP Workflow Tests (only if Workday MCP creds available) ---
-    results.extend(_check_workflows(runner))
+    # Skip in provision scope — SOAP workflow tests require ISU credentials
+    # and env vars that the simplified /provision path defers to /connect workday.
+    if runner.scope != "provision":
+        results.extend(_check_workflows(runner))
 
     return results
 
 
 def _check_env_vars(runner) -> list[CheckResult]:
-    """Validate Workday environment variables in Dataverse."""
+    """Validate Workday environment variables in Dataverse.
+
+    In provision scope, these ISU/RaaS env vars are not yet configured
+    (the simplified OAuth path defers them to /connect workday), so we
+    skip rather than fail.
+    """
     results = []
+
+    if runner.scope == "provision":
+        results.append(CheckResult(
+            checkpoint_id="WD-ENV-001", category="Workday",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description="Workday environment variables",
+            result="Skipped — provision uses simplified OAuth path; "
+                   "run /connect workday to configure ISU/RaaS env vars",
+        ))
+        return results
+
     env_url = runner.env_url
     dv_token = runner.dv_token
 
@@ -343,11 +369,18 @@ def _check_connections(runner) -> list[CheckResult]:
 
 
 def _get_conn_status(conn: dict) -> str:
-    """Extract connection status from the BAP API response."""
+    """Extract connection status from the BAP API response.
+
+    Prefers the token-target status (most reliable for OAuth connections).
+    Falls back to the first status entry if no token target exists.
+    """
     statuses = conn.get("properties", {}).get("statuses", [])
-    if isinstance(statuses, list) and statuses:
-        return statuses[0].get("status", "Unknown")
-    return "Unknown"
+    if not isinstance(statuses, list) or not statuses:
+        return "Unknown"
+    for s in statuses:
+        if s.get("target") == "token":
+            return s.get("status", "Unknown")
+    return statuses[0].get("status", "Unknown")
 
 
 def _check_flow_status(runner, wd_flows: list) -> list[CheckResult]:
@@ -376,6 +409,121 @@ def _check_flow_status(runner, wd_flows: list) -> list[CheckResult]:
             result=f"State: {'Enabled' if is_on else 'Disabled'}",
             remediation=f"Enable '{name}' in Power Automate." if not is_on else "",
             doc_link=f"{DOC_BASE}/workday#topics",
+        ))
+
+    return results
+
+
+def _check_provision_bindings(runner) -> list[CheckResult]:
+    """Verify connection ref bindings and Dataverse connection (provision scope).
+
+    Queries Dataverse connectionreferences for ESS/Workday refs and checks
+    that they have a non-empty connectionid (i.e., they are actually bound
+    to a connection). Also checks for at least one Dataverse connection in
+    the Power Platform connections list.
+    """
+    results = []
+    env_url = runner.env_url
+    dv_token = runner.dv_token
+
+    if not env_url or not dv_token:
+        results.append(CheckResult(
+            checkpoint_id="WD-BIND-001", category="Workday",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description="Connection ref bindings",
+            result="Dataverse token not available — skipping binding check",
+        ))
+        return results
+
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+        from auth import query_all
+
+        ess_filter = (
+            "startswith(connectionreferencelogicalname,'msdyn_ess') "
+            "or startswith(connectionreferencelogicalname,'msdyn_copilotforemployeeselfservice') "
+            "or startswith(connectionreferencelogicalname,'new_sharedworkdaysoap') "
+            "or startswith(connectionreferencelogicalname,'msviess_shared')"
+        )
+        refs = query_all(
+            env_url, dv_token,
+            "connectionreferences",
+            "connectionreferenceid,connectionreferencelogicalname,connectorid,connectionid",
+            ess_filter,
+        )
+
+        if not refs:
+            results.append(CheckResult(
+                checkpoint_id="WD-BIND-001", category="Workday",
+                priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+                description="Connection ref bindings",
+                result="No ESS/Workday connection references found",
+                remediation="Ensure the Workday ISV solution is installed.",
+            ))
+            return results
+
+        bound = [r for r in refs if r.get("connectionid")]
+        unbound = [r for r in refs if not r.get("connectionid")]
+
+        if unbound:
+            unbound_names = [r.get("connectionreferencelogicalname", "?") for r in unbound]
+            results.append(CheckResult(
+                checkpoint_id="WD-BIND-001", category="Workday",
+                priority=Priority.CRITICAL.value, status=Status.FAILED.value,
+                description="Connection ref bindings",
+                result=f"{len(unbound)} of {len(refs)} refs unbound: {', '.join(unbound_names[:5])}",
+                remediation="Run bind_connection_refs.py or /provision to bind refs.",
+            ))
+        else:
+            results.append(CheckResult(
+                checkpoint_id="WD-BIND-001", category="Workday",
+                priority=Priority.HIGH.value, status=Status.PASSED.value,
+                description="Connection ref bindings",
+                result=f"All {len(bound)} ESS/Workday refs are bound",
+            ))
+
+        # Check for Dataverse connection presence
+        pp = runner.pp_admin
+        env_id = runner.env_id
+        if pp and env_id:
+            all_conns = pp.get_connections(env_id)
+            if isinstance(all_conns, list):
+                dv_conns = [
+                    c for c in all_conns
+                    if "commondataservice" in (
+                        c.get("properties", {}).get("apiId", "")
+                    ).lower()
+                ]
+                connected_dv = [c for c in dv_conns if _get_conn_status(c) == "Connected"]
+                if connected_dv:
+                    results.append(CheckResult(
+                        checkpoint_id="WD-BIND-002", category="Workday",
+                        priority=Priority.HIGH.value, status=Status.PASSED.value,
+                        description="Dataverse connection",
+                        result=f"{len(connected_dv)} Dataverse connection(s) Connected",
+                    ))
+                elif dv_conns:
+                    results.append(CheckResult(
+                        checkpoint_id="WD-BIND-002", category="Workday",
+                        priority=Priority.HIGH.value, status=Status.FAILED.value,
+                        description="Dataverse connection",
+                        result=f"{len(dv_conns)} Dataverse connection(s) found but none Connected",
+                        remediation="Authenticate the Dataverse connection in the maker portal.",
+                    ))
+                else:
+                    results.append(CheckResult(
+                        checkpoint_id="WD-BIND-002", category="Workday",
+                        priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+                        description="Dataverse connection",
+                        result="No Dataverse connections found",
+                        remediation="Create a Dataverse connection via /provision or the maker portal.",
+                    ))
+    except Exception as e:
+        results.append(CheckResult(
+            checkpoint_id="WD-BIND-001", category="Workday",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description="Connection ref bindings",
+            result=f"Unable to check: {e}",
         ))
 
     return results

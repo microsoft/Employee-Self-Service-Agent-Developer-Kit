@@ -99,7 +99,15 @@ def run_environment_checks(runner) -> list[CheckResult]:
     # ---- ENV-008: DLP policies ----
     try:
         policies = pp.get_dlp_policies_for_env(env_id)
-        if policies:
+        if isinstance(policies, dict) and "_error" in policies:
+            results.append(CheckResult(
+                checkpoint_id="ENV-008", category="Environment",
+                priority=Priority.HIGH.value, status=Status.WARNING.value,
+                description="DLP policies",
+                result=f"Unable to list DLP policies: {policies['_error']}",
+                remediation="Requires Power Platform Admin role.",
+            ))
+        elif policies:
             results.append(CheckResult(
                 checkpoint_id="ENV-008", category="Environment",
                 priority=Priority.HIGH.value, status=Status.PASSED.value,

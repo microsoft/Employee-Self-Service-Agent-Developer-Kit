@@ -127,6 +127,75 @@ python scripts/flightcheck/cli.py --scope full
 | `workday` | Workday connections, flows, env vars, and SOAP workflow tests |
 | `local` | Agent files only — no API calls |
 | `prerequisites` | Licenses and roles only |
+| `provision` | Smoke test for the `/provision` skill — env, external systems, Workday |
+
+---
+
+### 🚀 `/provision` — One-Command Environment Provisioning
+
+End-to-end provisioning of a fresh Power Platform environment with ESS base, Workday ISV, connections, and configured topic. Targets internal dev work in EmployeeHub today; extends to other tenants with `.env` configuration.
+
+What `/provision ess with workday` does:
+
+1. Creates a new Power Platform env via PAC CLI (Developer type, configurable ring: Preprod or Prod)
+2. Installs the ESS HR or ESS IT base agent from AppSource via `pac application install`
+3. Installs the Workday HCM extension (`msdyn_EssHRWorkday` or `msdyn_EssITWorkday`)
+4. Creates the Workday SOAP and Dataverse connections programmatically via the Power Platform Connectivity API (per-env REST endpoint)
+5. Prompts the user to complete the OAuth handshake for both connections in the Power Apps maker portal (one click each)
+6. Binds solution-level connection references in Dataverse
+7. Enables the Workday flows via Dataverse workflow activation
+8. Guides the user through manual Copilot Studio flow wiring and connection parameter sharing
+9. PATCHes the `[Admin] - User Context - Setup` topic to redirect to `WorkdaySystemGetUserContextV2`
+10. Verifies all provision tasks completed via checklist review
+
+Wall-clock: ~7 minutes of automation plus ~2-3 minutes of manual steps (connection sign-in + Copilot Studio flow wiring). Compared to the manual flow it replaces (~30 minutes of error-prone clicking).
+
+#### One-time setup (per tenant)
+
+To use `/provision` in any tenant, register a custom Entra app once and grant it the right delegated permissions.
+
+**Steps (one-time per tenant):**
+
+1. Sign in to [Azure portal](https://portal.azure.com) → **Microsoft Entra ID** → **App registrations** → **+ New registration**.
+2. Name it (e.g. `ESS-DevKit-Provision-Client`). Single tenant. No redirect URI yet.
+3. Open the new app → **Authentication** → **+ Add a platform** → **Mobile and desktop applications** → add redirect URI `http://localhost`.
+4. **Authentication** → scroll down → **Advanced settings** → set **Allow public client flows** to **Yes** → **Save**.
+5. **API permissions** → **+ Add a permission** → **APIs my organization uses**. Add each of these as **Delegated**, then **Grant admin consent**:
+   - **Power Platform API** (App ID `8578e004-a5c6-46e7-913e-12f58912df43`) — for Prod-ring usage
+     - `Connectivity.Connections.Read`
+     - `Connectivity.Connections.ReadWrite`
+     - `Connectivity.Connectors.Read`
+   - **Power Platform API (preprod)** (App ID `0ddb742a-e7dc-4899-a31e-80e797ec7144`) — for Preprod-ring usage. Same permissions as above.
+   - **Microsoft Graph** — `User.Read`
+6. Copy the **Application (client) ID** from the Overview blade.
+7. In `.local/.env` add:
+   ```text
+   ESS_DEVKIT_EMPHUB_CLIENT_ID=<your-app-client-id>
+   ```
+
+Also one-time per ring:
+
+- Install PAC CLI: `dotnet tool install --global Microsoft.PowerApps.CLI.Tool` (or use the Windows MSI at https://aka.ms/PowerAppsCLI).
+- Create a PAC auth profile per ring:
+  - Preprod (PPE): `pac auth create --cloud Preprod --deviceCode`
+  - Prod: `pac auth create --cloud Public --deviceCode`
+
+#### Usage
+
+```
+/provision ess with workday
+```
+
+The skill asks for persona (HR or IT), ring (Preprod or Prod), and env name, then runs the full flow. State is persisted under `my/provision/{env-name}/` so a failed run can resume.
+
+#### Reference: EmployeeHub tenant setup
+
+The ESS team's `EmployeeHub.onmicrosoft.com` tenant already has this app registered. The client ID lives in the team's `.env` template. New team members just need:
+
+1. `dotnet tool install --global Microsoft.PowerApps.CLI.Tool` + `pac auth create --cloud Preprod --deviceCode`
+2. Copy the team's `.local/.env` template into their kit folder
+3. Be granted access to the EmployeeHub PPE tenant by the team admin
+4. Run `/provision ess with workday`
 
 ---
 

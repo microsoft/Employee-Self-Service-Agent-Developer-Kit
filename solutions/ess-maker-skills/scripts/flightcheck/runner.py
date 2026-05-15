@@ -130,10 +130,20 @@ class FlightCheckRunner:
         total_failed = sum(c.failed for c in cat_map.values())
         total_warnings = sum(c.warnings for c in cat_map.values())
         total_passed = sum(c.passed for c in cat_map.values())
+        total_errors = sum(c.errors for c in cat_map.values())
+        total_not_configured = sum(c.not_configured for c in cat_map.values())
 
-        if total_failed == 0 and total_warnings == 0:
+        # For the provision scope, ERROR and NOT_CONFIGURED statuses are
+        # blocking — they indicate that a required check could not run or
+        # the feature is absent, which means the env is not actually ready.
+        # For other scopes, only FAILED is blocking (existing behavior).
+        blocking = total_failed
+        if self.scope == "provision":
+            blocking += total_errors + total_not_configured
+
+        if blocking == 0 and total_warnings == 0:
             overall = "READY"
-        elif total_failed == 0:
+        elif blocking == 0:
             overall = "READY_WITH_WARNINGS"
         else:
             overall = "NOT_READY"
@@ -148,7 +158,7 @@ class FlightCheckRunner:
             passed=total_passed,
             failed=total_failed,
             warnings=total_warnings,
-            not_configured=sum(c.not_configured for c in cat_map.values()),
+            not_configured=total_not_configured,
             overall=overall,
         )
 

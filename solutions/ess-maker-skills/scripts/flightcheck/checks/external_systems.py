@@ -12,19 +12,30 @@ from ..runner import CheckResult, Status, Priority
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
 
-# Flow name patterns per integration
-WORKDAY_PATTERNS = ("Workday",)
+# Flow name patterns per integration.
+# Workday uses exact ESS flow name prefixes to avoid matching unrelated
+# Workday flows that may exist in the environment.
+WORKDAY_PATTERNS = ("ESS HR Workday", "ESS IT Workday", "WorkdayRESTExecution")
 SERVICENOW_PATTERNS = ("ServiceNow",)
 SAP_PATTERNS = ("SAP", "SuccessFactors")
 
 
-def _match_flows(flows: list, patterns: tuple) -> list:
-    """Return flows whose display name contains any of the patterns."""
+def _match_flows(flows: list, patterns: tuple, prefix: bool = False) -> list:
+    """Return flows whose display name matches the patterns.
+
+    When prefix=True, matches if the display name starts with a pattern
+    (used for tighter ESS flow matching). When False, matches if the
+    pattern appears anywhere in the display name (legacy broad matching).
+    """
     matched = []
     for f in flows:
         name = f.get("properties", {}).get("displayName", f.get("displayName", ""))
-        if any(p.lower() in name.lower() for p in patterns):
-            matched.append(f)
+        if prefix:
+            if any(name.startswith(p) for p in patterns):
+                matched.append(f)
+        else:
+            if any(p.lower() in name.lower() for p in patterns):
+                matched.append(f)
     return matched
 
 
@@ -76,7 +87,7 @@ def run_external_systems_checks(runner) -> list[CheckResult]:
     runner._all_flows = all_flows
 
     # ---- WD-001: Workday solution ----
-    wd_flows = _match_flows(all_flows, WORKDAY_PATTERNS)
+    wd_flows = _match_flows(all_flows, WORKDAY_PATTERNS, prefix=True)
     runner._workday_flows = wd_flows
     if wd_flows:
         results.append(CheckResult(
@@ -118,9 +129,13 @@ def run_external_systems_checks(runner) -> list[CheckResult]:
             doc_link=f"{DOC_BASE}/servicenow",
         ))
     else:
+        # In provision scope, non-target ISVs are not required — mark as
+        # SKIPPED so they don't trigger the provision-scope NOT_READY verdict.
+        absent_status = (Status.SKIPPED.value if runner.scope == "provision"
+                         else Status.NOT_CONFIGURED.value)
         results.append(CheckResult(
             checkpoint_id="SN-001", category="External Systems",
-            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            priority=Priority.HIGH.value, status=absent_status,
             description="ServiceNow solution installed",
             result="No ServiceNow flows found in environment",
             remediation="Install the ServiceNow extension pack if you plan to integrate.",
@@ -139,9 +154,11 @@ def run_external_systems_checks(runner) -> list[CheckResult]:
             doc_link=f"{DOC_BASE}/sap-successfactors",
         ))
     else:
+        absent_status = (Status.SKIPPED.value if runner.scope == "provision"
+                         else Status.NOT_CONFIGURED.value)
         results.append(CheckResult(
             checkpoint_id="SAP-001", category="External Systems",
-            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            priority=Priority.HIGH.value, status=absent_status,
             description="SAP SuccessFactors solution installed",
             result="No SAP SuccessFactors flows found",
             remediation="Install the SAP extension pack if you plan to integrate.",
