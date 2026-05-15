@@ -46,6 +46,14 @@ GRAPH_SCOPES = [
     "https://graph.microsoft.com/Directory.Read.All",
     "https://graph.microsoft.com/User.Read.All",
     "https://graph.microsoft.com/Policy.Read.All",
+    # Read-only access to Microsoft Graph external connectors (the Graph
+    # Connector knowledge sources customers attach to ESS). Used by
+    # EXT-002 — Graph Connector KB readiness. Per
+    # https://learn.microsoft.com/graph/api/externalconnectors-external-list-connections
+    # the list operation requires either ExternalConnection.Read.All or
+    # ExternalConnection.ReadWrite.OwnedBy / ExternalConnection.ReadWrite.All.
+    # We ask for the read-only one because FlightCheck never mutates state.
+    "https://graph.microsoft.com/ExternalConnection.Read.All",
 ]
 
 # Module-level requests Session with bounded retry-with-backoff for 429/5xx.
@@ -194,3 +202,53 @@ class GraphClient:
         if filter_expr:
             params["$filter"] = filter_expr
         return self.get_all("/servicePrincipals", params=params)
+
+    # ----- Microsoft Graph external connectors (Graph Connectors) -----
+    #
+    # Used by EXT-002 (Graph Connector KB readiness). The customer-facing
+    # "Graph Connector" surface in M365 Admin Center is exposed via the
+    # Microsoft Graph external connectors API:
+    # https://learn.microsoft.com/graph/api/resources/externalconnectors-externalconnection
+    #
+    # We never mutate state — the calls below are read-only.
+
+    def get_external_connections(self) -> list:
+        """List all Microsoft Graph external connections in the tenant.
+
+        GET /v1.0/external/connections — paginated.
+        See https://learn.microsoft.com/graph/api/externalconnectors-external-list-connections.
+        """
+        return self.get_all("/external/connections")
+
+    def get_external_connection(self, connection_id: str) -> dict:
+        """Get a single external connection by its admin-assigned id.
+
+        GET /v1.0/external/connections/{id}.
+        See https://learn.microsoft.com/graph/api/externalconnectors-externalconnection-get.
+
+        Returns the parsed JSON body, or a `{"_error": ..., "_status": 404}`
+        dict if the connection does not exist (the kit's standard
+        "missing resource" sentinel — see ``GraphClient.get`` which
+        already converts 401/403 to the same shape).
+        """
+        url = f"{GRAPH_BASE}/external/connections/{connection_id}"
+        resp = _SESSION.get(url, headers=self.headers, timeout=30)
+        if resp.status_code == 404:
+            return {"_error": "not_found", "_status": 404}
+        if resp.status_code in (401, 403):
+            return {"_error": "insufficient_permissions", "_status": resp.status_code}
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_connection_operations(self, connection_id: str) -> list:
+        """List crawl operations for a Graph external connection.
+
+        GET /v1.0/external/connections/{id}/operations — paginated.
+        See https://learn.microsoft.com/graph/api/externalconnectors-externalconnection-list-operations.
+
+        Each operation has a ``status`` field
+        (``unspecified`` | ``inprogress`` | ``completed`` | ``failed``)
+        and an optional ``error`` field. EXT-002 inspects the most recent
+        operation to detect silent crawl failures.
+        """
+        return self.get_all(f"/external/connections/{connection_id}/operations")
