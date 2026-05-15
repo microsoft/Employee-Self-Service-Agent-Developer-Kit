@@ -1,0 +1,386 @@
+interactions:
+- request:
+    body: grant_type=refresh_token&refresh_token=REDACTED_OAUTH_REFRESH_TOKEN
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '138'
+      Content-Type:
+      - application/x-www-form-urlencoded
+      User-Agent:
+      - python-requests/2.32.5
+    method: POST
+    uri: https://wd2-impl-services1.workday.com/ccx/oauth2/mocktenant_xx/token
+  response:
+    body:
+      string: '{"access_token":"REDACTED_OAUTH_ACCESS_TOKEN","token_type":"Bearer","refresh_token":"REDACTED_OAUTH_REFRESH_TOKEN"}'
+    headers:
+      Content-Type:
+      - application/json; charset=UTF-8
+      Date:
+      - Mon, 11 May 2026 22:21:03 GMT
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      content-length:
+      - '1407'
+      wd-stat-request-id:
+      - 00000000-0000-0000-0000-000000001111
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.32.5
+    method: GET
+    uri: https://wd2-impl-services1.workday.com/ccx/api/v1/mocktenant_xx/workers?limit=5
+  response:
+    body:
+      string: '{"total":547,"data":[{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","href":"https://wd2-impl-services1.workday.com/api/api/v1/mocktenant_xx/workers/00000000000000000000000000000000","primaryWorkEmail":"mock.user@contoso.com","primaryWorkPhone":"+1
+        555-555-0100","isManager":false,"businessTitle":"Mock Title","primarySupervisoryOrganization":{"descriptor":"Mock
+        Descriptor","id":"00000000000000000000000000000000","href":"https://wd2-impl-services1.workday.com/api/api/v1/mocktenant_xx/supervisoryOrganizations/00000000000000000000000000000000"}},{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","href":"https://wd2-impl-services1.workday.com/api/api/v1/mocktenant_xx/workers/00000000000000000000000000000000","primaryWorkEmail":"mock.user@contoso.com","isManager":false,"businessTitle":"Mock
+        Title","primarySupervisoryOrganization":{"descriptor":"Mock Descriptor","id":"00000000000000000000000000000000","href":"https://wd2-impl-services1.workday.com/api/api/v1/mocktenant_xx/supervisoryOrganizations/00000000000000000000000000000000"}},{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","href":"https://wd2-impl-services1.workday.com/api/api/v1/mocktenant_xx/workers/00000000000000000000000000000000","primaryWorkEmail":"mock.user@contoso.com","isManager":false,"businessTitle":"Mock
+        Title","primarySupervisoryOrganization":{"descriptor":"Mock Descriptor","id":"00000000000000000000000000000000","href":"https://wd2-impl-services1.workday.com/api/api/v1/mocktenant_xx/supervisoryOrganizations/00000000000000000000000000000000"}},{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","href":"https://wd2-impl-services1.workday.com/api/api/v1/mocktenant_xx/workers/00000000000000000000000000000000","isManager":false,"businessTitle":"Mock
+        Title","primarySupervisoryOrganization":{"descriptor":"Mock Descriptor","id":"00000000000000000000000000000000","href":"https://wd2-impl-services1.workday.com/api/api/v1/mocktenant_xx/supervisoryOrganizations/00000000000000000000000000000000"}},{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","href":"https://wd2-impl-services1.workday.com/api/api/v1/mocktenant_xx/workers/00000000000000000000000000000000","primaryWorkEmail":"mock.user@contoso.com","isManager":false,"businessTitle":"Mock
+        Title","primarySupervisoryOrganization":{"descriptor":"Mock Descriptor","id":"00000000000000000000000000000000","href":"https://wd2-impl-services1.workday.com/api/api/v1/mocktenant_xx/supervisoryOrganizations/00000000000000000000000000000000"}}]}'
+    headers:
+      Content-Type:
+      - application/json; charset=UTF-8
+      Date:
+      - Mon, 11 May 2026 22:21:05 GMT
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      WD-RateLimit-Tokens-Remaining:
+      - '3599'
+      cache-control:
+      - no-cache
+      content-length:
+      - '2723'
+      wd-stat-request-id:
+      - 00000000-0000-0000-0000-000000001111
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.32.5
+    method: GET
+    uri: https://wd2-impl-services1.workday.com/ccx/api/staffing/v6/mocktenant_xx/workers?limit=5
+  response:
+    body:
+      string: '{"total":547,"data":[{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","person":{"id":"00000000000000000000000000000000","email":"mock.user@contoso.com","phone":"+1
+        555-555-0100"},"workerId":"MOCK_EMP_001","workerType":{"descriptor":"Mock
+        Descriptor","id":"00000000000000000000000000000000"},"primaryJob":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","jobProfile":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","Job_Profile_ID":"39035"},"jobType":{"descriptor":"Mock Descriptor","Job_Type_Name_ID":"Primary"},"location":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","Location_ID":"Chicago_site","country":{"descriptor":"Mock Descriptor","ISO_3166-1_Alpha-3_Code":"USA"}},"businessTitle":"Mock
+        Title","supervisoryOrganization":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","Organization_Reference_ID":"Global_Support_USA_Group"}}},{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","person":{"id":"00000000000000000000000000000000","email":"mock.user@contoso.com"},"workerId":"MOCK_EMP_001","workerType":{"descriptor":"Mock
+        Descriptor","id":"00000000000000000000000000000000"},"primaryJob":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","supervisoryOrganization":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","Organization_Reference_ID":"Global_Modern_Services_supervisory"},"jobType":{"descriptor":"Mock
+        Descriptor","Job_Type_Name_ID":"Primary"},"jobProfile":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","Job_Profile_ID":"System_Administrator"},"location":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","Location_ID":"Boston","country":{"descriptor":"Mock Descriptor","ISO_3166-1_Alpha-3_Code":"USA"}},"businessTitle":"Mock
+        Title"}},{"id":"00000000000000000000000000000000","descriptor":"Mock Descriptor","person":{"id":"00000000000000000000000000000000","email":"mock.user@contoso.com"},"workerId":"MOCK_EMP_001","workerType":{"descriptor":"Mock
+        Descriptor","id":"00000000000000000000000000000000"},"primaryJob":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","jobType":{"descriptor":"Mock Descriptor","Job_Type_Name_ID":"Primary"},"location":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","Location_ID":"Boston","country":{"descriptor":"Mock Descriptor","ISO_3166-1_Alpha-3_Code":"USA"}},"businessTitle":"Mock
+        Title","supervisoryOrganization":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","Organization_Reference_ID":"Payroll_supervisory"},"jobProfile":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","Job_Profile_ID":"30210"}}},{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","person":{"id":"00000000000000000000000000000000"},"workerId":"MOCK_EMP_001","workerType":{"descriptor":"Mock
+        Descriptor","id":"00000000000000000000000000000000"},"primaryJob":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","jobProfile":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","Job_Profile_ID":"45600"},"jobType":{"descriptor":"Mock Descriptor","Job_Type_Name_ID":"Primary"},"supervisoryOrganization":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","Organization_Reference_ID":"SUPERVISORY_ORGANIZATION-16-227"},"businessTitle":"Mock
+        Title","location":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","Location_ID":"London_site","country":{"descriptor":"Mock Descriptor","ISO_3166-1_Alpha-3_Code":"GBR"}}}},{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","person":{"id":"00000000000000000000000000000000","email":"mock.user@contoso.com"},"workerId":"MOCK_EMP_001","workerType":{"descriptor":"Mock
+        Descriptor","id":"00000000000000000000000000000000"},"primaryJob":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","jobProfile":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","Job_Profile_ID":"39610"},"supervisoryOrganization":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","Organization_Reference_ID":"Marketing_Communications_supervisory"},"businessTitle":"Mock
+        Title","jobType":{"descriptor":"Mock Descriptor","Job_Type_Name_ID":"Primary"},"location":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","Location_ID":"Atlanta_site","country":{"descriptor":"Mock Descriptor","ISO_3166-1_Alpha-3_Code":"USA"}}}}]}'
+    headers:
+      Content-Type:
+      - application/json; charset=UTF-8
+      Date:
+      - Mon, 11 May 2026 22:21:05 GMT
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      WD-RateLimit-Tokens-Remaining:
+      - '3599'
+      cache-control:
+      - no-cache
+      content-length:
+      - '4842'
+      wd-stat-request-id:
+      - 00000000-0000-0000-0000-000000001111
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.32.5
+    method: GET
+    uri: https://wd2-impl-services1.workday.com/ccx/api/v1/mocktenant_xx/workers/me
+  response:
+    body:
+      string: '{"id":"00000000000000000000000000000000","descriptor":"Mock Descriptor","href":"https://wd2-impl-services1.workday.com/api/api/v1/mocktenant_xx/workers/00000000000000000000000000000000","businessTitle":"Mock
+        Title","yearsOfService":5,"isManager":false,"location":{"descriptor":"Mock
+        Descriptor","id":"00000000000000000000000000000000"},"primaryWorkAddressText":"1
+        Mock Street, Mocktown, MC 00000","primaryWorkEmail":"mock.user@contoso.com","primarySupervisoryOrganization":{"descriptor":"Mock
+        Descriptor","id":"00000000000000000000000000000000","href":"https://wd2-impl-services1.workday.com/api/api/v1/mocktenant_xx/supervisoryOrganizations/00000000000000000000000000000000"},"supervisoryOrganizationsManaged":"https://wd2-impl-services1.workday.com/api/api/v1/mocktenant_xx/workers/00000000000000000000000000000000/supervisoryOrganizationsManaged","dateOfBirth":"1990-01-01"}'
+    headers:
+      Content-Type:
+      - application/json; charset=UTF-8
+      Date:
+      - Mon, 11 May 2026 22:21:07 GMT
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      WD-RateLimit-Tokens-Remaining:
+      - '3599'
+      cache-control:
+      - no-cache
+      content-length:
+      - '890'
+      wd-stat-request-id:
+      - 00000000-0000-0000-0000-000000001111
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.32.5
+    method: GET
+    uri: https://wd2-impl-services1.workday.com/ccx/api/staffing/v6/mocktenant_xx/workers/me
+  response:
+    body:
+      string: '{"id":"00000000000000000000000000000000","descriptor":"Mock Descriptor","person":{"id":"00000000000000000000000000000000","email":"mock.user@contoso.com"},"primaryJob":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","supervisoryOrganization":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","Organization_Reference_ID":"Global_Modern_Services_supervisory"},"businessTitle":"Mock
+        Title","location":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","Location_ID":"Boston","country":{"descriptor":"Mock Descriptor","ISO_3166-1_Alpha-3_Code":"USA"}},"jobType":{"descriptor":"Mock
+        Descriptor","Job_Type_Name_ID":"Primary"},"jobProfile":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","Job_Profile_ID":"System_Administrator"}},"workerId":"MOCK_EMP_001","workerType":{"descriptor":"Mock
+        Descriptor","id":"00000000000000000000000000000000"}}'
+    headers:
+      Content-Type:
+      - application/json; charset=UTF-8
+      Date:
+      - Mon, 11 May 2026 22:21:06 GMT
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      WD-RateLimit-Tokens-Remaining:
+      - '3599'
+      cache-control:
+      - no-cache
+      content-length:
+      - '949'
+      wd-stat-request-id:
+      - 00000000-0000-0000-0000-000000001111
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.32.5
+    method: GET
+    uri: https://wd2-impl-services1.workday.com/ccx/api/integration/v1/mocktenant_xx/api-clients?limit=5
+  response:
+    body:
+      string: '{"error":"Not found"}'
+    headers:
+      Content-Type:
+      - application/json; charset=UTF-8
+      Date:
+      - Mon, 11 May 2026 22:21:08 GMT
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      content-length:
+      - '24'
+      x-wd-gid:
+      - GID|00000000-0000-0000-0000-000000001111
+    status:
+      code: 404
+      message: Not Found
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.32.5
+    method: GET
+    uri: https://wd2-impl-services1.workday.com/ccx/api/security/v1/mocktenant_xx/authentication-policies?limit=5
+  response:
+    body:
+      string: '{"error":"Invalid request"}'
+    headers:
+      Content-Type:
+      - application/json; charset=UTF-8
+      Date:
+      - Mon, 11 May 2026 22:21:08 GMT
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      content-length:
+      - '30'
+      x-wd-gid:
+      - GID|00000000-0000-0000-0000-000000001111
+    status:
+      code: 400
+      message: Bad Request
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.32.5
+    method: GET
+    uri: https://wd2-impl-services1.workday.com/ccx/api/integration/v1/mocktenant_xx/system-users?limit=5
+  response:
+    body:
+      string: '{"error":"Not found"}'
+    headers:
+      Content-Type:
+      - application/json; charset=UTF-8
+      Date:
+      - Mon, 11 May 2026 22:21:09 GMT
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      content-length:
+      - '24'
+      x-wd-gid:
+      - GID|00000000-0000-0000-0000-000000001111
+    status:
+      code: 404
+      message: Not Found
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.32.5
+    method: GET
+    uri: https://wd2-impl-services1.workday.com/ccx/api/security/v1/mocktenant_xx/security-groups?limit=5
+  response:
+    body:
+      string: '{"error":"Invalid request"}'
+    headers:
+      Content-Type:
+      - application/json; charset=UTF-8
+      Date:
+      - Mon, 11 May 2026 22:21:09 GMT
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      content-length:
+      - '30'
+      x-wd-gid:
+      - GID|00000000-0000-0000-0000-000000001111
+    status:
+      code: 400
+      message: Bad Request
+version: 1

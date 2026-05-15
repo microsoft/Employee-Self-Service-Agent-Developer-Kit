@@ -1,0 +1,552 @@
+interactions:
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.32.5
+    method: GET
+    uri: https://devmocktenant.service-now.com/api/now/table/oauth_entity?sysparm_query=type=external_client&sysparm_fields=name,client_id,redirect_url,active,refresh_lifetime,access_token_lifetime,sys_id&sysparm_limit=20
+  response:
+    body:
+      string: '{"result":[]}'
+    headers:
+      Cache-Control:
+      - no-cache,no-store,must-revalidate,max-age=-1
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json;charset=UTF-8
+      Date:
+      - Wed, 13 May 2026 15:40:31 GMT
+      Expires:
+      - '0'
+      Pragma:
+      - no-store,no-cache
+      Server:
+      - snow_adc
+      Server-Timing:
+      - t;desc="14e78fce83bc", sem_wait;dur=0, sesh_wait;dur=0
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=63072000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      X-Content-Type-Options:
+      - nosniff
+      X-Is-Logged-In:
+      - 'true'
+      X-Total-Count:
+      - '0'
+      X-Transaction-ID:
+      - 14e78fce83bc
+      content-length:
+      - '13'
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.32.5
+    method: GET
+    uri: https://devmocktenant.service-now.com/api/now/table/sys_user?sysparm_query=active=true&sysparm_limit=5&sysparm_fields=user_name,name,active,roles
+  response:
+    body:
+      string: '{"result":[{"user_name":"mock.user.001","roles":"","name":" Mock User One","active":"true"},{"user_name":"mock.user.005","roles":"","name":"A
+        Lopez","active":"true"},{"user_name":"mock.user.002","roles":"","name":"Abel
+        Phelps","active":"true"},{"user_name":"mock.user.003","roles":"","name":"Abel
+        Tuter","active":"true"},{"user_name":"mock.user.004","roles":"","name":"Abraham
+        Lincoln","active":"true"}]}'
+    headers:
+      Cache-Control:
+      - no-cache,no-store,must-revalidate,max-age=-1
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json;charset=UTF-8
+      Date:
+      - Wed, 13 May 2026 15:40:31 GMT
+      Expires:
+      - '0'
+      Link:
+      - <https://devmocktenant.service-now.com/api/now/table/sys_user?sysparm_query=active=true&sysparm_limit=5&sysparm_fields=user_name,name,active,roles&sysparm_offset=0>;rel="first",<https://devmocktenant.service-now.com/api/now/table/sys_user?sysparm_query=active=true&sysparm_limit=5&sysparm_fields=user_name,name,active,roles&sysparm_offset=5>;rel="next",<https://devmocktenant.service-now.com/api/now/table/sys_user?sysparm_query=active=true&sysparm_limit=5&sysparm_fields=user_name,name,active,roles&sysparm_offset=970>;rel="last"
+      Pragma:
+      - no-store,no-cache
+      Server:
+      - snow_adc
+      Server-Timing:
+      - t;desc="a0e7cf4a8374", sem_wait;dur=0, sesh_wait;dur=0
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=63072000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      X-Content-Type-Options:
+      - nosniff
+      X-Is-Logged-In:
+      - 'true'
+      X-Total-Count:
+      - '972'
+      X-Transaction-ID:
+      - a0e7cf4a8374
+      content-length:
+      - '387'
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.32.5
+    method: GET
+    uri: https://devmocktenant.service-now.com/api/now/table/kb_knowledge?sysparm_limit=1&sysparm_fields=number,short_description
+  response:
+    body:
+      string: '{"result":[{"number":"KB0089008","short_description":"Troubleshooting
+        Google Chrome Installation Errors"}]}'
+    headers:
+      Cache-Control:
+      - no-cache,no-store,must-revalidate,max-age=-1
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json;charset=UTF-8
+      Date:
+      - Wed, 13 May 2026 15:40:32 GMT
+      Expires:
+      - '0'
+      Link:
+      - <https://devmocktenant.service-now.com/api/now/table/kb_knowledge?sysparm_limit=1&sysparm_fields=number,short_description&sysparm_offset=0>;rel="first",<https://devmocktenant.service-now.com/api/now/table/kb_knowledge?sysparm_limit=1&sysparm_fields=number,short_description&sysparm_offset=-1>;rel="prev",<https://devmocktenant.service-now.com/api/now/table/kb_knowledge?sysparm_limit=1&sysparm_fields=number,short_description&sysparm_offset=1>;rel="next",<https://devmocktenant.service-now.com/api/now/table/kb_knowledge?sysparm_limit=1&sysparm_fields=number,short_description&sysparm_offset=396>;rel="last"
+      Pragma:
+      - no-store,no-cache
+      Server:
+      - snow_adc
+      Server-Timing:
+      - t;desc="ace70b4a83b0", sem_wait;dur=0, sesh_wait;dur=0
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=63072000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      X-Content-Type-Options:
+      - nosniff
+      X-Is-Logged-In:
+      - 'true'
+      X-Total-Count:
+      - '397'
+      X-Transaction-ID:
+      - ace70b4a83b0
+      content-length:
+      - '107'
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.32.5
+    method: GET
+    uri: https://devmocktenant.service-now.com/api/now/table/user_criteria?sysparm_limit=1&sysparm_fields=name
+  response:
+    body:
+      string: '{"result":[{"name":"Users with GRC business user and lite user role"}]}'
+    headers:
+      Cache-Control:
+      - no-cache,no-store,must-revalidate,max-age=-1
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json;charset=UTF-8
+      Date:
+      - Wed, 13 May 2026 15:40:33 GMT
+      Expires:
+      - '0'
+      Link:
+      - <https://devmocktenant.service-now.com/api/now/table/user_criteria?sysparm_limit=1&sysparm_fields=name&sysparm_offset=0>;rel="first",<https://devmocktenant.service-now.com/api/now/table/user_criteria?sysparm_limit=1&sysparm_fields=name&sysparm_offset=-1>;rel="prev",<https://devmocktenant.service-now.com/api/now/table/user_criteria?sysparm_limit=1&sysparm_fields=name&sysparm_offset=1>;rel="next",<https://devmocktenant.service-now.com/api/now/table/user_criteria?sysparm_limit=1&sysparm_fields=name&sysparm_offset=84>;rel="last"
+      Pragma:
+      - no-store,no-cache
+      Server:
+      - snow_adc
+      Server-Timing:
+      - t;desc="74e7cf0e83b8", sem_wait;dur=0, sesh_wait;dur=0
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=63072000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      X-Content-Type-Options:
+      - nosniff
+      X-Is-Logged-In:
+      - 'true'
+      X-Total-Count:
+      - '85'
+      X-Transaction-ID:
+      - 74e7cf0e83b8
+      content-length:
+      - '71'
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.32.5
+    method: GET
+    uri: https://devmocktenant.service-now.com/api/now/table/sys_user_group?sysparm_limit=1&sysparm_fields=name
+  response:
+    body:
+      string: '{"result":[{"name":"Analytics Settings Managers"}]}'
+    headers:
+      Cache-Control:
+      - no-cache,no-store,must-revalidate,max-age=-1
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json;charset=UTF-8
+      Date:
+      - Wed, 13 May 2026 15:40:34 GMT
+      Expires:
+      - '0'
+      Link:
+      - <https://devmocktenant.service-now.com/api/now/table/sys_user_group?sysparm_limit=1&sysparm_fields=name&sysparm_offset=0>;rel="first",<https://devmocktenant.service-now.com/api/now/table/sys_user_group?sysparm_limit=1&sysparm_fields=name&sysparm_offset=-1>;rel="prev",<https://devmocktenant.service-now.com/api/now/table/sys_user_group?sysparm_limit=1&sysparm_fields=name&sysparm_offset=1>;rel="next",<https://devmocktenant.service-now.com/api/now/table/sys_user_group?sysparm_limit=1&sysparm_fields=name&sysparm_offset=81>;rel="last"
+      Pragma:
+      - no-store,no-cache
+      Server:
+      - snow_adc
+      Server-Timing:
+      - t;desc="01e7c78a83fc", sem_wait;dur=0, sesh_wait;dur=0
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=63072000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      X-Content-Type-Options:
+      - nosniff
+      X-Is-Logged-In:
+      - 'true'
+      X-Total-Count:
+      - '82'
+      X-Transaction-ID:
+      - 01e7c78a83fc
+      content-length:
+      - '51'
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.32.5
+    method: GET
+    uri: https://devmocktenant.service-now.com/api/now/table/sys_user_role?sysparm_limit=1&sysparm_fields=name
+  response:
+    body:
+      string: '{"result":[]}'
+    headers:
+      Cache-Control:
+      - no-cache,no-store,must-revalidate,max-age=-1
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json;charset=UTF-8
+      Date:
+      - Wed, 13 May 2026 15:40:34 GMT
+      Expires:
+      - '0'
+      Link:
+      - <https://devmocktenant.service-now.com/api/now/table/sys_user_role?sysparm_limit=1&sysparm_fields=name&sysparm_offset=0>;rel="first",<https://devmocktenant.service-now.com/api/now/table/sys_user_role?sysparm_limit=1&sysparm_fields=name&sysparm_offset=-1>;rel="prev",<https://devmocktenant.service-now.com/api/now/table/sys_user_role?sysparm_limit=1&sysparm_fields=name&sysparm_offset=1>;rel="next",<https://devmocktenant.service-now.com/api/now/table/sys_user_role?sysparm_limit=1&sysparm_fields=name&sysparm_offset=709>;rel="last"
+      Pragma:
+      - no-store,no-cache
+      Server:
+      - snow_adc
+      Server-Timing:
+      - t;desc="0de7cf4e83b0", sem_wait;dur=0, sesh_wait;dur=0
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=63072000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      X-Content-Type-Options:
+      - nosniff
+      X-Is-Logged-In:
+      - 'true'
+      X-Total-Count:
+      - '710'
+      X-Transaction-ID:
+      - 0de7cf4e83b0
+      content-length:
+      - '13'
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.32.5
+    method: GET
+    uri: https://devmocktenant.service-now.com/api/now/table/sys_security_acl?sysparm_query=type=REST_Endpoint&sysparm_fields=name,operation,active,role&sysparm_limit=10
+  response:
+    body:
+      string: '{"result":[{"name":"ux_framework_builder_api_experiences","active":"true","operation":{"link":"https://devmocktenant.service-now.com/api/now/table/sys_security_operation/execute","value":"execute"}},{"name":"awa_integration_user","active":"true","operation":{"link":"https://devmocktenant.service-now.com/api/now/table/sys_security_operation/execute","value":"execute"}},{"name":"/api/sn_wwna/wwna/","active":"true","operation":{"link":"https://devmocktenant.service-now.com/api/now/table/sys_security_operation/execute","value":"execute"}},{"name":"delete_metadata_hosting_rule_by_type","active":"true","operation":{"link":"https://devmocktenant.service-now.com/api/now/table/sys_security_operation/execute","value":"execute"}},{"name":"Flow
+        Designer Trigger API","active":"true","operation":{"link":"https://devmocktenant.service-now.com/api/now/table/sys_security_operation/execute","value":"execute"}},{"name":"App
+        Engine Studio APIs","active":"true","operation":{"link":"https://devmocktenant.service-now.com/api/now/table/sys_security_operation/execute","value":"execute"}},{"name":"AES
+        Workspace scripted REST","active":"true","operation":{"link":"https://devmocktenant.service-now.com/api/now/table/sys_security_operation/execute","value":"execute"}},{"name":"MID
+        Telemetry API","active":"true","operation":{"link":"https://devmocktenant.service-now.com/api/now/table/sys_security_operation/execute","value":"execute"}},{"name":"ACE
+        Maint - REST Endpoint","active":"true","operation":{"link":"https://devmocktenant.service-now.com/api/now/table/sys_security_operation/execute","value":"execute"}},{"name":"VA
+        Channel Integration ACL","active":"true","operation":{"link":"https://devmocktenant.service-now.com/api/now/table/sys_security_operation/execute","value":"execute"}}]}'
+    headers:
+      Cache-Control:
+      - no-cache,no-store,must-revalidate,max-age=-1
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json;charset=UTF-8
+      Date:
+      - Wed, 13 May 2026 15:40:35 GMT
+      Expires:
+      - '0'
+      Link:
+      - <https://devmocktenant.service-now.com/api/now/table/sys_security_acl?sysparm_query=type=REST_Endpoint&sysparm_fields=name,operation,active,role&sysparm_limit=10&sysparm_offset=0>;rel="first",<https://devmocktenant.service-now.com/api/now/table/sys_security_acl?sysparm_query=type=REST_Endpoint&sysparm_fields=name,operation,active,role&sysparm_limit=10&sysparm_offset=10>;rel="next",<https://devmocktenant.service-now.com/api/now/table/sys_security_acl?sysparm_query=type=REST_Endpoint&sysparm_fields=name,operation,active,role&sysparm_limit=10&sysparm_offset=330>;rel="last"
+      Pragma:
+      - no-store,no-cache
+      Server:
+      - snow_adc
+      Server-Timing:
+      - t;desc="1de7c78e83b0", sem_wait;dur=0, sesh_wait;dur=0
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=63072000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      X-Content-Type-Options:
+      - nosniff
+      X-Is-Logged-In:
+      - 'true'
+      X-Total-Count:
+      - '333'
+      X-Transaction-ID:
+      - 1de7c78e83b0
+      content-length:
+      - '1744'
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.32.5
+    method: GET
+    uri: https://devmocktenant.service-now.com/api/now/table/sys_ws_definition?sysparm_query=active=true&sysparm_fields=name,api_id,namespace,active&sysparm_limit=10
+  response:
+    body:
+      string: '{"result":[{"name":"Topic Recommender Review Api","namespace":"sn_topic_recommend","active":"true"},{"name":"Get
+        Applications","namespace":"sn_glider","active":"true"},{"name":"Conversation
+        Server Preview","namespace":"now","active":"true"},{"name":"Change Request
+        Calendar (Internal API)","namespace":"now","active":"true"},{"name":"ServiceNow
+        Studio Applications API","namespace":"sn_sns","active":"true"},{"name":"Collaboration
+        Slack Event Processor","namespace":"sn_oe_sfs","active":"true"},{"name":"ACE
+        Contents","namespace":"now","active":"true"},{"name":"Model Explainability","namespace":"now","active":"true"},{"name":"Pipeline
+        API","namespace":"sn_pipeline","active":"true"},{"name":"PAR Migrate Classic
+        Dashboard Layout","namespace":"now","active":"true"}]}'
+    headers:
+      Cache-Control:
+      - no-cache,no-store,must-revalidate,max-age=-1
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json;charset=UTF-8
+      Date:
+      - Wed, 13 May 2026 15:40:36 GMT
+      Expires:
+      - '0'
+      Link:
+      - <https://devmocktenant.service-now.com/api/now/table/sys_ws_definition?sysparm_query=active=true&sysparm_fields=name,api_id,namespace,active&sysparm_limit=10&sysparm_offset=0>;rel="first",<https://devmocktenant.service-now.com/api/now/table/sys_ws_definition?sysparm_query=active=true&sysparm_fields=name,api_id,namespace,active&sysparm_limit=10&sysparm_offset=10>;rel="next",<https://devmocktenant.service-now.com/api/now/table/sys_ws_definition?sysparm_query=active=true&sysparm_fields=name,api_id,namespace,active&sysparm_limit=10&sysparm_offset=250>;rel="last"
+      Pragma:
+      - no-store,no-cache
+      Server:
+      - snow_adc
+      Server-Timing:
+      - t;desc="21e70bc283b4", sem_wait;dur=1, sesh_wait;dur=0
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=63072000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      X-Content-Type-Options:
+      - nosniff
+      X-Is-Logged-In:
+      - 'true'
+      X-Total-Count:
+      - '254'
+      X-Transaction-ID:
+      - 21e70bc283b4
+      content-length:
+      - '768'
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.32.5
+    method: GET
+    uri: https://devmocktenant.service-now.com/api/now/table/sys_ws_operation?sysparm_query=relative_path=/user_criteria&sysparm_fields=name,relative_path,http_method,active&sysparm_limit=5
+  response:
+    body:
+      string: '{"result":[{"http_method":"GET","name":"GetAllUserCriteria","active":"true","relative_path":"/user_criteria"},{"http_method":"GET","name":"GetAllUserCriteria","active":"true","relative_path":"/user_criteria"}]}'
+    headers:
+      Cache-Control:
+      - no-cache,no-store,must-revalidate,max-age=-1
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json;charset=UTF-8
+      Date:
+      - Wed, 13 May 2026 15:40:36 GMT
+      Expires:
+      - '0'
+      Pragma:
+      - no-store,no-cache
+      Server:
+      - snow_adc
+      Server-Timing:
+      - t;desc="61e747c283fc", sem_wait;dur=0, sesh_wait;dur=0
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=63072000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      X-Content-Type-Options:
+      - nosniff
+      X-Is-Logged-In:
+      - 'true'
+      X-Total-Count:
+      - '2'
+      X-Transaction-ID:
+      - 61e747c283fc
+      content-length:
+      - '210'
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.32.5
+    method: GET
+    uri: https://devmocktenant.service-now.com/api/now/table/oauth_entity?sysparm_limit=1
+  response:
+    body:
+      string: '{"error":{"message":"User is not authenticated","detail":"Required
+        to provide Auth information"},"status":"failure"}'
+    headers:
+      Cache-Control:
+      - no-cache,no-store,must-revalidate,max-age=-1
+      Connection:
+      - keep-alive
+      Content-Type:
+      - application/json;charset=UTF-8
+      Date:
+      - Wed, 13 May 2026 15:40:37 GMT
+      Expires:
+      - '0'
+      Pragma:
+      - no-store,no-cache
+      Server:
+      - snow_adc
+      Server-Timing:
+      - t;desc="31e78f0683bc", sem_wait;dur=0, sesh_wait;dur=0
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=63072000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      WWW-Authenticate:
+      - Basic realm="Service-now"
+      X-Content-Type-Options:
+      - nosniff
+      content-length:
+      - '116'
+    status:
+      code: 401
+      message: Unauthorized
+version: 1

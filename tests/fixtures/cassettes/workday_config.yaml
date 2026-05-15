@@ -1,0 +1,336 @@
+interactions:
+- request:
+    body: "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<soapenv:Envelope\n    xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\"\n
+      \   xmlns:bsvc=\"urn:com.workday/bsvc\">\n  <soapenv:Header>\n    <wsse:Security
+      xmlns:wsse=\"http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd\">\n
+      \     <wsse:UsernameToken>\n        <wsse:Username>REDACTED_WSSE_USERNAME</wsse:Username>\n
+      \       <wsse:Password>REDACTED_WSSE_PASSWORD</wsse:Password>\n      </wsse:UsernameToken>\n
+      \   </wsse:Security>\n  </soapenv:Header>\n  <soapenv:Body><bsvc:Get_API_Clients_Request
+      bsvc:version=\"v40.0\"><bsvc:Response_Filter><bsvc:Page>1</bsvc:Page><bsvc:Count>20</bsvc:Count></bsvc:Response_Filter></bsvc:Get_API_Clients_Request></soapenv:Body>\n</soapenv:Envelope>"
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '726'
+      Content-Type:
+      - text/xml; charset=utf-8
+      User-Agent:
+      - python-requests/2.32.5
+    method: POST
+    uri: https://wd2-impl-services1.workday.com/ccx/service/mocktenant_xx/Integration_System/v40.0
+  response:
+    body:
+      string: <?xml version="1.0" encoding="utf-8"?><SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"><SOAP-ENV:Body><SOAP-ENV:Fault
+        xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" xmlns:wd="urn:com.workday/bsvc"><faultcode>SOAP-ENV:Client.validationError</faultcode><faultstring>Validation
+        error occurred. Element not found=Get_API_Clients_Request-urn:com.workday/bsvc</faultstring><detail><wd:Validation_Fault><wd:Validation_Error><wd:Message>Element
+        not found=Get_API_Clients_Request-urn:com.workday/bsvc</wd:Message><wd:Detail_Message></wd:Detail_Message><wd:Xpath></wd:Xpath></wd:Validation_Error></wd:Validation_Fault></detail></SOAP-ENV:Fault></SOAP-ENV:Body></SOAP-ENV:Envelope>
+    headers:
+      Content-Type:
+      - text/xml; charset=UTF-8
+      Date:
+      - Mon, 11 May 2026 21:13:45 GMT
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      WD-RateLimit-Tokens-Remaining:
+      - '699'
+      content-length:
+      - '711'
+      x-wd-gid:
+      - GID|00000000-0000-0000-0000-000000001111
+    status:
+      code: 500
+      message: Internal Server Error
+- request:
+    body: "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<soapenv:Envelope\n    xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\"\n
+      \   xmlns:bsvc=\"urn:com.workday/bsvc\">\n  <soapenv:Header>\n    <wsse:Security
+      xmlns:wsse=\"http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd\">\n
+      \     <wsse:UsernameToken>\n        <wsse:Username>REDACTED_WSSE_USERNAME</wsse:Username>\n
+      \       <wsse:Password>REDACTED_WSSE_PASSWORD</wsse:Password>\n      </wsse:UsernameToken>\n
+      \   </wsse:Security>\n  </soapenv:Header>\n  <soapenv:Body><bsvc:Get_API_Clients_Request
+      bsvc:version=\"v40.0\"><bsvc:Response_Filter><bsvc:Page>1</bsvc:Page><bsvc:Count>20</bsvc:Count></bsvc:Response_Filter></bsvc:Get_API_Clients_Request></soapenv:Body>\n</soapenv:Envelope>"
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '726'
+      Content-Type:
+      - text/xml; charset=utf-8
+      User-Agent:
+      - python-requests/2.32.5
+    method: POST
+    uri: https://wd2-impl-services1.workday.com/ccx/service/mocktenant_xx/Identity_Management/v40.0
+  response:
+    body:
+      string: <?xml version="1.0" encoding="utf-8"?><SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"><SOAP-ENV:Body><SOAP-ENV:Fault
+        xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" xmlns:wd="urn:com.workday/bsvc"><faultcode>SOAP-ENV:Client.validationError</faultcode><faultstring>Validation
+        error occurred. Element not found=Get_API_Clients_Request-urn:com.workday/bsvc</faultstring><detail><wd:Validation_Fault><wd:Validation_Error><wd:Message>Element
+        not found=Get_API_Clients_Request-urn:com.workday/bsvc</wd:Message><wd:Detail_Message></wd:Detail_Message><wd:Xpath></wd:Xpath></wd:Validation_Error></wd:Validation_Fault></detail></SOAP-ENV:Fault></SOAP-ENV:Body></SOAP-ENV:Envelope>
+    headers:
+      Content-Type:
+      - text/xml; charset=UTF-8
+      Date:
+      - Mon, 11 May 2026 21:13:46 GMT
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      WD-RateLimit-Tokens-Remaining:
+      - '699'
+      content-length:
+      - '711'
+      x-wd-gid:
+      - GID|00000000-0000-0000-0000-000000001111
+    status:
+      code: 500
+      message: Internal Server Error
+- request:
+    body: "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<soapenv:Envelope\n    xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\"\n
+      \   xmlns:bsvc=\"urn:com.workday/bsvc\">\n  <soapenv:Header>\n    <wsse:Security
+      xmlns:wsse=\"http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd\">\n
+      \     <wsse:UsernameToken>\n        <wsse:Username>REDACTED_WSSE_USERNAME</wsse:Username>\n
+      \       <wsse:Password>REDACTED_WSSE_PASSWORD</wsse:Password>\n      </wsse:UsernameToken>\n
+      \   </wsse:Security>\n  </soapenv:Header>\n  <soapenv:Body><bsvc:Get_API_Clients_Request
+      bsvc:version=\"v44.0\"><bsvc:Response_Filter><bsvc:Page>1</bsvc:Page><bsvc:Count>20</bsvc:Count></bsvc:Response_Filter></bsvc:Get_API_Clients_Request></soapenv:Body>\n</soapenv:Envelope>"
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '726'
+      Content-Type:
+      - text/xml; charset=utf-8
+      User-Agent:
+      - python-requests/2.32.5
+    method: POST
+    uri: https://wd2-impl-services1.workday.com/ccx/service/mocktenant_xx/Integration_System/v44.0
+  response:
+    body:
+      string: <?xml version="1.0" encoding="utf-8"?><SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"><SOAP-ENV:Body><SOAP-ENV:Fault
+        xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" xmlns:wd="urn:com.workday/bsvc"><faultcode>SOAP-ENV:Client.validationError</faultcode><faultstring>Validation
+        error occurred. Element not found=Get_API_Clients_Request-urn:com.workday/bsvc</faultstring><detail><wd:Validation_Fault><wd:Validation_Error><wd:Message>Element
+        not found=Get_API_Clients_Request-urn:com.workday/bsvc</wd:Message><wd:Detail_Message></wd:Detail_Message><wd:Xpath></wd:Xpath></wd:Validation_Error></wd:Validation_Fault></detail></SOAP-ENV:Fault></SOAP-ENV:Body></SOAP-ENV:Envelope>
+    headers:
+      Content-Type:
+      - text/xml; charset=UTF-8
+      Date:
+      - Mon, 11 May 2026 21:13:46 GMT
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      WD-RateLimit-Tokens-Remaining:
+      - '699'
+      content-length:
+      - '711'
+      x-wd-gid:
+      - GID|00000000-0000-0000-0000-000000001111
+    status:
+      code: 500
+      message: Internal Server Error
+- request:
+    body: "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<soapenv:Envelope\n    xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\"\n
+      \   xmlns:bsvc=\"urn:com.workday/bsvc\">\n  <soapenv:Header>\n    <wsse:Security
+      xmlns:wsse=\"http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd\">\n
+      \     <wsse:UsernameToken>\n        <wsse:Username>REDACTED_WSSE_USERNAME</wsse:Username>\n
+      \       <wsse:Password>REDACTED_WSSE_PASSWORD</wsse:Password>\n      </wsse:UsernameToken>\n
+      \   </wsse:Security>\n  </soapenv:Header>\n  <soapenv:Body><bsvc:Get_API_Clients_Request
+      bsvc:version=\"v36.0\"><bsvc:Response_Filter><bsvc:Page>1</bsvc:Page><bsvc:Count>20</bsvc:Count></bsvc:Response_Filter></bsvc:Get_API_Clients_Request></soapenv:Body>\n</soapenv:Envelope>"
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '726'
+      Content-Type:
+      - text/xml; charset=utf-8
+      User-Agent:
+      - python-requests/2.32.5
+    method: POST
+    uri: https://wd2-impl-services1.workday.com/ccx/service/mocktenant_xx/Integration_System/v36.0
+  response:
+    body:
+      string: <?xml version="1.0" encoding="utf-8"?><SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"><SOAP-ENV:Body><SOAP-ENV:Fault
+        xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" xmlns:wd="urn:com.workday/bsvc"><faultcode>SOAP-ENV:Client.validationError</faultcode><faultstring>Validation
+        error occurred. Element not found=Get_API_Clients_Request-urn:com.workday/bsvc</faultstring><detail><wd:Validation_Fault><wd:Validation_Error><wd:Message>Element
+        not found=Get_API_Clients_Request-urn:com.workday/bsvc</wd:Message><wd:Detail_Message></wd:Detail_Message><wd:Xpath></wd:Xpath></wd:Validation_Error></wd:Validation_Fault></detail></SOAP-ENV:Fault></SOAP-ENV:Body></SOAP-ENV:Envelope>
+    headers:
+      Content-Type:
+      - text/xml; charset=UTF-8
+      Date:
+      - Mon, 11 May 2026 21:13:47 GMT
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      WD-RateLimit-Tokens-Remaining:
+      - '699'
+      content-length:
+      - '711'
+      x-wd-gid:
+      - GID|00000000-0000-0000-0000-000000001111
+    status:
+      code: 500
+      message: Internal Server Error
+- request:
+    body: "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<soapenv:Envelope\n    xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\"\n
+      \   xmlns:bsvc=\"urn:com.workday/bsvc\">\n  <soapenv:Header>\n    <wsse:Security
+      xmlns:wsse=\"http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd\">\n
+      \     <wsse:UsernameToken>\n        <wsse:Username>REDACTED_WSSE_USERNAME</wsse:Username>\n
+      \       <wsse:Password>REDACTED_WSSE_PASSWORD</wsse:Password>\n      </wsse:UsernameToken>\n
+      \   </wsse:Security>\n  </soapenv:Header>\n  <soapenv:Body><bsvc:Get_Authentication_Policies_Request
+      bsvc:version=\"v40.0\"><bsvc:Response_Filter><bsvc:Page>1</bsvc:Page><bsvc:Count>20</bsvc:Count></bsvc:Response_Filter></bsvc:Get_Authentication_Policies_Request></soapenv:Body>\n</soapenv:Envelope>"
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '750'
+      Content-Type:
+      - text/xml; charset=utf-8
+      User-Agent:
+      - python-requests/2.32.5
+    method: POST
+    uri: https://wd2-impl-services1.workday.com/ccx/service/mocktenant_xx/Identity_Management/v40.0
+  response:
+    body:
+      string: <?xml version="1.0" encoding="utf-8"?><SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"><SOAP-ENV:Body><SOAP-ENV:Fault
+        xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" xmlns:wd="urn:com.workday/bsvc"><faultcode>SOAP-ENV:Client.validationError</faultcode><faultstring>The
+        web service or version is invalid for the requested operation</faultstring></SOAP-ENV:Fault></SOAP-ENV:Body></SOAP-ENV:Envelope>
+    headers:
+      Content-Type:
+      - text/xml; charset=UTF-8
+      Date:
+      - Mon, 11 May 2026 21:13:48 GMT
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      content-length:
+      - '437'
+      x-wd-gid:
+      - GID|00000000-0000-0000-0000-000000001111
+    status:
+      code: 500
+      message: Internal Server Error
+- request:
+    body: "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<soapenv:Envelope\n    xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\"\n
+      \   xmlns:bsvc=\"urn:com.workday/bsvc\">\n  <soapenv:Header>\n    <wsse:Security
+      xmlns:wsse=\"http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd\">\n
+      \     <wsse:UsernameToken>\n        <wsse:Username>REDACTED_WSSE_USERNAME</wsse:Username>\n
+      \       <wsse:Password>REDACTED_WSSE_PASSWORD</wsse:Password>\n      </wsse:UsernameToken>\n
+      \   </wsse:Security>\n  </soapenv:Header>\n  <soapenv:Body><bsvc:Get_Authentication_Policies_Request
+      bsvc:version=\"v44.0\"><bsvc:Response_Filter><bsvc:Page>1</bsvc:Page><bsvc:Count>20</bsvc:Count></bsvc:Response_Filter></bsvc:Get_Authentication_Policies_Request></soapenv:Body>\n</soapenv:Envelope>"
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '750'
+      Content-Type:
+      - text/xml; charset=utf-8
+      User-Agent:
+      - python-requests/2.32.5
+    method: POST
+    uri: https://wd2-impl-services1.workday.com/ccx/service/mocktenant_xx/Identity_Management/v44.0
+  response:
+    body:
+      string: <?xml version="1.0" encoding="utf-8"?><SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"><SOAP-ENV:Body><SOAP-ENV:Fault
+        xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" xmlns:wd="urn:com.workday/bsvc"><faultcode>SOAP-ENV:Client.validationError</faultcode><faultstring>The
+        web service or version is invalid for the requested operation</faultstring></SOAP-ENV:Fault></SOAP-ENV:Body></SOAP-ENV:Envelope>
+    headers:
+      Content-Type:
+      - text/xml; charset=UTF-8
+      Date:
+      - Mon, 11 May 2026 21:13:48 GMT
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      content-length:
+      - '437'
+      x-wd-gid:
+      - GID|00000000-0000-0000-0000-000000001111
+    status:
+      code: 500
+      message: Internal Server Error
+- request:
+    body: "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n<soapenv:Envelope\n    xmlns:soapenv=\"http://schemas.xmlsoap.org/soap/envelope/\"\n
+      \   xmlns:bsvc=\"urn:com.workday/bsvc\">\n  <soapenv:Header>\n    <wsse:Security
+      xmlns:wsse=\"http://docs.oasis-open.org/wss/2004/01/oasis-200401-wss-wssecurity-secext-1.0.xsd\">\n
+      \     <wsse:UsernameToken>\n        <wsse:Username>REDACTED_WSSE_USERNAME</wsse:Username>\n
+      \       <wsse:Password>REDACTED_WSSE_PASSWORD</wsse:Password>\n      </wsse:UsernameToken>\n
+      \   </wsse:Security>\n  </soapenv:Header>\n  <soapenv:Body><bsvc:Get_Authentication_Policies_Request
+      bsvc:version=\"v36.0\"><bsvc:Response_Filter><bsvc:Page>1</bsvc:Page><bsvc:Count>20</bsvc:Count></bsvc:Response_Filter></bsvc:Get_Authentication_Policies_Request></soapenv:Body>\n</soapenv:Envelope>"
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '750'
+      Content-Type:
+      - text/xml; charset=utf-8
+      User-Agent:
+      - python-requests/2.32.5
+    method: POST
+    uri: https://wd2-impl-services1.workday.com/ccx/service/mocktenant_xx/Identity_Management/v36.0
+  response:
+    body:
+      string: <?xml version="1.0" encoding="utf-8"?><SOAP-ENV:Envelope xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/"><SOAP-ENV:Body><SOAP-ENV:Fault
+        xmlns:SOAP-ENV="http://schemas.xmlsoap.org/soap/envelope/" xmlns:wd="urn:com.workday/bsvc"><faultcode>SOAP-ENV:Client.validationError</faultcode><faultstring>The
+        web service or version is invalid for the requested operation</faultstring></SOAP-ENV:Fault></SOAP-ENV:Body></SOAP-ENV:Envelope>
+    headers:
+      Content-Type:
+      - text/xml; charset=UTF-8
+      Date:
+      - Mon, 11 May 2026 21:13:49 GMT
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Transfer-Encoding:
+      - chunked
+      content-length:
+      - '437'
+      x-wd-gid:
+      - GID|00000000-0000-0000-0000-000000001111
+    status:
+      code: 500
+      message: Internal Server Error
+version: 1

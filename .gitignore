@@ -11,6 +11,7 @@
 !.vscode/
 !solutions/
 !samples/
+!tests/
 !README.md
 !LICENSE
 !SECURITY.md
@@ -18,6 +19,8 @@
 !CODE_OF_CONDUCT.md
 !SUPPORT.md
 !no-commit/
+!pyproject.toml
+!requirements-dev.txt
 
 # Internal planning docs (not for distribution)
 no-commit/
@@ -38,3 +41,18 @@ node_modules/
 __pycache__/
 *.pyc
 .env
+
+# Test artifacts
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+.tox/
+
+# Captured VCR cassettes that contain unredacted real-tenant traffic.
+# Cassettes that have been redacted and reviewed live at tests/fixtures/cassettes/
+# and ARE committed. The .raw/ subdir is for unredacted intermediate captures
+# that must never reach git.
+tests/fixtures/cassettes/.raw/
+tests/fixtures/captures/.raw/
