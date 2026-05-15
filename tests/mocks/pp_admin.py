@@ -197,6 +197,193 @@ def non_workday_connection(
     )
 
 
+# ────────────────────────────────────────────────────────────────────────
+# ServiceNow connection variants — auth-mode discrimination is based
+# on the BAP `connectionParametersSet.name` field (see SN-002 in
+# flightcheck/checks/external_systems.py).
+#
+# Cited consumers:
+#   - flightcheck/checks/external_systems.py:_check_sn_entra_user_signin_connections
+#
+# Source (validated):
+#   tests/fixtures/cassettes/flightcheck_pp_admin.yaml lines 2637-2690
+#   Connected entraIDUserLogin SN connection: line 2640
+#   Errored entraIDUserLogin SN connection (AADSTS50173):  line 2658
+#   Basic-auth (`connectionParameters.username`) SN connection: line 2637
+# ────────────────────────────────────────────────────────────────────────
+
+
+# AAD/Entra error message captured verbatim (with structural names redacted) from
+# tests/fixtures/cassettes/flightcheck_pp_admin.yaml line 2658-2667.
+ENTRA_TOKEN_REFRESH_ERROR_MESSAGE = (
+    "Failed to refresh access token for service: aadcertificate. "
+    "Correlation Id=g-00000000-0000-0000-0000-000000001111, "
+    "UTC TimeStamp=4/18/2026 1:48:15 PM, Error: Failed to acquire token from AAD: "
+    "{\"error\":\"invalid_grant\",\"error_description\":\"AADSTS50173: The provided "
+    "grant has expired due to it being revoked, a fresh auth token is needed. "
+    "The user might have changed or reset their password.\","
+    "\"error_codes\":[50173],"
+    "\"timestamp\":\"2026-04-18 13:48:15Z\","
+    "\"trace_id\":\"00000000-0000-0000-0000-000000001111\","
+    "\"correlation_id\":\"00000000-0000-0000-0000-000000001111\","
+    "\"error_uri\":\"https://login.windows.net/error?code=50173\"}"
+)
+
+
+def servicenow_entra_user_signin_connection(
+    *,
+    name: str = "shared-service-now-mock-eusi-001",
+    display_name: str = "ServiceNow — Entra User Sign In",
+    status: str = "Connected",
+    instance_name: str = "DevMockInstance",
+    error_message: str | None = None,
+    env_id: str = MOCK_ENV_ID,
+) -> dict[str, Any]:
+    """Build a ServiceNow Power Platform connection that uses the
+    "Microsoft Entra User Sign In" auth mode.
+
+    Cited consumers:
+      - flightcheck/checks/external_systems.py
+        :_check_sn_entra_user_signin_connections (SN-002)
+
+    Source (validated):
+      tests/fixtures/cassettes/flightcheck_pp_admin.yaml
+      Connected case: line 2640 (`connectionParametersSet.name == "entraIDUserLogin"`)
+      Errored case:   line 2658 (status="Error", target="token",
+                                 error.code="Unauthorized", AADSTS50173 in message)
+    """
+    api_name = "shared_service-now"
+    api_id = (
+        f"/providers/Microsoft.PowerApps/scopes/admin/environments/"
+        f"{env_id}/apis/{api_name}"
+    )
+
+    if status == "Error":
+        status_entry: dict[str, Any] = {
+            "status": "Error",
+            "target": "token",
+            "error": {
+                "code": "Unauthorized",
+                "message": error_message or ENTRA_TOKEN_REFRESH_ERROR_MESSAGE,
+            },
+        }
+    else:
+        status_entry = {"status": status}
+
+    properties: dict[str, Any] = {
+        "apiId": api_id,
+        "displayName": display_name,
+        "iconUri": (
+            "https://conn-afd-prod-endpoint.b01.azurefd.net/"
+            "releases/v1.0.0/service-now/icon.png"
+        ),
+        "statuses": [status_entry],
+        "connectionParametersSet": {
+            "name": "entraIDUserLogin",
+            "values": {
+                "token:ResourceUri": {
+                    "value": "00000000-0000-0000-0000-000000001111"
+                },
+                "token:InstanceName": {"value": instance_name},
+            },
+        },
+        "keywordsRemaining": 78,
+        "isSsoConnection": False,
+        "createdBy": {
+            "id": "00000000-0000-0000-0000-000000002222",
+            "displayName": "Mock User",
+            "email": "mock.user@contoso.com",
+            "type": "User",
+            "tenantId": "00000000-0000-0000-0000-000000001111",
+            "userPrincipalName": "mock.user@contoso.com",
+        },
+        "createdTime": "2026-01-01T00:00:00.0000000Z",
+        "lastModifiedTime": "2026-01-15T00:00:00.0000000Z",
+        "environment": {
+            "id": f"/providers/Microsoft.PowerApps/environments/{env_id}",
+            "name": env_id,
+        },
+        "accountName": "mock.user@contoso.com",
+        "allowSharing": False,
+    }
+
+    return {
+        "name": name,
+        "id": (
+            f"/providers/Microsoft.PowerApps/scopes/admin/environments/"
+            f"{env_id}/apis/{api_name}/connections/{name}"
+        ),
+        "type": "Microsoft.PowerApps/scopes/apis/connections",
+        "properties": properties,
+    }
+
+
+def servicenow_basic_auth_connection(
+    *,
+    name: str = "shared-service-now-mock-basic-001",
+    display_name: str = "ServiceNow — Basic Auth",
+    status: str = "Connected",
+    username: str = "mock.user@contoso.com@microsoft_dpt6",
+    instance: str = "DevMockInstance",
+    env_id: str = MOCK_ENV_ID,
+) -> dict[str, Any]:
+    """Build a ServiceNow Power Platform connection that uses Basic
+    auth (the original Username/Password auth mode).
+
+    Used by SN-002 tests to verify the Entra-User-Sign-In filter
+    excludes ServiceNow connections in other auth modes.
+
+    Source (validated):
+      tests/fixtures/cassettes/flightcheck_pp_admin.yaml line 2637-2638
+      `connectionParameters` carries username + instance, no
+      `connectionParametersSet` field.
+    """
+    api_name = "shared_service-now"
+    api_id = (
+        f"/providers/Microsoft.PowerApps/scopes/admin/environments/"
+        f"{env_id}/apis/{api_name}"
+    )
+    return {
+        "name": name,
+        "id": (
+            f"/providers/Microsoft.PowerApps/scopes/admin/environments/"
+            f"{env_id}/apis/{api_name}/connections/{name}"
+        ),
+        "type": "Microsoft.PowerApps/scopes/apis/connections",
+        "properties": {
+            "apiId": api_id,
+            "displayName": display_name,
+            "iconUri": (
+                "https://conn-afd-prod-endpoint.b01.azurefd.net/"
+                "releases/v1.0.0/service-now/icon.png"
+            ),
+            "statuses": [{"status": status}],
+            "connectionParameters": {
+                "username": username,
+                "instance": instance,
+                "sku": "Enterprise",
+            },
+            "keywordsRemaining": 78,
+            "isSsoConnection": False,
+            "createdBy": {
+                "id": "00000000-0000-0000-0000-000000002222",
+                "displayName": "Mock User",
+                "email": "mock.user@contoso.com",
+                "type": "User",
+                "tenantId": "00000000-0000-0000-0000-000000001111",
+                "userPrincipalName": "mock.user@contoso.com",
+            },
+            "createdTime": "2026-01-01T00:00:00.0000000Z",
+            "lastModifiedTime": "2026-01-15T00:00:00.0000000Z",
+            "environment": {
+                "id": f"/providers/Microsoft.PowerApps/environments/{env_id}",
+                "name": env_id,
+            },
+            "allowSharing": False,
+        },
+    }
+
+
 def flow(
     *,
     flow_id: str | None = None,
