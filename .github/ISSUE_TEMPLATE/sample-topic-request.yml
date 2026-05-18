@@ -7,7 +7,7 @@ body:
     attributes:
       value: |
         Use this template for requests that affect content under `samples/` only.
-        See [`samples/AGENTS.md`](../blob/main/samples/AGENTS.md) for folder conventions.
+        See [`samples/AGENTS.md`](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/blob/main/samples/AGENTS.md) for folder conventions.
   - type: dropdown
     id: kind
     attributes:

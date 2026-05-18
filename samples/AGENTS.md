@@ -16,7 +16,6 @@ Top-level areas under `samples/` today:
 | `WorkdayCustomEngineAgent/` | `Employee/`, `Manager/`, `Extended/` | Workday Custom Engine Agent (CEA) topics. |
 | `WorkdayDeclarativeAgent/` | `Employee/`, `Manager/` | Workday Declarative Agent (DA) topics. |
 | `ServiceNow/` | empty placeholder | Currently empty. Only add a ServiceNow topic when an issue explicitly requests one and provides enough details. |
-| `Evaluations/` | `StarterTestSets/`, `TemplatedTestSets/` | Evaluation CSVs. **Do not modify from a topic-related issue.** |
 
 Topic path patterns:
 
@@ -80,7 +79,6 @@ For **new** files, follow the PascalCase + `msdyn_<Area><Action>.xml` convention
 
 - No renames of existing folders or files.
 - No deletions of existing topics.
-- No edits to `samples/Evaluations/` from a topic-related issue.
 - No new top-level area unless the issue explicitly names the ISV and provides at least one topic.
 - No external network calls. No secrets in files.
 - One issue → one PR. No auto-merge. Human review required.
@@ -99,15 +97,16 @@ Stop and ask if:
 
 ## Validation before PR
 
-Before preparing a PR:
+Before preparing a PR, run every check in [`.github/agents/skills/validate-sample-topic/SKILL.md`](../.github/agents/skills/validate-sample-topic/SKILL.md) and paste its summary block into the PR body. The checks are:
 
-- Confirm changed YAML is well-formed.
-- Confirm changed XML is well-formed.
-- Confirm `topic.yaml` keeps `kind: AdaptiveDialog`.
-- Confirm the diff is scoped to the intended topic folder.
-- Summarize validation results in the PR body.
-
-Full check list lives in [`.github/agents/skills/validate-sample-topic/SKILL.md`](../.github/agents/skills/validate-sample-topic/SKILL.md).
+- YAML well-formedness (changed `topic.yaml`).
+- `topic.yaml` has top-level `kind: AdaptiveDialog`.
+- Neighbor-key parity for new `topic.yaml` against its sibling reference.
+- XML well-formedness (changed `*.xml`).
+- Filename convention for **new** XML files (`msdyn_` prefix).
+- Folder convention for **new** topic folders (PascalCase, contains `topic.yaml`, at least one `*.xml`, and `README.md`).
+- Diff scope limited to a single `samples/<Area>/.../<TopicFolder>/`.
+- No secrets or internal URLs in the diff.
 
 ## Topic YAML authoring guidance
 
