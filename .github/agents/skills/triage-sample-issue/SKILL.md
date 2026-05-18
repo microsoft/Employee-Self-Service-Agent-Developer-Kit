@@ -40,10 +40,12 @@
    - `out-of-scope` — not about `samples/`, or asks for renames, deletions, cross-area refactors, or changes outside `samples/`.
    - `not-actionable` — spam/empty.
 6. **Act on the classification:**
-   - `actionable-*` → apply `agent:eligible`, hand off to `create-or-update-sample-topic`.
+   - `actionable-new-topic` / `actionable-fix` → apply `agent:eligible`, hand off to `create-or-update-sample-topic`.
    - `needs-clarification` → apply `agent:needs-info`, post a comment listing the specific missing fields. Do not modify files.
-   - `duplicate` → apply `duplicate`, post a short comment linking the original issue. Do not modify files.
-   - `blocked` / `out-of-scope` / `not-actionable` → apply the matching label, post a short explanation referencing `samples/AGENTS.md`. Do not modify files.
+   - `blocked` → apply `agent:blocked`, post a short comment naming the external dependency and referencing `samples/AGENTS.md`. Do not modify files.
+   - `out-of-scope` → apply `agent:out-of-scope`, post a short comment referencing the relevant rule in `samples/AGENTS.md` (safety boundaries or area scope). Do not modify files.
+   - `duplicate` → apply the stock `duplicate` label, post a short comment linking the original issue (`Duplicate of #<n>`). Do not modify files. (No dedicated `agent:duplicate` label is defined.)
+   - `not-actionable` → do not apply any label. Stop without commenting; optionally flag for human review. Do not modify files.
 
 ## Outputs
 
