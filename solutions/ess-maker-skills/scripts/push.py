@@ -699,19 +699,38 @@ def main():
                 parent_id = entry["parentbotcomponentid"]
 
             # 2. Parent created in THIS push, same folder.
+            #    When multiple parents share a folder, prefer the one
+            #    whose filename stem is a prefix of the child filename
+            #    (e.g. parent "topic-triggering.mcs.yml" matches child
+            #    "topic-triggering-base-compensation.mcs.yml").
             if parent_id is None:
+                child_fname = filepath.replace("\\", "/").split("/")[-1]
+                _folder_matches = []
                 for p_path, p_id in eval_parent_ids.items():
                     p_folder = "/".join(
                         p_path.replace("\\", "/").split("/")[:-1]
                     )
                     if p_folder == child_folder:
-                        parent_id = p_id
-                        break
+                        _folder_matches.append((p_path, p_id))
+                if len(_folder_matches) == 1:
+                    parent_id = _folder_matches[0][1]
+                elif len(_folder_matches) > 1:
+                    # Multiple parents in same folder — match by prefix.
+                    for p_path, p_id in _folder_matches:
+                        p_stem = p_path.replace("\\", "/").split("/")[-1] \
+                            .replace(".mcs.yml", "")
+                        if child_fname.startswith(p_stem + "-"):
+                            parent_id = p_id
+                            break
+                    if parent_id is None:
+                        # No prefix match; fall back to first.
+                        parent_id = _folder_matches[0][1]
 
             # 3. Existing parent already in component_map, same folder.
             #    This is the common case: customer adds a new test case
             #    under an evaluation set that was extracted by /setup.
             if parent_id is None:
+                _cm_matches = []
                 for p_path, p_entry in component_map.items():
                     if p_entry.get("componenttype") != 19:
                         continue
@@ -721,8 +740,20 @@ def main():
                         p_path.replace("\\", "/").split("/")[:-1]
                     )
                     if p_folder == child_folder:
-                        parent_id = p_entry.get("botcomponentid")
-                        break
+                        _cm_matches.append(
+                            (p_path, p_entry.get("botcomponentid")))
+                if len(_cm_matches) == 1:
+                    parent_id = _cm_matches[0][1]
+                elif len(_cm_matches) > 1:
+                    child_fname = filepath.replace("\\", "/").split("/")[-1]
+                    for p_path, p_id in _cm_matches:
+                        p_stem = p_path.replace("\\", "/").split("/")[-1] \
+                            .replace(".mcs.yml", "")
+                        if child_fname.startswith(p_stem + "-"):
+                            parent_id = p_id
+                            break
+                    if parent_id is None:
+                        parent_id = _cm_matches[0][1]
 
             if parent_id is None:
                 # Fail closed: don't create an orphan eval case in
