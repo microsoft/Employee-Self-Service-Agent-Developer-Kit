@@ -52,6 +52,7 @@ the PR.
 | **Workday SOAP** (Human_Resources, Identity_Management, Compensation, Absence_Management, etc.) | `validated` | Cassettes at `flightcheck_workday.yaml`, `workday_config.yaml`. | Vendor docs require Workday Community login; tenant-specific WSDL varies. |
 | **Workday WQL / REST** (`/ccx/api/wql/v1/...`, `/ccx/api/v1/...`) | `validated` | Cassette at `workday_wql_admin.yaml`. **Known auth blocker** — see "Workday WQL config-validation pattern" section below before authoring any runtime check on this cassette. | Per-tenant API client registration creates the chicken-and-egg blocker. |
 | **ServiceNow Table API** | `validated` | Cassette at `flightcheck_servicenow.yaml`. | Per-instance custom field variance + dev portal access required for live testing makes the documented tier insufficient. |
+| **Vendor TCP/HTTPS reachability** (Workday/ServiceNow/SAP SuccessFactors outbound hostnames) | `n/a — transport diagnostic` | Transport-level probe (`socket.create_connection` + HTTPS `HEAD`). No vendor API response contract consumed, so the cardinal rule does not apply. Tests substitute fake `TcpProber` / `HttpsProber` implementations covering reachable / refused / timeout / DNS-failure / TLS-error / 4xx / 5xx branches. No cassette required. | Used by `solutions/ess-maker-skills/scripts/flightcheck/checks/network.py` (NET-001 / NET-002 / NET-003). |
 
 If you need to call an API that isn't in this registry, STOP and tell
 the user — the tier must be decided (and recorded here) before any

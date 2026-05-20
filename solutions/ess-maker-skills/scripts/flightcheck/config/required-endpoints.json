@@ -1,0 +1,51 @@
+{
+  "_comment": "ESS required outbound network endpoints by integration. Used by Test-NetworkConnectivity.ps1 (BL-014).",
+  "_scope": "VENDOR ENDPOINTS ONLY. Microsoft endpoints are documented authoritatively by Microsoft - see https://learn.microsoft.com/en-us/power-platform/admin/online-requirements. This config covers Workday, ServiceNow, SAP SuccessFactors only.",
+  "_hostingNote": "Workday and SuccessFactors hostnames are data-center-based, not tenant-based. The customer tenant lives in the URL path or as a request parameter, NOT in the hostname. Therefore firewall reachability is the same for every customer using a given data center. Only ServiceNow uses an instance-prefixed hostname pattern.",
+  "_schemaVersion": "2.1",
+  "_lastUpdated": "2026-05-08",
+  "integrations": [
+    {
+      "name": "Workday",
+      "required": true,
+      "hostingPattern": "Data center based (NOT tenant-prefixed). Customer tenant is in URL path.",
+      "endpoints": [
+        { "host": "impl.workday.com", "port": 443, "purpose": "Implementation tenants UI host", "tenantPlaceholder": false },
+        { "host": "wd2-impl-services1.workday.com", "port": 443, "purpose": "Implementation services (DC2)", "tenantPlaceholder": false },
+        { "host": "wd5-impl-services1.workday.com", "port": 443, "purpose": "Implementation services (DC5)", "tenantPlaceholder": false },
+        { "host": "wd5.myworkday.com", "port": 443, "purpose": "Production tenants UI host (DC5)", "tenantPlaceholder": false }
+      ],
+      "ipRangeNote": "Workday publishes IP ranges per data center at https://community.workday.com (login required). Customers should request the current list from their Workday account team. Customers should also confirm WHICH data centers their tenants are hosted in."
+    },
+    {
+      "name": "ServiceNow",
+      "required": true,
+      "hostingPattern": "Instance-prefixed hostname (instance.service-now.com).",
+      "endpoints": [
+        { "host": "{instance}.service-now.com", "port": 443, "purpose": "ServiceNow instance API", "tenantPlaceholder": true },
+        { "host": "{instance}.servicenowservices.com", "port": 443, "purpose": "ServiceNow services endpoint", "tenantPlaceholder": true }
+      ],
+      "ipRangeNote": "ServiceNow IP ranges published at https://docs.servicenow.com under Platform Security > IP Address Access Control."
+    },
+    {
+      "name": "SAP SuccessFactors",
+      "required": false,
+      "hostingPattern": "Data center based (NOT tenant-prefixed). Customer tenant is in URL path or request parameter.",
+      "endpoints": [
+        { "host": "api.successfactors.com", "port": 443, "purpose": "SuccessFactors API (global)", "tenantPlaceholder": false },
+        { "host": "api4.successfactors.com", "port": 443, "purpose": "SuccessFactors API (DC4)", "tenantPlaceholder": false },
+        { "host": "api8.successfactors.com", "port": 443, "purpose": "SuccessFactors API (DC8)", "tenantPlaceholder": false }
+      ],
+      "ipRangeNote": "SAP publishes datacenter IP ranges at https://help.sap.com under SuccessFactors Platform > Network Configuration. Customers should confirm which datacenter (DC4 vs DC8 vs others) their tenant is hosted in."
+    }
+  ],
+  "microsoftEndpointsReference": {
+    "note": "We deliberately do NOT probe Microsoft endpoints. Customers should follow the official Microsoft allowlist documentation, which covers wildcard domains, Azure service tag IP ranges, and the consolidated domain initiative.",
+    "links": [
+      { "title": "Power Platform URLs and IP address ranges", "url": "https://learn.microsoft.com/en-us/power-platform/admin/online-requirements" },
+      { "title": "Microsoft 365 URLs and IP address ranges", "url": "https://learn.microsoft.com/en-us/microsoft-365/enterprise/urls-and-ip-address-ranges" },
+      { "title": "Azure IP Ranges and Service Tags - Public Cloud", "url": "https://www.microsoft.com/download/details.aspx?id=56519" },
+      { "title": "Power Platform connectors outbound IP addresses", "url": "https://learn.microsoft.com/en-us/connectors/common/outbound-ip-addresses" }
+    ]
+  }
+}
