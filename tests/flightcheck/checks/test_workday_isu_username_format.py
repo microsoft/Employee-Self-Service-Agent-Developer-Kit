@@ -15,8 +15,9 @@ Asserts:
   check PASSES.
 
 * When the ISU username has no `@` (legacy short-employee-id format —
-  the BCBSA scenario from the source customer incident), the check
-  WARNS and remediation points the operator at the env var.
+  common on federated tenants where the ISU was provisioned before
+  adopting UPN-shaped service-account naming), the check WARNS and
+  remediation points the operator at the env var.
 
 * When the ISU username's domain is not in the tenant's verified
   domains, the check WARNS (could be legitimate cross-tenant, but
@@ -243,9 +244,11 @@ class TestWarning:
     def test_legacy_short_id_format_warns(
         self, runner_with_graph: _MinimalRunner, fake_dataverse_url: str
     ) -> None:
-        """The BCBSA scenario from the source customer incident: ISU
-        left in legacy short-employee-id format with no `@` — Workday
-        cannot match the Entra UPN ESS sends to a Worker."""
+        """Legacy short-ID ISU scenario: ISU left in short-employee-id
+        format with no `@` — common on federated tenants (Okta, Ping,
+        ADFS) where the ISU was provisioned before adopting UPN-shaped
+        service-account naming. Workday cannot match the Entra UPN ESS
+        sends to a Worker."""
         from flightcheck.checks.workday import _check_isu_username_format
 
         _register_isu(
@@ -416,11 +419,12 @@ class TestSkipped:
     def test_warns_on_legacy_isu_format_even_when_no_graph_client(
         self, fake_dataverse_url: str, fake_token: str
     ) -> None:
-        """Regression: the no-`@` legacy-format detection (the BCBSA
-        scenario) must run off the Dataverse value alone and still
-        WARN even when Graph is unavailable. Earlier revisions short-
-        circuited to SKIPPED on missing Graph and silently dropped
-        this critical signal — pin that this no longer happens.
+        """Regression: the no-`@` legacy-format detection (legacy
+        short-ID ISU on a federated tenant) must run off the Dataverse
+        value alone and still WARN even when Graph is unavailable.
+        Earlier revisions short-circuited to SKIPPED on missing Graph
+        and silently dropped this critical signal — pin that this no
+        longer happens.
         """
         from flightcheck.checks.workday import _check_isu_username_format
 

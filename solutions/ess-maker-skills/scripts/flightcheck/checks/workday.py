@@ -307,7 +307,9 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
 
     # ── Step 1: read the ISU env var from Dataverse. We do this FIRST,
     # before consulting Graph, because the no-`@` legacy-format detection
-    # (the most-cited misconfiguration root cause — the BCBSA scenario)
+    # (the most-cited misconfiguration root cause — legacy short-ID ISU
+    # provisioning on federated tenants, common where the ISU was set
+    # up before the tenant adopted UPN-shaped service-account naming)
     # can be reported off the Dataverse value alone.
     try:
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
