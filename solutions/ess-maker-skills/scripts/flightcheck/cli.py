@@ -16,6 +16,7 @@ Scopes:
     authentication  — Entra ID, SSO, CA policies
     external        — Integration discovery (flows)
     workday         — Workday deep validation
+    servicenow      — ServiceNow deep validation
     local           — Local agent file validation
     publishing      — Publishing/QA checklist
 """
@@ -39,6 +40,7 @@ from flightcheck.checks.environment import run_environment_checks
 from flightcheck.checks.authentication import run_authentication_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.workday import run_workday_checks
+from flightcheck.checks.servicenow import run_servicenow_checks
 from flightcheck.checks.local_files import run_local_file_checks
 from flightcheck.checks.publishing import run_publishing_checks
 
@@ -52,6 +54,10 @@ SCOPE_MAP = {
         ("External Systems", run_external_systems_checks),
         ("Workday", run_workday_checks),
     ],
+    "servicenow": [
+        ("External Systems", run_external_systems_checks),
+        ("ServiceNow", run_servicenow_checks),
+    ],
     "local": [("Local Files", run_local_file_checks)],
     "publishing": [("Publishing", run_publishing_checks)],
 }
@@ -62,6 +68,7 @@ FULL_SCOPE = [
     ("Authentication", run_authentication_checks),
     ("External Systems", run_external_systems_checks),
     ("Workday", run_workday_checks),
+    ("ServiceNow", run_servicenow_checks),
     ("Local Files", run_local_file_checks),
     ("Publishing", run_publishing_checks),
 ]
