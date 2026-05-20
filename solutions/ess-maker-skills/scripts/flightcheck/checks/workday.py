@@ -169,6 +169,9 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # --- SOAP Workflow Tests (only if Workday MCP creds available) ---
     results.extend(_check_workflows(runner))
 
+    # --- REST Endpoints (manual diagnostic surfaced as a checklist item) ---
+    results.extend(_check_rest_endpoints_manual(runner))
+
     return results
 
 
@@ -831,3 +834,44 @@ def _soap_call(
         if password and password in msg:
             msg = msg.replace(password, '[REDACTED]')
         return {"success": False, "error": msg}
+
+
+def _check_rest_endpoints_manual(runner) -> list[CheckResult]:
+    """Surface the Workday REST endpoint diagnostic as a manual checklist item.
+
+    The 9 Workday REST connector actions (`/workers/me`, inbox, payslips,
+    search, direct reports, supervisory orgs, feedback templates,
+    TransferEmployee, RequestFeedback) cannot be validated automatically
+    by the FlightCheck runner: they require an OAuth 2.0 Authorization
+    Code flow against a customer-registered Workday API Client, which is
+    the same chicken-and-egg auth problem documented in
+    `tests/fixtures/cassettes/INDEX.md` "Workday WQL config-validation pattern".
+
+    Instead the kit ships a standalone interactive diagnostic at
+    `solutions/ess-maker-skills/scripts/diagnostics/test_workday_rest_endpoints.py`.
+    This check emits a single NotConfigured result that tells the operator
+    to run that script. It is intentionally only added when `run_workday_checks`
+    has already confirmed Workday is configured for the agent (via the
+    `wd_flows` gate at the top of `run_workday_checks`) — customers without
+    a Workday integration get no noise.
+    """
+    return [CheckResult(
+        checkpoint_id="WD-REST-MANUAL",
+        category="Workday",
+        priority=Priority.HIGH.value,
+        status=Status.NOT_CONFIGURED.value,
+        description="Workday REST endpoint pre-flight (manual)",
+        result=(
+            "Workday REST OAuth (Authorization Code) cannot be automated by "
+            "the FlightCheck runner; run the standalone diagnostic to validate "
+            "the 9 REST connector actions."
+        ),
+        remediation=(
+            "Register an OAuth 2.0 API Client in Workday (grant type "
+            "Authorization Code, redirect URI https://localhost:8888/callback), "
+            "then run: python solutions/ess-maker-skills/scripts/diagnostics/"
+            "test_workday_rest_endpoints.py. Attach the resulting JSON file "
+            "to your deployment ticket."
+        ),
+        doc_link=f"{DOC_BASE}/workday",
+    )]
