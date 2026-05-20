@@ -15,9 +15,15 @@ Scopes:
     environment     — PP environment, Dataverse, DLP
     authentication  — Entra ID, SSO, CA policies
     external        — Integration discovery (flows)
+    network         — Vendor TCP/HTTPS reachability (no Microsoft auth required)
     workday         — Workday deep validation
     local           — Local agent file validation
     publishing      — Publishing/QA checklist
+
+Standalone modes:
+    --export-firewall-requirements  Write a network-team handoff doc listing
+                                    the required outbound vendor endpoints.
+                                    No Microsoft auth required.
 """
 
 import argparse
@@ -38,6 +44,7 @@ from flightcheck.checks.prerequisites import run_prerequisites_checks
 from flightcheck.checks.environment import run_environment_checks
 from flightcheck.checks.authentication import run_authentication_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
+from flightcheck.checks.network import run_network_checks
 from flightcheck.checks.workday import run_workday_checks
 from flightcheck.checks.local_files import run_local_file_checks
 from flightcheck.checks.publishing import run_publishing_checks
@@ -48,6 +55,7 @@ SCOPE_MAP = {
     "environment": [("Environment", run_environment_checks)],
     "authentication": [("Authentication", run_authentication_checks)],
     "external": [("External Systems", run_external_systems_checks)],
+    "network": [("Network", run_network_checks)],
     "workday": [
         ("External Systems", run_external_systems_checks),
         ("Workday", run_workday_checks),
@@ -61,10 +69,47 @@ FULL_SCOPE = [
     ("Environment", run_environment_checks),
     ("Authentication", run_authentication_checks),
     ("External Systems", run_external_systems_checks),
+    ("Network", run_network_checks),
     ("Workday", run_workday_checks),
     ("Local Files", run_local_file_checks),
     ("Publishing", run_publishing_checks),
 ]
+
+# Scopes that exercise vendor transport-only or local-file-only checks and
+# therefore do NOT need Dataverse / Graph / Power Platform Admin authentication.
+# Keep this set explicit so a future scope addition doesn't silently regress the
+# no-auth path. The PVA gating below uses its own (narrower) allowlist because
+# PVA is already lazy-auth.
+_NO_MS_AUTH_SCOPES = frozenset({"network"})
+
+
+def _requires_microsoft_auth(scope: str) -> bool:
+    """Return True if the scope needs Dataverse / Graph / PP Admin auth.
+
+    Pure function so tests can pin the scope-to-auth mapping without spinning
+    up MSAL or any HTTP client. Any new scope added to SCOPE_MAP should also
+    be considered here — either by adding it to ``_NO_MS_AUTH_SCOPES`` (if
+    it's a transport-only or local-only check) or by leaving it as the default
+    (auth-required).
+    """
+    return scope not in _NO_MS_AUTH_SCOPES
+
+
+def _run_export_firewall_requirements(config: dict, output_dir: str) -> int:
+    """Standalone mode: emit the firewall-requirements markdown handoff doc.
+
+    Runs before any auth path so customers can hand the file to their network
+    team without first authenticating to Microsoft. Returns the process exit
+    code (0 on success, non-zero on render failure).
+    """
+    from flightcheck.checks.firewall_export import export_firewall_requirements
+
+    os.makedirs(output_dir, exist_ok=True)
+    out_path = os.path.join(output_dir, "firewall-requirements.md")
+    written = export_firewall_requirements(config, out_path)
+    print(f"Firewall requirements written to: {written}")
+    return 0
+
 
 
 def main():
@@ -78,6 +123,14 @@ def main():
         "--output", default="workspace/flightcheck",
         help="Output directory (default: workspace/flightcheck)",
     )
+    parser.add_argument(
+        "--export-firewall-requirements", action="store_true",
+        help=(
+            "Standalone mode: render the firewall-requirements markdown doc "
+            "from required-endpoints.json and exit. Does NOT authenticate "
+            "to Microsoft."
+        ),
+    )
     args = parser.parse_args()
 
     # Load config
@@ -89,8 +142,15 @@ def main():
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
 
+    # --- Standalone mode: firewall-requirements export ---
+    # Runs BEFORE the env_url check + any auth so customers can use it on a
+    # fresh checkout with only the config keys their network team needs.
+    if args.export_firewall_requirements:
+        sys.exit(_run_export_firewall_requirements(config, args.output))
+
     env_url = config.get("dataverseEndpoint", "")
-    if not env_url:
+    needs_ms_auth = _requires_microsoft_auth(args.scope)
+    if needs_ms_auth and not env_url:
         print("ERROR: No dataverseEndpoint in .local/config.json.")
         sys.exit(1)
 
@@ -109,51 +169,61 @@ def main():
     print("=" * 64)
     if len(agents) == 1:
         print(f"  Agent:       {agents[0].get('name', 'N/A')}")
-    else:
+    elif agents:
         print(f"  Agents:      {len(agents)} discovered")
         for a in agents:
             marker = "→" if a.get("slug") == active else " "
             print(f"    {marker} {a.get('name', 'Unknown')}")
-    print(f"  Environment: {env_url}")
+    if env_url:
+        print(f"  Environment: {env_url}")
     print(f"  Scope:       {args.scope}")
     print("=" * 64)
     print()
 
-    # --- Authenticate ---
-    from auth import authenticate, discover_tenant
+    # --- Authenticate (scope-gated) ---
+    dv_token = None
+    tenant_id = None
+    env_id = None
+    graph = None
+    pp_admin = None
 
-    print("Authenticating to Dataverse...")
-    dv_token = authenticate(env_url)
+    if needs_ms_auth:
+        from auth import authenticate, discover_tenant
 
-    tenant_id = discover_tenant(env_url)
-    print(f"Tenant: {tenant_id}")
+        print("Authenticating to Dataverse...")
+        dv_token = authenticate(env_url)
 
-    # Derive PP environment ID
-    print("Deriving Power Platform environment ID...")
-    env_id = derive_environment_id(env_url, dv_token)
-    if env_id:
-        print(f"Environment ID: {env_id}")
+        tenant_id = discover_tenant(env_url)
+        print(f"Tenant: {tenant_id}")
+
+        # Derive PP environment ID
+        print("Deriving Power Platform environment ID...")
+        env_id = derive_environment_id(env_url, dv_token)
+        if env_id:
+            print(f"Environment ID: {env_id}")
+        else:
+            print("WARNING: Could not derive environment ID. Some checks may be limited.")
+
+        # Initialize clients
+        print("Authenticating to Microsoft Graph...")
+        graph = GraphClient(tenant_id)
+        try:
+            graph.authenticate()
+            print("  Graph: OK")
+        except Exception as e:
+            print(f"  Graph: WARNING — {e}")
+            print("  (Some checks will be skipped)")
+
+        print("Authenticating to Power Platform Admin API...")
+        pp_admin = PPAdminClient(tenant_id)
+        try:
+            pp_admin.authenticate()
+            print("  Power Platform: OK")
+        except Exception as e:
+            print(f"  Power Platform: WARNING — {e}")
+            print("  (Some checks will be skipped)")
     else:
-        print("WARNING: Could not derive environment ID. Some checks may be limited.")
-
-    # Initialize clients
-    print("Authenticating to Microsoft Graph...")
-    graph = GraphClient(tenant_id)
-    try:
-        graph.authenticate()
-        print("  Graph: OK")
-    except Exception as e:
-        print(f"  Graph: WARNING — {e}")
-        print("  (Some checks will be skipped)")
-
-    print("Authenticating to Power Platform Admin API...")
-    pp_admin = PPAdminClient(tenant_id)
-    try:
-        pp_admin.authenticate()
-        print("  Power Platform: OK")
-    except Exception as e:
-        print(f"  Power Platform: WARNING — {e}")
-        print("  (Some checks will be skipped)")
+        print(f"Skipping Microsoft auth (not required for --scope {args.scope}).")
 
     # Gate PVA (Copilot Studio Island Gateway) auth on scope.
     # Only CONFIG-013 needs PVA today, and it lives in run_local_file_checks.
@@ -174,7 +244,7 @@ def main():
             print(f"  Copilot Studio: WARNING — {e}")
             print("  (Knowledge source status check will use local-only validation)")
             pva = None
-    else:
+    elif needs_ms_auth:
         print("Skipping Copilot Studio auth (not required for this scope).")
 
     # --- Build runner ---

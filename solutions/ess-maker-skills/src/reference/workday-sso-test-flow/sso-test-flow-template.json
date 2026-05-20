@@ -1,0 +1,112 @@
+{
+  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+  "metadata": {
+    "name": "ESS SSO Permission Test",
+    "description": "Pre-flight validator flow that tests Workday SSO permissions via the OAuthUser connection. Executes a lightweight Get_Workers_Request to prove the OAuth user has correct Workday security domain access.",
+    "version": "1.0.0",
+    "author": "ESS Pre-flight Validator",
+    "usage": "Import this flow into Power Automate, map the Workday SOAP connection to your OAuthUser connection, then run the ESS Validator SSO test."
+  },
+  "flow_setup_instructions": {
+    "step_1": "Go to https://make.powerautomate.com and select your ESS environment",
+    "step_2": "Click 'My Flows' > 'Import' > 'Import Package (Legacy)'",
+    "step_3": "Select this template or create a new Instant Cloud Flow manually",
+    "step_4": "Add an HTTP Request trigger (see trigger_schema below)",
+    "step_5": "Add a 'Workday SOAP - Execute SOAP operation' action",
+    "step_6": "Set the connection to your OAuthUser connection (Entra ID Integrated)",
+    "step_7": "Configure the action parameters as shown in action_config below",
+    "step_8": "Add a Response action returning the SOAP result",
+    "step_9": "Save the flow - the HTTP trigger URL will be generated automatically"
+  },
+  "manual_creation_guide": {
+    "flow_name": "ESS SSO Permission Test",
+    "flow_type": "Instant cloud flow (HTTP Request trigger)",
+    "trigger": {
+      "type": "Request",
+      "kind": "Http",
+      "method": "POST",
+      "schema": {
+        "type": "object",
+        "properties": {
+          "testUserUPN": {
+            "type": "string",
+            "description": "UPN of the user to test (e.g., user@contoso.com)"
+          },
+          "workdayTenant": {
+            "type": "string",
+            "description": "Workday tenant name (e.g., contoso_impl)"
+          }
+        },
+        "required": ["testUserUPN", "workdayTenant"]
+      }
+    },
+    "actions": [
+      {
+        "order": 1,
+        "name": "Execute_SOAP_Operation",
+        "connector": "Workday SOAP",
+        "action": "Execute SOAP operation (Preview)",
+        "operation_id": "SOAP_Operation",
+        "connection": "Use your OAuthUser connection (Entra ID Integrated auth type)",
+        "parameters": {
+          "service": "Human_Resources",
+          "version": "v42.0",
+          "requestBody": "See soap_request_template below - paste the XML with @{triggerBody()?['testUserUPN']} for the UPN"
+        }
+      },
+      {
+        "order": 2,
+        "name": "Response",
+        "type": "Response",
+        "parameters": {
+          "statusCode": 200,
+          "headers": {
+            "Content-Type": "application/json"
+          },
+          "body": {
+            "status": "completed",
+            "soapResponse": "@{body('Execute_SOAP_Operation')}"
+          }
+        }
+      }
+    ]
+  },
+  "soap_request_template": "<bsvc:Get_Workers_Request xmlns:bsvc=\"urn:com.workday/bsvc\" bsvc:version=\"v42.0\"><bsvc:Request_References bsvc:Skip_Non_Existing_Instances=\"false\" bsvc:Ignore_Invalid_References=\"true\"><bsvc:Worker_Reference><bsvc:ID bsvc:type=\"User_ID\">@{triggerBody()?['testUserUPN']}</bsvc:ID></bsvc:Worker_Reference></bsvc:Request_References><bsvc:Response_Filter><bsvc:As_Of_Effective_Date>@{utcNow('yyyy-MM-dd')}</bsvc:As_Of_Effective_Date></bsvc:Response_Filter><bsvc:Response_Group><bsvc:Include_Reference>true</bsvc:Include_Reference><bsvc:Include_Personal_Information>true</bsvc:Include_Personal_Information><bsvc:Include_Employment_Information>true</bsvc:Include_Employment_Information><bsvc:Include_Organizations>true</bsvc:Include_Organizations><bsvc:Include_Qualifications>true</bsvc:Include_Qualifications></bsvc:Response_Group></bsvc:Get_Workers_Request>",
+  "soap_request_readable": {
+    "_comment": "This is the human-readable version of the SOAP request above. Copy the XML below into the 'SOAP request body' field in Power Automate, replacing the @{...} expressions.",
+    "xml": [
+      "<bsvc:Get_Workers_Request xmlns:bsvc=\"urn:com.workday/bsvc\" bsvc:version=\"v42.0\">",
+      "  <bsvc:Request_References bsvc:Skip_Non_Existing_Instances=\"false\" bsvc:Ignore_Invalid_References=\"true\">",
+      "    <bsvc:Worker_Reference>",
+      "      <bsvc:ID bsvc:type=\"User_ID\">@{triggerBody()?['testUserUPN']}</bsvc:ID>",
+      "    </bsvc:Worker_Reference>",
+      "  </bsvc:Request_References>",
+      "  <bsvc:Response_Filter>",
+      "    <bsvc:As_Of_Effective_Date>@{utcNow('yyyy-MM-dd')}</bsvc:As_Of_Effective_Date>",
+      "  </bsvc:Response_Filter>",
+      "  <bsvc:Response_Group>",
+      "    <bsvc:Include_Reference>true</bsvc:Include_Reference>",
+      "    <bsvc:Include_Personal_Information>true</bsvc:Include_Personal_Information>",
+      "    <bsvc:Include_Employment_Information>true</bsvc:Include_Employment_Information>",
+      "    <bsvc:Include_Organizations>true</bsvc:Include_Organizations>",
+      "    <bsvc:Include_Qualifications>true</bsvc:Include_Qualifications>",
+      "  </bsvc:Response_Group>",
+      "</bsvc:Get_Workers_Request>"
+    ]
+  },
+  "permissions_tested": {
+    "_comment": "The Get_Workers_Request with these response groups tests the following security domains for the OAuth user",
+    "domains": [
+      { "response_group": "Include_Reference", "domain": "Worker Data: Worker ID", "test": "Employee_ID present in response" },
+      { "response_group": "Include_Personal_Information", "domain": "Worker Data: Personal Information (Self)", "test": "First_Name / Last_Name present" },
+      { "response_group": "Include_Personal_Information", "domain": "Person Data: Emergency Contacts", "test": "Emergency_Contact node present" },
+      { "response_group": "Include_Personal_Information", "domain": "Worker Data: National Identifiers", "test": "National_ID node present" },
+      { "response_group": "Include_Personal_Information", "domain": "Worker Data: Government IDs", "test": "Passport_ID / Visa_ID nodes" },
+      { "response_group": "Include_Employment_Information", "domain": "Worker Data: Employment Information", "test": "Hire_Date / Employment_Data present" },
+      { "response_group": "Include_Employment_Information", "domain": "Worker Data: Current Staffing Information", "test": "Position_ID / Organization_Data present" },
+      { "response_group": "Include_Organizations", "domain": "Worker Data: Current Staffing Information", "test": "Organization_Data with Cost Center / Company" },
+      { "response_group": "Include_Qualifications", "domain": "Worker Data: Qualifications", "test": "Certification nodes present" },
+      { "response_group": "Include_Qualifications", "domain": "Worker Data: Skills and Experience", "test": "Language nodes present" }
+    ]
+  }
+}
