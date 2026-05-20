@@ -12,6 +12,26 @@ This project has adopted the [Microsoft Open Source Code of Conduct](https://ope
 For more information see the [Code of Conduct FAQ](https://opensource.microsoft.com/codeofconduct/faq/) or
 contact [opencode@microsoft.com](mailto:opencode@microsoft.com) with any additional questions or comments.
 
+## Pre-PR Checklist (REQUIRED)
+
+Before opening a pull request, confirm each of the following. The PR template
+([`.github/PULL_REQUEST_TEMPLATE.md`](.github/PULL_REQUEST_TEMPLATE.md)) will
+ask you to tick these off — incomplete PRs may be sent back for cleanup.
+
+- [ ] **Rebased on latest `main`** — `git fetch origin && git rebase origin/main`
+- [ ] **PR diff shows ONLY files you intended to change** — review the "Files changed" tab; no accidental deletions or unrelated edits
+- [ ] **Local lint / tests pass** — `pytest tests/ -q` clean, or note in the PR description why end-to-end testing wasn't possible (e.g., no tenant access)
+- [ ] **No references to files outside the repo** — header comments and docs should not point to internal source-of-truth files
+- [ ] **Defaults match repo conventions** — output paths default to `workspace/flightcheck/...`; risky operations (writes, deletions, destructive API calls) are opt-in via explicit flags
+- [ ] **FlightCheck integration** — new checks wired into a scope in `solutions/ess-maker-skills/scripts/flightcheck/cli.py` (`SCOPE_MAP` and `FULL_SCOPE`); new tests live under `tests/flightcheck/checks/`
+- [ ] **API tier registry honored** — every new external API call references the tier assigned in `tests/fixtures/cassettes/INDEX.md`; any new tier rows added there with rationale (see [`solutions/ess-maker-skills/scripts/flightcheck/AGENTS.md`](solutions/ess-maker-skills/scripts/flightcheck/AGENTS.md))
+- [ ] **Docs updated** — relevant `README.md` / `AGENTS.md` updated to mention the new check, scope, or behavior change
+
+> **Why "rebased on latest `main`" matters:** Stale branches can silently
+> delete files added after your branch was cut. We've already caught one
+> case of this in a sibling repo. GitHub branch protection enforces this
+> rule automatically.
+
 ## Maintenance
 
 ### Security maintenance
