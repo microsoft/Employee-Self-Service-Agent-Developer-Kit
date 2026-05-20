@@ -47,7 +47,8 @@ the PR.
 | **Microsoft Entra OAuth2 token endpoint** | `validatable` | OpenID discovery at `https://login.microsoftonline.com/{tenant or 'common'}/v2.0/.well-known/openid-configuration` (no auth) + RFC 6749 / OpenID Connect Core for response shapes + MS Learn `https://learn.microsoft.com/entra/identity-platform/v2-oauth2-*`. | Token response shape is RFC-defined; very stable. |
 | **Power Platform Admin API (BAP)** | `documented` | MS Learn `https://learn.microsoft.com/power-platform/admin/programmability-resources` + `programmability-authentication-v2`. PowerShell module source at `Microsoft.PowerApps.Administration.PowerShell` is a useful supplementary reference. | No public OpenAPI spec. Probed `https://api.bap.microsoft.com/.../swagger/docs/v1` → 401. |
 | **Dataverse Web API v9.2** | `documented` | MS Learn `https://learn.microsoft.com/power-apps/developer/data-platform/webapi/`. Per-org `$metadata` exists at `{org}/api/data/v9.2/$metadata` but requires auth, so it's not a no-tenant validation path. | Excellent prose docs with example responses for every operation. |
-| **PowerApps Admin API** (`/Microsoft.PowerApps/...`, `/Microsoft.ProcessSimple/.../v2/flows`) | `validated` | Cassette at `flightcheck_pp_admin.yaml`. | The 404-on-Dataverse-only-env behavior is undocumented and discovered empirically; cassette is the only ground truth. |
+| **PowerApps Admin API** (`/Microsoft.PowerApps/...`) | `validated` | Cassette at `flightcheck_pp_admin.yaml`. | Connection enumeration uses this host. |
+| **Power Automate Admin API** (`/Microsoft.ProcessSimple/.../v2/flows`) | `validated` | Hosted on `api.flow.microsoft.com` (NOT `api.powerapps.com`) and requires a `service.flow.microsoft.com//.default` audience token. Cassette to be re-captured against the correct host. | Admin flow listing — Power Automate audience required. |
 | **PVA Island Gateway** (`/api/botmanagement/v1/...`) | `validated` | Cassette at `island_gateway_botcomponents.yaml`. | Internal Copilot Studio API; not publicly documented. |
 | **Workday SOAP** (Human_Resources, Identity_Management, Compensation, Absence_Management, etc.) | `validated` | Cassettes at `flightcheck_workday.yaml`, `workday_config.yaml`. | Vendor docs require Workday Community login; tenant-specific WSDL varies. |
 | **Workday WQL / REST** (`/ccx/api/wql/v1/...`, `/ccx/api/v1/...`) | `validated` | Cassette at `workday_wql_admin.yaml`. **Known auth blocker** — see "Workday WQL config-validation pattern" section below before authoring any runtime check on this cassette. | Per-tenant API client registration creates the chicken-and-egg blocker. |
@@ -74,8 +75,8 @@ table, it is not confirmed — see `tests/AGENTS.md` for what to do next.
 | Power Platform Admin (BAP) | `GET /providers/Microsoft.BusinessAppPlatform/scopes/admin/environments` | 200 | `flightcheck_pp_admin.yaml` |
 | Power Platform Admin (BAP) | `GET /providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/{env_id}` | 200 | `flightcheck_pp_admin.yaml` |
 | Power Platform Admin (BAP) | `GET /providers/Microsoft.BusinessAppPlatform/scopes/admin/apiPolicies` | 200 | `flightcheck_pp_admin.yaml` |
-| PowerApps | `GET /providers/Microsoft.ProcessSimple/scopes/admin/environments/{env_id}/v2/flows` | **404** (Dataverse-only env) | `flightcheck_pp_admin.yaml` |
 | PowerApps | `GET /providers/Microsoft.PowerApps/scopes/admin/environments/{env_id}/connections` | 200 | `flightcheck_pp_admin.yaml` |
+| Power Automate | `GET https://api.flow.microsoft.com/providers/Microsoft.ProcessSimple/scopes/admin/environments/{env_id}/v2/flows` | 200 | (cassette to be re-captured — host correction) |
 | Workday OAuth2 | `POST /ccx/oauth2/{tenant}/token` (refresh_token grant via Basic auth) | 200 | `workday_wql_admin.yaml` |
 | Workday WQL | `GET /ccx/api/wql/v1/{tenant}/dataSources?limit=100&offset=N` (paginated catalog of all data sources) | 200 | `workday_wql_admin.yaml` |
 | Workday WQL | `GET /ccx/api/wql/v1/{tenant}/dataSources/{wid}` (data source detail incl. `requiredParameters`, `dataSourceFilters`, `filterIsRequired`) | 200 | `workday_wql_admin.yaml` |
@@ -99,11 +100,6 @@ table, it is not confirmed — see `tests/AGENTS.md` for what to do next.
 | ServiceNow Table API | `GET /api/now/table/sys_ws_definition?sysparm_query=active=true` (Task 3 — Scripted REST APIs) | 200 | `flightcheck_servicenow.yaml` |
 | ServiceNow Table API | `GET /api/now/table/sys_ws_operation?sysparm_query=relative_path=/user_criteria` (Task 4 — `/user_criteria` API resource) | 200 | `flightcheck_servicenow.yaml` |
 | ServiceNow Table API | `GET /api/now/table/oauth_entity` with bad-password Basic auth (negative path) | **401** | `flightcheck_servicenow.yaml` |
-
-The 404 row above is intentional — it captures the response shape the
-kit hits when an environment exists in BAP but not in PowerApps
-ProcessSimple (a Dataverse-only env). See bug 4 in
-`tests/flightcheck/test_pp_admin_client.py`.
 
 ### Workday WQL config-validation pattern (`workday_wql_admin.yaml`)
 
