@@ -128,14 +128,6 @@ def main():
     tenant_id = discover_tenant(env_url)
     print(f"Tenant: {tenant_id}")
 
-    # Derive PP environment ID
-    print("Deriving Power Platform environment ID...")
-    env_id = derive_environment_id(env_url, dv_token)
-    if env_id:
-        print(f"Environment ID: {env_id}")
-    else:
-        print("WARNING: Could not derive environment ID. Some checks may be limited.")
-
     # Initialize clients
     print("Authenticating to Microsoft Graph...")
     graph = GraphClient(tenant_id)
@@ -154,6 +146,19 @@ def main():
     except Exception as e:
         print(f"  Power Platform: WARNING — {e}")
         print("  (Some checks will be skipped)")
+        pp_admin = None
+
+    # Derive the BAP environment ID. This MUST run after pp_admin is
+    # authenticated: the correct id comes from the BAP env list
+    # (matched on linkedEnvironmentMetadata.instanceUrl), not from the
+    # Dataverse WhoAmI OrganizationId (which is a different guid for
+    # almost every tenant — see derive_environment_id docstring).
+    print("Deriving Power Platform environment ID...")
+    env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
+    if env_id:
+        print(f"Environment ID: {env_id}")
+    else:
+        print("WARNING: Could not derive environment ID. Some checks may be limited.")
 
     # Gate PVA (Copilot Studio Island Gateway) auth on scope.
     # Only CONFIG-013 needs PVA today, and it lives in run_local_file_checks.
