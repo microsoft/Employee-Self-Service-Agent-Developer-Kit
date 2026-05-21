@@ -715,13 +715,15 @@ def main():
                 if len(_folder_matches) == 1:
                     parent_id = _folder_matches[0][1]
                 elif len(_folder_matches) > 1:
-                    # Multiple parents in same folder — match by prefix.
+                    # Multiple parents in same folder — match by longest prefix.
+                    _best = (None, -1)  # (p_id, stem_length)
                     for p_path, p_id in _folder_matches:
                         p_stem = p_path.replace("\\", "/").split("/")[-1] \
                             .replace(".mcs.yml", "")
-                        if child_fname.startswith(p_stem + "-"):
-                            parent_id = p_id
-                            break
+                        if child_fname.startswith(p_stem + "-") and len(p_stem) > _best[1]:
+                            _best = (p_id, len(p_stem))
+                    if _best[0] is not None:
+                        parent_id = _best[0]
                     if parent_id is None:
                         # No prefix match; fall back to first.
                         parent_id = _folder_matches[0][1]
@@ -746,12 +748,14 @@ def main():
                     parent_id = _cm_matches[0][1]
                 elif len(_cm_matches) > 1:
                     child_fname = filepath.replace("\\", "/").split("/")[-1]
+                    _best = (None, -1)  # (p_id, stem_length)
                     for p_path, p_id in _cm_matches:
                         p_stem = p_path.replace("\\", "/").split("/")[-1] \
                             .replace(".mcs.yml", "")
-                        if child_fname.startswith(p_stem + "-"):
-                            parent_id = p_id
-                            break
+                        if child_fname.startswith(p_stem + "-") and len(p_stem) > _best[1]:
+                            _best = (p_id, len(p_stem))
+                    if _best[0] is not None:
+                        parent_id = _best[0]
                     if parent_id is None:
                         parent_id = _cm_matches[0][1]
 
