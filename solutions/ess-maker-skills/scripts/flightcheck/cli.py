@@ -153,12 +153,32 @@ def main():
     # (matched on linkedEnvironmentMetadata.instanceUrl), not from the
     # Dataverse WhoAmI OrganizationId (which is a different guid for
     # almost every tenant — see derive_environment_id docstring).
+    #
+    # derive_environment_id intentionally tolerates pp_admin=None and
+    # falls back to the WhoAmI/OrganizationId path so that operators
+    # whose Power Platform sign-in failed (network issue, cancelled
+    # browser, MSAL error) can still run the substantial fraction of
+    # FlightCheck that doesn't need pp_admin — PRE-* (license SKUs),
+    # AUTH-*, WD-ENV-* (Workday env vars / ISU format), WD-WF-*
+    # (Workday SOAP runtime), and CONFIG-* (local agent / topic /
+    # knowledge source). Erroring out here would block those.
     print("Deriving Power Platform environment ID...")
     env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
-    if env_id:
+    if env_id and pp_admin is not None:
         print(f"Environment ID: {env_id}")
+    elif env_id:
+        print(
+            f"Environment ID: {env_id} (Dataverse OrganizationId fallback "
+            "— Power Platform sign-in failed, so BAP-scoped checks "
+            "(ENV-*, EXT-*, WD-CONN-*) will be skipped)"
+        )
     else:
-        print("WARNING: Could not derive environment ID. Some checks may be limited.")
+        print(
+            f"WARNING: Could not derive environment ID for {env_url}. "
+            "BAP-scoped checks (ENV-*, EXT-*, WD-CONN-*) will be skipped; "
+            "license, auth, Workday env-var, Workday SOAP, and local-file "
+            "checks will still run."
+        )
 
     # Gate PVA (Copilot Studio Island Gateway) auth on scope.
     # Only CONFIG-013 needs PVA today, and it lives in run_local_file_checks.
