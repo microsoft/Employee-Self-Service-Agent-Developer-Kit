@@ -53,3 +53,18 @@
 - name: area:setup
   color: e99695
   description: /setup and onboarding flow
+- name: area:samples
+  color: d4c5f9
+  description: Sample agents and topics under samples/
+- name: agent:eligible
+  color: 0e8a16
+  description: Issue is eligible to be handled by an automated agent
+- name: agent:needs-info
+  color: fbca04
+  description: Agent needs additional information to proceed
+- name: agent:blocked
+  color: b60205
+  description: Agent is blocked from proceeding
+- name: agent:out-of-scope
+  color: 5319e7
+  description: Issue is out of scope for automated agent handling
