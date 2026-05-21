@@ -698,13 +698,30 @@ def main():
             if entry and entry.get("parentbotcomponentid"):
                 parent_id = entry["parentbotcomponentid"]
 
+            child_fname = filepath.replace("\\", "/").split("/")[-1]
+
+            def _match_parent_by_prefix(candidates):
+                """Pick the candidate whose filename stem is the longest
+                prefix of *child_fname*.  Returns the matched parent ID
+                or None."""
+                best_id = None
+                best_stem_len = -1
+                for p_path, p_id in candidates:
+                    p_stem = (
+                        p_path.replace("\\", "/").split("/")[-1]
+                        .replace(".mcs.yml", "")
+                    )
+                    if child_fname.startswith(p_stem + "-") and len(p_stem) > best_stem_len:
+                        best_id = p_id
+                        best_stem_len = len(p_stem)
+                return best_id
+
             # 2. Parent created in THIS push, same folder.
             #    When multiple parents share a folder, prefer the one
             #    whose filename stem is a prefix of the child filename
             #    (e.g. parent "topic-triggering.mcs.yml" matches child
             #    "topic-triggering-base-compensation.mcs.yml").
             if parent_id is None:
-                child_fname = filepath.replace("\\", "/").split("/")[-1]
                 _folder_matches = []
                 for p_path, p_id in eval_parent_ids.items():
                     p_folder = "/".join(
@@ -715,17 +732,7 @@ def main():
                 if len(_folder_matches) == 1:
                     parent_id = _folder_matches[0][1]
                 elif len(_folder_matches) > 1:
-                    # Multiple parents in same folder — match by longest prefix.
-                    _best = (None, -1)  # (p_id, stem_length)
-                    for p_path, p_id in _folder_matches:
-                        p_stem = (
-                            p_path.replace("\\", "/").split("/")[-1]
-                            .replace(".mcs.yml", "")
-                        )
-                        if child_fname.startswith(p_stem + "-") and len(p_stem) > _best[1]:
-                            _best = (p_id, len(p_stem))
-                    if _best[0] is not None:
-                        parent_id = _best[0]
+                    parent_id = _match_parent_by_prefix(_folder_matches)
                     if parent_id is None:
                         # No prefix match; fall back to first.
                         parent_id = _folder_matches[0][1]
@@ -749,17 +756,14 @@ def main():
                 if len(_cm_matches) == 1:
                     parent_id = _cm_matches[0][1]
                 elif len(_cm_matches) > 1:
-                    child_fname = filepath.replace("\\", "/").split("/")[-1]
-                    _best = (None, -1)  # (p_id, stem_length)
-                    for p_path, p_id in _cm_matches:
-                        p_stem = p_path.replace("\\", "/").split("/")[-1] \
-                            .replace(".mcs.yml", "")
-                        if child_fname.startswith(p_stem + "-") and len(p_stem) > _best[1]:
-                            _best = (p_id, len(p_stem))
-                    if _best[0] is not None:
-                        parent_id = _best[0]
+                    parent_id = _match_parent_by_prefix(_cm_matches)
                     if parent_id is None:
-                        parent_id = _cm_matches[0][1]
+                        print(
+                            f"  ❌ Failed: {filepath}: multiple eval parents found "
+                            f"in {child_folder}/ but none matches the filename "
+                            f"prefix deterministically. Rename the case to use a "
+                            f"parent prefix or remove the ambiguity."
+                        )
 
             if parent_id is None:
                 # Fail closed: don't create an orphan eval case in
