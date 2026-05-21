@@ -718,8 +718,10 @@ def main():
                     # Multiple parents in same folder — match by longest prefix.
                     _best = (None, -1)  # (p_id, stem_length)
                     for p_path, p_id in _folder_matches:
-                        p_stem = p_path.replace("\\", "/").split("/")[-1] \
+                        p_stem = (
+                            p_path.replace("\\", "/").split("/")[-1]
                             .replace(".mcs.yml", "")
+                        )
                         if child_fname.startswith(p_stem + "-") and len(p_stem) > _best[1]:
                             _best = (p_id, len(p_stem))
                     if _best[0] is not None:
