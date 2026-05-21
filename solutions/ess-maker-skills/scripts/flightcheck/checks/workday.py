@@ -161,6 +161,9 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # --- Environment Variables ---
     results.extend(_check_env_vars(runner))
 
+    # --- ISU username vs Entra UPN format alignment ---
+    results.extend(_check_isu_username_format(runner))
+
     # --- Connection References ---
     results.extend(_check_connections(runner))
     results.extend(_check_connection_token_health(runner))
@@ -256,6 +259,222 @@ def _check_env_vars(runner) -> list[CheckResult]:
             priority=Priority.CRITICAL.value, status=Status.WARNING.value,
             description="Workday environment variables",
             result=f"Unable to check: {e}",
+        ))
+
+    return results
+
+
+def _check_isu_username_format(runner) -> list[CheckResult]:
+    """WD-ENV-101 — Workday ISU username alignment with Entra UPN format.
+
+    Pulls the configured ISU username from
+    `EmployeeContextRequestAccountName` (Dataverse env var) and compares
+    its shape against the tenant's verified Entra domains. Federated
+    tenants (Okta / Ping) frequently leave the ISU username in a legacy
+    short-employee-id format that does not match the UPN claim ESS sends
+    on each request, which prevents Workday from matching the request to
+    a Worker.
+
+    Heuristics:
+      * No `@` in ISU → WARNING (legacy short-id format — the
+        most-cited misconfiguration root cause). Reported even when
+        Graph is unavailable, because this signal needs only the
+        Dataverse env var.
+      * `@` present but the domain part is not in the tenant's
+        verified-domains list → WARNING (could be legitimate cross-tenant
+        federation; surface for the operator to confirm).
+      * `<localpart>@<verified-domain>` → PASSED.
+
+    A scoped per-Worker comparison (Get_Workers User_ID == Entra UPN
+    for a sample of expected ESS users) is intentionally out of scope
+    for this check — it requires Workday SOAP credentials and a curated
+    sample list, which `_check_workflows` already exercises against
+    `WORKDAY_TEST_EMPLOYEE_ID`. Wire a future `WD-WF-NNN` against that
+    surface when those inputs are formalised; this checkpoint covers
+    the static format-alignment gap that can be detected without ISU
+    credentials.
+    """
+    results: list[CheckResult] = []
+    env_url = runner.env_url
+    dv_token = runner.dv_token
+
+    if not env_url or not dv_token:
+        results.append(CheckResult(
+            checkpoint_id="WD-ENV-101", category="Workday",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description="ISU username vs Entra UPN format alignment",
+            result="Dataverse token not available — skipping ISU format check",
+        ))
+        return results
+
+    # ── Step 1: read the ISU env var from Dataverse. We do this FIRST,
+    # before consulting Graph, because the no-`@` legacy-format detection
+    # (the most-cited misconfiguration root cause — legacy short-ID ISU
+    # provisioning on federated tenants, common where the ISU was set
+    # up before the tenant adopted UPN-shaped service-account naming)
+    # can be reported off the Dataverse value alone.
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+        from auth import query_all
+
+        defs = query_all(
+            env_url, dv_token,
+            "environmentvariabledefinitions",
+            "displayname,schemaname,environmentvariabledefinitionid",
+            filter_expr="contains(schemaname,'EmployeeContext')",
+        )
+        vals = query_all(
+            env_url, dv_token,
+            "environmentvariablevalues",
+            "value,schemaname,_environmentvariabledefinitionid_value",
+        )
+
+        def_map = {d["environmentvariabledefinitionid"]: d for d in defs}
+        isu_value: str | None = None
+        for v in vals:
+            def_id = v.get("_environmentvariabledefinitionid_value")
+            if def_id not in def_map:
+                continue
+            schema = def_map[def_id].get("schemaname", "")
+            if "EmployeeContextRequestAccountName".lower() in schema.lower():
+                isu_value = v.get("value", "") or None
+                break
+    except Exception as e:
+        results.append(CheckResult(
+            checkpoint_id="WD-ENV-101", category="Workday",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description="ISU username vs Entra UPN format alignment",
+            result=f"Unable to read ISU env var from Dataverse: {e}",
+        ))
+        return results
+
+    if not isu_value:
+        # WD-ENV-001 already covers the missing-value remediation; skip
+        # here to avoid double-reporting the same root cause.
+        results.append(CheckResult(
+            checkpoint_id="WD-ENV-101", category="Workday",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description="ISU username vs Entra UPN format alignment",
+            result="ISU env var not set — see WD-ENV-001 for the underlying gap",
+            doc_link=f"{DOC_BASE}/workday#step-4-environment-variables",
+        ))
+        return results
+
+    # ── Step 2: legacy short-id detection (no Graph required). This is
+    # the most decisive failure mode and must be reported even when
+    # Graph auth has failed.
+    if "@" not in isu_value:
+        results.append(CheckResult(
+            checkpoint_id="WD-ENV-101", category="Workday",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description="ISU username vs Entra UPN format alignment",
+            result=(
+                f"ISU username '{isu_value}' does not contain '@' — does not match "
+                f"the Entra UPN format ESS sends on each request"
+            ),
+            remediation=(
+                "If the tenant federates identity (Okta, Ping, ADFS), set the "
+                "Workday ISU username to the Entra UPN format (e.g. "
+                "isu@<verified-tenant-domain>) so Workday can match incoming "
+                "ESS requests to a Worker. Update "
+                "`EmployeeContextRequestAccountName` in [Power Platform admin "
+                "center](https://admin.powerplatform.microsoft.com)."
+            ),
+            doc_link=f"{DOC_BASE}/workday#step-4-environment-variables",
+        ))
+        return results
+
+    # ── Step 3: verified-domain comparison (requires Graph). If Graph
+    # isn't available, we can't do this comparison — surface that as a
+    # SKIP so the operator knows the deeper check wasn't performed.
+    graph = getattr(runner, "graph", None)
+    if not graph:
+        results.append(CheckResult(
+            checkpoint_id="WD-ENV-101", category="Workday",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description="ISU username vs Entra UPN format alignment",
+            result=(
+                f"ISU username '{isu_value}' is in UPN-style format but Microsoft "
+                f"Graph client is unavailable — cannot verify the domain matches "
+                f"a verified tenant domain"
+            ),
+            remediation="Re-run flightcheck and complete the Microsoft Graph sign-in prompt.",
+            doc_link=f"{DOC_BASE}/workday#step-4-environment-variables",
+        ))
+        return results
+
+    try:
+        org = graph.get_organization()
+    except Exception as e:
+        results.append(CheckResult(
+            checkpoint_id="WD-ENV-101", category="Workday",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description="ISU username vs Entra UPN format alignment",
+            result=f"Unable to fetch tenant verified domains from Graph: {e}",
+            remediation="Ensure permissions to read Organization info via Graph (Organization.Read.All).",
+        ))
+        return results
+
+    if not isinstance(org, dict) or not org:
+        results.append(CheckResult(
+            checkpoint_id="WD-ENV-101", category="Workday",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description="ISU username vs Entra UPN format alignment",
+            result=(
+                "Graph /organization returned no tenant record — likely "
+                "insufficient permissions"
+            ),
+            remediation="Ensure permissions to read Organization info via Graph (Organization.Read.All).",
+        ))
+        return results
+
+    verified = [
+        (d.get("name") or "").lower()
+        for d in org.get("verifiedDomains", [])
+        if d.get("name")
+    ]
+
+    domain = isu_value.rsplit("@", 1)[1].lower()
+    if not verified:
+        results.append(CheckResult(
+            checkpoint_id="WD-ENV-101", category="Workday",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description="ISU username vs Entra UPN format alignment",
+            result=(
+                f"ISU username '{isu_value}' contains '@{domain}' but Graph "
+                f"returned no verified domains — cannot confirm alignment"
+            ),
+            remediation="Ensure permissions to read Organization info via Graph (Organization.Read.All).",
+            doc_link=f"{DOC_BASE}/workday#step-4-environment-variables",
+        ))
+        return results
+
+    if domain in verified:
+        results.append(CheckResult(
+            checkpoint_id="WD-ENV-101", category="Workday",
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
+            description="ISU username vs Entra UPN format alignment",
+            result=f"ISU username '{isu_value}' matches verified tenant domain '{domain}'",
+            doc_link=f"{DOC_BASE}/workday#step-4-environment-variables",
+        ))
+    else:
+        results.append(CheckResult(
+            checkpoint_id="WD-ENV-101", category="Workday",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description="ISU username vs Entra UPN format alignment",
+            result=(
+                f"ISU username domain '{domain}' is not in the tenant's verified "
+                f"domains ({', '.join(sorted(verified))}) — Workday may fail to "
+                f"match ESS requests to a Worker if ESS sends UPN claims from a "
+                f"verified domain"
+            ),
+            remediation=(
+                "Confirm the ISU username matches the UPN claim ESS sends. If "
+                "the tenant uses federated identity, update "
+                "`EmployeeContextRequestAccountName` to use a verified-domain "
+                "UPN, or document the cross-tenant scenario for the operator."
+            ),
+            doc_link=f"{DOC_BASE}/workday#step-4-environment-variables",
         ))
 
     return results

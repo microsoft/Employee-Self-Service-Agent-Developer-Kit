@@ -34,6 +34,10 @@ MOCK_CASSETTE = "tests/fixtures/cassettes/flightcheck_pp_admin.yaml"
 
 BAP_BASE = "https://api.bap.microsoft.com"
 POWERAPPS_BASE = "https://api.powerapps.com"
+# Flow listing endpoint lives on a different host with a different audience
+# token. See solutions/ess-maker-skills/scripts/flightcheck/pp_admin_client.py
+# `FLOW_BASE` and the `service.flow.microsoft.com//.default` scope.
+FLOW_BASE = "https://api.flow.microsoft.com"
 
 MOCK_ENV_ID = "Default-00000000-0000-0000-0000-000000001111"
 MOCK_ORG_ID = "00000000-0000-0000-0000-000000005555"
@@ -318,11 +322,16 @@ def list_flows(
     flows: Iterable[Mapping[str, Any]] | None = None,
     status: int = 200,
 ) -> dict[str, Any]:
-    """Mock GET /providers/Microsoft.ProcessSimple/scopes/admin/environments/{env}/v2/flows."""
+    """Mock GET /providers/Microsoft.ProcessSimple/scopes/admin/environments/{env}/v2/flows.
+
+    Hosted on `api.flow.microsoft.com` (NOT `api.powerapps.com`) and
+    requires a `service.flow.microsoft.com//.default` audience token
+    rather than the PowerApps audience.
+    """
     return {
         "method": "GET",
         "url": (
-            f"{POWERAPPS_BASE}/providers/Microsoft.ProcessSimple/scopes/admin/environments/"
+            f"{FLOW_BASE}/providers/Microsoft.ProcessSimple/scopes/admin/environments/"
             f"{env_id}/v2/flows"
         ),
         "json": collection(flows or []),
@@ -347,7 +356,7 @@ def insufficient_permissions(
         )
     elif endpoint == "flows":
         url = (
-            f"{POWERAPPS_BASE}/providers/Microsoft.ProcessSimple/scopes/admin/environments/"
+            f"{FLOW_BASE}/providers/Microsoft.ProcessSimple/scopes/admin/environments/"
             f"{env_id}/v2/flows"
         )
     elif endpoint == "environments":
@@ -370,28 +379,4 @@ def insufficient_permissions(
     }
 
 
-def flows_resource_not_found(*, env_id: str = MOCK_ENV_ID) -> dict[str, Any]:
-    """Mock the 404 ResourceNotFound response that PowerApps ProcessSimple
-    returns when an environment exists in BAP but has no PowerApps
-    runtime registered (Dataverse-only envs).
 
-    Captured behavior — see tests/fixtures/cassettes/flightcheck_pp_admin.yaml
-    line 2578-2621. The real response has an empty body and an
-    ``x-servicefabric: ResourceNotFound`` header. The kit's
-    pp_admin_client._get_all only handles 401/403 specially, so this
-    bubbles up as ``requests.exceptions.HTTPError`` and crashes any
-    FlightCheck check that calls get_flows().
-
-    See bug 4 in plan.md and the regression test in
-    tests/flightcheck/test_pp_admin_client.py.
-    """
-    return {
-        "method": "GET",
-        "url": (
-            f"{POWERAPPS_BASE}/providers/Microsoft.ProcessSimple/scopes/admin/environments/"
-            f"{env_id}/v2/flows"
-        ),
-        "body": "",
-        "status": 404,
-        "headers": {"x-servicefabric": "ResourceNotFound"},
-    }
