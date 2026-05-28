@@ -201,8 +201,10 @@ extensionData:
 
 ### Naming convention
 
-- **Parent set file**: `evaluations/{category-name}.mcs.yml` (e.g., `evaluations/topic-triggering.mcs.yml`)
-- **Child test case files**: `evaluations/{category-name}-{short-slug}.mcs.yml` (e.g., `evaluations/topic-triggering-check-ticket-status.mcs.yml`)
+Each category gets its own folder under `evaluations/`:
+
+- **Parent set file**: `evaluations/{category-name}/{category-name}.mcs.yml` (e.g., `evaluations/topic-triggering/topic-triggering.mcs.yml`)
+- **Child test case files**: `evaluations/{category-name}/{short-slug}.mcs.yml` (e.g., `evaluations/topic-triggering/check-ticket-status.mcs.yml`)
 
 The `displayOrder` field is an epoch-milliseconds timestamp. Use the current time
 and increment by 1 for each test case to preserve ordering.
