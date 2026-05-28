@@ -1,0 +1,82 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+name: Validate samples
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "samples/**"
+      - "tools/validate_samples/**"
+      - ".github/workflows/validate-samples.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  validate:
+    name: Static validation (samples/)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install PyYAML
+
+      - name: Run validator
+        id: validate
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set +e
+          python -m tools.validate_samples --diff-base "$BASE_SHA" > validation.txt
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          cat validation.txt
+          # Always surface in step summary
+          {
+            echo "## Samples static validation"
+            echo ""
+            echo '```text'
+            cat validation.txt
+            echo '```'
+            echo ""
+            echo "_Runtime validation in Power Platform is a manual follow-up. See [tools/validate_samples/README.md](../blob/${{ github.event.pull_request.head.sha }}/tools/validate_samples/README.md)._"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Compose PR comment body
+        if: always()
+        run: |
+          {
+            echo "## Samples static validation"
+            echo ""
+            echo '```text'
+            cat validation.txt
+            echo '```'
+            echo ""
+            echo "_Runtime validation in Power Platform is a manual follow-up. See \`tools/validate_samples/README.md\`._"
+          } > validation-comment.md
+
+      - name: Post / update PR comment
+        if: always()
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: samples-validation
+          path: validation-comment.md
+
+      - name: Fail the job if validation failed
+        if: steps.validate.outputs.exit_code != '0'
+        run: |
+          echo "::error::Static validation failed. See the PR comment or job summary."
+          exit 1
