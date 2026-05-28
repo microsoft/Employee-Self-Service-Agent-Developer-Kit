@@ -357,3 +357,438 @@ class TestEdgeCases:
         runner_no_pp = _MinimalRunner(pp_admin=None, env_id=pp.MOCK_ENV_ID)
         results = _check_connection_token_health(runner_no_pp)
         assert results == []
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Owner-fallback tests
+#
+# Admin-scope listings of connections owned by other users frequently
+# return ``accountName: null``. WD-CONN-101 must fall through to
+# ``createdBy.userPrincipalName`` / ``createdBy.displayName`` so the
+# operator gets the most actionable owner identity available, instead
+# of an unhelpful "(unknown owner)".
+#
+# Observed live on 2026-05-21 in env PROD - ESS + WD + SNow: 7 Workday
+# connections with ``accountName: null`` but
+# ``createdBy.userPrincipalName: lmoulet@EmployeeHub.onmicrosoft.com``.
+# ───────────────────────────────────────────────────────────────────────
+
+
+class TestOwnerFallback:
+    @responses.activate
+    def test_falls_back_to_created_by_upn_when_account_name_null(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """``accountName`` is empty but ``createdBy.userPrincipalName``
+        is set → result shows the UPN, not "(unknown owner)"."""
+        from flightcheck.checks.workday import _check_connection_token_health
+
+        responses.add(**pp.list_connections(
+            env_id=runner.env_id,
+            connections=[
+                pp.workday_connection(
+                    status="Error",
+                    display_name="Workday",
+                    error_code="Unauthorized",
+                    error_message="Failed: AADSTS50173: grant expired.",
+                    account_name="",  # admin-scope shape
+                    created_by_upn="lmoulet@example.com",
+                    created_by_display_name="Laurent Moulet",
+                ),
+            ],
+        ))
+
+        results = _check_connection_token_health(runner)
+        wd_101 = _result_by_id(results, "WD-CONN-101")
+        assert "lmoulet@example.com" in wd_101.result
+        assert "lmoulet@example.com" in wd_101.remediation
+        assert "(unknown owner)" not in wd_101.result
+
+    @responses.activate
+    def test_falls_back_to_created_by_display_name_when_upn_also_missing(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """Owner-fallback chain: accountName empty AND createdBy.UPN
+        empty → use createdBy.displayName as the last actionable
+        identity."""
+        from flightcheck.checks.workday import _check_connection_token_health
+
+        responses.add(**pp.list_connections(
+            env_id=runner.env_id,
+            connections=[
+                pp.workday_connection(
+                    status="Error",
+                    display_name="Workday",
+                    error_code="Unauthorized",
+                    error_message="Failed: AADSTS50173: grant expired.",
+                    account_name="",
+                    created_by_display_name="Service Principal — Workday Importer",
+                ),
+            ],
+        ))
+
+        results = _check_connection_token_health(runner)
+        wd_101 = _result_by_id(results, "WD-CONN-101")
+        assert "Service Principal — Workday Importer" in wd_101.result
+
+    @responses.activate
+    def test_unknown_owner_when_all_identity_fields_missing(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """All owner-identity fields missing → preserve the
+        ``(unknown owner)`` literal so operators don't see a confusing
+        bare colon."""
+        from flightcheck.checks.workday import _check_connection_token_health
+
+        responses.add(**pp.list_connections(
+            env_id=runner.env_id,
+            connections=[
+                pp.workday_connection(
+                    status="Error",
+                    display_name="Workday",
+                    error_code="Unauthorized",
+                    error_message="Failed: AADSTS50173: grant expired.",
+                    account_name="",
+                    # createdBy.* not overridden — default builder
+                    # populates Mock User; clear with empty strings
+                    created_by_upn="",
+                    created_by_display_name="",
+                ),
+            ],
+        ))
+
+        results = _check_connection_token_health(runner)
+        wd_101 = _result_by_id(results, "WD-CONN-101")
+        assert "(unknown owner)" in wd_101.result
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Severity tiering + in-use cross-reference tests
+#
+# WD-CONN-101 splits unhealthy connections into two buckets:
+#   - FAILED: unhealthy AND referenced by a flow (will break runtime)
+#   - WARNING: unhealthy AND not referenced by any flow (cleanup task)
+#
+# When flow enumeration is unavailable (no flow mock registered,
+# get_flows raises, etc.) the check conservatively treats every
+# unhealthy connection as in-use → FAILED. This preserves backward
+# compatibility with the original tests above (which don't register
+# a flows mock) and avoids silently demoting real flow-breakers.
+# ───────────────────────────────────────────────────────────────────────
+
+
+@pytest.fixture
+def pp_client_with_flow_token(pp_client, fake_token: str):
+    """A pp_client with both _token AND _flow_token set, so the
+    in-use lookup (via pp.get_flows()) can be exercised by tests
+    that register a flow mock. The two tokens live on different
+    audiences in production — the test fixture reuses the same
+    fake_token for both since the responses library doesn't
+    validate the bearer value."""
+    pp_client._flow_token = fake_token
+    return pp_client
+
+
+@pytest.fixture
+def runner_with_flow_token(pp_client_with_flow_token) -> _MinimalRunner:
+    return _MinimalRunner(
+        pp_admin=pp_client_with_flow_token, env_id=pp.MOCK_ENV_ID
+    )
+
+
+class TestSeverityTiering:
+    @responses.activate
+    def test_config_needed_orphan_is_warning_not_failed(
+        self, runner_with_flow_token: _MinimalRunner
+    ) -> None:
+        """ConfigurationNeeded + no flow uses the connection ⇒ WARNING
+        (orphan cleanup), not FAILED. This is the 3-of-7 scenario
+        observed live in PROD - ESS + WD + SNow on 2026-05-21."""
+        from flightcheck.checks.workday import _check_connection_token_health
+
+        responses.add(**pp.list_connections(
+            env_id=runner_with_flow_token.env_id,
+            connections=[
+                pp.workday_connection(
+                    status="Error",
+                    display_name="Workday",
+                    connection_name="shared-workdaysoap-orphan-001",
+                    error_code="ConfigurationNeeded",
+                    error_message="Parameter value missing.",
+                    account_name="",
+                    created_by_upn="lmoulet@example.com",
+                ),
+            ],
+        ))
+        # No flows reference this connection ⇒ orphan.
+        responses.add(**pp.list_flows(
+            env_id=runner_with_flow_token.env_id,
+            flows=[],
+        ))
+
+        results = _check_connection_token_health(runner_with_flow_token)
+        wd_101 = _result_by_id(results, "WD-CONN-101")
+        assert wd_101.status == "Warning"
+        assert "orphan" in wd_101.result.lower()
+        assert "not referenced by any flow" in wd_101.result.lower()
+        assert "ConfigurationNeeded" in wd_101.result
+
+    @responses.activate
+    def test_config_needed_in_use_is_failed_not_warning(
+        self, runner_with_flow_token: _MinimalRunner
+    ) -> None:
+        """ConfigurationNeeded but a flow references the connection ⇒
+        FAILED (the flow will break at runtime — operator must finish
+        configuration)."""
+        from flightcheck.checks.workday import _check_connection_token_health
+
+        conn_name = "shared-workdaysoap-inuse-002"
+        responses.add(**pp.list_connections(
+            env_id=runner_with_flow_token.env_id,
+            connections=[
+                pp.workday_connection(
+                    status="Error",
+                    display_name="Workday",
+                    connection_name=conn_name,
+                    error_code="ConfigurationNeeded",
+                    error_message="Parameter value missing.",
+                ),
+            ],
+        ))
+        responses.add(**pp.list_flows(
+            env_id=runner_with_flow_token.env_id,
+            flows=[
+                pp.flow(
+                    display_name="Get Worker — Workday",
+                    connection_references={
+                        "shared_workdaysoap_01": pp.workday_connection_reference(
+                            connection_name=conn_name,
+                        ),
+                    },
+                ),
+            ],
+        ))
+
+        results = _check_connection_token_health(runner_with_flow_token)
+        wd_101 = _result_by_id(results, "WD-CONN-101")
+        assert wd_101.status == "Failed"
+        assert "referenced by a flow" in wd_101.result.lower()
+        assert "ConfigurationNeeded" in wd_101.result
+
+    @responses.activate
+    def test_auth_failure_with_no_flows_mock_remains_failed(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """No flows mock registered ⇒ in-use lookup returns None ⇒
+        conservative "treat as in-use" ⇒ FAILED. This is the
+        backwards-compat path for the original TestBadConfig tests."""
+        from flightcheck.checks.workday import _check_connection_token_health
+
+        responses.add(**pp.list_connections(
+            env_id=runner.env_id,
+            connections=[
+                pp.workday_connection(
+                    status="Error",
+                    display_name="Workday",
+                    error_code="Unauthorized",
+                    error_message="Failed: AADSTS50173: grant expired.",
+                ),
+            ],
+        ))
+
+        results = _check_connection_token_health(runner)
+        wd_101 = _result_by_id(results, "WD-CONN-101")
+        assert wd_101.status == "Failed"
+
+    @responses.activate
+    def test_mixed_orphan_and_in_use_emits_two_results(
+        self, runner_with_flow_token: _MinimalRunner
+    ) -> None:
+        """Mix of in-use AADSTS failure + orphan ConfigurationNeeded ⇒
+        TWO WD-CONN-101 results: one FAILED for the in-use auth-broken
+        one, one WARNING for the orphan unconfigured one."""
+        from flightcheck.checks.workday import _check_connection_token_health
+
+        in_use_name = "shared-workdaysoap-inuse-aaa"
+        orphan_name = "shared-workdaysoap-orphan-bbb"
+        responses.add(**pp.list_connections(
+            env_id=runner_with_flow_token.env_id,
+            connections=[
+                pp.workday_connection(
+                    status="Error",
+                    display_name="Workday",
+                    connection_name=in_use_name,
+                    error_code="Unauthorized",
+                    error_message="Failed: AADSTS50173: grant expired.",
+                    account_name="active.owner@example.com",
+                ),
+                pp.workday_connection(
+                    status="Error",
+                    display_name="Workday",
+                    connection_name=orphan_name,
+                    error_code="ConfigurationNeeded",
+                    error_message="Parameter value missing.",
+                    account_name="",
+                    created_by_upn="leftover.creator@example.com",
+                ),
+            ],
+        ))
+        responses.add(**pp.list_flows(
+            env_id=runner_with_flow_token.env_id,
+            flows=[
+                pp.flow(
+                    display_name="Active Workday Flow",
+                    connection_references={
+                        "shared_workdaysoap_01": pp.workday_connection_reference(
+                            connection_name=in_use_name,
+                        ),
+                    },
+                ),
+            ],
+        ))
+
+        results = _check_connection_token_health(runner_with_flow_token)
+        wd_101_results = [r for r in results if r.checkpoint_id == "WD-CONN-101"]
+        assert len(wd_101_results) == 2, (
+            f"Expected one FAILED + one WARNING, got: "
+            f"{[(r.status, r.result[:60]) for r in wd_101_results]}"
+        )
+        statuses = {r.status for r in wd_101_results}
+        assert statuses == {"Failed", "Warning"}
+
+        failed = next(r for r in wd_101_results if r.status == "Failed")
+        warning = next(r for r in wd_101_results if r.status == "Warning")
+        # FAILED bucket has the in-use connection; WARNING has the orphan.
+        assert "AADSTS50173" in failed.result
+        assert "active.owner@example.com" in failed.result
+        assert "ConfigurationNeeded" not in failed.result
+        assert "ConfigurationNeeded" in warning.result
+        assert "leftover.creator@example.com" in warning.result
+        assert "AADSTS50173" not in warning.result
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Remediation content tests
+#
+# The whole point of WD-CONN-101 is to give the operator a finding they
+# can act on without leaving the FlightCheck output. These tests pin
+# the actionable elements: connection id suffix, owner, creation date,
+# deep link to the maker portal, and the pre-filled PowerShell
+# Remove-AdminPowerAppConnection command for orphan cleanup.
+# ───────────────────────────────────────────────────────────────────────
+
+
+class TestRemediationContent:
+    @responses.activate
+    def test_orphan_remediation_contains_powershell_delete_command(
+        self, runner_with_flow_token: _MinimalRunner
+    ) -> None:
+        """Orphan connections get a pre-filled Remove-AdminPowerAppConnection
+        command with env id, connection name, and connector name."""
+        from flightcheck.checks.workday import _check_connection_token_health
+
+        conn_name = "shared-workdaysoap-de1e7e-01"
+        responses.add(**pp.list_connections(
+            env_id=runner_with_flow_token.env_id,
+            connections=[
+                pp.workday_connection(
+                    status="Error",
+                    display_name="Workday",
+                    connection_name=conn_name,
+                    error_code="ConfigurationNeeded",
+                    error_message="Parameter value missing.",
+                ),
+            ],
+        ))
+        responses.add(**pp.list_flows(env_id=runner_with_flow_token.env_id, flows=[]))
+
+        results = _check_connection_token_health(runner_with_flow_token)
+        wd_101 = _result_by_id(results, "WD-CONN-101")
+        assert wd_101.status == "Warning"
+        assert "Remove-AdminPowerAppConnection" in wd_101.remediation
+        assert f"-EnvironmentName {runner_with_flow_token.env_id}" in wd_101.remediation
+        assert f"-ConnectionName {conn_name}" in wd_101.remediation
+        assert "-ConnectorName shared_workdaysoap" in wd_101.remediation
+
+    @responses.activate
+    def test_in_use_auth_failed_remediation_contains_maker_url(
+        self, runner_with_flow_token: _MinimalRunner
+    ) -> None:
+        """In-use auth-failed connections must include the maker portal
+        URL where the owner can re-authenticate."""
+        from flightcheck.checks.workday import _check_connection_token_health
+
+        conn_name = "shared-workdaysoap-inuse-cc"
+        responses.add(**pp.list_connections(
+            env_id=runner_with_flow_token.env_id,
+            connections=[
+                pp.workday_connection(
+                    status="Error",
+                    display_name="Workday",
+                    connection_name=conn_name,
+                    error_code="Unauthorized",
+                    error_message="Failed: AADSTS50173: grant expired.",
+                    account_name="owner@example.com",
+                ),
+            ],
+        ))
+        responses.add(**pp.list_flows(
+            env_id=runner_with_flow_token.env_id,
+            flows=[
+                pp.flow(
+                    display_name="Workday Flow",
+                    connection_references={
+                        "ref": pp.workday_connection_reference(connection_name=conn_name),
+                    },
+                ),
+            ],
+        ))
+
+        results = _check_connection_token_health(runner_with_flow_token)
+        wd_101 = _result_by_id(results, "WD-CONN-101")
+        assert wd_101.status == "Failed"
+        maker_url = (
+            f"https://make.powerautomate.com/environments/"
+            f"{runner_with_flow_token.env_id}/connections"
+        )
+        assert maker_url in wd_101.remediation
+        # Auth-failed in-use must NOT suggest the delete command — it's
+        # in use, deleting would break the flow.
+        assert "Remove-AdminPowerAppConnection" not in wd_101.remediation
+
+    @responses.activate
+    def test_result_includes_id_suffix_owner_and_date(
+        self, runner_with_flow_token: _MinimalRunner
+    ) -> None:
+        """Every detail line must include the connection's short id
+        suffix (so the operator can tell apart 3 connections all named
+        "Workday"), the owner, and the creation date."""
+        from flightcheck.checks.workday import _check_connection_token_health
+
+        # Connection name embeds a recognizable 8-hex segment.
+        conn_name = "shared-workdaysoap-deadbeef-2222-3333-4444-555555555555"
+        responses.add(**pp.list_connections(
+            env_id=runner_with_flow_token.env_id,
+            connections=[
+                pp.workday_connection(
+                    status="Error",
+                    display_name="Workday",
+                    connection_name=conn_name,
+                    error_code="ConfigurationNeeded",
+                    error_message="Parameter value missing.",
+                    account_name="",
+                    created_by_upn="creator@example.com",
+                    created_time="2026-02-17T06:08:43.0592278Z",
+                ),
+            ],
+        ))
+        responses.add(**pp.list_flows(env_id=runner_with_flow_token.env_id, flows=[]))
+
+        results = _check_connection_token_health(runner_with_flow_token)
+        wd_101 = _result_by_id(results, "WD-CONN-101")
+        # Short id suffix from the connection name.
+        assert "id=deadbeef" in wd_101.result
+        # Owner fell through to createdBy.UPN.
+        assert "owner=creator@example.com" in wd_101.result
+        # Creation date in YYYY-MM-DD form (no time component).
+        assert "created=2026-02-17" in wd_101.result

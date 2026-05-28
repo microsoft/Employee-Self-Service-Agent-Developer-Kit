@@ -182,6 +182,10 @@ def workday_connection(
     error_code: str | None = None,
     error_message: str | None = None,
     account_name: str | None = None,
+    connection_name: str | None = None,
+    created_by_upn: str | None = None,
+    created_by_display_name: str | None = None,
+    created_time: str | None = None,
 ) -> dict[str, Any]:
     """Convenience: a Workday SOAP connection. The check filters by
     'workday' substring in apiId+displayName, so both the api_id and
@@ -195,20 +199,52 @@ def workday_connection(
 
     `account_name` overrides the connection's ``properties.accountName``
     field — used by WD-CONN-101's remediation message to tell the
-    operator exactly which user's grant needs refreshing.
+    operator exactly which user's grant needs refreshing. Pass an
+    empty string ``""`` to simulate the admin-scope shape where
+    ``accountName`` is null/empty (forces the check's owner-fallback
+    chain through ``createdBy.userPrincipalName`` /
+    ``createdBy.displayName``).
+
+    `connection_name` overrides the connection record's ``name`` field
+    (the GUID-suffixed identifier like
+    ``shared-workdaysoap-ac42a2e7-...``) so tests can pin a specific
+    name that matches a flow's ``connectionReferences.{ref}.connectionName``
+    for in-use cross-referencing.
+
+    `created_by_upn` / `created_by_display_name` override the
+    ``properties.createdBy.userPrincipalName`` /
+    ``properties.createdBy.displayName`` fields used by WD-CONN-101's
+    owner-fallback chain when ``accountName`` is null.
+
+    `created_time` overrides the ``properties.createdTime`` field used
+    by WD-CONN-101 to surface a creation date in the operator's view.
     """
-    extra: dict[str, Any] | None = None
+    extra: dict[str, Any] = {}
     if account_name is not None:
-        extra = {"accountName": account_name}
+        extra["accountName"] = account_name
+    if created_time is not None:
+        extra["createdTime"] = created_time
+    if created_by_upn is not None or created_by_display_name is not None:
+        created_by: dict[str, Any] = {
+            "id": "00000000-0000-0000-0000-000000002222",
+            "type": "User",
+            "tenantId": "00000000-0000-0000-0000-000000001111",
+        }
+        if created_by_upn is not None:
+            created_by["userPrincipalName"] = created_by_upn
+            created_by["email"] = created_by_upn
+        if created_by_display_name is not None:
+            created_by["displayName"] = created_by_display_name
+        extra["createdBy"] = created_by
     return connection(
-        name=f"workday-{status.lower()}-{display_name[:8].lower().replace(' ', '-')}",
+        name=connection_name or f"workday-{status.lower()}-{display_name[:8].lower().replace(' ', '-')}",
         display_name=display_name,
         api_name="shared_workdaysoap",
         status=status,
         error_target=error_target,
         error_code=error_code,
         error_message=error_message,
-        extra_properties=extra,
+        extra_properties=extra or None,
     )
 
 
@@ -231,6 +267,7 @@ def flow(
     env_id: str = MOCK_ENV_ID,
     display_name: str = "Workday Get Worker",
     state: str = "Started",
+    connection_references: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Build a single PowerApps flow record.
 
@@ -243,8 +280,23 @@ def flow(
     default) would serve under. Callers building a flow against a
     specific environment should pass the same env_id they pass to
     `list_flows()`.
+
+    `connection_references` populates ``properties.connectionReferences``,
+    a dict keyed by ref-name → ``{"apiId": ..., "connectionName": ...}``.
+    Used by WD-CONN-101 to cross-reference unhealthy Workday
+    connections against flows that depend on them (in-use ⇒ FAILED,
+    orphan ⇒ WARNING). Pass an empty dict / None to model a flow with
+    no connection references (i.e. doesn't claim any of the test's
+    Workday connections).
     """
     effective_id = flow_id or "00000000-0000-0000-0000-000000007101"
+    props: dict[str, Any] = {
+        "displayName": display_name,
+        "state": state,
+        "createdTime": "2026-01-01T00:00:00.000Z",
+    }
+    if connection_references is not None:
+        props["connectionReferences"] = dict(connection_references)
     return {
         "name": effective_id,
         "id": (
@@ -252,11 +304,35 @@ def flow(
             f"/flows/{effective_id}"
         ),
         "type": "Microsoft.ProcessSimple/environments/flows",
-        "properties": {
-            "displayName": display_name,
-            "state": state,
-            "createdTime": "2026-01-01T00:00:00.000Z",
-        },
+        "properties": props,
+    }
+
+
+def workday_connection_reference(
+    *,
+    connection_name: str,
+    api_name: str = "shared_workdaysoap",
+) -> dict[str, Any]:
+    """Build a single ``connectionReferences`` entry binding a flow to
+    a specific Workday connection record.
+
+    Returned shape matches the production response: a dict with at
+    least ``apiId`` (connector path) and ``connectionName`` (the
+    connection record's GUID-suffixed name). Wrap one or more of these
+    in a dict keyed by ref-name and pass to ``flow(connection_references=...)``.
+    """
+    return {
+        "apiId": (
+            f"/providers/Microsoft.PowerApps/scopes/admin/environments/"
+            f"{MOCK_ENV_ID}/apis/{api_name}"
+        ),
+        "connectionName": connection_name,
+        "id": (
+            f"/providers/Microsoft.PowerApps/scopes/admin/environments/"
+            f"{MOCK_ENV_ID}/apis/{api_name}/connections/{connection_name}"
+        ),
+        "source": "Embedded",
+        "tier": "NotSpecified",
     }
 
 

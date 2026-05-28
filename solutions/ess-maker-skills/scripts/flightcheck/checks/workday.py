@@ -607,7 +607,17 @@ TOKEN_HEALTH_ERROR_CODES = {
     "AADSTS50076": "MFA challenge required. Have the connection owner re-authenticate and complete MFA.",
     "Unauthorized": "Power Platform marked the credential unauthorized. Re-authenticate the connection.",
     "Unauthenticated": "Connection is not authenticated. Have the connection owner sign in to Power Platform.",
+    "ConfigurationNeeded": "Connection was created but never fully configured (required parameter missing). Either finish setup in Power Platform or delete the unbound connection.",
 }
+
+# Error-code values from TOKEN_HEALTH_ERROR_CODES that indicate the
+# connection was created but never configured (vs. lapsed auth on a
+# previously-working connection). Used by _classify_token_health_error
+# to set the severity/remediation class.
+_CONFIG_ERROR_CODES = frozenset({"ConfigurationNeeded"})
+# Error-code values that indicate a previously-working auth that has
+# lapsed and needs the owner to re-authenticate.
+_AUTH_ERROR_CODES = frozenset({"Unauthorized", "Unauthenticated"})
 
 # Matches Entra error-code identifiers like "AADSTS50173" or "AADSTS700082"
 # anywhere in a string. Anchored to a 5-7 digit AADSTS prefix to avoid
@@ -617,10 +627,12 @@ TOKEN_HEALTH_ERROR_CODES = {
 _AADSTS_CODE_RE = re.compile(r"\b(AADSTS\d{5,7})\b")
 
 
-def _classify_token_health_error(conn: dict) -> tuple[str | None, str | None, str]:
+def _classify_token_health_error(
+    conn: dict,
+) -> tuple[str | None, str | None, str, str]:
     """Inspect ``statuses[0].error`` on a connection record and return
-    ``(reported_code, reported_message, hint)`` for token-health
-    classification.
+    ``(reported_code, reported_message, hint, severity_class)`` for
+    token-health classification.
 
     The PowerApps connections API includes a structured ``error`` block
     on non-Connected statuses (target, code, message). The actual
@@ -639,19 +651,35 @@ def _classify_token_health_error(conn: dict) -> tuple[str | None, str | None, st
          code/message the API returned so the operator can search
          for it in MS Learn.
 
-    Returns ``(None, None, no-status-hint)`` only when the entire
-    ``statuses`` array is missing or empty.
+    ``severity_class`` is one of:
+      - ``"config"`` — connection was never fully configured (e.g.
+        ``ConfigurationNeeded`` with ``Parameter value missing``).
+        Different remediation path: finish setup OR delete the
+        orphan; "re-authenticate" doesn't apply to something that
+        was never authenticated.
+      - ``"auth"`` — auth grant on a previously-working connection
+        has lapsed (any AADSTS code, ``Unauthorized``,
+        ``Unauthenticated``). Owner must re-authenticate.
+      - ``"unknown"`` — error block present but neither config nor
+        auth shape recognized. Treated as auth-style in remediation
+        but flagged as needing investigation.
+
+    Returns ``(None, None, no-status-hint, "unknown")`` only when the
+    entire ``statuses`` array is missing or empty.
 
     Cited consumer: ``_check_connection_token_health`` (this file).
     Source (validated): ``tests/fixtures/cassettes/flightcheck_pp_admin.yaml``
     lines 2661-2680 capture the live AADSTS50173-in-message shape;
     lines 2682-2700+ capture the ``Unauthenticated`` ("never signed in")
     shape; the production fields used (``status`` / ``target`` / ``code``
-    / ``message``) all appear in the cassette.
+    / ``message``) all appear in the cassette. The ``ConfigurationNeeded``
+    shape was observed live on 2026-05-21 in env
+    ``PROD - ESS + WD + SNow`` on 3-of-7 Workday SOAP connections that
+    were created but never had their ``sku`` parameter populated.
     """
     statuses = conn.get("properties", {}).get("statuses", [])
     if not isinstance(statuses, list) or not statuses:
-        return None, None, "No status information returned by Power Platform."
+        return None, None, "No status information returned by Power Platform.", "unknown"
     err = statuses[0].get("error") or {}
     raw_code = err.get("code")
     raw_message = err.get("message") or ""
@@ -664,7 +692,7 @@ def _classify_token_health_error(conn: dict) -> tuple[str | None, str | None, st
             aadsts_code,
             "Unrecognized AADSTS error. Re-authenticate the connection in Power Platform.",
         )
-        return aadsts_code, raw_message, hint
+        return aadsts_code, raw_message, hint, "auth"
 
     # Tier 2: fall back to the coarser error.code value.
     if raw_code:
@@ -672,13 +700,19 @@ def _classify_token_health_error(conn: dict) -> tuple[str | None, str | None, st
             raw_code,
             "Unrecognized token-health error. Re-authenticate the connection in Power Platform.",
         )
-        return raw_code, raw_message or None, hint
+        if raw_code in _CONFIG_ERROR_CODES:
+            severity = "config"
+        elif raw_code in _AUTH_ERROR_CODES:
+            severity = "auth"
+        else:
+            severity = "unknown"
+        return raw_code, raw_message or None, hint, severity
 
     # Tier 3: error block present but neither an AADSTS code nor a code field.
     return None, raw_message or None, (
         "Connection reported an error but Power Platform did not include a "
         "structured error code. Re-authenticate the connection."
-    )
+    ), "unknown"
 
 
 def _check_connection_token_health(runner) -> list[CheckResult]:
@@ -688,22 +722,43 @@ def _check_connection_token_health(runner) -> list[CheckResult]:
     ``Connected`` state. WD-CONN-101 goes one level deeper: for any
     Workday connection NOT in ``Connected`` state, it parses the
     structured ``statuses[0].error.{code,message}`` block the
-    PowerApps connections API returns and surfaces a remediation
-    pinned to the specific Entra error code (e.g. AADSTS50173 grant
-    expired vs AADSTS70008 refresh-token-expired-due-to-inactivity vs
-    AADSTS50076 MFA challenge required). The customer-facing failure
-    mode this catches: a Workday SOAP connection that worked yesterday
-    silently flips to 401/403 at runtime because the connection
-    creator's Entra grant lapsed — WD-CONN-001 says ``Error`` and
-    points at "re-authenticate", WD-CONN-101 names the user, the
-    grant code, and what specifically expired.
+    PowerApps connections API returns, classifies the failure into
+    config-needed vs lapsed-auth vs unknown, cross-references each
+    unhealthy connection against the env's flow connection-references
+    to determine in-use vs orphan, and emits up to two CheckResults:
+
+      - FAILED — connections that are unhealthy AND referenced by an
+        active flow (these will break flow execution at runtime).
+      - WARNING — connections that are unhealthy but not referenced by
+        any flow (cleanup task: orphan leftovers from solution
+        imports, abandoned manual creation attempts, etc.).
+
+    Each entry in the results carries enough operator-actionable
+    detail to fix the issue without leaving the FlightCheck output:
+
+      - Connection display name + short id suffix (so operators can
+        disambiguate between 7 connections all named "Workday").
+      - Owner — falls back to ``createdBy.userPrincipalName`` /
+        ``createdBy.displayName`` when ``accountName`` is null
+        (frequently the case for admin-scope listings of connections
+        owned by other users).
+      - Creation date — helps the operator spot stale records.
+      - Deep link to the maker portal connections page.
+      - For config-needed orphans: the exact
+        ``Remove-AdminPowerAppConnection`` PowerShell command,
+        pre-filled with env id, connection name, and connector name.
+      - For lapsed-auth connections: the maker URL the owner needs
+        to visit to re-authenticate, plus the per-AADSTS-code hint
+        from TOKEN_HEALTH_ERROR_CODES.
 
     Mock tier (validated): backed by ``tests/mocks/pp_admin.py``
     (MOCK_STATUS = "validated", cassette
     ``tests/fixtures/cassettes/flightcheck_pp_admin.yaml``). Same
     endpoint as WD-CONN-001 — ``GET /providers/Microsoft.PowerApps/
     scopes/admin/environments/{env_id}/connections`` — so no new
-    cassette is required.
+    cassette is required. The flow-listing step uses
+    ``pp.get_flows(env_id)`` against the validated Flow admin
+    endpoint (also in the cassette).
 
     Scope notes (intentionally narrower than the issue suggested):
       * The runtime ESS Workday integration uses WS-Security
@@ -773,12 +828,18 @@ def _check_connection_token_health(runner) -> list[CheckResult]:
         ))
         return results
 
-    unhealthy: list[tuple[dict, str | None, str | None, str]] = []
+    unhealthy: list[dict] = []
     for c in wd_conns:
         if _get_conn_status(c) == "Connected":
             continue
-        code, message, hint = _classify_token_health_error(c)
-        unhealthy.append((c, code, message, hint))
+        code, message, hint, severity = _classify_token_health_error(c)
+        unhealthy.append({
+            "conn": c,
+            "code": code,
+            "message": message,
+            "hint": hint,
+            "severity": severity,
+        })
 
     if not unhealthy:
         results.append(CheckResult(
@@ -790,31 +851,284 @@ def _check_connection_token_health(runner) -> list[CheckResult]:
         ))
         return results
 
-    detail_lines: list[str] = []
-    remediation_lines: list[str] = []
-    for c, code, message, hint in unhealthy:
-        props = c.get("properties", {})
-        name = props.get("displayName", "(unnamed)")
-        owner = props.get("accountName", "(unknown owner)")
-        code_str = code or "no-error-code"
-        msg_excerpt = (message or "").split("\n", 1)[0][:140]
-        detail_lines.append(
-            f"'{name}' (owner={owner}): {code_str} — {msg_excerpt}".rstrip(" —")
-        )
-        remediation_lines.append(f"'{name}' (owner={owner}): {hint}")
+    # In-use cross-reference. None ⇒ couldn't determine (treat all as
+    # in-use for safety; better to over-report FAILED than to silently
+    # demote a real flow-breaker to WARNING).
+    in_use_names = _get_in_use_workday_connection_names(runner)
 
-    results.append(CheckResult(
-        checkpoint_id="WD-CONN-101", category="Workday",
-        priority=Priority.HIGH.value, status=Status.FAILED.value,
-        description="Workday connection token health",
-        result=(
-            f"{len(unhealthy)} of {len(wd_conns)} Workday connection(s) have "
-            f"unhealthy auth state: " + "; ".join(detail_lines)
-        ),
-        remediation=" | ".join(remediation_lines),
-        doc_link=f"{DOC_BASE}/workday#step-3-connection-references",
-    ))
+    failed_entries: list[dict] = []
+    warning_entries: list[dict] = []
+    for entry in unhealthy:
+        conn_name = entry["conn"].get("name", "")
+        if in_use_names is None:
+            is_in_use = True
+        else:
+            is_in_use = conn_name in in_use_names
+        entry["in_use"] = is_in_use
+        entry["in_use_determined"] = in_use_names is not None
+        if is_in_use:
+            failed_entries.append(entry)
+        else:
+            warning_entries.append(entry)
+
+    if failed_entries:
+        details = [_format_unhealthy_detail(e) for e in failed_entries]
+        remediations = [_format_unhealthy_remediation(e, env_id) for e in failed_entries]
+        results.append(CheckResult(
+            checkpoint_id="WD-CONN-101", category="Workday",
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            description="Workday connection token health",
+            result=(
+                f"{len(failed_entries)} of {len(wd_conns)} Workday connection(s) "
+                f"have unhealthy auth state and are referenced by a flow: "
+                + "; ".join(details)
+            ),
+            remediation=" | ".join(remediations),
+            doc_link=f"{DOC_BASE}/workday#step-3-connection-references",
+        ))
+
+    if warning_entries:
+        details = [_format_unhealthy_detail(e) for e in warning_entries]
+        remediations = [_format_unhealthy_remediation(e, env_id) for e in warning_entries]
+        results.append(CheckResult(
+            checkpoint_id="WD-CONN-101", category="Workday",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description="Workday connection token health",
+            result=(
+                f"{len(warning_entries)} orphan Workday connection(s) "
+                f"(unhealthy but not referenced by any flow — cleanup task): "
+                + "; ".join(details)
+            ),
+            remediation=" | ".join(remediations),
+            doc_link=f"{DOC_BASE}/workday#step-3-connection-references",
+        ))
+
     return results
+
+
+# ── Operator-actionable formatting helpers for WD-CONN-101 ────────────
+#
+# Each unhealthy connection emits two strings into the CheckResult:
+#
+#   1. detail   — short identifier line that goes into the ``result``
+#                 (the "what's broken") field.
+#   2. remediation — actionable hint that goes into the ``remediation``
+#                    field (the "what to do about it") field, including
+#                    deep links and pre-filled PowerShell commands.
+#
+# The split exists because in the FlightCheck report, ``result`` shows
+# in the summary table and ``remediation`` shows in the expandable
+# detail — operators scan the summary first to triage, then read the
+# remediation when they're ready to act.
+
+
+def _extract_conn_id_suffix(name: str) -> str:
+    """Return a short stable identifier from a connection's full name.
+
+    PowerApps connection names follow the shape
+    ``shared-<connector>-<guid>``, e.g.
+    ``shared-workdaysoap-ac42a2e7-2ebf-4217-a7d7-0488d0fd48da``. We
+    return the first 8-hex-digit segment from the GUID (e.g.
+    ``ac42a2e7``) so operators can disambiguate between connections
+    that all share the display name "Workday".
+    """
+    match = re.search(r"\b([0-9a-f]{8})\b", name.lower())
+    if match:
+        return match.group(1)
+    # Fallback: last 8 chars of whatever we got.
+    return name[-8:] if len(name) >= 8 else name or "(no-id)"
+
+
+def _resolve_owner(props: dict) -> str:
+    """Return the most useful owner identity available on a connection.
+
+    Admin-scope connection listings (the endpoint WD-CONN-101 uses)
+    frequently return ``accountName: null`` even when the connection
+    has a clear creator — observed live on 2026-05-21 across 7 Workday
+    connections owned by ``lmoulet@EmployeeHub.onmicrosoft.com`` where
+    ``accountName`` was null but ``createdBy.userPrincipalName`` was
+    populated.
+
+    Falls back through ``accountName`` → ``createdBy.userPrincipalName``
+    → ``createdBy.displayName`` → ``"(unknown owner)"`` so the
+    operator gets the most actionable identity available.
+    """
+    account = props.get("accountName")
+    if account:
+        return account
+    created_by = props.get("createdBy") or {}
+    upn = created_by.get("userPrincipalName")
+    if upn:
+        return upn
+    display = created_by.get("displayName")
+    if display:
+        return display
+    return "(unknown owner)"
+
+
+def _format_created_date(props: dict) -> str:
+    """Return the YYYY-MM-DD portion of ``createdTime`` for compact display."""
+    ts = props.get("createdTime") or ""
+    if len(ts) >= 10 and ts[4] == "-" and ts[7] == "-":
+        return ts[:10]
+    return "(unknown date)"
+
+
+def _extract_connector_name(conn: dict) -> str:
+    """Extract the connector type name (e.g. ``shared_workdaysoap``)
+    from the connection's ``apiId`` path. Used to build the
+    ``-ConnectorName`` argument of the PowerShell delete command."""
+    api_id = conn.get("properties", {}).get("apiId", "")
+    match = re.search(r"/apis/([^/]+)/?$", api_id)
+    return match.group(1) if match else "shared_workdaysoap"
+
+
+def _maker_connections_url(env_id: str) -> str:
+    """Direct link to the Power Automate maker connections page.
+
+    We use make.powerautomate.com over make.powerapps.com because the
+    PowerAutomate experience renders the env-scoped connections list
+    more reliably across the multiple PPAC IA churns observed in
+    2024-2026.
+    """
+    return f"https://make.powerautomate.com/environments/{env_id}/connections"
+
+
+def _format_unhealthy_detail(entry: dict) -> str:
+    """Single-connection detail line for the ``result`` field.
+
+    Shape: ``'<display>' (id=<suffix>, owner=<owner>, created=<date>):
+    <code> — <message>``
+    """
+    c = entry["conn"]
+    props = c.get("properties", {})
+    name = props.get("displayName", "(unnamed)")
+    suffix = _extract_conn_id_suffix(c.get("name", ""))
+    owner = _resolve_owner(props)
+    date = _format_created_date(props)
+    code = entry["code"] or "no-error-code"
+    msg_excerpt = (entry["message"] or "").split("\n", 1)[0][:140]
+    return (
+        f"'{name}' (id={suffix}, owner={owner}, created={date}): "
+        f"{code} — {msg_excerpt}"
+    ).rstrip(" —")
+
+
+def _format_unhealthy_remediation(entry: dict, env_id: str) -> str:
+    """Single-connection remediation hint for the ``remediation`` field.
+
+    Template varies by severity_class × in_use:
+      - config + in-use:    owner must finish setup (flow depends on this)
+      - config + orphan:    PowerShell delete command (never used, safe to remove)
+      - auth + in-use:      owner must re-authenticate (admins can't re-auth others)
+      - auth + orphan:      owner re-auth OR PowerShell delete
+      - unknown + in-use:   owner investigates (we don't know what's wrong)
+      - unknown + orphan:   owner investigates OR PowerShell delete
+    """
+    c = entry["conn"]
+    props = c.get("properties", {})
+    name = props.get("displayName", "(unnamed)")
+    suffix = _extract_conn_id_suffix(c.get("name", ""))
+    owner = _resolve_owner(props)
+    severity = entry["severity"]
+    hint = entry["hint"]
+    in_use = entry["in_use"]
+    conn_name = c.get("name", "")
+    connector = _extract_connector_name(c)
+    maker_url = _maker_connections_url(env_id)
+    delete_cmd = (
+        f"Remove-AdminPowerAppConnection -EnvironmentName {env_id} "
+        f"-ConnectionName {conn_name} -ConnectorName {connector}"
+    )
+    prefix = f"'{name}' (id={suffix}, owner={owner}):"
+
+    if severity == "config":
+        if in_use:
+            return (
+                f"{prefix} {hint} Connection is referenced by an active flow — "
+                f"owner ({owner}) must finish setup at {maker_url}; admins "
+                f"cannot configure on owner's behalf."
+            )
+        return (
+            f"{prefix} {hint} Connection is not referenced by any flow "
+            f"(likely solution-import leftover). Delete as Power Platform "
+            f"Admin: `{delete_cmd}`"
+        )
+
+    if severity == "auth":
+        if in_use:
+            return (
+                f"{prefix} {hint} Connection is referenced by an active flow — "
+                f"owner ({owner}) must re-authenticate at {maker_url}; admins "
+                f"cannot re-auth on owner's behalf (would change the identity "
+                f"the flow runs under)."
+            )
+        return (
+            f"{prefix} {hint} Connection is not referenced by any flow. "
+            f"Either owner re-authenticates at {maker_url} or delete as "
+            f"orphan: `{delete_cmd}`"
+        )
+
+    # unknown
+    if in_use:
+        return (
+            f"{prefix} {hint} Connection is referenced by an active flow — "
+            f"owner ({owner}) should investigate at {maker_url}."
+        )
+    return (
+        f"{prefix} {hint} Connection is not referenced by any flow. Either "
+        f"owner investigates at {maker_url} or delete as orphan: `{delete_cmd}`"
+    )
+
+
+def _get_in_use_workday_connection_names(runner) -> set[str] | None:
+    """Return the set of Workday connection names referenced by any
+    flow in the environment, or ``None`` if we couldn't determine it.
+
+    Each flow's ``properties.connectionReferences.{ref_key}`` carries
+    the apiId of the connector and the bound connection's name. We
+    collect every connection name where the apiId contains 'workday'.
+
+    ``None`` ⇒ couldn't enumerate flows (flow API failed, returned
+    insufficient_permissions, raised). The caller treats this as
+    "unknown ⇒ assume in-use" so we don't silently demote real
+    flow-breakers to WARNING.
+    """
+    pp = getattr(runner, "pp_admin", None)
+    env_id = getattr(runner, "env_id", None)
+    if not pp or not env_id:
+        return None
+    try:
+        flows = pp.get_flows(env_id)
+    except Exception:
+        return None
+    if isinstance(flows, dict) and "_error" in flows:
+        return None
+    if not isinstance(flows, list):
+        return None
+    in_use: set[str] = set()
+    for f in flows:
+        refs = (f.get("properties") or {}).get("connectionReferences") or {}
+        if not isinstance(refs, dict):
+            continue
+        for _ref_key, ref in refs.items():
+            if not isinstance(ref, dict):
+                continue
+            api_id = (
+                ref.get("apiId")
+                or (ref.get("api") or {}).get("name", "")
+                or ""
+            )
+            if "workday" not in api_id.lower():
+                continue
+            conn_name = (
+                ref.get("connectionName")
+                or (ref.get("connection") or {}).get("name", "")
+                or ""
+            )
+            if conn_name:
+                in_use.add(conn_name)
+    return in_use
 
 
 def _check_flow_status(runner, wd_flows: list) -> list[CheckResult]:
