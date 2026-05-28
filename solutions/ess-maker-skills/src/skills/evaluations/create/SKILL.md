@@ -147,6 +147,7 @@ Use these thresholds per category:
 | Responsible AI | 0.7 | Standard match — refusal responses should be consistent |
 | Sensitive Topics | 0.7 | Standard match — escalation responses should be consistent |
 | Emotional Intelligence | 0.7 | Standard match — empathy acknowledgment should be clear |
+| General Knowledge | 0.7 | Standard match — knowledge answers should surface the key information |
 | Integration Data | 0.7 | Standard match — data responses should match expected fields |
 
 ```yaml
@@ -399,6 +400,10 @@ For each integration topic, generate a mix of positive, boundary, and negative c
 #### GeneralKnowledge
 
 **Only generate if** the user confirmed they have knowledge sources.
+
+Include both `GeneralQualityGrader` and `CompareMeaningGrader` (threshold **0.7**) in
+the parent EvaluationSet — knowledge answers should surface the key information
+from the agent's knowledge sources.
 
 1. Generate 10-15 general questions relevant to the agent's domain
 2. Include `expectedOutput` describing the key information the agent should provide
