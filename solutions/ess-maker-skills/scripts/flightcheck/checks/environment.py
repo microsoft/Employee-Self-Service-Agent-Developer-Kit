@@ -145,6 +145,24 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
       - Connections with no corresponding connection reference
         (unbound connection).
 
+    Terminology:
+      **Orphan reference** (FAIL) — A connection reference in the solution
+      points to a connection ID that no longer exists in the environment.
+      This occurs when a connection was deleted, the solution was imported
+      from another environment, or a connection was recreated with a new ID.
+      Topics/flows using this reference will fail at runtime with auth errors.
+
+      **Unbound reference** (FAIL) — A connection reference exists in the
+      solution but has no connection ID set (empty ``connectionid`` field).
+      This occurs after a solution import where references were never
+      configured, or a new reference was added but not bound. Topics/flows
+      using this reference will fail immediately.
+
+      **Unbound connection** (WARN) — A connection exists in the environment
+      but no connection reference points to it. Common after troubleshooting
+      (test connections), re-binding references to newer connections, or
+      manual connection creation. No runtime impact, but adds clutter.
+
     Signal:
       PASS  — all references bound to existing, connected connections.
       WARN  — unbound connections exist (may be intentional).
