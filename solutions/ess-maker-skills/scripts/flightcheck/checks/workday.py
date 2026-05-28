@@ -31,6 +31,7 @@ from defusedxml import ElementTree as ET
 from defusedxml.common import DefusedXmlException
 
 from ..runner import CheckResult, Status, Priority
+from .connections import check_connector_connections, filter_connections_by_connector, get_connection_status
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
 
@@ -482,93 +483,17 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
 
 def _check_connections(runner) -> list[CheckResult]:
     """Validate Workday connection references in Power Platform."""
-    results = []
-    pp = runner.pp_admin
-    env_id = runner.env_id
-
-    if not env_id:
-        return results
-
-    try:
-        all_conns = pp.get_connections(env_id)
-        if isinstance(all_conns, dict) and "_error" in all_conns:
-            results.append(CheckResult(
-                checkpoint_id="WD-CONN-001", category="Workday",
-                priority=Priority.HIGH.value, status=Status.WARNING.value,
-                description="Workday connections",
-                result=f"Unable to list connections: {all_conns['_error']}",
-                remediation="Requires Power Platform Admin role.",
-            ))
-            return results
-
-        wd_conns = [
-            c for c in all_conns
-            if "workday" in (
-                c.get("properties", {}).get("apiId", "") +
-                c.get("properties", {}).get("displayName", "")
-            ).lower()
-        ]
-
-        if wd_conns:
-            connected = [
-                c for c in wd_conns
-                if _get_conn_status(c) == "Connected"
-            ]
-            errored = [
-                c for c in wd_conns
-                if _get_conn_status(c) != "Connected"
-            ]
-
-            results.append(CheckResult(
-                checkpoint_id="WD-CONN-001", category="Workday",
-                priority=Priority.HIGH.value,
-                status=Status.PASSED.value if connected else Status.FAILED.value,
-                description="Workday connections",
-                result=f"{len(wd_conns)} total — {len(connected)} connected, {len(errored)} errored",
-                remediation="Re-authenticate errored connections in Power Platform." if errored else "",
-                doc_link=f"{DOC_BASE}/workday#step-3-connection-references",
-            ))
-
-            # Detail each connection
-            for i, c in enumerate(wd_conns):
-                props = c.get("properties", {})
-                name = props.get("displayName", f"Connection {i+1}")
-                status = _get_conn_status(c)
-                cid = f"WD-CONN-{i+2:03d}"
-                results.append(CheckResult(
-                    checkpoint_id=cid, category="Workday",
-                    priority=Priority.HIGH.value,
-                    status=Status.PASSED.value if status == "Connected" else Status.FAILED.value,
-                    description=f"Connection: {name}",
-                    result=f"Status: {status}",
-                    remediation=f"Re-authenticate '{name}' in Power Platform." if status != "Connected" else "",
-                ))
-        else:
-            results.append(CheckResult(
-                checkpoint_id="WD-CONN-001", category="Workday",
-                priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
-                description="Workday connections",
-                result="No Workday connections found",
-                remediation="Configure Workday SOAP connections in the environment.",
-                doc_link=f"{DOC_BASE}/workday#step-3-connection-references",
-            ))
-    except Exception as e:
-        results.append(CheckResult(
-            checkpoint_id="WD-CONN-001", category="Workday",
-            priority=Priority.HIGH.value, status=Status.WARNING.value,
-            description="Workday connections",
-            result=f"Unable to check: {e}",
-        ))
-
-    return results
-
-
-def _get_conn_status(conn: dict) -> str:
-    """Extract connection status from the BAP API response."""
-    statuses = conn.get("properties", {}).get("statuses", [])
-    if isinstance(statuses, list) and statuses:
-        return statuses[0].get("status", "Unknown")
-    return "Unknown"
+    # Legacy behavior: silently skip when env_id is unavailable
+    if not runner.env_id:
+        return []
+    return check_connector_connections(
+        runner,
+        connector_keyword="workday",
+        checkpoint_prefix="WD-CONN",
+        category="Workday",
+        not_found_remediation="Configure Workday SOAP connections in the environment.",
+        doc_link=f"{DOC_BASE}/workday#step-3-connection-references",
+    )
 
 
 # OAuth grant-expiry / token-health error codes the Power Platform
@@ -809,13 +734,7 @@ def _check_connection_token_health(runner) -> list[CheckResult]:
         ))
         return results
 
-    wd_conns = [
-        c for c in all_conns
-        if "workday" in (
-            c.get("properties", {}).get("apiId", "")
-            + c.get("properties", {}).get("displayName", "")
-        ).lower()
-    ]
+    wd_conns = filter_connections_by_connector(all_conns, "workday")
 
     if not wd_conns:
         results.append(CheckResult(
@@ -830,7 +749,7 @@ def _check_connection_token_health(runner) -> list[CheckResult]:
 
     unhealthy: list[dict] = []
     for c in wd_conns:
-        if _get_conn_status(c) == "Connected":
+        if get_connection_status(c) == "Connected":
             continue
         code, message, hint, severity = _classify_token_health_error(c)
         unhealthy.append({
