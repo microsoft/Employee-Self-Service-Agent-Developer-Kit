@@ -121,8 +121,14 @@ class TestPrintEnvironmentTable:
 
         assert "Env A" in output
         assert "Env B" in output
-        assert "https://a.crm.dynamics.com" in output
-        assert "https://b.crm.dynamics.com" in output
+        # Check URLs appear as complete tokens in the table (not substring matching)
+        lines = output.splitlines()
+        assert any("https://a.crm.dynamics.com" == url.strip() or
+                   line.strip().endswith("https://a.crm.dynamics.com")
+                   for line in lines for url in line.split())
+        assert any("https://b.crm.dynamics.com" == url.strip() or
+                   line.strip().endswith("https://b.crm.dynamics.com")
+                   for line in lines for url in line.split())
 
     def test_shows_no_dataverse_for_empty_url(self, capsys):
         """Environments with empty instanceUrl show placeholder text."""
@@ -165,7 +171,7 @@ class TestDiscoverListEnvironmentsMode:
         json_line = [l for l in output.splitlines() if "SELECTED_ENV_JSON:" in l][0]
         payload = json.loads(json_line.split("SELECTED_ENV_JSON:", 1)[1])
         assert payload["displayName"] == "Test Environment 1"
-        assert "https://org001.crm.dynamics.com" in payload["instanceUrl"]
+        assert payload["instanceUrl"] == "https://org001.crm.dynamics.com"
 
     @patch("list_environments.PPAdminClient")
     def test_select_invalid_number_exits_with_error(self, mock_cls, capsys, monkeypatch):
