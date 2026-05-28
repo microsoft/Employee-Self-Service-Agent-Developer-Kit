@@ -292,3 +292,157 @@ def insufficient_permissions(
         },
         "status": 403,
     }
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Microsoft Graph external connectors (Graph Connectors)
+#
+# Used by EXT-002 — Graph Connector knowledge source readiness. Backed by
+# the public Graph CSDL EntityType definitions for externalConnection +
+# connectionOperation:
+#
+#   https://graph.microsoft.com/v1.0/$metadata
+#     EntityType Name="externalConnection" — fields used:
+#       id (Edm.String, key)
+#       name (Edm.String)
+#       state (microsoft.graph.externalConnectors.connectionState
+#              enum: draft|ready|obsolete|limitExceeded|unknownFutureValue)
+#     EntityType Name="connectionOperation" — fields used:
+#       id (Edm.String, key, monotonic)
+#       status (microsoft.graph.externalConnectors.connectionOperationStatus
+#               enum: unspecified|inprogress|completed|failed|unknownFutureValue)
+#       error (microsoft.graph.publicError, optional)
+#
+# Operation docs cited in each builder.
+# ────────────────────────────────────────────────────────────────────────
+
+
+MOCK_EXTERNAL_CONNECTION_ID = "ServiceNowKB48"
+MOCK_EXTERNAL_CONNECTION_NAME = "Mock ServiceNow Knowledge Connector"
+
+
+def external_connection(
+    *,
+    connection_id: str = MOCK_EXTERNAL_CONNECTION_ID,
+    name: str = MOCK_EXTERNAL_CONNECTION_NAME,
+    state: str = "ready",
+    description: str = "Mock connector used by FlightCheck tests.",
+) -> dict[str, Any]:
+    """Build a single Graph /external/connections record.
+
+    Cited consumers:
+      - flightcheck/checks/graph_connector_kb.py — EXT-002.
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="externalConnection" — fields used:
+                id          (Edm.String, key, admin-assigned)
+                name        (Edm.String)
+                state       (Enum connectionState:
+                             draft | ready | obsolete | limitExceeded |
+                             unknownFutureValue)
+                description (Edm.String)
+      Docs:   https://learn.microsoft.com/graph/api/externalconnectors-externalconnection-get
+    """
+    return {
+        "id": connection_id,
+        "name": name,
+        "description": description,
+        "state": state,
+    }
+
+
+def connection_operation(
+    *,
+    operation_id: str = "00000000-0000-0000-0000-000000005001",
+    status: str = "completed",
+    error: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a single Graph /external/connections/{id}/operations record.
+
+    Cited consumers:
+      - flightcheck/checks/graph_connector_kb.py — EXT-002 latest crawl.
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="connectionOperation" — fields used:
+                id     (Edm.String, key)
+                status (Enum connectionOperationStatus:
+                        unspecified | inprogress | completed | failed |
+                        unknownFutureValue)
+                error  (microsoft.graph.publicError, optional)
+      Docs:   https://learn.microsoft.com/graph/api/externalconnectors-externalconnection-list-operations
+    """
+    record: dict[str, Any] = {
+        "id": operation_id,
+        "status": status,
+    }
+    if error is not None:
+        record["error"] = error
+    return record
+
+
+def list_external_connections(
+    *, connections: Iterable[Mapping[str, Any]] | None = None
+) -> dict[str, Any]:
+    """Mock GET /v1.0/external/connections."""
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/external/connections",
+        "json": collection(
+            connections if connections is not None else [external_connection()],
+            odata_context="$metadata#external/connections",
+        ),
+        "status": 200,
+    }
+
+
+def get_external_connection(
+    *,
+    connection_id: str = MOCK_EXTERNAL_CONNECTION_ID,
+    record: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Mock GET /v1.0/external/connections/{id}."""
+    payload = dict(record) if record is not None else external_connection(
+        connection_id=connection_id
+    )
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/external/connections/{connection_id}",
+        "json": payload,
+        "status": 200,
+    }
+
+
+def get_external_connection_not_found(
+    *, connection_id: str = MOCK_EXTERNAL_CONNECTION_ID
+) -> dict[str, Any]:
+    """Mock GET /v1.0/external/connections/{id} → 404."""
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/external/connections/{connection_id}",
+        "json": {
+            "error": {
+                "code": "ItemNotFound",
+                "message": f"External connection '{connection_id}' was not found.",
+            }
+        },
+        "status": 404,
+    }
+
+
+def list_connection_operations(
+    *,
+    connection_id: str = MOCK_EXTERNAL_CONNECTION_ID,
+    operations: Iterable[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Mock GET /v1.0/external/connections/{id}/operations."""
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/external/connections/{connection_id}/operations",
+        "json": collection(
+            operations if operations is not None else [connection_operation()],
+            odata_context=f"$metadata#external/connections('{connection_id}')/operations",
+        ),
+        "status": 200,
+    }
