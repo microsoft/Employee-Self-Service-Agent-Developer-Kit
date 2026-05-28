@@ -78,6 +78,14 @@ def main():
         "--output", default="workspace/flightcheck",
         help="Output directory (default: workspace/flightcheck)",
     )
+    parser.add_argument(
+        "--environment-url",
+        help="Override the Dataverse environment URL (used by environment_picker.py)",
+    )
+    parser.add_argument(
+        "--environment-id",
+        help="Override the Power Platform environment ID (used by environment_picker.py)",
+    )
     args = parser.parse_args()
 
     # Load config
@@ -89,7 +97,7 @@ def main():
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
 
-    env_url = config.get("dataverseEndpoint", "")
+    env_url = args.environment_url or config.get("dataverseEndpoint", "")
     if not env_url:
         print("ERROR: No dataverseEndpoint in .local/config.json.")
         sys.exit(1)
@@ -163,22 +171,26 @@ def main():
     # (Workday SOAP runtime), and CONFIG-* (local agent / topic /
     # knowledge source). Erroring out here would block those.
     print("Deriving Power Platform environment ID...")
-    env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
-    if env_id and pp_admin is not None:
-        print(f"Environment ID: {env_id}")
-    elif env_id:
-        print(
-            f"Environment ID: {env_id} (Dataverse OrganizationId fallback "
-            "— Power Platform sign-in failed, so BAP-scoped checks "
-            "(ENV-*, EXT-*, WD-CONN-*) will be skipped)"
-        )
+    if args.environment_id:
+        env_id = args.environment_id
+        print(f"Environment ID: {env_id} (provided via --environment-id)")
     else:
-        print(
-            f"WARNING: Could not derive environment ID for {env_url}. "
-            "BAP-scoped checks (ENV-*, EXT-*, WD-CONN-*) will be skipped; "
-            "license, auth, Workday env-var, Workday SOAP, and local-file "
-            "checks will still run."
-        )
+        env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
+        if env_id and pp_admin is not None:
+            print(f"Environment ID: {env_id}")
+        elif env_id:
+            print(
+                f"Environment ID: {env_id} (Dataverse OrganizationId fallback "
+                "— Power Platform sign-in failed, so BAP-scoped checks "
+                "(ENV-*, EXT-*, WD-CONN-*) will be skipped)"
+            )
+        else:
+            print(
+                f"WARNING: Could not derive environment ID for {env_url}. "
+                "BAP-scoped checks (ENV-*, EXT-*, WD-CONN-*) will be skipped; "
+                "license, auth, Workday env-var, Workday SOAP, and local-file "
+                "checks will still run."
+            )
 
     # Gate PVA (Copilot Studio Island Gateway) auth on scope.
     # Only CONFIG-013 needs PVA today, and it lives in run_local_file_checks.
