@@ -68,7 +68,7 @@ def print_environment_table(environments: list[dict]):
     type_width = max(type_width, 4)
 
     header = f"  {'#':<4} {'Environment Name':<{name_width}}  {'Type':<{type_width}}  {'Region':<8}  {'URL'}"
-    sep = f"  {'─'*4} {'─'*name_width}  {'─'*type_width}  {'─'*8}  {'─'*40}"
+    sep = f"  {'-'*4} {'-'*name_width}  {'-'*type_width}  {'-'*8}  {'-'*40}"
     print()
     print(header)
     print(sep)
