@@ -228,9 +228,11 @@ Generate one EvaluationSet file + child EvaluationData files for each applicable
 
 #### TopicTriggering
 
-TopicTriggering is the only category that uses the **positive / boundary / negative**
-distribution pattern. Other categories (RAI, AmbiguousTopic, etc.) have their own
-specific test patterns defined below.
+TopicTriggering enforces a strict minimum per topic (≥1 positive, ≥1 boundary,
+≥1 negative). Other categories below — AmbiguousTopic, IntegrationData,
+MultiTurn — use a flexible mix of the same three variant types. RAI,
+SensitiveTopic, and EQTopic are single-type categories and do not use this
+pattern.
 
 **For each user-facing topic, generate 3-5 test cases** covering positive, boundary,
 and negative variants (≥1 of each type per topic):
