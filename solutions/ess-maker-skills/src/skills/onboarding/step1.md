@@ -5,6 +5,29 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 
 ---
 
+## 1.0 — Ask how to provide the environment
+
+Use the `vscode_askQuestions` tool:
+
+```json
+[
+  {
+    "header": "Environment setup",
+    "question": "Would you like me to list all the Power Platform environments in your tenant so you can pick one?",
+    "options": [
+      { "label": "Yes, list my environments", "description": "Sign in and browse available environments" },
+      { "label": "No, I'll enter the URL manually", "description": "I already know my environment URL" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+- If the user chose **"Yes, list my environments"** → go to step 1.1.
+- If the user chose **"No, I'll enter the URL manually"** → go to step 1.1c.
+
+---
+
 ## 1.1 — List environments and let the user pick
 
 **Message (do NOT wait for user response — continue immediately):**
@@ -17,7 +40,7 @@ browser window will open for sign-in...
 Run this command in the terminal:
 
 ```
-python scripts/list_environments.py
+python scripts/discover.py --list-environments
 ```
 
 A browser window will open for sign-in. Wait for the script to finish.
@@ -61,7 +84,7 @@ output.
 Run the selection command in the terminal:
 
 ```
-python scripts/list_environments.py --select {NUMBER}
+python scripts/discover.py --list-environments --select {NUMBER}
 ```
 
 Find the line starting with `SELECTED_ENV_JSON:` in the output. Parse the
@@ -73,16 +96,7 @@ Go to step 1.2.
 
 ---
 
-## 1.1c — Environment listing failed
-
-**Message:**
-
-I couldn't list your environments. This can happen if your account doesn't
-have Power Platform access or if sign-in was cancelled.
-
-As a fallback, you can provide your environment URL directly.
-
-**End message.**
+## 1.1c — Manual URL entry (fallback)
 
 Use the `vscode_askQuestions` tool:
 
