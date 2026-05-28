@@ -415,7 +415,7 @@ appear in Copilot Studio under the **"Conversational chat (preview)"** data type
 Using `EvaluationData` with multiple rows will create single-response tests that
 only show the first turn.
 
-**Format reference**: See `src/examples/ess-samples/ESSEvaluationSamples/EvalConversationTemplate.csv`
+**Format reference**: See `src/examples/ess-samples/ESSEvaluationSamples/multi-turn/EvalConversationTemplate.csv`
 
 **Constraints** (from Copilot Studio):
 - Max **6 question-response pairs** (12 total messages) per conversation
