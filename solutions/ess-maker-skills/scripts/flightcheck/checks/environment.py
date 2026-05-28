@@ -8,6 +8,7 @@ Checks Power Platform environment, Dataverse, DLP policies, and related config.
 """
 
 from ..runner import CheckResult, Status, Priority
+from .connections import get_connection_status
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
 
@@ -325,8 +326,7 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
         conn_name = props.get("displayName", conn.get("name", "Unknown"))
         api_id = props.get("apiId", "")
         connector_label = api_id.split("/")[-1] if api_id else "unknown"
-        statuses = props.get("statuses", [])
-        conn_status = statuses[0].get("status", "Unknown") if statuses else "Unknown"
+        conn_status = get_connection_status(conn)
         results.append(CheckResult(
             checkpoint_id=f"ENV-004-UC-{i + 1:03d}", category="Environment",
             priority=Priority.MEDIUM.value, status=Status.WARNING.value,

@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 
 from ..runner import CheckResult, Status, Priority
+from .connections import check_connector_connections
 from .external_systems import _categorize_servicenow_flows
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
@@ -79,94 +80,14 @@ def run_servicenow_checks(runner) -> list[CheckResult]:
 
 def _check_connections(runner) -> list[CheckResult]:
     """Validate ServiceNow connection references in Power Platform."""
-    results = []
-    pp = runner.pp_admin
-    env_id = runner.env_id
-
-    if not env_id or not pp:
-        results.append(CheckResult(
-            checkpoint_id="SN-CONN-001", category="ServiceNow",
-            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
-            description="ServiceNow connections",
-            result="Power Platform Admin API not available — skipping connection checks",
-        ))
-        return results
-
-    try:
-        all_conns = pp.get_connections(env_id)
-        if isinstance(all_conns, dict) and "_error" in all_conns:
-            results.append(CheckResult(
-                checkpoint_id="SN-CONN-001", category="ServiceNow",
-                priority=Priority.HIGH.value, status=Status.WARNING.value,
-                description="ServiceNow connections",
-                result=f"Unable to list connections: {all_conns['_error']}",
-                remediation="Requires Power Platform Admin role.",
-            ))
-            return results
-
-        sn_conns = [
-            c for c in all_conns
-            if "service-now" in (
-                c.get("properties", {}).get("apiId", "") +
-                c.get("properties", {}).get("displayName", "")
-            ).lower() or "servicenow" in (
-                c.get("properties", {}).get("apiId", "") +
-                c.get("properties", {}).get("displayName", "")
-            ).lower()
-        ]
-
-        if sn_conns:
-            connected = [
-                c for c in sn_conns
-                if _get_conn_status(c) == "Connected"
-            ]
-            errored = [
-                c for c in sn_conns
-                if _get_conn_status(c) != "Connected"
-            ]
-
-            results.append(CheckResult(
-                checkpoint_id="SN-CONN-001", category="ServiceNow",
-                priority=Priority.HIGH.value,
-                status=Status.PASSED.value if connected else Status.FAILED.value,
-                description="ServiceNow connections",
-                result=f"{len(sn_conns)} total — {len(connected)} connected, {len(errored)} errored",
-                remediation="Re-authenticate errored connections in Power Platform." if errored else "",
-                doc_link=f"{DOC_BASE}/servicenow",
-            ))
-
-            # Detail each connection
-            for i, c in enumerate(sn_conns):
-                props = c.get("properties", {})
-                name = props.get("displayName", f"Connection {i + 1}")
-                status = _get_conn_status(c)
-                cid = f"SN-CONN-{i + 2:03d}"
-                results.append(CheckResult(
-                    checkpoint_id=cid, category="ServiceNow",
-                    priority=Priority.HIGH.value,
-                    status=Status.PASSED.value if status == "Connected" else Status.FAILED.value,
-                    description=f"Connection: {name}",
-                    result=f"Status: {status}",
-                    remediation=f"Re-authenticate '{name}' in Power Platform." if status != "Connected" else "",
-                ))
-        else:
-            results.append(CheckResult(
-                checkpoint_id="SN-CONN-001", category="ServiceNow",
-                priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
-                description="ServiceNow connections",
-                result="No ServiceNow connections found",
-                remediation="Configure ServiceNow connections in the environment. Run /connect servicenow.",
-                doc_link=f"{DOC_BASE}/servicenow",
-            ))
-    except Exception as e:
-        results.append(CheckResult(
-            checkpoint_id="SN-CONN-001", category="ServiceNow",
-            priority=Priority.HIGH.value, status=Status.WARNING.value,
-            description="ServiceNow connections",
-            result=f"Unable to check: {e}",
-        ))
-
-    return results
+    return check_connector_connections(
+        runner,
+        connector_keyword=["service-now", "servicenow"],
+        checkpoint_prefix="SN-CONN",
+        category="ServiceNow",
+        not_found_remediation="Configure ServiceNow connections in the environment. Run /connect servicenow.",
+        doc_link=f"{DOC_BASE}/servicenow",
+    )
 
 
 def _check_flow_status(runner, sn_flows: list) -> list[CheckResult]:
@@ -430,9 +351,3 @@ def _count_matching_topics(topic_files: list[str], pack_type: str) -> int:
     return count
 
 
-def _get_conn_status(conn: dict) -> str:
-    """Extract connection status from the BAP API response."""
-    statuses = conn.get("properties", {}).get("statuses", [])
-    if isinstance(statuses, list) and statuses:
-        return statuses[0].get("status", "Unknown")
-    return "Unknown"
