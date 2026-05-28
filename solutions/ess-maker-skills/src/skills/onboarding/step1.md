@@ -5,7 +5,84 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 
 ---
 
-## 1.1 — Ask for the environment URL
+## 1.1 — List environments and let the user pick
+
+**Message (do NOT wait for user response — continue immediately):**
+
+Let me find the Power Platform environments available in your tenant. A
+browser window will open for sign-in...
+
+**End message.**
+
+Run this command in the terminal:
+
+```
+python scripts/list_environments.py
+```
+
+A browser window will open for sign-in. Wait for the script to finish.
+
+**Check the terminal output:**
+
+- **Script printed a table of environments → go to step 1.1a.**
+- **Script failed with an auth/permission error → go to step 1.1c.**
+
+---
+
+## 1.1a — Ask the user to pick an environment
+
+Build options from the script's environment table. Each row becomes an
+option with the environment name as the label and the URL + type as
+the description.
+
+Use the `vscode_askQuestions` tool:
+
+```json
+[
+  {
+    "header": "Select environment",
+    "question": "Which environment is your ESS agent deployed in?",
+    "options": [
+      { "label": "{env 1 name}", "description": "{URL} [{type}]" },
+      { "label": "{env 2 name}", "description": "{URL} [{type}]" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Map the selected environment name back to its row number from the script
+output.
+
+---
+
+## 1.1b — Confirm selection
+
+Run the selection command in the terminal:
+
+```
+python scripts/list_environments.py --select {NUMBER}
+```
+
+Find the line starting with `SELECTED_ENV_JSON:` in the output. Parse the
+JSON after the colon to get the `instanceUrl` field. Save it as ENV_URL.
+**Strip any trailing slash** from ENV_URL before using it (e.g.,
+`https://org.crm.dynamics.com/` becomes `https://org.crm.dynamics.com`).
+
+Go to step 1.2.
+
+---
+
+## 1.1c — Environment listing failed
+
+**Message:**
+
+I couldn't list your environments. This can happen if your account doesn't
+have Power Platform access or if sign-in was cancelled.
+
+As a fallback, you can provide your environment URL directly.
+
+**End message.**
 
 Use the `vscode_askQuestions` tool:
 
