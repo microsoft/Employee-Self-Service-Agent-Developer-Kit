@@ -104,3 +104,14 @@ When modifying a file to add new functionality, **only change what is necessary 
 - Change function signatures (e.g., removing `required=True` from argparse) unless the new feature explicitly needs it
 
 Each PR should be reviewable by diffing only the lines that matter for the stated goal. Unrelated cosmetic changes create noise, increase merge conflicts, and make `git blame` less useful.
+
+### 7. Clean commits — review before you push
+
+Before committing, **always review what's staged** to avoid accidentally including unrelated files:
+
+- Run `git status` and `git diff --cached` before every commit
+- Never use `git add -A` or `git add .` without inspecting untracked files first — prefer `git add <specific-files>`
+- Ensure local working files (task trackers, scratch notes, editor artifacts) are covered by `.gitignore` or excluded manually
+- If an accidental file slips through, remove it in the same PR — don't leave orphan files for others to clean up
+
+Accidental commits pollute history, can leak internal workflows, and waste reviewer time on irrelevant diffs.
