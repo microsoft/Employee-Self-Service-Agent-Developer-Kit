@@ -9,6 +9,7 @@ Checks Power Platform environment, Dataverse, DLP policies, and related config.
 
 from ..runner import CheckResult, Status, Priority
 from .connections import get_connection_status
+from auth import query_all  # scripts/auth.py, on path via cli.py
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
 
@@ -220,9 +221,6 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
 
     # --- Fetch connection references from Dataverse ---
     try:
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-        from auth import query_all
-
         conn_refs = query_all(
             env_url, dv_token,
             "connectionreferences",
@@ -278,10 +276,11 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
         overall_status = Status.PASSED.value
 
     # --- Summary ---
+    bound_refs = len(conn_refs) - len(orphan_refs) - len(unbound_refs)
     summary_parts = [
         f"{len(all_conns)} connection(s)",
         f"{len(conn_refs)} reference(s)",
-        f"{len(bound_conn_ids)} bound",
+        f"{bound_refs} bound ({len(bound_conn_ids)} distinct conn(s))",
     ]
     if orphan_refs:
         summary_parts.append(f"{len(orphan_refs)} orphan ref(s)")
