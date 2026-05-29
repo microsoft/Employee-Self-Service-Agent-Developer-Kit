@@ -26,39 +26,21 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from auth import discover_tenant
 from flightcheck.pp_admin_client import PPAdminClient
+from list_environments import parse_raw_environments
 
 
 def list_environments(pp_admin: PPAdminClient) -> list[dict]:
     """Fetch all environments from the Power Platform Admin API.
 
-    Returns a list of environment records with extracted metadata
-    useful for display and selection.
+    Delegates parsing to list_environments.parse_raw_environments to
+    avoid logic duplication. Accepts an already-authenticated PPAdminClient.
     """
     raw_envs = pp_admin.get_environments()
     if isinstance(raw_envs, dict) and "_error" in raw_envs:
         print("ERROR: Could not list environments. Insufficient permissions.")
         sys.exit(1)
 
-    environments = []
-    for env in raw_envs:
-        props = env.get("properties", {})
-        linked = props.get("linkedEnvironmentMetadata", {})
-        instance_url = linked.get("instanceUrl", "").rstrip("/")
-        display_name = props.get("displayName", "Unknown")
-        env_type = props.get("environmentType", "Unknown")
-        state = props.get("states", {}).get("runtime", {}).get("id", "Unknown")
-        env_id = env.get("name", "")
-
-        environments.append({
-            "id": env_id,
-            "displayName": display_name,
-            "type": env_type,
-            "state": state,
-            "instanceUrl": instance_url,
-            "region": linked.get("geo", ""),
-        })
-
-    return environments
+    return parse_raw_environments(raw_envs)
 
 
 def display_environment_menu(environments: list[dict]) -> int:

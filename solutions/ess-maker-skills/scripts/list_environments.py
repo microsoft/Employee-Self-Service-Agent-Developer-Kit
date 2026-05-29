@@ -24,6 +24,37 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from flightcheck.pp_admin_client import PPAdminClient
 
 
+def parse_raw_environments(raw_envs):
+    """Parse raw BAP environment records into normalized dicts.
+
+    Args:
+        raw_envs: List of environment records from PPAdminClient.get_environments().
+
+    Returns:
+        List of dicts with keys: id, displayName, type, state, instanceUrl, region.
+    """
+    environments = []
+    for env in raw_envs:
+        props = env.get("properties", {})
+        linked = props.get("linkedEnvironmentMetadata", {})
+        instance_url = linked.get("instanceUrl", "").rstrip("/")
+        display_name = props.get("displayName", "Unknown")
+        env_type = props.get("environmentType", "Unknown")
+        state = props.get("states", {}).get("runtime", {}).get("id", "Unknown")
+        env_id = env.get("name", "")
+
+        environments.append({
+            "id": env_id,
+            "displayName": display_name,
+            "type": env_type,
+            "state": state,
+            "instanceUrl": instance_url,
+            "region": linked.get("geo", ""),
+        })
+
+    return environments
+
+
 def list_environments():
     """Fetch all environments from the Power Platform Admin API.
 
@@ -49,24 +80,7 @@ def list_environments():
         print("ERROR: Could not list environments. Insufficient permissions.")
         sys.exit(1)
 
-    environments = []
-    for env in raw_envs:
-        props = env.get("properties", {})
-        linked = props.get("linkedEnvironmentMetadata", {})
-        instance_url = linked.get("instanceUrl", "").rstrip("/")
-        display_name = props.get("displayName", "Unknown")
-        env_type = props.get("environmentType", "Unknown")
-        env_id = env.get("name", "")
-
-        environments.append({
-            "id": env_id,
-            "displayName": display_name,
-            "type": env_type,
-            "instanceUrl": instance_url,
-            "region": linked.get("geo", ""),
-        })
-
-    return environments
+    return parse_raw_environments(raw_envs)
 
 
 def get_dataverse_environments():
