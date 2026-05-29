@@ -698,20 +698,50 @@ def main():
             if entry and entry.get("parentbotcomponentid"):
                 parent_id = entry["parentbotcomponentid"]
 
+            child_fname = filepath.replace("\\", "/").split("/")[-1]
+
+            def _match_parent_by_prefix(candidates):
+                """Pick the candidate whose filename stem is the longest
+                prefix of *child_fname*.  Returns the matched parent ID
+                or None."""
+                best_id = None
+                best_stem_len = -1
+                for p_path, p_id in candidates:
+                    p_stem = (
+                        p_path.replace("\\", "/").split("/")[-1]
+                        .replace(".mcs.yml", "")
+                    )
+                    if child_fname.startswith(p_stem + "-") and len(p_stem) > best_stem_len:
+                        best_id = p_id
+                        best_stem_len = len(p_stem)
+                return best_id
+
             # 2. Parent created in THIS push, same folder.
+            #    When multiple parents share a folder, prefer the one
+            #    whose filename stem is a prefix of the child filename
+            #    (e.g. parent "topic-triggering.mcs.yml" matches child
+            #    "topic-triggering-base-compensation.mcs.yml").
             if parent_id is None:
+                _folder_matches = []
                 for p_path, p_id in eval_parent_ids.items():
                     p_folder = "/".join(
                         p_path.replace("\\", "/").split("/")[:-1]
                     )
                     if p_folder == child_folder:
-                        parent_id = p_id
-                        break
+                        _folder_matches.append((p_path, p_id))
+                if len(_folder_matches) == 1:
+                    parent_id = _folder_matches[0][1]
+                elif len(_folder_matches) > 1:
+                    parent_id = _match_parent_by_prefix(_folder_matches)
+                    if parent_id is None:
+                        # No prefix match; fall back to first.
+                        parent_id = _folder_matches[0][1]
 
             # 3. Existing parent already in component_map, same folder.
             #    This is the common case: customer adds a new test case
             #    under an evaluation set that was extracted by /setup.
             if parent_id is None:
+                _cm_matches = []
                 for p_path, p_entry in component_map.items():
                     if p_entry.get("componenttype") != 19:
                         continue
@@ -721,8 +751,19 @@ def main():
                         p_path.replace("\\", "/").split("/")[:-1]
                     )
                     if p_folder == child_folder:
-                        parent_id = p_entry.get("botcomponentid")
-                        break
+                        _cm_matches.append(
+                            (p_path, p_entry.get("botcomponentid")))
+                if len(_cm_matches) == 1:
+                    parent_id = _cm_matches[0][1]
+                elif len(_cm_matches) > 1:
+                    parent_id = _match_parent_by_prefix(_cm_matches)
+                    if parent_id is None:
+                        print(
+                            f"  ❌ Failed: {filepath}: multiple eval parents found "
+                            f"in {child_folder}/ but none matches the filename "
+                            f"prefix deterministically. Rename the case to use a "
+                            f"parent prefix or remove the ambiguity."
+                        )
 
             if parent_id is None:
                 # Fail closed: don't create an orphan eval case in
