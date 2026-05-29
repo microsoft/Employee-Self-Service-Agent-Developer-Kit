@@ -27,3 +27,45 @@ This is the Employee Self-Service Agent Developer Kit monorepo. It contains:
 
 For repo-level tasks (CI, contributing, issues, PRs), you can help normally.
 For ESS agent customization, direct users to open `solutions/ess-maker-skills/`.
+
+## Code Quality Rules
+
+### No duplicate functions
+
+When adding new functionality, **always check if equivalent logic already exists**
+before writing a new function. Duplicated logic across files leads to drift,
+inconsistent bug fixes, and maintenance burden.
+
+**Rules:**
+
+1. Before writing a parsing, formatting, or utility function, search the codebase
+   for existing implementations that do the same thing.
+2. If shared logic exists, **import and call it** — do not copy-paste and adapt.
+3. If existing logic needs slight modification for your use case, **extract a
+   shared helper** with parameters rather than forking the implementation.
+4. When two modules need the same logic, place the canonical implementation in
+   the lower-level module and have the higher-level module import from it.
+
+**Example (bad):**
+```python
+# file_a.py
+def parse_environments(raw):
+    # 20 lines of parsing...
+
+# file_b.py
+def parse_environments(raw):
+    # same 20 lines copy-pasted...
+```
+
+**Example (good):**
+```python
+# shared_module.py
+def parse_raw_environments(raw):
+    # single source of truth
+
+# file_a.py
+from shared_module import parse_raw_environments
+
+# file_b.py
+from shared_module import parse_raw_environments
+```
