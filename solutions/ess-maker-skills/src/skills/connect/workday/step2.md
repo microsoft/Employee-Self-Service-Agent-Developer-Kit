@@ -20,9 +20,19 @@ step1.md (pip install + server start). Then retry the failed call.
 Do NOT ask the user about MCP internals — handle reconnection silently.
 
 **CRITICAL RULES (from retro):**
-- Entra SSO is MANDATORY. Do not ask if the user wants it. Do not skip
-  Task 1. The OAuthUser connection reference uses `runtimeSource: invoker`
-  which requires Entra SSO for employee-scoped API calls.
+- There are TWO install paths (set as `installPath` in config by step 1):
+  - **simplified** — only Task 1 (Entra SSO) applies. ISU accounts,
+    security groups, auth policies, API client, domain permissions, and
+    the RaaS report are NOT needed (the `ff0df` connection + REST
+    `/workers/me` replace them). After Task 1, skip straight to 2.7.
+  - **legacy** — all 6 tasks apply, as documented below.
+  Read `installPath` from `my/connect/workday/config.json` and follow
+  the matching path. When in doubt for a fresh install, the path is
+  `simplified`.
+- Entra SSO is MANDATORY on BOTH paths. Do not ask if the user wants it.
+  Do not skip Task 1. The OAuthUser connection reference uses
+  `runtimeSource: invoker` which requires Entra SSO for employee-scoped
+  API calls.
 - NEVER skip tasks based on pre-flight tests run with MCP admin credentials.
   The MCP uses the user's admin account. The Power Platform flows use ISU
   accounts. These have DIFFERENT permissions. A passing pre-flight does NOT
@@ -40,6 +50,24 @@ Do NOT ask the user about MCP internals — handle reconnection silently.
 ---
 
 ## 2.0 — Show task overview
+
+Read `installPath` from `my/connect/workday/config.json`.
+
+**If INSTALL_PATH is `simplified`:**
+
+**Message:**
+
+There's just one admin task for the streamlined Workday setup: enabling
+Microsoft Entra single sign-on so employees authenticate as themselves.
+I'll handle as much as possible automatically and verify it before
+moving on.
+
+**End message.**
+
+Do Task 1 (Entra SSO Setup) below, then skip directly to section 2.7.
+Do NOT do Tasks 2–6.
+
+**If INSTALL_PATH is `legacy`:**
 
 **Message:**
 
@@ -282,6 +310,11 @@ Update `my/connect/workday/config.json`:
 ---
 
 ## Task 2: ISU Accounts and Security Groups
+
+**LEGACY PATH ONLY.** If `installPath` is `simplified`, skip Tasks 2–6
+entirely and go to section 2.7 now — the simplified install needs no ISU
+accounts, security groups, auth policies, API client, domain
+permissions, or RaaS report.
 
 **Do NOT skip this task based on pre-flight.** The pre-flight uses
 the MCP admin credentials, not ISU credentials. Always verify ISU
@@ -948,6 +981,25 @@ Wait for the user on retry. Re-run `get_user_context`.
 
 Update `my/connect/workday/tasks.md` — change step 2 from
 `- [ ]` to `- [x]`.
+
+**If INSTALL_PATH is `simplified`:**
+
+**Message:**
+
+✅ Admin setup complete!
+
+| # | Task | Status |
+|---|------|--------|
+| 1 | Environment configured | ✅ |
+| 2 | Entra SSO enabled | ✅ |
+| 3 | Connection verified | ⬜ |
+
+One more step — let's install the Workday extension and run the final
+verification.
+
+**End message.**
+
+**If INSTALL_PATH is `legacy`:**
 
 **Message:**
 
