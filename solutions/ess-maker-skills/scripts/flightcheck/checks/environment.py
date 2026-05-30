@@ -169,8 +169,6 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
       WARN  — unbound connections exist (may be intentional).
       FAIL  — orphan or unbound references found (broken bindings).
     """
-    import os
-    import sys
 
     results: list[CheckResult] = []
     pp = runner.pp_admin
