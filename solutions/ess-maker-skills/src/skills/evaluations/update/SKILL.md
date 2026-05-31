@@ -108,7 +108,7 @@ Run `python scripts/push.py` to push changes to Copilot Studio.
 **If the push fails:** show the error and offer retry or revert
 (`python scripts/checkpoint.py --revert`).
 
-## Step 6: Verify
+## Step 7: Verify
 
 > ✅ Evaluation test cases updated in Copilot Studio.
 >
