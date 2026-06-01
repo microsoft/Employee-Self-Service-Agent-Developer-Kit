@@ -259,7 +259,7 @@ and do the per-tier verification.
    claims to validate (e.g., missing API access), never return `PASSED`. A
    check that always passes is worse than no check at all.
 
-2. **Use the right status.** The runner has six statuses — pick the one that
+2. **Use the right status.** The runner has seven statuses — pick the one that
    matches your situation:
    - `PASSED` — we ran the check and the result is good
    - `FAILED` — we ran the check and the result is bad
@@ -269,6 +269,18 @@ and do the per-tier verification.
      creds, no relevant data on disk)
    - `NOT_CONFIGURED` — the feature isn't turned on, or the item requires
      manual verification in the portal
+   - `MANUAL` — the check gathered everything programmatically observable but
+     the final comparison must be performed by the operator against an
+     external system the kit can't (or shouldn't) read directly. Use this
+     when you can fetch one side of a comparison (e.g. the Entra-side SAML
+     claim mapping via Microsoft Graph) but the other side lives in a vendor
+     system the kit has no admin API for (e.g. Workday Tenant Setup -
+     Security). The `result` field MUST carry the value the kit observed
+     verbatim; the `remediation` field MUST tell the operator exactly which
+     external screen to open and which value to compare against. MANUAL is
+     the canonical pattern for Workday / ServiceNow / SAP tenant-config
+     validation that has no programmatic admin surface (see issue #84 for
+     the original SAML-NameID example). MANUAL does NOT fail readiness.
    - `ERROR` — the check itself crashed (the runner catches exceptions and
      sets this automatically)
 
