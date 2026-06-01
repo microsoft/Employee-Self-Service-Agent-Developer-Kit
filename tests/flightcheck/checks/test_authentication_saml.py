@@ -273,54 +273,76 @@ class TestMultipleWorkdayApps:
         assert "entity IDs: guid-noise" not in r.result
 
 
-class TestErrorHandling:
-    """Graph failures surface as WARNING, not silent pass."""
+class TestPermissionGaps:
+    """Missing Graph consent must surface as WARNING with a remediation
+    pointing at the specific permission needed — never as a silent
+    NOT_CONFIGURED or a falsely-confident MANUAL with the wrong
+    NameID summary. See PR #113 review comments.
+    """
 
     @responses.activate
-    def test_servicepriniclap_403_emits_warning(
+    def test_serviceprincipals_403_emits_warning_with_consent_remediation(
         self, runner: _MinimalRunner
     ) -> None:
-        """If Graph returns 403 (missing Application.Read.All) when
-        listing service principals, get_all() returns [] — which the
-        check currently interprets as NOT_CONFIGURED. Pin that
-        behavior; if we ever want to distinguish "no SP" from "no
-        permission", we'd plumb _status through get_all()."""
+        """Application.Read.All missing → AUTH-006 must NOT say "no
+        Workday SAML app exists" (the silent-failure mode this check is
+        meant to prevent). It must emit WARNING and name the missing
+        permission so the operator can fix it.
+        """
         from flightcheck.checks.authentication import _run_saml_nameid_check
 
+        # The probe call goes to /servicePrincipals?$top=1.
         responses.add(**g.insufficient_permissions(path="/servicePrincipals"))
 
         results = _run_saml_nameid_check(runner)
         r = _result_by_id(results, "AUTH-006")
-        # Empty list path → NOT_CONFIGURED (documented quirk of
-        # graph_client.get_all on 401/403; see graph_client.py:148-161).
-        assert r.status == "NotConfigured"
+        assert r.status == "Warning", (
+            f"Expected Warning, got {r.status} — confidently-wrong "
+            "NOT_CONFIGURED on 403 is the bug this fix addresses."
+        )
+        assert "Application.Read.All" in r.remediation
+        assert "403" in r.result
+        # And the check MUST NOT proceed to fetch /servicePrincipals
+        # with a filter (responses.assert_all_requests_are_fired
+        # defaults true; if we wanted to assert non-firing we'd need
+        # passthru). Behavioral verification: only one result, and
+        # the result wording does not include a "Detected apps:" list.
+        assert "Detected apps" not in r.result
 
     @responses.activate
-    def test_claims_mapping_403_emits_warning_for_that_sp(
+    def test_claims_mapping_policies_403_emits_warning_with_policy_read_remediation(
         self, runner: _MinimalRunner
     ) -> None:
-        """If the SP listing succeeds but reading its claimsMappingPolicies
-        gets a 403, the per-SP result is informational — the
-        get_all() returns [], so the check treats it as 'no override'
-        and emits MANUAL with the default summary. Pin that behavior
-        to make the contract obvious."""
+        """Policy.Read.All missing → falsely reporting every detected
+        Workday app as "default NameID = userPrincipalName" would
+        suppress real overrides invisibly. Must WARN with the
+        specific permission needed instead.
+        """
         from flightcheck.checks.authentication import _run_saml_nameid_check
 
-        sp = g.service_principal(sp_id="sp-x", display_name="Workday")
-        responses.add(**g.list_service_principals(service_principals=[sp]))
+        # Probe call (/servicePrincipals?$top=1) succeeds.
+        responses.add(**g.list_service_principals(
+            service_principals=[g.service_principal()],
+        ))
+        # Filtered call (/servicePrincipals?$filter=...) also succeeds.
+        responses.add(**g.list_service_principals(
+            service_principals=[g.service_principal(sp_id="sp-x")],
+        ))
+        # Per-app claimsMappingPolicies probe returns 403.
         responses.add(**g.insufficient_permissions(
             path="/servicePrincipals/sp-x/claimsMappingPolicies",
         ))
 
         results = _run_saml_nameid_check(runner)
         r = _result_by_id(results, "AUTH-006")
-        # 403 on claimsMappingPolicies returns [] from get_all, which
-        # we treat as "no custom policy" → MANUAL with default summary.
-        # Real consequence: the operator gets the same actionable
-        # MANUAL result either way; if Policy.Read.All was missing
-        # they'd just see the default-mapping summary instead of any
-        # detected override. Acceptable for an initial release.
-        assert r.status == "Manual"
+        assert r.status == "Warning", (
+            f"Expected Warning, got {r.status} — silently falling back "
+            "to 'default mapping' across N apps when we can't see the "
+            "override data is the bug this fix addresses."
+        )
+        assert "Policy.Read.All" in r.remediation
+        assert "claimsMappingPolicies" in r.result
+        assert "403" in r.result
 
 
 class TestGraphUnavailable:

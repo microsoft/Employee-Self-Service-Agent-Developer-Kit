@@ -175,6 +175,31 @@ def _run_saml_nameid_check(runner) -> list[CheckResult]:
             doc_link=doc_link,
         )]
 
+    # Probe /servicePrincipals with graph.get() FIRST — get_all() (which
+    # get_service_principals wraps) swallows 401/403 into an empty list,
+    # so a missing Application.Read.All consent would otherwise
+    # masquerade as "no Workday SAML app exists" and falsely PASS the
+    # check as NOT_CONFIGURED. graph.get() preserves the _status field
+    # so we can distinguish "no apps" from "we can't see apps."
+    sp_probe = graph.get("/servicePrincipals", params={"$top": "1"})
+    if sp_probe.get("_status") in (401, 403):
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=description,
+            result=(
+                "Cannot read Entra service principals — Graph returned "
+                f"HTTP {sp_probe['_status']} on /servicePrincipals."
+            ),
+            remediation=(
+                "Grant Application.Read.All (or Directory.Read.All) "
+                "consent on the Graph app registration the kit uses, "
+                "then re-run FlightCheck. Without this consent the "
+                "check cannot tell whether a Workday SAML app exists."
+            ),
+            doc_link=doc_link,
+        )]
+
     try:
         workday_sps = graph.get_service_principals(filter_expr=_WORKDAY_SP_FILTER)
     except Exception as e:
@@ -208,6 +233,40 @@ def _run_saml_nameid_check(runner) -> list[CheckResult]:
                 "this check is not applicable. If you do, register the "
                 "Workday enterprise app from the Entra gallery and "
                 "configure SAML SSO."
+            ),
+            doc_link=doc_link,
+        )]
+
+    # Same trap on the per-app endpoint: get_all() on
+    # /servicePrincipals/{id}/claimsMappingPolicies swallows 401/403 into
+    # an empty list, which would make every detected app falsely report
+    # "default NameID = userPrincipalName" when really we couldn't read
+    # any override data. Probe once on the first SP and bail out as
+    # WARNING if Policy.Read.All isn't consented — silently reporting
+    # the wrong NameID across all N apps is exactly the
+    # confidently-wrong result tier-1 of the cardinal rule forbids.
+    first_sp_id = workday_sps[0].get("id", "")
+    cmp_probe = graph.get(
+        f"/servicePrincipals/{first_sp_id}/claimsMappingPolicies"
+    )
+    if cmp_probe.get("_status") in (401, 403):
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=description,
+            result=(
+                f"Found {len(workday_sps)} federated Workday SAML app(s) "
+                "in Entra, but cannot read their claimsMappingPolicies — "
+                f"Graph returned HTTP {cmp_probe['_status']}. NameID "
+                "overrides (if any) are not visible to the kit, so "
+                "AUTH-006 can't reliably surface what Entra is sending."
+            ),
+            remediation=(
+                "Grant Policy.Read.All consent on the Graph app "
+                "registration the kit uses, then re-run FlightCheck. "
+                "Without this consent the check would falsely report "
+                "every Workday app as using Entra's default NameID "
+                "mapping even when a claimsMappingPolicy overrides it."
             ),
             doc_link=doc_link,
         )]
