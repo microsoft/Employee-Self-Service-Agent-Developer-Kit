@@ -41,10 +41,10 @@ EXPECTED_TOPICS = {
         {"pattern": "servicenowhrsdgetusercases", "name": "ServiceNow HRSD Get User Cases"},
     ],
     "itsm": [
-        {"pattern": "servicenowitsm createticket", "name": "ServiceNow ITSM Create Ticket"},
-        {"pattern": "servicenowitsm getticketdetails", "name": "ServiceNow ITSM Get Ticket Details"},
-        {"pattern": "servicenowitsm getusertickets", "name": "ServiceNow ITSM Get User Tickets"},
-        {"pattern": "servicenowitsm updateticket", "name": "ServiceNow ITSM Update Ticket"},
+        {"pattern": "servicenowitsmcreateticket", "name": "ServiceNow ITSM Create Ticket"},
+        {"pattern": "servicenowitsmgetticketdetails", "name": "ServiceNow ITSM Get Ticket Details"},
+        {"pattern": "servicenowitsmgetusertickets", "name": "ServiceNow ITSM Get User Tickets"},
+        {"pattern": "servicenowitsmupdateticket", "name": "ServiceNow ITSM Update Ticket"},
     ],
 }
 
