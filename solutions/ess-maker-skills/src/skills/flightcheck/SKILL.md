@@ -39,6 +39,7 @@ Use `vscode_askQuestions`:
     "options": [
       { "label": "Full check", "description": "All categories — licenses, environment, auth, integrations, agent files, publishing", "recommended": true },
       { "label": "Workday only", "description": "Workday connections, flows, env vars, and SOAP workflow tests" },
+      { "label": "ServiceNow only", "description": "ServiceNow connections, flows, template configs, and local topics" },
       { "label": "Local files only", "description": "Validate extracted topic files, agent config, variables" },
       { "label": "Prerequisites only", "description": "Licenses, roles, capacity" }
     ],
@@ -50,6 +51,7 @@ Use `vscode_askQuestions`:
 Map the selection to a scope flag:
 - "Full check" → `full`
 - "Workday only" → `workday`
+- "ServiceNow only" → `servicenow`
 - "Local files only" → `local`
 - "Prerequisites only" → `prerequisites`
 
