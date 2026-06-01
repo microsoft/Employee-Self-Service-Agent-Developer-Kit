@@ -192,6 +192,113 @@ def conditional_access_policy(
     }
 
 
+def service_principal(
+    *,
+    sp_id: str = "00000000-0000-0000-0000-000000005001",
+    app_id: str = "00000000-0000-0000-0000-000000005002",
+    display_name: str = "Workday",
+    preferred_sso_mode: str | None = "saml",
+    tags: Iterable[str] | None = None,
+    login_url: str | None = "https://impl.workday.com/contoso/login-saml.htmld",
+    service_principal_names: Iterable[str] | None = None,
+) -> dict[str, Any]:
+    """Build a single Graph /servicePrincipals record.
+
+    Default values represent a customer's federated Workday enterprise
+    app — the shape AUTH-006 expects to find. The
+    ``service_principal_names`` collection includes the SAML entity ID
+    Workday's "SAML Identity Providers > Service Provider ID" field
+    references — that's the join key AUTH-006 surfaces so the operator
+    can identify which Entra app the Workday tenant is actually using.
+
+    Cited consumers:
+      - flightcheck/graph_client.py:191-196 (get_service_principals).
+      - flightcheck/checks/authentication.py (AUTH-006).
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="servicePrincipal"
+              Fields used by AUTH-006:
+                id (Edm.String)
+                appId (Edm.String)
+                displayName (Edm.String)
+                preferredSingleSignOnMode (Edm.String, nullable)
+                servicePrincipalNames (Collection(Edm.String))
+                tags (Collection(Edm.String))
+                loginUrl (Edm.String, nullable)
+      Docs:   https://learn.microsoft.com/graph/api/resources/serviceprincipal?view=graph-rest-1.0
+    """
+    if service_principal_names is None:
+        # Default mirrors the entity-ID pattern Microsoft documents
+        # for the Workday gallery app — see
+        # https://learn.microsoft.com/en-us/entra/identity/saas-apps/workday-tutorial
+        # step 5 (Reply URL pattern) and step 6 (Service Provider ID).
+        service_principal_names = [
+            app_id,
+            "http://www.workday.com/contoso",
+        ]
+    return {
+        "id": sp_id,
+        "deletedDateTime": None,
+        "accountEnabled": True,
+        "appId": app_id,
+        "appDisplayName": display_name,
+        "displayName": display_name,
+        "preferredSingleSignOnMode": preferred_sso_mode,
+        "loginUrl": login_url,
+        "servicePrincipalNames": list(service_principal_names),
+        "servicePrincipalType": "Application",
+        "tags": list(tags) if tags is not None else ["WindowsAzureActiveDirectoryIntegratedApp"],
+        "appRoles": [],
+        "oauth2PermissionScopes": [],
+    }
+
+
+def claims_mapping_policy(
+    *,
+    policy_id: str = "00000000-0000-0000-0000-000000005101",
+    display_name: str = "Workday NameID -> employeeId",
+    definition: list[str] | None = None,
+) -> dict[str, Any]:
+    """Build a single Graph claimsMappingPolicy record.
+
+    The `definition` field is a list of JSON-encoded strings (Entra's
+    own format — not nested JSON objects). AUTH-006 reads the first
+    element to surface the override; if no policy is assigned, the
+    application uses Entra's default
+    (NameID = user.userPrincipalName).
+
+    Cited consumers:
+      - flightcheck/graph_client.py (get_claims_mapping_policies).
+      - flightcheck/checks/authentication.py (AUTH-006).
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="claimsMappingPolicy"
+              Fields used by AUTH-006:
+                id (Edm.String)
+                displayName (Edm.String)
+                definition (Collection(Edm.String))
+      Docs:   https://learn.microsoft.com/graph/api/resources/claimsmappingpolicy?view=graph-rest-1.0
+              https://learn.microsoft.com/graph/api/serviceprincipal-list-claimsmappingpolicies?view=graph-rest-1.0
+              (verbatim example response cited in the response section)
+    """
+    if definition is None:
+        definition = [
+            '{"ClaimsMappingPolicy":{"Version":1,"IncludeBasicClaimSet":"true",'
+            '"ClaimsSchema":[{"Source":"user","ID":"employeeid",'
+            '"SamlClaimType":'
+            '"http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier"}]}}'
+        ]
+    return {
+        "id": policy_id,
+        "deletedDateTime": None,
+        "displayName": display_name,
+        "definition": list(definition),
+        "isOrganizationDefault": False,
+    }
+
+
 # ────────────────────────────────────────────────────────────────────────
 # Collection wrappers + responses kwargs
 # ────────────────────────────────────────────────────────────────────────
@@ -268,6 +375,50 @@ def list_conditional_access_policies(
         "json": collection(
             policies if policies is not None else [conditional_access_policy()],
             odata_context="$metadata#identity/conditionalAccess/policies",
+        ),
+        "status": 200,
+    }
+
+
+def list_service_principals(
+    *,
+    filter_expr: str | None = None,
+    service_principals: Iterable[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Mock GET /v1.0/servicePrincipals?$filter=...
+
+    Server-side narrowing via $filter doesn't change the response shape
+    (same `servicePrincipal` collection), so a single mock covers any
+    AUTH-006 filter (displayName, appId, tags/any, etc.).
+    """
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/servicePrincipals",
+        "json": collection(
+            service_principals if service_principals is not None else [service_principal()],
+            odata_context="$metadata#servicePrincipals",
+        ),
+        "status": 200,
+    }
+
+
+def list_claims_mapping_policies_for_sp(
+    *,
+    sp_id: str = "00000000-0000-0000-0000-000000005001",
+    policies: Iterable[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Mock GET /v1.0/servicePrincipals/{id}/claimsMappingPolicies.
+
+    Pass `policies=[]` to mock the no-custom-mapping case (the application
+    is using Entra's default NameID claim).
+    """
+    pol_list = list(policies) if policies is not None else [claims_mapping_policy()]
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/servicePrincipals/{sp_id}/claimsMappingPolicies",
+        "json": collection(
+            pol_list,
+            odata_context=f"$metadata#servicePrincipals('{sp_id}')/claimsMappingPolicies",
         ),
         "status": 200,
     }
