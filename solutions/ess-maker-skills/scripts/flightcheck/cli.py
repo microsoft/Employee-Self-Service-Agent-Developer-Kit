@@ -238,19 +238,19 @@ def main():
     print("  FLIGHTCHECK SUMMARY")
     print("=" * 64)
     print(f"  Total checks: {result.total}")
-    print(f"  ✅ Passed:         {result.passed}")
-    print(f"  ❌ Failed:         {result.failed}")
-    print(f"  ⚠️  Warnings:       {result.warnings}")
-    print(f"  ℹ️  Not Configured: {result.not_configured}")
-    print(f"  Duration:          {result.duration_secs}s")
+    print(f"  [PASS] Passed:         {result.passed}")
+    print(f"  [FAIL] Failed:         {result.failed}")
+    print(f"  [WARN] Warnings:       {result.warnings}")
+    print(f"  [INFO] Not Configured: {result.not_configured}")
+    print(f"  Duration:              {result.duration_secs}s")
     print()
 
     if result.overall == "READY":
-        print("  ✅ READY FOR DEPLOYMENT")
+        print("  [PASS] READY FOR DEPLOYMENT")
     elif result.overall == "READY_WITH_WARNINGS":
-        print("  ⚠️  READY WITH WARNINGS")
+        print("  [WARN] READY WITH WARNINGS")
     else:
-        print("  ❌ NOT READY — ISSUES FOUND")
+        print("  [FAIL] NOT READY -- ISSUES FOUND")
 
     print("=" * 64)
 
@@ -259,9 +259,9 @@ def main():
     if failures:
         print(f"\n  FAILED CHECKS ({len(failures)}):\n")
         for r in failures:
-            print(f"    ❌ {r.checkpoint_id}: {r.result}")
+            print(f"    [FAIL] {r.checkpoint_id}: {r.result}")
             if r.remediation:
-                print(f"       → {r.remediation}")
+                print(f"       -> {r.remediation}")
         print()
 
     # Save results
