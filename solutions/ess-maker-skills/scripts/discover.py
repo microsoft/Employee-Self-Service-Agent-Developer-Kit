@@ -10,6 +10,12 @@ less-capable ones — can complete setup by running a terminal command instead
 of navigating MCP tool calls.
 
 Usage:
+    # List all environments in the tenant (no URL required)
+    python scripts/discover.py --list-environments
+
+    # Select environment #2 and output JSON
+    python scripts/discover.py --list-environments --select 2
+
     # List agents in the environment
     python scripts/discover.py --url https://org.crm.dynamics.com
 
@@ -67,11 +73,49 @@ def print_agent_table(agents):
 def main():
     parser = argparse.ArgumentParser(
         description="Discover agents in a Dataverse environment")
-    parser.add_argument("--url", required=True,
+    parser.add_argument("--url",
                         help="Power Platform environment URL")
+    parser.add_argument("--list-environments", action="store_true",
+                        help="List all environments in the tenant (no URL needed)")
     parser.add_argument("--select", type=int, default=None,
                         help="Select agent by number and output JSON")
     args = parser.parse_args()
+
+    # --- Environment listing mode ---
+    if args.list_environments:
+        from list_environments import (
+            get_dataverse_environments,
+            print_environment_table,
+        )
+
+        dv_environments, excluded = get_dataverse_environments()
+
+        print(f"Found {len(dv_environments)} Dataverse-linked environment(s).")
+        if excluded:
+            print(f"  ({excluded} environment(s) without Dataverse were excluded.)")
+
+        if not dv_environments:
+            print("ERROR: No environments with linked Dataverse found.")
+            print("ESS requires a Dataverse-enabled environment.")
+            sys.exit(1)
+
+        print_environment_table(dv_environments)
+
+        if args.select is not None:
+            idx = args.select
+            if idx < 1 or idx > len(dv_environments):
+                print(f"ERROR: Invalid selection '{idx}'. "
+                      f"Choose a number between 1 and {len(dv_environments)}.")
+                sys.exit(1)
+            selected = dv_environments[idx - 1]
+            print(f"SELECTED_ENV_JSON:{json.dumps(selected)}")
+            sys.exit(0)
+
+        return
+
+    # --- Agent discovery mode (requires --url) ---
+    if not args.url:
+        parser.error("--url is required when not using --list-environments")
 
     env_url = args.url.rstrip("/")
 
