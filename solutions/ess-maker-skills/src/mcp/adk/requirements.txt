@@ -1,0 +1,4 @@
+mcp
+msal
+requests
+PyYAML
