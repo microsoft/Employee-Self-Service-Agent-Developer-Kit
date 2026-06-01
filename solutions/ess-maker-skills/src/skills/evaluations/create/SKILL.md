@@ -71,8 +71,11 @@ AND contains at least one `.mcs.yml` file. Mark it as **existing** or **missing*
 
 **If ALL categories are missing** (fresh agent, no eval sets yet):
 
-> I found **{N}** user-facing topics in your agent. I can generate evaluation
-> test sets in these categories:
+> I found **{N}** user-facing topics in your agent. With positive, boundary,
+> and negative cases per topic, this will generate roughly **{N×3} to {N×5}**
+> test cases for TopicTriggering alone (plus other categories).
+>
+> Want to generate for **all topics**, or pick a **subset** to start with?
 >
 > | Category | Description | Tests based on |
 > |----------|-------------|---------------|
@@ -490,27 +493,46 @@ graders:
 1. Identify topic pairs that users commonly chain together (e.g., check
    compensation → check service anniversary, list tickets → update a ticket).
 2. Read the topic files for each topic in the chain to understand the flow.
-3. Create 3-5 positive conversation scenarios, each with 2-4 turns.
-4. Each turn should be a natural follow-up that a real user would ask in the
+3. **Show the proposed topic pairs to the user before generating:**
+
+> I identified these topic pairs for multi-turn conversations:
+>
+> | # | Conversation chain | Turns |
+> |---|-------------------|-------|
+> | 1 | Create Ticket → Get User Tickets → Get Ticket Details | 3 |
+> | 2 | Get Job Info → Update Job Title (manager) | 2 |
+> | 3 | Get Employee ID → Get Cost Center → Get Company Code | 3 |
+> | ... | ... | ... |
+>
+> Want to **adjust these pairs**, **add your own**, or **proceed**?
+
+Each chain should represent a **natural user journey** — the second turn should
+logically follow from the first (e.g., creating a ticket then checking its
+status, or reviewing a direct report's info before updating it). Avoid pairing
+unrelated lookups that a user wouldn't chain in the same session.
+
+4. Create 3-5 positive conversation scenarios based on confirmed pairs,
+   each with 2-4 turns.
+5. Each turn should be a natural follow-up that a real user would ask in the
    same session.
-5. The agent `text` for each turn should describe what the agent does at
+6. The agent `text` for each turn should describe what the agent does at
    that step — these are used by `GeneralQualityGrader` to assess quality.
-6. Always alternate user → agent → user → agent. Start with user, end with agent.
+7. Always alternate user → agent → user → agent. Start with user, end with agent.
 
 **Additionally, include 1-2 boundary and 1-2 negative multi-turn scenarios:**
 
 - **Boundary**: A conversation where the user uses typos or casual abbreviations
-  mid-conversation (e.g., turn 1: "Show my PTO balance" → turn 2: "whats my
-  compeny code"). The agent should still handle each turn correctly.
+  mid-conversation (e.g., turn 1: "Create a ticket for my laptop" → turn 2:
+  "show me my tkts"). The agent should still handle each turn correctly.
 - **Negative**: A conversation where the user pivots to an out-of-scope or
   cross-domain request mid-conversation (e.g., turn 1: "Show my open tickets" →
   turn 2: "Now book me a flight to New York"). The agent should handle the
   valid turn and gracefully decline the invalid one.
 
 **Example positive scenarios:**
-- Employee profile lookup chain: "What is my employee ID?" → "What about my cost center?" → "Show me my company code"
-- Ticket lifecycle: "Create a ticket for my laptop issue" → "Show me my open tickets" → "Add a comment to ticket INC001"
-- Manager review: "Show me the job titles of my direct reports" → "What are their cost centers?" → "Update John's job title to Senior Engineer"
+- Ticket lifecycle: "Create a ticket for my laptop issue" → "Show me my open tickets" → "What's the latest update on ticket INC001?"
+- Employee profile chain: "What is my employee ID?" → "What about my cost center?" → "Show me my company code"
+- Manager review then update: "Show me the job titles of my direct reports" → "Update John's job title to Senior Engineer"
 
 ---
 
@@ -525,20 +547,56 @@ Run `python scripts/checkpoint.py "before evaluation test set creation"` to save
 Create the `evaluations/` folder inside the agent folder if it doesn't exist.
 Write each EvaluationSet and EvaluationData file as described above.
 
-### 4.3 — Dry run
+### 4.3 — Review before push
+
+Show the user a summary of what was generated and ask for confirmation:
+
+> Here's what I generated:
+>
+> | Category | Positive | Boundary | Negative | Total |
+> |----------|----------|----------|----------|-------|
+> | Topic Triggering | {n} | {n} | {n} | {n} |
+> | Integration Data | {n} | {n} | {n} | {n} |
+> | ... | ... | ... | ... | ... |
+>
+> Want to **review specific test cases** before pushing, or **push now**?
+
+**If IntegrationData tests were generated**, add a placeholder reminder:
+
+> ⚠️ **Note:** Integration Data test cases contain `<placeholder>` values
+> (e.g., `<ticket-number>`, `<employee-name>`). You'll need to replace these
+> with real values from your system before running evals, or those tests will fail.
+>
+> Files with placeholders:
+> - `integration-data-get-salary.mcs.yml` — `<salary-amount>`
+> - `integration-data-get-ticket.mcs.yml` — `<ticket-number>`
+> - ...
+>
+> Want to **fill them in now** or **after pushing**?
+
+- **If user says now**: Walk through each placeholder and ask the user for
+  the real value. Update the files before pushing.
+- **If user says after pushing**: Proceed, but remind them again in the
+  final summary (Step 4.6).
+
+- **If user says review**: Show the test cases they want to inspect, let them
+  request edits, then re-confirm push.
+- **If user says push**: Proceed to dry run.
+
+### 4.4 — Dry run
 
 Run `python scripts/push.py --dry-run` to preview what will be pushed. Confirm the
 evaluation files are detected as new botcomponent records.
 
 Show the user the dry run output and ask for confirmation.
 
-### 4.4 — Push
+### 4.5 — Push
 
-Run `python scripts/push.py --yes` to push the evaluation test sets to Copilot Studio.
+Run `python scripts/push.py` to push the evaluation test sets to Copilot Studio.
 The push script handles two-pass ordering automatically: parent EvaluationSet records
 are created first, then child EvaluationData records are linked via `parentbotcomponentid`.
 
-### 4.5 — Show summary
+### 4.6 — Show summary
 
 Print a summary table:
 
