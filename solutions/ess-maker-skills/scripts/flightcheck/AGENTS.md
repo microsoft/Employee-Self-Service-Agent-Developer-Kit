@@ -248,7 +248,7 @@ and do the per-tier verification.
    python scripts/flightcheck/cli.py --scope <scope>
    ```
    Available scopes: `full`, `prerequisites`, `environment`,
-   `authentication`, `external`, `workday`, `local`, `publishing`.
+   `authentication`, `external`, `workday`, `servicenow`, `local`, `publishing`.
 3. Verify the check produces useful output in both pass AND fail states.
 
 ---

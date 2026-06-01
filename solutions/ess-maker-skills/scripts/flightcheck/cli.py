@@ -16,6 +16,7 @@ Scopes:
     authentication  — Entra ID, SSO, CA policies
     external        — Integration discovery (flows)
     workday         — Workday deep validation
+    servicenow      — ServiceNow deep validation
     local           — Local agent file validation
     publishing      — Publishing/QA checklist
 """
@@ -39,6 +40,7 @@ from flightcheck.checks.environment import run_environment_checks
 from flightcheck.checks.authentication import run_authentication_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.workday import run_workday_checks
+from flightcheck.checks.servicenow import run_servicenow_checks
 from flightcheck.checks.local_files import run_local_file_checks
 from flightcheck.checks.publishing import run_publishing_checks
 
@@ -52,6 +54,10 @@ SCOPE_MAP = {
         ("External Systems", run_external_systems_checks),
         ("Workday", run_workday_checks),
     ],
+    "servicenow": [
+        ("External Systems", run_external_systems_checks),
+        ("ServiceNow", run_servicenow_checks),
+    ],
     "local": [("Local Files", run_local_file_checks)],
     "publishing": [("Publishing", run_publishing_checks)],
 }
@@ -62,6 +68,7 @@ FULL_SCOPE = [
     ("Authentication", run_authentication_checks),
     ("External Systems", run_external_systems_checks),
     ("Workday", run_workday_checks),
+    ("ServiceNow", run_servicenow_checks),
     ("Local Files", run_local_file_checks),
     ("Publishing", run_publishing_checks),
 ]
@@ -231,19 +238,19 @@ def main():
     print("  FLIGHTCHECK SUMMARY")
     print("=" * 64)
     print(f"  Total checks: {result.total}")
-    print(f"  ✅ Passed:         {result.passed}")
-    print(f"  ❌ Failed:         {result.failed}")
-    print(f"  ⚠️  Warnings:       {result.warnings}")
-    print(f"  ℹ️  Not Configured: {result.not_configured}")
-    print(f"  Duration:          {result.duration_secs}s")
+    print(f"  [PASS] Passed:         {result.passed}")
+    print(f"  [FAIL] Failed:         {result.failed}")
+    print(f"  [WARN] Warnings:       {result.warnings}")
+    print(f"  [INFO] Not Configured: {result.not_configured}")
+    print(f"  Duration:              {result.duration_secs}s")
     print()
 
     if result.overall == "READY":
-        print("  ✅ READY FOR DEPLOYMENT")
+        print("  [PASS] READY FOR DEPLOYMENT")
     elif result.overall == "READY_WITH_WARNINGS":
-        print("  ⚠️  READY WITH WARNINGS")
+        print("  [WARN] READY WITH WARNINGS")
     else:
-        print("  ❌ NOT READY — ISSUES FOUND")
+        print("  [FAIL] NOT READY -- ISSUES FOUND")
 
     print("=" * 64)
 
@@ -252,9 +259,9 @@ def main():
     if failures:
         print(f"\n  FAILED CHECKS ({len(failures)}):\n")
         for r in failures:
-            print(f"    ❌ {r.checkpoint_id}: {r.result}")
+            print(f"    [FAIL] {r.checkpoint_id}: {r.result}")
             if r.remediation:
-                print(f"       → {r.remediation}")
+                print(f"       -> {r.remediation}")
         print()
 
     # Save results
