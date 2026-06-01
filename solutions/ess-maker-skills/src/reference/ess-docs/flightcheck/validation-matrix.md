@@ -37,6 +37,10 @@ and extended with local file validation checks unique to the Copilot Kit.
 | ENV-001 | Power Platform environment exists | Critical | BAP Admin API | [prepare#set-up-your-power-platform-environment](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prepare#set-up-your-power-platform-environment) |
 | ENV-002 | Dataverse database provisioned | Critical | BAP Admin API | [prepare#set-up-your-power-platform-environment](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prepare#set-up-your-power-platform-environment) |
 | ENV-003 | Environment type | High | BAP Admin API | [prepare#set-up-your-power-platform-environment](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prepare#set-up-your-power-platform-environment) |
+| ENV-004 | Connections & connection references (binding + orphan detection) | High | BAP Admin API + Dataverse REST | [prepare#set-up-your-power-platform-environment](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prepare#set-up-your-power-platform-environment) |
+| ENV-004-OR-nnn | Orphan reference (points to missing connection) | High | — | — |
+| ENV-004-UR-nnn | Unbound reference (no connection bound) | High | — | — |
+| ENV-004-UC-nnn | Unbound connection (no reference uses it) | Medium | — | — |
 | ENV-008 | DLP policies configured | High | BAP Admin API | [prepare#allow-the-external-systems-connector](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prepare#allow-the-external-systems-connector) |
 
 ## 3. Authentication & Identity (AUTH-xxx)
