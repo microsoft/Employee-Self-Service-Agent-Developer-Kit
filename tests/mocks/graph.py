@@ -203,12 +203,24 @@ def service_principal(
     display_name: str = "Workday",
     app_role_assignment_required: bool = True,
     account_enabled: bool = True,
+    preferred_sso_mode: str | None = "saml",
+    tags: Iterable[str] | None = None,
+    login_url: str | None = "https://impl.workday.com/contoso/login-saml.htmld",
+    service_principal_names: Iterable[str] | None = None,
 ) -> dict[str, Any]:
     """Build a single Graph /servicePrincipals record.
 
+    Defaults represent a customer's federated Workday enterprise app —
+    the shape both AUTH-005 (user-assignment) and AUTH-006 (SAML NameID
+    alignment) expect to find. The ``service_principal_names``
+    collection includes the SAML entity ID Workday's "SAML Identity
+    Providers > Service Provider ID" field references — that's the
+    join key AUTH-006 surfaces so the operator can identify which
+    Entra app the Workday tenant is actually using.
+
     Cited consumers:
-      - flightcheck/graph_client.py (get_service_principals)
-      - flightcheck/checks/authentication.py (AUTH-005)
+      - flightcheck/graph_client.py (get_service_principals).
+      - flightcheck/checks/authentication.py (AUTH-005, AUTH-006).
 
     Source (validatable):
       Schema: https://graph.microsoft.com/v1.0/$metadata
@@ -216,12 +228,28 @@ def service_principal(
                 id (Edm.String)
                 appId (Edm.String)
                 displayName (Edm.String)
-                appRoleAssignmentRequired (Edm.Boolean)
+                appRoleAssignmentRequired (Edm.Boolean)  [AUTH-005]
                 accountEnabled (Edm.Boolean)
+                preferredSingleSignOnMode (Edm.String, nullable)  [AUTH-006]
+                servicePrincipalNames (Collection(Edm.String))  [AUTH-006]
+                tags (Collection(Edm.String))
+                loginUrl (Edm.String, nullable)
       Docs:   https://learn.microsoft.com/graph/api/serviceprincipal-get
+              https://learn.microsoft.com/graph/api/resources/serviceprincipal?view=graph-rest-1.0
               Example response copied verbatim 2026-05.
     """
+    if service_principal_names is None:
+        # Default mirrors the entity-ID pattern Microsoft documents
+        # for the Workday gallery app — see
+        # https://learn.microsoft.com/en-us/entra/identity/saas-apps/workday-tutorial
+        # step 5 (Reply URL pattern) and step 6 (Service Provider ID).
+        service_principal_names = [
+            app_id,
+            "http://www.workday.com/contoso",
+        ]
     return {
+        "id": sp_id,
+        "deletedDateTime": None,
         "accountEnabled": account_enabled,
         "addIns": [],
         "alternativeNames": [],
@@ -231,7 +259,6 @@ def service_principal(
         "appRoleAssignmentRequired": app_role_assignment_required,
         "appRoles": [],
         "displayName": display_name,
-        "id": sp_id,
         "info": {
             "termsOfServiceUrl": None,
             "supportUrl": None,
@@ -240,15 +267,17 @@ def service_principal(
             "logoUrl": None,
         },
         "keyCredentials": [],
+        "loginUrl": login_url,
         "logoutUrl": None,
         "oauth2PermissionScopes": [],
         "passwordCredentials": [],
+        "preferredSingleSignOnMode": preferred_sso_mode,
         "publisherName": None,
         "replyUrls": [],
-        "servicePrincipalNames": [app_id],
+        "servicePrincipalNames": list(service_principal_names),
         "servicePrincipalType": "Application",
         "signInAudience": "AzureADMyOrg",
-        "tags": ["WindowsAzureActiveDirectoryIntegratedApp"],
+        "tags": list(tags) if tags is not None else ["WindowsAzureActiveDirectoryIntegratedApp"],
         "tokenEncryptionKeyId": None,
     }
 
@@ -295,6 +324,51 @@ def app_role_assignment(
         "principalType": principal_type,
         "resourceDisplayName": resource_display_name,
         "resourceId": resource_id,
+    }
+
+
+def claims_mapping_policy(
+    *,
+    policy_id: str = "00000000-0000-0000-0000-000000005201",
+    display_name: str = "Workday NameID -> employeeId",
+    definition: list[str] | None = None,
+) -> dict[str, Any]:
+    """Build a single Graph claimsMappingPolicy record.
+
+    The `definition` field is a list of JSON-encoded strings (Entra's
+    own format — not nested JSON objects). AUTH-006 reads the first
+    element to surface the override; if no policy is assigned, the
+    application uses Entra's default
+    (NameID = user.userPrincipalName).
+
+    Cited consumers:
+      - flightcheck/graph_client.py (get_claims_mapping_policies).
+      - flightcheck/checks/authentication.py (AUTH-006).
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="claimsMappingPolicy"
+              Fields used by AUTH-006:
+                id (Edm.String)
+                displayName (Edm.String)
+                definition (Collection(Edm.String))
+      Docs:   https://learn.microsoft.com/graph/api/resources/claimsmappingpolicy?view=graph-rest-1.0
+              https://learn.microsoft.com/graph/api/serviceprincipal-list-claimsmappingpolicies?view=graph-rest-1.0
+              (verbatim example response cited in the response section)
+    """
+    if definition is None:
+        definition = [
+            '{"ClaimsMappingPolicy":{"Version":1,"IncludeBasicClaimSet":"true",'
+            '"ClaimsSchema":[{"Source":"user","ID":"employeeid",'
+            '"SamlClaimType":'
+            '"http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier"}]}}'
+        ]
+    return {
+        "id": policy_id,
+        "deletedDateTime": None,
+        "displayName": display_name,
+        "definition": list(definition),
+        "isOrganizationDefault": False,
     }
 
 
@@ -388,7 +462,9 @@ def list_service_principals(
     The production check uses a server-side ``$filter`` to narrow on
     ``displayName``; per the cassette-tier rule that ``$filter`` /
     ``$select`` / ``$top`` are server-side narrowing on the same path,
-    one mock covers all narrowing variants.
+    one mock covers all narrowing variants. Both AUTH-005 and
+    AUTH-006 hit this endpoint with different filters and consume
+    the same ``servicePrincipal`` shape.
     """
     return {
         "method": "GET",
@@ -417,6 +493,28 @@ def list_app_role_assignments(
             odata_context=(
                 f"$metadata#servicePrincipals('{sp_id}')/appRoleAssignedTo"
             ),
+        ),
+        "status": 200,
+    }
+
+
+def list_claims_mapping_policies_for_sp(
+    *,
+    sp_id: str = MOCK_WORKDAY_SP_ID,
+    policies: Iterable[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Mock GET /v1.0/servicePrincipals/{id}/claimsMappingPolicies.
+
+    Pass `policies=[]` to mock the no-custom-mapping case (the application
+    is using Entra's default NameID claim).
+    """
+    pol_list = list(policies) if policies is not None else [claims_mapping_policy()]
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/servicePrincipals/{sp_id}/claimsMappingPolicies",
+        "json": collection(
+            pol_list,
+            odata_context=f"$metadata#servicePrincipals('{sp_id}')/claimsMappingPolicies",
         ),
         "status": 200,
     }

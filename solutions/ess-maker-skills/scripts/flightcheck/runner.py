@@ -23,6 +23,14 @@ class Status(str, Enum):
     NOT_CONFIGURED = "NotConfigured"
     SKIPPED = "Skipped"
     ERROR = "Error"
+    # MANUAL — the check gathered everything the kit can verify
+    # programmatically but the final comparison must be performed by
+    # the operator against an external system the kit can't (or
+    # shouldn't) read directly. The result carries the value the kit
+    # observed; the remediation tells the operator what to compare it
+    # against and where. MANUAL items do NOT fail readiness — they're
+    # informational/actionable, similar to NOT_CONFIGURED.
+    MANUAL = "Manual"
 
 
 class Priority(str, Enum):
@@ -54,6 +62,7 @@ class CategorySummary:
     not_configured: int = 0
     skipped: int = 0
     errors: int = 0
+    manual: int = 0
 
 
 @dataclass
@@ -68,6 +77,7 @@ class RunResult:
     failed: int = 0
     warnings: int = 0
     not_configured: int = 0
+    manual: int = 0
     overall: str = ""  # READY / READY_WITH_WARNINGS / NOT_READY
 
 
@@ -126,6 +136,8 @@ class FlightCheckRunner:
                 s.skipped += 1
             elif r.status == Status.ERROR.value:
                 s.errors += 1
+            elif r.status == Status.MANUAL.value:
+                s.manual += 1
 
         total_failed = sum(c.failed for c in cat_map.values())
         total_warnings = sum(c.warnings for c in cat_map.values())
@@ -149,6 +161,7 @@ class FlightCheckRunner:
             failed=total_failed,
             warnings=total_warnings,
             not_configured=sum(c.not_configured for c in cat_map.values()),
+            manual=sum(c.manual for c in cat_map.values()),
             overall=overall,
         )
 
@@ -170,6 +183,7 @@ def save_results(run_result: RunResult, output_dir: str = "workspace/flightcheck
         "failed": run_result.failed,
         "warnings": run_result.warnings,
         "not_configured": run_result.not_configured,
+        "manual": run_result.manual,
         "categories": [asdict(c) for c in run_result.categories],
         "results": [asdict(r) for r in run_result.results],
     }
@@ -208,6 +222,7 @@ def _generate_html_report(r: RunResult) -> str:
             Status.NOT_CONFIGURED.value: "status-notconfigured",
             Status.SKIPPED.value: "status-notconfigured",
             Status.ERROR.value: "status-failed",
+            Status.MANUAL.value: "status-manual",
         }.get(res.status, "")
 
         priority_class = {
@@ -225,8 +240,8 @@ def _generate_html_report(r: RunResult) -> str:
             f"                    <td>{res.category}</td>\n"
             f"                    <td>{res.priority}</td>\n"
             f'                    <td class="{status_class}">{res.status}</td>\n'
-            f"                    <td>{_html_escape(res.result)}</td>\n"
-            f"                    <td>{remediation}</td>\n"
+            f'                    <td class="cell-text">{_html_escape(res.result)}</td>\n'
+            f'                    <td class="cell-text">{remediation}</td>\n'
             f"                </tr>"
         )
 
@@ -240,21 +255,30 @@ def _generate_html_report(r: RunResult) -> str:
         body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; margin: 20px; background-color: #f5f5f5; }}
         .header {{ background-color: #0078d4; color: white; padding: 20px; border-radius: 5px; }}
         .summary {{ background-color: white; padding: 20px; margin: 20px 0; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
-        .summary-grid {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }}
+        .summary-grid {{ display: grid; grid-template-columns: repeat(5, 1fr); gap: 20px; }}
         .summary-item {{ text-align: center; padding: 15px; border-radius: 5px; }}
         .passed {{ background-color: #d4edda; color: #155724; }}
         .failed {{ background-color: #f8d7da; color: #721c24; }}
         .warning {{ background-color: #fff3cd; color: #856404; }}
         .notconfigured {{ background-color: #e7e7e7; color: #666; }}
+        .manual {{ background-color: #cce5ff; color: #004085; }}
         .results {{ background-color: white; padding: 20px; border-radius: 5px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }}
         table {{ width: 100%; border-collapse: collapse; margin-top: 20px; }}
         th {{ background-color: #0078d4; color: white; padding: 12px; text-align: left; }}
-        td {{ padding: 10px; border-bottom: 1px solid #ddd; }}
+        td {{ padding: 10px; border-bottom: 1px solid #ddd; vertical-align: top; word-wrap: break-word; overflow-wrap: break-word; }}
+        /* cell-text preserves authored line breaks AND leading
+           whitespace, so multi-line result/remediation strings (e.g.
+           AUTH-006's "Detected apps:" list and "Step 1 / Step 2"
+           sub-steps) render as written instead of collapsing into a
+           wall of text. Applied only to the result + remediation
+           cells; the other cells stay single-line. */
+        td.cell-text {{ white-space: pre-wrap; line-height: 1.5; }}
         tr:hover {{ background-color: #f5f5f5; }}
         .status-passed {{ color: #28a745; font-weight: bold; }}
         .status-failed {{ color: #dc3545; font-weight: bold; }}
         .status-warning {{ color: #ffc107; font-weight: bold; }}
         .status-notconfigured {{ color: #6c757d; font-weight: bold; }}
+        .status-manual {{ color: #004085; font-weight: bold; }}
         .priority-critical {{ background-color: #ffe6e6; }}
         .priority-high {{ background-color: #fff4e6; }}
         .footer {{ margin-top: 20px; text-align: center; color: #666; }}
@@ -285,6 +309,10 @@ def _generate_html_report(r: RunResult) -> str:
             <div class="summary-item notconfigured">
                 <h3>{r.not_configured}</h3>
                 <p>Not Configured</p>
+            </div>
+            <div class="summary-item manual">
+                <h3>{r.manual}</h3>
+                <p>Manual</p>
             </div>
         </div>
     </div>

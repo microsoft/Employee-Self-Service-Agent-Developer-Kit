@@ -14,7 +14,8 @@ failure where the customer's Workday Enterprise App had
 ``appRoleAssignmentRequired`` set without an ESS user/group assigned, and
 the OBO/OAuth handshake on first agent access failed for ~3,000 end users.
 
-These tests pin the four branches the check distinguishes:
+These tests pin the four branches the check distinguishes plus the
+status-bucketing rule:
 
 * GOOD — ``appRoleAssignmentRequired=true`` and a Group is assigned →
   PASSED.
@@ -26,7 +27,12 @@ These tests pin the four branches the check distinguishes:
 * WARNING (per-user only) — ``appRoleAssignmentRequired=true`` and only
   individual User principals are assigned (no Group).
 * SKIPPED — no Workday SP exists in the tenant.
-"""
+
+When the tenant has multiple Workday SPs, results are grouped by
+status — one Failed row, one Warning row, one Passed row at most —
+each listing every SP in that bucket. Per-SP rows would make the
+readiness summary unreadable for tenants with several Workday apps
+(SSO + OAuth + per-tenant implementation app)."""
 
 from __future__ import annotations
 
@@ -152,9 +158,13 @@ class TestBadConfig:
             f"status={auth_005.status} result={auth_005.result!r}"
         )
         assert auth_005.priority == "Critical"
-        assert "no users or groups are assigned" in auth_005.result
-        assert "OBO/OAuth handshake" in auth_005.result
+        # Result is the current state — terse, no impact prose.
+        assert "0 users/groups assigned" in auth_005.result
+        assert "user assignment required" in auth_005.result
+        # Impact + fix steps live in remediation, not result.
+        assert "OBO/OAuth handshake" in auth_005.remediation
         assert "Users and groups" in auth_005.remediation
+        assert "ESS user security group" in auth_005.remediation
         assert auth_005.doc_link.startswith(
             "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
         )
@@ -165,10 +175,11 @@ class TestEdgeCases:
     def test_assignment_required_false_returns_warning(
         self, runner: _MinimalRunner
     ) -> None:
-        """When the customer left 'User assignment required?' = No,
-        anyone in the tenant could obtain a token. Per the issue, a
-        deploy-time check cannot guarantee per-user access at runtime —
-        warn rather than pass."""
+        """When the customer left 'User assignment required?' = No, the
+        Workday SP can issue tokens to any licensed user in the tenant —
+        ESS still works, but the impersonation surface is the whole
+        tenant and you lose deploy-time provable access control. Warn
+        as a hardening recommendation."""
         from flightcheck.checks.authentication import (
             _check_workday_app_user_assignment,
         )
@@ -185,8 +196,15 @@ class TestEdgeCases:
         auth_005 = _result_by_id(results, "AUTH-005")
 
         assert auth_005.status == "Warning"
+        # Result describes the observable state and what it means.
         assert "set to No" in auth_005.result
+        assert "any licensed user" in auth_005.result
+        # Remediation frames this as hardening, not a functional fix,
+        # and explains why Yes is better before saying how to set it.
+        assert "Hardening recommendation" in auth_005.remediation
+        assert "not a functional blocker" in auth_005.remediation
         assert "Assignment required?" in auth_005.remediation
+        assert "ESS user security group" in auth_005.remediation
 
     @responses.activate
     def test_only_individual_users_assigned_returns_warning(
@@ -266,12 +284,13 @@ class TestEdgeCases:
         assert "Graph client not available" in results[0].result
 
     @responses.activate
-    def test_multiple_workday_sps_each_get_their_own_result(
+    def test_multiple_workday_sps_grouped_by_status(
         self, runner: _MinimalRunner
     ) -> None:
         """Some tenants register both a SAML SSO app and an OAuth flavor —
-        the check should evaluate each independently rather than picking
-        one and ignoring the rest."""
+        the check must evaluate each independently but emit at most one
+        row per status, so the readiness summary doesn't get a separate
+        row for every Workday SP."""
         from flightcheck.checks.authentication import (
             _check_workday_app_user_assignment,
         )
@@ -315,7 +334,60 @@ class TestEdgeCases:
         results = _check_workday_app_user_assignment(runner.graph)
 
         auth_005_results = [r for r in results if r.checkpoint_id == "AUTH-005"]
+        # One row per distinct status — here Passed (SSO) + Warning (OAuth).
         assert len(auth_005_results) == 2
 
         statuses = {r.status for r in auth_005_results}
         assert statuses == {"Passed", "Warning"}
+
+        # Each row names the SP it covers.
+        by_status = {r.status: r for r in auth_005_results}
+        assert "Workday SSO" in by_status["Passed"].result
+        assert "Workday OAuth" in by_status["Warning"].result
+
+    @responses.activate
+    def test_two_failing_sps_collapse_to_one_failed_row(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """Two Workday SPs in the same FAILED state must produce ONE
+        Failed row that lists both apps, not two separate rows."""
+        from flightcheck.checks.authentication import (
+            _check_workday_app_user_assignment,
+        )
+
+        sp_a_id = "00000000-0000-0000-0000-000000005401"
+        sp_b_id = "00000000-0000-0000-0000-000000005402"
+
+        responses.add(
+            **gr.list_service_principals(
+                service_principals=[
+                    gr.service_principal(
+                        sp_id=sp_a_id,
+                        app_id="00000000-0000-0000-0000-000000005411",
+                        display_name="Workday Prod",
+                        app_role_assignment_required=True,
+                    ),
+                    gr.service_principal(
+                        sp_id=sp_b_id,
+                        app_id="00000000-0000-0000-0000-000000005412",
+                        display_name="Workday Impl",
+                        app_role_assignment_required=True,
+                    ),
+                ]
+            )
+        )
+        responses.add(**gr.list_app_role_assignments(sp_id=sp_a_id, assignments=[]))
+        responses.add(**gr.list_app_role_assignments(sp_id=sp_b_id, assignments=[]))
+
+        results = _check_workday_app_user_assignment(runner.graph)
+
+        auth_005_results = [r for r in results if r.checkpoint_id == "AUTH-005"]
+        assert len(auth_005_results) == 1, (
+            f"Expected one Failed row covering both SPs, got "
+            f"{[(r.status, r.result) for r in auth_005_results]}"
+        )
+        assert auth_005_results[0].status == "Failed"
+        # Both SPs are surfaced in the combined result.
+        assert "Workday Prod" in auth_005_results[0].result
+        assert "Workday Impl" in auth_005_results[0].result
+        assert "2 Workday Enterprise App(s)" in auth_005_results[0].result
