@@ -302,6 +302,78 @@ and do the per-tier verification.
    confirmed exists. If no doc page exists, leave the link empty with a
    `# TODO: create doc page at ...` comment.
 
+7. **Bucket multi-resource checks by status.** When a check iterates
+   over N resources of the same kind (service principals, cloud flows,
+   environment variables, environments, etc.), group results by status
+   and emit at most one `CheckResult` per distinct status — never one
+   per resource. Per-resource rows make the readiness summary
+   unreadable as soon as a tenant has more than one of the resource
+   (e.g. a customer with both a Workday SSO app and a Workday OAuth
+   app produces two rows instead of one Warning + one Passed). The
+   `result` field of each bucket lists every affected resource (one
+   line per resource when there are multiple); the `remediation` is
+   the de-duplicated set of fix actions. See AUTH-005 in
+   `checks/authentication.py` for the canonical implementation,
+   including the `_format_sp_state()` / `_format_sp_remediations()`
+   helpers that handle the single-resource vs. multi-resource
+   rendering.
+
+8. **`result` vs. `remediation` contract.** Every `CheckResult` must
+   obey this split, regardless of status:
+   - `result` = what the kit observed (current state). No fix steps,
+     no "should be X" prose, no impact speculation. Read it and you
+     know what's true in the tenant right now.
+   - `remediation` = what the operator should do. No restating of the
+     current state. Read it and you know which buttons to click.
+   - The WHY of acting (impact, hardening justification, urgency
+     framing) belongs once at the start of `remediation`, NOT in
+     `result`. The status + priority already convey severity; the
+     `remediation` is where you explain why the operator should care.
+   - Fix actions in `remediation` should NOT embed per-resource names
+     when emitted from a status-bucketed check (principle 7). Factor
+     the name out — say "the app(s) above" or "the resources listed"
+     — so identical fixes across multiple resources collapse to a
+     single de-duplicated line instead of repeating verbatim per
+     resource. Resource names live in `result`.
+   - `PASSED` results have no `remediation`. There is nothing to fix.
+   - This is the general form of the rule MANUAL spelled out in
+     principle 2 — apply it everywhere.
+
+9. **Calibrate WARNING text by kind.** Before shipping a WARNING,
+   classify it explicitly. Each kind has a different `remediation`
+   shape so the operator triaging the report doesn't waste cycles
+   chasing the wrong urgency:
+   - **Functional risk** ("X will fail / is partially broken /
+     misconfigured in a way that causes runtime errors"): describe
+     the breakage tersely in `result`, give the fix and the runtime
+     impact in `remediation`.
+   - **Hardening recommendation** (the system works, but the
+     configuration is below the supported best practice for
+     security, scale, or audit): the `remediation` MUST open with
+     `"Hardening recommendation (not a functional blocker)"` and
+     MUST give at least one concrete reason the recommended state
+     is better (smaller impersonation surface, group-based access
+     control, audit trail, etc.) BEFORE the click-path. Otherwise
+     operators read it as a broken-thing alert and waste triage time.
+   - **Data-quality concern** (low sample size, short description,
+     missing optional metadata): say so in `result`; the `remediation`
+     names the missing data.
+   If you can't categorize the WARNING into one of these three, it's
+   probably either misframed or it should be a different status
+   (`NOT_CONFIGURED` for items that need manual portal verification,
+   `SKIPPED` for items the check couldn't actually evaluate).
+
+10. **Verify framing claims.** Any urgency phrase in check text
+    ("X will fail", "Y is required for runtime", "Z breaks for all
+    users") must trace to either (a) a tested code path the check
+    actually exercises, or (b) a cited doc/issue link in the source
+    comments. Vague hedges like "a deploy-time check cannot guarantee
+    runtime behavior" are forbidden — if you don't know whether the
+    misconfiguration actually breaks anything, find out before
+    shipping the check. Untested urgency claims erode trust the
+    moment a reviewer asks "wait, does this actually break ESS?"
+    and the answer is "no, but it could in theory."
+
 ---
 
 ## Things you must NOT do
