@@ -41,6 +41,19 @@ modifications:
 | "Remove a test case" | Delete the EvaluationData file (use delete skill) |
 | "Replace placeholder values" | Update `<placeholder>` tokens in `expectedOutput` |
 
+Once the user picks a category (or if they're not sure which test case), show
+a table of all test cases in that category so they can identify the one to update:
+
+> Here are the test cases in **{Category Name}** ({N} total):
+>
+> | # | Type | Input | Expected Output | File |
+> |---|------|-------|----------------|------|
+> | 1 | Positive | "What is my employee ID?" | "The agent should display..." | `topic-triggering-employee-id.mcs.yml` |
+> | 2 | Boundary | "empolyee ID" | "The agent should display..." | `topic-triggering-employee-id-boundary.mcs.yml` |
+> | ... | ... | ... | ... | ... |
+>
+> Which test case do you want to update? (enter a number or describe what you're looking for)
+
 ## Step 2: Checkpoint
 
 Run in the terminal:
@@ -67,19 +80,35 @@ extensionData:
 For new test cases, create new `.mcs.yml` files following the naming convention:
 `{set-name}-{short-slug}.mcs.yml`.
 
-## Step 4: Dry Run
+## Step 4: Review before push
+
+Show the user a summary of what changed and ask for confirmation:
+
+> Here's what I changed:
+>
+> | # | File | Field | Before | After |
+> |---|------|-------|--------|-------|
+> | 1 | `topic-triggering-salary.mcs.yml` | input | "Show my salary" | "What is my base salary?" |
+> | ... | ... | ... | ... | ... |
+>
+> Want to **review the full file** before pushing, or **push now**?
+
+- **If user says review**: Show the full YAML of the changed file(s).
+- **If user says push**: Proceed to dry run.
+
+## Step 5: Dry Run
 
 Run `python scripts/push.py --dry-run` to preview changes. Show the user the
 output confirming modified/new/deleted evaluation files.
 
-## Step 5: Push
+## Step 6: Push
 
-Run `python scripts/push.py --yes` to push changes to Copilot Studio.
+Run `python scripts/push.py` to push changes to Copilot Studio.
 
 **If the push fails:** show the error and offer retry or revert
 (`python scripts/checkpoint.py --revert`).
 
-## Step 6: Verify
+## Step 7: Verify
 
 > ✅ Evaluation test cases updated in Copilot Studio.
 >
