@@ -9,13 +9,14 @@ matching .github/agents/skills/validate-sample-topic/SKILL.md.
 from __future__ import annotations
 
 import re
-import xml.etree.ElementTree as ET
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path, PurePosixPath
 from typing import Iterable
 
 import yaml
+from defusedxml.ElementTree import ParseError as _XMLParseError
+from defusedxml.ElementTree import fromstring as _xml_fromstring
 
 SAMPLES_ROOT = "samples"
 
@@ -154,8 +155,8 @@ def check_xml_parse(repo_root: Path, changed: list[ChangedFile]) -> Result:
         if text is None:
             continue
         try:
-            ET.fromstring(text)
-        except ET.ParseError as exc:
+            _xml_fromstring(text)
+        except _XMLParseError as exc:
             res.add(f"{c.path}: {exc}")
     return res
 

@@ -30,7 +30,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install test deps
-        run: pip install "pytest>=8,<9" "PyYAML>=6,<7"
+        run: pip install "pytest>=8,<9" "PyYAML>=6,<7" "defusedxml>=0.7,<1.0"
 
       - name: Run pytest
         run: pytest tests/test_validate_samples.py -q
@@ -52,7 +52,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install PyYAML
+        run: pip install PyYAML defusedxml
 
       - name: Compute changed files
         id: changed
