@@ -93,3 +93,25 @@ The Microsoft CLA bot will comment on your PR if you are an external contributor
 ### 5. Code quality
 
 - **No fabricated URLs.** Every URL in code (doc links, remediation messages, comments, README references) must point to a page you have confirmed exists. See [solutions/ess-maker-skills/.github/copilot-instructions.md#no-fabricated-urls](solutions/ess-maker-skills/.github/copilot-instructions.md#no-fabricated-urls) for the verification rule.
+
+### 6. Minimal, surgical changes
+
+When modifying a file to add new functionality, **only change what is necessary for the feature**. Do not:
+
+- Rewrite or rephrase existing docstrings, comments, or variable names that are unrelated to your change
+- Replace Unicode characters (e.g., `─`) with ASCII equivalents unless the change is specifically about encoding compatibility
+- Refactor surrounding code (rename variables, reorder functions, change formatting) unless it's required for your feature to work
+- Change function signatures (e.g., removing `required=True` from argparse) unless the new feature explicitly needs it
+
+Each PR should be reviewable by diffing only the lines that matter for the stated goal. Unrelated cosmetic changes create noise, increase merge conflicts, and make `git blame` less useful.
+
+### 7. Clean commits — review before you push
+
+Before committing, **always review what's staged** to avoid accidentally including unrelated files:
+
+- Run `git status` and `git diff --cached` before every commit
+- Never use `git add -A` or `git add .` without inspecting untracked files first — prefer `git add <specific-files>`
+- Ensure local working files (task trackers, scratch notes, editor artifacts) are covered by `.gitignore` or excluded manually
+- If an accidental file slips through, remove it in the same PR — don't leave orphan files for others to clean up
+
+Accidental commits pollute history, can leak internal workflows, and waste reviewer time on irrelevant diffs.

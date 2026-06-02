@@ -1,0 +1,4 @@
+plugins:
+  default:
+    - "market:devui@gim-home/ai-developer-toolkit"
+    - "market:ai-starter-pack@agency-microsoft/playground"

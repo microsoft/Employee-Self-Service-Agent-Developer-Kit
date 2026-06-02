@@ -39,6 +39,19 @@ Determine whether the user wants to:
 - **Delete an entire test set** — remove the EvaluationSet file AND all its
   child EvaluationData files
 
+If the user wants to delete a single test case but hasn't specified which one,
+show a table of all test cases in the relevant category:
+
+> Here are the test cases in **{Category Name}** ({N} total):
+>
+> | # | Input | Expected Output | File |
+> |---|-------|----------------|------|
+> | 1 | "What is my employee ID?" | "The agent should display..." | `topic-triggering-employee-id.mcs.yml` |
+> | 2 | "empolyee ID" | "The agent should display..." | `topic-triggering-employee-id-boundary.mcs.yml` |
+> | ... | ... | ... | ... |
+>
+> Which test case do you want to delete? (enter a number or describe what you're looking for)
+
 ## Step 2: Confirm Deletion
 
 Show the user what will be deleted:
@@ -67,19 +80,35 @@ For an entire test set: delete the parent EvaluationSet file AND all child
 EvaluationData files that reference it (check `parentbotcomponentid` in the
 component map).
 
-## Step 5: Dry Run
+## Step 5: Review before push
+
+Show the user a summary of what will be deleted and ask for final confirmation:
+
+> Here's what will be removed:
+>
+> | # | File | Input |
+> |---|------|-------|
+> | 1 | `topic-triggering-salary.mcs.yml` | "Show my salary" |
+> | ... | ... | ... |
+>
+> This will delete **{N}** file(s) from Copilot Studio. Proceed?
+
+- **If user confirms**: Proceed to dry run.
+- **If user cancels**: Revert local deletions via `python scripts/checkpoint.py --revert`.
+
+## Step 6: Dry Run
 
 Run `python scripts/push.py --dry-run`. Confirm the expected files show as
 deleted.
 
-## Step 6: Push
+## Step 7: Push
 
-Run `python scripts/push.py --yes`. The push script automatically orders
+Run `python scripts/push.py`. The push script automatically orders
 evaluation deletions — children are deleted before parents.
 
 **If the push fails:** show the error and offer retry or revert.
 
-## Step 7: Verify
+## Step 8: Verify
 
 > ✅ Evaluation test {case/set} deleted from Copilot Studio.
 >

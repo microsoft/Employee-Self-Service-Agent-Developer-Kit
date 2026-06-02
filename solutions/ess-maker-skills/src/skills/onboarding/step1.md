@@ -5,7 +5,98 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 
 ---
 
-## 1.1 — Ask for the environment URL
+## 1.0 — Ask how to provide the environment
+
+Use the `vscode_askQuestions` tool:
+
+```json
+[
+  {
+    "header": "Environment setup",
+    "question": "Would you like me to list all the Power Platform environments in your tenant so you can pick one?",
+    "options": [
+      { "label": "Yes, list my environments", "description": "Sign in and browse available environments" },
+      { "label": "No, I'll enter the URL manually", "description": "I already know my environment URL" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+- If the user chose **"Yes, list my environments"** → go to step 1.1.
+- If the user chose **"No, I'll enter the URL manually"** → go to step 1.1c.
+
+---
+
+## 1.1 — List environments and let the user pick
+
+**Message (do NOT wait for user response — continue immediately):**
+
+Let me find the Power Platform environments available in your tenant. A
+browser window will open for sign-in...
+
+**End message.**
+
+Run this command in the terminal:
+
+```
+python scripts/discover.py --list-environments
+```
+
+A browser window will open for sign-in. Wait for the script to finish.
+
+**Check the terminal output:**
+
+- **Script printed a table of environments → go to step 1.1a.**
+- **Script failed with an auth/permission error → go to step 1.1c.**
+
+---
+
+## 1.1a — Ask the user to pick an environment
+
+Build options from the script's environment table. Each row becomes an
+option with the environment name as the label and the URL + type as
+the description.
+
+Use the `vscode_askQuestions` tool:
+
+```json
+[
+  {
+    "header": "Select environment",
+    "question": "Which environment is your ESS agent deployed in?",
+    "options": [
+      { "label": "{env 1 name}", "description": "{URL} [{type}]" },
+      { "label": "{env 2 name}", "description": "{URL} [{type}]" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Map the selected environment name back to its row number from the script
+output.
+
+---
+
+## 1.1b — Confirm selection
+
+Run the selection command in the terminal:
+
+```
+python scripts/discover.py --list-environments --select {NUMBER}
+```
+
+Find the line starting with `SELECTED_ENV_JSON:` in the output. Parse the
+JSON after the colon to get the `instanceUrl` field. Save it as ENV_URL.
+**Strip any trailing slash** from ENV_URL before using it (e.g.,
+`https://org.crm.dynamics.com/` becomes `https://org.crm.dynamics.com`).
+
+Go to step 1.2.
+
+---
+
+## 1.1c — Manual URL entry (fallback)
 
 Use the `vscode_askQuestions` tool:
 
