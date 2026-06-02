@@ -366,8 +366,20 @@ if ($FlightCheckOnly) {
     $configPath = Join-Path $localDir 'config.json'
 
     if (Test-Path $configPath) {
-        Write-Ok "Config already exists at $configPath - skipping generation"
-    } else {
+        Write-Host ''
+        Write-Host "    Config already exists at $configPath" -ForegroundColor White
+        Write-Host '    Would you like to reconfigure? (Y/N)' -ForegroundColor Gray
+        Write-Host ''
+        $reconfigure = Read-Host '    Reconfigure'
+        if ($reconfigure -notmatch '^[Yy]') {
+            Write-Ok 'Keeping existing config'
+        } else {
+            Remove-Item $configPath -Force
+            Write-Ok 'Removed existing config - starting fresh'
+        }
+    }
+
+    if (-not (Test-Path $configPath)) {
         $scriptsDir = Join-Path $workspace 'scripts'
         $discoverPy = Join-Path $scriptsDir 'discover.py'
         $python = Get-Command python -ErrorAction SilentlyContinue
@@ -432,7 +444,7 @@ if ($FlightCheckOnly) {
                 $isManaged = $true
             } else {
                 Write-Host ''
-                $agentChoice = Read-Host '    Select agent number from the list above (or press Enter to skip)'
+                $agentChoice = Read-Host '    Select agent number (or press Enter to run environment-wide checks only)'
                 $agentChoice = $agentChoice.Trim()
 
                 if ($agentChoice -and $agentChoice -match '^\d+$') {
