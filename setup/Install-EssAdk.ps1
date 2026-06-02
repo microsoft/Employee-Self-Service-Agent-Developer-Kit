@@ -339,7 +339,7 @@ if ($deferPip) {
             Write-Warn2 'python still not on PATH. Run: pip install -r solutions/ess-maker-skills/scripts/requirements.txt'
         }
     } else {
-        Write-Warn2 'requirements.txt not found in cloned repo — pip dependencies not installed'
+        Write-Warn2 'requirements.txt not found in cloned repo - pip dependencies not installed'
     }
 }
 
@@ -360,7 +360,7 @@ if ($FlightCheckOnly) {
     $configPath = Join-Path $localDir 'config.json'
 
     if (Test-Path $configPath) {
-        Write-Ok "Config already exists at $configPath — skipping generation"
+        Write-Ok "Config already exists at $configPath - skipping generation"
     } else {
         $scriptsDir = Join-Path $workspace 'scripts'
         $discoverPy = Join-Path $scriptsDir 'discover.py'
@@ -379,7 +379,7 @@ if ($FlightCheckOnly) {
         Write-Host '    A browser window will open for sign-in.' -ForegroundColor Gray
         Write-Host ''
 
-        # Run discover.py --list-environments (interactive — shows table to user)
+        # Run discover.py --list-environments (interactive - shows table to user)
         Push-Location $workspace
         try {
             & $python.Source $discoverPy --list-environments
