@@ -28,6 +28,27 @@ This is the Employee Self-Service Agent Developer Kit monorepo. It contains:
 For repo-level tasks (CI, contributing, issues, PRs), you can help normally.
 For ESS agent customization, direct users to open `solutions/ess-maker-skills/`.
 
+## Branch Workflow
+
+### Refresh from main before starting work on a branch
+
+When starting work on a feature branch, **first merge the latest `main`**
+so your changes apply on top of current code. Refresh again before
+pushing if main has moved on while you were working.
+
+**Steps:**
+
+1. Fetch the latest main: `git fetch origin main`
+2. Merge main into your branch: `git merge origin/main`
+3. Resolve any conflicts if they arise
+4. Run the lint/syntax checks from CONTRIBUTING.md
+   ("Validating your changes" §1) to confirm nothing is broken
+5. Then make your changes and commit
+
+**Why:** Feature branches that drift from main accumulate conflicts and risk
+breaking when merged back. Keeping branches current makes PRs smaller, reviews
+easier, and CI green.
+
 ## Code Quality Rules
 
 ### No duplicate functions
