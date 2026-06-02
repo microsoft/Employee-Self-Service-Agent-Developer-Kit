@@ -16,6 +16,7 @@ Scopes:
     authentication  — Entra ID, SSO, CA policies
     external        — Integration discovery (flows)
     workday         — Workday deep validation
+    servicenow      — ServiceNow deep validation
     local           — Local agent file validation
     publishing      — Publishing/QA checklist
 """
@@ -39,6 +40,7 @@ from flightcheck.checks.environment import run_environment_checks
 from flightcheck.checks.authentication import run_authentication_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.workday import run_workday_checks
+from flightcheck.checks.servicenow import run_servicenow_checks
 from flightcheck.checks.local_files import run_local_file_checks
 from flightcheck.checks.publishing import run_publishing_checks
 
@@ -52,6 +54,10 @@ SCOPE_MAP = {
         ("External Systems", run_external_systems_checks),
         ("Workday", run_workday_checks),
     ],
+    "servicenow": [
+        ("External Systems", run_external_systems_checks),
+        ("ServiceNow", run_servicenow_checks),
+    ],
     "local": [("Local Files", run_local_file_checks)],
     "publishing": [("Publishing", run_publishing_checks)],
 }
@@ -62,6 +68,7 @@ FULL_SCOPE = [
     ("Authentication", run_authentication_checks),
     ("External Systems", run_external_systems_checks),
     ("Workday", run_workday_checks),
+    ("ServiceNow", run_servicenow_checks),
     ("Local Files", run_local_file_checks),
     ("Publishing", run_publishing_checks),
 ]
@@ -78,6 +85,14 @@ def main():
         "--output", default="workspace/flightcheck",
         help="Output directory (default: workspace/flightcheck)",
     )
+    parser.add_argument(
+        "--environment-url",
+        help="Override the Dataverse environment URL (used by environment_picker.py)",
+    )
+    parser.add_argument(
+        "--environment-id",
+        help="Override the Power Platform environment ID (used by environment_picker.py)",
+    )
     args = parser.parse_args()
 
     # Load config
@@ -89,7 +104,7 @@ def main():
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
 
-    env_url = config.get("dataverseEndpoint", "")
+    env_url = args.environment_url or config.get("dataverseEndpoint", "")
     if not env_url:
         print("ERROR: No dataverseEndpoint in .local/config.json.")
         sys.exit(1)
@@ -163,22 +178,26 @@ def main():
     # (Workday SOAP runtime), and CONFIG-* (local agent / topic /
     # knowledge source). Erroring out here would block those.
     print("Deriving Power Platform environment ID...")
-    env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
-    if env_id and pp_admin is not None:
-        print(f"Environment ID: {env_id}")
-    elif env_id:
-        print(
-            f"Environment ID: {env_id} (Dataverse OrganizationId fallback "
-            "— Power Platform sign-in failed, so BAP-scoped checks "
-            "(ENV-*, EXT-*, WD-CONN-*) will be skipped)"
-        )
+    if args.environment_id:
+        env_id = args.environment_id
+        print(f"Environment ID: {env_id} (provided via --environment-id)")
     else:
-        print(
-            f"WARNING: Could not derive environment ID for {env_url}. "
-            "BAP-scoped checks (ENV-*, EXT-*, WD-CONN-*) will be skipped; "
-            "license, auth, Workday env-var, Workday SOAP, and local-file "
-            "checks will still run."
-        )
+        env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
+        if env_id and pp_admin is not None:
+            print(f"Environment ID: {env_id}")
+        elif env_id:
+            print(
+                f"Environment ID: {env_id} (Dataverse OrganizationId fallback "
+                "— Power Platform sign-in failed, so BAP-scoped checks "
+                "(ENV-*, EXT-*, WD-CONN-*) will be skipped)"
+            )
+        else:
+            print(
+                f"WARNING: Could not derive environment ID for {env_url}. "
+                "BAP-scoped checks (ENV-*, EXT-*, WD-CONN-*) will be skipped; "
+                "license, auth, Workday env-var, Workday SOAP, and local-file "
+                "checks will still run."
+            )
 
     # Gate PVA (Copilot Studio Island Gateway) auth on scope.
     # Only CONFIG-013 needs PVA today, and it lives in run_local_file_checks.
@@ -231,19 +250,19 @@ def main():
     print("  FLIGHTCHECK SUMMARY")
     print("=" * 64)
     print(f"  Total checks: {result.total}")
-    print(f"  ✅ Passed:         {result.passed}")
-    print(f"  ❌ Failed:         {result.failed}")
-    print(f"  ⚠️  Warnings:       {result.warnings}")
-    print(f"  ℹ️  Not Configured: {result.not_configured}")
-    print(f"  Duration:          {result.duration_secs}s")
+    print(f"  [PASS] Passed:         {result.passed}")
+    print(f"  [FAIL] Failed:         {result.failed}")
+    print(f"  [WARN] Warnings:       {result.warnings}")
+    print(f"  [INFO] Not Configured: {result.not_configured}")
+    print(f"  Duration:              {result.duration_secs}s")
     print()
 
     if result.overall == "READY":
-        print("  ✅ READY FOR DEPLOYMENT")
+        print("  [PASS] READY FOR DEPLOYMENT")
     elif result.overall == "READY_WITH_WARNINGS":
-        print("  ⚠️  READY WITH WARNINGS")
+        print("  [WARN] READY WITH WARNINGS")
     else:
-        print("  ❌ NOT READY — ISSUES FOUND")
+        print("  [FAIL] NOT READY -- ISSUES FOUND")
 
     print("=" * 64)
 
@@ -252,9 +271,9 @@ def main():
     if failures:
         print(f"\n  FAILED CHECKS ({len(failures)}):\n")
         for r in failures:
-            print(f"    ❌ {r.checkpoint_id}: {r.result}")
+            print(f"    [FAIL] {r.checkpoint_id}: {r.result}")
             if r.remediation:
-                print(f"       → {r.remediation}")
+                print(f"       -> {r.remediation}")
         print()
 
     # Save results

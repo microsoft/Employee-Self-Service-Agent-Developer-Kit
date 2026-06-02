@@ -37,33 +37,37 @@ def get_connection_status(conn: dict) -> str:
 
 def filter_connections_by_connector(
     all_conns: list[dict],
-    connector_keyword: str,
+    connector_keyword: str | list[str],
 ) -> list[dict]:
     """Filter connections by connector keyword in apiId or displayName.
 
     Args:
         all_conns: Full list of connection records from the BAP API.
-        connector_keyword: Case-insensitive substring to match against the
-            connection's ``properties.apiId`` and ``properties.displayName``
-            (e.g. "workday", "service-now").
+        connector_keyword: Case-insensitive substring (or list of substrings)
+            to match against the connection's ``properties.apiId`` and
+            ``properties.displayName`` (e.g. "workday", "service-now",
+            or ["service-now", "servicenow"]).
 
     Returns:
-        List of connections whose apiId or displayName contains the keyword.
+        List of connections whose apiId or displayName contains any keyword.
     """
-    keyword_lower = connector_keyword.lower()
+    keywords = [connector_keyword.lower()] if isinstance(connector_keyword, str) else [k.lower() for k in connector_keyword]
     return [
         c for c in all_conns
-        if keyword_lower in (
-            c.get("properties", {}).get("apiId", "")
-            + c.get("properties", {}).get("displayName", "")
-        ).lower()
+        if any(
+            kw in (
+                c.get("properties", {}).get("apiId", "")
+                + c.get("properties", {}).get("displayName", "")
+            ).lower()
+            for kw in keywords
+        )
     ]
 
 
 def check_connector_connections(
     runner,
     *,
-    connector_keyword: str,
+    connector_keyword: str | list[str],
     checkpoint_prefix: str,
     category: str,
     not_found_remediation: str,
@@ -78,8 +82,8 @@ def check_connector_connections(
 
     Args:
         runner: FlightCheck runner with ``pp_admin`` and ``env_id``.
-        connector_keyword: Substring to match in apiId/displayName
-            (e.g. "workday", "service-now").
+        connector_keyword: Substring or list of substrings to match in
+            apiId/displayName (e.g. "workday", ["service-now", "servicenow"]).
         checkpoint_prefix: Prefix for checkpoint IDs (e.g. "WD-CONN", "SN-CONN").
         category: Check category (e.g. "Workday", "ServiceNow").
         not_found_remediation: Remediation text when no connections are found.

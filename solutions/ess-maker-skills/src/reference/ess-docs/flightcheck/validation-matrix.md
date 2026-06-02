@@ -113,6 +113,21 @@ standalone FlightCheck tool did not have.
 | TOPIC-011 | Topic inventory count | Medium | Count `topics/*.mcs.yml` |
 | LOCAL-TC-001 | Template configuration inventory | Medium | Count `template-configs/` |
 
+## 5b. ServiceNow Deep Validation (SN-xxx)
+
+| ID | Check | Priority | Method | Doc Link |
+|----|-------|----------|--------|----------|
+| SN-CONN-001 | ServiceNow connections summary | High | PP Admin API | [servicenow](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/servicenow) |
+| SN-CONN-nnn | Individual connection status | High | PP Admin API | [servicenow](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/servicenow) |
+| SN-FLOW-000 | ServiceNow flow status summary | High | PP Admin API | [servicenow](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/servicenow) |
+| SN-FLOW-nnn | Individual flow enabled/disabled (HRSD/ITSM) | High | PP Admin API | [servicenow](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/servicenow) |
+| SN-CFG-001 | ServiceNow template configs exist in Dataverse | High | Dataverse REST | [servicenow](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/servicenow) |
+| SN-CFG-010 | HRSD expected template configs present | Medium | Dataverse REST | [servicenow](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/servicenow) |
+| SN-CFG-020 | ITSM expected template configs present | Medium | Dataverse REST | [servicenow](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/servicenow) |
+| SN-LOCAL-001 | ServiceNow topics present in local agent files | Medium | Scan `topics/` | [servicenow](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/servicenow) |
+| SN-LOCAL-002 | HRSD topics present | Medium | Scan `topics/` | [servicenow](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/servicenow) |
+| SN-LOCAL-003 | ITSM topics present | Medium | Scan `topics/` | [servicenow](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/servicenow) |
+
 ## 7. Publishing & QA (Manual Checklist)
 
 | ID | Check | Priority | Method |
@@ -136,6 +151,9 @@ python scripts/flightcheck/cli.py --scope full
 
 # Workday-specific
 python scripts/flightcheck/cli.py --scope workday
+
+# ServiceNow-specific
+python scripts/flightcheck/cli.py --scope servicenow
 
 # Local files only (no API calls)
 python scripts/flightcheck/cli.py --scope local
