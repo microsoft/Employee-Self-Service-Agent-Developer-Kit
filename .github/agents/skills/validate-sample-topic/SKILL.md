@@ -37,7 +37,7 @@ the same way locally, in CI, and by this skill — so results cannot drift.
    and contains `topic.yaml`, at least one `*.xml`, and `README.md`.
 6. **Diff scope** — every changed path is under `samples/`; the diff touches
    at most one topic folder (area-level `README.md` / `AGENTS.md` are allowed).
-7. **Secrets / internal URLs** — conservative regex sweep of the diff.
+7. **Secrets / internal URLs** — conservative regex sweep of the *full current contents* of each changed file (not just the added hunks).
 
 **Neighbor-key parity** against the sibling reference is *not* a CLI check —
 it is part of step 1 of [`create-or-update-sample-topic`](../create-or-update-sample-topic/SKILL.md).

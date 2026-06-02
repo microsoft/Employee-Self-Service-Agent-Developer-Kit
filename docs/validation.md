@@ -18,7 +18,7 @@ The validator enforces, for the diff between the PR branch and `main`:
 | Filename convention (new) | New XML filenames start with `msdyn_` and have no trailing dot. |
 | Folder convention (new) | New topic folders are PascalCase and contain `topic.yaml`, at least one `*.xml`, and `README.md`. |
 | Diff scope | Every changed path is under `samples/`; the diff touches at most one topic folder (area-level `README.md` / `AGENTS.md` are allowed). |
-| Secrets / internal URLs | Conservative regex sweep (AWS keys, JWTs, bearer tokens, private-key blocks, `*.corp.microsoft.com`, etc.). |
+| Secrets / internal URLs | Conservative regex sweep of the full current contents of each changed file (AWS keys, JWTs, bearer tokens, private-key blocks, `*.corp.microsoft.com`, etc.). Pre-existing matches in a touched file will fail the check; removed secrets are not reported here. |
 
 Documented exceptions from [`samples/AGENTS.md`](../samples/AGENTS.md) are
 codified in [`tools/validate_samples/whitelist.yml`](../tools/validate_samples/whitelist.yml).
@@ -80,9 +80,12 @@ under a `FAIL` line name the specific path and reason. Common cases:
   any `*.xml`, or `README.md`, or the folder name is not PascalCase.
 - **Diff scope FAIL** — the PR touches paths outside `samples/`, or
   touches more than one topic folder. Split the PR.
-- **Secrets / internal URLs FAIL** — review the flagged snippet. If it is
-  a false positive (rare; patterns are conservative), open an issue and
-  do not whitelist silently.
+- **Secrets / internal URLs FAIL** — review the flagged location (path
+  and line; the matched value is redacted). The check scans the whole
+  current file, so a match may be pre-existing rather than introduced by
+  the PR — verify either way before merging. If it is a false positive
+  (rare; patterns are conservative), open an issue and do not whitelist
+  silently.
 
 ## CI integration
 

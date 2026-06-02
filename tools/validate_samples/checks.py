@@ -88,7 +88,11 @@ def _topic_folder_for(path: str) -> str | None:
     # samples/<Area>/<Topic>/...  (Facilities, ServiceNow — flat)
     # samples/<Area>/<Sub>/<Topic>/...  (Workday*)
     if parts[1] in {"WorkdayCustomEngineAgent", "WorkdayDeclarativeAgent"}:
-        if len(parts) < 4:
+        # Require a file *inside* the topic folder, i.e. at least
+        # samples/<Area>/<Sub>/<Topic>/<file>. Otherwise a subgroup-level
+        # file such as samples/WorkdayDeclarativeAgent/Employee/README.md
+        # would be misidentified as its own topic folder.
+        if len(parts) < 5:
             return None
         return "/".join(parts[:4])
     return "/".join(parts[:3])
@@ -251,6 +255,11 @@ def check_diff_scope(repo_root: Path, changed: list[ChangedFile]) -> Result:
 
 
 def check_secrets(repo_root: Path, changed: list[ChangedFile]) -> Result:
+    # Note: scans the *full current contents* of each changed file, not just
+    # the added/removed hunks. Pre-existing matches elsewhere in a touched
+    # file will be reported, and secrets that were removed by the PR will
+    # not appear here (the file may no longer be in `changed`, and if it is,
+    # only the post-change contents are scanned).
     res = Result("Secrets / internal URLs", Status.PASS)
     scanned = 0
     for c in changed:
@@ -265,10 +274,10 @@ def check_secrets(repo_root: Path, changed: list[ChangedFile]) -> Result:
         for label, pat in _SECRET_PATTERNS:
             m = pat.search(text)
             if m:
-                snippet = m.group(0)
-                if len(snippet) > 40:
-                    snippet = snippet[:37] + "..."
-                res.add(f"{c.path}: {label} match: {snippet!r}")
+                # Do not log the matched value: it may be a real secret.
+                # Report file, label, and 1-based line number only.
+                line_no = text.count("\n", 0, m.start()) + 1
+                res.add(f"{c.path}:{line_no}: {label} match (value redacted)")
     if scanned == 0:
         res.status = Status.NA
     return res

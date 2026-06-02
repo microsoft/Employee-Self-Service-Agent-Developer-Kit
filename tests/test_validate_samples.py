@@ -202,6 +202,21 @@ def test_workday_subgroup_topic_folder_resolves(tmp_path: Path) -> None:
     assert _by_name(results)["Diff scope (samples/ only)"].status is Status.PASS
 
 
+def test_workday_subgroup_readme_not_treated_as_topic(tmp_path: Path) -> None:
+    # A subgroup-level README plus a real topic edit must not be flagged as
+    # touching multiple topic folders.
+    sub_readme = "samples/WorkdayDeclarativeAgent/Employee/README.md"
+    topic_yaml = "samples/WorkdayDeclarativeAgent/Employee/EmployeeGetX/topic.yaml"
+    _write(tmp_path, sub_readme, VALID_README)
+    _write(tmp_path, topic_yaml, VALID_TOPIC_YAML)
+    changed = [
+        ChangedFile(sub_readme, "M"),
+        ChangedFile(topic_yaml, "M"),
+    ]
+    results = run_all_checks(tmp_path, changed, whitelist={})
+    assert _by_name(results)["Diff scope (samples/ only)"].status is Status.PASS
+
+
 def test_whitelisted_filename_inconsistency_not_flagged(tmp_path: Path) -> None:
     # Lowercase msdyn_copilotforemployeeselfservice* prefix is whitelisted.
     rel = "samples/Facilities/Foo/msdyn_copilotforemployeeselfserviceFoo.xml"
