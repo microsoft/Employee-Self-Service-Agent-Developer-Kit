@@ -85,6 +85,57 @@ function Write-Ok    { param([string]$m) Write-Host "    [ok]   $m" -ForegroundC
 function Write-Warn2 { param([string]$m) Write-Host "    [warn] $m" -ForegroundColor Yellow }
 function Write-Err2  { param([string]$m) Write-Host "    [err]  $m" -ForegroundColor Red }
 
+# Helper: run a native command safely without $ErrorActionPreference = 'Stop'
+# terminating on stderr output (PS 5.1 bug). Returns combined output as string[].
+function Invoke-Native {
+    param([scriptblock]$Command)
+    $prevEAP = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        $output = & $Command 2>&1
+        return $output
+    } finally {
+        $ErrorActionPreference = $prevEAP
+    }
+}
+
+# Helper: resolve Python executable robustly.
+# Checks py launcher, python on PATH (excluding Store alias), and known install paths.
+function Resolve-Python {
+    # 1. py launcher (most reliable on Windows)
+    $py = Get-Command py -ErrorAction SilentlyContinue
+    if ($py) {
+        $null = Invoke-Native { & py -3.12 --version }
+        if ($LASTEXITCODE -eq 0) { return 'py -3.12' }
+        $null = Invoke-Native { & py -3 --version }
+        if ($LASTEXITCODE -eq 0) { return 'py -3' }
+    }
+
+    # 2. python on PATH (validate it's real, not the Store alias)
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if ($python) {
+        # Store alias lives in WindowsApps and outputs nothing useful
+        if ($python.Source -notmatch 'WindowsApps') {
+            $null = Invoke-Native { & $python.Source --version }
+            if ($LASTEXITCODE -eq 0) { return $python.Source }
+        }
+    }
+
+    # 3. Known install paths
+    $knownPaths = @(
+        "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
+        "$env:ProgramFiles\Python312\python.exe",
+        "${env:ProgramFiles(x86)}\Python312\python.exe",
+        "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
+        "$env:ProgramFiles\Python311\python.exe"
+    )
+    foreach ($p in $knownPaths) {
+        if (Test-Path $p) { return $p }
+    }
+
+    return $null
+}
+
 # ---------------------------------------------------------------------------
 # 1. Preflight
 # ---------------------------------------------------------------------------
@@ -102,11 +153,20 @@ if ($os.Platform -ne 'Win32NT' -or $os.Version.Build -lt 17763) {
 Write-Ok "Windows build $($os.Version.Build)"
 
 $winget = Get-Command winget -ErrorAction SilentlyContinue
-if (-not $winget) {
-    Write-Err2 'winget not found. Install "App Installer" from the Microsoft Store, then re-run.'
-    throw 'winget is required.'
+$wingetAvailable = [bool]$winget
+
+if (-not $wingetAvailable) {
+    if ($FlightCheckOnly) {
+        # In FlightCheck-only mode, winget is preferred but not mandatory.
+        # If Python and Git are already installed, we can skip winget entirely.
+        Write-Warn2 'winget not found. Will check if Python and Git are already available.'
+    } else {
+        Write-Err2 'winget not found. Install "App Installer" from the Microsoft Store, then re-run.'
+        throw 'winget is required for the full ADK install.'
+    }
+} else {
+    Write-Ok "winget at $($winget.Source)"
 }
-Write-Ok "winget at $($winget.Source)"
 
 # ---------------------------------------------------------------------------
 # 2. Toolchain install (winget)
@@ -117,20 +177,52 @@ Write-Step 'Installing toolchain via winget'
 if ($FlightCheckOnly) {
     # Minimal set: just Python + Git (no VS Code, PowerShell 7, or GH CLI)
     $packages = @(
-        @{ Id = 'Python.Python.3.12'; Name = 'Python 3.12'     },
-        @{ Id = 'Git.Git';            Name = 'Git for Windows' }
+        @{ Id = 'Python.Python.3.12'; Name = 'Python 3.12'; Cmd = 'python' },
+        @{ Id = 'Git.Git';            Name = 'Git for Windows'; Cmd = 'git' }
     )
 } else {
     $packages = @(
-        @{ Id = 'Microsoft.VisualStudioCode'; Name = 'Visual Studio Code' },
-        @{ Id = 'Python.Python.3.12';         Name = 'Python 3.12'        },
-        @{ Id = 'Microsoft.PowerShell';       Name = 'PowerShell 7'       },
-        @{ Id = 'Git.Git';                    Name = 'Git for Windows'    },
-        @{ Id = 'GitHub.cli';                 Name = 'GitHub CLI'         }
+        @{ Id = 'Microsoft.VisualStudioCode'; Name = 'Visual Studio Code'; Cmd = 'code' },
+        @{ Id = 'Python.Python.3.12';         Name = 'Python 3.12'; Cmd = 'python'      },
+        @{ Id = 'Microsoft.PowerShell';       Name = 'PowerShell 7'; Cmd = 'pwsh'       },
+        @{ Id = 'Git.Git';                    Name = 'Git for Windows'; Cmd = 'git'     },
+        @{ Id = 'GitHub.cli';                 Name = 'GitHub CLI'; Cmd = 'gh'           }
     )
 }
 
-if ($UseDsc) {
+if (-not $wingetAvailable) {
+    # winget not present - check if required tools are already installed
+    Write-Warn2 'winget not available. Checking for pre-installed tools...'
+    $missingTools = @()
+    foreach ($pkg in $packages) {
+        $cmd = Get-Command $pkg.Cmd -ErrorAction SilentlyContinue
+        if ($cmd) {
+            Write-Ok "$($pkg.Name) (already installed at $($cmd.Source))"
+        } elseif ($pkg.Cmd -eq 'python') {
+            # Use Resolve-Python for smarter detection
+            $resolved = Resolve-Python
+            if ($resolved) {
+                Write-Ok "$($pkg.Name) (found: $resolved)"
+            } else {
+                $missingTools += $pkg.Name
+            }
+        } else {
+            $missingTools += $pkg.Name
+        }
+    }
+    if ($missingTools.Count -gt 0) {
+        Write-Err2 "Missing tools that cannot be auto-installed without winget: $($missingTools -join ', ')"
+        Write-Err2 'Please install them manually:'
+        Write-Err2 '  Python 3.12: https://www.python.org/downloads/'
+        Write-Err2 '  Git: https://git-scm.com/download/win'
+        if (-not $FlightCheckOnly) {
+            Write-Err2 '  VS Code: https://code.visualstudio.com/download'
+            Write-Err2 '  PowerShell 7: https://aka.ms/powershell-release?tag=stable'
+            Write-Err2 '  GitHub CLI: https://cli.github.com/'
+        }
+        throw "Required tools are missing and winget is not available to install them."
+    }
+} elseif ($UseDsc) {
     # Declarative path - requires `winget configure --enable` (one-time opt-in
     # that pulls DSC modules from the Microsoft Store). Provided for IT shops
     # that prefer the auditable YAML manifest.
@@ -150,16 +242,27 @@ if ($UseDsc) {
     # winget without enabling extended features. Idempotent: re-running just
     # logs "already installed" for present packages.
     foreach ($pkg in $packages) {
+        # Skip if already installed (avoids unnecessary winget calls + elevation prompts)
+        if ($FlightCheckOnly) {
+            $existing = if ($pkg.Cmd -eq 'python') { Resolve-Python } else { Get-Command $pkg.Cmd -ErrorAction SilentlyContinue }
+            if ($existing) {
+                Write-Ok "$($pkg.Name) (already installed)"
+                continue
+            }
+        }
+
         Write-Host "    installing $($pkg.Name) ($($pkg.Id))"
-        & winget install --id $pkg.Id `
-                         --source winget `
-                         --exact `
-                         --silent `
-                         --accept-package-agreements `
-                         --accept-source-agreements `
-                         --disable-interactivity 2>&1 | ForEach-Object {
-            $line = "$_".Trim()
-            # Skip empty lines, spinner frames, and progress bar garbage
+        $wingetOutput = Invoke-Native {
+            & winget install --id $pkg.Id `
+                             --source winget `
+                             --exact `
+                             --silent `
+                             --accept-package-agreements `
+                             --accept-source-agreements `
+                             --disable-interactivity
+        }
+        foreach ($rawLine in $wingetOutput) {
+            $line = "$rawLine".Trim()
             if ($line -and $line -notmatch '^[\\/\|\-]$' -and $line -notmatch '[^\x20-\x7E]') {
                 Write-Host "      $line"
             }
@@ -174,7 +277,11 @@ if ($UseDsc) {
         if ($code -eq 0 -or $code -eq -1978335189) {
             Write-Ok "$($pkg.Name)"
         } else {
-            throw "winget install $($pkg.Id) failed with exit code $code"
+            if ($FlightCheckOnly) {
+                Write-Warn2 "$($pkg.Name) install exited $code. Will check if usable anyway."
+            } else {
+                throw "winget install $($pkg.Id) failed with exit code $code"
+            }
         }
     }
 }
@@ -190,43 +297,31 @@ $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
 Write-Step 'Installing Python pip dependencies'
 
 $deferPip = $false
-$pip = Get-Command pip -ErrorAction SilentlyContinue
-if (-not $pip) {
-    # Try python -m pip as a fallback (pip not on PATH yet after fresh install)
-    $python = Get-Command python -ErrorAction SilentlyContinue
-    if ($python) {
-        $requirementsFile = Join-Path $PSScriptRoot '..\solutions\ess-maker-skills\scripts\requirements.txt'
-        if (-not (Test-Path $requirementsFile)) {
-            # If running from a temp dir (bootstrap), the repo hasn't been cloned yet.
-            # Defer pip install to after clone (section 5b below).
-            Write-Warn2 'requirements.txt not yet available (pre-clone). Will install after clone.'
-            $deferPip = $true
-        } else {
-            & $python.Source -m pip install --quiet --disable-pip-version-check -r $requirementsFile 2>&1 | ForEach-Object { Write-Host "      $_" }
-            if ($LASTEXITCODE -eq 0) {
-                Write-Ok 'pip dependencies installed'
-            } else {
-                Write-Warn2 "pip install returned exit code $LASTEXITCODE (non-fatal, /setup will retry)"
-            }
-            $deferPip = $false
-        }
-    } else {
-        Write-Warn2 'python not on PATH yet. Pip dependencies will be installed when you run /setup.'
-        $deferPip = $false
-    }
+$pythonExe = Resolve-Python
+
+if (-not $pythonExe) {
+    Write-Warn2 'Python not found on PATH or known locations. Pip dependencies will be installed when you run /setup.'
+    $deferPip = $false
 } else {
+    Write-Ok "Using Python: $pythonExe"
     $requirementsFile = Join-Path $PSScriptRoot '..\solutions\ess-maker-skills\scripts\requirements.txt'
     if (-not (Test-Path $requirementsFile)) {
         Write-Warn2 'requirements.txt not yet available (pre-clone). Will install after clone.'
         $deferPip = $true
     } else {
-        & $pip.Source install --quiet --disable-pip-version-check -r $requirementsFile 2>&1 | ForEach-Object { Write-Host "      $_" }
+        # Use Invoke-Native to avoid PS 5.1 stderr termination
+        if ($pythonExe -eq 'py -3.12' -or $pythonExe -eq 'py -3') {
+            $pyArgs = ($pythonExe -split ' ')[1]
+            $pipOutput = Invoke-Native { & py $pyArgs -m pip install --quiet --disable-pip-version-check -r $requirementsFile }
+        } else {
+            $pipOutput = Invoke-Native { & $pythonExe -m pip install --quiet --disable-pip-version-check -r $requirementsFile }
+        }
+        foreach ($line in $pipOutput) { Write-Host "      $line" }
         if ($LASTEXITCODE -eq 0) {
             Write-Ok 'pip dependencies installed'
         } else {
             Write-Warn2 "pip install returned exit code $LASTEXITCODE (non-fatal, /setup will retry)"
         }
-        $deferPip = $false
     }
 }
 
@@ -303,6 +398,10 @@ $repoPath = Join-Path $InstallRoot $repoName
 if (-not $SkipClone) {
     Write-Step "Cloning $RepoUrl"
 
+    # Prevent git from hanging waiting for credentials or host-key prompts
+    $env:GIT_TERMINAL_PROMPT = '0'
+    $env:GCM_INTERACTIVE = 'never'
+
     if (-not (Test-Path $InstallRoot)) {
         New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
     }
@@ -311,13 +410,17 @@ if (-not $SkipClone) {
         Write-Ok "Repo already cloned at $repoPath - pulling latest"
         Push-Location $repoPath
         try {
-            & git fetch --quiet origin
-            & git checkout --quiet $Branch
-            & git pull --quiet --ff-only
+            $gitOutput = Invoke-Native { & git fetch --quiet origin }
+            $gitOutput = Invoke-Native { & git checkout --quiet $Branch }
+            $gitOutput = Invoke-Native { & git pull --quiet --ff-only }
         } finally { Pop-Location }
     } else {
-        & git clone --branch $Branch --single-branch $RepoUrl $repoPath
+        $gitOutput = Invoke-Native { & git clone --branch $Branch --single-branch $RepoUrl $repoPath }
+        foreach ($line in $gitOutput) { Write-Host "      $line" }
         if ($LASTEXITCODE -ne 0) {
+            Write-Err2 "git clone failed with exit code $LASTEXITCODE"
+            Write-Err2 "If this is a network/firewall issue, you can download the repo manually:"
+            Write-Err2 "  https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/archive/refs/heads/$Branch.zip"
             throw "git clone failed with exit code $LASTEXITCODE"
         }
         Write-Ok "Cloned to $repoPath"
@@ -333,16 +436,22 @@ if ($deferPip) {
     $requirementsFile = Join-Path $repoPath 'solutions\ess-maker-skills\scripts\requirements.txt'
     if (Test-Path $requirementsFile) {
         Write-Step 'Installing Python pip dependencies (deferred)'
-        $python = Get-Command python -ErrorAction SilentlyContinue
-        if ($python) {
-            & $python.Source -m pip install --quiet --disable-pip-version-check -r $requirementsFile 2>&1 | ForEach-Object { Write-Host "      $_" }
+        $pythonExe = Resolve-Python
+        if ($pythonExe) {
+            if ($pythonExe -eq 'py -3.12' -or $pythonExe -eq 'py -3') {
+                $pyArgs = ($pythonExe -split ' ')[1]
+                $pipOutput = Invoke-Native { & py $pyArgs -m pip install --quiet --disable-pip-version-check -r $requirementsFile }
+            } else {
+                $pipOutput = Invoke-Native { & $pythonExe -m pip install --quiet --disable-pip-version-check -r $requirementsFile }
+            }
+            foreach ($line in $pipOutput) { Write-Host "      $line" }
             if ($LASTEXITCODE -eq 0) {
                 Write-Ok 'pip dependencies installed'
             } else {
                 Write-Warn2 "pip install returned exit code $LASTEXITCODE (non-fatal, /setup will retry)"
             }
         } else {
-            Write-Warn2 'python still not on PATH. Run: pip install -r solutions/ess-maker-skills/scripts/requirements.txt'
+            Write-Warn2 'Python still not found. Run: pip install -r solutions/ess-maker-skills/scripts/requirements.txt'
         }
     } else {
         Write-Warn2 'requirements.txt not found in cloned repo - pip dependencies not installed'
@@ -382,13 +491,22 @@ if ($FlightCheckOnly) {
     if (-not (Test-Path $configPath)) {
         $scriptsDir = Join-Path $workspace 'scripts'
         $discoverPy = Join-Path $scriptsDir 'discover.py'
-        $python = Get-Command python -ErrorAction SilentlyContinue
+        $pythonExe = Resolve-Python
 
-        if (-not $python) {
-            throw 'python not found on PATH. Cannot run environment discovery.'
+        if (-not $pythonExe) {
+            throw 'Python not found on PATH or known locations. Cannot run environment discovery.'
         }
         if (-not (Test-Path $discoverPy)) {
             throw "discover.py not found at $discoverPy. Was the repo cloned correctly?"
+        }
+
+        # Build the base python command components for consistent invocation
+        if ($pythonExe -eq 'py -3.12') {
+            $pyCmd = 'py'; $pyBaseArgs = @('-3.12')
+        } elseif ($pythonExe -eq 'py -3') {
+            $pyCmd = 'py'; $pyBaseArgs = @('-3')
+        } else {
+            $pyCmd = $pythonExe; $pyBaseArgs = @()
         }
 
         # --- Step 1: List environments and let user pick ---
@@ -400,7 +518,9 @@ if ($FlightCheckOnly) {
         # Run discover.py --list-environments (interactive - shows table to user)
         Push-Location $workspace
         try {
-            & $python.Source $discoverPy --list-environments
+            $discoverArgs = $pyBaseArgs + @($discoverPy, '--list-environments')
+            $output = Invoke-Native { & $pyCmd @discoverArgs }
+            foreach ($line in $output) { Write-Host $line }
             if ($LASTEXITCODE -ne 0) {
                 throw 'Environment listing failed.'
             }
@@ -413,7 +533,8 @@ if ($FlightCheckOnly) {
             }
 
             # Re-run with --select to get machine-parseable JSON
-            $envOutput = & $python.Source $discoverPy --list-environments --select $envChoice 2>&1
+            $selectArgs = $pyBaseArgs + @($discoverPy, '--list-environments', '--select', $envChoice)
+            $envOutput = Invoke-Native { & $pyCmd @selectArgs }
             if ($LASTEXITCODE -ne 0) {
                 throw "Environment selection failed: $envOutput"
             }
@@ -435,7 +556,9 @@ if ($FlightCheckOnly) {
             Write-Host '    Discovering agents in this environment...' -ForegroundColor White
             Write-Host ''
 
-            & $python.Source $discoverPy --url $envUrl
+            $agentListArgs = $pyBaseArgs + @($discoverPy, '--url', $envUrl)
+            $output = Invoke-Native { & $pyCmd @agentListArgs }
+            foreach ($line in $output) { Write-Host $line }
             if ($LASTEXITCODE -ne 0) {
                 Write-Warn2 'Agent discovery failed. Config will be created without a bot ID.'
                 $botId = ''
@@ -448,7 +571,8 @@ if ($FlightCheckOnly) {
                 $agentChoice = $agentChoice.Trim()
 
                 if ($agentChoice -and $agentChoice -match '^\d+$') {
-                    $agentOutput = & $python.Source $discoverPy --url $envUrl --select $agentChoice 2>&1
+                    $agentSelectArgs = $pyBaseArgs + @($discoverPy, '--url', $envUrl, '--select', $agentChoice)
+                    $agentOutput = Invoke-Native { & $pyCmd @agentSelectArgs }
                     if ($LASTEXITCODE -ne 0) {
                         Write-Warn2 "Agent selection failed. Continuing without bot ID."
                         $botId = ''
@@ -510,14 +634,20 @@ if ($FlightCheckOnly) {
 
     # --- Run FlightCheck ---
     Write-Step 'Running FlightCheck'
-    $python = Get-Command python -ErrorAction SilentlyContinue
-    if ($python) {
+    $pythonExe = Resolve-Python
+    if ($pythonExe) {
         Push-Location $workspace
         try {
-            & $python.Source scripts/flightcheck/cli.py --scope full
+            if ($pythonExe -eq 'py -3.12') {
+                & py -3.12 scripts/flightcheck/cli.py --scope full
+            } elseif ($pythonExe -eq 'py -3') {
+                & py -3 scripts/flightcheck/cli.py --scope full
+            } else {
+                & $pythonExe scripts/flightcheck/cli.py --scope full
+            }
         } finally { Pop-Location }
     } else {
-        Write-Warn2 'python not found on PATH. Open a new terminal and run:'
+        Write-Warn2 'Python not found. Open a new terminal and run:'
         Write-Warn2 "  cd $workspace"
         Write-Warn2 '  python scripts/flightcheck/cli.py --scope full'
     }

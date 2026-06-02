@@ -45,7 +45,15 @@ foreach ($f in $files) {
     $url = "$SourceBaseUrl/$f"
     $dst = Join-Path $tempDir $f
     Write-Host "  $url"
-    Invoke-WebRequest -Uri $url -OutFile $dst -UseBasicParsing
+    try {
+        Invoke-WebRequest -Uri $url -OutFile $dst -UseBasicParsing -TimeoutSec 60
+    } catch {
+        Write-Host "  [ERR] Failed to download: $url" -ForegroundColor Red
+        Write-Host "  If raw.githubusercontent.com is blocked by your firewall/proxy," -ForegroundColor Yellow
+        Write-Host "  download the repo manually and run:" -ForegroundColor Yellow
+        Write-Host "    .\setup\Install-EssAdk.ps1" -ForegroundColor Yellow
+        throw $_
+    }
 }
 
 $installer = Join-Path $tempDir 'Install-EssAdk.ps1'
