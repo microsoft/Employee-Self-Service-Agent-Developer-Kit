@@ -103,7 +103,9 @@ python scripts/flightcheck/cli.py --scope full
 If you only need FlightCheck without the full maker kit, use the one-shot installer with `-FlightCheckOnly`:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\setup\Install-EssAdk.ps1 -FlightCheckOnly
+# Download and run (no local clone required):
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/Install-EssAdk.ps1" -OutFile "$env:TEMP\Install-EssAdk.ps1" -UseBasicParsing
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\Install-EssAdk.ps1" -FlightCheckOnly
 ```
 
 This installs just Python + Git, pip dependencies, and walks you through selecting your environment and agent interactively. Re-run the same command to change your environment or agent. See [`setup/README.md`](../../setup/README.md) for details.

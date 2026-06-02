@@ -25,7 +25,15 @@ iex (irm https://aka.ms/ess-adk-setup)
 For users who only need to run FlightCheck (pre-deployment readiness validation) without the full maker kit experience:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -FlightCheckOnly
+# Download and run (no local clone required):
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/Install-EssAdk.ps1" -OutFile "$env:TEMP\Install-EssAdk.ps1" -UseBasicParsing
+powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\Install-EssAdk.ps1" -FlightCheckOnly
+```
+
+Or, if you already have the repo cloned:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\setup\Install-EssAdk.ps1 -FlightCheckOnly
 ```
 
 This installs a **minimal toolchain** (Python + Git only — no VS Code, PowerShell 7, or GitHub CLI), installs pip dependencies, clones the repo, and then walks you through an interactive setup:
