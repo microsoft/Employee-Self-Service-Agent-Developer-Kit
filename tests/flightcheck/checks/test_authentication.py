@@ -98,6 +98,7 @@ class TestGoodConfig:
             _check_workday_app_user_assignment,
         )
 
+        responses.add(**gr.list_application_templates())
         responses.add(
             **gr.list_service_principals(
                 service_principals=[
@@ -141,6 +142,7 @@ class TestBadConfig:
             _check_workday_app_user_assignment,
         )
 
+        responses.add(**gr.list_application_templates())
         responses.add(
             **gr.list_service_principals(
                 service_principals=[
@@ -184,6 +186,7 @@ class TestEdgeCases:
             _check_workday_app_user_assignment,
         )
 
+        responses.add(**gr.list_application_templates())
         responses.add(
             **gr.list_service_principals(
                 service_principals=[
@@ -217,6 +220,7 @@ class TestEdgeCases:
             _check_workday_app_user_assignment,
         )
 
+        responses.add(**gr.list_application_templates())
         responses.add(
             **gr.list_service_principals(
                 service_principals=[
@@ -259,6 +263,7 @@ class TestEdgeCases:
             _check_workday_app_user_assignment,
         )
 
+        responses.add(**gr.list_application_templates())
         responses.add(**gr.list_service_principals(service_principals=[]))
 
         results = _check_workday_app_user_assignment(runner.graph)
@@ -314,6 +319,7 @@ class TestEdgeCases:
         )
 
         sp_id = "00000000-0000-0000-0000-000000005701"
+        responses.add(**gr.list_application_templates())
         responses.add(
             **gr.list_service_principals(
                 service_principals=[
@@ -365,6 +371,7 @@ class TestEdgeCases:
         sp_sso_id = "00000000-0000-0000-0000-000000005201"
         sp_oauth_id = "00000000-0000-0000-0000-000000005301"
 
+        responses.add(**gr.list_application_templates())
         responses.add(
             **gr.list_service_principals(
                 service_principals=[
@@ -425,6 +432,7 @@ class TestEdgeCases:
         sp_a_id = "00000000-0000-0000-0000-000000005401"
         sp_b_id = "00000000-0000-0000-0000-000000005402"
 
+        responses.add(**gr.list_application_templates())
         responses.add(
             **gr.list_service_principals(
                 service_principals=[
@@ -458,3 +466,111 @@ class TestEdgeCases:
         assert "Workday Prod" in auth_005_results[0].result
         assert "Workday Impl" in auth_005_results[0].result
         assert "2 Workday Enterprise App(s)" in auth_005_results[0].result
+
+    @responses.activate
+    def test_renamed_workday_sp_discovered_by_application_template_id(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """The Workday Enterprise App is discovered by its immutable
+        ``applicationTemplateId``, not by ``displayName``. A customer
+        that renamed their Workday SSO app to something else (e.g.
+        'ESS SSO Provider') must still be found and evaluated."""
+        from flightcheck.checks.authentication import (
+            _check_workday_app_user_assignment,
+        )
+
+        responses.add(**gr.list_application_templates())
+        responses.add(
+            **gr.list_service_principals(
+                service_principals=[
+                    gr.service_principal(
+                        # Tenant renamed the SP — no "Workday" anywhere
+                        # in displayName, but applicationTemplateId
+                        # still points at the Workday gallery template.
+                        display_name="ESS SSO Provider",
+                        app_role_assignment_required=True,
+                        # application_template_id defaults to
+                        # MOCK_WORKDAY_APP_TEMPLATE_ID, matching the
+                        # template returned by list_application_templates().
+                    )
+                ]
+            )
+        )
+        responses.add(
+            **gr.list_app_role_assignments(
+                assignments=[
+                    gr.app_role_assignment(
+                        principal_type="Group",
+                        principal_display_name="ESS Users",
+                    )
+                ]
+            )
+        )
+
+        results = _check_workday_app_user_assignment(runner.graph)
+        auth_005 = _result_by_id(results, "AUTH-005")
+
+        # Renamed SP was discovered and evaluated as a real Workday app.
+        assert auth_005.status == "Passed", (
+            f"Renamed Workday SP should be discovered by "
+            f"applicationTemplateId; got {auth_005.status}: "
+            f"{auth_005.result!r}"
+        )
+        assert "ESS SSO Provider" in auth_005.result
+
+    @responses.activate
+    def test_application_templates_lookup_failure_returns_warning(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """If /applicationTemplates returns 401/403, AUTH-005 cannot
+        resolve the Workday gallery template id and therefore cannot
+        identify the Workday SP. Must surface as WARNING (not silently
+        skip) so the operator knows the check did not run."""
+        from flightcheck.checks.authentication import (
+            _check_workday_app_user_assignment,
+        )
+
+        responses.add(
+            **gr.insufficient_permissions(path="/applicationTemplates")
+        )
+
+        results = _check_workday_app_user_assignment(runner.graph)
+        auth_005 = _result_by_id(results, "AUTH-005")
+
+        assert auth_005.status == "Warning"
+        assert "applicationTemplates" in auth_005.result
+        assert "/applicationTemplates" in auth_005.remediation
+
+    @responses.activate
+    def test_no_sso_workday_template_returns_warning(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """If the /applicationTemplates response contains Workday-prefixed
+        templates but none expose a federated SSO mode (i.e.
+        ``supportedSingleSignOnModes`` contains neither ``saml`` nor
+        ``oidc`` — only provisioning-only or password-SSO templates),
+        AUTH-005 has no template id to match SPs against — surface
+        WARNING so the operator knows."""
+        from flightcheck.checks.authentication import (
+            _check_workday_app_user_assignment,
+        )
+
+        responses.add(
+            **gr.list_application_templates(
+                templates=[
+                    gr.application_template(
+                        template_id="00000000-0000-0000-0000-000000005501",
+                        display_name="Workday to AD Provisioning",
+                        categories=("Human resources",),
+                        # Provisioning-only template — no SAML/OIDC SSO.
+                        supported_single_sign_on_modes=("notSupported",),
+                    ),
+                ]
+            )
+        )
+
+        results = _check_workday_app_user_assignment(runner.graph)
+        auth_005 = _result_by_id(results, "AUTH-005")
+
+        assert auth_005.status == "Warning"
+        assert "saml" in auth_005.result or "oidc" in auth_005.result

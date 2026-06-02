@@ -194,6 +194,11 @@ def conditional_access_policy(
 
 MOCK_WORKDAY_SP_ID = "00000000-0000-0000-0000-000000005001"
 MOCK_WORKDAY_APP_ID = "00000000-0000-0000-0000-000000005002"
+# The Entra gallery applicationTemplate id for the Workday SSO template.
+# Real values are Microsoft-issued; this mock value is stable so tests
+# can wire `applicationTemplateId` through the SP and the
+# `/applicationTemplates` lookup consistently.
+MOCK_WORKDAY_APP_TEMPLATE_ID = "00000000-0000-0000-0000-000000005401"
 
 
 def service_principal(
@@ -207,6 +212,7 @@ def service_principal(
     tags: Iterable[str] | None = None,
     login_url: str | None = "https://impl.workday.com/contoso/login-saml.htmld",
     service_principal_names: Iterable[str] | None = None,
+    application_template_id: str | None = MOCK_WORKDAY_APP_TEMPLATE_ID,
 ) -> dict[str, Any]:
     """Build a single Graph /servicePrincipals record.
 
@@ -234,6 +240,7 @@ def service_principal(
                 servicePrincipalNames (Collection(Edm.String))  [AUTH-006]
                 tags (Collection(Edm.String))
                 loginUrl (Edm.String, nullable)
+                applicationTemplateId (Edm.String, nullable)  [AUTH-005]
       Docs:   https://learn.microsoft.com/graph/api/serviceprincipal-get
               https://learn.microsoft.com/graph/api/resources/serviceprincipal?view=graph-rest-1.0
               Example response copied verbatim 2026-05.
@@ -247,7 +254,7 @@ def service_principal(
             app_id,
             "http://www.workday.com/contoso",
         ]
-    return {
+    record = {
         "id": sp_id,
         "deletedDateTime": None,
         "accountEnabled": account_enabled,
@@ -280,6 +287,12 @@ def service_principal(
         "tags": list(tags) if tags is not None else ["WindowsAzureActiveDirectoryIntegratedApp"],
         "tokenEncryptionKeyId": None,
     }
+    # applicationTemplateId is nullable per the CSDL — omit the key
+    # entirely (matching Graph's typical response for non-gallery SPs)
+    # when the caller explicitly passes None.
+    if application_template_id is not None:
+        record["applicationTemplateId"] = application_template_id
+    return record
 
 
 def app_role_assignment(
@@ -493,6 +506,77 @@ def list_app_role_assignments(
             odata_context=(
                 f"$metadata#servicePrincipals('{sp_id}')/appRoleAssignedTo"
             ),
+        ),
+        "status": 200,
+    }
+
+
+def application_template(
+    *,
+    template_id: str = MOCK_WORKDAY_APP_TEMPLATE_ID,
+    display_name: str = "Workday",
+    categories: Iterable[str] | None = ("Human resources",),
+    supported_single_sign_on_modes: Iterable[str] | None = ("saml",),
+    publisher: str = "Workday",
+    description: str = "Mock Workday gallery template used by FlightCheck tests.",
+) -> dict[str, Any]:
+    """Build a single Graph /applicationTemplates record.
+
+    The Entra application gallery catalog is tenant-independent
+    metadata Microsoft curates centrally. Each template has a stable
+    ``id``, a ``categories`` array (functional bucket — "Human
+    resources", "Productivity", ...) and a ``supportedSingleSignOnModes``
+    array of federation modes (``saml``, ``oidc``, ``password``,
+    ``notSupported``). AUTH-005 filters by ``supportedSingleSignOnModes``
+    intersecting {``saml``, ``oidc``} to identify federated-SSO
+    templates and discover the Workday Enterprise App via
+    ``servicePrincipal.applicationTemplateId``.
+
+    Pass ``supported_single_sign_on_modes=("notSupported",)`` or
+    ``("password",)`` to mock a non-federated template (e.g. a
+    provisioning-only Workday entry).
+
+    Cited consumers:
+      - flightcheck/graph_client.py (get_application_templates).
+      - flightcheck/checks/authentication.py (AUTH-005).
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="applicationTemplate" — fields used:
+                id (Edm.String, key)
+                displayName (Edm.String)
+                categories (Collection(Edm.String))
+                supportedSingleSignOnModes (Collection(Edm.String))
+                publisher (Edm.String, nullable)
+                description (Edm.String, nullable)
+      Docs:   https://learn.microsoft.com/graph/api/applicationtemplate-list
+              https://learn.microsoft.com/graph/api/resources/applicationtemplate
+    """
+    return {
+        "id": template_id,
+        "displayName": display_name,
+        "categories": list(categories) if categories is not None else [],
+        "supportedSingleSignOnModes": (
+            list(supported_single_sign_on_modes)
+            if supported_single_sign_on_modes is not None
+            else []
+        ),
+        "publisher": publisher,
+        "description": description,
+    }
+
+
+def list_application_templates(
+    *,
+    templates: Iterable[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Mock GET /v1.0/applicationTemplates (with optional ``$filter``)."""
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/applicationTemplates",
+        "json": collection(
+            templates if templates is not None else [application_template()],
+            odata_context="$metadata#applicationTemplates",
         ),
         "status": 200,
     }

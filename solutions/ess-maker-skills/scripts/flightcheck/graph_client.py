@@ -145,13 +145,34 @@ class GraphClient:
         resp.raise_for_status()
         return resp.json()
 
-    def get_all(self, path: str, params: dict | None = None) -> list:
-        """GET with @odata.nextLink pagination. Returns all items."""
+    def get_all(
+        self,
+        path: str,
+        params: dict | None = None,
+        *,
+        raise_on_permission_error: bool = False,
+    ) -> list:
+        """GET with @odata.nextLink pagination. Returns all items.
+
+        Default behavior on HTTP 401/403 is to return whatever items
+        were already collected (partial results) — most FlightCheck
+        callers prefer "show what we can see, silently degrade." When
+        the caller needs to distinguish "no items exist" from
+        "permission denied" (e.g. AUTH-005, where a denied
+        appRoleAssignedTo lookup must NOT false-alarm as a Sev-2
+        "0 users assigned" finding), pass
+        ``raise_on_permission_error=True`` to convert 401/403 into a
+        ``PermissionError`` instead.
+        """
         items: list = []
         url = f"{GRAPH_BASE}{path}"
         while url:
             resp = _SESSION.get(url, headers=self.headers, params=params, timeout=30)
             if resp.status_code in (401, 403):
+                if raise_on_permission_error:
+                    raise PermissionError(
+                        f"Graph returned HTTP {resp.status_code} on {path}."
+                    )
                 return items  # partial results
             resp.raise_for_status()
             data = resp.json()
@@ -207,9 +228,9 @@ class GraphClient:
 
         Raises ``PermissionError`` on HTTP 401/403 so callers can
         distinguish "permission denied" from "no assignments exist."
-        Without this, ``get_all()``'s silent-on-401/403 behavior would
-        make a denied appRoleAssignedTo lookup look identical to a
-        legitimately empty list — letting a Workday SP with a scoped
+        Without this, ``get_all()``'s default silent-on-401/403 behavior
+        would make a denied appRoleAssignedTo lookup look identical to
+        a legitimately empty list — letting a Workday SP with a scoped
         Conditional Access policy or a permission-restricted directory
         role false-alarm as "no users/groups assigned" (a Sev-2-shaped
         finding) when the real cause is the kit's own token lacking
@@ -220,17 +241,45 @@ class GraphClient:
         Docs: https://learn.microsoft.com/graph/api/serviceprincipal-list-approleassignedto
         """
         path = f"/servicePrincipals/{sp_id}/appRoleAssignedTo"
-        # Probe permission before delegating to get_all() — get_all
-        # silently returns [] on 401/403, which would let callers
-        # mistake "denied" for "no assignments exist." graph.get()
-        # preserves the _status field so we can branch explicitly.
-        probe = self.get(path, params={"$top": "1"})
-        if probe.get("_status") in (401, 403):
+        try:
+            return self.get_all(path, raise_on_permission_error=True)
+        except PermissionError as e:
+            # Re-raise with a more actionable message (the bare get_all
+            # error only mentions the path and status code).
             raise PermissionError(
-                f"Graph returned HTTP {probe['_status']} on {path}. "
-                "Requires Application.Read.All or Directory.Read.All."
-            )
-        return self.get_all(path)
+                f"{e} Requires Application.Read.All or Directory.Read.All."
+            ) from e
+
+    def get_application_templates(self, filter_expr: str = "") -> list:
+        """List Entra application gallery templates.
+
+        ``GET /v1.0/applicationTemplates`` returns the tenant-independent
+        catalog of gallery apps (Workday, ServiceNow, Salesforce, ...).
+        Each template has a stable ``id`` (set once when Microsoft
+        registered the template) and a list of ``categories``
+        (``"Single sign-on"``, ``"User Provisioning"``, ...). When an
+        operator provisions an app from the Entra gallery, the
+        resulting ``servicePrincipal.applicationTemplateId`` points
+        back at this id — so matching SPs by ``applicationTemplateId``
+        is the rename-proof way to discover gallery apps.
+
+        No special permission is required (this endpoint exposes
+        tenant-independent gallery metadata). On HTTP 401/403 we raise
+        ``PermissionError`` rather than silently returning [] so the
+        caller can distinguish "Microsoft shipped no matching template"
+        (empty list, file an issue) from "we couldn't read the
+        catalog" (consent/token problem, fix the token).
+
+        Docs: https://learn.microsoft.com/graph/api/applicationtemplate-list
+        """
+        params = {}
+        if filter_expr:
+            params["$filter"] = filter_expr
+        return self.get_all(
+            "/applicationTemplates",
+            params=params,
+            raise_on_permission_error=True,
+        )
 
     def get_claims_mapping_policies(self, service_principal_id: str) -> list:
         """List claimsMappingPolicy objects assigned to a service principal.

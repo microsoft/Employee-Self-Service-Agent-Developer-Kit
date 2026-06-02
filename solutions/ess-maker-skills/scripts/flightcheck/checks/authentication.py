@@ -139,11 +139,55 @@ def run_authentication_checks(runner) -> list[CheckResult]:
 # ─────────────────────────────────────────────────────────────────────
 
 
-# Display-name prefix(es) we recognize as the Workday Enterprise App
-# in a customer tenant. Most customers leave the SSO gallery name
-# ("Workday") in place; some prepend "Workday SSO" / "Workday OAuth".
-# Matches via the `startswith(displayName, '...')` Graph filter.
-_WORKDAY_SP_PREFIXES = ("Workday",)
+# Entra gallery applicationTemplate displayName prefix we use to
+# resolve the immutable templateId(s) for the Workday SSO gallery
+# entries. The /applicationTemplates catalog is tenant-independent
+# Microsoft-curated metadata, so this prefix matches a small fixed
+# set of templates (e.g. "Workday", "Workday to Active Directory User
+# Provisioning"); we then filter the result by the SSO mode field
+# (``supportedSingleSignOnModes`` contains ``saml`` or ``oidc``) to
+# keep only the federated-SSO templates and exclude provisioning-only
+# entries.
+#
+# We discover Workday Enterprise App service principals by
+# ``servicePrincipal.applicationTemplateId`` rather than by
+# ``displayName`` so the check survives a tenant-side rename of the
+# SP (e.g. customer renames it to "ESS SSO Provider"). The
+# applicationTemplateId is set by Entra at provisioning time and is
+# immutable thereafter.
+_WORKDAY_TEMPLATE_NAME_PREFIX = "Workday"
+# Per Microsoft Graph CSDL the ``applicationTemplate.categories`` array
+# uses values like "Human resources", "Productivity", "Collaboration" —
+# there is NO "Single sign-on" category. The SSO discriminator is the
+# ``supportedSingleSignOnModes`` array, whose documented values are
+# ``saml``, ``oidc``, ``password``, and ``notSupported`` (the gallery
+# Workday entry uses ``saml``). We accept any federated mode.
+# Docs: https://learn.microsoft.com/graph/api/resources/applicationtemplate
+_SSO_MODES: frozenset[str] = frozenset({"saml", "oidc"})
+
+
+def _resolve_workday_template_ids(graph) -> list[str]:
+    """Resolve the Entra gallery template id(s) for the Workday SSO app.
+
+    Returns the list of ``applicationTemplate.id`` values whose
+    ``displayName`` starts with "Workday" AND whose
+    ``supportedSingleSignOnModes`` array contains a federated SSO mode
+    (``saml`` or ``oidc``). An empty list means the
+    /applicationTemplates lookup returned no matching SSO templates
+    (treated by the caller as "Workday SSO not resolvable" — surfaces
+    a WARNING rather than silently skipping the whole check).
+    """
+    templates = graph.get_application_templates(
+        filter_expr=f"startswith(displayName,'{_WORKDAY_TEMPLATE_NAME_PREFIX}')"
+    )
+    ids: list[str] = []
+    for t in templates:
+        modes = t.get("supportedSingleSignOnModes") or []
+        if any(m in _SSO_MODES for m in modes):
+            tid = t.get("id")
+            if isinstance(tid, str) and tid:
+                ids.append(tid)
+    return ids
 
 
 def _check_workday_app_user_assignment(graph) -> list[CheckResult]:
@@ -155,9 +199,15 @@ def _check_workday_app_user_assignment(graph) -> list[CheckResult]:
     in customer ICM analysis). Validation logic per issue
     microsoft/Employee-Self-Service-Agent-Developer-Kit#79:
 
-      1. Locate the Workday Enterprise Application service principal(s)
-         via ``GET /servicePrincipals?$filter=startswith(displayName,'Workday')``.
-      2. For each, read ``appRoleAssignmentRequired`` (Edm.Boolean).
+      1. Resolve the Workday SSO Entra gallery template id(s) via
+         ``GET /applicationTemplates?$filter=startswith(displayName,'Workday')``
+         filtered to ``supportedSingleSignOnModes`` containing ``saml``
+         or ``oidc``.
+      2. Locate the Workday Enterprise Application service principal(s)
+         via ``GET /servicePrincipals?$filter=applicationTemplateId in (...)``.
+         Matching by ``applicationTemplateId`` (rather than displayName)
+         catches SPs that the customer renamed.
+      3. For each, read ``appRoleAssignmentRequired`` (Edm.Boolean).
          - ``False`` → WARNING (deploy-time check cannot guarantee per-user
            access at runtime; recommend setting it to Yes and assigning an
            ESS group).
@@ -185,11 +235,50 @@ def _check_workday_app_user_assignment(graph) -> list[CheckResult]:
         )]
 
     try:
-        # Single Graph filter that catches the common SSO gallery name and
-        # the OAuth-flavored variants tenants sometimes register alongside.
-        filter_clause = " or ".join(
-            f"startswith(displayName,'{p}')" for p in _WORKDAY_SP_PREFIXES
+        template_ids = _resolve_workday_template_ids(graph)
+    except Exception as e:
+        return [CheckResult(
+            checkpoint_id=cp_id, category="Authentication",
+            priority=Priority.CRITICAL.value, status=Status.WARNING.value,
+            description=description,
+            result=(
+                "Unable to resolve Workday SSO gallery template id from "
+                f"/applicationTemplates: {e}"
+            ),
+            remediation=(
+                "Re-run FlightCheck with a Graph token that can read "
+                "/applicationTemplates (no extra consent required for "
+                "tenant-independent gallery metadata)."
+            ),
+        )]
+
+    if not template_ids:
+        return [CheckResult(
+            checkpoint_id=cp_id, category="Authentication",
+            priority=Priority.CRITICAL.value, status=Status.WARNING.value,
+            description=description,
+            result=(
+                "No federated-SSO Workday applicationTemplate found in "
+                "the Entra gallery catalog (no template whose "
+                "supportedSingleSignOnModes contains 'saml' or 'oidc'). "
+                "AUTH-005 cannot identify the Workday Enterprise App "
+                "without it."
+            ),
+            remediation=(
+                "This is unexpected — Microsoft ships at least one "
+                "Workday SSO template in the gallery. Please file an "
+                "issue against FlightCheck so the lookup can be updated."
+            ),
+        )]
+
+    try:
+        # Match SPs by applicationTemplateId — immutable and rename-proof.
+        # Expand the in() set to explicit ORs since v1.0 $filter does
+        # not support the `in` operator on applicationTemplateId.
+        template_clause = " or ".join(
+            f"applicationTemplateId eq '{tid}'" for tid in template_ids
         )
+        filter_clause = f"({template_clause})"
         sps = graph.get_service_principals(filter_expr=filter_clause)
     except Exception as e:
         return [CheckResult(
@@ -210,10 +299,10 @@ def _check_workday_app_user_assignment(graph) -> list[CheckResult]:
             priority=Priority.CRITICAL.value, status=Status.SKIPPED.value,
             description=description,
             result=(
-                "No Enterprise Application matching displayName starting with "
-                f"{', '.join(repr(p) for p in _WORKDAY_SP_PREFIXES)} found in "
-                "this tenant. The Workday SSO app must be provisioned before "
-                "this check applies."
+                "No Enterprise Application provisioned from the Workday "
+                f"SSO gallery template(s) ({', '.join(template_ids)}) "
+                "found in this tenant. The Workday SSO app must be "
+                "provisioned before this check applies."
             ),
             remediation=(
                 "Install the Workday Enterprise Application from the Entra "
@@ -358,6 +447,22 @@ def _check_workday_app_user_assignment(graph) -> list[CheckResult]:
 
     # Emit at most one row per status, in priority order so the most
     # urgent finding appears first in the report.
+    #
+    # NOTE: All three buckets below share ``checkpoint_id=cp_id`` (== "AUTH-005")
+    # by design — the operator sees up to three rows with the same id,
+    # one per status bucket, each enumerating the SPs in that bucket.
+    # This pattern depends on the report renderer being a FLAT LIST
+    # over ``RunResult.results`` (no keying or dedup by checkpoint_id):
+    #   * ``runner._generate_html_report`` emits one ``<tr>`` per
+    #     ``r.results`` entry (runner.py).
+    #   * ``runner.run`` aggregates category counts by iterating, not
+    #     by indexing by checkpoint_id.
+    #   * ``cli.py`` prints summaries by iteration.
+    # The regression guard for the renderer side lives in
+    # ``tests/flightcheck/test_runner.py`` —
+    # ``test_html_report_preserves_multiple_results_with_same_checkpoint_id``.
+    # If you change either the renderer keying or the buckets here,
+    # update both ends together.
     if failed_items:
         results.append(CheckResult(
             checkpoint_id=cp_id, category="Authentication",
