@@ -157,7 +157,13 @@ if ($UseDsc) {
                          --silent `
                          --accept-package-agreements `
                          --accept-source-agreements `
-                         --disable-interactivity 2>&1 | ForEach-Object { Write-Host "      $_" }
+                         --disable-interactivity 2>&1 | ForEach-Object {
+            $line = "$_".Trim()
+            # Skip empty lines, spinner frames, and progress bar garbage
+            if ($line -and $line -notmatch '^[\\/\|\-]$' -and $line -notmatch '[^\x20-\x7E]') {
+                Write-Host "      $line"
+            }
+        }
 
         # winget exit codes:
         #   0                = installed OK
