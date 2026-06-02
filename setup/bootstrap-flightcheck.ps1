@@ -39,7 +39,6 @@ $tempDir = Join-Path $env:TEMP "ess-adk-bootstrap-$([Guid]::NewGuid().ToString('
 New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
 
 $files = @(
-    'ess-adk-setup.winget.yaml',
     'Install-EssAdk.ps1'
 )
 

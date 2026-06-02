@@ -195,11 +195,8 @@ if (-not $wingetAvailable) {
     Write-Warn2 'winget not available. Checking for pre-installed tools...'
     $missingTools = @()
     foreach ($pkg in $packages) {
-        $cmd = Get-Command $pkg.Cmd -ErrorAction SilentlyContinue
-        if ($cmd) {
-            Write-Ok "$($pkg.Name) (already installed at $($cmd.Source))"
-        } elseif ($pkg.Cmd -eq 'python') {
-            # Use Resolve-Python for smarter detection
+        if ($pkg.Cmd -eq 'python') {
+            # Use Resolve-Python to exclude the non-functional Store alias
             $resolved = Resolve-Python
             if ($resolved) {
                 Write-Ok "$($pkg.Name) (found: $resolved)"
@@ -207,7 +204,12 @@ if (-not $wingetAvailable) {
                 $missingTools += $pkg.Name
             }
         } else {
-            $missingTools += $pkg.Name
+            $cmd = Get-Command $pkg.Cmd -ErrorAction SilentlyContinue
+            if ($cmd) {
+                Write-Ok "$($pkg.Name) (already installed at $($cmd.Source))"
+            } else {
+                $missingTools += $pkg.Name
+            }
         }
     }
     if ($missingTools.Count -gt 0) {
@@ -411,8 +413,22 @@ if (-not $SkipClone) {
         Push-Location $repoPath
         try {
             $gitOutput = Invoke-Native { & git fetch --quiet origin }
-            $gitOutput = Invoke-Native { & git checkout --quiet $Branch }
-            $gitOutput = Invoke-Native { & git pull --quiet --ff-only }
+            foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
+            if ($LASTEXITCODE -ne 0) {
+                Write-Warn2 "git fetch failed (exit $LASTEXITCODE). Continuing with local copy."
+            } else {
+                $gitOutput = Invoke-Native { & git checkout --quiet $Branch }
+                foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Warn2 "git checkout $Branch failed (exit $LASTEXITCODE). Continuing on current branch."
+                } else {
+                    $gitOutput = Invoke-Native { & git pull --quiet --ff-only }
+                    foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
+                    if ($LASTEXITCODE -ne 0) {
+                        Write-Warn2 "git pull failed (exit $LASTEXITCODE). Continuing with local copy."
+                    }
+                }
+            }
         } finally { Pop-Location }
     } else {
         $gitOutput = Invoke-Native { & git clone --branch $Branch --single-branch $RepoUrl $repoPath }
@@ -639,12 +655,15 @@ if ($FlightCheckOnly) {
         Push-Location $workspace
         try {
             if ($pythonExe -eq 'py -3.12') {
-                & py -3.12 scripts/flightcheck/cli.py --scope full
+                $fcArgs = @('-3.12', 'scripts/flightcheck/cli.py', '--scope', 'full')
+                $fcOutput = Invoke-Native { & py @fcArgs }
             } elseif ($pythonExe -eq 'py -3') {
-                & py -3 scripts/flightcheck/cli.py --scope full
+                $fcArgs = @('-3', 'scripts/flightcheck/cli.py', '--scope', 'full')
+                $fcOutput = Invoke-Native { & py @fcArgs }
             } else {
-                & $pythonExe scripts/flightcheck/cli.py --scope full
+                $fcOutput = Invoke-Native { & $pythonExe scripts/flightcheck/cli.py --scope full }
             }
+            foreach ($line in $fcOutput) { Write-Host $line }
         } finally { Pop-Location }
     } else {
         Write-Warn2 'Python not found. Open a new terminal and run:'
