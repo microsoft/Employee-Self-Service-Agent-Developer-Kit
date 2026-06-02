@@ -1,8 +1,8 @@
 # ESS ADK — One-Shot Installer
 
-Companion artifact to [`../adk-onboarding-friction-reduction.md`](../adk-onboarding-friction-reduction.md). This folder is a **working prototype** of Option 3 from that proposal — a single PowerShell command that takes a customer from a clean Windows machine to a ready-to-use ESS Maker Kit workspace in VS Code.
+A single PowerShell command that takes a customer from a clean Windows machine to a ready-to-use ESS Maker Kit workspace in VS Code.
 
-> **Status:** Prototype for review. Not yet pushed to the upstream ADK repo. The `aka.ms/ess-adk-setup` short link in the customer command below assumes the files are eventually published under `bootstrap/` in [microsoft/Employee-Self-Service-Agent-Developer-Kit](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit).
+> **Status:** Prototype for review. The `aka.ms/ess-adk-setup` short link in the customer command below assumes the files are eventually published under `bootstrap/` in [microsoft/Employee-Self-Service-Agent-Developer-Kit](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit).
 
 ## What this delivers
 
