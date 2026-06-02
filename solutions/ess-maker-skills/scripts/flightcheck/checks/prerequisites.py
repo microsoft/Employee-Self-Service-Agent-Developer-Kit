@@ -13,6 +13,54 @@ from ..runner import CheckResult, Status, Priority
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
 
 
+def _sku_matches(sku: dict, patterns: tuple[str, ...]) -> bool:
+    """Case-insensitive substring match against `skuPartNumber`.
+
+    Graph returns `skuPartNumber` in mixed case (e.g. ``Microsoft_365_Copilot``)
+    for many SKUs, while Microsoft's documented part numbers and most
+    operator-facing references use UPPER_SNAKE_CASE (e.g.
+    ``MICROSOFT_365_COPILOT``). A naive case-sensitive ``in`` check
+    silently misses every license on tenants whose Graph response uses
+    mixed case, which was the original behavior of these PRE-xxx
+    checks and produced false-negative "No <X> licenses found" results
+    even on properly-licensed tenants.
+    """
+    part = (sku.get("skuPartNumber") or "").upper()
+    return any(p.upper() in part for p in patterns)
+
+
+# Microsoft 365 Copilot SKU part numbers (and historical aliases).
+M365_COPILOT_SKUS: tuple[str, ...] = (
+    "MICROSOFT_365_COPILOT",
+)
+
+# Copilot Studio SKU part numbers. The M365 Copilot bundle also
+# includes Copilot Studio message capacity, so it counts as a source
+# of Copilot Studio entitlement for prerequisite-check purposes.
+COPILOT_STUDIO_SKUS: tuple[str, ...] = (
+    "COPILOT_STUDIO",                  # forward-compatible Studio SKUs
+    "MICROSOFT_COPILOT_STUDIO",        # alternate naming convention
+    "POWER_VIRTUAL_AGENTS",            # legacy PVA SKUs (PVA_VIRAL, etc.)
+    "CCIBOTS_PRIVPREV_VIRAL",          # original PVA preview SKU
+    "MICROSOFT_365_COPILOT",           # M365 Copilot bundle includes Studio messages
+)
+
+# SKUs that carry Microsoft Teams entitlement, including bundles
+# whose part numbers do not literally contain "TEAMS".
+TEAMS_BEARING_SKUS: tuple[str, ...] = (
+    "TEAMS",                           # standalone Teams SKUs (TEAMS_EXPLORATORY, TEAMS_FREE_*, etc.)
+    "O365_BUSINESS_PREMIUM",           # M365 Business Standard
+    "O365_BUSINESS_ESSENTIALS",        # M365 Business Basic
+    "SPB",                             # M365 Business Premium
+    "M365_BUSINESS_PREMIUM",
+    "ENTERPRISEPACK",                  # Office 365 E3
+    "ENTERPRISEPREMIUM",               # Office 365 E5
+    "SPE_E3",                          # Microsoft 365 E3
+    "SPE_E5",                          # Microsoft 365 E5
+    "DEVELOPERPACK_E5",                # M365 E5 Developer
+)
+
+
 def run_prerequisites_checks(runner) -> list[CheckResult]:
     """Execute all prerequisites checks using the Graph client."""
     graph = runner.graph
@@ -21,7 +69,7 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
     # ---- PRE-001: Microsoft 365 Copilot licenses ----
     try:
         skus = graph.get_subscribed_skus()
-        copilot_skus = [s for s in skus if "MICROSOFT_365_COPILOT" in s.get("skuPartNumber", "")]
+        copilot_skus = [s for s in skus if _sku_matches(s, M365_COPILOT_SKUS)]
         consumed = sum(s.get("consumedUnits", 0) for s in copilot_skus)
         enabled = sum(
             s.get("prepaidUnits", {}).get("enabled", 0) for s in copilot_skus
@@ -56,11 +104,7 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
     # ---- PRE-002: Copilot Studio licenses ----
     try:
         skus = graph.get_subscribed_skus()
-        cs_skus = [
-            s for s in skus
-            if any(k in s.get("skuPartNumber", "")
-                   for k in ("COPILOT_STUDIO", "POWER_VIRTUAL_AGENTS"))
-        ]
+        cs_skus = [s for s in skus if _sku_matches(s, COPILOT_STUDIO_SKUS)]
         if cs_skus:
             names = ", ".join(s.get("skuPartNumber", "") for s in cs_skus)
             results.append(CheckResult(
@@ -91,7 +135,7 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
     # ---- PRE-003: Microsoft Teams licenses ----
     try:
         skus = graph.get_subscribed_skus()
-        teams_skus = [s for s in skus if "TEAMS" in s.get("skuPartNumber", "")]
+        teams_skus = [s for s in skus if _sku_matches(s, TEAMS_BEARING_SKUS)]
         consumed = sum(s.get("consumedUnits", 0) for s in teams_skus)
         if teams_skus and consumed > 0:
             results.append(CheckResult(

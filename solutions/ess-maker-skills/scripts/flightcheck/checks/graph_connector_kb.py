@@ -55,8 +55,6 @@ verified against the public CSDL at
 
 from __future__ import annotations
 
-from typing import Any
-
 from ..runner import CheckResult, Status, Priority
 
 DOC_BASE = "https://learn.microsoft.com/graph/api"

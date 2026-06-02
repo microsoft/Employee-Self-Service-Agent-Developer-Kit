@@ -252,3 +252,23 @@ class GraphClient:
         operation to detect silent crawl failures.
         """
         return self.get_all(f"/external/connections/{connection_id}/operations")
+
+    def get_claims_mapping_policies(self, service_principal_id: str) -> list:
+        """List claimsMappingPolicy objects assigned to a service principal.
+
+        Used by AUTH-006 to read the SAML token-issuance overrides Entra
+        applies for a federated enterprise app (e.g., the customer's
+        Workday SAML app). An empty list means no policy is assigned
+        and the application uses Entra's default claim set
+        (NameID = user.userPrincipalName).
+
+        Source (validatable):
+          Schema:  https://graph.microsoft.com/v1.0/$metadata
+                   EntityType Name="claimsMappingPolicy"
+          Docs:    https://learn.microsoft.com/graph/api/serviceprincipal-list-claimsmappingpolicies?view=graph-rest-1.0
+
+        Requires Policy.Read.All (already requested by this client).
+        """
+        return self.get_all(
+            f"/servicePrincipals/{service_principal_id}/claimsMappingPolicies"
+        )
