@@ -211,9 +211,9 @@ def query_all(env_url, token, entity_set, select, filter_expr=None):
         if page == 1:
             print(f"  Page {page}: {len(records)} records", end="")
         elif records:
-            print(f" → Page {page}: {len(records)}", end="")
+            print(f" -> Page {page}: {len(records)}", end="")
 
-    print(f" → Total: {len(all_records)}")
+    print(f" -> Total: {len(all_records)}")
     return all_records
 
 
