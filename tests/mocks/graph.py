@@ -192,41 +192,58 @@ def conditional_access_policy(
     }
 
 
+MOCK_WORKDAY_SP_ID = "00000000-0000-0000-0000-000000005001"
+MOCK_WORKDAY_APP_ID = "00000000-0000-0000-0000-000000005002"
+# The Entra gallery applicationTemplate id for the Workday SSO template.
+# Real values are Microsoft-issued; this mock value is stable so tests
+# can wire `applicationTemplateId` through the SP and the
+# `/applicationTemplates` lookup consistently.
+MOCK_WORKDAY_APP_TEMPLATE_ID = "00000000-0000-0000-0000-000000005401"
+
+
 def service_principal(
     *,
-    sp_id: str = "00000000-0000-0000-0000-000000005001",
-    app_id: str = "00000000-0000-0000-0000-000000005002",
+    sp_id: str = MOCK_WORKDAY_SP_ID,
+    app_id: str = MOCK_WORKDAY_APP_ID,
     display_name: str = "Workday",
+    app_role_assignment_required: bool = True,
+    account_enabled: bool = True,
     preferred_sso_mode: str | None = "saml",
     tags: Iterable[str] | None = None,
     login_url: str | None = "https://impl.workday.com/contoso/login-saml.htmld",
     service_principal_names: Iterable[str] | None = None,
+    application_template_id: str | None = MOCK_WORKDAY_APP_TEMPLATE_ID,
 ) -> dict[str, Any]:
     """Build a single Graph /servicePrincipals record.
 
-    Default values represent a customer's federated Workday enterprise
-    app — the shape AUTH-006 expects to find. The
-    ``service_principal_names`` collection includes the SAML entity ID
-    Workday's "SAML Identity Providers > Service Provider ID" field
-    references — that's the join key AUTH-006 surfaces so the operator
-    can identify which Entra app the Workday tenant is actually using.
+    Defaults represent a customer's federated Workday enterprise app —
+    the shape both AUTH-005 (user-assignment) and AUTH-006 (SAML NameID
+    alignment) expect to find. The ``service_principal_names``
+    collection includes the SAML entity ID Workday's "SAML Identity
+    Providers > Service Provider ID" field references — that's the
+    join key AUTH-006 surfaces so the operator can identify which
+    Entra app the Workday tenant is actually using.
 
     Cited consumers:
-      - flightcheck/graph_client.py:191-196 (get_service_principals).
-      - flightcheck/checks/authentication.py (AUTH-006).
+      - flightcheck/graph_client.py (get_service_principals).
+      - flightcheck/checks/authentication.py (AUTH-005, AUTH-006).
 
     Source (validatable):
       Schema: https://graph.microsoft.com/v1.0/$metadata
-              EntityType Name="servicePrincipal"
-              Fields used by AUTH-006:
+              EntityType Name="servicePrincipal" — fields used:
                 id (Edm.String)
                 appId (Edm.String)
                 displayName (Edm.String)
-                preferredSingleSignOnMode (Edm.String, nullable)
-                servicePrincipalNames (Collection(Edm.String))
+                appRoleAssignmentRequired (Edm.Boolean)  [AUTH-005]
+                accountEnabled (Edm.Boolean)
+                preferredSingleSignOnMode (Edm.String, nullable)  [AUTH-006]
+                servicePrincipalNames (Collection(Edm.String))  [AUTH-006]
                 tags (Collection(Edm.String))
                 loginUrl (Edm.String, nullable)
-      Docs:   https://learn.microsoft.com/graph/api/resources/serviceprincipal?view=graph-rest-1.0
+                applicationTemplateId (Edm.String, nullable)  [AUTH-005]
+      Docs:   https://learn.microsoft.com/graph/api/serviceprincipal-get
+              https://learn.microsoft.com/graph/api/resources/serviceprincipal?view=graph-rest-1.0
+              Example response copied verbatim 2026-05.
     """
     if service_principal_names is None:
         # Default mirrors the entity-ID pattern Microsoft documents
@@ -237,26 +254,95 @@ def service_principal(
             app_id,
             "http://www.workday.com/contoso",
         ]
-    return {
+    record = {
         "id": sp_id,
         "deletedDateTime": None,
-        "accountEnabled": True,
-        "appId": app_id,
+        "accountEnabled": account_enabled,
+        "addIns": [],
+        "alternativeNames": [],
         "appDisplayName": display_name,
+        "appId": app_id,
+        "appOwnerOrganizationId": MOCK_TENANT_ID,
+        "appRoleAssignmentRequired": app_role_assignment_required,
+        "appRoles": [],
         "displayName": display_name,
-        "preferredSingleSignOnMode": preferred_sso_mode,
+        "info": {
+            "termsOfServiceUrl": None,
+            "supportUrl": None,
+            "privacyStatementUrl": None,
+            "marketingUrl": None,
+            "logoUrl": None,
+        },
+        "keyCredentials": [],
         "loginUrl": login_url,
+        "logoutUrl": None,
+        "oauth2PermissionScopes": [],
+        "passwordCredentials": [],
+        "preferredSingleSignOnMode": preferred_sso_mode,
+        "publisherName": None,
+        "replyUrls": [],
         "servicePrincipalNames": list(service_principal_names),
         "servicePrincipalType": "Application",
+        "signInAudience": "AzureADMyOrg",
         "tags": list(tags) if tags is not None else ["WindowsAzureActiveDirectoryIntegratedApp"],
-        "appRoles": [],
-        "oauth2PermissionScopes": [],
+        "tokenEncryptionKeyId": None,
+    }
+    # applicationTemplateId is nullable per the CSDL — omit the key
+    # entirely (matching Graph's typical response for non-gallery SPs)
+    # when the caller explicitly passes None.
+    if application_template_id is not None:
+        record["applicationTemplateId"] = application_template_id
+    return record
+
+
+def app_role_assignment(
+    *,
+    assignment_id: str = "00000000-0000-0000-0000-000000005101",
+    principal_id: str = "00000000-0000-0000-0000-000000005102",
+    principal_display_name: str = "ESS Users",
+    principal_type: str = "Group",
+    resource_id: str = MOCK_WORKDAY_SP_ID,
+    resource_display_name: str = "Workday",
+    app_role_id: str = "00000000-0000-0000-0000-000000000000",
+) -> dict[str, Any]:
+    """Build a single Graph /servicePrincipals/{id}/appRoleAssignedTo record.
+
+    ``principal_type`` is one of ``User``, ``Group``, ``ServicePrincipal``
+    per the appRoleAssignment EntityType.
+
+    Cited consumers:
+      - flightcheck/graph_client.py (get_app_role_assignments)
+      - flightcheck/checks/authentication.py (AUTH-005)
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="appRoleAssignment" — fields used:
+                id (Edm.String)
+                principalId (Edm.Guid)
+                principalDisplayName (Edm.String)
+                principalType (Edm.String)
+                resourceId (Edm.Guid)
+                resourceDisplayName (Edm.String)
+                appRoleId (Edm.Guid)
+      Docs:   https://learn.microsoft.com/graph/api/serviceprincipal-list-approleassignedto
+              Example response copied verbatim 2026-05.
+    """
+    return {
+        "id": assignment_id,
+        "deletedDateTime": None,
+        "appRoleId": app_role_id,
+        "createdDateTime": "2025-01-01T00:00:00Z",
+        "principalDisplayName": principal_display_name,
+        "principalId": principal_id,
+        "principalType": principal_type,
+        "resourceDisplayName": resource_display_name,
+        "resourceId": resource_id,
     }
 
 
 def claims_mapping_policy(
     *,
-    policy_id: str = "00000000-0000-0000-0000-000000005101",
+    policy_id: str = "00000000-0000-0000-0000-000000005201",
     display_name: str = "Workday NameID -> employeeId",
     definition: list[str] | None = None,
 ) -> dict[str, Any]:
@@ -382,21 +468,115 @@ def list_conditional_access_policies(
 
 def list_service_principals(
     *,
-    filter_expr: str | None = None,
     service_principals: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """Mock GET /v1.0/servicePrincipals?$filter=...
+    """Mock GET /v1.0/servicePrincipals (with or without ``$filter``).
 
-    Server-side narrowing via $filter doesn't change the response shape
-    (same `servicePrincipal` collection), so a single mock covers any
-    AUTH-006 filter (displayName, appId, tags/any, etc.).
+    The production check uses a server-side ``$filter`` to narrow on
+    ``displayName``; per the cassette-tier rule that ``$filter`` /
+    ``$select`` / ``$top`` are server-side narrowing on the same path,
+    one mock covers all narrowing variants. Both AUTH-005 and
+    AUTH-006 hit this endpoint with different filters and consume
+    the same ``servicePrincipal`` shape.
     """
     return {
         "method": "GET",
         "url": f"{GRAPH_BASE}/servicePrincipals",
         "json": collection(
-            service_principals if service_principals is not None else [service_principal()],
+            service_principals
+            if service_principals is not None
+            else [service_principal()],
             odata_context="$metadata#servicePrincipals",
+        ),
+        "status": 200,
+    }
+
+
+def list_app_role_assignments(
+    *,
+    sp_id: str = MOCK_WORKDAY_SP_ID,
+    assignments: Iterable[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Mock GET /v1.0/servicePrincipals/{id}/appRoleAssignedTo."""
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/servicePrincipals/{sp_id}/appRoleAssignedTo",
+        "json": collection(
+            assignments if assignments is not None else [app_role_assignment()],
+            odata_context=(
+                f"$metadata#servicePrincipals('{sp_id}')/appRoleAssignedTo"
+            ),
+        ),
+        "status": 200,
+    }
+
+
+def application_template(
+    *,
+    template_id: str = MOCK_WORKDAY_APP_TEMPLATE_ID,
+    display_name: str = "Workday",
+    categories: Iterable[str] | None = ("Human resources",),
+    supported_single_sign_on_modes: Iterable[str] | None = ("saml",),
+    publisher: str = "Workday",
+    description: str = "Mock Workday gallery template used by FlightCheck tests.",
+) -> dict[str, Any]:
+    """Build a single Graph /applicationTemplates record.
+
+    The Entra application gallery catalog is tenant-independent
+    metadata Microsoft curates centrally. Each template has a stable
+    ``id``, a ``categories`` array (functional bucket — "Human
+    resources", "Productivity", ...) and a ``supportedSingleSignOnModes``
+    array of federation modes (``saml``, ``oidc``, ``password``,
+    ``notSupported``). AUTH-005 filters by ``supportedSingleSignOnModes``
+    intersecting {``saml``, ``oidc``} to identify federated-SSO
+    templates and discover the Workday Enterprise App via
+    ``servicePrincipal.applicationTemplateId``.
+
+    Pass ``supported_single_sign_on_modes=("notSupported",)`` or
+    ``("password",)`` to mock a non-federated template (e.g. a
+    provisioning-only Workday entry).
+
+    Cited consumers:
+      - flightcheck/graph_client.py (get_application_templates).
+      - flightcheck/checks/authentication.py (AUTH-005).
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="applicationTemplate" — fields used:
+                id (Edm.String, key)
+                displayName (Edm.String)
+                categories (Collection(Edm.String))
+                supportedSingleSignOnModes (Collection(Edm.String))
+                publisher (Edm.String, nullable)
+                description (Edm.String, nullable)
+      Docs:   https://learn.microsoft.com/graph/api/applicationtemplate-list
+              https://learn.microsoft.com/graph/api/resources/applicationtemplate
+    """
+    return {
+        "id": template_id,
+        "displayName": display_name,
+        "categories": list(categories) if categories is not None else [],
+        "supportedSingleSignOnModes": (
+            list(supported_single_sign_on_modes)
+            if supported_single_sign_on_modes is not None
+            else []
+        ),
+        "publisher": publisher,
+        "description": description,
+    }
+
+
+def list_application_templates(
+    *,
+    templates: Iterable[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Mock GET /v1.0/applicationTemplates (with optional ``$filter``)."""
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/applicationTemplates",
+        "json": collection(
+            templates if templates is not None else [application_template()],
+            odata_context="$metadata#applicationTemplates",
         ),
         "status": 200,
     }
@@ -404,7 +584,7 @@ def list_service_principals(
 
 def list_claims_mapping_policies_for_sp(
     *,
-    sp_id: str = "00000000-0000-0000-0000-000000005001",
+    sp_id: str = MOCK_WORKDAY_SP_ID,
     policies: Iterable[Mapping[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Mock GET /v1.0/servicePrincipals/{id}/claimsMappingPolicies.
