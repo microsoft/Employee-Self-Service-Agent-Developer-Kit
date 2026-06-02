@@ -1,4 +1,4 @@
-# ESS ADK — `winget configure` one-shot installer (Option 3)
+# ESS ADK — One-Shot Installer
 
 Companion artifact to [`../adk-onboarding-friction-reduction.md`](../adk-onboarding-friction-reduction.md). This folder is a **working prototype** of Option 3 from that proposal — a single PowerShell command that takes a customer from a clean Windows machine to a ready-to-use ESS Maker Kit workspace in VS Code.
 
@@ -20,12 +20,43 @@ iex (irm https://aka.ms/ess-adk-setup)
 
 > **GitHub Copilot subscription is still required** for the in-editor maker experience — see the parent proposal for context. This script installs and signs the customer into the extension scaffolding; it does not (and cannot) grant the entitlement.
 
+## FlightCheck-Only Mode
+
+For users who only need to run FlightCheck (pre-deployment readiness validation) without the full maker kit experience:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -FlightCheckOnly
+```
+
+This installs a **minimal toolchain** (Python + Git only — no VS Code, PowerShell 7, or GitHub CLI), installs pip dependencies, clones the repo, and then walks you through an interactive setup:
+
+1. **Environment selection** — Lists all Power Platform environments in your tenant (authenticates via browser) and lets you pick one by number.
+2. **Agent selection** — Lists all agents in the selected environment and lets you pick one (or press Enter to skip for environment-wide checks only).
+3. **Config generation** — Creates `.local/config.json` with the selected environment and agent.
+
+After setup, run FlightCheck with:
+
+```powershell
+cd solutions\ess-maker-skills
+python scripts/flightcheck/cli.py --scope full
+```
+
+### Changing your environment or agent
+
+Re-run the installer with `-FlightCheckOnly` — it will detect the existing config and ask if you want to reconfigure:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -FlightCheckOnly
+```
+
+Since the toolchain is already installed, it skips straight to the environment/agent picker. You can select a different environment, a different agent, or skip the agent entirely.
+
 ## Files
 
 | File | Purpose |
 |---|---|
 | `ess-adk-setup.winget.yaml` | Declarative DSC config consumed by `winget configure`. Installs VS Code, Python 3.12, PowerShell 7, Git, GitHub CLI. |
-| `Install-EssAdk.ps1` | Orchestrator. Runs `winget configure`, installs VS Code extensions, clones the repo, launches VS Code. Idempotent. |
+| `Install-EssAdk.ps1` | Orchestrator. Installs toolchain via winget, installs pip dependencies, clones the repo, installs VS Code extensions, launches VS Code. Idempotent. With `-FlightCheckOnly`, installs minimal toolchain and runs interactive environment/agent discovery. |
 | `bootstrap.ps1` | The thing behind `aka.ms/ess-adk-setup`. Downloads the two files above into `$env:TEMP` and runs the installer. |
 
 ## How to test it locally (without publishing anything)
@@ -60,9 +91,10 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -Instal
 Useful flags during testing:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipExtensions   # skip code --install-extension calls
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipClone        # skip git clone (toolchain only)
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipLaunch       # don't open VS Code at the end
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipExtensions      # skip code --install-extension calls
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipClone           # skip git clone (toolchain only)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipLaunch          # don't open VS Code at the end
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -FlightCheckOnly     # minimal install for FlightCheck only
 ```
 
 ## How it will look once published

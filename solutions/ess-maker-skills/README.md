@@ -98,6 +98,16 @@ cd solutions/ess-maker-skills
 python scripts/flightcheck/cli.py --scope full
 ```
 
+**Standalone install (no VS Code or Copilot required):**
+
+If you only need FlightCheck without the full maker kit, use the one-shot installer with `-FlightCheckOnly`:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\setup\Install-EssAdk.ps1 -FlightCheckOnly
+```
+
+This installs just Python + Git, pip dependencies, and walks you through selecting your environment and agent interactively. Re-run the same command to change your environment or agent. See [`setup/README.md`](../../setup/README.md) for details.
+
 **What it checks (41+ automated checks across 8 categories):**
 
 | Category | What's validated |
