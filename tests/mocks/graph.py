@@ -470,6 +470,12 @@ def insufficient_permissions(
 
 MOCK_EXTERNAL_CONNECTION_ID = "ServiceNowKB48"
 MOCK_EXTERNAL_CONNECTION_NAME = "Mock ServiceNow Knowledge Connector"
+# Default connectorId for the builder is a real Microsoft Gallery
+# template ID (per learn.microsoft.com/microsoftsearch/connectors-overview),
+# so default-mock connections behave like Gallery connections in EXT-002.
+# Tests that need to exercise the custom (API-created) provenance branch
+# pass connector_id=None explicitly.
+MOCK_GALLERY_CONNECTOR_ID = "serviceNowKnowledge"
 
 
 def external_connection(
@@ -478,6 +484,8 @@ def external_connection(
     name: str = MOCK_EXTERNAL_CONNECTION_NAME,
     state: str = "ready",
     description: str = "Mock connector used by FlightCheck tests.",
+    connector_id: str | None = MOCK_GALLERY_CONNECTOR_ID,
+    ingested_items_count: int = 0,
 ) -> dict[str, Any]:
     """Build a single Graph /external/connections record.
 
@@ -487,20 +495,33 @@ def external_connection(
     Source (validatable):
       Schema: https://graph.microsoft.com/v1.0/$metadata
               EntityType Name="externalConnection" — fields used:
-                id          (Edm.String, key, admin-assigned)
-                name        (Edm.String)
-                state       (Enum connectionState:
-                             draft | ready | obsolete | limitExceeded |
-                             unknownFutureValue)
-                description (Edm.String)
+                id                   (Edm.String, key, admin-assigned)
+                name                 (Edm.String)
+                state                (Enum connectionState:
+                                      draft | ready | obsolete |
+                                      limitExceeded | unknownFutureValue)
+                description          (Edm.String)
+                connectorId          (Edm.String, Nullable=true — populated
+                                      only when the connection was created
+                                      from a Microsoft Gallery template;
+                                      null/empty for custom connections
+                                      created directly via POST
+                                      /external/connections)
+                ingestedItemsCount   (Edm.Int64, Nullable=true — current
+                                      item count served by the connection)
       Docs:   https://learn.microsoft.com/graph/api/externalconnectors-externalconnection-get
+              https://learn.microsoft.com/microsoftsearch/connectors-overview
     """
-    return {
+    record: dict[str, Any] = {
         "id": connection_id,
         "name": name,
         "description": description,
         "state": state,
+        "ingestedItemsCount": ingested_items_count,
     }
+    if connector_id is not None:
+        record["connectorId"] = connector_id
+    return record
 
 
 def connection_operation(

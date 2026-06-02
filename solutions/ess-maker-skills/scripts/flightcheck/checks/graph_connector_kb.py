@@ -35,6 +35,21 @@ What is validated (per Graph Connector knowledge source on the agent):
     /operations``) is ``completed`` — ``failed`` is a silent failure;
     ``inprogress`` is surfaced as a warning so the operator waits.
 
+Remediation branches on connection **provenance**, discriminated by the
+``externalConnection.connectorId`` field:
+
+  * Gallery connection (``connectorId`` populated, e.g.
+    ``serviceNowKnowledge``) — manageable from the M365 admin center →
+    Copilot → Connectors UI. Bad-state remediation points the operator
+    at the UI to edit settings / trigger a recrawl / finish setup.
+  * Custom (API-created) connection (``connectorId`` null/empty) — NOT
+    surfaced in the admin center UI; only the owning app or a Graph API
+    consumer can mutate it. Bad-state remediation surfaces the explicit
+    DELETE + Gallery-recreate path because the operator has no other
+    in-portal lever. A custom connection that is ready but has no crawl
+    operations AND no ingested items is escalated WARNING → FAILED for
+    the same reason — the operator cannot recover it from any UI.
+
 What is NOT automated (surfaced as ``NOT_CONFIGURED`` manual check):
 
   * Item-level ACL inspection. The Graph external connectors API exposes
@@ -42,8 +57,8 @@ What is NOT automated (surfaced as ``NOT_CONFIGURED`` manual check):
     deny-shadowing audit must be performed in the M365 Admin Center or
     via the connector's own admin tooling.
   * Tenant-wide search audience restriction
-    (M365 Admin Center → Search & Intelligence → Data Sources). This
-    setting is not exposed via Microsoft Graph today.
+    (M365 admin center → Copilot → Connectors → connector → Available to).
+    This setting is not exposed via Microsoft Graph today.
 
 API tier: Microsoft Graph v1.0 is the ``validatable`` tier (see
 ``tests/fixtures/cassettes/INDEX.md`` API tier registry). The
@@ -58,6 +73,17 @@ from __future__ import annotations
 from ..runner import CheckResult, Status, Priority
 
 DOC_BASE = "https://learn.microsoft.com/graph/api"
+
+# Where operators manage Graph Connectors in the M365 admin center.
+# Microsoft relocated this surface in April 2025 from
+# "Settings → Search & Intelligence → Data sources" to
+# "Copilot → Connectors" under the Copilot Control System.
+# Source of truth: keep this string in sync with the canonical Learn doc.
+ADMIN_CENTER_PATH = "M365 admin center → Copilot → Connectors"
+ADMIN_CENTER_DOC = (
+    "https://learn.microsoft.com/microsoft-365/copilot/connectors/"
+    "deployment-overview"
+)
 ESS_KNOWN_ISSUES_DOC = (
     "https://learn.microsoft.com/microsoft-365/copilot/employee-self-service/"
     "known-issues-limitations"
@@ -236,10 +262,9 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
                         "id or name exists in the tenant."
                     ),
                     remediation=(
-                        "Either provision the missing Graph Connector in M365 "
-                        "Admin Center → Search & Intelligence → Data Sources, "
-                        "or update the agent's knowledge source to point at "
-                        "an existing connection."
+                        f"Either provision the missing Graph Connector in "
+                        f"{ADMIN_CENTER_PATH}, or update the agent's "
+                        "knowledge source to point at an existing connection."
                     ),
                     doc_link=f"{DOC_BASE}/externalconnectors-externalconnection-get",
                 ))
@@ -282,7 +307,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
                     f"Connection '{connection_id}' state is '{state}' — "
                     "ESS KB queries against this connector will fail silently."
                 ),
-                remediation=_state_remediation(state),
+                remediation=_state_remediation(state, connection),
                 doc_link=f"{DOC_BASE}/resources/externalconnectors-externalconnection",
             ))
             continue
@@ -297,10 +322,9 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
                 description=f"Graph Connector: {connection_name}",
                 result=f"Connection '{connection_id}' has unrecognized state '{state}'.",
                 remediation=(
-                    "Verify the connector in M365 Admin Center → Search & "
-                    "Intelligence → Data Sources. File an issue against "
-                    "FlightCheck so this state can be added to the readiness "
-                    "allowlist."
+                    f"Verify the connector in {ADMIN_CENTER_PATH}. File "
+                    "an issue against FlightCheck so this state can be "
+                    "added to the readiness allowlist."
                 ),
             ))
             continue
@@ -323,6 +347,18 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
             ))
         elif op_status == "failed":
             failed.append(display)
+            if _is_gallery_connection(connection):
+                op_failed_remediation = (
+                    f"Inspect the connector's crawl errors in "
+                    f"{ADMIN_CENTER_PATH}, fix the underlying issue (auth, "
+                    "ACL, source connectivity), and trigger a re-crawl "
+                    "(edit the connection settings or use 'Resync') "
+                    "before deploying the agent."
+                )
+            else:
+                op_failed_remediation = _delete_and_recreate_remediation(
+                    connection_id, connection_name
+                )
             results.append(CheckResult(
                 checkpoint_id=cid,
                 category="Graph Connector KB",
@@ -334,12 +370,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
                     "recent crawl operation FAILED. KB queries may return "
                     "stale or incomplete results."
                 ),
-                remediation=(
-                    "Inspect the connector's crawl errors in M365 Admin "
-                    "Center → Search & Intelligence → Data Sources, fix the "
-                    "underlying issue (auth, ACL, source connectivity), and "
-                    "trigger a re-crawl before deploying the agent."
-                ),
+                remediation=op_failed_remediation,
                 doc_link=(
                     f"{DOC_BASE}/externalconnectors-externalconnection-list-operations"
                 ),
@@ -365,24 +396,86 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
             ))
         else:
             # No operations recorded, or status is unspecified/unknown.
-            warned.append(display)
-            results.append(CheckResult(
-                checkpoint_id=cid,
-                category="Graph Connector KB",
-                priority=Priority.HIGH.value,
-                status=Status.WARNING.value,
-                description=f"Graph Connector: {connection_name}",
-                result=(
-                    f"Connection '{connection_id}' is ready, but no completed "
-                    "crawl operation could be confirmed (status="
-                    f"{op_status or 'none'})."
-                ),
-                remediation=(
-                    "Trigger an initial crawl of the connector in M365 Admin "
-                    "Center → Search & Intelligence → Data Sources, and "
-                    "verify it completes before deploying."
-                ),
-            ))
+            # Branch on provenance + ingestion: a Gallery connector with
+            # no ops is a setup-incomplete WARNING the operator can fix
+            # in the admin center, while a custom (API-created)
+            # connection with no ops AND no items is unrecoverable from
+            # any UI — escalate to FAILED with explicit delete+recreate
+            # remediation. A custom connection with items already
+            # ingested is legitimate (the owning app PUTs items
+            # directly without using crawl operations); surface as
+            # WARNING with freshness guidance.
+            is_gallery = _is_gallery_connection(connection)
+            ingested = connection.get("ingestedItemsCount") or 0
+            try:
+                ingested = int(ingested)
+            except (TypeError, ValueError):
+                ingested = 0
+
+            if is_gallery:
+                warned.append(display)
+                results.append(CheckResult(
+                    checkpoint_id=cid,
+                    category="Graph Connector KB",
+                    priority=Priority.HIGH.value,
+                    status=Status.WARNING.value,
+                    description=f"Graph Connector: {connection_name}",
+                    result=(
+                        f"Connection '{connection_id}' is ready, but no "
+                        "completed crawl operation could be confirmed "
+                        f"(status={op_status or 'none'})."
+                    ),
+                    remediation=(
+                        f"Open {ADMIN_CENTER_PATH}, select this "
+                        "connection, and edit its settings (or use "
+                        "'Resync') to trigger a full crawl. Verify it "
+                        "completes before deploying."
+                    ),
+                ))
+            elif ingested > 0:
+                warned.append(display)
+                results.append(CheckResult(
+                    checkpoint_id=cid,
+                    category="Graph Connector KB",
+                    priority=Priority.HIGH.value,
+                    status=Status.WARNING.value,
+                    description=f"Graph Connector: {connection_name}",
+                    result=(
+                        f"Connection '{connection_id}' is a custom "
+                        "(API-created) connector with no crawl-operation "
+                        f"history but {ingested} ingested item(s) — items "
+                        "are being PUT directly by the owning app. KB "
+                        "queries will return current items, but "
+                        "freshness depends on the owning app."
+                    ),
+                    remediation=(
+                        "If KB results appear stale or incomplete, "
+                        "contact the team that owns the app that "
+                        f"created connection '{connection_id}' to verify "
+                        "item updates are still being pushed. This "
+                        "connection is not visible in "
+                        f"{ADMIN_CENTER_PATH} and cannot be recrawled "
+                        "from any UI."
+                    ),
+                ))
+            else:
+                failed.append(display)
+                results.append(CheckResult(
+                    checkpoint_id=cid,
+                    category="Graph Connector KB",
+                    priority=Priority.HIGH.value,
+                    status=Status.FAILED.value,
+                    description=f"Graph Connector: {connection_name}",
+                    result=(
+                        f"Connection '{connection_id}' is a custom "
+                        "(API-created) connector that is ready but has "
+                        "no crawl operations AND no ingested items — "
+                        "KB queries against it will return no results."
+                    ),
+                    remediation=_delete_and_recreate_remediation(
+                        connection_id, connection_name
+                    ),
+                ))
 
     # ---- EXT-002 (top-level summary) ----
     total = len(gc_sources)
@@ -440,9 +533,8 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
             "Manually verify in the connector's source system that items have "
             "at least one grant ACL targeting the ESS user audience (group or "
             "everyone), and no deny ACL that would shadow it. Also verify in "
-            "M365 Admin Center → Search & Intelligence → Data Sources that "
-            "the connector audience is not restricted to a group ESS users "
-            "are not in."
+            f"{ADMIN_CENTER_PATH} that the connector audience is not "
+            "restricted to a group ESS users are not in."
         ),
     ))
 
@@ -452,6 +544,60 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
 # ────────────────────────────────────────────────────────────────────────
 # Internals
 # ────────────────────────────────────────────────────────────────────────
+
+
+def _is_gallery_connection(connection: dict) -> bool:
+    """True if the connection was created from a Microsoft Gallery template.
+
+    The ``externalConnection.connectorId`` field is populated only for
+    connections provisioned via the M365 admin center → Copilot →
+    Connectors → Gallery flow (or by an app that explicitly passed
+    ``connectorId`` on POST /external/connections). Custom connections
+    created directly via the Microsoft Graph API have ``connectorId``
+    null/empty.
+
+    The distinction matters for remediation: Gallery connections are
+    visible and editable in the admin center UI; custom connections are
+    not, so the only operator-controllable fix path is to DELETE via
+    Graph and recreate from a Gallery template.
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="externalConnection"
+              Property Name="connectorId" Type="Edm.String" Nullable="true"
+      Docs:   https://learn.microsoft.com/microsoftsearch/connectors-overview
+    """
+    cid = connection.get("connectorId")
+    return isinstance(cid, str) and bool(cid.strip())
+
+
+def _delete_and_recreate_remediation(
+    connection_id: str, connection_name: str
+) -> str:
+    """Operator remediation for unhealthy custom (API-created) connections.
+
+    These connections do not appear in the M365 admin center UI, so the
+    operator cannot edit settings, trigger a recrawl, or finish setup
+    from any portal. The only escape hatches are (a) ask the owning app
+    to re-provision the connection or (b) delete it via the Microsoft
+    Graph API and recreate the knowledge source from a Microsoft
+    Gallery template.
+    """
+    return (
+        f"This connection has no Gallery connectorId, so it was created "
+        f"directly via the Microsoft Graph API and is NOT manageable in "
+        f"{ADMIN_CENTER_PATH}. To fix, either:\n"
+        f"  (a) Identify the owning app/service principal that created "
+        f"'{connection_id}' and have it re-provision the connection, OR\n"
+        f"  (b) Delete the broken connection via Graph "
+        f"(DELETE https://graph.microsoft.com/v1.0/external/connections/"
+        f"{connection_id} — requires "
+        f"ExternalConnection.ReadWrite.OwnedBy), then recreate the "
+        f"knowledge source from a Microsoft Gallery template via "
+        f"{ADMIN_CENTER_PATH} → Add a connector, and update the agent's "
+        f"Graph Connector knowledge source env variable to point at "
+        f"the new connection name."
+    )
 
 
 def _filter_graph_connector_sources(knowledge_sources: list) -> list[dict]:
@@ -525,27 +671,41 @@ def _latest_operation_status(graph, connection_id: str) -> str:
     return (latest.get("status") or "").strip().lower()
 
 
-def _state_remediation(state: str) -> str:
-    """Per-state operator guidance for non-ready connectors."""
-    if state == "draft":
-        return (
-            "Connector is in 'draft' state — finish provisioning it in M365 "
-            "Admin Center → Search & Intelligence → Data Sources (publish "
-            "schema, configure connection, run initial crawl) before deploying."
-        )
-    if state == "obsolete":
-        return (
-            "Connector is in 'obsolete' state — recreate it (the connector "
-            "schema or owning app changed in a way that retired the "
-            "connection) and re-attach the knowledge source."
-        )
+def _state_remediation(state: str, connection: dict) -> str:
+    """Per-state operator guidance for non-ready connectors.
+
+    Branches on provenance (``_is_gallery_connection``): Gallery
+    connections can be finished/recreated in the admin center UI;
+    custom (API-created) connections are not surfaced there and must
+    be DELETEd via Graph + recreated from a Gallery template.
+    """
+    connection_id = connection.get("id") or ""
+    connection_name = connection.get("name") or connection_id
+    is_gallery = _is_gallery_connection(connection)
+
     if state == "limitexceeded":
+        # Tenant-level item or storage limit — provenance is irrelevant;
+        # the remediation is a Microsoft support request either way.
         return (
             "Connector hit its tenant-level item or storage limit — request a "
             "limit increase from Microsoft or remove items, then trigger a "
             "re-crawl."
         )
-    return (
-        f"Connector is not in 'ready' state ({state}); investigate in M365 "
-        "Admin Center → Search & Intelligence → Data Sources."
-    )
+    if state == "draft":
+        if is_gallery:
+            return (
+                f"Connector is in 'draft' state — finish provisioning it in "
+                f"{ADMIN_CENTER_PATH} (publish schema, configure connection, "
+                "run initial crawl) before deploying."
+            )
+        return _delete_and_recreate_remediation(connection_id, connection_name)
+    if state == "obsolete":
+        if is_gallery:
+            return (
+                f"Connector is in 'obsolete' state — recreate the connection "
+                f"in {ADMIN_CENTER_PATH} (the connector schema or owning app "
+                "changed in a way that retired the connection) and re-attach "
+                "the knowledge source."
+            )
+        return _delete_and_recreate_remediation(connection_id, connection_name)
+    return f"Verify the connector in {ADMIN_CENTER_PATH}."

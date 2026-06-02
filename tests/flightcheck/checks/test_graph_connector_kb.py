@@ -432,8 +432,9 @@ class TestWarningBranches:
 
     @responses.activate
     def test_no_operations_returns_warning(self, fake_token: str) -> None:
-        """Connector is ready but no crawl has ever run — items aren't
-        searchable yet."""
+        """Gallery connector is ready but no crawl has ever run — items
+        aren't searchable yet, but the operator can trigger a crawl in
+        the admin center, so this stays a WARNING."""
         from flightcheck.checks.graph_connector_kb import run_graph_connector_kb_checks
 
         responses.add(**g.list_external_connections(
@@ -450,7 +451,145 @@ class TestWarningBranches:
         per_source = _result_by_id(results, "EXT-002-001")
         assert per_source.status == "Warning"
         assert "no completed crawl" in per_source.result.lower()
-        assert "trigger an initial crawl" in per_source.remediation.lower()
+        # Gallery connectors get UI-actionable remediation.
+        assert "edit its settings" in per_source.remediation.lower()
+        assert "trigger a full crawl" in per_source.remediation.lower()
+        # Regression guard: Microsoft relocated this admin surface in
+        # April 2025 from "Search & Intelligence → Data sources" to
+        # "Copilot → Connectors". Operators following the old path
+        # cannot find it. Keep the navigation string in sync with the
+        # ADMIN_CENTER_PATH constant in graph_connector_kb.py.
+        assert "Copilot → Connectors" in per_source.remediation
+        assert "Search & Intelligence" not in per_source.remediation
+
+    @responses.activate
+    def test_custom_connection_no_operations_no_items_returns_failed(
+        self, fake_token: str
+    ) -> None:
+        """A custom (API-created, connectorId=null) connection that is
+        ready but has no crawl operations AND no ingested items is
+        unrecoverable from any UI — escalate WARNING → FAILED and
+        surface the delete+recreate path."""
+        from flightcheck.checks.graph_connector_kb import run_graph_connector_kb_checks
+
+        responses.add(**g.list_external_connections(
+            connections=[g.external_connection(
+                state="ready",
+                connector_id=None,
+                ingested_items_count=0,
+            )],
+        ))
+        responses.add(**g.list_connection_operations(operations=[]))
+
+        runner = _build_runner(
+            knowledge_sources=[_gc_knowledge_source()],
+            graph=_graph_client(fake_token),
+        )
+        results = run_graph_connector_kb_checks(runner)
+
+        per_source = _result_by_id(results, "EXT-002-001")
+        assert per_source.status == "Failed"
+        assert "no crawl operations" in per_source.result.lower()
+        assert "no ingested items" in per_source.result.lower()
+        # Remediation must surface the DELETE + recreate path, not a
+        # phantom "trigger a crawl in admin center" suggestion the
+        # operator cannot act on.
+        assert "delete" in per_source.remediation.lower()
+        assert "DELETE https://graph.microsoft.com/v1.0/external/connections/" \
+            in per_source.remediation
+        assert "gallery" in per_source.remediation.lower()
+        assert "Copilot → Connectors" in per_source.remediation
+
+    @responses.activate
+    def test_custom_connection_no_operations_with_items_returns_warning(
+        self, fake_token: str
+    ) -> None:
+        """A custom connection serving items via direct PUT (no crawl
+        ops but ingestedItemsCount > 0) is legitimate — surface as
+        WARNING with freshness guidance, not FAILED."""
+        from flightcheck.checks.graph_connector_kb import run_graph_connector_kb_checks
+
+        responses.add(**g.list_external_connections(
+            connections=[g.external_connection(
+                state="ready",
+                connector_id=None,
+                ingested_items_count=42,
+            )],
+        ))
+        responses.add(**g.list_connection_operations(operations=[]))
+
+        runner = _build_runner(
+            knowledge_sources=[_gc_knowledge_source()],
+            graph=_graph_client(fake_token),
+        )
+        results = run_graph_connector_kb_checks(runner)
+
+        per_source = _result_by_id(results, "EXT-002-001")
+        assert per_source.status == "Warning"
+        assert "42 ingested item" in per_source.result.lower()
+        assert "owns the app" in per_source.remediation.lower()
+
+    @responses.activate
+    def test_custom_connection_failed_crawl_remediation_is_delete_recreate(
+        self, fake_token: str
+    ) -> None:
+        """When the most-recent crawl FAILED on a custom connection,
+        remediation is delete+recreate (not the admin-center recrawl
+        steps that only apply to Gallery connectors)."""
+        from flightcheck.checks.graph_connector_kb import run_graph_connector_kb_checks
+
+        responses.add(**g.list_external_connections(
+            connections=[g.external_connection(
+                state="ready",
+                connector_id=None,
+            )],
+        ))
+        responses.add(**g.list_connection_operations(operations=[
+            g.connection_operation(operation_id="op-002", status="failed"),
+        ]))
+
+        runner = _build_runner(
+            knowledge_sources=[_gc_knowledge_source()],
+            graph=_graph_client(fake_token),
+        )
+        results = run_graph_connector_kb_checks(runner)
+
+        per_source = _result_by_id(results, "EXT-002-001")
+        assert per_source.status == "Failed"
+        assert "delete" in per_source.remediation.lower()
+        assert "DELETE https://graph.microsoft.com/v1.0/external/connections/" \
+            in per_source.remediation
+
+    @responses.activate
+    def test_custom_connection_in_draft_remediation_is_delete_recreate(
+        self, fake_token: str
+    ) -> None:
+        """A custom connection stuck in 'draft' state — the operator
+        cannot finish setup from any UI, so remediation must be
+        delete+recreate."""
+        from flightcheck.checks.graph_connector_kb import run_graph_connector_kb_checks
+
+        responses.add(**g.list_external_connections(
+            connections=[g.external_connection(
+                state="draft",
+                connector_id=None,
+            )],
+        ))
+
+        runner = _build_runner(
+            knowledge_sources=[_gc_knowledge_source()],
+            graph=_graph_client(fake_token),
+        )
+        results = run_graph_connector_kb_checks(runner)
+
+        per_source = _result_by_id(results, "EXT-002-001")
+        assert per_source.status == "Failed"
+        # Gallery 'draft' text ("publish schema") must NOT appear for
+        # a custom connection — the operator has no admin-center page
+        # to publish from.
+        assert "publish schema" not in per_source.remediation.lower()
+        assert "delete" in per_source.remediation.lower()
+        assert "gallery" in per_source.remediation.lower()
 
     @responses.activate
     def test_unknown_state_returns_warning(self, fake_token: str) -> None:
