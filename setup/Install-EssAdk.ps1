@@ -507,10 +507,19 @@ if ($FlightCheckOnly) {
         Write-Ok "Created $configPath"
     }
 
-    Write-Host "`nDone. FlightCheck is ready." -ForegroundColor Green
-    Write-Host "Next: cd into $workspace and run:" -ForegroundColor Green
-    Write-Host "  python scripts/flightcheck/cli.py --scope full" -ForegroundColor Yellow
-    Write-Host "  python scripts/flightcheck/environment_picker.py  (to pick a different environment)" -ForegroundColor Yellow
+    # --- Run FlightCheck ---
+    Write-Step 'Running FlightCheck'
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if ($python) {
+        Push-Location $workspace
+        try {
+            & $python.Source scripts/flightcheck/cli.py --scope full
+        } finally { Pop-Location }
+    } else {
+        Write-Warn2 'python not found on PATH. Open a new terminal and run:'
+        Write-Warn2 "  cd $workspace"
+        Write-Warn2 '  python scripts/flightcheck/cli.py --scope full'
+    }
     exit 0
 }
 

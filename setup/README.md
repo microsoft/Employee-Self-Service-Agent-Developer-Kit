@@ -20,40 +20,36 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 ## FlightCheck-Only Mode
 
-For users who only need to run FlightCheck (pre-deployment readiness validation) without the full maker kit experience:
+For users who want to run a pre-deployment readiness check on their Power Platform environment — no coding tools or VS Code required. Just run this command in PowerShell:
 
 ```powershell
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1)
 ```
 
-Or, if you already have the repo cloned:
+That's it. The script handles everything automatically:
 
-```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\setup\Install-EssAdk.ps1 -FlightCheckOnly
-```
-
-This installs a **minimal toolchain** (Python + Git only — no VS Code, PowerShell 7, or GitHub CLI), installs pip dependencies, clones the repo, and then walks you through an interactive setup:
-
-1. **Environment selection** — Lists all Power Platform environments in your tenant (authenticates via browser) and lets you pick one by number.
-2. **Agent selection** — Lists all agents in the selected environment and lets you pick one (or press Enter to skip for environment-wide checks only).
-3. **Config generation** — Creates `.local/config.json` with the selected environment and agent.
-
-After setup, run FlightCheck with:
-
-```powershell
-cd solutions\ess-maker-skills
-python scripts/flightcheck/cli.py --scope full
-```
+1. Installs Python and Git (if not already present)
+2. Opens a browser window for you to sign in with your Microsoft work account
+3. Shows your available environments — pick one by number
+4. Shows the agents in that environment — pick one (or skip)
+5. Runs the full FlightCheck validation and displays results
 
 ### Changing your environment or agent
 
-Re-run the FlightCheck bootstrap — it will detect the existing config and ask if you want to reconfigure:
+Re-run the same command — it will ask if you want to reconfigure:
 
 ```powershell
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1)
 ```
 
-Since the toolchain is already installed, it skips straight to the environment/agent picker. You can select a different environment, a different agent, or skip the agent entirely.
+### Running FlightCheck again (after initial setup)
+
+Once you've run the installer once, you can re-run FlightCheck directly without going through setup again:
+
+```powershell
+cd $env:USERPROFILE\source\Employee-Self-Service-Agent-Developer-Kit\solutions\ess-maker-skills
+python scripts/flightcheck/cli.py --scope full
+```
 
 ## Files
 

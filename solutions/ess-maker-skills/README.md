@@ -100,13 +100,13 @@ python scripts/flightcheck/cli.py --scope full
 
 **Standalone install (no VS Code or Copilot required):**
 
-If you only need FlightCheck without the full maker kit, use the one-liner bootstrap:
+If you only need to run FlightCheck, this single command handles everything — installs dependencies, signs you in, lets you pick your environment, and runs the check:
 
 ```powershell
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1)
 ```
 
-This installs just Python + Git, pip dependencies, and walks you through selecting your environment and agent interactively. Re-run the same command to change your environment or agent. See [`setup/README.md`](../../setup/README.md) for details.
+Re-run the same command to change your environment or agent. See [`setup/README.md`](../../setup/README.md) for details.
 
 **What it checks (41+ automated checks across 8 categories):**
 
