@@ -268,10 +268,23 @@ This kit relies on structured instructions and multi-step tool use. Not all mode
 
 ### Quick Start
 
-1. **Clone this repo** and open the folder in VS Code
-2. **Run `/setup`** in GitHub Copilot Chat to configure your environment
+**Option A: One-shot Windows installer** (installs VS Code, Python, Git, and everything else):
 
-Setup connects to your Power Platform environment, discovers your ESS agent, and creates a local working copy.
+```powershell
+iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap.ps1)
+```
+
+**Option B: GitHub Codespaces** (no local install — runs in your browser):
+
+```powershell
+iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-codespaces.ps1)
+```
+
+Or open directly: [Create Codespace](https://github.com/codespaces/new?repo=microsoft/Employee-Self-Service-Agent-Developer-Kit&ref=main&devcontainer_path=.devcontainer%2Fdevcontainer.json)
+
+**Option C: Manual setup** — clone the repo and open this folder in VS Code yourself.
+
+Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 
 ---
 

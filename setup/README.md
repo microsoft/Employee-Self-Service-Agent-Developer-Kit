@@ -18,6 +18,18 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 > **GitHub Copilot subscription is still required** for the in-editor maker experience. This script installs the toolchain and extension scaffolding; it does not (and cannot) grant the Copilot entitlement.
 
+## GitHub Codespaces (no local install)
+
+For users who prefer a cloud-based development environment — no local toolchain or VS Code desktop install required. Just a browser and a GitHub account:
+
+```powershell
+iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-codespaces.ps1)
+```
+
+Or open directly: [Create Codespace](https://github.com/codespaces/new?repo=microsoft/Employee-Self-Service-Agent-Developer-Kit&ref=main&devcontainer_path=.devcontainer%2Fdevcontainer.json)
+
+The Codespace comes pre-configured with Python 3.12, pip dependencies, GitHub Copilot, and opens directly in the `solutions/ess-maker-skills` workspace. Once it starts, run `/setup` in Copilot Chat to connect Dataverse.
+
 ## FlightCheck-Only Mode
 
 For users who want to run a pre-deployment readiness check on their Power Platform environment — no coding tools or VS Code required. Just run this command in PowerShell:
@@ -59,6 +71,8 @@ python scripts/flightcheck/cli.py --scope full
 | `Install-EssAdk.ps1` | Orchestrator. Installs toolchain via winget, installs pip dependencies, clones the repo, installs VS Code extensions, launches VS Code. Idempotent. With `-FlightCheckOnly`, installs minimal toolchain and runs interactive environment/agent discovery. |
 | `bootstrap.ps1` | One-liner entry point for the full maker kit install. Downloads the installer into `$env:TEMP` and runs it. |
 | `bootstrap-flightcheck.ps1` | One-liner entry point for FlightCheck-only install. Downloads the installer and runs it with `-FlightCheckOnly`. |
+| `bootstrap-codespaces.ps1` | One-liner entry point for GitHub Codespaces. Opens the Codespace creation page in the browser. |
+| `.devcontainer/devcontainer.json` | Codespace configuration. Pre-installs Python 3.12, pip dependencies, Copilot extensions, and sets the workspace folder. |
 
 ## How to test it locally (without publishing anything)
 
