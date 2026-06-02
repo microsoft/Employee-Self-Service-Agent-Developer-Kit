@@ -95,6 +95,11 @@ def _topic_folder_for(path: str) -> str | None:
         if len(parts) < 5:
             return None
         return "/".join(parts[:4])
+    # Require a file *inside* the topic folder for flat areas too: an
+    # area-level file such as samples/Facilities/README.md must not be
+    # treated as its own topic folder.
+    if len(parts) < 4:
+        return None
     return "/".join(parts[:3])
 
 

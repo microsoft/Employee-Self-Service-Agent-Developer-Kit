@@ -52,7 +52,7 @@ jobs:
             cat validation.txt
             echo '```'
             echo ""
-            echo "_Runtime validation in Power Platform is a manual follow-up. See [tools/validate_samples/README.md](../blob/${{ github.event.pull_request.head.sha }}/tools/validate_samples/README.md)._"
+            echo "_Runtime validation in Power Platform is a manual follow-up. See [tools/validate_samples/README.md](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.event.pull_request.head.sha }}/tools/validate_samples/README.md)._"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Compose PR comment body
@@ -70,6 +70,7 @@ jobs:
 
       - name: Post / update PR comment
         if: always()
+        continue-on-error: true
         uses: marocchino/sticky-pull-request-comment@v2
         with:
           header: samples-validation

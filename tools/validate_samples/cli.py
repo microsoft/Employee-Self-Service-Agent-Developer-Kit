@@ -5,7 +5,7 @@
 Usage:
   python -m tools.validate_samples --diff-base origin/main
   python -m tools.validate_samples --paths-file changed.txt --repo-root .
-  python -m tools.validate_samples --json
+  python -m tools.validate_samples --diff-base origin/main --json
 """
 
 from __future__ import annotations
@@ -42,8 +42,8 @@ def _git_changed(repo_root: Path, base: str) -> list[ChangedFile]:
             continue
         parts = line.split("\t")
         status = parts[0]
-        # Renames look like "R100\told\tnew" — treat the new path as added.
-        if status.startswith("R") and len(parts) >= 3:
+        # Renames/copies look like "R100\told\tnew" or "C100\told\tnew" — treat the new path as added.
+        if status.startswith(("R", "C")) and len(parts) >= 3:
             changed.append(ChangedFile(path=parts[2].replace("\\", "/"), change_type="A"))
         elif len(parts) >= 2:
             changed.append(ChangedFile(path=parts[1].replace("\\", "/"), change_type=status[:1]))

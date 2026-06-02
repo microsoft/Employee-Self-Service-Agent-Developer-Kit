@@ -11,8 +11,10 @@ filename_exemptions:
   # Lowercase msdyn_copilotforemployeeselfservice* prefix is documented as acceptable
   # for existing files; pattern below is matched as a path prefix substring.
 
-# Substrings; if present in the basename of an existing XML file, filename
-# convention is skipped. Applies only to files that already existed on base.
+# Substrings; if present in the basename of a new XML file, filename
+# convention is skipped. The filename convention check only runs on newly
+# added XML files, so these substrings have no effect on files that already
+# existed on base.
 filename_exemption_substrings:
   - msdyn_copilotforemployeeselfservice
 
