@@ -277,6 +277,31 @@ def _check_workday_app_user_assignment(graph) -> list[CheckResult]:
         # continue to the assignment check when missing).
         try:
             assignments = graph.get_app_role_assignments(sp_id)
+        except PermissionError as e:
+            # Distinct from the generic Exception arm below: a 401/403
+            # on /appRoleAssignedTo would otherwise look identical to
+            # a legitimately empty list (get_all swallows the status
+            # code into []), so get_app_role_assignments raises here
+            # explicitly. We route to WARNING with a permission-
+            # specific remediation, NOT to the FAILED 'no assignments'
+            # branch — false-alarming a Sev-2-shaped finding on a
+            # tenant whose only problem is the kit's own token scope
+            # is exactly the wrong direction for a check whose intro
+            # says it was filed to catch a real Sev 2 (issue #79).
+            warning_items.append((
+                sp_name,
+                "insufficient permission to list assigned users/groups "
+                f"({e})",
+                "Re-run FlightCheck with a Graph token that holds "
+                "Application.Read.All or Directory.Read.All, and "
+                "confirm no Conditional Access policy or scoped "
+                "directory role denies access to this service "
+                "principal's appRoleAssignedTo endpoint. Without "
+                "this, the check cannot distinguish 'no assignments' "
+                "(a real Sev 2 misconfiguration) from 'we can't see "
+                "the assignments' (a kit-token problem).",
+            ))
+            continue
         except Exception as e:
             warning_items.append((
                 sp_name,

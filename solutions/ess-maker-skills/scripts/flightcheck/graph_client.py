@@ -203,12 +203,34 @@ class GraphClient:
         ``GET /servicePrincipals/{id}/appRoleAssignedTo`` — each item is an
         appRoleAssignment with ``principalId``, ``principalType``
         (``User`` | ``Group`` | ``ServicePrincipal``), ``principalDisplayName``,
-        and ``appRoleId``. Returns ``[]`` on 401/403 (handled by ``get_all``)
-        so caller can branch on insufficient permissions.
+        and ``appRoleId``.
+
+        Raises ``PermissionError`` on HTTP 401/403 so callers can
+        distinguish "permission denied" from "no assignments exist."
+        Without this, ``get_all()``'s silent-on-401/403 behavior would
+        make a denied appRoleAssignedTo lookup look identical to a
+        legitimately empty list — letting a Workday SP with a scoped
+        Conditional Access policy or a permission-restricted directory
+        role false-alarm as "no users/groups assigned" (a Sev-2-shaped
+        finding) when the real cause is the kit's own token lacking
+        access. AUTH-005 explicitly catches PermissionError and routes
+        to WARNING with a permission-remediation message; AUTH-006
+        uses the same defensive pattern via a ``graph.get()`` probe.
 
         Docs: https://learn.microsoft.com/graph/api/serviceprincipal-list-approleassignedto
         """
-        return self.get_all(f"/servicePrincipals/{sp_id}/appRoleAssignedTo")
+        path = f"/servicePrincipals/{sp_id}/appRoleAssignedTo"
+        # Probe permission before delegating to get_all() — get_all
+        # silently returns [] on 401/403, which would let callers
+        # mistake "denied" for "no assignments exist." graph.get()
+        # preserves the _status field so we can branch explicitly.
+        probe = self.get(path, params={"$top": "1"})
+        if probe.get("_status") in (401, 403):
+            raise PermissionError(
+                f"Graph returned HTTP {probe['_status']} on {path}. "
+                "Requires Application.Read.All or Directory.Read.All."
+            )
+        return self.get_all(path)
 
     def get_claims_mapping_policies(self, service_principal_id: str) -> list:
         """List claimsMappingPolicy objects assigned to a service principal.

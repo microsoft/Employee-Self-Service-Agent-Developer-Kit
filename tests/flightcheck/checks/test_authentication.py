@@ -284,6 +284,73 @@ class TestEdgeCases:
         assert "Graph client not available" in results[0].result
 
     @responses.activate
+    def test_403_on_appRoleAssignedTo_is_warning_not_failed(
+        self,
+        runner: _MinimalRunner,
+    ) -> None:
+        """Regression for PR #90 review: a 403 on the
+        ``/servicePrincipals/{id}/appRoleAssignedTo`` lookup must surface
+        as a permission WARNING, not a "no assignments" FAILED.
+
+        Failure mode: ``GraphClient.get_all()`` silently swallows 401/403
+        into an empty list (see ``graph_client.py`` ``get_all``). Before
+        the fix, ``get_app_role_assignments`` wrapped ``get_all`` and
+        therefore returned ``[]`` on permission denial, which AUTH-005's
+        ``if not assignments:`` branch then interpreted as "user
+        assignment required, 0 users/groups assigned" — a Sev-2-shaped
+        FAILED row telling the operator to assign a security group that
+        is in fact already correctly assigned but invisible to the kit's
+        own token. After the fix, ``get_app_role_assignments`` raises
+        ``PermissionError`` on 401/403 and the check routes to WARNING
+        with a permission-remediation message.
+
+        Realistic scenario: an auditor's token holds
+        ``Application.Read.All`` (enough to list service principals, so
+        we get past the SP lookup), but a Conditional Access policy or
+        scoped directory role denies ``appRoleAssignedTo`` on this
+        specific SP."""
+        from flightcheck.checks.authentication import (
+            _check_workday_app_user_assignment,
+        )
+
+        sp_id = "00000000-0000-0000-0000-000000005701"
+        responses.add(
+            **gr.list_service_principals(
+                service_principals=[
+                    gr.service_principal(
+                        sp_id=sp_id,
+                        app_id="00000000-0000-0000-0000-000000005702",
+                        display_name="Workday",
+                        app_role_assignment_required=True,
+                    )
+                ]
+            )
+        )
+        # 403 on the assignment lookup — must NOT be misread as "empty list".
+        responses.add(
+            **gr.insufficient_permissions(
+                path=f"/servicePrincipals/{sp_id}/appRoleAssignedTo",
+            )
+        )
+
+        results = _check_workday_app_user_assignment(runner.graph)
+        auth_005 = _result_by_id(results, "AUTH-005")
+
+        # The point of the test — bucket as WARNING (permission), NOT FAILED.
+        assert auth_005.status == "Warning", (
+            f"Expected WARNING (permission denied) but got "
+            f"{auth_005.status}: result={auth_005.result!r}"
+        )
+        # Result names the observable condition (permission denial),
+        # not the assignment-missing condition.
+        assert "insufficient permission" in auth_005.result.lower()
+        assert "0 users/groups assigned" not in auth_005.result
+        # Remediation points at fixing the kit's own token / CA / role
+        # scope, not at adding a security group to the Workday app.
+        assert "Application.Read.All" in auth_005.remediation
+        assert "Conditional Access" in auth_005.remediation
+
+    @responses.activate
     def test_multiple_workday_sps_grouped_by_status(
         self, runner: _MinimalRunner
     ) -> None:
