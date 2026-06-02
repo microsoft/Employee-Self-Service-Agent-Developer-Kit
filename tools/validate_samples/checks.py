@@ -194,16 +194,20 @@ def check_folder_convention(
     res = Result("Folder convention (new, incl. README.md)", Status.NA)
     exempt_folders = set(whitelist.get("folder_exemptions") or [])
 
-    # A folder is "new" if every changed file inside it is added.
     by_topic: dict[str, list[ChangedFile]] = {}
     for c in changed:
         tf = _topic_folder_for(c.path)
         if tf:
             by_topic.setdefault(tf, []).append(c)
 
+    # A topic folder is "new" only if its topic.yaml is being added in this
+    # diff. Otherwise additions (e.g. a missing README.md) to an existing
+    # topic would be misclassified as a new topic and re-validated against
+    # PascalCase / required-files rules — making it impossible to backfill
+    # docs in documented/legacy non-PascalCase folders.
     new_topic_folders = [
         tf for tf, files in by_topic.items()
-        if files and all(f.is_new for f in files)
+        if any(f.is_new and PurePosixPath(f.path).name == "topic.yaml" for f in files)
     ]
     if not new_topic_folders:
         return res

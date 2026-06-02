@@ -263,3 +263,15 @@ def test_area_level_readme_edit_passes_diff_scope(tmp_path: Path) -> None:
     _write(tmp_path, rel, "# Facilities\n")
     results = run_all_checks(tmp_path, [ChangedFile(rel, "M")], whitelist={})
     assert _by_name(results)["Diff scope (samples/ only)"].status is Status.PASS
+
+
+def test_add_readme_to_existing_topic_not_treated_as_new(tmp_path: Path) -> None:
+    # Backfilling a missing README.md into an existing (non-PascalCase) topic
+    # must not trigger "new topic" folder convention checks.
+    topic = "samples/Facilities/legacyfolder"
+    _write(tmp_path, f"{topic}/topic.yaml", VALID_TOPIC_YAML)
+    _write(tmp_path, f"{topic}/msdyn_X.xml", VALID_XML)
+    _write(tmp_path, f"{topic}/README.md", VALID_README)
+    changed = [ChangedFile(f"{topic}/README.md", "A")]
+    results = run_all_checks(tmp_path, changed, whitelist={})
+    assert _by_name(results)["Folder convention (new, incl. README.md)"].status is Status.NA

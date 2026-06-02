@@ -9,6 +9,8 @@ on:
     paths:
       - "samples/**"
       - "tools/validate_samples/**"
+      - "tests/test_validate_samples.py"
+      - "pyproject.toml"
       - ".github/workflows/validate-samples.yml"
 
 permissions:
@@ -16,6 +18,23 @@ permissions:
   pull-requests: write
 
 jobs:
+  unit-tests:
+    name: Validator unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install test deps
+        run: pip install -e .[test]
+
+      - name: Run pytest
+        run: pytest tests/test_validate_samples.py -q
+
   validate:
     name: Static validation (samples/)
     runs-on: ubuntu-latest
