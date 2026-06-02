@@ -30,7 +30,7 @@ jobs:
           python-version: '3.11'
 
       - name: Install test deps
-        run: pip install -e .[test]
+        run: pip install "pytest>=8,<9" "PyYAML>=6,<7"
 
       - name: Run pytest
         run: pytest tests/test_validate_samples.py -q
@@ -54,13 +54,27 @@ jobs:
       - name: Install dependencies
         run: pip install PyYAML
 
-      - name: Run validator
-        id: validate
+      - name: Compute samples-only changed files
+        id: changed
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
+          git diff --name-status "$BASE_SHA...HEAD" \
+            | awk -F'\t' 'BEGIN{OFS="\t"} { if ($1 ~ /^[RC]/) { p=$3 } else { p=$2 } if (p ~ /^samples\//) { if ($1 ~ /^[RC]/) print "A", p; else print $1, p } }' \
+            > samples-changed.txt
+          if [ -s samples-changed.txt ]; then
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+          fi
+          cat samples-changed.txt || true
+
+      - name: Run validator
+        id: validate
+        if: steps.changed.outputs.has_changes == 'true'
+        run: |
           set +e
-          python -m tools.validate_samples --diff-base "$BASE_SHA" > validation.txt
+          python -m tools.validate_samples --paths-file samples-changed.txt --repo-root . > validation.txt
           echo "exit_code=$?" >> "$GITHUB_OUTPUT"
           cat validation.txt
           # Always surface in step summary
@@ -75,7 +89,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Compose PR comment body
-        if: always()
+        if: always() && steps.changed.outputs.has_changes == 'true'
         run: |
           {
             echo "## Samples static validation"
@@ -88,7 +102,7 @@ jobs:
           } > validation-comment.md
 
       - name: Post / update PR comment
-        if: always()
+        if: always() && steps.changed.outputs.has_changes == 'true'
         continue-on-error: true
         uses: marocchino/sticky-pull-request-comment@v2
         with:
