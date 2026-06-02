@@ -2,8 +2,6 @@
 
 A single PowerShell command that takes a customer from a clean Windows machine to a ready-to-use ESS Maker Kit workspace in VS Code.
 
-> **Status:** Prototype for review. The `aka.ms/ess-adk-setup` short link in the customer command below assumes the files are eventually published under `bootstrap/` in [microsoft/Employee-Self-Service-Agent-Developer-Kit](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit).
-
 ## What this delivers
 
 The customer experience goes from:
@@ -13,21 +11,19 @@ The customer experience goes from:
 to:
 
 ```powershell
-iex (irm https://aka.ms/ess-adk-setup)
+iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap.ps1)
 ```
 
-…and they land in VS Code at `solutions/ess-maker-skills/` with everything wired up except the final Dataverse auth step (`/setup` in Copilot Chat).
+...and they land in VS Code at `solutions/ess-maker-skills/` with everything wired up except the final Dataverse auth step (`/setup` in Copilot Chat).
 
-> **GitHub Copilot subscription is still required** for the in-editor maker experience — see the parent proposal for context. This script installs and signs the customer into the extension scaffolding; it does not (and cannot) grant the entitlement.
+> **GitHub Copilot subscription is still required** for the in-editor maker experience. This script installs the toolchain and extension scaffolding; it does not (and cannot) grant the Copilot entitlement.
 
 ## FlightCheck-Only Mode
 
 For users who only need to run FlightCheck (pre-deployment readiness validation) without the full maker kit experience:
 
 ```powershell
-# Download and run (no local clone required):
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/Install-EssAdk.ps1" -OutFile "$env:TEMP\Install-EssAdk.ps1" -UseBasicParsing
-powershell -NoProfile -ExecutionPolicy Bypass -File "$env:TEMP\Install-EssAdk.ps1" -FlightCheckOnly
+iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1)
 ```
 
 Or, if you already have the repo cloned:
@@ -51,10 +47,10 @@ python scripts/flightcheck/cli.py --scope full
 
 ### Changing your environment or agent
 
-Re-run the installer with `-FlightCheckOnly` — it will detect the existing config and ask if you want to reconfigure:
+Re-run the FlightCheck bootstrap — it will detect the existing config and ask if you want to reconfigure:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -FlightCheckOnly
+iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1)
 ```
 
 Since the toolchain is already installed, it skips straight to the environment/agent picker. You can select a different environment, a different agent, or skip the agent entirely.
@@ -65,7 +61,8 @@ Since the toolchain is already installed, it skips straight to the environment/a
 |---|---|
 | `ess-adk-setup.winget.yaml` | Declarative DSC config consumed by `winget configure`. Installs VS Code, Python 3.12, PowerShell 7, Git, GitHub CLI. |
 | `Install-EssAdk.ps1` | Orchestrator. Installs toolchain via winget, installs pip dependencies, clones the repo, installs VS Code extensions, launches VS Code. Idempotent. With `-FlightCheckOnly`, installs minimal toolchain and runs interactive environment/agent discovery. |
-| `bootstrap.ps1` | The thing behind `aka.ms/ess-adk-setup`. Downloads the two files above into `$env:TEMP` and runs the installer. |
+| `bootstrap.ps1` | One-liner entry point for the full maker kit install. Downloads the installer into `$env:TEMP` and runs it. |
+| `bootstrap-flightcheck.ps1` | One-liner entry point for FlightCheck-only install. Downloads the installer and runs it with `-FlightCheckOnly`. |
 
 ## How to test it locally (without publishing anything)
 
@@ -84,7 +81,7 @@ Since the toolchain is already installed, it skips straight to the environment/a
 > iex (Get-Content .\bootstrap.ps1 -Raw)
 > ```
 >
-> The published customer entry point (`iex (irm https://aka.ms/ess-adk-setup)`) uses the third pattern, so end users will not hit this error.
+> The published customer entry point (`iex (irm ...)`) uses the third pattern, so end users will not hit this error.
 
 From this folder:
 
@@ -105,24 +102,29 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipLa
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -FlightCheckOnly     # minimal install for FlightCheck only
 ```
 
-## How it will look once published
+## Customer-facing commands
 
-After the files are placed under `bootstrap/` in the upstream repo, the customer-facing command becomes:
+Full maker kit install (VS Code + Copilot + everything):
 
 ```powershell
-# Public one-liner (needs aka.ms short link or raw GitHub URL):
-iex (irm https://aka.ms/ess-adk-setup)
+iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap.ps1)
 ```
 
-Or, for customers who prefer to inspect first:
+FlightCheck-only (no VS Code or Copilot required):
 
 ```powershell
-irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/bootstrap/bootstrap.ps1 -OutFile bootstrap.ps1
+iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1)
+```
+
+For customers who prefer to inspect first:
+
+```powershell
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap.ps1" -OutFile bootstrap.ps1 -UseBasicParsing
 # review bootstrap.ps1
 .\bootstrap.ps1
 ```
 
-For air-gapped / locked-down environments, IT can mirror the three files internally and serve them from an intranet URL by passing `-SourceBaseUrl`.
+For air-gapped / locked-down environments, IT can mirror the files internally and serve them from an intranet URL by passing `-SourceBaseUrl`.
 
 ## Design choices worth flagging in review
 
@@ -136,6 +138,4 @@ For air-gapped / locked-down environments, IT can mirror the three files interna
 
 - [ ] Confirm exact Python version the kit pins to (3.11 vs 3.12).
 - [ ] Decide if we ship a VS Code workspace file in the repo so we can open `.code-workspace` instead of a folder.
-- [ ] Get `aka.ms/ess-adk-setup` registered and pointed at the raw `bootstrap.ps1` URL.
 - [ ] Add an MSRC-aligned signing story for `Install-EssAdk.ps1` (or document `-ExecutionPolicy Bypass` invocation).
-- [ ] Decide where in the upstream repo the files live (`/bootstrap/` is suggested above; could also be `/solutions/ess-maker-skills/bootstrap/`).

@@ -1,15 +1,18 @@
 <#
 .SYNOPSIS
-    Irreducible one-liner bootstrap for the ESS Agent Developer Kit.
+    One-liner bootstrap for FlightCheck-only installation.
 
 .DESCRIPTION
-    Downloads the winget config + installer script into a temp folder and runs them.
-    Designed to be invoked from a single command (see README.md):
+    Downloads the installer script into a temp folder and runs it with
+    -FlightCheckOnly. Installs only Python + Git, pip dependencies, and
+    walks through interactive environment/agent discovery.
 
-        iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap.ps1)
+    Designed to be invoked from a single command:
+
+        iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1)
 
     All real work happens in Install-EssAdk.ps1; this file just gets the bits
-    onto the customer's machine first.
+    onto the customer's machine and passes the -FlightCheckOnly flag.
 
 .PARAMETER InstallRoot
     Forwarded to Install-EssAdk.ps1. See that script for details.
@@ -19,7 +22,7 @@
 
 .PARAMETER SourceBaseUrl
     Where to fetch the installer files from. Defaults to the raw GitHub URL of
-    this folder once it lands in the upstream repo. Override for testing.
+    the setup folder. Override for testing.
 #>
 
 [CmdletBinding()]
@@ -49,7 +52,7 @@ foreach ($f in $files) {
 }
 
 $installer = Join-Path $tempDir 'Install-EssAdk.ps1'
-$installerArgs = @{ Branch = $Branch }
+$installerArgs = @{ Branch = $Branch; FlightCheckOnly = $true }
 if ($InstallRoot) { $installerArgs.InstallRoot = $InstallRoot }
 
 & $installer @installerArgs
