@@ -654,16 +654,18 @@ if ($FlightCheckOnly) {
     if ($pythonExe) {
         Push-Location $workspace
         try {
+            # Run FlightCheck with EAP=Continue so stderr doesn't terminate,
+            # but let output stream directly to console (FlightCheck is interactive)
+            $prevEAP = $ErrorActionPreference
+            $ErrorActionPreference = 'Continue'
             if ($pythonExe -eq 'py -3.12') {
-                $fcArgs = @('-3.12', 'scripts/flightcheck/cli.py', '--scope', 'full')
-                $fcOutput = Invoke-Native { & py @fcArgs }
+                & py -3.12 scripts/flightcheck/cli.py --scope full
             } elseif ($pythonExe -eq 'py -3') {
-                $fcArgs = @('-3', 'scripts/flightcheck/cli.py', '--scope', 'full')
-                $fcOutput = Invoke-Native { & py @fcArgs }
+                & py -3 scripts/flightcheck/cli.py --scope full
             } else {
-                $fcOutput = Invoke-Native { & $pythonExe scripts/flightcheck/cli.py --scope full }
+                & $pythonExe scripts/flightcheck/cli.py --scope full
             }
-            foreach ($line in $fcOutput) { Write-Host $line }
+            $ErrorActionPreference = $prevEAP
         } finally { Pop-Location }
     } else {
         Write-Warn2 'Python not found. Open a new terminal and run:'
