@@ -349,6 +349,27 @@ Each new check needs at minimum:
 - Edge tests for any branches in the check logic (no token, partial data,
   unexpected error response).
 
+**Every GOOD / BAD / WARNING test MUST assert on specific phrases from
+both `result` and `remediation`, not just on `status`.** A test that
+checks only `status == "Warning"` lets misleading text regress
+silently — including production incidents where the warning text
+implied a runtime break that doesn't actually exist (see the AUTH-005
+`Assignment required = No` rewrite for an example caught only in PR
+review). At minimum, pin:
+
+1. A phrase from `result` that names the current state the test set
+   up (e.g. `"0 users/groups assigned"`, `"set to No"`,
+   `"3 individual user(s) assigned but no security groups"`).
+2. A phrase from `remediation` that captures both WHY the operator
+   should act (impact for FAILED / hardening framing for WARNING)
+   and HOW (a concrete click-path or command). For WARNING tests,
+   also pin the WARNING-kind framing required by principle 9 of
+   `flightcheck/AGENTS.md` — e.g. `"Hardening recommendation"`,
+   `"not a functional blocker"`.
+3. For status-bucketed checks (principle 7 of `flightcheck/AGENTS.md`),
+   add a multi-resource test that verifies N resources in the same
+   status collapse to ONE row that lists all of them — not N rows.
+
 If a `placeholder` mock would be needed for any of the above, **stop
 and follow "What to do when you need a new endpoint" above** to
 promote the builder (or capture a cassette) per the API's tier.
