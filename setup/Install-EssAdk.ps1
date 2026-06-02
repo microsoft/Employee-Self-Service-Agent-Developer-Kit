@@ -503,7 +503,8 @@ if ($FlightCheckOnly) {
             activeAgent        = ''
         }
 
-        $config | ConvertTo-Json -Depth 4 | Set-Content -Path $configPath -Encoding utf8
+        $json = $config | ConvertTo-Json -Depth 4
+        [System.IO.File]::WriteAllText($configPath, $json, (New-Object System.Text.UTF8Encoding $false))
         Write-Ok "Created $configPath"
     }
 
