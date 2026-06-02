@@ -543,7 +543,7 @@ if ($FlightCheckOnly) {
 
             Write-Host ''
             $envChoice = Read-Host '    Select environment number from the list above'
-            $envChoice = $envChoice.Trim()
+            if ($envChoice) { $envChoice = $envChoice.Trim() }
             if (-not $envChoice -or $envChoice -notmatch '^\d+$') {
                 throw 'Invalid selection. Please re-run and pick a number from the list.'
             }
@@ -584,7 +584,7 @@ if ($FlightCheckOnly) {
             } else {
                 Write-Host ''
                 $agentChoice = Read-Host '    Select agent number (or press Enter to run environment-wide checks only)'
-                $agentChoice = $agentChoice.Trim()
+                if ($agentChoice) { $agentChoice = $agentChoice.Trim() }
 
                 if ($agentChoice -and $agentChoice -match '^\d+$') {
                     $agentSelectArgs = $pyBaseArgs + @($discoverPy, '--url', $envUrl, '--select', $agentChoice)
