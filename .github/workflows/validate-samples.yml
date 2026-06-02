@@ -113,7 +113,7 @@ jobs:
           path: validation-comment.md
 
       - name: Fail the job if validation failed
-        if: steps.validate.outputs.exit_code != '0'
+        if: steps.changed.outputs.has_samples == 'true' && steps.validate.outputs.exit_code != '0'
         run: |
           echo "::error::Static validation failed. See the PR comment or job summary."
           exit 1
