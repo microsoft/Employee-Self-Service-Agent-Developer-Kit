@@ -80,8 +80,13 @@ install_brew_pkg() {
         ok "$name (already installed)"
     else
         echo "    Installing $name ($pkg)..."
-        brew install "$pkg"
-        ok "$name"
+        brew install "$pkg" || true
+        if brew list "$pkg" &>/dev/null; then
+            ok "$name"
+        else
+            err "Failed to install $name. Try manually: brew install $pkg"
+            exit 1
+        fi
     fi
 }
 
@@ -94,14 +99,25 @@ install_brew_cask() {
         ok "$name (already installed outside Homebrew)"
     else
         echo "    Installing $name ($cask)..."
-        brew install --cask "$cask"
-        ok "$name"
+        brew install --cask "$cask" || true
+        if brew list --cask "$cask" &>/dev/null || [[ -d "/Applications/Visual Studio Code.app" ]]; then
+            ok "$name"
+        else
+            err "Failed to install $name. Try manually: brew install --cask $cask"
+            exit 1
+        fi
     fi
 }
 
 # Core tools (always needed)
 install_brew_pkg "python@3.12" "Python 3.12"
-install_brew_pkg "git" "Git"
+
+# Git: check if already available (e.g. via Xcode CLT) before installing via brew
+if command -v git &>/dev/null; then
+    ok "Git (already installed at $(command -v git))"
+else
+    install_brew_pkg "git" "Git"
+fi
 
 if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
     # Full maker kit tools
@@ -158,15 +174,19 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# 5. Pip dependencies
+# 5. Pip dependencies (using virtualenv to avoid PEP 668 restrictions)
 # ---------------------------------------------------------------------------
 step "Installing Python pip dependencies"
 
 REQUIREMENTS_FILE="$REPO_PATH/solutions/ess-maker-skills/scripts/requirements.txt"
+VENV_PATH="$REPO_PATH/.venv"
 
 if [[ -f "$REQUIREMENTS_FILE" ]]; then
-    "$PYTHON" -m pip install --quiet --disable-pip-version-check -r "$REQUIREMENTS_FILE"
-    ok "pip dependencies installed"
+    if [[ ! -d "$VENV_PATH" ]]; then
+        "$PYTHON" -m venv "$VENV_PATH"
+    fi
+    "$VENV_PATH/bin/pip" install --quiet --disable-pip-version-check -r "$REQUIREMENTS_FILE"
+    ok "pip dependencies installed (virtualenv at .venv/)"
 else
     warn "requirements.txt not found at $REQUIREMENTS_FILE"
 fi
@@ -203,7 +223,11 @@ if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
 
     MAKER_KIT_PATH="$REPO_PATH/solutions/ess-maker-skills"
     cd "$MAKER_KIT_PATH"
-    "$PYTHON" scripts/flightcheck/cli.py --scope full
+    FLIGHTCHECK_PYTHON="$VENV_PATH/bin/python"
+    if [[ ! -x "$FLIGHTCHECK_PYTHON" ]]; then
+        FLIGHTCHECK_PYTHON="$PYTHON"
+    fi
+    "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope full
     exit $?
 fi
 
