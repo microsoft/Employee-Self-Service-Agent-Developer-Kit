@@ -192,6 +192,199 @@ def conditional_access_policy(
     }
 
 
+MOCK_WORKDAY_SP_ID = "00000000-0000-0000-0000-000000005001"
+MOCK_WORKDAY_APP_ID = "00000000-0000-0000-0000-000000005002"
+# The Entra gallery applicationTemplate id for the Workday SSO template.
+# Real values are Microsoft-issued; this mock value is stable so tests
+# can wire `applicationTemplateId` through the SP and the
+# `/applicationTemplates` lookup consistently.
+MOCK_WORKDAY_APP_TEMPLATE_ID = "00000000-0000-0000-0000-000000005401"
+
+
+def service_principal(
+    *,
+    sp_id: str = MOCK_WORKDAY_SP_ID,
+    app_id: str = MOCK_WORKDAY_APP_ID,
+    display_name: str = "Workday",
+    app_role_assignment_required: bool = True,
+    account_enabled: bool = True,
+    preferred_sso_mode: str | None = "saml",
+    tags: Iterable[str] | None = None,
+    login_url: str | None = "https://impl.workday.com/contoso/login-saml.htmld",
+    service_principal_names: Iterable[str] | None = None,
+    application_template_id: str | None = MOCK_WORKDAY_APP_TEMPLATE_ID,
+) -> dict[str, Any]:
+    """Build a single Graph /servicePrincipals record.
+
+    Defaults represent a customer's federated Workday enterprise app —
+    the shape both AUTH-005 (user-assignment) and AUTH-006 (SAML NameID
+    alignment) expect to find. The ``service_principal_names``
+    collection includes the SAML entity ID Workday's "SAML Identity
+    Providers > Service Provider ID" field references — that's the
+    join key AUTH-006 surfaces so the operator can identify which
+    Entra app the Workday tenant is actually using.
+
+    Cited consumers:
+      - flightcheck/graph_client.py (get_service_principals).
+      - flightcheck/checks/authentication.py (AUTH-005, AUTH-006).
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="servicePrincipal" — fields used:
+                id (Edm.String)
+                appId (Edm.String)
+                displayName (Edm.String)
+                appRoleAssignmentRequired (Edm.Boolean)  [AUTH-005]
+                accountEnabled (Edm.Boolean)
+                preferredSingleSignOnMode (Edm.String, nullable)  [AUTH-006]
+                servicePrincipalNames (Collection(Edm.String))  [AUTH-006]
+                tags (Collection(Edm.String))
+                loginUrl (Edm.String, nullable)
+                applicationTemplateId (Edm.String, nullable)  [AUTH-005]
+      Docs:   https://learn.microsoft.com/graph/api/serviceprincipal-get
+              https://learn.microsoft.com/graph/api/resources/serviceprincipal?view=graph-rest-1.0
+              Example response copied verbatim 2026-05.
+    """
+    if service_principal_names is None:
+        # Default mirrors the entity-ID pattern Microsoft documents
+        # for the Workday gallery app — see
+        # https://learn.microsoft.com/en-us/entra/identity/saas-apps/workday-tutorial
+        # step 5 (Reply URL pattern) and step 6 (Service Provider ID).
+        service_principal_names = [
+            app_id,
+            "http://www.workday.com/contoso",
+        ]
+    record = {
+        "id": sp_id,
+        "deletedDateTime": None,
+        "accountEnabled": account_enabled,
+        "addIns": [],
+        "alternativeNames": [],
+        "appDisplayName": display_name,
+        "appId": app_id,
+        "appOwnerOrganizationId": MOCK_TENANT_ID,
+        "appRoleAssignmentRequired": app_role_assignment_required,
+        "appRoles": [],
+        "displayName": display_name,
+        "info": {
+            "termsOfServiceUrl": None,
+            "supportUrl": None,
+            "privacyStatementUrl": None,
+            "marketingUrl": None,
+            "logoUrl": None,
+        },
+        "keyCredentials": [],
+        "loginUrl": login_url,
+        "logoutUrl": None,
+        "oauth2PermissionScopes": [],
+        "passwordCredentials": [],
+        "preferredSingleSignOnMode": preferred_sso_mode,
+        "publisherName": None,
+        "replyUrls": [],
+        "servicePrincipalNames": list(service_principal_names),
+        "servicePrincipalType": "Application",
+        "signInAudience": "AzureADMyOrg",
+        "tags": list(tags) if tags is not None else ["WindowsAzureActiveDirectoryIntegratedApp"],
+        "tokenEncryptionKeyId": None,
+    }
+    # applicationTemplateId is nullable per the CSDL — omit the key
+    # entirely (matching Graph's typical response for non-gallery SPs)
+    # when the caller explicitly passes None.
+    if application_template_id is not None:
+        record["applicationTemplateId"] = application_template_id
+    return record
+
+
+def app_role_assignment(
+    *,
+    assignment_id: str = "00000000-0000-0000-0000-000000005101",
+    principal_id: str = "00000000-0000-0000-0000-000000005102",
+    principal_display_name: str = "ESS Users",
+    principal_type: str = "Group",
+    resource_id: str = MOCK_WORKDAY_SP_ID,
+    resource_display_name: str = "Workday",
+    app_role_id: str = "00000000-0000-0000-0000-000000000000",
+) -> dict[str, Any]:
+    """Build a single Graph /servicePrincipals/{id}/appRoleAssignedTo record.
+
+    ``principal_type`` is one of ``User``, ``Group``, ``ServicePrincipal``
+    per the appRoleAssignment EntityType.
+
+    Cited consumers:
+      - flightcheck/graph_client.py (get_app_role_assignments)
+      - flightcheck/checks/authentication.py (AUTH-005)
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="appRoleAssignment" — fields used:
+                id (Edm.String)
+                principalId (Edm.Guid)
+                principalDisplayName (Edm.String)
+                principalType (Edm.String)
+                resourceId (Edm.Guid)
+                resourceDisplayName (Edm.String)
+                appRoleId (Edm.Guid)
+      Docs:   https://learn.microsoft.com/graph/api/serviceprincipal-list-approleassignedto
+              Example response copied verbatim 2026-05.
+    """
+    return {
+        "id": assignment_id,
+        "deletedDateTime": None,
+        "appRoleId": app_role_id,
+        "createdDateTime": "2025-01-01T00:00:00Z",
+        "principalDisplayName": principal_display_name,
+        "principalId": principal_id,
+        "principalType": principal_type,
+        "resourceDisplayName": resource_display_name,
+        "resourceId": resource_id,
+    }
+
+
+def claims_mapping_policy(
+    *,
+    policy_id: str = "00000000-0000-0000-0000-000000005201",
+    display_name: str = "Workday NameID -> employeeId",
+    definition: list[str] | None = None,
+) -> dict[str, Any]:
+    """Build a single Graph claimsMappingPolicy record.
+
+    The `definition` field is a list of JSON-encoded strings (Entra's
+    own format — not nested JSON objects). AUTH-006 reads the first
+    element to surface the override; if no policy is assigned, the
+    application uses Entra's default
+    (NameID = user.userPrincipalName).
+
+    Cited consumers:
+      - flightcheck/graph_client.py (get_claims_mapping_policies).
+      - flightcheck/checks/authentication.py (AUTH-006).
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="claimsMappingPolicy"
+              Fields used by AUTH-006:
+                id (Edm.String)
+                displayName (Edm.String)
+                definition (Collection(Edm.String))
+      Docs:   https://learn.microsoft.com/graph/api/resources/claimsmappingpolicy?view=graph-rest-1.0
+              https://learn.microsoft.com/graph/api/serviceprincipal-list-claimsmappingpolicies?view=graph-rest-1.0
+              (verbatim example response cited in the response section)
+    """
+    if definition is None:
+        definition = [
+            '{"ClaimsMappingPolicy":{"Version":1,"IncludeBasicClaimSet":"true",'
+            '"ClaimsSchema":[{"Source":"user","ID":"employeeid",'
+            '"SamlClaimType":'
+            '"http://schemas.xmlsoap.org/ws/2005/05/identity/claims/nameidentifier"}]}}'
+        ]
+    return {
+        "id": policy_id,
+        "deletedDateTime": None,
+        "displayName": display_name,
+        "definition": list(definition),
+        "isOrganizationDefault": False,
+    }
+
+
 # ────────────────────────────────────────────────────────────────────────
 # Collection wrappers + responses kwargs
 # ────────────────────────────────────────────────────────────────────────
@@ -273,6 +466,144 @@ def list_conditional_access_policies(
     }
 
 
+def list_service_principals(
+    *,
+    service_principals: Iterable[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Mock GET /v1.0/servicePrincipals (with or without ``$filter``).
+
+    The production check uses a server-side ``$filter`` to narrow on
+    ``displayName``; per the cassette-tier rule that ``$filter`` /
+    ``$select`` / ``$top`` are server-side narrowing on the same path,
+    one mock covers all narrowing variants. Both AUTH-005 and
+    AUTH-006 hit this endpoint with different filters and consume
+    the same ``servicePrincipal`` shape.
+    """
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/servicePrincipals",
+        "json": collection(
+            service_principals
+            if service_principals is not None
+            else [service_principal()],
+            odata_context="$metadata#servicePrincipals",
+        ),
+        "status": 200,
+    }
+
+
+def list_app_role_assignments(
+    *,
+    sp_id: str = MOCK_WORKDAY_SP_ID,
+    assignments: Iterable[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Mock GET /v1.0/servicePrincipals/{id}/appRoleAssignedTo."""
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/servicePrincipals/{sp_id}/appRoleAssignedTo",
+        "json": collection(
+            assignments if assignments is not None else [app_role_assignment()],
+            odata_context=(
+                f"$metadata#servicePrincipals('{sp_id}')/appRoleAssignedTo"
+            ),
+        ),
+        "status": 200,
+    }
+
+
+def application_template(
+    *,
+    template_id: str = MOCK_WORKDAY_APP_TEMPLATE_ID,
+    display_name: str = "Workday",
+    categories: Iterable[str] | None = ("Human resources",),
+    supported_single_sign_on_modes: Iterable[str] | None = ("saml",),
+    publisher: str = "Workday",
+    description: str = "Mock Workday gallery template used by FlightCheck tests.",
+) -> dict[str, Any]:
+    """Build a single Graph /applicationTemplates record.
+
+    The Entra application gallery catalog is tenant-independent
+    metadata Microsoft curates centrally. Each template has a stable
+    ``id``, a ``categories`` array (functional bucket — "Human
+    resources", "Productivity", ...) and a ``supportedSingleSignOnModes``
+    array of federation modes (``saml``, ``oidc``, ``password``,
+    ``notSupported``). AUTH-005 filters by ``supportedSingleSignOnModes``
+    intersecting {``saml``, ``oidc``} to identify federated-SSO
+    templates and discover the Workday Enterprise App via
+    ``servicePrincipal.applicationTemplateId``.
+
+    Pass ``supported_single_sign_on_modes=("notSupported",)`` or
+    ``("password",)`` to mock a non-federated template (e.g. a
+    provisioning-only Workday entry).
+
+    Cited consumers:
+      - flightcheck/graph_client.py (get_application_templates).
+      - flightcheck/checks/authentication.py (AUTH-005).
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="applicationTemplate" — fields used:
+                id (Edm.String, key)
+                displayName (Edm.String)
+                categories (Collection(Edm.String))
+                supportedSingleSignOnModes (Collection(Edm.String))
+                publisher (Edm.String, nullable)
+                description (Edm.String, nullable)
+      Docs:   https://learn.microsoft.com/graph/api/applicationtemplate-list
+              https://learn.microsoft.com/graph/api/resources/applicationtemplate
+    """
+    return {
+        "id": template_id,
+        "displayName": display_name,
+        "categories": list(categories) if categories is not None else [],
+        "supportedSingleSignOnModes": (
+            list(supported_single_sign_on_modes)
+            if supported_single_sign_on_modes is not None
+            else []
+        ),
+        "publisher": publisher,
+        "description": description,
+    }
+
+
+def list_application_templates(
+    *,
+    templates: Iterable[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Mock GET /v1.0/applicationTemplates (with optional ``$filter``)."""
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/applicationTemplates",
+        "json": collection(
+            templates if templates is not None else [application_template()],
+            odata_context="$metadata#applicationTemplates",
+        ),
+        "status": 200,
+    }
+
+
+def list_claims_mapping_policies_for_sp(
+    *,
+    sp_id: str = MOCK_WORKDAY_SP_ID,
+    policies: Iterable[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Mock GET /v1.0/servicePrincipals/{id}/claimsMappingPolicies.
+
+    Pass `policies=[]` to mock the no-custom-mapping case (the application
+    is using Entra's default NameID claim).
+    """
+    pol_list = list(policies) if policies is not None else [claims_mapping_policy()]
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/servicePrincipals/{sp_id}/claimsMappingPolicies",
+        "json": collection(
+            pol_list,
+            odata_context=f"$metadata#servicePrincipals('{sp_id}')/claimsMappingPolicies",
+        ),
+        "status": 200,
+    }
+
+
 def insufficient_permissions(
     *, path: str = "/identity/conditionalAccess/policies"
 ) -> dict[str, Any]:
@@ -291,4 +622,179 @@ def insufficient_permissions(
             }
         },
         "status": 403,
+    }
+
+
+# ────────────────────────────────────────────────────────────────────────
+# Microsoft Graph external connectors (Graph Connectors)
+#
+# Used by EXT-002 — Graph Connector knowledge source readiness. Backed by
+# the public Graph CSDL EntityType definitions for externalConnection +
+# connectionOperation:
+#
+#   https://graph.microsoft.com/v1.0/$metadata
+#     EntityType Name="externalConnection" — fields used:
+#       id (Edm.String, key)
+#       name (Edm.String)
+#       state (microsoft.graph.externalConnectors.connectionState
+#              enum: draft|ready|obsolete|limitExceeded|unknownFutureValue)
+#     EntityType Name="connectionOperation" — fields used:
+#       id (Edm.String, key, monotonic)
+#       status (microsoft.graph.externalConnectors.connectionOperationStatus
+#               enum: unspecified|inprogress|completed|failed|unknownFutureValue)
+#       error (microsoft.graph.publicError, optional)
+#
+# Operation docs cited in each builder.
+# ────────────────────────────────────────────────────────────────────────
+
+
+MOCK_EXTERNAL_CONNECTION_ID = "ServiceNowKB48"
+MOCK_EXTERNAL_CONNECTION_NAME = "Mock ServiceNow Knowledge Connector"
+# Default connectorId for the builder is a real Microsoft Gallery
+# template ID (per learn.microsoft.com/microsoftsearch/connectors-overview),
+# so default-mock connections behave like Gallery connections in EXT-002.
+# Tests that need to exercise the custom (API-created) provenance branch
+# pass connector_id=None explicitly.
+MOCK_GALLERY_CONNECTOR_ID = "serviceNowKnowledge"
+
+
+def external_connection(
+    *,
+    connection_id: str = MOCK_EXTERNAL_CONNECTION_ID,
+    name: str = MOCK_EXTERNAL_CONNECTION_NAME,
+    state: str = "ready",
+    description: str = "Mock connector used by FlightCheck tests.",
+    connector_id: str | None = MOCK_GALLERY_CONNECTOR_ID,
+    ingested_items_count: int = 0,
+) -> dict[str, Any]:
+    """Build a single Graph /external/connections record.
+
+    Cited consumers:
+      - flightcheck/checks/graph_connector_kb.py — EXT-002.
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="externalConnection" — fields used:
+                id                   (Edm.String, key, admin-assigned)
+                name                 (Edm.String)
+                state                (Enum connectionState:
+                                      draft | ready | obsolete |
+                                      limitExceeded | unknownFutureValue)
+                description          (Edm.String)
+                connectorId          (Edm.String, Nullable=true — populated
+                                      only when the connection was created
+                                      from a Microsoft Gallery template;
+                                      null/empty for custom connections
+                                      created directly via POST
+                                      /external/connections)
+                ingestedItemsCount   (Edm.Int64, Nullable=true — current
+                                      item count served by the connection)
+      Docs:   https://learn.microsoft.com/graph/api/externalconnectors-externalconnection-get
+              https://learn.microsoft.com/microsoftsearch/connectors-overview
+    """
+    record: dict[str, Any] = {
+        "id": connection_id,
+        "name": name,
+        "description": description,
+        "state": state,
+        "ingestedItemsCount": ingested_items_count,
+    }
+    if connector_id is not None:
+        record["connectorId"] = connector_id
+    return record
+
+
+def connection_operation(
+    *,
+    operation_id: str = "00000000-0000-0000-0000-000000005001",
+    status: str = "completed",
+    error: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a single Graph /external/connections/{id}/operations record.
+
+    Cited consumers:
+      - flightcheck/checks/graph_connector_kb.py — EXT-002 latest crawl.
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="connectionOperation" — fields used:
+                id     (Edm.String, key)
+                status (Enum connectionOperationStatus:
+                        unspecified | inprogress | completed | failed |
+                        unknownFutureValue)
+                error  (microsoft.graph.publicError, optional)
+      Docs:   https://learn.microsoft.com/graph/api/externalconnectors-externalconnection-list-operations
+    """
+    record: dict[str, Any] = {
+        "id": operation_id,
+        "status": status,
+    }
+    if error is not None:
+        record["error"] = error
+    return record
+
+
+def list_external_connections(
+    *, connections: Iterable[Mapping[str, Any]] | None = None
+) -> dict[str, Any]:
+    """Mock GET /v1.0/external/connections."""
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/external/connections",
+        "json": collection(
+            connections if connections is not None else [external_connection()],
+            odata_context="$metadata#external/connections",
+        ),
+        "status": 200,
+    }
+
+
+def get_external_connection(
+    *,
+    connection_id: str = MOCK_EXTERNAL_CONNECTION_ID,
+    record: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Mock GET /v1.0/external/connections/{id}."""
+    payload = dict(record) if record is not None else external_connection(
+        connection_id=connection_id
+    )
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/external/connections/{connection_id}",
+        "json": payload,
+        "status": 200,
+    }
+
+
+def get_external_connection_not_found(
+    *, connection_id: str = MOCK_EXTERNAL_CONNECTION_ID
+) -> dict[str, Any]:
+    """Mock GET /v1.0/external/connections/{id} → 404."""
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/external/connections/{connection_id}",
+        "json": {
+            "error": {
+                "code": "ItemNotFound",
+                "message": f"External connection '{connection_id}' was not found.",
+            }
+        },
+        "status": 404,
+    }
+
+
+def list_connection_operations(
+    *,
+    connection_id: str = MOCK_EXTERNAL_CONNECTION_ID,
+    operations: Iterable[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Mock GET /v1.0/external/connections/{id}/operations."""
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/external/connections/{connection_id}/operations",
+        "json": collection(
+            operations if operations is not None else [connection_operation()],
+            odata_context=f"$metadata#external/connections('{connection_id}')/operations",
+        ),
+        "status": 200,
     }

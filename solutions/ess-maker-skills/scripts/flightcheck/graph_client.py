@@ -46,6 +46,14 @@ GRAPH_SCOPES = [
     "https://graph.microsoft.com/Directory.Read.All",
     "https://graph.microsoft.com/User.Read.All",
     "https://graph.microsoft.com/Policy.Read.All",
+    # Read-only access to Microsoft Graph external connectors (the Graph
+    # Connector knowledge sources customers attach to ESS). Used by
+    # EXT-002 — Graph Connector KB readiness. Per
+    # https://learn.microsoft.com/graph/api/externalconnectors-external-list-connections
+    # the list operation requires either ExternalConnection.Read.All or
+    # ExternalConnection.ReadWrite.OwnedBy / ExternalConnection.ReadWrite.All.
+    # We ask for the read-only one because FlightCheck never mutates state.
+    "https://graph.microsoft.com/ExternalConnection.Read.All",
 ]
 
 # Module-level requests Session with bounded retry-with-backoff for 429/5xx.
@@ -145,13 +153,34 @@ class GraphClient:
         resp.raise_for_status()
         return resp.json()
 
-    def get_all(self, path: str, params: dict | None = None) -> list:
-        """GET with @odata.nextLink pagination. Returns all items."""
+    def get_all(
+        self,
+        path: str,
+        params: dict | None = None,
+        *,
+        raise_on_permission_error: bool = False,
+    ) -> list:
+        """GET with @odata.nextLink pagination. Returns all items.
+
+        Default behavior on HTTP 401/403 is to return whatever items
+        were already collected (partial results) — most FlightCheck
+        callers prefer "show what we can see, silently degrade." When
+        the caller needs to distinguish "no items exist" from
+        "permission denied" (e.g. AUTH-005, where a denied
+        appRoleAssignedTo lookup must NOT false-alarm as a Sev-2
+        "0 users assigned" finding), pass
+        ``raise_on_permission_error=True`` to convert 401/403 into a
+        ``PermissionError`` instead.
+        """
         items: list = []
         url = f"{GRAPH_BASE}{path}"
         while url:
             resp = _SESSION.get(url, headers=self.headers, params=params, timeout=30)
             if resp.status_code in (401, 403):
+                if raise_on_permission_error:
+                    raise PermissionError(
+                        f"Graph returned HTTP {resp.status_code} on {path}."
+                    )
                 return items  # partial results
             resp.raise_for_status()
             data = resp.json()
@@ -194,3 +223,140 @@ class GraphClient:
         if filter_expr:
             params["$filter"] = filter_expr
         return self.get_all("/servicePrincipals", params=params)
+
+    # ----- Entra Enterprise App user/group assignment (AUTH-005) -----
+
+    def get_app_role_assignments(self, sp_id: str) -> list:
+        """List principals (users, groups, service principals) assigned to
+        the resource service principal identified by ``sp_id``.
+
+        Returns the collection from
+        ``GET /servicePrincipals/{id}/appRoleAssignedTo`` — each item is an
+        appRoleAssignment with ``principalId``, ``principalType``
+        (``User`` | ``Group`` | ``ServicePrincipal``), ``principalDisplayName``,
+        and ``appRoleId``.
+
+        Raises ``PermissionError`` on HTTP 401/403 so callers can
+        distinguish "permission denied" from "no assignments exist."
+        Without this, ``get_all()``'s default silent-on-401/403 behavior
+        would make a denied appRoleAssignedTo lookup look identical to
+        a legitimately empty list — letting a Workday SP with a scoped
+        Conditional Access policy or a permission-restricted directory
+        role false-alarm as "no users/groups assigned" (a Sev-2-shaped
+        finding) when the real cause is the kit's own token lacking
+        access. AUTH-005 explicitly catches PermissionError and routes
+        to WARNING with a permission-remediation message; AUTH-006
+        uses the same defensive pattern via a ``graph.get()`` probe.
+
+        Docs: https://learn.microsoft.com/graph/api/serviceprincipal-list-approleassignedto
+        """
+        path = f"/servicePrincipals/{sp_id}/appRoleAssignedTo"
+        try:
+            return self.get_all(path, raise_on_permission_error=True)
+        except PermissionError as e:
+            # Re-raise with a more actionable message (the bare get_all
+            # error only mentions the path and status code).
+            raise PermissionError(
+                f"{e} Requires Application.Read.All or Directory.Read.All."
+            ) from e
+
+    def get_application_templates(self, filter_expr: str = "") -> list:
+        """List Entra application gallery templates.
+
+        ``GET /v1.0/applicationTemplates`` returns the tenant-independent
+        catalog of gallery apps (Workday, ServiceNow, Salesforce, ...).
+        Each template has a stable ``id`` (set once when Microsoft
+        registered the template) and a list of ``categories``
+        (``"Single sign-on"``, ``"User Provisioning"``, ...). When an
+        operator provisions an app from the Entra gallery, the
+        resulting ``servicePrincipal.applicationTemplateId`` points
+        back at this id — so matching SPs by ``applicationTemplateId``
+        is the rename-proof way to discover gallery apps.
+
+        No special permission is required (this endpoint exposes
+        tenant-independent gallery metadata). On HTTP 401/403 we raise
+        ``PermissionError`` rather than silently returning [] so the
+        caller can distinguish "Microsoft shipped no matching template"
+        (empty list, file an issue) from "we couldn't read the
+        catalog" (consent/token problem, fix the token).
+
+        Docs: https://learn.microsoft.com/graph/api/applicationtemplate-list
+        """
+        params = {}
+        if filter_expr:
+            params["$filter"] = filter_expr
+        return self.get_all(
+            "/applicationTemplates",
+            params=params,
+            raise_on_permission_error=True,
+        )
+
+    # ----- Microsoft Graph external connectors (Graph Connectors) -----
+    #
+    # Used by EXT-002 (Graph Connector KB readiness). The customer-facing
+    # "Graph Connector" surface in M365 Admin Center is exposed via the
+    # Microsoft Graph external connectors API:
+    # https://learn.microsoft.com/graph/api/resources/externalconnectors-externalconnection
+    #
+    # We never mutate state — the calls below are read-only.
+
+    def get_external_connections(self) -> list:
+        """List all Microsoft Graph external connections in the tenant.
+
+        GET /v1.0/external/connections — paginated.
+        See https://learn.microsoft.com/graph/api/externalconnectors-external-list-connections.
+        """
+        return self.get_all("/external/connections")
+
+    def get_external_connection(self, connection_id: str) -> dict:
+        """Get a single external connection by its admin-assigned id.
+
+        GET /v1.0/external/connections/{id}.
+        See https://learn.microsoft.com/graph/api/externalconnectors-externalconnection-get.
+
+        Returns the parsed JSON body, or a `{"_error": ..., "_status": 404}`
+        dict if the connection does not exist (the kit's standard
+        "missing resource" sentinel — see ``GraphClient.get`` which
+        already converts 401/403 to the same shape).
+        """
+        url = f"{GRAPH_BASE}/external/connections/{connection_id}"
+        resp = _SESSION.get(url, headers=self.headers, timeout=30)
+        if resp.status_code == 404:
+            return {"_error": "not_found", "_status": 404}
+        if resp.status_code in (401, 403):
+            return {"_error": "insufficient_permissions", "_status": resp.status_code}
+        resp.raise_for_status()
+        return resp.json()
+
+    def get_connection_operations(self, connection_id: str) -> list:
+        """List crawl operations for a Graph external connection.
+
+        GET /v1.0/external/connections/{id}/operations — paginated.
+        See https://learn.microsoft.com/graph/api/externalconnectors-externalconnection-list-operations.
+
+        Each operation has a ``status`` field
+        (``unspecified`` | ``inprogress`` | ``completed`` | ``failed``)
+        and an optional ``error`` field. EXT-002 inspects the most recent
+        operation to detect silent crawl failures.
+        """
+        return self.get_all(f"/external/connections/{connection_id}/operations")
+
+    def get_claims_mapping_policies(self, service_principal_id: str) -> list:
+        """List claimsMappingPolicy objects assigned to a service principal.
+
+        Used by AUTH-006 to read the SAML token-issuance overrides Entra
+        applies for a federated enterprise app (e.g., the customer's
+        Workday SAML app). An empty list means no policy is assigned
+        and the application uses Entra's default claim set
+        (NameID = user.userPrincipalName).
+
+        Source (validatable):
+          Schema:  https://graph.microsoft.com/v1.0/$metadata
+                   EntityType Name="claimsMappingPolicy"
+          Docs:    https://learn.microsoft.com/graph/api/serviceprincipal-list-claimsmappingpolicies?view=graph-rest-1.0
+
+        Requires Policy.Read.All (already requested by this client).
+        """
+        return self.get_all(
+            f"/servicePrincipals/{service_principal_id}/claimsMappingPolicies"
+        )
