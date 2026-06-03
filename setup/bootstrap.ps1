@@ -57,7 +57,14 @@ foreach ($f in $files) {
 }
 
 $installer = Join-Path $tempDir 'Install-EssAdk.ps1'
-$installerArgs = @{ Branch = $Branch }
-if ($InstallRoot) { $installerArgs.InstallRoot = $InstallRoot }
 
-& $installer @installerArgs
+# Build argument list for the child process
+$argList = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $installer, '-Branch', $Branch)
+if ($InstallRoot) { $argList += @('-InstallRoot', $InstallRoot) }
+
+# Launch in a child process with -ExecutionPolicy Bypass so the downloaded
+# script runs even when the machine's policy is Restricted.
+$proc = Start-Process powershell -ArgumentList $argList -Wait -PassThru -NoNewWindow
+if ($proc.ExitCode -ne 0) {
+    throw "Install-EssAdk.ps1 exited with code $($proc.ExitCode)"
+}
