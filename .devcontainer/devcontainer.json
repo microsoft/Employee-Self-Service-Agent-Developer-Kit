@@ -4,7 +4,7 @@
 
   "workspaceFolder": "/workspaces/Employee-Self-Service-Agent-Developer-Kit/solutions/ess-maker-skills",
 
-  "postCreateCommand": "pip install --quiet --disable-pip-version-check -r scripts/requirements.txt && echo '' && echo '=== ESS Maker Kit ready! ===' && echo 'Open Copilot Chat and run /setup to connect your Dataverse environment.' && echo ''",
+  "postCreateCommand": "pip install --quiet --disable-pip-version-check -r /workspaces/Employee-Self-Service-Agent-Developer-Kit/solutions/ess-maker-skills/scripts/requirements.txt && echo '' && echo '=== ESS Maker Kit ready! ===' && echo 'Open File > Open Folder and select solutions/ess-maker-skills, then run /setup in Copilot Chat.' && echo ''",
 
   "customizations": {
     "vscode": {
