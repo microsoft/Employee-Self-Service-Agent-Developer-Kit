@@ -206,8 +206,20 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
     fi
 
     if [[ -n "$CODE_CMD" ]]; then
-        EXTENSIONS=("GitHub.copilot" "GitHub.copilot-chat" "ms-python.python")
-        for ext in "${EXTENSIONS[@]}"; do
+        # Required extensions — fail if these can't be installed
+        REQUIRED_EXTENSIONS=("GitHub.copilot" "GitHub.copilot-chat")
+        for ext in "${REQUIRED_EXTENSIONS[@]}"; do
+            if ! "$CODE_CMD" --install-extension "$ext" --force 2>/dev/null; then
+                err "Failed to install required extension: $ext"
+                err "Sign in to VS Code with a GitHub account that has Copilot access, then re-run this script."
+                exit 1
+            fi
+            ok "$ext"
+        done
+
+        # Optional extensions — warn on failure
+        OPTIONAL_EXTENSIONS=("ms-python.python")
+        for ext in "${OPTIONAL_EXTENSIONS[@]}"; do
             "$CODE_CMD" --install-extension "$ext" --force 2>/dev/null && ok "$ext" || warn "Failed to install $ext"
         done
     else
