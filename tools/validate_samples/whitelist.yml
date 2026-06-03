@@ -1,0 +1,23 @@
+# Documented inconsistencies under samples/. The validator MUST NOT flag these
+# for filename/folder convention checks. Source of truth: samples/AGENTS.md
+# ("Documented inconsistencies — do NOT 'fix' these").
+#
+# Adding entries here requires a citation to samples/AGENTS.md or a follow-up
+# issue. Anything not listed here is held to the documented convention.
+
+# Exact relative paths (from repo root) that are exempt from filename convention.
+filename_exemptions:
+  - samples/Facilities/EmployeeGetDiningMenu/msdyn_DiningGetMenusQuery..xml
+  # Lowercase msdyn_copilotforemployeeselfservice* prefix is documented as acceptable
+  # for existing files; pattern below is matched as a path prefix substring.
+
+# Substrings; if present in the basename of a new XML file, filename
+# convention is skipped. The filename convention check only runs on newly
+# added XML files, so these substrings have no effect on files that already
+# existed on base.
+filename_exemption_substrings:
+  - msdyn_copilotforemployeeselfservice
+
+# Exact relative folder paths exempt from PascalCase folder convention.
+folder_exemptions:
+  - samples/WorkdayDeclarativeAgent/Employee/WorkdayEmployeesviewtheirjobtaxonomy

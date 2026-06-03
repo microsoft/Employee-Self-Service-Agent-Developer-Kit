@@ -97,16 +97,23 @@ Stop and ask if:
 
 ## Validation before PR
 
-Before preparing a PR, run every check in [`.github/agents/skills/validate-sample-topic/SKILL.md`](../.github/agents/skills/validate-sample-topic/SKILL.md) and paste its summary block into the PR body. The checks are:
+Before preparing a PR, run the validator and paste its summary block into the PR body:
 
-- YAML well-formedness (changed `topic.yaml`).
+```bash
+python -m tools.validate_samples --diff-base origin/main
+```
+
+Full procedure: [`.github/agents/skills/validate-sample-topic/SKILL.md`](../.github/agents/skills/validate-sample-topic/SKILL.md). Scope, failure interpretation, and the runtime-validation disclaimer: [`docs/validation.md`](../docs/validation.md). The CLI enforces:
+
+- YAML well-formedness (changed `*.yaml`).
 - `topic.yaml` has top-level `kind: AdaptiveDialog`.
-- Neighbor-key parity for new `topic.yaml` against its sibling reference.
 - XML well-formedness (changed `*.xml`).
 - Filename convention for **new** XML files (`msdyn_` prefix).
 - Folder convention for **new** topic folders (PascalCase, contains `topic.yaml`, at least one `*.xml`, and `README.md`).
-- Diff scope limited to a single `samples/<Area>/.../<TopicFolder>/`.
-- No secrets or internal URLs in the diff.
+- Diff scope limited to a single `samples/<Area>/.../<TopicFolder>/` (area-level docs allowed).
+- No secrets or internal URLs anywhere in touched files (the check scans full file contents, not just the diff).
+
+Neighbor-key parity against the sibling reference is your responsibility in step 1 of [`create-or-update-sample-topic`](../.github/agents/skills/create-or-update-sample-topic/SKILL.md) — record the neighbor path in the PR body.
 
 ## Topic YAML authoring guidance
 
