@@ -19,7 +19,7 @@ There are several ways to set up your environment depending on your needs:
 | Option | Best for | Guide |
 |--------|----------|-------|
 | **One-shot installer** (Windows) | Full maker kit — installs VS Code, Python, Git, and all dependencies | [Setup README](setup/README.md) |
-| **GitHub Codespaces** | Browser-based development — no local install required ([paid feature](https://github.com/features/codespaces#pricing)) | [Setup README](setup/README.md#github-codespaces-no-local-install) |
+| **GitHub Codespaces** | Browser-based development — no local install required ([60 free hours/month](https://github.com/features/codespaces#pricing)) | [Setup README](setup/README.md#github-codespaces-no-local-install) |
 | **FlightCheck only** | Pre-deployment validation without the full ADK install | [Setup README](setup/README.md#flightcheck-only-mode) |
 | **Manual setup** | Clone the repo and configure your own environment | [Maker Kit README](solutions/ess-maker-skills/README.md#quick-start) |
 

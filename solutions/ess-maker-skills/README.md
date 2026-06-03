@@ -274,11 +274,13 @@ This kit relies on structured instructions and multi-step tool use. Not all mode
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap.ps1)
 ```
 
-**Option B: GitHub Codespaces** (no local install — runs in your browser; [paid feature](https://github.com/features/codespaces#pricing)):
+**Option B: GitHub Codespaces** (no local install — runs in your browser; [60 free hours/month](https://github.com/features/codespaces#pricing)):
 
 👉 [**Create Codespace**](https://github.com/codespaces/new?repo=microsoft/Employee-Self-Service-Agent-Developer-Kit&ref=main&devcontainer_path=.devcontainer%2Fdevcontainer.json)
 
-**Option C: Manual setup** — clone the repo and open this folder in VS Code yourself.
+Select the 2-core machine type. Once it starts, open `solutions/ess-maker-skills` (File → Open Folder) and run `/setup` in Copilot Chat.
+
+**Option C: Manual setup** — clone the repo and open `solutions/ess-maker-skills` in VS Code yourself.
 
 Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 

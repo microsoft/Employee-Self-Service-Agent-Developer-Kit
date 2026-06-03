@@ -20,13 +20,16 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 ## GitHub Codespaces (no local install)
 
-> **GitHub Codespaces is a paid feature.** Usage is billed to your GitHub account or organization. See [GitHub Codespaces pricing](https://github.com/features/codespaces#pricing) for details.
+> **Free tier:** Personal GitHub accounts include 60 hours/month of Codespaces on a 2-core machine (120 core-hours). Compute is only billed while the Codespace is running — it stops automatically after 30 minutes of inactivity. See [GitHub Codespaces pricing](https://github.com/features/codespaces#pricing) for details.
 
-For users who prefer a cloud-based development environment — no local toolchain or VS Code desktop install required. Just a browser and a GitHub account with Codespaces access:
+For users who prefer a cloud-based development environment — no local toolchain or VS Code desktop install required. Just a browser and a GitHub account:
 
 👉 [**Create Codespace**](https://github.com/codespaces/new?repo=microsoft/Employee-Self-Service-Agent-Developer-Kit&ref=main&devcontainer_path=.devcontainer%2Fdevcontainer.json)
 
-The Codespace comes pre-configured with Python 3.12, pip dependencies, GitHub Copilot, and opens directly in the `solutions/ess-maker-skills` workspace. The default **2-core** machine type is sufficient — no need to select a larger instance. Once it starts, run `/setup` in Copilot Chat to connect Dataverse.
+The Codespace comes pre-configured with Python 3.12, pip dependencies, and GitHub Copilot. Select the **2-core** machine type (sufficient for the maker kit). Once it starts:
+
+1. Open the `solutions/ess-maker-skills` folder (File → Open Folder → `/workspaces/Employee-Self-Service-Agent-Developer-Kit/solutions/ess-maker-skills`)
+2. Run `/setup` in Copilot Chat to connect your Dataverse environment
 
 ## FlightCheck-Only Mode
 
