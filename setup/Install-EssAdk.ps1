@@ -638,17 +638,24 @@ if ($FlightCheckOnly) {
         }
 
         # Match the structure setup.py produces: agents array + activeAgent slug
+        if ($botId) {
+            $agentsList = [System.Collections.ArrayList]@()
+            $agentsList.Add($agentEntry) | Out-Null
+        } else {
+            $agentsList = [System.Collections.ArrayList]@()
+        }
+
         $config = @{
             configVersion      = 1
             setup              = 'flightcheck-only'
             dataverseEndpoint  = $envUrl
             flightCheckOnly    = $true
             agent              = $agentEntry
-            agents             = if ($botId) { @(,$agentEntry) } else { @() }
+            agents             = $agentsList
             activeAgent        = if ($botId) { $slug } else { '' }
         }
 
-        $json = $config | ConvertTo-Json -Depth 4
+        $json = $config | ConvertTo-Json -Depth 4 -Compress:$false
         [System.IO.File]::WriteAllText($configPath, $json, (New-Object System.Text.UTF8Encoding $false))
         Write-Ok "Created $configPath"
     }

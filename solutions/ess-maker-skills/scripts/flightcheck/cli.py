@@ -127,7 +127,7 @@ def main():
     else:
         print(f"  Agents:      {len(agents)} discovered")
         for a in agents:
-            marker = "→" if a.get("slug") == active else " "
+            marker = "->" if a.get("slug") == active else "  "
             print(f"    {marker} {a.get('name', 'Unknown')}")
     print(f"  Environment: {env_url}")
     print(f"  Scope:       {args.scope}")
