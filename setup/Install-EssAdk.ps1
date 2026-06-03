@@ -245,12 +245,10 @@ if (-not $wingetAvailable) {
     # logs "already installed" for present packages.
     foreach ($pkg in $packages) {
         # Skip if already installed (avoids unnecessary winget calls + elevation prompts)
-        if ($FlightCheckOnly) {
-            $existing = if ($pkg.Cmd -eq 'python') { Resolve-Python } else { Get-Command $pkg.Cmd -ErrorAction SilentlyContinue }
-            if ($existing) {
-                Write-Ok "$($pkg.Name) (already installed)"
-                continue
-            }
+        $existing = if ($pkg.Cmd -eq 'python') { Resolve-Python } else { Get-Command $pkg.Cmd -ErrorAction SilentlyContinue }
+        if ($existing) {
+            Write-Ok "$($pkg.Name) (already installed)"
+            continue
         }
 
         Write-Host "    installing $($pkg.Name) ($($pkg.Id))"
