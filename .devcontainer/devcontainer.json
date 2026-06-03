@@ -2,9 +2,11 @@
   "name": "ESS Maker Kit",
   "image": "mcr.microsoft.com/devcontainers/python:3.12",
 
-  "workspaceFolder": "/workspaces/Employee-Self-Service-Agent-Developer-Kit/solutions/ess-maker-skills",
+  "workspaceFolder": "/workspaces/Employee-Self-Service-Agent-Developer-Kit",
 
-  "postCreateCommand": "pip install --quiet --disable-pip-version-check -r scripts/requirements.txt && echo '' && echo '=== ESS Maker Kit ready! ===' && echo 'Open Copilot Chat and run /setup to connect your Dataverse environment.' && echo ''",
+  "postCreateCommand": "cd solutions/ess-maker-skills && pip install --quiet --disable-pip-version-check -r scripts/requirements.txt && echo '' && echo '=== ESS Maker Kit ready! ===' && echo 'Open Copilot Chat and run /setup to connect your Dataverse environment.' && echo ''",
+
+  "postAttachCommand": "code /workspaces/Employee-Self-Service-Agent-Developer-Kit/.devcontainer/ess-maker-kit.code-workspace",
 
   "customizations": {
     "vscode": {
