@@ -627,20 +627,24 @@ if ($FlightCheckOnly) {
         }
 
         # Write minimal config.json sufficient for FlightCheck
+        $slug = 'flightcheck-only'
+        $agentEntry = @{
+            name       = $agentName
+            botId      = $botId
+            schemaName = $schemaName
+            isManaged  = $isManaged
+            slug       = $slug
+            folder     = ''
+        }
+
+        # Match the structure setup.py produces: agents array + activeAgent slug
         $config = @{
             setup              = 'complete'
             dataverseEndpoint  = $envUrl
             flightCheckOnly    = $true
-            agent              = @{
-                name       = $agentName
-                botId      = $botId
-                schemaName = $schemaName
-                isManaged  = $isManaged
-                slug       = 'flightcheck-only'
-                folder     = ''
-            }
-            agents             = @()
-            activeAgent        = ''
+            agent              = $agentEntry
+            agents             = if ($botId) { @(,$agentEntry) } else { @() }
+            activeAgent        = if ($botId) { $slug } else { '' }
         }
 
         $json = $config | ConvertTo-Json -Depth 4
