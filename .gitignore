@@ -35,7 +35,6 @@ Thumbs.db
 .vscode/.ropeproject
 .vscode/mcp.json
 *.code-workspace
-!.devcontainer/*.code-workspace
 
 # Node (if added later)
 node_modules/
