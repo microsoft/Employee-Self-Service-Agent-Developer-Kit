@@ -60,7 +60,7 @@ def print_agent_table(agents):
     schema_width = max(schema_width, 11)
 
     header = f"  {'#':<4} {'Agent Name':<{name_width}}  {'Schema Name':<{schema_width}}  {'Managed'}"
-    sep = f"  {'─'*4} {'─'*name_width}  {'─'*schema_width}  {'─'*7}"
+    sep = f"  {'-'*4} {'-'*name_width}  {'-'*schema_width}  {'-'*7}"
     print()
     print(header)
     print(sep)
