@@ -70,11 +70,20 @@ jobs:
           else
             echo "has_samples=false" >> "$GITHUB_OUTPUT"
           fi
+          # PRs that modify the validator, its tests, or this workflow are
+          # maintainer changes — not contributor sample PRs — and would
+          # legitimately mix non-samples/ paths. Skip the diff-scope gate
+          # for them (unit-tests job still runs).
+          if grep -Eq '^[A-Z]	(tools/validate_samples/|tests/test_validate_samples\.py|\.github/workflows/validate-samples\.yml)' changed.txt; then
+            echo "self_edit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "self_edit=false" >> "$GITHUB_OUTPUT"
+          fi
           cat changed.txt || true
 
       - name: Run validator
         id: validate
-        if: steps.changed.outputs.has_samples == 'true'
+        if: steps.changed.outputs.has_samples == 'true' && steps.changed.outputs.self_edit != 'true'
         run: |
           set +e
           python -m tools.validate_samples --paths-file changed.txt --repo-root . > validation.txt
@@ -92,7 +101,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Compose PR comment body
-        if: always() && steps.changed.outputs.has_samples == 'true'
+        if: always() && steps.changed.outputs.has_samples == 'true' && steps.changed.outputs.self_edit != 'true'
         run: |
           {
             echo "## Samples static validation"
@@ -105,7 +114,7 @@ jobs:
           } > validation-comment.md
 
       - name: Post / update PR comment
-        if: always() && steps.changed.outputs.has_samples == 'true'
+        if: always() && steps.changed.outputs.has_samples == 'true' && steps.changed.outputs.self_edit != 'true'
         continue-on-error: true
         uses: marocchino/sticky-pull-request-comment@v2
         with:
@@ -113,7 +122,7 @@ jobs:
           path: validation-comment.md
 
       - name: Fail the job if validation failed
-        if: steps.changed.outputs.has_samples == 'true' && steps.validate.outputs.exit_code != '0'
+        if: steps.changed.outputs.has_samples == 'true' && steps.changed.outputs.self_edit != 'true' && steps.validate.outputs.exit_code != '0'
         run: |
           echo "::error::Static validation failed. See the PR comment or job summary."
           exit 1
