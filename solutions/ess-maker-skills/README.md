@@ -276,11 +276,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 **Option B: GitHub Codespaces** (no local install — runs in your browser; [paid feature](https://github.com/features/codespaces#pricing)):
 
-```powershell
-iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-codespaces.ps1)
-```
-
-Or open directly: [Create Codespace](https://github.com/codespaces/new?repo=microsoft/Employee-Self-Service-Agent-Developer-Kit&ref=main&devcontainer_path=.devcontainer%2Fdevcontainer.json)
+👉 [**Create Codespace**](https://github.com/codespaces/new?repo=microsoft/Employee-Self-Service-Agent-Developer-Kit&ref=main&devcontainer_path=.devcontainer%2Fdevcontainer.json)
 
 **Option C: Manual setup** — clone the repo and open this folder in VS Code yourself.
 
