@@ -245,12 +245,10 @@ if (-not $wingetAvailable) {
     # logs "already installed" for present packages.
     foreach ($pkg in $packages) {
         # Skip if already installed (avoids unnecessary winget calls + elevation prompts)
-        if ($FlightCheckOnly) {
-            $existing = if ($pkg.Cmd -eq 'python') { Resolve-Python } else { Get-Command $pkg.Cmd -ErrorAction SilentlyContinue }
-            if ($existing) {
-                Write-Ok "$($pkg.Name) (already installed)"
-                continue
-            }
+        $existing = if ($pkg.Cmd -eq 'python') { Resolve-Python } else { Get-Command $pkg.Cmd -ErrorAction SilentlyContinue }
+        if ($existing) {
+            Write-Ok "$($pkg.Name) (already installed)"
+            continue
         }
 
         Write-Host "    installing $($pkg.Name) ($($pkg.Id))"
@@ -627,23 +625,35 @@ if ($FlightCheckOnly) {
         }
 
         # Write minimal config.json sufficient for FlightCheck
-        $config = @{
-            setup              = 'complete'
-            dataverseEndpoint  = $envUrl
-            flightCheckOnly    = $true
-            agent              = @{
-                name       = $agentName
-                botId      = $botId
-                schemaName = $schemaName
-                isManaged  = $isManaged
-                slug       = 'flightcheck-only'
-                folder     = ''
-            }
-            agents             = @()
-            activeAgent        = ''
+        $slug = 'flightcheck-only'
+        $agentEntry = @{
+            name       = $agentName
+            botId      = $botId
+            schemaName = $schemaName
+            isManaged  = $isManaged
+            slug       = $slug
+            folder     = ''
         }
 
-        $json = $config | ConvertTo-Json -Depth 4
+        # Match the structure setup.py produces: agents array + activeAgent slug
+        if ($botId) {
+            $agentsList = [System.Collections.ArrayList]@()
+            $agentsList.Add($agentEntry) | Out-Null
+        } else {
+            $agentsList = [System.Collections.ArrayList]@()
+        }
+
+        $config = @{
+            configVersion      = 1
+            setup              = 'flightcheck-only'
+            dataverseEndpoint  = $envUrl
+            flightCheckOnly    = $true
+            agent              = $agentEntry
+            agents             = $agentsList
+            activeAgent        = if ($botId) { $slug } else { '' }
+        }
+
+        $json = $config | ConvertTo-Json -Depth 4 -Compress:$false
         [System.IO.File]::WriteAllText($configPath, $json, (New-Object System.Text.UTF8Encoding $false))
         Write-Ok "Created $configPath"
     }

@@ -1,0 +1,128 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+name: Validate samples
+
+on:
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "samples/**"
+      - "tools/validate_samples/**"
+      - "tests/test_validate_samples.py"
+      - "pyproject.toml"
+      - ".github/workflows/validate-samples.yml"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  unit-tests:
+    name: Validator unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install test deps
+        run: pip install "pytest>=8,<9" "PyYAML>=6,<7" "defusedxml>=0.7,<1.0"
+
+      - name: Run pytest
+        run: pytest tests/test_validate_samples.py -q
+
+  validate:
+    name: Static validation (samples/)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout PR
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install PyYAML defusedxml
+
+      - name: Compute changed files
+        id: changed
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # Normalize rename/copy entries (Rxxx/Cxxx) to "A<TAB>destination"
+          # but otherwise keep every changed path so the validator's
+          # Diff scope (samples/ only) check sees out-of-scope edits.
+          git diff --name-status "$BASE_SHA...HEAD" \
+            | awk -F'\t' 'BEGIN{OFS="\t"} { if ($1 ~ /^[RC]/) print "A", $3; else print $1, $2 }' \
+            > changed.txt
+          if grep -q '^[A-Z]	samples/' changed.txt; then
+            echo "has_samples=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_samples=false" >> "$GITHUB_OUTPUT"
+          fi
+          # PRs that modify the validator, its tests, or this workflow are
+          # maintainer changes — not contributor sample PRs — and would
+          # legitimately mix non-samples/ paths. Skip the diff-scope gate
+          # for them (unit-tests job still runs).
+          if grep -Eq '^[A-Z]	(tools/validate_samples/|tests/test_validate_samples\.py|\.github/workflows/validate-samples\.yml)' changed.txt; then
+            echo "self_edit=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "self_edit=false" >> "$GITHUB_OUTPUT"
+          fi
+          cat changed.txt || true
+
+      - name: Run validator
+        id: validate
+        if: steps.changed.outputs.has_samples == 'true' && steps.changed.outputs.self_edit != 'true'
+        run: |
+          set +e
+          python -m tools.validate_samples --paths-file changed.txt --repo-root . > validation.txt
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          cat validation.txt
+          # Always surface in step summary
+          {
+            echo "## Samples static validation"
+            echo ""
+            echo '```text'
+            cat validation.txt
+            echo '```'
+            echo ""
+            echo "_Runtime validation in Power Platform is a manual follow-up. See [tools/validate_samples/README.md](${{ github.server_url }}/${{ github.repository }}/blob/${{ github.event.pull_request.head.sha }}/tools/validate_samples/README.md)._"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Compose PR comment body
+        if: always() && steps.changed.outputs.has_samples == 'true' && steps.changed.outputs.self_edit != 'true'
+        run: |
+          {
+            echo "## Samples static validation"
+            echo ""
+            echo '```text'
+            cat validation.txt
+            echo '```'
+            echo ""
+            echo "_Runtime validation in Power Platform is a manual follow-up. See \`tools/validate_samples/README.md\`._"
+          } > validation-comment.md
+
+      - name: Post / update PR comment
+        if: always() && steps.changed.outputs.has_samples == 'true' && steps.changed.outputs.self_edit != 'true'
+        continue-on-error: true
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: samples-validation
+          path: validation-comment.md
+
+      - name: Fail the job if validation failed
+        if: steps.changed.outputs.has_samples == 'true' && steps.changed.outputs.self_edit != 'true' && steps.validate.outputs.exit_code != '0'
+        run: |
+          echo "::error::Static validation failed. See the PR comment or job summary."
+          exit 1
