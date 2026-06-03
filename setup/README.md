@@ -109,40 +109,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipLa
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -FlightCheckOnly     # minimal install for FlightCheck only
 ```
 
-## Customer-facing commands
-
-Full maker kit install (VS Code + Copilot + everything):
-
-```powershell
-iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap.ps1)
-```
-
-FlightCheck-only (no VS Code or Copilot required):
-
-```powershell
-iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1)
-```
-
-For customers who prefer to inspect first:
-
-```powershell
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap.ps1" -OutFile bootstrap.ps1 -UseBasicParsing
-# review bootstrap.ps1
-.\bootstrap.ps1
-```
-
 For air-gapped / locked-down environments, IT can mirror the files internally and serve them from an intranet URL by passing `-SourceBaseUrl`.
-
-## Design choices worth flagging in review
-
-1. **No admin elevation required by default.** `winget configure` will UAC-prompt only for packages that need it (Python, VS Code system installer). If the customer can't elevate, they can pre-install those via Intune/Company Portal and re-run the script — it'll skip the present packages and continue.
-2. **Separate winget YAML vs. PowerShell orchestrator.** The YAML is the IT-reviewable artifact (admins can audit/mirror it). The PS1 handles the "non-declarative" bits (VS Code extensions, git clone, launch) that winget DSC can't cleanly express today.
-3. **Pinned Python version (`Python.Python.3.12`)** rather than latest, to match what the kit's `requirements.txt` is tested against. Update in lockstep with upstream.
-4. **GitHub CLI included** primarily so the device-code auth flow works smoothly when the Copilot extension signs in.
-5. **Idempotent.** Re-running fixes a partial install; we never delete or downgrade.
-
-## Open items before this can ship
-
-- [ ] Confirm exact Python version the kit pins to (3.11 vs 3.12).
-- [ ] Decide if we ship a VS Code workspace file in the repo so we can open `.code-workspace` instead of a folder.
-- [ ] Add an MSRC-aligned signing story for `Install-EssAdk.ps1` (or document `-ExecutionPolicy Bypass` invocation).
