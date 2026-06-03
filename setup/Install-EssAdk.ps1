@@ -228,8 +228,8 @@ if (-not $wingetAvailable) {
     # Declarative path - requires `winget configure --enable` (one-time opt-in
     # that pulls DSC modules from the Microsoft Store). Provided for IT shops
     # that prefer the auditable YAML manifest.
-    $configFile = Join-Path $PSScriptRoot 'ess-adk-setup.winget.yaml'
-    if (-not (Test-Path $configFile)) {
+    $configFile = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'ess-adk-setup.winget.yaml' } else { '' }
+    if (-not $configFile -or -not (Test-Path $configFile)) {
         throw "Configuration file not found: $configFile"
     }
     Write-Ok "Using DSC config: $configFile"
@@ -304,8 +304,12 @@ if (-not $pythonExe) {
     $deferPip = $false
 } else {
     Write-Ok "Using Python: $pythonExe"
-    $requirementsFile = Join-Path $PSScriptRoot '..\solutions\ess-maker-skills\scripts\requirements.txt'
-    if (-not (Test-Path $requirementsFile)) {
+    if ($PSScriptRoot) {
+        $requirementsFile = Join-Path $PSScriptRoot '..\solutions\ess-maker-skills\scripts\requirements.txt'
+    } else {
+        $requirementsFile = ''
+    }
+    if (-not $requirementsFile -or -not (Test-Path $requirementsFile)) {
         Write-Warn2 'requirements.txt not yet available (pre-clone). Will install after clone.'
         $deferPip = $true
     } else {
