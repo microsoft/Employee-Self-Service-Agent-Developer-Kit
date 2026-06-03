@@ -20,7 +20,9 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 ## GitHub Codespaces (no local install)
 
-For users who prefer a cloud-based development environment — no local toolchain or VS Code desktop install required. Just a browser and a GitHub account:
+> **GitHub Codespaces is a paid feature.** Usage is billed to your GitHub account or organization. See [GitHub Codespaces pricing](https://github.com/features/codespaces#pricing) for details.
+
+For users who prefer a cloud-based development environment — no local toolchain or VS Code desktop install required. Just a browser and a GitHub account with Codespaces access:
 
 ```powershell
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-codespaces.ps1)

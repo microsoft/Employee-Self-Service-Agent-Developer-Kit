@@ -274,7 +274,7 @@ This kit relies on structured instructions and multi-step tool use. Not all mode
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap.ps1)
 ```
 
-**Option B: GitHub Codespaces** (no local install — runs in your browser):
+**Option B: GitHub Codespaces** (no local install — runs in your browser; [paid feature](https://github.com/features/codespaces#pricing)):
 
 ```powershell
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-codespaces.ps1)

@@ -12,6 +12,19 @@ A monorepo of solutions, samples, and tooling for the Microsoft Employee Self-Se
 
 Additional solutions (FlightCheck standalone, evaluation harnesses, etc.) will be added under `solutions/` over time.
 
+## Getting Started
+
+There are several ways to set up your environment depending on your needs:
+
+| Option | Best for | Guide |
+|--------|----------|-------|
+| **One-click installer** (Windows) | Full maker kit — installs VS Code, Python, Git, and all dependencies | [Setup README](setup/README.md) |
+| **GitHub Codespaces** | Browser-based development — no local install required ([paid feature](https://github.com/features/codespaces#pricing)) | [Setup README](setup/README.md#github-codespaces-no-local-install) |
+| **FlightCheck only** | Pre-deployment validation without the full ADK install | [Setup README](setup/README.md#flightcheck-only-mode) |
+| **Manual setup** | Clone the repo and configure your own environment | [Maker Kit README](solutions/ess-maker-skills/README.md) |
+
+> **GitHub Copilot subscription is required** for the in-editor maker experience.
+
 ## Samples
 
 Reference content used directly by customers — topic YAMLs, template-config XMLs, evaluation test sets, and integration walkthroughs — lives at the root under [`samples/`](samples/), peer to `solutions/`. Samples are first-class reference resources, not implementation details of any single solution.
