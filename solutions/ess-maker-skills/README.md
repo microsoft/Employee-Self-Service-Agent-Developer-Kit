@@ -98,6 +98,16 @@ cd solutions/ess-maker-skills
 python scripts/flightcheck/cli.py --scope full
 ```
 
+**Standalone install (no VS Code or Copilot required):**
+
+If you only need to run FlightCheck, this single command handles everything — installs dependencies, signs you in, lets you pick your environment, and runs the check:
+
+```powershell
+iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1)
+```
+
+Re-run the same command to change your environment or agent. See [`setup/README.md`](../../setup/README.md) for details.
+
 **What it checks (41+ automated checks across 8 categories):**
 
 | Category | What's validated |
