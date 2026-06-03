@@ -85,6 +85,40 @@ function Write-Ok    { param([string]$m) Write-Host "    [ok]   $m" -ForegroundC
 function Write-Warn2 { param([string]$m) Write-Host "    [warn] $m" -ForegroundColor Yellow }
 function Write-Err2  { param([string]$m) Write-Host "    [err]  $m" -ForegroundColor Red }
 
+# Helper: show a spinner while a script block executes synchronously.
+# The spinner runs in a background runspace so it doesn't block the main thread.
+function Start-Spinner {
+    param([string]$Label)
+    $script:spinnerLabel = $Label
+    $script:spinnerRunspace = [runspacefactory]::CreateRunspace()
+    $script:spinnerRunspace.Open()
+    $script:spinnerPipe = [powershell]::Create().AddScript({
+        param($label)
+        $frames = @('|','/','-','\')
+        $i = 0
+        while ($true) {
+            $frame = $frames[$i % $frames.Count]
+            [Console]::Write("`r    $frame $label")
+            Start-Sleep -Milliseconds 150
+            $i++
+        }
+    }).AddArgument($Label)
+    $script:spinnerPipe.Runspace = $script:spinnerRunspace
+    $script:spinnerHandle = $script:spinnerPipe.BeginInvoke()
+}
+
+function Stop-Spinner {
+    if ($script:spinnerPipe) {
+        $script:spinnerPipe.Stop()
+        $script:spinnerPipe.Dispose()
+        $script:spinnerRunspace.Close()
+        # Clear the spinner line
+        $blank = ' ' * ($script:spinnerLabel.Length + 8)
+        [Console]::Write("`r$blank`r")
+        $script:spinnerPipe = $null
+    }
+}
+
 # Helper: run a native command safely without $ErrorActionPreference = 'Stop'
 # terminating on stderr output (PS 5.1 bug). Returns combined output as string[].
 function Invoke-Native {
@@ -230,7 +264,7 @@ if (-not $wingetAvailable) {
     # that prefer the auditable YAML manifest.
     $configFile = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'ess-adk-setup.winget.yaml' } else { '' }
     if (-not $configFile -or -not (Test-Path $configFile)) {
-        throw "Cannot locate winget config — -UseDsc requires running Install-EssAdk.ps1 directly from disk, not via bootstrap."
+        throw "Cannot locate winget config - -UseDsc requires running Install-EssAdk.ps1 directly from disk, not via bootstrap."
     }
     Write-Ok "Using DSC config: $configFile"
     & winget configure --file $configFile `
@@ -251,7 +285,7 @@ if (-not $wingetAvailable) {
             continue
         }
 
-        Write-Host "    installing $($pkg.Name) ($($pkg.Id))"
+        Start-Spinner "installing $($pkg.Name) ($($pkg.Id))"
         $wingetOutput = Invoke-Native {
             & winget install --id $pkg.Id `
                              --source winget `
@@ -261,6 +295,7 @@ if (-not $wingetAvailable) {
                              --accept-source-agreements `
                              --disable-interactivity
         }
+        Stop-Spinner
         foreach ($rawLine in $wingetOutput) {
             $line = "$rawLine".Trim()
             if ($line -and $line -notmatch '^[\\/\|\-]$' -and $line -notmatch '[^\x20-\x7E]') {
@@ -314,12 +349,14 @@ if (-not $pythonExe) {
         $deferPip = $true
     } else {
         # Use Invoke-Native to avoid PS 5.1 stderr termination
+        Start-Spinner "installing pip dependencies"
         if ($pythonExe -eq 'py -3.12' -or $pythonExe -eq 'py -3') {
             $pyArgs = ($pythonExe -split ' ')[1]
             $pipOutput = Invoke-Native { & py $pyArgs -m pip install --quiet --disable-pip-version-check -r $requirementsFile }
         } else {
             $pipOutput = Invoke-Native { & $pythonExe -m pip install --quiet --disable-pip-version-check -r $requirementsFile }
         }
+        Stop-Spinner
         foreach ($line in $pipOutput) { Write-Host "      $line" }
         if ($LASTEXITCODE -eq 0) {
             Write-Ok 'pip dependencies installed'
@@ -433,7 +470,9 @@ if (-not $SkipClone) {
             }
         } finally { Pop-Location }
     } else {
+        Start-Spinner "cloning repository"
         $gitOutput = Invoke-Native { & git clone --branch $Branch --single-branch $RepoUrl $repoPath }
+        Stop-Spinner
         foreach ($line in $gitOutput) { Write-Host "      $line" }
         if ($LASTEXITCODE -ne 0) {
             Write-Err2 "git clone failed with exit code $LASTEXITCODE"
@@ -456,12 +495,14 @@ if ($deferPip) {
         Write-Step 'Installing Python pip dependencies (deferred)'
         $pythonExe = Resolve-Python
         if ($pythonExe) {
+            Start-Spinner "installing pip dependencies"
             if ($pythonExe -eq 'py -3.12' -or $pythonExe -eq 'py -3') {
                 $pyArgs = ($pythonExe -split ' ')[1]
                 $pipOutput = Invoke-Native { & py $pyArgs -m pip install --quiet --disable-pip-version-check -r $requirementsFile }
             } else {
                 $pipOutput = Invoke-Native { & $pythonExe -m pip install --quiet --disable-pip-version-check -r $requirementsFile }
             }
+            Stop-Spinner
             foreach ($line in $pipOutput) { Write-Host "      $line" }
             if ($LASTEXITCODE -eq 0) {
                 Write-Ok 'pip dependencies installed'
@@ -482,7 +523,7 @@ if ($deferPip) {
 $workspace = Join-Path $repoPath 'solutions\ess-maker-skills'
 if (-not (Test-Path $workspace)) {
     Write-Warn2 "Expected workspace not found: $workspace"
-    Write-Warn2 'Repo layout may have changed; using repo root instead.'
+    Write-Warn2 'Repo layout may have changed. Opening repo root instead.'
     $workspace = $repoPath
 }
 
