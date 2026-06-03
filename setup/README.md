@@ -24,7 +24,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 For users who prefer a cloud-based development environment — no local toolchain or VS Code desktop install required. Just a browser and a GitHub account with Codespaces access:
 
-👉 [**Create Codespace**](https://github.com/codespaces/new?repo=microsoft/Employee-Self-Service-Agent-Developer-Kit&ref=main&devcontainer_path=.devcontainer%2Fdevcontainer.json)
+👉 <a href="https://github.com/codespaces/new?repo=microsoft/Employee-Self-Service-Agent-Developer-Kit&ref=main&devcontainer_path=.devcontainer%2Fdevcontainer.json" target="_blank"><strong>Create Codespace</strong></a>
 
 The Codespace comes pre-configured with Python 3.12, pip dependencies, GitHub Copilot, and opens directly in the `solutions/ess-maker-skills` workspace. The default **2-core** machine type is sufficient — no need to select a larger instance. Once it starts, run `/setup` in Copilot Chat to connect Dataverse.
 
