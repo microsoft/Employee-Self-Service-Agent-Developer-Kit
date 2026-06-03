@@ -639,7 +639,8 @@ if ($FlightCheckOnly) {
 
         # Match the structure setup.py produces: agents array + activeAgent slug
         $config = @{
-            setup              = 'complete'
+            configVersion      = 1
+            setup              = 'flightcheck-only'
             dataverseEndpoint  = $envUrl
             flightCheckOnly    = $true
             agent              = $agentEntry
