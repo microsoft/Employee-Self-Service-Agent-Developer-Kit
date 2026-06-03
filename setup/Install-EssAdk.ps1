@@ -230,7 +230,7 @@ if (-not $wingetAvailable) {
     # that prefer the auditable YAML manifest.
     $configFile = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'ess-adk-setup.winget.yaml' } else { '' }
     if (-not $configFile -or -not (Test-Path $configFile)) {
-        throw "Configuration file not found: $configFile"
+        throw "Cannot locate winget config — -UseDsc requires running Install-EssAdk.ps1 directly from disk, not via bootstrap."
     }
     Write-Ok "Using DSC config: $configFile"
     & winget configure --file $configFile `
