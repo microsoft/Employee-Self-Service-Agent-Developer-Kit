@@ -39,6 +39,7 @@ from flightcheck.checks.prerequisites import run_prerequisites_checks
 from flightcheck.checks.environment import run_environment_checks
 from flightcheck.checks.authentication import run_authentication_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
+from flightcheck.checks.graph_connector_kb import run_graph_connector_kb_checks
 from flightcheck.checks.workday import run_workday_checks
 from flightcheck.checks.servicenow import run_servicenow_checks
 from flightcheck.checks.local_files import run_local_file_checks
@@ -54,6 +55,10 @@ SCOPE_MAP = {
         ("External Systems", run_external_systems_checks),
         ("Workday", run_workday_checks),
     ],
+    "graphconnector": [
+        ("External Systems", run_external_systems_checks),
+        ("Graph Connector KB", run_graph_connector_kb_checks),
+    ],
     "servicenow": [
         ("External Systems", run_external_systems_checks),
         ("ServiceNow", run_servicenow_checks),
@@ -68,6 +73,7 @@ FULL_SCOPE = [
     ("Authentication", run_authentication_checks),
     ("External Systems", run_external_systems_checks),
     ("Workday", run_workday_checks),
+    ("Graph Connector KB", run_graph_connector_kb_checks),
     ("ServiceNow", run_servicenow_checks),
     ("Local Files", run_local_file_checks),
     ("Publishing", run_publishing_checks),
@@ -204,7 +210,7 @@ def main():
     # Authenticating unconditionally would prompt for a second interactive login
     # on scopes like --scope prerequisites that don't need it.
     pva = None
-    if args.scope in ("full", "local"):
+    if args.scope in ("full", "local", "graphconnector"):
         print("Authenticating to Copilot Studio (Island Gateway)...")
         pva = PVAClient(tenant_id, env_url)
         try:
