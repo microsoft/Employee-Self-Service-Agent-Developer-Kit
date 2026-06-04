@@ -296,6 +296,7 @@ After a successful push, `.baseline/` is updated to match the new state.
 | Generate evaluation test sets | `src/skills/evaluations/create/SKILL.md` |
 | Update/modify evaluation test cases | `src/skills/evaluations/update/SKILL.md` |
 | Delete evaluation test sets/cases | `src/skills/evaluations/delete/SKILL.md` |
+| Validate / quality-check evaluation test sets | `src/skills/evaluations/validate/SKILL.md` |
 | Troubleshoot connectivity/auth issues | `src/skills/troubleshoot/SKILL.md` |
 | Debug Workday ISU errors | `src/skills/troubleshoot/SKILL.md` |
 
@@ -312,6 +313,16 @@ JSON format", "something went wrong with Workday".
 **Trigger phrases for flightcheck:** "readiness check", "pre-deployment check",
 "flightcheck", "flight check", "is my agent ready", "validate my environment",
 "check my setup", "pre-flight", "deployment readiness", "run validation".
+
+**Quality validation invocation:** When quality validation is requested on
+eval files — at step 4.3 of the eval create flow OR step 4 of the eval
+update flow — invoke `runSubagent` (the VS Code Copilot Chat tool) pointing the subagent to read
+`src/skills/evaluations/validate/SKILL.md` as its first action, passing the
+paths of the newly written eval files and the agent folder path. Wait for
+the subagent to return with its quality report before continuing. If fixes
+are applied, re-invoke the subagent and wait for the updated report
+before continuing. Do NOT proceed to review and push until the subagent
+has returned. Do NOT invoke the validate subagent after delete operations.
 
 **When the user asks to modify, delete, rename, or otherwise change an agent
 component, ALWAYS load and follow the corresponding skill file.** The skill

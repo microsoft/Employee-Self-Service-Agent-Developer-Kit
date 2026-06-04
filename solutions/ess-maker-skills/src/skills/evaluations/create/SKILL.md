@@ -267,6 +267,25 @@ and negative variants (≥1 of each type per topic):
 | Write-on-read-only | "Update my hire date" / "Change my employee ID" |
 | Multi-intent confusion | "Check my PTO balance and also reset my password" |
 
+**Utterance type rule — natural language vs. keyword:**
+
+Every test set needs two kinds of utterances. Apply this rule across all three
+case types (positive, boundary, negative):
+
+| Type | Description | Example |
+|------|-------------|---------|
+| **Natural language** | A complete sentence a real employee would say | "Can you show me all my open IT support tickets?" |
+| **Keyword** | Short, sparse input with no grammar | "open tkts" |
+
+Rules:
+- **Never generate two natural-language paraphrases for the same intent.** Near-synonyms
+  like "Show me my email" / "What's my email address on file?" test the same routing and
+  inflate redundancy scores without adding coverage.
+- **Positives**: if a topic gets 2 positive cases, make one natural language and one
+  keyword (e.g., "List my open IT tickets" + "open tkts").
+- **Boundaries**: the boundary types (typos, abbreviations, very short input) already
+  lean keyword by nature — continue this pattern, do not add full-sentence boundaries.
+
 **Step 1 — Positive cases (≥1 per topic):**
 1. Read the topic's `triggerQueries` list from the YAML file.
 2. Pick **1-2 representative trigger queries** per topic — not all of them:
@@ -298,12 +317,24 @@ Pick the most relevant boundary type for each topic and generate 1 test case:
 
 **Step 3 — Negative cases (≥1 per topic, where applicable):**
 Pick the most relevant negative type for each topic:
+
+**CRITICAL — vary utterance type across negatives.** If you generate privacy-boundary
+negatives for multiple topics, do NOT write them all as "Show me [person]'s [X]"
+natural-language sentences — they will all share the same structure and score low on
+Redundancy. Apply the utterance type rule:
+- First privacy negative in the set → natural language: "What is Sarah's salary?"
+- Second privacy negative → keyword: "Sarah tkts" / "John salary" / "manager ticket"
+- Third+ → different failure mode entirely (write-on-read-only, cross-domain, out-of-scope)
+
 - For **read-only data topics** (Get Employee ID, Get Hire Date): add a
   **write-on-read-only** case — "Update my hire date" / "Change my employee ID"
+  - Use keyword format: "change hire date" / "update employee ID"
   - `expectedOutput`: The agent should explain it cannot modify this data or
     offer an alternative path
 - For **employee-scoped topics** (My Salary, My PTO): add a **privacy boundary**
-  case — "What is Sarah's salary?" / "Show me John's PTO balance"
+  case — natural language for the first one, keyword for subsequent ones
+  - Natural language: "What is Sarah's salary?" / "Show me John's PTO balance"
+  - Keyword: "Sarah salary" / "John PTO"
   - `expectedOutput`: The agent should refuse to show another employee's data
 - For **domain-specific topics** (IT tickets, HR cases): add a **cross-domain**
   case — "Create a ticket and also show my pay stub"
@@ -547,19 +578,42 @@ Run `python scripts/checkpoint.py "before evaluation test set creation"` to save
 Create the `evaluations/` folder inside the agent folder if it doesn't exist.
 Write each EvaluationSet and EvaluationData file as described above.
 
-### 4.3 — Review before push
+### 4.3 — Quality validation
 
-Show the user a summary of what was generated and ask for confirmation:
+Run quality validation on the generated files.
+
+**After the subagent returns, display its full quality report output directly
+to the user — the complete dimension table, per-category scores, and any ⚠️
+callout blocks listing flagged files. Do NOT summarize or compress the report.
+Paste the subagent's output verbatim into the chat so the user sees it.**
+
+Follow the quality gate + fix flow defined in
+`src/skills/evaluations/quality-fix-flow.md`. The "review step" referred to
+there is step 4.4 of this skill.
+
+**Do not proceed to step 4.4 until quality validation has returned results and
+any fixes are complete.**
+
+---
+
+### 4.4 — Review before push
+
+> **STOP. Do not proceed to step 4.5 until the user has explicitly responded to this step.**
+> This step is mandatory. Do not skip it even if the quality gate passed cleanly.
+
+Count the positive, boundary, and negative cases generated per category. Then show the user this summary and wait for their response:
 
 > Here's what I generated:
 >
 > | Category | Positive | Boundary | Negative | Total |
-> |----------|----------|----------|----------|-------|
+> |----------|----------|----------|----------|---------|
 > | Topic Triggering | {n} | {n} | {n} | {n} |
 > | Integration Data | {n} | {n} | {n} | {n} |
 > | ... | ... | ... | ... | ... |
 >
 > Want to **review specific test cases** before pushing, or **push now**?
+
+Wait for the user's answer before continuing. Do not run the dry-run or push until the user explicitly says "push" or "proceed".
 
 **If IntegrationData tests were generated**, add a placeholder reminder:
 
@@ -577,26 +631,26 @@ Show the user a summary of what was generated and ask for confirmation:
 - **If user says now**: Walk through each placeholder and ask the user for
   the real value. Update the files before pushing.
 - **If user says after pushing**: Proceed, but remind them again in the
-  final summary (Step 4.6).
+  final summary (Step 4.7).
 
 - **If user says review**: Show the test cases they want to inspect, let them
   request edits, then re-confirm push.
 - **If user says push**: Proceed to dry run.
 
-### 4.4 — Dry run
+### 4.5 — Dry run
 
 Run `python scripts/push.py --dry-run` to preview what will be pushed. Confirm the
 evaluation files are detected as new botcomponent records.
 
 Show the user the dry run output and ask for confirmation.
 
-### 4.5 — Push
+### 4.6 — Push
 
 Run `python scripts/push.py` to push the evaluation test sets to Copilot Studio.
 The push script handles two-pass ordering automatically: parent EvaluationSet records
 are created first, then child EvaluationData records are linked via `parentbotcomponentid`.
 
-### 4.6 — Show summary
+### 4.7 — Show summary
 
 Print a summary table:
 
