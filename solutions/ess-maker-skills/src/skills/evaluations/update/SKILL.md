@@ -80,7 +80,25 @@ extensionData:
 For new test cases, create new `.mcs.yml` files following the naming convention:
 `{set-name}-{short-slug}.mcs.yml`.
 
-## Step 4: Review before push
+## Step 4: Quality validation
+
+Run quality validation by invoking the validate subagent, passing the paths
+of **all `.mcs.yml` files in the affected category** (not just the modified
+ones — category-level dimensions need the full set) and the agent folder path.
+
+**After the subagent returns, display its full quality report output directly
+to the user — the complete dimension table, per-category scores, and any ⚠️
+callout blocks listing flagged files. Do NOT summarize or compress the report.
+Paste the subagent's output verbatim into the chat so the user sees it.**
+
+Follow the quality gate + fix flow defined in
+`src/skills/evaluations/quality-fix-flow.md`. The "review step" referred to
+there is Step 5 of this skill.
+
+**Do not proceed to Step 5 until quality validation has returned results and
+any fixes are complete.**
+
+## Step 5: Review before push
 
 Show the user a summary of what changed and ask for confirmation:
 
@@ -96,19 +114,19 @@ Show the user a summary of what changed and ask for confirmation:
 - **If user says review**: Show the full YAML of the changed file(s).
 - **If user says push**: Proceed to dry run.
 
-## Step 5: Dry Run
+## Step 6: Dry Run
 
 Run `python scripts/push.py --dry-run` to preview changes. Show the user the
 output confirming modified/new/deleted evaluation files.
 
-## Step 6: Push
+## Step 7: Push
 
 Run `python scripts/push.py` to push changes to Copilot Studio.
 
 **If the push fails:** show the error and offer retry or revert
 (`python scripts/checkpoint.py --revert`).
 
-## Step 7: Verify
+## Step 8: Verify
 
 > ✅ Evaluation test cases updated in Copilot Studio.
 >
