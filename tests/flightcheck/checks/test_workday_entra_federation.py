@@ -187,7 +187,10 @@ class TestManualVerificationRequired:
         # And the current tenant ID must appear in the remediation
         # too so operators know what value to compare against.
         assert g.MOCK_TENANT_ID in r.remediation
-        # Explicit conflict warning — the whole point of the check.
+        # Explicit conflict warning — the whole point of the check —
+        # belongs in remediation, not result (principle #8: result is
+        # observed state only).
+        assert "silently break" not in r.result
         assert "silently break" in r.remediation
         assert "foreign" in r.remediation.lower() or "different" in r.remediation.lower()
         # Doc link must point at the MS Learn Workday SSO tutorial
