@@ -85,37 +85,23 @@ function Write-Ok    { param([string]$m) Write-Host "    [ok]   $m" -ForegroundC
 function Write-Warn2 { param([string]$m) Write-Host "    [warn] $m" -ForegroundColor Yellow }
 function Write-Err2  { param([string]$m) Write-Host "    [err]  $m" -ForegroundColor Red }
 
-# Helper: show a spinner while a script block executes synchronously.
-# The spinner runs in a background runspace so it doesn't block the main thread.
+# Helper: show elapsed time during a long-running operation.
+# Start-Spinner records the start time; Stop-Spinner prints the elapsed duration.
 function Start-Spinner {
     param([string]$Label)
     $script:spinnerLabel = $Label
-    $script:spinnerRunspace = [runspacefactory]::CreateRunspace()
-    $script:spinnerRunspace.Open()
-    $script:spinnerPipe = [powershell]::Create().AddScript({
-        param($label)
-        $frames = @('|','/','-','\')
-        $i = 0
-        while ($true) {
-            $frame = $frames[$i % $frames.Count]
-            [Console]::Write("`r    $frame $label")
-            Start-Sleep -Milliseconds 150
-            $i++
-        }
-    }).AddArgument($Label)
-    $script:spinnerPipe.Runspace = $script:spinnerRunspace
-    $script:spinnerHandle = $script:spinnerPipe.BeginInvoke()
+    $script:spinnerSW = [System.Diagnostics.Stopwatch]::StartNew()
+    Write-Host "    [..] $Label ..." -NoNewline -ForegroundColor DarkGray
 }
 
 function Stop-Spinner {
-    if ($script:spinnerPipe) {
-        $script:spinnerPipe.Stop()
-        $script:spinnerPipe.Dispose()
-        $script:spinnerRunspace.Close()
-        # Clear the spinner line
-        $blank = ' ' * ($script:spinnerLabel.Length + 8)
-        [Console]::Write("`r$blank`r")
-        $script:spinnerPipe = $null
+    if ($script:spinnerSW) {
+        $elapsed = [math]::Floor($script:spinnerSW.Elapsed.TotalSeconds)
+        $script:spinnerSW.Stop()
+        $script:spinnerSW = $null
+        # Overwrite the [..] line with elapsed time
+        Write-Host "`r    [$($elapsed)s] $($script:spinnerLabel)           " -ForegroundColor DarkGray
+        $script:spinnerLabel = $null
     }
 }
 
@@ -263,7 +249,8 @@ if (-not $wingetAvailable) {
     # that pulls DSC modules from the Microsoft Store). Provided for IT shops
     # that prefer the auditable YAML manifest.
     $configFile = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'ess-adk-setup.winget.yaml' } else { '' }
-    if (-not $configFile -or -not (Test-Path $configFile)) {
+    $cfgExists = $configFile -and (Test-Path -LiteralPath $configFile)
+    if (-not $cfgExists) {
         throw "Cannot locate winget config - -UseDsc requires running Install-EssAdk.ps1 directly from disk, not via bootstrap."
     }
     Write-Ok "Using DSC config: $configFile"
@@ -344,7 +331,8 @@ if (-not $pythonExe) {
     } else {
         $requirementsFile = ''
     }
-    if (-not $requirementsFile -or -not (Test-Path $requirementsFile)) {
+    $reqFileExists = $requirementsFile -and (Test-Path -LiteralPath $requirementsFile)
+    if (-not $reqFileExists) {
         Write-Warn2 'requirements.txt not yet available (pre-clone). Will install after clone.'
         $deferPip = $true
     } else {
