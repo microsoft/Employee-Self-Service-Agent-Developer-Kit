@@ -1,22 +1,14 @@
 # ESS ADK — One-Shot Installer
 
-A single PowerShell command that takes a customer from a clean Windows machine to a ready-to-use ESS Maker Kit workspace in VS Code.
-
-## What this delivers
-
-The customer experience goes from:
-
-> Install VS Code → Install Python → Install PowerShell 7 → Install Git → Install GitHub & Copilot extensions → Sign in → Clone repo → Open folder → Run `/setup`
-
-to:
+A single PowerShell command that installs everything needed for the ESS Maker Kit: VS Code, Python 3.12, Git, GitHub CLI, Copilot extensions, pip dependencies, and clones the repo.
 
 ```powershell
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap.ps1)
 ```
 
-...and they land in VS Code at `solutions/ess-maker-skills/` with everything wired up except the final Dataverse auth step (`/setup` in Copilot Chat).
+Once complete, VS Code opens at `solutions/ess-maker-skills/`. Run `/setup` in Copilot Chat to connect your Dataverse environment.
 
-> **GitHub Copilot subscription is still required** for the in-editor maker experience. This script installs the toolchain and extension scaffolding; it does not (and cannot) grant the Copilot entitlement.
+> **GitHub Copilot subscription is required** for the in-editor maker experience. This script installs the toolchain and extension scaffolding; it does not grant the Copilot entitlement.
 
 ## GitHub Codespaces (no local install)
 
@@ -125,32 +117,12 @@ The devcontainer provides an equivalent pre-built environment:
 - **VS Code extensions:** Copilot, Copilot Chat, Python (specified in `customizations.vscode.extensions`)
 - **Additional features:** GitHub CLI (via devcontainer features)
 
-## How to test it locally (without publishing anything)
-
-> **PowerShell execution policy note.** Windows ships with `Restricted` by default, which blocks `.ps1` files loaded from disk. If you see *"running scripts is disabled on this system"*, use one of these instead of `.\Install-EssAdk.ps1`:
->
-> ```powershell
-> # One-shot bypass (recommended for one-off runs, no persistent change):
-> powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1
->
-> # OR enable signed scripts for the current user only (persists):
-> Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
-> .\Install-EssAdk.ps1
->
-> # OR run the bootstrap directly from memory — execution policy does not apply
-> # because the script body is piped to Invoke-Expression and never hits disk:
-> iex (Get-Content .\bootstrap.ps1 -Raw)
-> ```
->
-> The published customer entry point (`iex (irm ...)`) uses the third pattern, so end users will not hit this error.
+## How to test it locally
 
 From this folder:
 
 ```powershell
-# Validate the winget DSC file in isolation:
-winget configure validate --file .\ess-adk-setup.winget.yaml
-
-# Or run the full installer end-to-end (note the -ExecutionPolicy Bypass):
+# Run the full installer end-to-end:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -InstallRoot $env:USERPROFILE\source-test
 ```
 
