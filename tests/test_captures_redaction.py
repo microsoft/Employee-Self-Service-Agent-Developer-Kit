@@ -59,6 +59,50 @@ class TestRedactText:
         # Both GUIDs collapse to the same placeholder.
         assert out.count("00000000-0000-0000-0000-000000001111") == 2
 
+    def test_replaces_guid_preceded_by_url_encoded_space(self) -> None:
+        # Regression: OData filter URLs include `$filter=X eq <guid>`
+        # which gets URL-encoded to `$filter=X%20eq%20<guid>`. The char
+        # immediately before the GUID is `0` (last hex of `%20`), which
+        # is itself a hex digit. The old single-char negative lookbehind
+        # `(?<![0-9a-fA-F-])` then rejected the match and a real
+        # solution GUID leaked into Dataverse cassettes.
+        #
+        # The fix is to widen the lookbehind to three chars; URL-encoded
+        # prefixes always include `%`, which is not hex, so the
+        # 3-char-wide all-hex check no longer fires.
+        url = (
+            "https://orgmocktenant.api.crm.dynamics.com/api/data/v9.2/"
+            "solutioncomponents?$filter=_solutionid_value%20eq%20"
+            "8907453e-7b9d-45c5-82e6-0a45b09fd1ec"
+        )
+        out = _redact_text(url)
+        assert "8907453e-7b9d-45c5-82e6-0a45b09fd1ec" not in out
+        assert "00000000-0000-0000-0000-000000001111" in out
+
+    def test_replaces_guid_preceded_by_other_url_encoded_bytes(self) -> None:
+        # Same root cause as the %20 case, but verifies the fix covers
+        # every URL-encoded byte whose last hex digit is in [0-9a-f]:
+        # %2c (comma), %2f (slash), %3a (colon), etc.
+        for encoded in ("%2c", "%2f", "%3a", "%3d", "%26"):
+            text = f"prefix{encoded}4f24a3e1-9bcd-4f00-aa11-deadbeef0001 suffix"
+            out = _redact_text(text)
+            assert "4f24a3e1-9bcd-4f00-aa11-deadbeef0001" not in out, (
+                f"GUID leaked through {encoded} prefix: {out}"
+            )
+
+    def test_preserves_guid_embedded_in_longer_hex_run(self) -> None:
+        # The 3-char-wide lookaround should still reject matches where
+        # the GUID is genuinely embedded in a longer hex sequence (i.e.
+        # not a real GUID, just a hex substring that happens to match
+        # the 8-4-4-4-12 shape). Three preceding hex chars is enough to
+        # tell "embedded" from "URL-encoded prefix".
+        text = "abcdef4f24a3e1-9bcd-4f00-aa11-deadbeef0001"
+        out = _redact_text(text)
+        assert "4f24a3e1-9bcd-4f00-aa11-deadbeef0001" in out
+        text2 = "4f24a3e1-9bcd-4f00-aa11-deadbeef0001abcdef"
+        out2 = _redact_text(text2)
+        assert "4f24a3e1-9bcd-4f00-aa11-deadbeef0001" in out2
+
     def test_replaces_workday_wid(self) -> None:
         wid = "ab" * 16  # 32 hex chars
         text = f"<wd:ID>{wid}</wd:ID>"
