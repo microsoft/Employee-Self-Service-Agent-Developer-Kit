@@ -36,9 +36,10 @@ When the user responds:
    > | 1 | `{filename}.mcs.yml` | {dimension} | input | `{old input}` | `{new input}` |
    > | 2 | `{filename}.mcs.yml` | {dimension} | expectedOutput | `{old output}` | `{new output}` |
 
-4. Re-invoke the validate subagent on all files in the category (not just
-   the edited ones — category-level dimensions need the full set) and display
-   the new quality report before proceeding.
+4. Re-invoke the validate subagent, passing the agent slug, category, and the
+   list of edited file paths. The subagent will determine the appropriate
+   scoring scope and path (script or fallback). Display the updated scores
+   before proceeding.
 
 **If the gate passes (4–5/5)** with some dimensions at 3/5 or below, the
 subagent will note them as optional improvements but will not block. Proceed
