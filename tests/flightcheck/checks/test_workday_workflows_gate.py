@@ -21,7 +21,10 @@ signed-in user's identity instead).
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
+
+import pytest
 
 
 @dataclass
@@ -36,6 +39,35 @@ class _MinimalRunner:
 
 
 class TestSimplifiedInstallGate:
+    @pytest.fixture(autouse=True)
+    def _isolate_env(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Isolate every test in this class from the developer's ambient
+        environment. When the gate does NOT fire, `_check_workflows` ->
+        `_resolve_workday_metadata` reads `WORKDAY_BASE_URL` /
+        `WORKDAY_TENANT` / `WORKDAY_TEST_EMPLOYEE_ID` from `os.environ`,
+        then `_read_mcp_workday_env()` parses `.vscode/mcp.json` from
+        CWD, and if all are empty + `sys.stdin.isatty()` is True it
+        calls `input("  Test Employee ID …")`.
+
+        A developer with any of those env vars set, or running pytest
+        from a workspace containing a `.vscode/mcp.json` with
+        `WORKDAY_BASE_URL`/`WORKDAY_TENANT`, would otherwise see a
+        different SKIP message (e.g. ``"No test employee ID provided"``
+        / ``"Workday ISU credentials not provided"``) and the
+        ``"not configured" in r.result.lower()`` assertions would fail.
+        Worse, `pytest -s` would activate the interactive prompt and
+        hang the test.
+
+        Applied `autouse` so every test in this class — including
+        future additions — gets the isolation consistently.
+        """
+        monkeypatch.delenv("WORKDAY_BASE_URL", raising=False)
+        monkeypatch.delenv("WORKDAY_TENANT", raising=False)
+        monkeypatch.delenv("WORKDAY_TEST_EMPLOYEE_ID", raising=False)
+        monkeypatch.chdir(tmp_path)
+
     def test_simplified_skips_with_correct_message(self) -> None:
         """`flavor == "simplified"` → single SKIPPED `WD-WF-000` row in
         the `Workday Workflows` category, zero metadata resolution
@@ -91,4 +123,50 @@ class TestSimplifiedInstallGate:
         # flavor message). Catches a regression where the gate text
         # leaks into the no-attribute branch.
         assert "WD-PKG-001" not in r.result
+        assert "not configured" in r.result.lower()
+
+    @pytest.mark.parametrize(
+        "flavor", ["full", "partial", "unknown", "none", "skipped"]
+    )
+    def test_non_simplified_verdicts_fall_through(self, flavor: str) -> None:
+        """Safety rule (AGENTS.md design principle #11.b): the gate
+        skips ONLY on a positive ``"simplified"`` match. Any other
+        verdict — including ``"full"`` (where ISU checks are clearly
+        applicable) AND the ambiguous values ``"partial"`` /
+        ``"unknown"`` / ``"none"`` / ``"skipped"`` (where the
+        fingerprint couldn't reach a confident answer) — must fall
+        through to the existing logic.
+
+        Without this pin, a future careless rewrite like
+        ``if flavor != "full": skip`` or
+        ``if flavor in {"simplified", "partial", "unknown"}: skip``
+        would silently suppress workflow diagnostics on intermediate
+        states — exactly the failure mode the safety rule exists to
+        prevent. Mirrors the same parametrized test in
+        `test_workday_env_vars.py` (`TestSimplifiedInstallGate
+        .test_ambiguous_verdicts_still_run_existing_logic`) and
+        `test_workday_isu_username_format.py`.
+
+        Note: the no-attribute branch is covered separately by
+        `test_attribute_absent_falls_through_to_existing_logic`
+        (explicit `not hasattr` precondition); this parametrize
+        intentionally pins only the attribute-SET-to-non-simplified
+        cases so each test has a single, focused failure mode.
+        """
+        from flightcheck.checks.workday import _check_workflows
+
+        runner = _MinimalRunner()
+        runner._workday_package_flavor = flavor
+
+        results = _check_workflows(runner)
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.checkpoint_id == "WD-WF-000"
+        assert r.status == "Skipped"
+        # Gate text must NOT leak into the fall-through branch.
+        assert "WD-PKG-001" not in r.result, (
+            f"flavor={flavor!r} leaked gate text into result"
+        )
+        # The existing credential-missing SKIP message.
         assert "not configured" in r.result.lower()
