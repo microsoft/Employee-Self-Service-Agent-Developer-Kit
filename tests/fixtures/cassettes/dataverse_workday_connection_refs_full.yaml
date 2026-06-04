@@ -1,0 +1,72 @@
+interactions:
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate, zstd
+      Connection:
+      - keep-alive
+      OData-MaxVersion:
+      - '4.0'
+      OData-Version:
+      - '4.0'
+      Prefer:
+      - odata.include-annotations=*
+      User-Agent:
+      - python-requests/2.32.5
+    method: GET
+    uri: https://orgmocktenant.api.crm.dynamics.com/api/data/v9.2/connectionreferences?$select=connectionreferenceid,connectionreferencelogicalname,connectionreferencedisplayname,connectorid,connectionid,statuscode
+  response:
+    body:
+      string: '{"@odata.context":"https://orgmocktenant.api.crm.dynamics.com/api/data/v9.2/$metadata#connectionreferences(connectionreferenceid,connectionreferencelogicalname,connectionreferencedisplayname,connectorid,connectionid,statuscode)","@Microsoft.Dynamics.CRM.totalrecordcount":-1,"@Microsoft.Dynamics.CRM.totalrecordcountlimitexceeded":false,"@Microsoft.Dynamics.CRM.globalmetadataversion":"4185914","value":[{"@odata.etag":"W/\"2194903\"","connectionid":"00000000000000000000000000000000","connectorid":"/providers/Microsoft.PowerApps/apis/shared_workdaysoap","connectionreferencedisplayname":"Generic
+        User","connectionreferenceid":"00000000-0000-0000-0000-000000001111","mock.user@contoso.com":"Active","statuscode":1,"connectionreferencelogicalname":"new_sharedworkdaysoap_0786a"},{"@odata.etag":"W/\"2194905\"","connectionid":"00000000000000000000000000000000","connectorid":"/providers/Microsoft.PowerApps/apis/shared_workdaysoap","connectionreferencedisplayname":"OAuthUser","connectionreferenceid":"00000000-0000-0000-0000-000000001111","mock.user@contoso.com":"Active","statuscode":1,"connectionreferencelogicalname":"new_sharedworkdaysoap_ff0df"},{"@odata.etag":"W/\"2194904\"","connectionid":"00000000000000000000000000000000","connectorid":"/providers/Microsoft.PowerApps/apis/shared_workdaysoap","connectionreferencedisplayname":"Context
+        Generic User","connectionreferenceid":"00000000-0000-0000-0000-000000001111","mock.user@contoso.com":"Active","statuscode":1,"connectionreferencelogicalname":"new_sharedworkdaysoap_d6081"},{"@odata.etag":"W/\"4159415\"","connectionid":null,"connectorid":"/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps","connectionreferencedisplayname":"Dataverse","connectionreferenceid":"00000000-0000-0000-0000-000000001111","mock.user@contoso.com":"Active","statuscode":1,"connectionreferencelogicalname":"msdyn_Dataverse"},{"@odata.etag":"W/\"4159413\"","connectionid":null,"connectorid":"/providers/Microsoft.PowerApps/apis/shared_conversionservice","connectionreferencedisplayname":"Content
+        Conversion","connectionreferenceid":"00000000-0000-0000-0000-000000001111","mock.user@contoso.com":"Active","statuscode":1,"connectionreferencelogicalname":"msdyn_ContentConversion"},{"@odata.etag":"W/\"2194902\"","connectionid":"shared-commondataser-00000000-0000-0000-0000-000000001111","connectorid":"/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps","connectionreferencedisplayname":"Microsoft
+        Dataverse","connectionreferenceid":"00000000-0000-0000-0000-000000001111","mock.user@contoso.com":"Active","statuscode":1,"connectionreferencelogicalname":"msdyn_sharedcommondataserviceforapps_92b66"}]}'
+    headers:
+      Allow:
+      - OPTIONS,GET,HEAD,POST
+      AuthActivityId:
+      - REDACTED
+      Cache-Control:
+      - no-cache
+      Content-Type:
+      - application/json; odata.metadata=minimal
+      Date:
+      - Thu, 04 Jun 2026 16:11:16 GMT
+      Expires:
+      - '-1'
+      OData-Version:
+      - '4.0'
+      Preference-Applied:
+      - odata.include-annotations="*"
+      Public:
+      - OPTIONS,GET,HEAD,POST
+      REQ_ID:
+      - REDACTED
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Vary:
+      - Accept-Encoding
+      X-Content-Type-Options:
+      - nosniff
+      X-Source:
+      - REDACTED
+      content-length:
+      - '2850'
+      x-ms-dop-hint:
+      - '48'
+      x-ms-ratelimit-burst-remaining-xrm-requests:
+      - '7999'
+      x-ms-ratelimit-time-remaining-xrm-requests:
+      - 1,200.00
+      x-ms-service-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+version: 1
