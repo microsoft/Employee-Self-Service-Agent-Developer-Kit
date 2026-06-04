@@ -29,11 +29,17 @@ emitted by the solution publisher at build time and embedded in the
 solution XML. They exist in Dataverse from the moment the solution is
 installed, regardless of whether the customer has wired up any
 connections — so they're a deterministic install-time fingerprint that
-survives partial wire-up. The simplified solution ships two
-connectionrefs (one OBO, one service-account); the full/legacy
-solution ships four (OBO, two SOAP ISU roles, one auxiliary). The
-exact ``connectionreferencelogicalname`` strings per flavor are the
-ground truth this recorder captures.
+survives partial wire-up. The simplified solution ships one
+connectionref (OBO / OAuthUser); the full / legacy solution ships
+three (OBO + two SOAP ISU roles: Generic User and Context Generic
+User). The exact ``connectionreferencelogicalname`` strings per
+flavor are the ground truth this recorder captures.
+
+(Note: the per-tenant BAP-side connection counts are larger — 2 on
+simplified, 4 on legacy — because each install layers an additional
+unbound service-account connection on top of the bound refs. WD-PKG-001
+fingerprints the Dataverse-side ref counts, not the BAP-side connection
+counts.)
 
 Exercises
 ---------
@@ -70,8 +76,8 @@ Operator workflow
 2. ``$env:ESS_DATAVERSE_URL = "https://<your-tenant>.crm.dynamics.com"``
 3. ``python tests/captures/record_dataverse_workday_connection_refs.py``
 4. Inspect the on-screen summary; confirm the Workday-flagged rows
-   match the install flavor you expected (2 rows on a simplified
-   tenant, 4 rows on a legacy tenant).
+   match the install flavor you expected (1 row on a simplified
+   tenant, 3 rows on a legacy tenant).
 5. Rename the cassette per the captured flavor:
      * OOTB simplified:    ``dataverse_workday_connection_refs_simplified.yaml``
      * full / legacy SOAP: ``dataverse_workday_connection_refs_full.yaml``
@@ -209,7 +215,7 @@ def main() -> None:
     print(
         "1. Confirm the Workday-flagged row count matches the install flavor"
     )
-    print("   you captured against (expect 2 for simplified, 4 for legacy).")
+    print("   you captured against (expect 1 for simplified, 3 for legacy).")
     print(
         "2. Eyeball the cassette body for any tenant-specific text the"
     )
