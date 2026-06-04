@@ -85,6 +85,26 @@ function Write-Ok    { param([string]$m) Write-Host "    [ok]   $m" -ForegroundC
 function Write-Warn2 { param([string]$m) Write-Host "    [warn] $m" -ForegroundColor Yellow }
 function Write-Err2  { param([string]$m) Write-Host "    [err]  $m" -ForegroundColor Red }
 
+# Helper: show elapsed time during a long-running operation.
+# Start-Spinner records the start time; Stop-Spinner prints the elapsed duration.
+function Start-Spinner {
+    param([string]$Label)
+    $script:spinnerLabel = $Label
+    $script:spinnerSW = [System.Diagnostics.Stopwatch]::StartNew()
+    Write-Host "    [..] $Label ..." -NoNewline -ForegroundColor DarkGray
+}
+
+function Stop-Spinner {
+    if ($script:spinnerSW) {
+        $elapsed = [math]::Floor($script:spinnerSW.Elapsed.TotalSeconds)
+        $script:spinnerSW.Stop()
+        $script:spinnerSW = $null
+        # Overwrite the [..] line with elapsed time
+        Write-Host "`r    [$($elapsed)s] $($script:spinnerLabel)           " -ForegroundColor DarkGray
+        $script:spinnerLabel = $null
+    }
+}
+
 # Helper: run a native command safely without $ErrorActionPreference = 'Stop'
 # terminating on stderr output (PS 5.1 bug). Returns combined output as string[].
 function Invoke-Native {
@@ -228,9 +248,10 @@ if (-not $wingetAvailable) {
     # Declarative path - requires `winget configure --enable` (one-time opt-in
     # that pulls DSC modules from the Microsoft Store). Provided for IT shops
     # that prefer the auditable YAML manifest.
-    $configFile = Join-Path $PSScriptRoot 'ess-adk-setup.winget.yaml'
-    if (-not (Test-Path $configFile)) {
-        throw "Configuration file not found: $configFile"
+    $configFile = if ($PSScriptRoot) { Join-Path $PSScriptRoot 'ess-adk-setup.winget.yaml' } else { '' }
+    $cfgExists = $configFile -and (Test-Path -LiteralPath $configFile)
+    if (-not $cfgExists) {
+        throw "Cannot locate winget config - -UseDsc requires running Install-EssAdk.ps1 directly from disk, not via bootstrap."
     }
     Write-Ok "Using DSC config: $configFile"
     & winget configure --file $configFile `
@@ -251,7 +272,7 @@ if (-not $wingetAvailable) {
             continue
         }
 
-        Write-Host "    installing $($pkg.Name) ($($pkg.Id))"
+        Start-Spinner "installing $($pkg.Name) ($($pkg.Id))"
         $wingetOutput = Invoke-Native {
             & winget install --id $pkg.Id `
                              --source winget `
@@ -261,6 +282,7 @@ if (-not $wingetAvailable) {
                              --accept-source-agreements `
                              --disable-interactivity
         }
+        Stop-Spinner
         foreach ($rawLine in $wingetOutput) {
             $line = "$rawLine".Trim()
             if ($line -and $line -notmatch '^[\\/\|\-]$' -and $line -notmatch '[^\x20-\x7E]') {
@@ -304,18 +326,25 @@ if (-not $pythonExe) {
     $deferPip = $false
 } else {
     Write-Ok "Using Python: $pythonExe"
-    $requirementsFile = Join-Path $PSScriptRoot '..\solutions\ess-maker-skills\scripts\requirements.txt'
-    if (-not (Test-Path $requirementsFile)) {
+    if ($PSScriptRoot) {
+        $requirementsFile = Join-Path $PSScriptRoot '..\solutions\ess-maker-skills\scripts\requirements.txt'
+    } else {
+        $requirementsFile = ''
+    }
+    $reqFileExists = $requirementsFile -and (Test-Path -LiteralPath $requirementsFile)
+    if (-not $reqFileExists) {
         Write-Warn2 'requirements.txt not yet available (pre-clone). Will install after clone.'
         $deferPip = $true
     } else {
         # Use Invoke-Native to avoid PS 5.1 stderr termination
+        Start-Spinner "installing pip dependencies"
         if ($pythonExe -eq 'py -3.12' -or $pythonExe -eq 'py -3') {
             $pyArgs = ($pythonExe -split ' ')[1]
             $pipOutput = Invoke-Native { & py $pyArgs -m pip install --quiet --disable-pip-version-check -r $requirementsFile }
         } else {
             $pipOutput = Invoke-Native { & $pythonExe -m pip install --quiet --disable-pip-version-check -r $requirementsFile }
         }
+        Stop-Spinner
         foreach ($line in $pipOutput) { Write-Host "      $line" }
         if ($LASTEXITCODE -eq 0) {
             Write-Ok 'pip dependencies installed'
@@ -429,7 +458,9 @@ if (-not $SkipClone) {
             }
         } finally { Pop-Location }
     } else {
+        Start-Spinner "cloning repository"
         $gitOutput = Invoke-Native { & git clone --branch $Branch --single-branch $RepoUrl $repoPath }
+        Stop-Spinner
         foreach ($line in $gitOutput) { Write-Host "      $line" }
         if ($LASTEXITCODE -ne 0) {
             Write-Err2 "git clone failed with exit code $LASTEXITCODE"
@@ -452,12 +483,14 @@ if ($deferPip) {
         Write-Step 'Installing Python pip dependencies (deferred)'
         $pythonExe = Resolve-Python
         if ($pythonExe) {
+            Start-Spinner "installing pip dependencies"
             if ($pythonExe -eq 'py -3.12' -or $pythonExe -eq 'py -3') {
                 $pyArgs = ($pythonExe -split ' ')[1]
                 $pipOutput = Invoke-Native { & py $pyArgs -m pip install --quiet --disable-pip-version-check -r $requirementsFile }
             } else {
                 $pipOutput = Invoke-Native { & $pythonExe -m pip install --quiet --disable-pip-version-check -r $requirementsFile }
             }
+            Stop-Spinner
             foreach ($line in $pipOutput) { Write-Host "      $line" }
             if ($LASTEXITCODE -eq 0) {
                 Write-Ok 'pip dependencies installed'
@@ -478,7 +511,7 @@ if ($deferPip) {
 $workspace = Join-Path $repoPath 'solutions\ess-maker-skills'
 if (-not (Test-Path $workspace)) {
     Write-Warn2 "Expected workspace not found: $workspace"
-    Write-Warn2 'Repo layout may have changed; using repo root instead.'
+    Write-Warn2 'Repo layout may have changed. Opening repo root instead.'
     $workspace = $repoPath
 }
 
