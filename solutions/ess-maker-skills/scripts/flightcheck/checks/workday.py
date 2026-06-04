@@ -229,6 +229,16 @@ def run_workday_checks(runner) -> list[CheckResult]:
 
     flavor = getattr(runner, "_workday_package_flavor", None)
 
+    # WD-CONN-010 — Workday single-Entra-tenant federation alignment.
+    # Runs BEFORE the no-Workday early-return gate below because the
+    # conflict scenario (a second Entra tenant wired up against a
+    # Workday tenant already federated to a different Entra tenant
+    # silently breaks the existing federation) can apply pre-install
+    # too — if there are Workday SAML enterprise apps in this Entra
+    # tenant we want to surface the manual verification step even
+    # when the kit-side Workday install isn't deployed yet.
+    results.extend(_check_entra_workday_federation_alignment(runner))
+
     # If neither flows nor any Workday connection references are
     # present, this tenant has no Workday integration. Skip the
     # downstream Workday-specific checks (preserves the pre-existing
@@ -260,6 +270,319 @@ def run_workday_checks(runner) -> list[CheckResult]:
     results.extend(_check_package_connection_completeness(runner))
 
     return results
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# WD-CONN-010 — Workday single-Entra-tenant federation alignment (MANUAL)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Workday supports exactly ONE Entra-tenant SAML federation per Workday
+# tenant. When a second Entra tenant is wired up against the same
+# Workday tenant (e.g. an admin / test environment added on top of an
+# existing production EmployeeHub tenant), the previously configured
+# tenant's federation silently breaks — Workday switches its enabled
+# IdP row to the new one and the old tenant's SAML SSO into Workday
+# stops working without an explicit error.
+#
+# There is no Workday API surface that returns the configured SAML
+# Identity Provider list — the 2026-05 capture attempts against the
+# SOAP Identity_Management and REST authentication-policies endpoints
+# all failed (see workday_config.yaml lines 200-336 + workday_rest_admin.yaml
+# line 296-299). Per the FlightCheck cardinal rules
+# (`solutions/ess-maker-skills/scripts/flightcheck/AGENTS.md` design
+# principle #2 — MANUAL status), this is exactly the case the MANUAL
+# pattern was added for: gather everything programmatically observable
+# on the Entra side and delegate the Workday-side comparison to the
+# operator, using the same shape AUTH-006 established for SAML NameID
+# alignment.
+#
+# What we observe (Entra side, via Graph v1.0 — validatable tier per
+# `tests/fixtures/cassettes/INDEX.md` API tier registry):
+#   * The current Entra tenant ID (runner.graph.tenant_id).
+#   * Every federated Workday enterprise app in this Entra tenant
+#     (servicePrincipals filtered on the same predicate AUTH-006 uses).
+#   * Each app's SAML entity IDs from servicePrincipalNames — the
+#     "Service Provider ID" join key Workday's SAML Identity Providers
+#     screen exposes, so the operator can identify which Entra app the
+#     Workday tenant is actually using.
+#
+# What we delegate (Workday side, MANUAL): the operator opens
+# Workday's Edit Tenant Setup - Security, reads the enabled SAML
+# Identity Provider row's issuer / federation metadata, and verifies
+# the embedded Entra tenant ID matches the current tenant. If it
+# references a different tenant, configuring an Entra Integrated
+# Workday connection from this tenant would silently break the
+# foreign tenant's federation.
+#
+# The two helpers below (_WORKDAY_SAML_SP_FILTER, _saml_entity_ids)
+# mirror the AUTH-006 implementation in
+# checks/authentication.py — duplicated rather than imported to keep
+# this Workday-category check self-contained. Any change to one
+# should be considered for the other.
+
+_WORKDAY_SAML_SP_FILTER = (
+    "startswith(displayName,'Workday') and preferredSingleSignOnMode eq 'saml'"
+)
+
+# Same authoritative reference AUTH-006 uses — the MS Learn Workday
+# SSO tutorial walks the operator through Entra↔Workday SAML setup,
+# including the Workday-side IdP configuration screen this check
+# delegates to.
+_WD_CONN_010_DOC = (
+    "https://learn.microsoft.com/en-us/entra/identity/saas-apps/workday-tutorial"
+)
+
+
+def _saml_entity_ids(service_principal_names: list[str]) -> list[str]:
+    """Filter ``servicePrincipalNames`` to entries that look like a SAML
+    entity ID (URI form), excluding the raw appId GUID.
+
+    Microsoft Graph returns servicePrincipalNames as a mix of the
+    application's appId GUID and one or more identifier URIs (the SAML
+    entity ID for SAML apps). The Workday "Service Provider ID" column
+    only ever shows the URI form, so the GUIDs are noise here.
+
+    Mirrors ``_saml_entity_ids`` in ``checks/authentication.py``
+    (AUTH-006) — kept in sync; see the WD-CONN-010 header comment.
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="servicePrincipal" — Property
+              servicePrincipalNames (Collection(Edm.String)).
+      Docs:   https://learn.microsoft.com/graph/api/resources/serviceprincipal?view=graph-rest-1.0
+    """
+    out: list[str] = []
+    for spn in service_principal_names:
+        if not isinstance(spn, str):
+            continue
+        if "://" in spn or "/" in spn or ":" in spn:
+            out.append(spn)
+    return out
+
+
+def _check_entra_workday_federation_alignment(runner) -> list[CheckResult]:
+    """WD-CONN-010 — Manual verification of Workday's single-Entra-tenant
+    federation constraint.
+
+    Enumerates federated Workday enterprise apps in the current Entra
+    tenant, surfaces their SAML entity IDs and the current Entra tenant
+    ID, and emits ONE coalesced MANUAL result instructing the operator
+    to verify in Workday "Edit Tenant Setup - Security" that the
+    enabled IdP issuer references the current Entra tenant — NOT a
+    different one (which would mean a foreign Entra tenant owns the
+    Workday federation today, and configuring an Entra Integrated
+    Workday connection from this tenant would silently break it).
+    """
+    cp_id = "WD-CONN-010"
+    category = "Workday"
+    description = "Workday single-Entra-tenant federation alignment"
+    doc_link = _WD_CONN_010_DOC
+
+    graph = getattr(runner, "graph", None)
+    if graph is None:
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=description,
+            result="Microsoft Graph client unavailable — skipping.",
+            remediation=(
+                "Re-run FlightCheck after Graph authentication succeeds."
+            ),
+            doc_link=doc_link,
+        )]
+
+    # Probe /servicePrincipals first — get_service_principals() wraps
+    # get_all() which swallows 401/403 into an empty list. Without
+    # this probe a missing Application.Read.All consent would
+    # masquerade as "no Workday SAML app exists" and emit a falsely
+    # reassuring NOT_CONFIGURED.
+    sp_probe = graph.get("/servicePrincipals", params={"$top": "1"})
+    probe_status = sp_probe.get("_status") if isinstance(sp_probe, dict) else None
+    if probe_status in (401, 403):
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=description,
+            result=(
+                "Cannot read Entra service principals — Graph returned "
+                f"HTTP {probe_status} on /servicePrincipals."
+            ),
+            remediation=(
+                "Grant Application.Read.All (or Directory.Read.All) "
+                "consent on the Graph app registration the kit uses, "
+                "then re-run FlightCheck. Without this consent the "
+                "check cannot enumerate Workday SAML enterprise apps "
+                "to surface for the operator's manual Workday-side "
+                "verification."
+            ),
+            doc_link=doc_link,
+        )]
+
+    try:
+        workday_sps = graph.get_service_principals(
+            filter_expr=_WORKDAY_SAML_SP_FILTER,
+        )
+    except Exception as e:
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=description,
+            result=f"Unable to query Entra service principals: {e}",
+            remediation=(
+                "Requires Application.Read.All (or Directory.Read.All) "
+                "consented on the Graph app registration."
+            ),
+            doc_link=doc_link,
+        )]
+
+    # The current Entra tenant ID is the ANCHOR for the manual check —
+    # the operator compares the Workday-side IdP issuer against this
+    # value. GraphClient stores tenant_id at construction time
+    # (graph_client.py line 79); fall back gracefully if it's absent
+    # so the rest of the result still ships.
+    current_tenant_id = getattr(graph, "tenant_id", None) or "(unknown)"
+
+    if not workday_sps:
+        # IMPORTANT: do NOT say "the conflict scenario doesn't apply
+        # here." We only know there's no LOCAL Workday SAML app — a
+        # foreign Entra tenant could already own the Workday-side
+        # federation, in which case wiring up Entra Integrated SSO
+        # from this tenant would silently break that foreign tenant's
+        # federation. Keep the manual verification advice on the
+        # remediation path for the pre-install/foreign-tenant scenario.
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            description=description,
+            result=(
+                "No federated Workday SAML enterprise app was found in "
+                f"this Entra tenant ({current_tenant_id}) using the "
+                f"filter \"{_WORKDAY_SAML_SP_FILTER}\". The kit cannot "
+                "identify a local Workday SAML app to surface for "
+                "manual Workday-side verification."
+            ),
+            remediation=(
+                "If you are NOT planning to configure Entra Integrated "
+                "Workday SSO from this tenant, this check is not "
+                "applicable. If you ARE preparing to configure it "
+                "(typical when standing up a new environment against "
+                "an existing Workday tenant), manually inspect Workday "
+                "before proceeding — see steps below.\n"
+                "\n"
+                "  a. Sign in to the Workday tenant ESS will connect to.\n"
+                "  b. In the global search box, type 'Edit Tenant Setup "
+                "- Security' and open the task.\n"
+                "  c. Scroll to the 'SAML Identity Providers' section. "
+                "Find any row whose 'Disabled' checkbox is unchecked "
+                "and whose 'Used for Environments' covers the Workday "
+                "environment ESS will connect to.\n"
+                "  d. Open the active IdP row and read its 'Issuer' / "
+                "federation metadata URL. The Entra-issued value is of "
+                "the form 'https://sts.windows.net/{tenantId}/'.\n"
+                "  e. If the embedded {tenantId} matches the current "
+                f"Entra tenant ({current_tenant_id}), Entra Integrated "
+                "SSO from this tenant is safe to configure. If it "
+                "embeds a DIFFERENT tenant ID, configuring an Entra "
+                "Integrated Workday connection from THIS tenant will "
+                "silently break the existing federation — revert in "
+                "the foreign tenant or coordinate with its admin "
+                "before proceeding."
+            ),
+            doc_link=doc_link,
+        )]
+
+    # Build the per-app evidence list. Each entry surfaces the data the
+    # operator needs to identify which Entra app the Workday tenant
+    # has selected as its active IdP (entity IDs are the join key).
+    app_entries: list[str] = []
+    for sp in workday_sps:
+        sp_name = sp.get("displayName", "(unknown)")
+        app_id = sp.get("appId", "?")
+        entity_ids = _saml_entity_ids(sp.get("servicePrincipalNames") or [])
+        entity_ids_str = ", ".join(entity_ids) if entity_ids else "(none surfaced)"
+        app_entries.append(
+            f"  - {sp_name} (appId={app_id}) — entity IDs: {entity_ids_str}"
+        )
+
+    intro_count = (
+        "1 federated Workday SAML app"
+        if len(workday_sps) == 1
+        else f"{len(workday_sps)} federated Workday SAML apps"
+    )
+
+    result_text = (
+        f"Current Entra tenant: {current_tenant_id}\n"
+        f"\n"
+        f"Found {intro_count} in this Entra tenant (filter: "
+        f"\"{_WORKDAY_SAML_SP_FILTER}\"). The kit cannot read "
+        "Workday's tenant security configuration to determine which "
+        "of these is the active IdP on the Workday side, or whether a "
+        "DIFFERENT Entra tenant owns the federation — Workday "
+        "supports exactly one Entra tenant integration per Workday "
+        "tenant, so a foreign tenant's IdP would silently break a "
+        "new integration configured here.\n"
+        f"\n"
+        f"Detected apps (display name → entity IDs are the Workday "
+        f"'Service Provider ID' join key):\n"
+        + "\n".join(app_entries)
+    )
+
+    return [CheckResult(
+        checkpoint_id=cp_id, category=category,
+        priority=Priority.HIGH.value, status=Status.MANUAL.value,
+        description=description,
+        result=result_text,
+        remediation=(
+            "Manual verification required — Workday supports exactly "
+            "one Entra-tenant SAML federation per Workday tenant. "
+            "Confirm the Workday-side enabled IdP issuer references "
+            "the current Entra tenant; if it references a different "
+            "one, configuring (or recommending) an Entra Integrated "
+            "Workday connection from this tenant will silently break "
+            "the foreign tenant's federation.\n"
+            "\n"
+            "Step 1 — Identify the active Entra app from inside Workday:\n"
+            "  a. Sign in to the Workday tenant ESS connects to.\n"
+            "  b. In the global search box, type 'Edit Tenant Setup "
+            "- Security' and open the task.\n"
+            "  c. Scroll to the 'SAML Identity Providers' section. "
+            "Find the row that is enabled (the 'Disabled' checkbox is "
+            "unchecked) and whose 'Used for Environments' covers the "
+            "environment ESS connects to.\n"
+            "  d. Note that row's 'Service Provider ID' value (e.g. "
+            "http://www.workday.com/contoso_prod).\n"
+            "  e. Match that value against the 'entity IDs' in the "
+            "result above. A match means the active IdP is one of "
+            "this tenant's Entra apps; no match means a DIFFERENT "
+            "Entra tenant currently owns the federation.\n"
+            "\n"
+            "Step 2 — Verify the IdP issuer's tenant ID:\n"
+            "  a. On the same Workday IdP row, open the configuration "
+            "and read the 'Issuer' / federation metadata URL. The "
+            "Entra-issued value has the form "
+            "'https://sts.windows.net/{tenantId}/'.\n"
+            f"  b. Compare the embedded {{tenantId}} against the "
+            f"current Entra tenant ({current_tenant_id}, listed in "
+            "the result above).\n"
+            "  c. If they match: Entra Integrated Workday SSO from "
+            "this tenant is safely configured.\n"
+            "  d. If they DIFFER: a foreign Entra tenant owns the "
+            "Workday federation. Configuring or 'fixing' an Entra "
+            "Integrated Workday connection from THIS tenant will "
+            "silently break SSO for users in the foreign tenant. "
+            "Either revert the conflicting integration in Workday "
+            "via 'Edit Tenant Setup - Security' first, or coordinate "
+            "with the foreign tenant's admin before proceeding.\n"
+            "\n"
+            "Note: this manual step exists because Workday does not "
+            "expose tenant SAML Identity Provider configuration via "
+            "any of its current public admin APIs (SOAP "
+            "Identity_Management, REST authentication-policies, and "
+            "WQL admin surfaces have all been verified empty for "
+            "this data). MANUAL items do not fail readiness."
+        ),
+        doc_link=doc_link,
+    )]
 
 
 # ─────────────────────────────────────────────────────────────────────────
