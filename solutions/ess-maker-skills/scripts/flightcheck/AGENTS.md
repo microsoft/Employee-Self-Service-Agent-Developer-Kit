@@ -374,6 +374,82 @@ and do the per-tier verification.
     moment a reviewer asks "wait, does this actually break ESS?"
     and the answer is "no, but it could in theory."
 
+11. **Gate flavor-specific checks on an install-fingerprint verdict.**
+    Some products ship under multiple install flavors that share the
+    same connector / connector keyword but have different runtime
+    semantics. The canonical example is Workday: the simplified
+    install (1 connection reference, OBO with the signed-in user's
+    identity) and the full / legacy install (3 refs: OBO + 2 ISU
+    service-account refs that drive RaaS reports) both bind to the
+    same `shared_workdaysoap` connector, but the ISU/RaaS code path
+    only exists on the full install. Running an ISU-specific check on
+    a simplified-install tenant emits FAILs whose remediations point
+    at the wrong setup path and waste operator triage time.
+
+    Convention for handling this:
+
+    a. **One fingerprint check per product** runs first within its
+       category and stores its verdict on a
+       `runner._<product>_package_flavor` attribute — e.g.
+       `runner._workday_package_flavor`. Use canonical string values
+       (e.g. `"simplified"`, `"full"`, `"partial"`, `"unknown"`,
+       `"none"`, `"skipped"`) so consumers can use `==` checks rather
+       than substring matches. WD-PKG-001 in `checks/workday.py` is
+       the canonical implementation.
+
+    b. **Consumer checks read the verdict** via
+       `getattr(runner, "_<product>_package_flavor", None)` and SKIP
+       only on a positive match for an INCOMPATIBLE flavor. Any other
+       value — `None`, `"partial"`, `"unknown"`, `"none"`, `"skipped"`,
+       or anything ambiguous — runs the existing logic. Operators
+       debugging a broken install need maximum signal, not silence.
+       This is the single safety rule that distinguishes "gating that
+       helps" from "gating that hides real bugs."
+
+    c. **The `None`-defaults-to-run rule** exists for backwards-compat
+       with direct unit-test callers that build minimal runners without
+       the attribute. In production the fingerprint check must execute
+       before any consumer reads its verdict — enforce this by ordering
+       at the call site (e.g. WD-PKG-001 runs at the top of
+       `run_workday_checks`). Pin both the "simplified → skip" and
+       "attribute absent → run" branches in tests so a future runner
+       refactor that forgets to populate the attribute is loud, not
+       silently masked by every consumer skipping.
+
+    d. **SKIP message split** follows principle 8: `result` reports
+       the fingerprint observation (e.g. `"WD-PKG-001 detected
+       simplified Workday install shape (1 connection ref,
+       OBO/OAuthUser). This check is ISU/RaaS-specific and does not
+       apply on the simplified install."`); `remediation` carries the
+       actionable contingency for an operator who intended the OTHER
+       flavor (e.g. `"If you intended to install the full / legacy
+       SOAP+custom integration, the same 1-ref shape ALSO matches a
+       broken full install where the 2 ISU connection references
+       (Generic User, Context Generic User) failed to deploy. See
+       WD-PKG-001's diagnostic before treating this SKIP as benign."`).
+       When the fingerprint observation is consistent with multiple
+       install intents, the remediation MUST surface that ambiguity —
+       a benign-looking SKIP that hides a broken install is the
+       failure mode this principle exists to prevent.
+
+    e. **SKIP `doc_link`** points to the documentation for the
+       DETECTED install flavor (e.g. on simplified, link to the
+       simplified-setup page), so operators can confirm the gating
+       decision in context.
+
+    f. **Place the gate before any API reads.** The whole point of
+       gating is to avoid the misleading downstream side effects; if
+       the gate runs after `runner.env_url` / `runner.graph` reads,
+       simplified-install tenants might still hit Dataverse/Graph
+       unnecessarily or produce token-related SKIPs that mask the
+       flavor-not-applicable SKIP.
+
+    See `_check_env_vars`, `_check_isu_username_format`, and
+    `_check_workflows` in `checks/workday.py` for the canonical
+    consumer pattern, and the `TestSimplifiedInstallGate` classes in
+    `tests/flightcheck/checks/test_workday_*.py` for the test
+    contract this principle requires.
+
 ---
 
 ## Things you must NOT do
