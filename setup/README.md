@@ -31,6 +31,17 @@ The Codespace comes pre-configured with Python 3.12, pip dependencies, and GitHu
 1. Open the `solutions/ess-maker-skills` folder (File → Open Folder → `/workspaces/Employee-Self-Service-Agent-Developer-Kit/solutions/ess-maker-skills`)
 2. Run `/setup` in Copilot Chat to connect your Dataverse environment
 
+### FlightCheck via Codespaces
+
+The same Codespace environment can be used to run FlightCheck without the full maker kit setup. After creating the Codespace above:
+
+1. Open the `solutions/ess-maker-skills` folder (File → Open Folder → `/workspaces/Employee-Self-Service-Agent-Developer-Kit/solutions/ess-maker-skills`)
+2. Open a terminal and run:
+   ```bash
+   python scripts/flightcheck/cli.py --scope full
+   ```
+3. Follow the prompts to sign in and select your environment
+
 ## FlightCheck-Only Mode
 
 For users who want to run a pre-deployment readiness check on their Power Platform environment — no coding tools or VS Code required. Just run this command in PowerShell:
@@ -72,7 +83,47 @@ python scripts/flightcheck/cli.py --scope full
 | `Install-EssAdk.ps1` | Orchestrator. Installs toolchain via winget, installs pip dependencies, clones the repo, installs VS Code extensions, launches VS Code. Idempotent. With `-FlightCheckOnly`, installs minimal toolchain and runs interactive environment/agent discovery. |
 | `bootstrap.ps1` | One-liner entry point for the full maker kit install. Downloads the installer into `$env:TEMP` and runs it. |
 | `bootstrap-flightcheck.ps1` | One-liner entry point for FlightCheck-only install. Downloads the installer and runs it with `-FlightCheckOnly`. |
-| `.devcontainer/devcontainer.json` | Codespace configuration. Pre-installs Python 3.12, pip dependencies, Copilot extensions, and sets the workspace folder. |
+| `.devcontainer/devcontainer.json` | Codespace configuration. Pre-installs Python 3.12, pip dependencies, and Copilot extensions. |
+
+## Dependencies
+
+The installer provisions the following dependencies. Users do not need to install these manually — the one-shot installer or Codespace handles everything.
+
+### System tools (installed via winget on Windows / Homebrew on macOS)
+
+| Tool | Version | Purpose | FlightCheck only? |
+|------|---------|---------|:-----------------:|
+| Python | 3.12 | Runtime for FlightCheck and maker scripts | ✅ |
+| Git | Latest | Clone the repo, version control | ✅ |
+| GitHub CLI (`gh`) | Latest | Device-code auth flow for private repo clone | ✅ |
+| VS Code | Latest | Editor and Copilot host | ❌ |
+| PowerShell 7 | Latest | Script execution (Windows only) | ❌ |
+
+### Python packages (installed via pip from `scripts/requirements.txt`)
+
+| Package | Purpose |
+|---------|---------|
+| `msal` | Microsoft Authentication Library — Entra ID auth for FlightCheck |
+| `requests` | HTTP client for Dataverse / Graph API calls |
+| `urllib3` | HTTP transport layer (requests dependency, pinned) |
+| `PyYAML` | YAML parsing for topic schema validation |
+| `defusedxml` | Safe XML parsing for Workday SOAP responses (XXE-hardened) |
+
+### VS Code extensions
+
+| Extension | Purpose |
+|-----------|---------|
+| `GitHub.copilot` | GitHub Copilot AI completions |
+| `GitHub.copilot-chat` | Copilot Chat — the primary maker interface |
+| `ms-python.python` | Python language support, linting, debugging |
+
+### Codespaces environment
+
+The devcontainer provides an equivalent pre-built environment:
+- **Base image:** `mcr.microsoft.com/devcontainers/python:3.12` (includes Python, git, common dev tools)
+- **Python packages:** Installed from `scripts/requirements.txt` via `postCreateCommand`
+- **VS Code extensions:** Copilot, Copilot Chat, Python (specified in `customizations.vscode.extensions`)
+- **Additional features:** GitHub CLI (via devcontainer features)
 
 ## How to test it locally (without publishing anything)
 
