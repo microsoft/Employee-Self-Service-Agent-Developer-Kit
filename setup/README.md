@@ -20,7 +20,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 ## GitHub Codespaces (no local install)
 
-> **Free tier:** Personal GitHub accounts include 60 hours/month of Codespaces on a 2-core machine (120 core-hours). Compute is only billed while the Codespace is running — it stops automatically after 30 minutes of inactivity. See [GitHub Codespaces pricing](https://github.com/features/codespaces#pricing) for details.
+> **Free tier available:** GitHub accounts include [120 core-hours/month of free Codespaces usage](https://docs.github.com/en/billing/managing-billing-for-your-products/managing-billing-for-github-codespaces/about-billing-for-github-codespaces#monthly-included-storage-and-core-hours-for-personal-accounts) (60 hours on a 2-core machine). Compute is only billed while the Codespace is running — it stops automatically after 30 minutes of inactivity. For organizational accounts, your admin may need to enable Codespaces — see [managing Codespaces for your organization](https://docs.github.com/en/codespaces/managing-codespaces-for-your-organization).
 
 For users who prefer a cloud-based development environment — no local toolchain or VS Code desktop install required. Just a browser and a GitHub account:
 

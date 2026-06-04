@@ -6,7 +6,7 @@
 /*
 
 # Allow our top-level folders and root files
-!.devcontainer/
+!.devcontainer/devcontainer.json
 !.github/
 !.gitignore
 !.vscode/
