@@ -330,3 +330,138 @@ class TestEdgeCases:
         results = _check_env_vars(runner)
         assert _result_by_id(results, "WD-ENV-001").status == "Passed"
         assert "ISU_MOCK" in _result_by_id(results, "WD-ENV-001").result
+
+
+class TestSimplifiedInstallGate:
+    """Pins the install-flavor gating contract for `_check_env_vars`
+    (see AGENTS.md design principle #11).
+
+    The three env vars (WD-ENV-001/002/003) are ISU/RaaS-only and are
+    not consumed by the simplified Workday install (which uses OBO
+    with the signed-in user's identity). The check gates on the
+    `runner._workday_package_flavor` verdict set by WD-PKG-001:
+
+      * "simplified" → all three checkpoints emit a SKIPPED that
+        explains why the check doesn't apply and points back at
+        WD-PKG-001 for ambiguity (`{ff0df}`-only could also mean a
+        broken full install).
+      * Any other verdict (None / "full" / "partial" / "unknown" /
+        "none" / "skipped") → run the existing logic. The "skip only
+        on a positive INCOMPATIBLE match" rule is the safety
+        valve — operators debugging a broken install need every
+        signal, not silence.
+    """
+
+    def test_simplified_skips_all_three_with_correct_priorities(self) -> None:
+        """`flavor == "simplified"` → exactly 3 SKIPPED rows (one per
+        env var), priorities preserved (WD-ENV-001 = Critical, the
+        other two = High), and zero HTTP calls (no `@responses.activate`
+        is needed because the gate fires before any Dataverse read)."""
+        from flightcheck.checks.workday import _check_env_vars
+
+        runner = _MinimalRunner(env_url="https://dv.example", dv_token="dv-token")
+        runner._workday_package_flavor = "simplified"
+
+        results = _check_env_vars(runner)
+
+        assert {r.checkpoint_id for r in results} == {"WD-ENV-001", "WD-ENV-002", "WD-ENV-003"}
+        for r in results:
+            assert r.status == "Skipped"
+            # The result text must name the fingerprint check by ID so
+            # operators can trace the gating decision.
+            assert "WD-PKG-001" in r.result
+            assert "simplified" in r.result.lower()
+            # The remediation must surface the `{ff0df}`-only ambiguity
+            # so an operator who intended the full install doesn't
+            # dismiss the SKIP as benign.
+            assert "Generic User" in r.remediation
+            assert "Context Generic User" in r.remediation
+            # The doc link points operators to the simplified install
+            # documentation (the detected flavor), per AGENTS.md
+            # principle #11.e.
+            assert "workday-simplified-setup" in r.doc_link
+
+        # WD-ENV-001 is critical; the other two are high.
+        assert _result_by_id(results, "WD-ENV-001").priority == "Critical"
+        assert _result_by_id(results, "WD-ENV-002").priority == "High"
+        assert _result_by_id(results, "WD-ENV-003").priority == "High"
+
+    @responses.activate
+    def test_full_verdict_runs_existing_logic_unchanged(
+        self, runner: _MinimalRunner, fake_dataverse_url: str
+    ) -> None:
+        """`flavor == "full"` → check runs as today. Pinned with a
+        happy-path mock; the WD-ENV-001 row reflects the real
+        underlying state instead of the gate's SKIP message."""
+        from flightcheck.checks.workday import _check_env_vars
+
+        runner._workday_package_flavor = "full"
+        _register_dataverse_state(
+            base_url=fake_dataverse_url,
+            definitions=_ALL_THREE_DEFINITIONS,
+            values=[
+                _ess_env_var_value(_DEF_ISU, "EmployeeContextRequestAccountName", "ISU_MOCK"),
+            ],
+        )
+
+        results = _check_env_vars(runner)
+        assert _result_by_id(results, "WD-ENV-001").status == "Passed"
+        assert "ISU_MOCK" in _result_by_id(results, "WD-ENV-001").result
+
+    @responses.activate
+    @pytest.mark.parametrize("flavor", ["partial", "unknown", "none", "skipped"])
+    def test_ambiguous_verdicts_still_run_existing_logic(
+        self, runner: _MinimalRunner, fake_dataverse_url: str, flavor: str,
+    ) -> None:
+        """Per AGENTS.md principle #11.b: skip ONLY on a positive
+        match for the INCOMPATIBLE flavor. Any other verdict — partial
+        install, unknown shape, no Workday refs at all, or
+        Dataverse-skipped — must run the existing logic so operators
+        debugging a broken install see every available signal.
+
+        Protects against a future careless rewrite like
+        `if flavor != "full": skip` that would pass the simplified/
+        full tests above but silently break these intermediate states.
+        """
+        from flightcheck.checks.workday import _check_env_vars
+
+        runner._workday_package_flavor = flavor
+        _register_dataverse_state(
+            base_url=fake_dataverse_url,
+            definitions=_ALL_THREE_DEFINITIONS,
+            values=[],
+        )
+
+        results = _check_env_vars(runner)
+        # ISU env var unset → critical FAIL (existing behavior); the
+        # gate must NOT suppress this on ambiguous flavors.
+        wd_001 = _result_by_id(results, "WD-ENV-001")
+        assert wd_001.status == "Failed", (
+            f"flavor={flavor!r} must run existing logic and FAIL when ISU "
+            f"env var is unset, got status={wd_001.status}"
+        )
+        assert "must be set manually" in wd_001.result
+
+    @responses.activate
+    def test_attribute_absent_runs_existing_logic_for_backwards_compat(
+        self, runner: _MinimalRunner, fake_dataverse_url: str
+    ) -> None:
+        """Backwards-compat: minimal test runners that don't set
+        `_workday_package_flavor` (the default state of the
+        `_MinimalRunner` dataclass) must continue producing the
+        pre-gating behavior. The `getattr(..., None)` default is what
+        enables this."""
+        from flightcheck.checks.workday import _check_env_vars
+
+        # Verify the precondition — `_MinimalRunner` doesn't set the
+        # gate attribute by default.
+        assert not hasattr(runner, "_workday_package_flavor")
+
+        _register_dataverse_state(
+            base_url=fake_dataverse_url,
+            definitions=_ALL_THREE_DEFINITIONS,
+            values=[],
+        )
+
+        results = _check_env_vars(runner)
+        assert _result_by_id(results, "WD-ENV-001").status == "Failed"
