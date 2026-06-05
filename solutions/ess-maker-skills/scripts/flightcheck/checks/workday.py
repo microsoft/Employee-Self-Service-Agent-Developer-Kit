@@ -31,6 +31,11 @@ from defusedxml import ElementTree as ET
 from defusedxml.common import DefusedXmlException
 
 from ..runner import CheckResult, Status, Priority
+from ._saml_utils import (
+    WORKDAY_SAML_SP_FILTER,
+    WORKDAY_SSO_TUTORIAL_DOC,
+    saml_entity_ids,
+)
 from .connections import check_connector_connections, filter_connections_by_connector, get_connection_status
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
@@ -314,50 +319,10 @@ def run_workday_checks(runner) -> list[CheckResult]:
 # Workday connection from this tenant would silently break the
 # foreign tenant's federation.
 #
-# The two helpers below (_WORKDAY_SAML_SP_FILTER, _saml_entity_ids)
-# mirror the AUTH-006 implementation in
-# checks/authentication.py — duplicated rather than imported to keep
-# this Workday-category check self-contained. Any change to one
-# should be considered for the other.
-
-_WORKDAY_SAML_SP_FILTER = (
-    "startswith(displayName,'Workday') and preferredSingleSignOnMode eq 'saml'"
-)
-
-# Same authoritative reference AUTH-006 uses — the MS Learn Workday
-# SSO tutorial walks the operator through Entra↔Workday SAML setup,
-# including the Workday-side IdP configuration screen this check
-# delegates to.
-_WD_CONN_010_DOC = (
-    "https://learn.microsoft.com/en-us/entra/identity/saas-apps/workday-tutorial"
-)
-
-
-def _saml_entity_ids(service_principal_names: list[str]) -> list[str]:
-    """Filter ``servicePrincipalNames`` to entries that look like a SAML
-    entity ID (URI form), excluding the raw appId GUID.
-
-    Microsoft Graph returns servicePrincipalNames as a mix of the
-    application's appId GUID and one or more identifier URIs (the SAML
-    entity ID for SAML apps). The Workday "Service Provider ID" column
-    only ever shows the URI form, so the GUIDs are noise here.
-
-    Mirrors ``_saml_entity_ids`` in ``checks/authentication.py``
-    (AUTH-006) — kept in sync; see the WD-CONN-010 header comment.
-
-    Source (validatable):
-      Schema: https://graph.microsoft.com/v1.0/$metadata
-              EntityType Name="servicePrincipal" — Property
-              servicePrincipalNames (Collection(Edm.String)).
-      Docs:   https://learn.microsoft.com/graph/api/resources/serviceprincipal?view=graph-rest-1.0
-    """
-    out: list[str] = []
-    for spn in service_principal_names:
-        if not isinstance(spn, str):
-            continue
-        if "://" in spn or "/" in spn or ":" in spn:
-            out.append(spn)
-    return out
+# The SAML SP filter, the helper for extracting SAML entity IDs from
+# servicePrincipalNames, and the MS Learn Workday SSO tutorial URL
+# all live in ``checks/_saml_utils`` so AUTH-006 and WD-CONN-010
+# share one source of truth.
 
 
 def _check_entra_workday_federation_alignment(runner) -> list[CheckResult]:
@@ -376,7 +341,7 @@ def _check_entra_workday_federation_alignment(runner) -> list[CheckResult]:
     cp_id = "WD-CONN-010"
     category = "Workday"
     description = "Workday single-Entra-tenant federation alignment"
-    doc_link = _WD_CONN_010_DOC
+    doc_link = WORKDAY_SSO_TUTORIAL_DOC
 
     graph = getattr(runner, "graph", None)
     if graph is None:
@@ -391,21 +356,27 @@ def _check_entra_workday_federation_alignment(runner) -> list[CheckResult]:
             doc_link=doc_link,
         )]
 
-    # Probe /servicePrincipals first — get_service_principals() wraps
-    # get_all() which swallows 401/403 into an empty list. Without
-    # this probe a missing Application.Read.All consent would
-    # masquerade as "no Workday SAML app exists" and emit a falsely
-    # reassuring NOT_CONFIGURED.
-    sp_probe = graph.get("/servicePrincipals", params={"$top": "1"})
-    probe_status = sp_probe.get("_status") if isinstance(sp_probe, dict) else None
-    if probe_status in (401, 403):
+    # Filtered /servicePrincipals call with raise_on_permission_error=True
+    # so a missing Application.Read.All consent surfaces as
+    # PermissionError → WARNING. Without this kwarg, get_all() (which
+    # get_service_principals wraps) silently swallows 401/403 into an
+    # empty list — which would masquerade as "no Workday SAML app
+    # exists" and emit a falsely reassuring NOT_CONFIGURED. Same
+    # plumbing AUTH-006 uses.
+    try:
+        workday_sps = graph.get_service_principals(
+            filter_expr=WORKDAY_SAML_SP_FILTER,
+            raise_on_permission_error=True,
+        )
+    except PermissionError as e:
         return [CheckResult(
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=description,
             result=(
-                "Cannot read Entra service principals — Graph returned "
-                f"HTTP {probe_status} on /servicePrincipals."
+                f"Cannot read Entra service principals: {e} "
+                "(HTTP 403 typically means Application.Read.All "
+                "is not consented)."
             ),
             remediation=(
                 "Grant Application.Read.All (or Directory.Read.All) "
@@ -417,11 +388,6 @@ def _check_entra_workday_federation_alignment(runner) -> list[CheckResult]:
             ),
             doc_link=doc_link,
         )]
-
-    try:
-        workday_sps = graph.get_service_principals(
-            filter_expr=_WORKDAY_SAML_SP_FILTER,
-        )
     except Exception as e:
         return [CheckResult(
             checkpoint_id=cp_id, category=category,
@@ -457,7 +423,7 @@ def _check_entra_workday_federation_alignment(runner) -> list[CheckResult]:
             result=(
                 "No federated Workday SAML enterprise app was found in "
                 f"this Entra tenant ({current_tenant_id}) using the "
-                f"filter \"{_WORKDAY_SAML_SP_FILTER}\". The kit cannot "
+                f"filter \"{WORKDAY_SAML_SP_FILTER}\". The kit cannot "
                 "identify a local Workday SAML app to surface for "
                 "manual Workday-side verification."
             ),
@@ -498,7 +464,7 @@ def _check_entra_workday_federation_alignment(runner) -> list[CheckResult]:
     for sp in workday_sps:
         sp_name = sp.get("displayName", "(unknown)")
         app_id = sp.get("appId", "?")
-        entity_ids = _saml_entity_ids(sp.get("servicePrincipalNames") or [])
+        entity_ids = saml_entity_ids(sp.get("servicePrincipalNames") or [])
         entity_ids_str = ", ".join(entity_ids) if entity_ids else "(none surfaced)"
         app_entries.append(
             f"  - {sp_name} (appId={app_id}) — entity IDs: {entity_ids_str}"
@@ -514,7 +480,7 @@ def _check_entra_workday_federation_alignment(runner) -> list[CheckResult]:
         f"Current Entra tenant: {current_tenant_id}\n"
         f"\n"
         f"Found {intro_count} in this Entra tenant (filter: "
-        f"\"{_WORKDAY_SAML_SP_FILTER}\"). The kit cannot read "
+        f"\"{WORKDAY_SAML_SP_FILTER}\"). The kit cannot read "
         "Workday's tenant security configuration to determine which "
         "of these is the active IdP on the Workday side, or whether "
         "the enabled Workday IdP belongs to a different Entra tenant.\n"

@@ -116,12 +116,9 @@ class TestNoLocalWorkdayApp:
         assert "SAML Identity Providers" in r.remediation
         # And must point at the issuer URL as the tenant-ID source —
         # NOT the entity ID / appId (rubber-duck blocking issue #2).
-        # `re.search` (not `in`) intentionally bypasses CodeQL's
-        # `py/incomplete-url-substring-sanitization` rule, which
-        # heuristically AST-matches `<url-literal> in <var>` and
-        # variants regardless of context. The rule is misapplied
-        # here: `r.remediation` is multi-line human-readable text,
-        # not a URL undergoing host-allowlist validation.
+        # CodeQL's `py/incomplete-url-substring-sanitization` rule is
+        # globally suppressed for this URL-shaped assertion pattern
+        # (see `.github/codeql/codeql-config.yml` for the rationale).
         assert re.search(r"https://sts\.windows\.net/", r.remediation)
         assert "Issuer" in r.remediation or "issuer" in r.remediation
 
@@ -150,9 +147,7 @@ class TestManualVerificationRequired:
                 "http://www.workday.com/contoso_prod",
             ],
         )
-        # Probe call (no filter, $top=1) succeeds.
-        responses.add(**g.list_service_principals(service_principals=[sp]))
-        # Filtered list call succeeds.
+        # Filtered /servicePrincipals call returns one Workday SP.
         responses.add(**g.list_service_principals(service_principals=[sp]))
 
         results = _check_entra_workday_federation_alignment(runner)
@@ -188,9 +183,8 @@ class TestManualVerificationRequired:
         # Rubber-duck blocking issue #2: the tenant-ID comparison
         # MUST point at the SAML issuer URL (which actually embeds
         # the Entra tenant ID), NOT the entity ID / appId / cert
-        # subject (which do not). See note on `re.search` vs `in`
-        # in `TestNoLocalWorkdayApp` above (CodeQL false-positive
-        # bypass).
+        # subject (which do not). See codeql-config.yml for why the
+        # URL-shaped substring check below doesn't trip CodeQL.
         assert re.search(r"https://sts\.windows\.net/", r.remediation)
         assert "Issuer" in r.remediation or "federation metadata" in r.remediation
         # And the current tenant ID must appear in the remediation
@@ -241,10 +235,7 @@ class TestMultipleWorkdayApps:
                 "http://www.workday.com/contoso_dpt6",
             ],
         )
-        # Probe call (no filter) + filtered list call.
-        responses.add(**g.list_service_principals(
-            service_principals=[sp_prod, sp_impl],
-        ))
+        # Filtered /servicePrincipals call returns both Workday SPs.
         responses.add(**g.list_service_principals(
             service_principals=[sp_prod, sp_impl],
         ))
@@ -272,9 +263,10 @@ class TestMultipleWorkdayApps:
 class TestPermissionGaps:
     """Missing Application.Read.All consent must surface as WARNING
     with a remediation pointing at the specific permission needed —
-    never as a silent NOT_CONFIGURED. AUTH-006 introduced this probe
-    pattern (PR #113 review); WD-CONN-010 inherits the same trap and
-    must mirror the same fix.
+    never as a silent NOT_CONFIGURED. AUTH-006 introduced this
+    raise-on-permission-error pattern (originally as a probe; PR #125
+    consolidated it into a kwarg on `get_service_principals`);
+    WD-CONN-010 inherits the same trap and must mirror the same fix.
     """
 
     @responses.activate
@@ -285,7 +277,9 @@ class TestPermissionGaps:
             _check_entra_workday_federation_alignment,
         )
 
-        # The probe call (/servicePrincipals?$top=1) returns 403.
+        # /servicePrincipals returns 403 on the filtered list call;
+        # get_service_principals(raise_on_permission_error=True) turns
+        # it into PermissionError, which the check catches → WARNING.
         responses.add(**g.insufficient_permissions(path="/servicePrincipals"))
 
         results = _check_entra_workday_federation_alignment(runner)
@@ -293,7 +287,7 @@ class TestPermissionGaps:
         assert r.status == "Warning", (
             f"Expected Warning, got {r.status} — confidently-wrong "
             "NOT_CONFIGURED on 403 is the silent-failure mode the "
-            "AUTH-006 probe pattern exists to prevent."
+            "AUTH-006 raise-on-permission-error pattern prevents."
         )
         assert "Application.Read.All" in r.remediation
         assert "403" in r.result
