@@ -697,8 +697,98 @@ def _check_package_connection_completeness(runner) -> list[CheckResult]:
     )]
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# Install-flavor gating helper (see AGENTS.md design principle #11)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Several Workday checks below are only meaningful on the full / legacy
+# install (the one with the 2 ISU service-account refs + RaaS report
+# env vars). On the simplified install, OBO uses the signed-in user's
+# identity — no ISU, no RaaS — so these checks would false-FAIL with
+# remediations pointing operators at the wrong setup path.
+#
+# We gate them on the WD-PKG-001 verdict cached on
+# `runner._workday_package_flavor`. To avoid suppressing real bugs:
+#
+#   * We skip ONLY on a positive `"simplified"` verdict. Any other
+#     verdict (None, "full", "partial", "unknown", "none", "skipped")
+#     runs the existing logic — operators debugging a broken install
+#     need maximum signal, not silence.
+#   * Tests that build minimal runners without setting the attribute
+#     get the default-None branch and observe the pre-gating behavior
+#     (backwards-compatible).
+#   * The SKIP remediation must acknowledge the `{ff0df}`-only
+#     ambiguity: the same 1-ref shape WD-PKG-001 classifies as
+#     "simplified" ALSO matches a broken full install where the 2 ISU
+#     refs failed to deploy. An operator who intended the full install
+#     needs to see this from the SKIP, not just from WD-PKG-001's
+#     standalone diagnostic.
+
+def _simplified_install_skip(
+    *, checkpoint_id: str, description: str,
+    priority: str = Priority.HIGH.value,
+    category: str = "Workday",
+) -> CheckResult:
+    """Build a SKIPPED CheckResult for an ISU/RaaS check gated on
+    `runner._workday_package_flavor == "simplified"`.
+
+    `category` defaults to "Workday" but can be overridden for the
+    workflow-test check, which uses the distinct "Workday Workflows"
+    category in the report so SKIP / pass rows stay grouped with
+    other WD-WF-* output.
+
+    The message split follows the AGENTS.md `result` / `remediation`
+    contract (principle #8): `result` reports the observation
+    (WD-PKG-001's verdict); `remediation` carries the actionable
+    contingency for an operator who intended the OTHER install flavor.
+    """
+    return CheckResult(
+        checkpoint_id=checkpoint_id,
+        category=category,
+        priority=priority,
+        status=Status.SKIPPED.value,
+        description=description,
+        result=(
+            "WD-PKG-001 detected the simplified Workday install shape "
+            "(1 connection reference, OBO/OAuthUser). This check is "
+            "ISU/RaaS-specific and does not apply on the simplified "
+            "install — OBO uses the signed-in user's identity."
+        ),
+        remediation=(
+            "If you intended to install the full / legacy SOAP+custom "
+            "integration, the same 1-ref shape also matches a broken "
+            "full install where the 2 ISU connection references "
+            "(Generic User, Context Generic User) failed to deploy. "
+            "See WD-PKG-001's diagnostic to confirm your install "
+            "intent before treating this SKIP as benign."
+        ),
+        doc_link=f"{DOC_BASE}/workday-simplified-setup",
+    )
+
+
 def _check_env_vars(runner) -> list[CheckResult]:
-    """Validate Workday environment variables in Dataverse."""
+    """Validate Workday environment variables in Dataverse.
+
+    Gated on `runner._workday_package_flavor`: skipped on
+    `"simplified"` because the three env vars (ISU account name,
+    RaaS report name, RaaS report instance) are only consumed by the
+    full / legacy install's RaaS code path. See
+    `_simplified_install_skip` for the SKIP message contract.
+    """
+    flavor = getattr(runner, "_workday_package_flavor", None)
+    if flavor == "simplified":
+        return [
+            _simplified_install_skip(
+                checkpoint_id=meta["id"],
+                description=meta["description"],
+                priority=(
+                    Priority.CRITICAL.value if meta["critical"]
+                    else Priority.HIGH.value
+                ),
+            )
+            for meta in ENV_VARS.values()
+        ]
+
     results = []
     env_url = runner.env_url
     dv_token = runner.dv_token
@@ -813,7 +903,19 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
     surface when those inputs are formalised; this checkpoint covers
     the static format-alignment gap that can be detected without ISU
     credentials.
+
+    Gated on `runner._workday_package_flavor`: skipped on
+    `"simplified"` because the simplified install has no ISU service
+    account (OBO uses the signed-in user's identity directly). See
+    `_simplified_install_skip` for the SKIP message contract.
     """
+    flavor = getattr(runner, "_workday_package_flavor", None)
+    if flavor == "simplified":
+        return [_simplified_install_skip(
+            checkpoint_id="WD-ENV-101",
+            description="ISU username vs Entra UPN format alignment",
+        )]
+
     results: list[CheckResult] = []
     env_url = runner.env_url
     dv_token = runner.dv_token
@@ -2228,7 +2330,25 @@ def _check_workflows(runner) -> list[CheckResult]:
       3. .local/config.json -> connections.Workday (tenant, base URL)
       4. Interactive prompt (username + password only - never cached to disk)
       5. .local/config.json -> workdayTestEmployeeId (cached after first prompt)
+
+    Gated on `runner._workday_package_flavor`: skipped on
+    `"simplified"`. The 17 workflows exercise Workday SOAP via ISU
+    credentials, which the simplified install does not use (OBO via
+    the signed-in user replaces the ISU code path). Without this gate
+    the natural credential-missing skip path emits
+    ``"Workday ISU credentials not provided"`` and asks the operator
+    to provide ISU creds — actively misleading guidance on a tenant
+    that intentionally has no ISU. See `_simplified_install_skip`
+    for the SKIP message contract.
     """
+    flavor = getattr(runner, "_workday_package_flavor", None)
+    if flavor == "simplified":
+        return [_simplified_install_skip(
+            checkpoint_id="WD-WF-000",
+            description="Workday SOAP workflow tests",
+            category="Workday Workflows",
+        )]
+
     results = []
 
     # --- Resolve non-sensitive metadata first (URL, tenant, employee). ---

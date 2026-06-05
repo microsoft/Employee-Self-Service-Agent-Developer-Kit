@@ -57,7 +57,13 @@ foreach ($f in $files) {
 }
 
 $installer = Join-Path $tempDir 'Install-EssAdk.ps1'
+
+# Run the installer in-memory (as a script block) so execution policy never
+# applies — the script content is never "executed from disk".
+$scriptContent = Get-Content $installer -Raw
+$scriptBlock = [ScriptBlock]::Create($scriptContent)
+
 $installerArgs = @{ Branch = $Branch }
 if ($InstallRoot) { $installerArgs.InstallRoot = $InstallRoot }
 
-& $installer @installerArgs
+& $scriptBlock @installerArgs

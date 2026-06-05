@@ -45,6 +45,21 @@ via Dataverse. Test cases are stored as `botcomponent` records with
    - Topics related to **emotional intelligence / empathy** → generate EQTopic tests
    - Topics related to **clarification / ambiguity** → generate AmbiguousTopic tests
 
+6. **Group user-facing topics by area.** Look at the file names of all
+   user-facing topic files and find **common words or prefixes** shared across
+   multiple files (e.g., all files starting with `Workday`, or containing
+   `ServiceNow`, `SuccessFactors`, etc.). Use those shared words as the area
+   labels — you are not limited to a fixed list; derive the areas from whatever
+   is actually in the agent.
+
+   - A topic belongs to the area whose shared word appears in its file name.
+   - If a topic's file name shares no word with any other topic, place it in
+     **General / Other**.
+   - If in doubt, check the `BeginDialog` system topic target inside the file
+     as a tiebreaker.
+
+   Keep the grouped list in memory — it will be shown verbatim in Step 2b.
+
 ---
 
 ## Step 2: Detect Existing Sets and Ask User About Scope
@@ -71,11 +86,16 @@ AND contains at least one `.mcs.yml` file. Mark it as **existing** or **missing*
 
 **If ALL categories are missing** (fresh agent, no eval sets yet):
 
-> I found **{N}** user-facing topics in your agent. With positive, boundary,
-> and negative cases per topic, this will generate roughly **{N×3} to {N×5}**
-> test cases for TopicTriggering alone (plus other categories).
+> I found **{N}** user-facing topics in your agent, grouped by area:
 >
-> Want to generate for **all topics**, or pick a **subset** to start with?
+> {Render one line per area derived from the agent's topic file names —
+> e.g. **{AreaLabel} ({n}):** Topic Display Name, Topic Display Name, ...
+> Omit areas with 0 topics. Do NOT hardcode ServiceNow/Workday/SuccessFactors
+> — use whatever common words actually appear in this agent's file names.}
+>
+> With positive, boundary, and negative cases per topic, this will generate
+> roughly **{N×3} to {N×5}** test cases for Topic Triggering alone (plus other
+> categories).
 >
 > | Category | Description | Tests based on |
 > |----------|-------------|---------------|
@@ -86,12 +106,20 @@ AND contains at least one `.mcs.yml` file. Mark it as **existing** or **missing*
 > | **Emotional Intelligence** | Does the agent respond with empathy? | Emotional tone scenarios |
 > | **Integration Data** | Does the agent return correct data? | Topics calling external systems |
 >
-> Would you like a **full evaluation** (all categories), or would you prefer to
-> pick specific categories?
+> Would you like a **full evaluation** (all categories), a **specific area**
+> (e.g., just the {first area label from the list above} topics), or a **specific
+> category** (e.g., just Topic Triggering)?
 
 **If SOME categories exist and SOME are missing:**
 
-> I found **{N}** user-facing topics and **{E}** existing eval sets in your agent.
+> I found **{N}** user-facing topics in your agent, grouped by area:
+>
+> {Render one line per area derived from the agent's topic file names —
+> e.g. **{AreaLabel} ({n}):** Topic Display Name, Topic Display Name, ...
+> Omit areas with 0 topics. Do NOT hardcode ServiceNow/Workday/SuccessFactors
+> — use whatever common words actually appear in this agent's file names.}
+>
+> Here's what eval coverage looks like so far:
 >
 > | Category | Status |
 > |----------|--------|
@@ -104,7 +132,8 @@ AND contains at least one `.mcs.yml` file. Mark it as **existing** or **missing*
 > | Multi-Turn | {✅ exists (X tests) / ❌ missing} |
 >
 > I can generate the **{M} missing** category/categories ({list missing names}),
-> or regenerate everything from scratch. What would you prefer?
+> generate for a **specific area** (e.g., just the {first area label from the list above} topics), or regenerate
+> everything from scratch. What would you prefer?
 
 For the test count, count the number of child `.mcs.yml` files in each existing
 category folder (excluding the parent EvaluationSet file which shares the folder name).
@@ -120,6 +149,7 @@ category folder (excluding the parent EvaluationSet file which shares the folder
 Based on the user's answer:
 - **"Generate missing"** / **"just the missing ones"**: Generate only the missing categories
 - **"Full evaluation"** / **"regenerate everything"**: Delete existing sets first (with confirmation), then generate all categories
+- **Specific area** (e.g., "just ServiceNow ITSM" or "just Workday"): Generate TopicTriggering tests for only the topics in that area. If topics in that area call external systems (workflows or shared system topics), also offer to generate IntegrationData tests for that area. Other categories (RAI, SensitiveTopic, etc.) still apply to all topics as usual.
 - **Specific categories**: Generate only what the user picked (if a named category already exists, confirm overwrite)
 - **Specific topics**: If the user names specific topics, generate TopicTriggering tests for only those topics
 
