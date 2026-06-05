@@ -291,7 +291,9 @@ class TestPermissionGaps:
         """
         from flightcheck.checks.authentication import _run_saml_nameid_check
 
-        # The probe call goes to /servicePrincipals?$top=1.
+        # /servicePrincipals returns 403 on the filtered list call;
+        # get_service_principals(raise_on_permission_error=True) turns
+        # it into PermissionError which the check catches → WARNING.
         responses.add(**g.insufficient_permissions(path="/servicePrincipals"))
 
         results = _run_saml_nameid_check(runner)
@@ -302,8 +304,8 @@ class TestPermissionGaps:
         )
         assert "Application.Read.All" in r.remediation
         assert "403" in r.result
-        # And the check MUST NOT proceed to fetch /servicePrincipals
-        # with a filter (responses.assert_all_requests_are_fired
+        # And the check MUST NOT proceed to fetch the per-app
+        # claimsMappingPolicies (responses.assert_all_requests_are_fired
         # defaults true; if we wanted to assert non-firing we'd need
         # passthru). Behavioral verification: only one result, and
         # the result wording does not include a "Detected apps:" list.
@@ -320,11 +322,7 @@ class TestPermissionGaps:
         """
         from flightcheck.checks.authentication import _run_saml_nameid_check
 
-        # Probe call (/servicePrincipals?$top=1) succeeds.
-        responses.add(**g.list_service_principals(
-            service_principals=[g.service_principal()],
-        ))
-        # Filtered call (/servicePrincipals?$filter=...) also succeeds.
+        # Filtered /servicePrincipals call returns one Workday SP.
         responses.add(**g.list_service_principals(
             service_principals=[g.service_principal(sp_id="sp-x")],
         ))

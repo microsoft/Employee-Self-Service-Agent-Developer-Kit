@@ -222,9 +222,10 @@ class GraphClient:
         filter_expr: str = "",
         *,
         select: str | None = None,
+        raise_on_permission_error: bool = False,
     ) -> list:
         """List service principals (enterprise apps) with optional filter.
-
+        
         ``select`` controls the OData ``$select`` projection. Graph
         ``GET /servicePrincipals`` listing responses OMIT several
         navigation-adjacent properties unless explicitly requested,
@@ -235,14 +236,24 @@ class GraphClient:
         empty for many tenants, which would make WD-CONN-102 falsely
         report "no signing certificate found" when the cert exists
         but wasn't projected.
-        Docs: https://learn.microsoft.com/graph/api/serviceprincipal-list#optional-query-parameters
+
+        Default behavior swallows 401/403 into an empty list (matches
+        ``get_all()``'s default). Pass ``raise_on_permission_error=True``
+        to convert 401/403 into a ``PermissionError`` instead — needed
+        when the caller has to distinguish "no SAML apps exist" from
+        "missing Application.Read.All consent" (e.g. AUTH-006,
+        WD-CONN-010). Mirrors the kwarg on ``get_app_role_assignments``.
         """
         params = {}
         if filter_expr:
             params["$filter"] = filter_expr
         if select:
             params["$select"] = select
-        return self.get_all("/servicePrincipals", params=params)
+        return self.get_all(
+            "/servicePrincipals",
+            params=params,
+            raise_on_permission_error=raise_on_permission_error,
+        )
 
     # Property list WD-CONN-102 reads off each Workday SAML SP. Pinned
     # as a module-level constant so the test for the request URL can
