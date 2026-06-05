@@ -217,12 +217,29 @@ class GraphClient:
         data = self.get("/users", params={"$top": str(top)})
         return data.get("value", [])
 
-    def get_service_principals(self, filter_expr: str = "") -> list:
-        """List service principals (enterprise apps) with optional filter."""
+    def get_service_principals(
+        self,
+        filter_expr: str = "",
+        *,
+        raise_on_permission_error: bool = False,
+    ) -> list:
+        """List service principals (enterprise apps) with optional filter.
+
+        Default behavior swallows 401/403 into an empty list (matches
+        ``get_all()``'s default). Pass ``raise_on_permission_error=True``
+        to convert 401/403 into a ``PermissionError`` instead — needed
+        when the caller has to distinguish "no SAML apps exist" from
+        "missing Application.Read.All consent" (e.g. AUTH-006,
+        WD-CONN-010). Mirrors the kwarg on ``get_app_role_assignments``.
+        """
         params = {}
         if filter_expr:
             params["$filter"] = filter_expr
-        return self.get_all("/servicePrincipals", params=params)
+        return self.get_all(
+            "/servicePrincipals",
+            params=params,
+            raise_on_permission_error=raise_on_permission_error,
+        )
 
     # ----- Entra Enterprise App user/group assignment (AUTH-005) -----
 
