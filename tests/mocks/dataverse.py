@@ -295,6 +295,33 @@ def whoami(*, base_url: str, **kwargs: Any) -> dict[str, Any]:
     }
 
 
+def usersettings(
+    *,
+    base_url: str,
+    user_id: str = MOCK_USER_ID,
+    preferred_solution_id: str | None = None,
+) -> dict[str, Any]:
+    """Mock ``/usersettingscollection({UserId})?$select=_preferredsolution_value``.
+
+    Single-record GET (not wrapped in an OData collection envelope, unlike
+    queries built with ``query()``). Response shape per
+    https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/usersettings
+    """
+    url = _api(
+        base_url,
+        f"usersettingscollection({user_id})?$select=_preferredsolution_value",
+    )
+    body: dict[str, Any] = {
+        "@odata.context": _api(
+            base_url,
+            "$metadata#usersettingscollection(_preferredsolution_value)/$entity",
+        ),
+        "systemuserid": user_id,
+        "_preferredsolution_value": preferred_solution_id,
+    }
+    return {"method": "GET", "url": url, "json": body, "status": 200}
+
+
 def discover_tenant_challenge(
     *,
     base_url: str,

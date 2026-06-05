@@ -7,9 +7,11 @@ ESS FlightCheck — Environment Configuration Validation (ENV-xxx)
 Checks Power Platform environment, Dataverse, DLP policies, and related config.
 """
 
+import requests
+
 from ..runner import CheckResult, Status, Priority
 from .connections import get_connection_status
-from auth import query_all  # scripts/auth.py, on path via cli.py
+from auth import query_all, dataverse_get, AuthExpiredError  # scripts/auth.py, on path via cli.py
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
 
@@ -129,6 +131,9 @@ def run_environment_checks(runner) -> list[CheckResult]:
             result=f"Unable to check: {e}",
             remediation="Requires Power Platform Admin role.",
         ))
+
+    # ---- ENV-009: Maker has preferred customization solution selected ----
+    results.extend(_check_preferred_solution(runner))
 
     return results
 
@@ -351,3 +356,228 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
         ))
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# ENV-009: Maker has preferred customization solution selected
+#
+# Background: ESS install guidance (src/reference/ess-docs/deployment/install.md,
+# lines 19-45) tells operators to create a customer-owned unmanaged solution and
+# select it as their *preferred solution* so that new Copilot Studio / Maker
+# portal customizations land in that solution instead of in the Default
+# Solution. The preferred-solution selection is stored per user on the
+# `usersettings` table, not per environment, so this check validates the
+# *current FlightCheck caller's* selection - it is honest about that scope in
+# the description and result text.
+#
+# Signals (all GET, no writes):
+#  1. Eligible unmanaged solutions
+#     GET /solutions?$filter=ismanaged eq false and isvisible eq true
+#         and uniquename ne 'Default' and uniquename ne 'Active'
+#         and solutiontype eq 0 and _parentsolutionid_value eq null
+#  2. Caller identity
+#     GET /WhoAmI()
+#     -> https://learn.microsoft.com/power-apps/developer/data-platform/webapi/use-web-api-functions
+#  3. Caller's preferred solution
+#     GET /usersettingscollection({UserId})?$select=_preferredsolution_value
+#     -> https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/usersettings
+#
+# Verdict map (always exactly one CheckResult emitted):
+#   * SKIPPED  - env_url or dv_token missing.
+#   * FAILED   - signal (1) returns 0 candidate solutions.
+#   * WARNING  - candidates exist but caller's selected preferred solution
+#                does not match any candidate. Framed as a hardening
+#                recommendation per AGENTS.md principle 9 (not a functional
+#                blocker).
+#   * PASSED   - candidates exist and caller's selected preferred solution is
+#                one of them.
+# ---------------------------------------------------------------------------
+
+_PREFSOL_DOC_LINK = f"{DOC_BASE}/install#set-up-a-preferred-solution"
+_PREFSOL_DESCRIPTION = "Maker has preferred customization solution selected"
+
+# OData filter that excludes Microsoft-installed and system solutions, leaving
+# only customer-created unmanaged top-level solutions. Verified against a live
+# tenant - it narrowed 3 raw matches down to 1 correct ESSCustomization row.
+# Notes:
+#  * `solutiontype eq 0` excludes patch/upgrade solutions.
+#  * `_parentsolutionid_value eq null` further excludes any nested children.
+#  * `_publisherid_value ne null` is intentionally NOT used - null comparisons
+#    on lookup columns are inconsistently supported across Dataverse versions.
+_ELIGIBLE_SOLUTION_FILTER = (
+    "ismanaged eq false and isvisible eq true "
+    "and uniquename ne 'Default' and uniquename ne 'Active' "
+    "and solutiontype eq 0 and _parentsolutionid_value eq null"
+)
+
+
+def _check_preferred_solution(runner) -> list[CheckResult]:
+    """ENV-009: Validate the maker has selected a preferred customization solution.
+
+    Always emits exactly one CheckResult (per principle 7 - bucket multi-resource
+    findings). Never raises - all errors are caught and turned into WARNING
+    results so a transient Dataverse failure does not abort the whole flightcheck
+    run.
+    """
+    env_url = getattr(runner, "env_url", None)
+    token = getattr(runner, "dv_token", None)
+
+    if not env_url or not token:
+        return [CheckResult(
+            checkpoint_id="ENV-009", category="Environment",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=_PREFSOL_DESCRIPTION,
+            result="Dataverse URL or access token not available in this run.",
+            doc_link=_PREFSOL_DOC_LINK,
+        )]
+
+    try:
+        # Eligible unmanaged customer solutions.
+        solutions = query_all(
+            env_url, token,
+            "solutions",
+            "solutionid,uniquename,friendlyname",
+            _ELIGIBLE_SOLUTION_FILTER,
+        )
+        if not solutions:
+            return [CheckResult(
+                checkpoint_id="ENV-009", category="Environment",
+                priority=Priority.HIGH.value, status=Status.FAILED.value,
+                description=_PREFSOL_DESCRIPTION,
+                result=(
+                    "No customer-created unmanaged solutions found in this "
+                    "environment. Customizations made via the kit have nowhere "
+                    "to land except the Default Solution, which is not "
+                    "exportable as an ALM artifact."
+                ),
+                remediation=(
+                    "Create an unmanaged solution in the Power Platform Maker "
+                    "portal (Solutions -> + New solution) using a custom "
+                    "publisher, then select it as your preferred solution. See "
+                    "the ESS install guide for the recommended naming and "
+                    "publisher conventions."
+                ),
+                doc_link=_PREFSOL_DOC_LINK,
+            )]
+
+        # Signal 2 + 3: caller identity, then caller's preferred solution lookup.
+        whoami = dataverse_get(env_url, token, "WhoAmI()")
+        user_id = whoami.get("UserId")
+        if not user_id:
+            return [CheckResult(
+                checkpoint_id="ENV-009", category="Environment",
+                priority=Priority.HIGH.value, status=Status.WARNING.value,
+                description=_PREFSOL_DESCRIPTION,
+                result=(
+                    "WhoAmI() returned a response without a UserId; cannot "
+                    "determine the current maker's preferred-solution selection."
+                ),
+                remediation=(
+                    "Re-authenticate to Dataverse and re-run FlightCheck so "
+                    "the active session identity can be determined."
+                ),
+                doc_link=_PREFSOL_DOC_LINK,
+            )]
+
+        try:
+            user_settings = dataverse_get(
+                env_url, token,
+                f"usersettingscollection({user_id})",
+                params={"$select": "_preferredsolution_value"},
+            )
+        except requests.HTTPError as e:
+            # 404 = caller has no usersettings record yet. This is deterministic
+            # and fixable (visit the maker portal once to auto-provision); call
+            # it out instead of letting the generic Exception branch swallow it.
+            if getattr(e.response, "status_code", None) == 404:
+                return [CheckResult(
+                    checkpoint_id="ENV-009", category="Environment",
+                    priority=Priority.HIGH.value, status=Status.WARNING.value,
+                    description=_PREFSOL_DESCRIPTION,
+                    result=(
+                        f"Current maker (UserId={user_id}) has no usersettings "
+                        f"record in this environment yet, so no preferred "
+                        f"solution can be selected."
+                    ),
+                    remediation=(
+                        "Open https://make.powerapps.com once with this "
+                        "account so Dataverse provisions a usersettings "
+                        "record, then re-run."
+                    ),
+                    doc_link=_PREFSOL_DOC_LINK,
+                )]
+            raise
+        selected_solution_id = user_settings.get("_preferredsolution_value")
+
+        eligible_names = sorted(s.get("uniquename", "<unknown>") for s in solutions)
+        eligible_summary = ", ".join(eligible_names)
+
+        if selected_solution_id:
+            match = next(
+                (s for s in solutions if s.get("solutionid") == selected_solution_id),
+                None,
+            )
+            if match:
+                return [CheckResult(
+                    checkpoint_id="ENV-009", category="Environment",
+                    priority=Priority.HIGH.value, status=Status.PASSED.value,
+                    description=_PREFSOL_DESCRIPTION,
+                    result=(
+                        f"Current maker has selected '{match.get('uniquename')}' "
+                        f"as their preferred solution; it is one of "
+                        f"{len(solutions)} eligible unmanaged solution(s) in "
+                        f"this environment ({eligible_summary})."
+                    ),
+                    doc_link=_PREFSOL_DOC_LINK,
+                )]
+
+        # Either no preferred solution selected, or the selection points to a
+        # solution outside the eligible set (e.g. a managed solution or
+        # Default). Both collapse into the same hardening warning - the action
+        # is identical.
+        return [CheckResult(
+            checkpoint_id="ENV-009", category="Environment",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=_PREFSOL_DESCRIPTION,
+            result=(
+                f"The current maker account has not selected any of the "
+                f"{len(solutions)} eligible unmanaged solution(s) "
+                f"({eligible_summary}) as their preferred solution."
+            ),
+            remediation=(
+                "Hardening recommendation (not a functional blocker). "
+                "Selecting a preferred solution ensures future Copilot Studio "
+                "/ Maker portal customizations consistently land in a "
+                "customer-owned, exportable solution rather than the Default "
+                "Solution (which can't be exported between environments). "
+                "Open the Power Platform Maker portal -> Solutions, select "
+                "the intended unmanaged solution, and choose 'Set preferred "
+                "solution'."
+            ),
+            doc_link=_PREFSOL_DOC_LINK,
+        )]
+
+    except AuthExpiredError as e:
+        return [CheckResult(
+            checkpoint_id="ENV-009", category="Environment",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=_PREFSOL_DESCRIPTION,
+            result=str(e),
+            remediation="Re-run FlightCheck to refresh the access token.",
+            doc_link=_PREFSOL_DOC_LINK,
+        )]
+    except Exception as e:
+        # Per principle 3 (fail loudly): surface unexpected Dataverse failures
+        # as WARNING rather than silently passing.
+        return [CheckResult(
+            checkpoint_id="ENV-009", category="Environment",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=_PREFSOL_DESCRIPTION,
+            result=f"Unable to validate preferred solution: {type(e).__name__}: {e}",
+            remediation=(
+                "Inspect the error above; common causes are insufficient "
+                "Dataverse permissions on the solution / usersettings tables "
+                "or a transient platform error."
+            ),
+            doc_link=_PREFSOL_DOC_LINK,
+        )]

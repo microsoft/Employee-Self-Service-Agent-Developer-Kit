@@ -217,6 +217,48 @@ def query_all(env_url, token, entity_set, select, filter_expr=None):
     return all_records
 
 
+def dataverse_get(env_url, token, path, params=None):
+    """GET a Dataverse Web API endpoint that is not a paged table query.
+
+    Use this for function calls (e.g. ``WhoAmI()``) and single-record reads
+    (e.g. ``usersettingscollection({systemuserid})``) where ``query_all`` does
+    not fit — ``query_all`` always appends ``$select`` and follows
+    ``@odata.nextLink``.
+
+    Parameters
+    ----------
+    env_url : str
+        Base environment URL (e.g. ``https://contoso.crm.dynamics.com``).
+    token : str
+        Dataverse bearer token.
+    path : str
+        Path relative to ``/api/data/v9.2/`` (no leading slash). Example:
+        ``"WhoAmI()"`` or ``"usersettingscollection(11111111-...)``.
+    params : dict | None
+        Optional querystring parameters (e.g. ``{"$select": "_preferredsolution_value"}``).
+
+    Returns
+    -------
+    dict
+        Parsed JSON response body.
+
+    Raises
+    ------
+    AuthExpiredError
+        If the response is 401.
+    requests.HTTPError
+        For other non-2xx responses (raised via ``raise_for_status``).
+    """
+    _validate_https_url(env_url)
+    headers = {**HEADERS_BASE, "Authorization": f"Bearer {token}"}
+    url = f"{env_url}/api/data/v9.2/{path.lstrip('/')}"
+    resp = _SESSION.get(url, headers=headers, params=params, timeout=60, verify=True)
+    if resp.status_code == 401:
+        raise AuthExpiredError("Dataverse returned 401 (token expired or invalid)")
+    resp.raise_for_status()
+    return resp.json()
+
+
 def update_record(env_url, token, entity_set, record_id, data):
     """Update a single Dataverse record via PATCH.
 
