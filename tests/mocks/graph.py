@@ -213,6 +213,8 @@ def service_principal(
     login_url: str | None = "https://impl.workday.com/contoso/login-saml.htmld",
     service_principal_names: Iterable[str] | None = None,
     application_template_id: str | None = MOCK_WORKDAY_APP_TEMPLATE_ID,
+    key_credentials: Iterable[Mapping[str, Any]] | None = None,
+    preferred_token_signing_key_thumbprint: str | None = None,
 ) -> dict[str, Any]:
     """Build a single Graph /servicePrincipals record.
 
@@ -224,9 +226,18 @@ def service_principal(
     join key AUTH-006 surfaces so the operator can identify which
     Entra app the Workday tenant is actually using.
 
+    ``key_credentials`` and ``preferred_token_signing_key_thumbprint``
+    are the certificate-related fields WD-CONN-102 (Workday SAML
+    signing certificate health) reads. The defaults keep the existing
+    test fixture shape (empty ``keyCredentials``, no preferred
+    thumbprint) so this extension is non-breaking for AUTH-005 /
+    AUTH-006 callers.
+
     Cited consumers:
-      - flightcheck/graph_client.py (get_service_principals).
+      - flightcheck/graph_client.py (get_service_principals,
+        get_workday_saml_service_principals).
       - flightcheck/checks/authentication.py (AUTH-005, AUTH-006).
+      - flightcheck/checks/workday.py (WD-CONN-102).
 
     Source (validatable):
       Schema: https://graph.microsoft.com/v1.0/$metadata
@@ -241,6 +252,8 @@ def service_principal(
                 tags (Collection(Edm.String))
                 loginUrl (Edm.String, nullable)
                 applicationTemplateId (Edm.String, nullable)  [AUTH-005]
+                keyCredentials (Collection(keyCredential))  [WD-CONN-102]
+                preferredTokenSigningKeyThumbprint (Edm.String, nullable)  [WD-CONN-102]
       Docs:   https://learn.microsoft.com/graph/api/serviceprincipal-get
               https://learn.microsoft.com/graph/api/resources/serviceprincipal?view=graph-rest-1.0
               Example response copied verbatim 2026-05.
@@ -273,12 +286,15 @@ def service_principal(
             "marketingUrl": None,
             "logoUrl": None,
         },
-        "keyCredentials": [],
+        "keyCredentials": (
+            list(key_credentials) if key_credentials is not None else []
+        ),
         "loginUrl": login_url,
         "logoutUrl": None,
         "oauth2PermissionScopes": [],
         "passwordCredentials": [],
         "preferredSingleSignOnMode": preferred_sso_mode,
+        "preferredTokenSigningKeyThumbprint": preferred_token_signing_key_thumbprint,
         "publisherName": None,
         "replyUrls": [],
         "servicePrincipalNames": list(service_principal_names),
@@ -293,6 +309,75 @@ def service_principal(
     if application_template_id is not None:
         record["applicationTemplateId"] = application_template_id
     return record
+
+
+def key_credential(
+    *,
+    key_id: str = "00000000-0000-0000-0000-0000000060c1",
+    custom_key_identifier: str | None = None,
+    end_date_time: str = "2099-01-01T00:00:00Z",
+    start_date_time: str = "2024-01-01T00:00:00Z",
+    display_name: str | None = "Workday SAML Signing",
+    usage: str = "Sign",
+    type_: str = "AsymmetricX509Cert",
+    key: str | None = None,
+) -> dict[str, Any]:
+    """Build a single Graph ``keyCredential`` complex-type record.
+
+    ``customKeyIdentifier`` is the SHA-1 thumbprint of the DER-encoded
+    X.509 cert, base64-encoded. WD-CONN-102 decodes this to the
+    20-byte SHA-1 digest, then re-encodes it as colon-separated
+    uppercase hex (the format Workday's "Edit Tenant Setup -
+    Security → SAML Identity Providers" screen displays).
+
+    When ``custom_key_identifier`` is omitted, a deterministic 20-byte
+    digest derived from ``key_id`` is used so tests can compute the
+    expected colon-hex thumbprint without hard-coding it.
+
+    A Sign+Verify pair (the two halves Graph creates for one logical
+    SAML signing cert) shares the same ``customKeyIdentifier`` — the
+    test ``test_sign_verify_pair_coalesces`` relies on this contract.
+
+    Cited consumers:
+      - flightcheck/checks/workday.py (WD-CONN-102 —
+        _check_saml_certificate_health).
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              ComplexType Name="keyCredential" — fields used:
+                keyId (Edm.Guid)
+                customKeyIdentifier (Edm.Binary, nullable) — base64
+                  in JSON wire format; WD-CONN-102 decodes to bytes
+                endDateTime (Edm.DateTimeOffset, nullable)
+                startDateTime (Edm.DateTimeOffset, nullable)
+                displayName (Edm.String, nullable)
+                usage (Edm.String, nullable) — "Sign" | "Verify" | ...
+                type (Edm.String, nullable) —
+                  "AsymmetricX509Cert" | "X509CertAndPassword" | ...
+                key (Edm.Binary, nullable) — DER bytes, omitted from
+                  list responses by Graph
+      Docs:   https://learn.microsoft.com/graph/api/resources/keycredential
+    """
+    if custom_key_identifier is None:
+        # Deterministic 20-byte SHA-1 digest derived from key_id so
+        # the test can compute the expected display thumbprint
+        # without hard-coding it. We use SHA-1 here to match the
+        # actual contents of customKeyIdentifier (which IS the SHA-1
+        # of the DER-encoded cert per the Graph schema doc).
+        import base64
+        import hashlib
+        digest = hashlib.sha1(key_id.encode("ascii")).digest()
+        custom_key_identifier = base64.b64encode(digest).decode("ascii")
+    return {
+        "customKeyIdentifier": custom_key_identifier,
+        "displayName": display_name,
+        "endDateTime": end_date_time,
+        "key": key,
+        "keyId": key_id,
+        "startDateTime": start_date_time,
+        "type": type_,
+        "usage": usage,
+    }
 
 
 def app_role_assignment(

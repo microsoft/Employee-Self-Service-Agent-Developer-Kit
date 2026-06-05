@@ -106,6 +106,33 @@ after installing the Workday extension pack.
 5. Or run `/connect workday` for guided re-setup
 **Verify:** Re-run `/flightcheck --scope workday`
 
+### WD-CONN-102: Workday SAML signing certificate health
+**Root cause:** The X.509 signing certificate on the federated Workday SAML
+enterprise app (Entra side) is missing, expired, expiring within 30 days, or
+out of sync with the certificate uploaded to Workday's tenant security setup.
+End-user SAML SSO into Workday fails silently when the two sides drift —
+ISU-credentialed runtime calls still succeed, so the agent appears healthy
+while user-context Workday flows break.
+**Fix (FAILED — no cert or all expired):**
+1. In Entra, open the federated Workday enterprise app → Single sign-on →
+   SAML Signing Certificate → generate a new cert and download the
+   `Certificate (Base64)`
+2. In Workday, search `Edit Tenant Setup - Security` → open the matching
+   `Service Provider ID` row in `SAML Identity Providers` → paste the new
+   `Certificate (Base64)` into `X509 Certificate`
+3. Set Entra's `preferredTokenSigningKeyThumbprint` (or the "Make
+   certificate active" toggle) to the new thumbprint
+**Fix (WARNING — expiring within 30 days or not yet valid):** Schedule a
+rotation before `NotAfter`; same steps as above, but stage the new cert in
+both systems first and only flip the active selection during a low-traffic
+window.
+**Fix (MANUAL — active cert is healthy on the Entra side):** Compare the
+thumbprint surfaced in the result against the `X509 Certificate` thumbprint
+on the matching `Service Provider ID` row in Workday. They must match
+byte-for-byte (colon-separated uppercase hex); if they differ, re-upload the
+active Entra `Certificate (Base64)` into Workday.
+**Verify:** Re-run `/flightcheck --scope workday`
+
 ### WD-FLOW-xxx: Flow disabled
 **Root cause:** A Workday Power Automate flow is turned off.
 **Fix:**
