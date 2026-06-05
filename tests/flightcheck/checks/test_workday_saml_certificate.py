@@ -123,7 +123,9 @@ class TestPermissionDenied:
     def test_probe_403_emits_warning(self, runner: _MinimalRunner) -> None:
         from flightcheck.checks.workday import _check_saml_certificate_health
 
-        # Probe call returns 403 → check bails out before listing.
+        # /servicePrincipals listing returns 403 →
+        # get_workday_saml_service_principals(raise_on_permission_error=True)
+        # raises PermissionError → check emits WARNING.
         responses.add(
             method="GET",
             url=f"{g.GRAPH_BASE}/servicePrincipals",
@@ -268,6 +270,65 @@ class TestPreferredThumbprintSelectsActive:
         assert f"active: thumbprint={new_thumb}" in r.result
         # The OLD cert should appear as a rollover entry.
         assert f"rollover: thumbprint={old_thumb}" in r.result
+
+
+class TestActiveExpiredRolloverExists:
+    """When preferredTokenSigningKeyThumbprint points at an EXPIRED cert
+    but another live cert is also present, the check must FAIL with the
+    distinctive "active selection has not been updated" hint (operator
+    forgot to flip preferredTokenSigningKeyThumbprint after uploading
+    the rollover). Pins workday.py:2335-2349 branch
+    (``reason="active_expired_rollover_exists"``), which is otherwise
+    only covered by the ``all_expired`` path where every cert is dead."""
+
+    @responses.activate
+    def test_preferred_expired_with_live_rollover_emits_failed(
+        self, runner: _MinimalRunner
+    ) -> None:
+        from flightcheck.checks.workday import _check_saml_certificate_health
+
+        # Active cert (by preferred thumbprint): expired 10 days ago.
+        kc_expired_active = g.key_credential(
+            key_id="cert-old-active",
+            end_date_time=_iso(datetime.now(timezone.utc) - timedelta(days=10)),
+        )
+        # Rollover cert: still alive, long-lived.
+        kc_live_rollover = g.key_credential(
+            key_id="cert-new-rollover",
+            end_date_time="2099-01-01T00:00:00Z",
+        )
+        # preferred points at the OLD/expired one (operator forgot to
+        # update preferred after rolling over to the new cert).
+        expired_thumb_no_colons = _expected_thumbprint_for(
+            "cert-old-active"
+        ).replace(":", "")
+        sp = g.service_principal(
+            sp_id="sp-workday-stale-preferred",
+            display_name="Workday Stale Preferred",
+            key_credentials=[kc_expired_active, kc_live_rollover],
+            preferred_token_signing_key_thumbprint=expired_thumb_no_colons,
+        )
+        responses.add(**g.list_service_principals(service_principals=[sp]))
+
+        results = _check_saml_certificate_health(runner)
+        r = _result_by_id(results, "WD-CONN-102")
+        assert r.status == "Failed"
+        # The expired cert appears as the "active" line.
+        expired_thumb = _expected_thumbprint_for("cert-old-active")
+        live_thumb = _expected_thumbprint_for("cert-new-rollover")
+        assert f"active: thumbprint={expired_thumb}" in r.result
+        assert "EXPIRED" in r.result
+        # The live cert appears as a "rollover" line — distinguishes
+        # this branch from the all_expired path.
+        assert f"rollover: thumbprint={live_thumb}" in r.result
+        # Distinctive hint message produced ONLY by the
+        # active_expired_rollover_exists branch.
+        assert "rollover certificate exists" in r.result
+        assert "active selection has not been updated" in r.result
+        # Remediation must guide the operator to flip the preferred
+        # selection (not just upload a new cert).
+        assert "preferredTokenSigningKeyThumbprint" in r.remediation
+        assert "SAML SSO into Workday will fail" in r.remediation
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -584,8 +645,8 @@ class TestWireup:
             graph: Any = None
             pp_admin: Any = None
             env_id: str | None = None
-            _workday_flows: list = None
-            config: dict = None
+            _workday_flows: list | None = None
+            config: dict | None = None
 
         bare = _Bare(_workday_flows=[], config={})
 
@@ -601,3 +662,9 @@ class TestWireup:
 
         ids = [r.checkpoint_id for r in results]
         assert "WD-CONN-102" in ids
+        # Pin the early-return guard: with no flows and no detected
+        # package flavor, downstream Workday workflow checks must not
+        # fire. If this regresses, run_workday_checks() will start
+        # emitting WD-FLOW-* results for tenants that have nothing
+        # Workday-related installed.
+        assert not any(i.startswith("WD-FLOW-") for i in ids)

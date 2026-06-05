@@ -182,16 +182,6 @@ _WORKDAY_SSO_DOC_LINK = (
     "employee-self-service/workday#task-1-create-the-x509-public-key"
 )
 
-# Filter SAML-only — OIDC variants of the Workday enterprise app
-# don't use the SAML signing cert WD-CONN-102 inspects, so listing
-# them would emit confusing "no cert" diagnostics for apps that
-# don't need a cert. Used to pre-flight the /servicePrincipals probe
-# (the actual listing call uses graph.get_workday_saml_service_principals()
-# which carries the same filter plus the $select clause).
-_WORKDAY_SAML_SP_PROBE_FILTER = (
-    "startswith(displayName,'Workday') and preferredSingleSignOnMode eq 'saml'"
-)
-
 # The 17 ESS Workday workflow definitions (ported from Test-WorkdayWorkflows.ps1)
 WORKFLOWS = [
     # 15 Read workflows
@@ -2174,23 +2164,25 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
             doc_link=doc_link,
         )]
 
-    # Probe /servicePrincipals with graph.get() so a missing
-    # Application.Read.All consent surfaces as a clear WARNING rather
-    # than silently masquerading as "no Workday SAML app exists"
-    # (which would falsely produce NOT_CONFIGURED). Same defensive
-    # pattern AUTH-006 uses — get_all() swallows 401/403 into [].
-    sp_probe = graph.get(
-        "/servicePrincipals",
-        params={"$top": "1", "$filter": _WORKDAY_SAML_SP_PROBE_FILTER},
-    )
-    if sp_probe.get("_status") in (401, 403):
+    # Single Graph round-trip: ask the listing call to raise
+    # PermissionError on 401/403 instead of swallowing it into an
+    # empty list (get_all()'s default would otherwise masquerade
+    # "missing Application.Read.All consent" as "no Workday SAML
+    # app exists" and produce a falsely reassuring NOT_CONFIGURED).
+    # Same defensive pattern AUTH-006 / WD-CONN-010 use.
+    try:
+        workday_sps = graph.get_workday_saml_service_principals(
+            raise_on_permission_error=True,
+        )
+    except PermissionError as e:
         return [CheckResult(
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=description,
             result=(
-                "Cannot read Entra service principals — Graph returned "
-                f"HTTP {sp_probe['_status']} on /servicePrincipals."
+                f"Cannot read Entra service principals: {e} "
+                "(HTTP 403 typically means Application.Read.All "
+                "is not consented)."
             ),
             remediation=(
                 "Grant Application.Read.All (or Directory.Read.All) "
@@ -2201,9 +2193,6 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
             ),
             doc_link=doc_link,
         )]
-
-    try:
-        workday_sps = graph.get_workday_saml_service_principals()
     except Exception as e:
         return [CheckResult(
             checkpoint_id=cp_id, category=category,
@@ -2244,11 +2233,12 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
             doc_link=doc_link,
         )]
 
-    # Lazy-import to avoid a circular import between
-    # checks.workday and checks.authentication at module-load time
-    # (authentication.py also imports from this module's siblings).
-    from .authentication import _saml_entity_ids
-
+    # ``saml_entity_ids`` (the canonical helper) is already imported
+    # at module load from ``._saml_utils``. The previous lazy import
+    # against ``checks.authentication._saml_entity_ids`` was a stale
+    # reference from before the helper was extracted to _saml_utils —
+    # it raised ImportError as soon as any Workday SAML SP with certs
+    # was returned, masking every cert-classification branch below.
     now = datetime.now(timezone.utc)
 
     # Classify each SP into exactly one of these buckets. Each list
@@ -2267,7 +2257,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
         # operators can disambiguate "Workday" / "Workday Sandbox"
         # rows that share the same display name.
         id_suffix = sp_id[-6:] if sp_id else "?"
-        entity_ids = _saml_entity_ids(sp.get("servicePrincipalNames") or [])
+        entity_ids = saml_entity_ids(sp.get("servicePrincipalNames") or [])
         entity_ids_str = ", ".join(entity_ids) if entity_ids else "(none surfaced)"
 
         cert_groups = _group_workday_cert_keycredentials(

@@ -264,7 +264,11 @@ class GraphClient:
         "keyCredentials"
     )
 
-    def get_workday_saml_service_principals(self) -> list:
+    def get_workday_saml_service_principals(
+        self,
+        *,
+        raise_on_permission_error: bool = False,
+    ) -> list:
         """List federated Workday SAML enterprise app service principals,
         projecting the keyCredential fields WD-CONN-102 inspects.
 
@@ -274,6 +278,18 @@ class GraphClient:
         ``preferredTokenSigningKeyThumbprint`` so the listing
         response actually carries the certificate data — see
         get_service_principals() for the rationale.
+
+        The filter predicate is the same one AUTH-006 / WD-CONN-010
+        use; the single source of truth lives in
+        ``checks/_saml_utils.WORKDAY_SAML_SP_FILTER`` so a drift
+        between the SAML-cert check and the federation-alignment
+        check cannot happen. Imported lazily to avoid pulling a
+        ``checks/`` module at ``graph_client`` import time.
+
+        Pass ``raise_on_permission_error=True`` to convert HTTP
+        401/403 from the listing call into a ``PermissionError``
+        instead of swallowing it into an empty list — the same
+        kwarg the underlying ``get_service_principals`` supports.
 
         Source (validatable):
           Schema: https://graph.microsoft.com/v1.0/$metadata
@@ -290,13 +306,12 @@ class GraphClient:
           Docs:   https://learn.microsoft.com/graph/api/resources/keycredential
                   https://learn.microsoft.com/graph/api/serviceprincipal-list
         """
-        filter_expr = (
-            "startswith(displayName,'Workday') and "
-            "preferredSingleSignOnMode eq 'saml'"
-        )
+        from .checks._saml_utils import WORKDAY_SAML_SP_FILTER
+
         return self.get_service_principals(
-            filter_expr=filter_expr,
+            filter_expr=WORKDAY_SAML_SP_FILTER,
             select=self.WORKDAY_SAML_SP_SELECT,
+            raise_on_permission_error=raise_on_permission_error,
         )
 
     # ----- Entra Enterprise App user/group assignment (AUTH-005) -----
