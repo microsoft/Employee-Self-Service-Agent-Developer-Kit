@@ -115,7 +115,7 @@ class TestNoLocalWorkdayApp:
         assert "SAML Identity Providers" in r.remediation
         # And must point at the issuer URL as the tenant-ID source —
         # NOT the entity ID / appId (rubber-duck blocking issue #2).
-        assert "sts.windows.net" in r.remediation
+        assert "https://sts.windows.net/" in r.remediation
         assert "Issuer" in r.remediation or "issuer" in r.remediation
 
 
@@ -182,7 +182,7 @@ class TestManualVerificationRequired:
         # MUST point at the SAML issuer URL (which actually embeds
         # the Entra tenant ID), NOT the entity ID / appId / cert
         # subject (which do not).
-        assert "sts.windows.net" in r.remediation
+        assert "https://sts.windows.net/" in r.remediation
         assert "Issuer" in r.remediation or "federation metadata" in r.remediation
         # And the current tenant ID must appear in the remediation
         # too so operators know what value to compare against.
