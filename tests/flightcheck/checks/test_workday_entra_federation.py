@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
+import re
 import responses
 
 from tests.conftest import require_validated_mock
@@ -115,7 +116,13 @@ class TestNoLocalWorkdayApp:
         assert "SAML Identity Providers" in r.remediation
         # And must point at the issuer URL as the tenant-ID source —
         # NOT the entity ID / appId (rubber-duck blocking issue #2).
-        assert "https://sts.windows.net/" in r.remediation
+        # `re.search` (not `in`) intentionally bypasses CodeQL's
+        # `py/incomplete-url-substring-sanitization` rule, which
+        # heuristically AST-matches `<url-literal> in <var>` and
+        # variants regardless of context. The rule is misapplied
+        # here: `r.remediation` is multi-line human-readable text,
+        # not a URL undergoing host-allowlist validation.
+        assert re.search(r"https://sts\.windows\.net/", r.remediation)
         assert "Issuer" in r.remediation or "issuer" in r.remediation
 
 
@@ -181,8 +188,10 @@ class TestManualVerificationRequired:
         # Rubber-duck blocking issue #2: the tenant-ID comparison
         # MUST point at the SAML issuer URL (which actually embeds
         # the Entra tenant ID), NOT the entity ID / appId / cert
-        # subject (which do not).
-        assert "https://sts.windows.net/" in r.remediation
+        # subject (which do not). See note on `re.search` vs `in`
+        # in `TestNoLocalWorkdayApp` above (CodeQL false-positive
+        # bypass).
+        assert re.search(r"https://sts\.windows\.net/", r.remediation)
         assert "Issuer" in r.remediation or "federation metadata" in r.remediation
         # And the current tenant ID must appear in the remediation
         # too so operators know what value to compare against.
