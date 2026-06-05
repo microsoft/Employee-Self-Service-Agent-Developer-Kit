@@ -461,3 +461,104 @@ class TestSkipped:
 
         assert r.status == "Skipped"
         assert "WD-ENV-001" in r.result
+
+
+class TestSimplifiedInstallGate:
+    """Pins the install-flavor gating contract for `_check_isu_username_format`
+    (see AGENTS.md design principle #11). WD-ENV-101 inspects an ISU
+    service-account username — a concept that does not exist on the
+    simplified install (OBO uses the signed-in user's identity).
+
+    Skip semantics mirror `_check_env_vars` — only skip on a positive
+    "simplified" match; any other verdict runs the existing logic.
+    """
+
+    def test_simplified_skips_with_correct_message(self) -> None:
+        """`flavor == "simplified"` → single SKIPPED row, zero HTTP
+        calls (gate fires before any Dataverse or Graph read)."""
+        from flightcheck.checks.workday import _check_isu_username_format
+
+        runner = _MinimalRunner(
+            env_url="https://dv.example",
+            dv_token="dv-token",
+            graph=_MinimalGraph(),
+        )
+        runner._workday_package_flavor = "simplified"
+
+        results = _check_isu_username_format(runner)
+        r = _result(results)
+
+        assert r.status == "Skipped"
+        assert r.priority == "High"
+        assert "WD-PKG-001" in r.result
+        assert "simplified" in r.result.lower()
+        # Remediation must surface the `{ff0df}`-only ambiguity so an
+        # operator who intended the full install doesn't dismiss it.
+        assert "Generic User" in r.remediation
+        assert "Context Generic User" in r.remediation
+        assert "workday-simplified-setup" in r.doc_link
+
+    @responses.activate
+    def test_full_verdict_runs_existing_logic_unchanged(
+        self, runner_with_graph: _MinimalRunner, fake_dataverse_url: str
+    ) -> None:
+        """`flavor == "full"` → check runs as today and reports the
+        real underlying state (PASSED in this happy-path mock)."""
+        from flightcheck.checks.workday import _check_isu_username_format
+
+        runner_with_graph._workday_package_flavor = "full"
+        _register_isu(
+            base_url=fake_dataverse_url,
+            isu_value=f"isu_ess@{_VERIFIED_DOMAIN}",
+        )
+
+        results = _check_isu_username_format(runner_with_graph)
+        assert _result(results).status == "Passed"
+
+    @responses.activate
+    @pytest.mark.parametrize("flavor", ["partial", "unknown", "none", "skipped"])
+    def test_ambiguous_verdicts_still_run_existing_logic(
+        self, runner_with_graph: _MinimalRunner, fake_dataverse_url: str, flavor: str,
+    ) -> None:
+        """Per AGENTS.md principle #11.b: skip ONLY on `"simplified"`.
+        Anything else — partial install, unknown shape, no Workday refs
+        at all, or Dataverse-skipped — runs the existing logic so
+        operators debugging a broken install see every signal.
+
+        Pinned with a legacy-short-ID ISU so we observe a real WARNING
+        rather than a SKIP that could be the gate's. If a future
+        rewrite accidentally widens the gate (`if flavor != "full": skip`),
+        this test catches it.
+        """
+        from flightcheck.checks.workday import _check_isu_username_format
+
+        runner_with_graph._workday_package_flavor = flavor
+        _register_isu(base_url=fake_dataverse_url, isu_value="ISU12345")
+
+        results = _check_isu_username_format(runner_with_graph)
+        r = _result(results)
+        assert r.status == "Warning", (
+            f"flavor={flavor!r} must run existing logic and WARN on legacy "
+            f"short-ID ISU; got status={r.status}"
+        )
+        assert "does not contain '@'" in r.result
+
+    @responses.activate
+    def test_attribute_absent_runs_existing_logic_for_backwards_compat(
+        self, runner_with_graph: _MinimalRunner, fake_dataverse_url: str
+    ) -> None:
+        """Backwards-compat: minimal test runners that don't set
+        `_workday_package_flavor` (e.g. the existing `_MinimalRunner`
+        dataclass default) must continue producing the pre-gating
+        behavior. The `getattr(..., None)` default enables this."""
+        from flightcheck.checks.workday import _check_isu_username_format
+
+        assert not hasattr(runner_with_graph, "_workday_package_flavor")
+
+        _register_isu(
+            base_url=fake_dataverse_url,
+            isu_value=f"isu_ess@{_VERIFIED_DOMAIN}",
+        )
+
+        results = _check_isu_username_format(runner_with_graph)
+        assert _result(results).status == "Passed"

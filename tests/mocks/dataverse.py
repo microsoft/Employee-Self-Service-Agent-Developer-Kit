@@ -145,6 +145,94 @@ def env_var_value(
     }
 
 
+WORKDAY_SOAP_CONNECTOR_ID = "/providers/Microsoft.PowerApps/apis/shared_workdaysoap"
+
+
+def connection_ref(
+    *,
+    ref_id: str | None = None,
+    logical_name: str,
+    display_name: str,
+    connector_id: str,
+    connection_id: str | None = None,
+    statuscode: int = 1,
+) -> dict[str, Any]:
+    """Build a single connectionreferences record matching the shape
+    captured in tests/fixtures/cassettes/dataverse_workday_connection_refs_*.yaml.
+
+    Cited consumers:
+      - flightcheck/checks/workday.py — `_check_package_flavor` (WD-PKG-001)
+        reads `connectorid` + `connectionreferencelogicalname` to fingerprint
+        the Workday install flavor (simplified vs full / legacy SOAP+custom).
+      - flightcheck/checks/workday.py — `_check_package_connection_completeness`
+        (WD-CONN-012) reads `connectionid` + `statuscode` to verify each
+        expected Workday ref is bound to an active connection.
+      - flightcheck/checks/environment.py:222 — `ENV-004` (general
+        connection-reference binding-state check).
+
+    Schema reference:
+      https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/connectionreference
+    """
+    return {
+        "@odata.etag": 'W/"1"',
+        "connectionreferenceid": ref_id or "00000000-0000-0000-0000-000000008001",
+        "connectionreferencelogicalname": logical_name,
+        "connectionreferencedisplayname": display_name,
+        "connectorid": connector_id,
+        "connectionid": connection_id,
+        "statuscode": statuscode,
+    }
+
+
+def workday_connection_ref(
+    *,
+    suffix: str,
+    display_name: str,
+    publisher_prefix: str = "new",
+    connection_id: str | None = "shared-workdaysoap-00000000-0000-0000-0000-000000001111",
+    statuscode: int = 1,
+    ref_id: str | None = None,
+) -> dict[str, Any]:
+    """Build a Workday connectionreferences record.
+
+    The `suffix` (e.g. "ff0df", "0786a", "d6081") is the deterministic
+    fingerprint shipped by Microsoft inside the install solution at
+    build time. `publisher_prefix` defaults to `new_` (Default
+    Publisher) but is configurable so tests can verify the WD-PKG-001
+    matcher is publisher-prefix-agnostic.
+    """
+    return connection_ref(
+        ref_id=ref_id,
+        logical_name=f"{publisher_prefix}_sharedworkdaysoap_{suffix}",
+        display_name=display_name,
+        connector_id=WORKDAY_SOAP_CONNECTOR_ID,
+        connection_id=connection_id,
+        statuscode=statuscode,
+    )
+
+
+# Canonical fixture-rows mirroring the captured cassettes. Keep these
+# in sync with:
+#   tests/fixtures/cassettes/dataverse_workday_connection_refs_simplified.yaml
+#   tests/fixtures/cassettes/dataverse_workday_connection_refs_full.yaml
+def workday_connection_refs_simplified() -> list[dict[str, Any]]:
+    """Workday connection refs as they appear in a simplified-install tenant
+    (1 ref: OAuthUser / OBO)."""
+    return [
+        workday_connection_ref(suffix="ff0df", display_name="OAuthUser"),
+    ]
+
+
+def workday_connection_refs_full() -> list[dict[str, Any]]:
+    """Workday connection refs as they appear in a full / legacy SOAP+custom
+    install tenant (3 refs: OAuthUser + 2 ISU roles)."""
+    return [
+        workday_connection_ref(suffix="ff0df", display_name="OAuthUser"),
+        workday_connection_ref(suffix="0786a", display_name="Generic User"),
+        workday_connection_ref(suffix="d6081", display_name="Context Generic User"),
+    ]
+
+
 def collection(
     records: Iterable[Mapping[str, Any]],
     *,

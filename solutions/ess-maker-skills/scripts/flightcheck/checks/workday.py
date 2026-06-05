@@ -57,6 +57,60 @@ ENV_VARS = {
     },
 }
 
+# ─────────────────────────────────────────────────────────────────────────
+# Workday install-flavor fingerprint (WD-PKG-001 / WD-CONN-012)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Microsoft ships two different Workday installs:
+#
+#   * Simplified ("OOTB", workday-simplified-setup docs): one Workday
+#     connection reference, used in OBO/invoker mode for the
+#     signed-in user.
+#   * Full / legacy SOAP+custom (workday docs): three Workday connection
+#     references — OBO/OAuthUser + two ISU service-account refs that
+#     drive the SOAP RaaS report lookups.
+#
+# Both install flavors use the SAME connector
+# (`shared_workdaysoap`), so connector identity alone cannot
+# distinguish them. The deterministic signal is the SET of
+# `connectionreferencelogicalname` suffixes shipped inside the install
+# solution — those suffixes are stamped at solution-build time by
+# Microsoft and don't change across customers. Matching on the
+# trailing 5-hex suffix (not the full logical name) keeps the check
+# resilient to publisher-prefix changes (e.g. a customer who clones
+# the solution under their own publisher would have a different
+# prefix but the same suffix).
+#
+# Evidence cassettes (fingerprint values; the API contract itself is
+# `documented`-tier per MS Learn):
+#   tests/fixtures/cassettes/dataverse_workday_connection_refs_simplified.yaml
+#   tests/fixtures/cassettes/dataverse_workday_connection_refs_full.yaml
+
+# The final URL segment we look for on a connectionreference's
+# `connectorid` to identify Workday-related refs. We match by
+# normalized endswith() rather than equality so case variants or
+# trailing-slash quirks don't drop legitimate matches.
+WORKDAY_SOAP_CONNECTOR_SUFFIX = "/apis/shared_workdaysoap"
+
+# Trailing `_<5-hex>` suffix on `connectionreferencelogicalname`
+# (e.g. `new_sharedworkdaysoap_ff0df` -> "ff0df").
+_REF_SUFFIX_RE = re.compile(r"_([0-9a-f]{5})$")
+
+# Per-flavor fingerprint suffixes. A row in either set carries the
+# stable Microsoft-shipped role identifier:
+#   ff0df: OAuthUser (per-user OBO/invoker)
+#   0786a: Generic User (ISU - read role)        [full / legacy only]
+#   d6081: Context Generic User (ISU - context)  [full / legacy only]
+SIMPLIFIED_REF_SUFFIXES = frozenset({"ff0df"})
+LEGACY_REF_SUFFIXES = frozenset({"ff0df", "0786a", "d6081"})
+
+# Human-readable role labels for diagnostics.
+_REF_SUFFIX_ROLES = {
+    "ff0df": "OAuthUser (OBO)",
+    "0786a": "Generic User (ISU)",
+    "d6081": "Context Generic User (ISU)",
+}
+
 # The 17 ESS Workday workflow definitions (ported from Test-WorkdayWorkflows.ps1)
 WORKFLOWS = [
     # 15 Read workflows
@@ -148,13 +202,38 @@ WORKFLOWS = [
 def run_workday_checks(runner) -> list[CheckResult]:
     """Execute Workday-specific deep validation.
 
-    Only runs if Workday flows were detected by external_systems checks.
+    WD-PKG-001 (package-flavor detection) is the new top-of-pipeline
+    check: it runs whenever Dataverse credentials are available,
+    independent of flow detection, because the connection references
+    themselves are the install signal (refs may be installed before
+    flows are deployed). The remaining workday checks are still gated
+    on `_workday_flows` because they validate flow-deployed Workday
+    configuration; if the customer has refs but no deployed flows, the
+    package-detection result text flags that contradiction for the
+    operator.
+
+    WD-CONN-012 (package connection-reference binding completeness)
+    runs at the end of the workday block when WD-PKG-001 detected a
+    known flavor, so its diagnostic can list which Microsoft-shipped
+    refs are bound vs. unbound for the detected flavor.
     """
     results: list[CheckResult] = []
 
-    # Skip if no Workday flows detected
     wd_flows = getattr(runner, "_workday_flows", [])
-    if not wd_flows:
+
+    # WD-PKG-001 — runs whenever Dataverse is available, independent
+    # of flow detection. Sets runner._workday_package_flavor and
+    # runner._workday_connection_refs (cached for WD-CONN-012).
+    pkg_results = _check_package_flavor(runner, wd_flows=wd_flows)
+    results.extend(pkg_results)
+
+    flavor = getattr(runner, "_workday_package_flavor", None)
+
+    # If neither flows nor any Workday connection references are
+    # present, this tenant has no Workday integration. Skip the
+    # downstream Workday-specific checks (preserves the pre-existing
+    # behavior of returning early when there's no Workday signal).
+    if not wd_flows and flavor in (None, "none"):
         return results
 
     print("\n  Running Workday deep validation...")
@@ -175,11 +254,449 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # --- SOAP Workflow Tests (only if Workday MCP creds available) ---
     results.extend(_check_workflows(runner))
 
+    # WD-CONN-012 — package-aware binding completeness; runs last so
+    # the operator sees binding diagnostics in context with the other
+    # connection checks above.
+    results.extend(_check_package_connection_completeness(runner))
+
     return results
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# WD-PKG-001 — Workday install-flavor detection
+# ─────────────────────────────────────────────────────────────────────────
+
+def _extract_ref_suffix(logical_name: str | None) -> str | None:
+    """Return the trailing 5-hex suffix from a `connectionreferencelogicalname`,
+    or None if the field is missing/empty/doesn't match the expected pattern."""
+    if not logical_name:
+        return None
+    m = _REF_SUFFIX_RE.search(logical_name)
+    return m.group(1) if m else None
+
+
+def _is_workday_soap_connector(connectorid: str | None) -> bool:
+    """Match a connectorid (from Dataverse connectionreferences) against the
+    Workday SOAP connector path. Tolerates casing and trailing-slash quirks."""
+    if not connectorid:
+        return False
+    normalized = connectorid.lower().rstrip("/")
+    return normalized.endswith(WORKDAY_SOAP_CONNECTOR_SUFFIX)
+
+
+def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
+    """WD-PKG-001 — Detect Workday install flavor from connectionreferences.
+
+    Queries Dataverse for all connectionreferences, filters to Workday SOAP
+    rows, extracts the suffix set, and classifies against the known
+    fingerprints. Sets `runner._workday_package_flavor` (string verdict) and
+    `runner._workday_connection_refs` (list of dicts; the cached rows so
+    WD-CONN-012 doesn't have to re-query).
+
+    The verdict is one of:
+      * ``simplified`` — exact match on {ff0df}
+      * ``full``       — exact match on {ff0df, 0786a, d6081}
+      * ``none``       — no Workday refs at all (no Workday integration)
+      * ``partial``    — strict non-empty subset of LEGACY_REF_SUFFIXES that
+                        doesn't equal either fingerprint (incomplete install)
+      * ``unknown``    — Workday refs present but the suffix set includes
+                        unrecognized values (customer-modified solution or a
+                        Microsoft release we haven't taught the kit about yet)
+      * ``skipped``    — no Dataverse credential available
+    """
+    results: list[CheckResult] = []
+    env_url = getattr(runner, "env_url", None)
+    dv_token = getattr(runner, "dv_token", None)
+
+    # Pre-populate the cache so downstream checks always have a defined value.
+    runner._workday_connection_refs = []
+    runner._workday_package_flavor = None
+
+    doc_simplified = f"{DOC_BASE}/workday-simplified-setup"
+    doc_legacy = f"{DOC_BASE}/workday"
+
+    if not env_url or not dv_token:
+        runner._workday_package_flavor = "skipped"
+        results.append(CheckResult(
+            checkpoint_id="WD-PKG-001", category="Workday",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description="Workday install flavor (simplified vs full / legacy)",
+            result="Dataverse token not available — skipping package detection",
+        ))
+        return results
+
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+        from auth import query_all
+
+        refs = query_all(
+            env_url, dv_token,
+            "connectionreferences",
+            "connectionreferenceid,connectionreferencelogicalname,"
+            "connectionreferencedisplayname,connectorid,connectionid,statuscode",
+        )
+    except Exception as e:
+        runner._workday_package_flavor = "skipped"
+        results.append(CheckResult(
+            checkpoint_id="WD-PKG-001", category="Workday",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description="Workday install flavor (simplified vs full / legacy)",
+            result=f"Unable to query connectionreferences: {e}",
+            remediation="Confirm the FlightCheck identity has Dataverse read access on connectionreferences.",
+        ))
+        return results
+
+    workday_refs = [r for r in refs if _is_workday_soap_connector(r.get("connectorid"))]
+    runner._workday_connection_refs = workday_refs
+
+    # Classify each Workday row's suffix (some may not match the
+    # _<5hex> pattern — surface those rather than silently dropping them).
+    known_suffixes: set[str] = set()
+    unknown_format_names: list[str] = []
+    unknown_suffixes: set[str] = set()
+    for r in workday_refs:
+        logical = r.get("connectionreferencelogicalname")
+        suffix = _extract_ref_suffix(logical)
+        if suffix is None:
+            unknown_format_names.append(logical or "<missing>")
+        elif suffix in LEGACY_REF_SUFFIXES:
+            known_suffixes.add(suffix)
+        else:
+            unknown_suffixes.add(suffix)
+
+    # 1. No Workday integration at all.
+    if not workday_refs:
+        runner._workday_package_flavor = "none"
+        results.append(CheckResult(
+            checkpoint_id="WD-PKG-001", category="Workday",
+            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            description="Workday install flavor (simplified vs full / legacy)",
+            result="No Workday connection references found in Dataverse",
+            remediation=(
+                "If this tenant is meant to use Workday, install one of the "
+                "Microsoft-published Workday integration packages. See the "
+                "documentation links for simplified vs full install."
+            ),
+            doc_link=doc_simplified,
+        ))
+        return results
+
+    # 2. Exact simplified match.
+    if known_suffixes == SIMPLIFIED_REF_SUFFIXES and not unknown_suffixes and not unknown_format_names:
+        runner._workday_package_flavor = "simplified"
+        # The `{ff0df}` suffix is shared between simplified and full
+        # installs, so a 1-ref shape COULD also be a failed full
+        # install whose ISU refs never deployed. Surface that
+        # ambiguity in the result text rather than overclaiming.
+        flow_note = ""
+        if not wd_flows:
+            flow_note = (
+                " No Workday flows are deployed yet in this environment "
+                "— the package is present but downstream flows have not run."
+            )
+        results.append(CheckResult(
+            checkpoint_id="WD-PKG-001", category="Workday",
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
+            description="Workday install flavor (simplified vs full / legacy)",
+            result=(
+                "Detected simplified-install shape (1 Workday connection "
+                "reference: OAuthUser/OBO). If this tenant was intended to "
+                "use the full / legacy SOAP+custom integration, the two "
+                "ISU connection references (Generic User, Context Generic "
+                "User) are missing." + flow_note
+            ),
+            doc_link=doc_simplified,
+        ))
+        return results
+
+    # 3. Exact full / legacy match.
+    if known_suffixes == LEGACY_REF_SUFFIXES and not unknown_suffixes and not unknown_format_names:
+        runner._workday_package_flavor = "full"
+        flow_note = ""
+        if not wd_flows:
+            flow_note = (
+                " No Workday flows are deployed yet in this environment "
+                "— the package is present but downstream flows have not run."
+            )
+        results.append(CheckResult(
+            checkpoint_id="WD-PKG-001", category="Workday",
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
+            description="Workday install flavor (simplified vs full / legacy)",
+            result=(
+                "Detected full / legacy SOAP+custom install shape "
+                "(3 Workday connection references: OAuthUser/OBO + 2 ISU)." + flow_note
+            ),
+            doc_link=doc_legacy,
+        ))
+        return results
+
+    # 4. Strict non-empty subset of legacy suffixes -> partial install.
+    if known_suffixes and not unknown_suffixes and not unknown_format_names \
+            and known_suffixes < LEGACY_REF_SUFFIXES:
+        runner._workday_package_flavor = "partial"
+        missing = LEGACY_REF_SUFFIXES - known_suffixes
+        observed_roles = ", ".join(sorted(_REF_SUFFIX_ROLES[s] for s in known_suffixes))
+        missing_roles = ", ".join(sorted(_REF_SUFFIX_ROLES[s] for s in missing))
+        results.append(CheckResult(
+            checkpoint_id="WD-PKG-001", category="Workday",
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            description="Workday install flavor (simplified vs full / legacy)",
+            result=(
+                f"Partial install detected — observed Workday roles: "
+                f"{observed_roles}; missing roles relative to the full / "
+                f"legacy install: {missing_roles}. Does not match either "
+                "the simplified (1-ref) or full (3-ref) fingerprint."
+            ),
+            remediation=(
+                "Re-import the chosen Microsoft Workday integration package; "
+                "the install appears to have created some but not all of the "
+                "expected connection references."
+            ),
+            doc_link=doc_legacy,
+        ))
+        return results
+
+    # 5. Anything else: unrecognized suffix(es) and/or malformed
+    #    logicalname(s) on Workday-connector rows.
+    runner._workday_package_flavor = "unknown"
+    diagnostics: list[str] = []
+    if known_suffixes:
+        diagnostics.append(
+            "recognized: " + ", ".join(sorted(_REF_SUFFIX_ROLES[s] for s in known_suffixes))
+        )
+    if unknown_suffixes:
+        diagnostics.append("unrecognized suffixes: " + ", ".join(sorted(unknown_suffixes)))
+    if unknown_format_names:
+        diagnostics.append(
+            "rows with unexpected logical-name format: "
+            + ", ".join(sorted(unknown_format_names))
+        )
+    results.append(CheckResult(
+        checkpoint_id="WD-PKG-001", category="Workday",
+        priority=Priority.HIGH.value, status=Status.WARNING.value,
+        description="Workday install flavor (simplified vs full / legacy)",
+        result=(
+            "Workday connection references present but the shape does not "
+            "match either the simplified (1-ref) or full / legacy (3-ref) "
+            "fingerprint (" + "; ".join(diagnostics) + "). "
+            "Downstream Workday-specific checks may produce unexpected results."
+        ),
+        remediation=(
+            "If this tenant runs a customized Workday solution, this is "
+            "informational. Otherwise re-import the Microsoft-published "
+            "Workday integration package."
+        ),
+        doc_link=doc_legacy,
+    ))
+    return results
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# WD-CONN-012 — Package-aware connection-reference binding completeness
+# ─────────────────────────────────────────────────────────────────────────
+#
+# This is intentionally a Dataverse-side binding check (`connectionid`
+# present and `statuscode` active), NOT a Power-Platform-side
+# connection health check. The existing WD-CONN-001..NNN and WD-CONN-101
+# checks already cover BAP-side connection status and OAuth token
+# health. WD-CONN-012's value-add is to verify that for the detected
+# install flavor, EVERY connection reference Microsoft shipped is
+# bound to some connection — a deterministic completeness signal that
+# the per-connection health checks can't give on their own.
+
+def _check_package_connection_completeness(runner) -> list[CheckResult]:
+    """WD-CONN-012 — Verify every Workday connection reference expected for
+    the detected install flavor is bound to a connection.
+
+    Uses the cached refs from `runner._workday_connection_refs` populated
+    by WD-PKG-001, so we don't re-query Dataverse here.
+    """
+    flavor = getattr(runner, "_workday_package_flavor", None)
+    refs = getattr(runner, "_workday_connection_refs", []) or []
+
+    if flavor not in ("simplified", "full"):
+        # WD-PKG-001 either didn't run (no Dataverse), found no
+        # Workday refs (NOT_CONFIGURED), or found an unrecognized
+        # shape (WARNING). In any of those cases this check can't add
+        # signal beyond what WD-PKG-001 already reported.
+        return [CheckResult(
+            checkpoint_id="WD-CONN-012", category="Workday",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description="Workday package connection-reference binding completeness",
+            result=(
+                "Skipped — WD-PKG-001 did not detect a known Workday install "
+                "flavor (current verdict: "
+                f"{flavor if flavor else 'unavailable'})."
+            ),
+        )]
+
+    expected = SIMPLIFIED_REF_SUFFIXES if flavor == "simplified" else LEGACY_REF_SUFFIXES
+
+    # Map suffix -> ref dict so we can check each expected role.
+    by_suffix: dict[str, dict] = {}
+    for r in refs:
+        suffix = _extract_ref_suffix(r.get("connectionreferencelogicalname"))
+        if suffix in expected:
+            by_suffix[suffix] = r
+
+    unbound: list[str] = []
+    inactive: list[str] = []
+    missing: list[str] = []
+    bound_roles: list[str] = []
+
+    for suffix in expected:
+        role = _REF_SUFFIX_ROLES.get(suffix, suffix)
+        row = by_suffix.get(suffix)
+        if row is None:
+            # Shouldn't normally happen — WD-PKG-001 already classified
+            # the install as matching `expected`. Guard anyway.
+            missing.append(role)
+            continue
+        cid = row.get("connectionid")
+        statuscode = row.get("statuscode")
+        if not cid:
+            unbound.append(role)
+        elif statuscode != 1:
+            inactive.append(f"{role} (statuscode={statuscode})")
+        else:
+            bound_roles.append(role)
+
+    problems: list[str] = []
+    if missing:
+        problems.append("missing rows: " + ", ".join(sorted(missing)))
+    if unbound:
+        problems.append("unbound (connectionid=null): " + ", ".join(sorted(unbound)))
+    if inactive:
+        problems.append("inactive: " + ", ".join(sorted(inactive)))
+
+    doc_link = (
+        f"{DOC_BASE}/workday-simplified-setup" if flavor == "simplified"
+        else f"{DOC_BASE}/workday"
+    )
+
+    if not problems:
+        return [CheckResult(
+            checkpoint_id="WD-CONN-012", category="Workday",
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
+            description="Workday package connection-reference binding completeness",
+            result=(
+                f"All {len(expected)} Workday connection reference(s) expected "
+                f"for the {flavor} install are bound to active connections "
+                f"({', '.join(sorted(bound_roles))})."
+            ),
+            doc_link=doc_link,
+        )]
+
+    return [CheckResult(
+        checkpoint_id="WD-CONN-012", category="Workday",
+        priority=Priority.HIGH.value, status=Status.FAILED.value,
+        description="Workday package connection-reference binding completeness",
+        result=(
+            f"One or more Workday connection references expected for the "
+            f"{flavor} install are not properly bound — "
+            + "; ".join(problems) + "."
+        ),
+        remediation=(
+            "In Power Platform admin center, open each affected connection "
+            "reference and bind it to a connection of the same connector. "
+            "If the connection itself was deleted, re-create it and re-bind."
+        ),
+        doc_link=doc_link,
+    )]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Install-flavor gating helper (see AGENTS.md design principle #11)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Several Workday checks below are only meaningful on the full / legacy
+# install (the one with the 2 ISU service-account refs + RaaS report
+# env vars). On the simplified install, OBO uses the signed-in user's
+# identity — no ISU, no RaaS — so these checks would false-FAIL with
+# remediations pointing operators at the wrong setup path.
+#
+# We gate them on the WD-PKG-001 verdict cached on
+# `runner._workday_package_flavor`. To avoid suppressing real bugs:
+#
+#   * We skip ONLY on a positive `"simplified"` verdict. Any other
+#     verdict (None, "full", "partial", "unknown", "none", "skipped")
+#     runs the existing logic — operators debugging a broken install
+#     need maximum signal, not silence.
+#   * Tests that build minimal runners without setting the attribute
+#     get the default-None branch and observe the pre-gating behavior
+#     (backwards-compatible).
+#   * The SKIP remediation must acknowledge the `{ff0df}`-only
+#     ambiguity: the same 1-ref shape WD-PKG-001 classifies as
+#     "simplified" ALSO matches a broken full install where the 2 ISU
+#     refs failed to deploy. An operator who intended the full install
+#     needs to see this from the SKIP, not just from WD-PKG-001's
+#     standalone diagnostic.
+
+def _simplified_install_skip(
+    *, checkpoint_id: str, description: str,
+    priority: str = Priority.HIGH.value,
+    category: str = "Workday",
+) -> CheckResult:
+    """Build a SKIPPED CheckResult for an ISU/RaaS check gated on
+    `runner._workday_package_flavor == "simplified"`.
+
+    `category` defaults to "Workday" but can be overridden for the
+    workflow-test check, which uses the distinct "Workday Workflows"
+    category in the report so SKIP / pass rows stay grouped with
+    other WD-WF-* output.
+
+    The message split follows the AGENTS.md `result` / `remediation`
+    contract (principle #8): `result` reports the observation
+    (WD-PKG-001's verdict); `remediation` carries the actionable
+    contingency for an operator who intended the OTHER install flavor.
+    """
+    return CheckResult(
+        checkpoint_id=checkpoint_id,
+        category=category,
+        priority=priority,
+        status=Status.SKIPPED.value,
+        description=description,
+        result=(
+            "WD-PKG-001 detected the simplified Workday install shape "
+            "(1 connection reference, OBO/OAuthUser). This check is "
+            "ISU/RaaS-specific and does not apply on the simplified "
+            "install — OBO uses the signed-in user's identity."
+        ),
+        remediation=(
+            "If you intended to install the full / legacy SOAP+custom "
+            "integration, the same 1-ref shape also matches a broken "
+            "full install where the 2 ISU connection references "
+            "(Generic User, Context Generic User) failed to deploy. "
+            "See WD-PKG-001's diagnostic to confirm your install "
+            "intent before treating this SKIP as benign."
+        ),
+        doc_link=f"{DOC_BASE}/workday-simplified-setup",
+    )
+
+
 def _check_env_vars(runner) -> list[CheckResult]:
-    """Validate Workday environment variables in Dataverse."""
+    """Validate Workday environment variables in Dataverse.
+
+    Gated on `runner._workday_package_flavor`: skipped on
+    `"simplified"` because the three env vars (ISU account name,
+    RaaS report name, RaaS report instance) are only consumed by the
+    full / legacy install's RaaS code path. See
+    `_simplified_install_skip` for the SKIP message contract.
+    """
+    flavor = getattr(runner, "_workday_package_flavor", None)
+    if flavor == "simplified":
+        return [
+            _simplified_install_skip(
+                checkpoint_id=meta["id"],
+                description=meta["description"],
+                priority=(
+                    Priority.CRITICAL.value if meta["critical"]
+                    else Priority.HIGH.value
+                ),
+            )
+            for meta in ENV_VARS.values()
+        ]
+
     results = []
     env_url = runner.env_url
     dv_token = runner.dv_token
@@ -294,7 +811,19 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
     surface when those inputs are formalised; this checkpoint covers
     the static format-alignment gap that can be detected without ISU
     credentials.
+
+    Gated on `runner._workday_package_flavor`: skipped on
+    `"simplified"` because the simplified install has no ISU service
+    account (OBO uses the signed-in user's identity directly). See
+    `_simplified_install_skip` for the SKIP message contract.
     """
+    flavor = getattr(runner, "_workday_package_flavor", None)
+    if flavor == "simplified":
+        return [_simplified_install_skip(
+            checkpoint_id="WD-ENV-101",
+            description="ISU username vs Entra UPN format alignment",
+        )]
+
     results: list[CheckResult] = []
     env_url = runner.env_url
     dv_token = runner.dv_token
@@ -1090,7 +1619,25 @@ def _check_workflows(runner) -> list[CheckResult]:
       3. .local/config.json -> connections.Workday (tenant, base URL)
       4. Interactive prompt (username + password only - never cached to disk)
       5. .local/config.json -> workdayTestEmployeeId (cached after first prompt)
+
+    Gated on `runner._workday_package_flavor`: skipped on
+    `"simplified"`. The 17 workflows exercise Workday SOAP via ISU
+    credentials, which the simplified install does not use (OBO via
+    the signed-in user replaces the ISU code path). Without this gate
+    the natural credential-missing skip path emits
+    ``"Workday ISU credentials not provided"`` and asks the operator
+    to provide ISU creds — actively misleading guidance on a tenant
+    that intentionally has no ISU. See `_simplified_install_skip`
+    for the SKIP message contract.
     """
+    flavor = getattr(runner, "_workday_package_flavor", None)
+    if flavor == "simplified":
+        return [_simplified_install_skip(
+            checkpoint_id="WD-WF-000",
+            description="Workday SOAP workflow tests",
+            category="Workday Workflows",
+        )]
+
     results = []
 
     # --- Resolve non-sensitive metadata first (URL, tenant, employee). ---

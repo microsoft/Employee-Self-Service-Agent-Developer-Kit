@@ -1,22 +1,38 @@
 # ESS ADK — One-Shot Installer
 
-A single PowerShell command that takes a customer from a clean Windows machine to a ready-to-use ESS Maker Kit workspace in VS Code.
-
-## What this delivers
-
-The customer experience goes from:
-
-> Install VS Code → Install Python → Install PowerShell 7 → Install Git → Install GitHub & Copilot extensions → Sign in → Clone repo → Open folder → Run `/setup`
-
-to:
+A single PowerShell command that installs everything needed for the ESS Maker Kit: VS Code, Python 3.12, Git, GitHub CLI, Copilot extensions, pip dependencies, and clones the repo.
 
 ```powershell
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap.ps1)
 ```
 
-...and they land in VS Code at `solutions/ess-maker-skills/` with everything wired up except the final Dataverse auth step (`/setup` in Copilot Chat).
+Once complete, VS Code opens at `solutions/ess-maker-skills/`. Run `/setup` in Copilot Chat to connect your Dataverse environment.
 
-> **GitHub Copilot subscription is still required** for the in-editor maker experience. This script installs the toolchain and extension scaffolding; it does not (and cannot) grant the Copilot entitlement.
+> **GitHub Copilot subscription is required** for the in-editor maker experience. This script installs the toolchain and extension scaffolding; it does not grant the Copilot entitlement.
+
+## GitHub Codespaces (no local install)
+
+> **Free tier available:** GitHub accounts include [120 core-hours/month of free Codespaces usage](https://docs.github.com/en/billing/managing-billing-for-your-products/managing-billing-for-github-codespaces/about-billing-for-github-codespaces#monthly-included-storage-and-core-hours-for-personal-accounts) (60 hours on a 2-core machine). Compute is only billed while the Codespace is running — it stops automatically after 30 minutes of inactivity. For organizational accounts, your admin may need to enable Codespaces — see [managing Codespaces for your organization](https://docs.github.com/en/codespaces/managing-codespaces-for-your-organization).
+
+For users who prefer a cloud-based development environment — no local toolchain or VS Code desktop install required. Just a browser and a GitHub account:
+
+👉 [**Create Codespace**](https://github.com/codespaces/new?repo=microsoft/Employee-Self-Service-Agent-Developer-Kit&ref=main&devcontainer_path=.devcontainer%2Fdevcontainer.json)
+
+The Codespace comes pre-configured with Python 3.12, pip dependencies, and GitHub Copilot. Select the **2-core** machine type (sufficient for the maker kit). Once it starts:
+
+1. Open the `solutions/ess-maker-skills` folder (File → Open Folder → `/workspaces/Employee-Self-Service-Agent-Developer-Kit/solutions/ess-maker-skills`)
+2. Run `/setup` in Copilot Chat to connect your Dataverse environment
+
+### FlightCheck via Codespaces
+
+The same Codespace environment can be used to run FlightCheck without the full maker kit setup. After creating the Codespace above:
+
+1. Open the `solutions/ess-maker-skills` folder (File → Open Folder → `/workspaces/Employee-Self-Service-Agent-Developer-Kit/solutions/ess-maker-skills`)
+2. Open a terminal and run:
+   ```bash
+   python scripts/flightcheck/cli.py --scope full
+   ```
+3. Follow the prompts to sign in and select your environment
 
 ## FlightCheck-Only Mode
 
@@ -59,33 +75,54 @@ python scripts/flightcheck/cli.py --scope full
 | `Install-EssAdk.ps1` | Orchestrator. Installs toolchain via winget, installs pip dependencies, clones the repo, installs VS Code extensions, launches VS Code. Idempotent. With `-FlightCheckOnly`, installs minimal toolchain and runs interactive environment/agent discovery. |
 | `bootstrap.ps1` | One-liner entry point for the full maker kit install. Downloads the installer into `$env:TEMP` and runs it. |
 | `bootstrap-flightcheck.ps1` | One-liner entry point for FlightCheck-only install. Downloads the installer and runs it with `-FlightCheckOnly`. |
+| `.devcontainer/devcontainer.json` | Codespace configuration. Pre-installs Python 3.12, pip dependencies, and Copilot extensions. |
 
-## How to test it locally (without publishing anything)
+## Dependencies
 
-> **PowerShell execution policy note.** Windows ships with `Restricted` by default, which blocks `.ps1` files loaded from disk. If you see *"running scripts is disabled on this system"*, use one of these instead of `.\Install-EssAdk.ps1`:
->
-> ```powershell
-> # One-shot bypass (recommended for one-off runs, no persistent change):
-> powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1
->
-> # OR enable signed scripts for the current user only (persists):
-> Set-ExecutionPolicy -Scope CurrentUser -ExecutionPolicy RemoteSigned
-> .\Install-EssAdk.ps1
->
-> # OR run the bootstrap directly from memory — execution policy does not apply
-> # because the script body is piped to Invoke-Expression and never hits disk:
-> iex (Get-Content .\bootstrap.ps1 -Raw)
-> ```
->
-> The published customer entry point (`iex (irm ...)`) uses the third pattern, so end users will not hit this error.
+The installer provisions the following dependencies. Users do not need to install these manually — the one-shot installer or Codespace handles everything.
+
+### System tools (installed via winget on Windows / Homebrew on macOS)
+
+| Tool | Version | Purpose | FlightCheck only? |
+|------|---------|---------|:-----------------:|
+| Python | 3.12 | Runtime for FlightCheck and maker scripts | ✅ |
+| Git | Latest | Clone the repo, version control | ✅ |
+| GitHub CLI (`gh`) | Latest | Device-code auth flow for private repo clone | ✅ |
+| VS Code | Latest | Editor and Copilot host | ❌ |
+| PowerShell 7 | Latest | Script execution (Windows only) | ❌ |
+
+### Python packages (installed via pip from `scripts/requirements.txt`)
+
+| Package | Purpose |
+|---------|---------|
+| `msal` | Microsoft Authentication Library — Entra ID auth for FlightCheck |
+| `requests` | HTTP client for Dataverse / Graph API calls |
+| `urllib3` | HTTP transport layer (requests dependency, pinned) |
+| `PyYAML` | YAML parsing for topic schema validation |
+| `defusedxml` | Safe XML parsing for Workday SOAP responses (XXE-hardened) |
+
+### VS Code extensions
+
+| Extension | Purpose |
+|-----------|---------|
+| `GitHub.copilot` | GitHub Copilot AI completions |
+| `GitHub.copilot-chat` | Copilot Chat — the primary maker interface |
+| `ms-python.python` | Python language support, linting, debugging |
+
+### Codespaces environment
+
+The devcontainer provides an equivalent pre-built environment:
+- **Base image:** `mcr.microsoft.com/devcontainers/python:3.12` (includes Python, git, common dev tools)
+- **Python packages:** Installed from `scripts/requirements.txt` via `postCreateCommand`
+- **VS Code extensions:** Copilot, Copilot Chat, Python (specified in `customizations.vscode.extensions`)
+- **Additional features:** GitHub CLI (via devcontainer features)
+
+## How to test it locally
 
 From this folder:
 
 ```powershell
-# Validate the winget DSC file in isolation:
-winget configure validate --file .\ess-adk-setup.winget.yaml
-
-# Or run the full installer end-to-end (note the -ExecutionPolicy Bypass):
+# Run the full installer end-to-end:
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -InstallRoot $env:USERPROFILE\source-test
 ```
 
@@ -98,40 +135,4 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipLa
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -FlightCheckOnly     # minimal install for FlightCheck only
 ```
 
-## Customer-facing commands
-
-Full maker kit install (VS Code + Copilot + everything):
-
-```powershell
-iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap.ps1)
-```
-
-FlightCheck-only (no VS Code or Copilot required):
-
-```powershell
-iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1)
-```
-
-For customers who prefer to inspect first:
-
-```powershell
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap.ps1" -OutFile bootstrap.ps1 -UseBasicParsing
-# review bootstrap.ps1
-.\bootstrap.ps1
-```
-
 For air-gapped / locked-down environments, IT can mirror the files internally and serve them from an intranet URL by passing `-SourceBaseUrl`.
-
-## Design choices worth flagging in review
-
-1. **No admin elevation required by default.** `winget configure` will UAC-prompt only for packages that need it (Python, VS Code system installer). If the customer can't elevate, they can pre-install those via Intune/Company Portal and re-run the script — it'll skip the present packages and continue.
-2. **Separate winget YAML vs. PowerShell orchestrator.** The YAML is the IT-reviewable artifact (admins can audit/mirror it). The PS1 handles the "non-declarative" bits (VS Code extensions, git clone, launch) that winget DSC can't cleanly express today.
-3. **Pinned Python version (`Python.Python.3.12`)** rather than latest, to match what the kit's `requirements.txt` is tested against. Update in lockstep with upstream.
-4. **GitHub CLI included** primarily so the device-code auth flow works smoothly when the Copilot extension signs in.
-5. **Idempotent.** Re-running fixes a partial install; we never delete or downgrade.
-
-## Open items before this can ship
-
-- [ ] Confirm exact Python version the kit pins to (3.11 vs 3.12).
-- [ ] Decide if we ship a VS Code workspace file in the repo so we can open `.code-workspace` instead of a folder.
-- [ ] Add an MSRC-aligned signing story for `Install-EssAdk.ps1` (or document `-ExecutionPolicy Bypass` invocation).

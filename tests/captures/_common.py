@@ -175,10 +175,30 @@ REDACT_REGEX: list[tuple[re.Pattern[str], str]] = [
     # because `_` is a word character — so \b doesn't fire between the
     # final hex char and `_`. The lookaround treats `_` as a boundary,
     # closing a real PII leak we hit in flightcheck_graph.yaml.
+    #
+    # The lookaround width is THREE chars (not one). One-char lookaround
+    # is over-eager: it rejects every GUID preceded by a single hex char
+    # even when that char is unrelated context. The killer case was
+    # OData filter URLs:
+    #
+    #     ?$filter=_solutionid_value%20eq%208907453e-7b9d-45c5-82e6-0a45b09fd1ec
+    #                                       ^                  GUID starts here
+    #     The char immediately before is `0` (last of `%20`), which is
+    #     hex, so single-char negative lookbehind REJECTED the match and
+    #     a real solution GUID leaked into the cassette. Same hazard for
+    #     `%2c` (comma), `%2f` (slash), `%3a` (colon), etc. — any URL-
+    #     encoded byte whose last hex digit happens to be in [0-9a-f].
+    #
+    # The 3-char width matches only when the preceding three chars are
+    # ALL hex/dash, i.e. when the GUID really is embedded in a longer
+    # hex run. URL-encoded prefixes (`%20`, `%2c`, …) include `%` which
+    # is not hex, so the lookbehind no longer fires and the embedded
+    # GUID gets scrubbed. Same logic applies symmetrically for the
+    # lookahead (trailing bytes).
     (
         re.compile(
-            r"(?<![0-9a-fA-F-])[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
-            r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?![0-9a-fA-F-])"
+            r"(?<![0-9a-fA-F-]{3})[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+            r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}(?![0-9a-fA-F-]{3})"
         ),
         "00000000-0000-0000-0000-000000001111",
     ),
