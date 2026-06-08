@@ -45,3 +45,32 @@ name: "ESS Agent Developer Kit CodeQL config"
 paths-ignore:
   # Operator-driven recording wrappers — see header comment for rationale.
   - tests/captures/**
+
+# `py/incomplete-url-substring-sanitization` heuristically AST-matches
+# any URL-literal-shaped substring check (`<url> in <var>`, and as of
+# the rule's 2026 widening, `re.search(r"<url>", <var>)` too),
+# regardless of context. Several FlightCheck test files assert that an
+# operator-facing remediation string contains an example issuer-URL
+# template such as `https://sts.windows.net/{tenantId}/` — the
+# canonical Entra-issued SAML issuer form an operator needs to look
+# for in the Workday IdP configuration. These assertions are NOT URL
+# sanitization or host-allowlist validation; the haystack is
+# multi-line human-readable prose, not a URL undergoing security
+# checks. The rule produces unactionable alerts here and has no
+# code-level rewrite that satisfies the heuristic without removing
+# the assertion the test exists to make.
+#
+# Every alert this rule has raised in this repo to date is classified
+# by CodeQL itself as `["test"]` (see code-scanning alerts #49–#52)
+# and lands on operator-facing-prose assertions. The rule has no
+# matches in production code under `solutions/` today. If a real URL
+# host-allowlist concern is ever introduced in product code, code
+# review remains the catch — and this exclusion can be revisited.
+# (CodeQL's `query-filters` mechanism does not support path-scoped
+# rule exclusions; the choices are global rule exclusion, whole-file
+# `paths-ignore`, or per-alert dismissal in the Security tab.
+# Global exclusion is the least-bad option given the rule's current
+# zero-signal track record here.)
+query-filters:
+  - exclude:
+      id: py/incomplete-url-substring-sanitization

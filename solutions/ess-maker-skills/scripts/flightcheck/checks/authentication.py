@@ -10,6 +10,11 @@ Checks Entra ID configuration, SSO, Conditional Access, user sync.
 import json
 
 from ..runner import CheckResult, Status, Priority
+from ._saml_utils import (
+    WORKDAY_SAML_SP_FILTER,
+    WORKDAY_SSO_TUTORIAL_DOC,
+    saml_entity_ids,
+)
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
 
@@ -542,21 +547,9 @@ def _format_sp_remediations(items: list[tuple[str, str, str]]) -> str:
 
 
 # Most production tenants name the federated app starting with "Workday"
-# (e.g. "Workday", "Workday Prod", "Workday Implementation"). Match
-# server-side via $filter so we don't pull every SP in the tenant.
-_WORKDAY_SP_FILTER = (
-    "startswith(displayName,'Workday') and preferredSingleSignOnMode eq 'saml'"
-)
-
-# Authoritative reference for the Entra→Workday SAML mapping
-# behavior. Step 6 + note: "You need to map the Name ID with actual
-# User ID in your Workday account". Workday itself matches the
-# incoming NameID against the Workday Username — there is NO
-# Workday-side configurable "which attribute to match" field; the
-# alignment work happens entirely on the Entra side.
-_WORKDAY_SSO_TUTORIAL = (
-    "https://learn.microsoft.com/en-us/entra/identity/saas-apps/workday-tutorial"
-)
+# (e.g. "Workday", "Workday Prod", "Workday Implementation"). The SAML
+# SP filter and the Workday SSO tutorial URL live in
+# ``checks/_saml_utils`` so AUTH-006 and WD-CONN-010 stay in sync.
 
 
 def _run_saml_nameid_check(runner) -> list[CheckResult]:
@@ -564,7 +557,7 @@ def _run_saml_nameid_check(runner) -> list[CheckResult]:
     cp_id = "AUTH-006"
     category = "Authentication"
     description = "SAML NameID alignment with Workday user identifier"
-    doc_link = _WORKDAY_SSO_TUTORIAL
+    doc_link = WORKDAY_SSO_TUTORIAL_DOC
 
     graph = getattr(runner, "graph", None)
     if graph is None:
@@ -579,21 +572,27 @@ def _run_saml_nameid_check(runner) -> list[CheckResult]:
             doc_link=doc_link,
         )]
 
-    # Probe /servicePrincipals with graph.get() FIRST — get_all() (which
-    # get_service_principals wraps) swallows 401/403 into an empty list,
-    # so a missing Application.Read.All consent would otherwise
-    # masquerade as "no Workday SAML app exists" and falsely PASS the
-    # check as NOT_CONFIGURED. graph.get() preserves the _status field
-    # so we can distinguish "no apps" from "we can't see apps."
-    sp_probe = graph.get("/servicePrincipals", params={"$top": "1"})
-    if sp_probe.get("_status") in (401, 403):
+    # Filtered /servicePrincipals call with raise_on_permission_error=True
+    # so a missing Application.Read.All consent surfaces as
+    # PermissionError → WARNING instead of get_all()'s default
+    # silent-empty-list (which would masquerade as "no Workday SAML app
+    # exists" and falsely PASS the check as NOT_CONFIGURED). Uses the
+    # same plumbing as get_app_role_assignments (AUTH-005) — see
+    # graph_client.get_all() raise_on_permission_error kwarg.
+    try:
+        workday_sps = graph.get_service_principals(
+            filter_expr=WORKDAY_SAML_SP_FILTER,
+            raise_on_permission_error=True,
+        )
+    except PermissionError as e:
         return [CheckResult(
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=description,
             result=(
-                "Cannot read Entra service principals — Graph returned "
-                f"HTTP {sp_probe['_status']} on /servicePrincipals."
+                f"Cannot read Entra service principals: {e} "
+                "(HTTP 403 typically means Application.Read.All "
+                "is not consented)."
             ),
             remediation=(
                 "Grant Application.Read.All (or Directory.Read.All) "
@@ -603,9 +602,6 @@ def _run_saml_nameid_check(runner) -> list[CheckResult]:
             ),
             doc_link=doc_link,
         )]
-
-    try:
-        workday_sps = graph.get_service_principals(filter_expr=_WORKDAY_SP_FILTER)
     except Exception as e:
         return [CheckResult(
             checkpoint_id=cp_id, category=category,
@@ -689,7 +685,7 @@ def _run_saml_nameid_check(runner) -> list[CheckResult]:
         sp_id = sp.get("id", "")
         sp_name = sp.get("displayName", "(unknown)")
         app_id = sp.get("appId", "?")
-        entity_ids = _saml_entity_ids(sp.get("servicePrincipalNames") or [])
+        entity_ids = saml_entity_ids(sp.get("servicePrincipalNames") or [])
         entity_ids_str = ", ".join(entity_ids) if entity_ids else "(none surfaced)"
 
         try:
@@ -790,31 +786,6 @@ def _run_saml_nameid_check(runner) -> list[CheckResult]:
         ),
         doc_link=doc_link,
     )]
-
-
-def _saml_entity_ids(service_principal_names: list[str]) -> list[str]:
-    """Filter ``servicePrincipalNames`` to entries that look like a
-    SAML entity ID (URI form), excluding the raw appId GUID.
-
-    Microsoft Graph returns servicePrincipalNames as a mix of the
-    application's appId GUID and one or more identifier URIs (the
-    SAML entity ID for SAML apps). The Workday "Service Provider ID"
-    column always carries the URI form, so the GUIDs are noise here.
-
-    Source (validatable):
-      Schema: https://graph.microsoft.com/v1.0/$metadata
-              EntityType Name="servicePrincipal" — Property
-              servicePrincipalNames (Collection(Edm.String)).
-      Docs:   https://learn.microsoft.com/graph/api/resources/serviceprincipal?view=graph-rest-1.0
-    """
-    out: list[str] = []
-    for spn in service_principal_names:
-        if not isinstance(spn, str):
-            continue
-        # A GUID is 32 hex chars + 4 dashes = 36 chars, no scheme.
-        if "://" in spn or "/" in spn or ":" in spn:
-            out.append(spn)
-    return out
 
 
 def _summarize_nameid(policies: list[dict]) -> str:

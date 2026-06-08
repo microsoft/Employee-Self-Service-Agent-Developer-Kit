@@ -3,7 +3,7 @@
 evaluate_evals.py — Quality validation for generated evaluation test sets.
 
 Reads eval YAML files from an agent's evaluations/ folder, sends them to a
-LLM judge via GitHub Models API, and reports quality scores per dimension.
+LLM judge via GitHub Copilot API, and reports quality scores per dimension.
 
 Uses 'gh auth token' for credentials — no extra setup required.
 
@@ -178,7 +178,7 @@ def load_topic_context(topics_dir: Path) -> dict[str, str]:
     return context
 
 
-# ─── GitHub Models API ────────────────────────────────────────────────────────
+# ─── Copilot API ──────────────────────────────────────────────────────────────
 
 def get_gh_token() -> str:
     """Get the current GitHub token via gh auth token."""
@@ -205,7 +205,7 @@ def get_gh_token() -> str:
 
 
 def call_judge(prompt: str, token: str, _retry: bool = True) -> str:
-    """Call the GitHub Models LLM judge. Returns the response text."""
+    """Call the Copilot API LLM judge. Returns the response text."""
     payload = {
         "messages": [
             {
@@ -267,10 +267,10 @@ def call_judge(prompt: str, token: str, _retry: bool = True) -> str:
             print("\nERROR: Rate limited by Copilot API. Wait a moment and retry.", file=sys.stderr)
             sys.exit(1)
         else:
-            print(f"\nERROR: GitHub Models API returned {e.code}: {err_body}", file=sys.stderr)
+            print(f"\nERROR: Copilot API returned {e.code}: {err_body}", file=sys.stderr)
             sys.exit(1)
     except urllib.error.URLError as e:
-        print(f"\nERROR: Could not reach GitHub Models API: {e.reason}", file=sys.stderr)
+        print(f"\nERROR: Could not reach Copilot API: {e.reason}", file=sys.stderr)
         sys.exit(1)
 
 
