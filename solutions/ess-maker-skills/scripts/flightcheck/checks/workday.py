@@ -2099,7 +2099,7 @@ def _format_cert_detail_line(cert: dict, now: datetime) -> str:
     if end is None:
         expiry_str = "NotAfter=(unknown)"
     else:
-        days = (end - now).days
+        days = (end.date() - now.date()).days
         if days < 0:
             expiry_str = f"NotAfter={end.date().isoformat()} (EXPIRED {-days} days ago)"
         else:
@@ -2107,7 +2107,7 @@ def _format_cert_detail_line(cert: dict, now: datetime) -> str:
     start = cert["start"]
     start_str = ""
     if start is not None and start > now:
-        days_until = (start - now).days
+        days_until = (start.date() - now.date()).days
         start_str = f", NotBefore={start.date().isoformat()} (not yet valid for {days_until} more days)"
     usages = sorted(cert.get("usages_seen") or set())
     usage_str = "+".join(usages) if usages else "(no usage)"
