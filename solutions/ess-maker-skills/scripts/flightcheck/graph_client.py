@@ -225,7 +225,7 @@ class GraphClient:
         raise_on_permission_error: bool = False,
     ) -> list:
         """List service principals (enterprise apps) with optional filter.
-        
+
         ``select`` controls the OData ``$select`` projection. Graph
         ``GET /servicePrincipals`` listing responses OMIT several
         navigation-adjacent properties unless explicitly requested,
