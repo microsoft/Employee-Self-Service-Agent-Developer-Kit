@@ -227,6 +227,9 @@ def service_principal(
     Cited consumers:
       - flightcheck/graph_client.py (get_service_principals).
       - flightcheck/checks/authentication.py (AUTH-005, AUTH-006).
+      - flightcheck/checks/workday.py (WD-CONN-010 — single-Entra-tenant
+        federation alignment; consumes the same SAML filter as AUTH-006
+        plus the servicePrincipalNames entity-ID list).
 
     Source (validatable):
       Schema: https://graph.microsoft.com/v1.0/$metadata
