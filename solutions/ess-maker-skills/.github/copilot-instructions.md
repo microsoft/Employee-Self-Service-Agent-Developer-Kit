@@ -315,14 +315,16 @@ JSON format", "something went wrong with Workday".
 "check my setup", "pre-flight", "deployment readiness", "run validation".
 
 **Quality validation invocation:** When quality validation is requested on
-eval files — at step 4.3 of the eval create flow OR step 4 of the eval
-update flow — invoke `runSubagent` (the VS Code Copilot Chat tool) pointing the subagent to read
+eval files — at step 4.3 of the eval create flow, step 4 of the eval
+update flow, OR step 5 of the eval delete flow (single test case deletion
+only) — invoke `runSubagent` (the VS Code Copilot Chat tool) pointing the subagent to read
 `src/skills/evaluations/validate/SKILL.md` as its first action, passing the
 paths of the newly written eval files and the agent folder path. Wait for
 the subagent to return with its quality report before continuing. If fixes
 are applied, re-invoke the subagent and wait for the updated report
 before continuing. Do NOT proceed to review and push until the subagent
-has returned. Do NOT invoke the validate subagent after delete operations.
+has returned. Do NOT invoke the validate subagent after entire test set
+delete operations or after deleting the last remaining case in a category.
 
 **When the user asks to modify, delete, rename, or otherwise change an agent
 component, ALWAYS load and follow the corresponding skill file.** The skill
