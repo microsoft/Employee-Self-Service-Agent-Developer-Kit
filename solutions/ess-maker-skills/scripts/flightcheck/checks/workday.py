@@ -2419,7 +2419,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
                 "Hardening recommendation (not a functional blocker): "
                 f"{len(warning_entries)} Workday SAML app(s) have a "
                 "signing certificate that is expiring soon (within "
-                f"{CERT_EXPIRY_WARN_DAYS} days) or not yet valid:\n"
+                f"{CERT_EXPIRY_WARN_DAYS} days), not yet valid, or has unknown expiry metadata:\n"
                 f"{bodies}"
             ),
             remediation=(
