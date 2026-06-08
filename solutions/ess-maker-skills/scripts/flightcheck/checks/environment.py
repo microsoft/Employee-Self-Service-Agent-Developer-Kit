@@ -7,6 +7,8 @@ ESS FlightCheck — Environment Configuration Validation (ENV-xxx)
 Checks Power Platform environment, Dataverse, DLP policies, and related config.
 """
 
+import uuid
+
 from ..runner import CheckResult, Status, Priority
 from .connections import get_connection_status
 from auth import query_all, dataverse_get, AuthExpiredError  # scripts/auth.py, on path via cli.py
@@ -416,6 +418,22 @@ _ELIGIBLE_SOLUTION_FILTER = (
 )
 
 
+def _try_parse_guid(value) -> uuid.UUID | None:
+    """Return ``uuid.UUID(value)`` or ``None`` if value is not a parsable GUID.
+
+    Used to normalise Dataverse-returned ``solutionid`` strings (which may
+    differ in case or ``{braces}`` between endpoints) before equality
+    comparison. Non-string / non-GUID inputs (including ``None`` and empty
+    string) return ``None`` so callers can treat them as "no value".
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return uuid.UUID(value)
+    except (ValueError, AttributeError):
+        return None
+
+
 def _check_preferred_solution(runner) -> list[CheckResult]:
     """ENV-009: Validate the maker has selected a preferred customization solution.
 
@@ -473,9 +491,18 @@ def _check_preferred_solution(runner) -> list[CheckResult]:
         eligible_names = sorted(s.get("uniquename", "<unknown>") for s in solutions)
         eligible_summary = ", ".join(eligible_names)
 
-        if selected_solution_id:
+        # Normalise GUIDs to uuid.UUID for the membership compare so casing
+        # or `{braces}` differences between the two response sources never
+        # cause a false WARNING. Defensive parse — malformed values fall
+        # through to the WARNING branch below (treated as "no selection").
+        selected_uuid = _try_parse_guid(selected_solution_id)
+
+        if selected_uuid is not None:
             match = next(
-                (s for s in solutions if s.get("solutionid") == selected_solution_id),
+                (
+                    s for s in solutions
+                    if _try_parse_guid(s.get("solutionid")) == selected_uuid
+                ),
                 None,
             )
             if match:

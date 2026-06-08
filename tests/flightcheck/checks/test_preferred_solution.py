@@ -223,6 +223,30 @@ def test_passed_when_selected_matches_one_of_many(runner: _MinimalRunner) -> Non
 
 
 @responses.activate
+def test_passed_when_guid_casing_differs_between_endpoints(
+    runner: _MinimalRunner,
+) -> None:
+    """GUID equality must be case-insensitive across the two endpoints.
+
+    Dataverse normally returns lowercase GUIDs in JSON, but the comparison
+    in production code must not break if the two endpoints ever serialise
+    GUIDs in different cases. The eligible-set query returns the GUID in
+    lowercase here; GetPreferredSolution() returns the same logical GUID
+    in uppercase. The check must still PASS.
+    """
+    _register_solutions(solutions=[
+        _solution_record(SOLUTION_ID_ELIGIBLE.lower(), "ESSCustomization"),
+    ])
+    _register_get_preferred_solution(
+        selected_solution_id=SOLUTION_ID_ELIGIBLE.upper(),
+    )
+
+    r = _check_preferred_solution(runner)[0]
+    assert r.status == "Passed"
+    assert "'ESSCustomization'" in r.result
+
+
+@responses.activate
 def test_warning_when_dataverse_returns_500(runner: _MinimalRunner) -> None:
     """A transient platform error must surface as WARNING, not silently PASS.
 
