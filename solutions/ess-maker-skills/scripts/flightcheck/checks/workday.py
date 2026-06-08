@@ -2347,8 +2347,8 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
                 "reason": "not_yet_valid",
             })
         elif (
-            active_end is not None
-            and (active_end - now) <= timedelta(days=CERT_EXPIRY_WARN_DAYS)
+            active_end is None
+            or (active_end - now) <= timedelta(days=CERT_EXPIRY_WARN_DAYS)
         ):
             warning_entries.append({
                 "sp_name": sp_name,
@@ -2356,7 +2356,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
                     f"{sp_header}\n"
                     f"    active: {cert_line}{rollover_block}"
                 ),
-                "reason": "expiring_soon",
+                "reason": "unknown_expiry" if active_end is None else "expiring_soon",
             })
         else:
             manual_entries.append({
