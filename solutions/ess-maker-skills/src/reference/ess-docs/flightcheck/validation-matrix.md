@@ -94,6 +94,41 @@ Tests all 17 ESS pre-configured workflows against the Workday API. Requires ISU 
 | WD-WF-016 | Update Email | Human_Resources | Write | | Contact Information |
 | WD-WF-017 | Update Phone | Human_Resources | Write | | Contact Information |
 
+### Workday Custom-Workflow Inventory (WD-WF-CAT-xxx) — Manual
+
+The 17 SOAP tests above cover only the OOTB workflows the kit ships
+SOAP envelopes for. Customers routinely wire up additional Workday
+scenarios via two patterns:
+
+- **Pattern A** — Topic that calls
+  `WorkdaySystemGetCommonExecution` with a `scenarioName` of a
+  template-config record in Dataverse.
+- **Pattern B** — Standalone topic that calls a customer-built cloud
+  flow bound to the `shared_workdaysoap` connector via
+  `InvokeFlowAction`.
+
+Both patterns exit the automated validation surface (the kit doesn't
+ship a Workday WSDL parser; per-tenant security domain / ISU config
+varies). WD-WF-CAT-001 walks
+`workspace/agents/*/topics/*.mcs.yml` for these patterns and emits a
+MANUAL row enumerating any scenarios NOT in the seed catalog at
+`scripts/flightcheck/data/workday_scenario_catalog.json`. The
+remediation carries a 4-item checklist (ISU account, payload shape vs.
+Workday WSDL, evaluation test prompt, connection-ref auth health) and
+a loop-back link inviting PRs to extend the catalog.
+
+| ID | Check | Priority | Method | Doc Link |
+|----|-------|----------|--------|----------|
+| WD-WF-CAT-001 | Workday custom-workflow inventory checklist (MANUAL) | High | Local file walk + JSON catalog diff | [workday-extensibility](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-extensibility) |
+| WD-WF-CAT-LINK | Cross-link trailer surfacing WD-WF-CAT-001 from inside the SOAP-test block | Medium | Computed from WD-WF-CAT-001 cache | [workday-extensibility](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-extensibility) |
+
+MANUAL rows do not fail readiness (per FlightCheck design principle #2)
+— they direct the operator to verify what the kit cannot. Address
+each scenario by either (a) confirming it against the 4-item checklist
+in the customer's environment, or (b) PR'ing the scenarioName to
+`workday_scenario_catalog.json` if it is in fact an OOTB scenario the
+seed list is missing.
+
 ## 6. Local Agent File Validation (Kit-exclusive)
 
 These checks parse the extracted agent files on disk — a capability the
