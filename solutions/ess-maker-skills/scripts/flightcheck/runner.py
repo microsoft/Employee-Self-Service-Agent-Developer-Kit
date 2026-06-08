@@ -144,10 +144,19 @@ class FlightCheckRunner:
         total_failed = sum(c.failed for c in cat_map.values())
         total_warnings = sum(c.warnings for c in cat_map.values())
         total_passed = sum(c.passed for c in cat_map.values())
+        # Tallied here so the verdict logic can consult errors. Errors
+        # (a check raised mid-run) mean we don't actually know whether
+        # ESS is healthy in that area, so they MUST count as
+        # "not ready" — not "ready" or "ready with warnings". Before
+        # this was added, an error-only run rendered as green READY
+        # with all the errored rows visible under ACTION REQUIRED
+        # directly below the green banner — exactly the at-a-glance
+        # contradiction the prioritized report is meant to eliminate.
+        total_errors = sum(c.errors for c in cat_map.values())
 
-        if total_failed == 0 and total_warnings == 0:
+        if total_failed == 0 and total_errors == 0 and total_warnings == 0:
             overall = "READY"
-        elif total_failed == 0:
+        elif total_failed == 0 and total_errors == 0:
             overall = "READY_WITH_WARNINGS"
         else:
             overall = "NOT_READY"
@@ -165,7 +174,7 @@ class FlightCheckRunner:
             not_configured=sum(c.not_configured for c in cat_map.values()),
             manual=sum(c.manual for c in cat_map.values()),
             skipped=sum(c.skipped for c in cat_map.values()),
-            errors=sum(c.errors for c in cat_map.values()),
+            errors=total_errors,
             overall=overall,
         )
 

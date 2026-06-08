@@ -461,3 +461,89 @@ def test_runresult_skipped_and_errors_tallied():
 
     assert result.skipped == 1
     assert result.errors == 1
+
+
+def test_overall_verdict_treats_error_only_run_as_not_ready():
+    """An error-only run must not render as READY.
+
+    The verdict banner is the report's single biggest at-a-glance
+    signal. An ERROR (a check raised mid-run) means we don't actually
+    know whether ESS is healthy in that area, so the verdict MUST
+    NOT be green.
+
+    Pre-fix the verdict logic inspected only failed+warnings and
+    ignored errors entirely (runner.py:148). An error-only run
+    therefore rendered a green ``verdict-ready`` banner reading
+    *"All N check(s) passed. Your environment looks ready to
+    deploy."* with all the errored rows listed under ACTION REQUIRED
+    directly below — exactly the at-a-glance contradiction the
+    prioritized report is meant to eliminate.
+
+    Repro recipe: kill BAP auth mid-run so EXT-001 / ENV-001 /
+    WD-CONN-001 all raise. Nothing else fails or warns. Banner
+    shows READY. The errored rows appear directly below it.
+    """
+    from flightcheck.runner import (
+        CheckResult,
+        FlightCheckRunner,
+        Priority,
+        Status,
+    )
+
+    runner = FlightCheckRunner(scope="test")
+    runner.register("Cat", lambda _r: [
+        CheckResult(
+            checkpoint_id="E-1", category="Cat",
+            priority=Priority.HIGH.value, status=Status.ERROR.value,
+            description="External systems validation",
+            result="Check failed with error: boom",
+            remediation="Review permissions and retry.",
+        ),
+        CheckResult(
+            checkpoint_id="PRE-001", category="Cat",
+            priority=Priority.CRITICAL.value, status=Status.PASSED.value,
+            description="License", result="OK",
+        ),
+    ])
+    result = runner.run()
+
+    assert result.errors == 1
+    assert result.failed == 0
+    assert result.warnings == 0
+    assert result.overall == "NOT_READY"
+
+
+def test_overall_verdict_error_plus_warning_is_not_ready_not_ready_with_warnings():
+    """Same blind spot at the READY_WITH_WARNINGS boundary: an error
+    plus a warning must NOT render as READY_WITH_WARNINGS (which
+    would silently swallow the error in the verdict). It is
+    NOT_READY because we have an error.
+    """
+    from flightcheck.runner import (
+        CheckResult,
+        FlightCheckRunner,
+        Priority,
+        Status,
+    )
+
+    runner = FlightCheckRunner(scope="test")
+    runner.register("Cat", lambda _r: [
+        CheckResult(
+            checkpoint_id="E-1", category="Cat",
+            priority=Priority.HIGH.value, status=Status.ERROR.value,
+            description="External systems validation",
+            result="Check failed with error: boom",
+            remediation="Review permissions and retry.",
+        ),
+        CheckResult(
+            checkpoint_id="W-1", category="Cat",
+            priority=Priority.MEDIUM.value, status=Status.WARNING.value,
+            description="Soft issue", result="meh",
+            remediation="Look at this.",
+        ),
+    ])
+    result = runner.run()
+
+    assert result.errors == 1
+    assert result.warnings == 1
+    assert result.overall == "NOT_READY"
