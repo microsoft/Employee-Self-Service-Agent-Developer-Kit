@@ -1,8 +1,8 @@
 # Eval Quality Fix Flow
 
 This file is the single source of truth for the quality gate + fix flow.
-Both `create/SKILL.md` and `update/SKILL.md` reference it. Do not duplicate
-this logic in either file.
+`create/SKILL.md`, `update/SKILL.md`, and `delete/SKILL.md` reference it.
+Do not duplicate this logic in any of those files.
 
 ---
 
