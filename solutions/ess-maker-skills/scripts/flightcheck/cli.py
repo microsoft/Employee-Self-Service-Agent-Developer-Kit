@@ -29,7 +29,15 @@ import sys
 # Ensure scripts/ is on the path so we can import auth
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from flightcheck.runner import FlightCheckRunner, save_results, Status
+from flightcheck.runner import (
+    FlightCheckRunner,
+    save_results,
+    Status,
+    bucket_results,
+    BUCKET_ACTION,
+    BUCKET_MANUAL,
+    BUCKET_PASSED,
+)
 from flightcheck.graph_client import GraphClient
 from flightcheck.pp_admin_client import PPAdminClient, derive_environment_id
 from flightcheck.pva_client import PVAClient
@@ -192,10 +200,29 @@ def main():
         if env_id and pp_admin is not None:
             print(f"Environment ID: {env_id}")
         elif env_id:
+            # pp_admin is None: we fell back to WhoAmI/OrganizationId.
+            # That value is wrong for BAP admin calls AND for any URL
+            # that embeds an env id (Copilot Studio, maker portal, ...).
             print(
                 f"Environment ID: {env_id} (Dataverse OrganizationId fallback "
                 "— Power Platform sign-in failed, so BAP-scoped checks "
                 "(ENV-*, EXT-*, WD-CONN-*) will be skipped)"
+            )
+        elif pp_admin is not None:
+            # BAP auth succeeded but no env matched the Dataverse hostname.
+            # Usually means the signed-in user lacks admin access on the
+            # env hosting this Dataverse instance. Tell the operator how
+            # to override so deep links and BAP-scoped checks still work.
+            print(
+                f"WARNING: Could not find a BAP environment whose linked "
+                f"Dataverse instance matches {env_url}. You may not have "
+                "Power Platform admin access on that environment. "
+                "BAP-scoped checks (ENV-*, EXT-*, WD-CONN-*) will be skipped "
+                "and Copilot Studio deep links will fall back to the "
+                "homepage. To override, pass --environment-id <guid> "
+                "(find it in the Power Platform admin center or in the "
+                "Copilot Studio bot URL: "
+                "https://copilotstudio.microsoft.com/environments/<guid>/bots/...)."
             )
         else:
             print(
@@ -251,42 +278,125 @@ def main():
     result = runner.run()
 
     # --- Print summary ---
-    print()
-    print("=" * 64)
-    print("  FLIGHTCHECK SUMMARY")
-    print("=" * 64)
-    print(f"  Total checks: {result.total}")
-    print(f"  [PASS] Passed:         {result.passed}")
-    print(f"  [FAIL] Failed:         {result.failed}")
-    print(f"  [WARN] Warnings:       {result.warnings}")
-    print(f"  [INFO] Not Configured: {result.not_configured}")
-    print(f"  Duration:              {result.duration_secs}s")
-    print()
-
-    if result.overall == "READY":
-        print("  [PASS] READY FOR DEPLOYMENT")
-    elif result.overall == "READY_WITH_WARNINGS":
-        print("  [WARN] READY WITH WARNINGS")
-    else:
-        print("  [FAIL] NOT READY -- ISSUES FOUND")
-
-    print("=" * 64)
-
-    # Print failures
-    failures = [r for r in result.results if r.status == Status.FAILED.value]
-    if failures:
-        print(f"\n  FAILED CHECKS ({len(failures)}):\n")
-        for r in failures:
-            print(f"    [FAIL] {r.checkpoint_id}: {r.result}")
-            if r.remediation:
-                print(f"       -> {r.remediation}")
-        print()
+    _print_prioritized_summary(result)
 
     # Save results
     save_results(result, args.output)
 
     # Exit code
     sys.exit(1 if result.failed > 0 else 0)
+
+
+def _print_prioritized_summary(result):
+    """Print a triage-first summary that mirrors the HTML layout.
+
+    Three sections, biggest signal first:
+      1. Verdict banner (one line).
+      2. Counts strip.
+      3. ACTION REQUIRED — full per-row detail (Failed / Error / Warning).
+      4. NEEDS MANUAL VERIFICATION — one line per row (Manual /
+         NotConfigured / Skipped).
+      5. PASSED — count only, point to report.html for the list.
+
+    The goal is for an operator scanning the terminal to see, in
+    order: am I OK? what must I fix? what must I verify? — without
+    having to read every passing row.
+    """
+    buckets = bucket_results(result.results)
+    action = buckets[BUCKET_ACTION]
+    manual = buckets[BUCKET_MANUAL]
+    passed = buckets[BUCKET_PASSED]
+
+    print()
+    print("=" * 64)
+    print("  FLIGHTCHECK SUMMARY")
+    print("=" * 64)
+
+    # Verdict line — single most important signal in the terminal.
+    if result.overall == "READY":
+        print("  [READY] Ready for deployment")
+        if manual:
+            print(f"          ({len(manual)} item(s) need manual "
+                  "verification -- see below)")
+    elif result.overall == "READY_WITH_WARNINGS":
+        print(f"  [WARN]  Ready with warnings -- {result.warnings} "
+              "warning(s) to review")
+    else:
+        action_total = result.failed + result.errors + result.warnings
+        word = "issue" if action_total == 1 else "issues"
+        print(f"  [FAIL]  Not ready -- {action_total} {word} need "
+              "attention")
+
+    print()
+    # Counts strip — every status in one line so the operator can
+    # cross-reference with the detail sections below.
+    print(f"  Failed: {result.failed}   Errored: {result.errors}   "
+          f"Warnings: {result.warnings}   Manual: {result.manual}   "
+          f"NotConfigured: {result.not_configured}   "
+          f"Skipped: {result.skipped}   Passed: {result.passed}")
+    print(f"  Total checks: {result.total}   "
+          f"Duration: {result.duration_secs}s")
+    print("=" * 64)
+
+    # Section 1 — ACTION REQUIRED (full detail)
+    if action:
+        print()
+        print(f"  ACTION REQUIRED ({len(action)})")
+        print("  " + "-" * 62)
+        for r in action:
+            tag = _status_tag(r.status)
+            print(f"  {tag} {r.checkpoint_id} [{r.priority}]: {r.result}")
+            if r.remediation:
+                # Indent multi-line remediation under the arrow so
+                # multi-step fixes stay visually grouped with their
+                # finding.
+                lines = r.remediation.splitlines()
+                print(f"       -> {lines[0]}")
+                for cont in lines[1:]:
+                    print(f"          {cont}")
+            print()
+
+    # Section 2 — NEEDS MANUAL VERIFICATION (one-liner per row;
+    # full prose is in report.html so the terminal stays scannable).
+    if manual:
+        print()
+        print(f"  NEEDS MANUAL VERIFICATION ({len(manual)})")
+        print("  " + "-" * 62)
+        for r in manual:
+            tag = _status_tag(r.status)
+            print(f"  {tag} {r.checkpoint_id} [{r.priority}]: "
+                  f"{r.description}")
+        print("  (Open report.html for the full result + verification "
+              "steps.)")
+
+    # Section 3 — PASSED (count only; the operator doesn't need to
+    # scroll past 200+ green rows to find what needs their attention).
+    print()
+    print(f"  PASSED ({len(passed)})")
+    print("  " + "-" * 62)
+    if passed:
+        print("  See report.html for the full list of passing checks.")
+    else:
+        print("  No passing checks in this run.")
+    print()
+
+
+def _status_tag(status: str) -> str:
+    """Return a 6-char tag in [BRACKETS] for terminal alignment.
+
+    Matches the existing [PASS]/[FAIL]/[WARN]/[INFO] convention used
+    elsewhere in cli.py so the report visually fits the rest of the
+    terminal output.
+    """
+    return {
+        Status.FAILED.value: "[FAIL]",
+        Status.ERROR.value: "[ERR ]",
+        Status.WARNING.value: "[WARN]",
+        Status.MANUAL.value: "[MAN ]",
+        Status.NOT_CONFIGURED.value: "[CFG ]",
+        Status.SKIPPED.value: "[SKIP]",
+        Status.PASSED.value: "[PASS]",
+    }.get(status, "[?   ]")
 
 
 if __name__ == "__main__":
