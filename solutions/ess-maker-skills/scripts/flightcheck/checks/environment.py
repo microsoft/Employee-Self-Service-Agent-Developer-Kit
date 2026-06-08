@@ -7,8 +7,6 @@ ESS FlightCheck — Environment Configuration Validation (ENV-xxx)
 Checks Power Platform environment, Dataverse, DLP policies, and related config.
 """
 
-import requests
-
 from ..runner import CheckResult, Status, Priority
 from .connections import get_connection_status
 from auth import query_all, dataverse_get, AuthExpiredError  # scripts/auth.py, on path via cli.py
@@ -365,8 +363,8 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
 # lines 19-45) tells operators to create a customer-owned unmanaged solution and
 # select it as their *preferred solution* so that new Copilot Studio / Maker
 # portal customizations land in that solution instead of in the Default
-# Solution. The preferred-solution selection is stored per user on the
-# `usersettings` table, not per environment, so this check validates the
+# Solution. The preferred-solution selection is stored per user (on the
+# `usersettings` table), not per environment, so this check validates the
 # *current FlightCheck caller's* selection - it is honest about that scope in
 # the description and result text.
 #
@@ -375,12 +373,19 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
 #     GET /solutions?$filter=ismanaged eq false and isvisible eq true
 #         and uniquename ne 'Default' and uniquename ne 'Active'
 #         and solutiontype eq 0 and _parentsolutionid_value eq null
-#  2. Caller identity
-#     GET /WhoAmI()
-#     -> https://learn.microsoft.com/power-apps/developer/data-platform/webapi/use-web-api-functions
-#  3. Caller's preferred solution
-#     GET /usersettingscollection({UserId})?$select=_preferredsolution_value
-#     -> https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/usersettings
+#  2. Caller's preferred solution (single round-trip, bound to the caller
+#     via the bearer token - no separate WhoAmI() lookup needed)
+#     GET /GetPreferredSolution()
+#     -> https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/getpreferredsolution
+#
+# UNCERTAINTY: the MS Learn reference for GetPreferredSolution() documents
+# the return type as `crmbaseentity` but does not include an example
+# response body. The code below treats the response defensively:
+#  * A body that contains `solutionid` is the selected solution; we then
+#    compare it against the eligible set above.
+#  * A body that omits `solutionid` (or any decode/empty-body edge case
+#    that bubbles up as an exception) is reported via the generic catch-all
+#    WARNING with the HTTP status code surfaced (per PR #128 review).
 #
 # Verdict map (always exactly one CheckResult emitted):
 #   * SKIPPED  - env_url or dv_token missing.
@@ -432,7 +437,7 @@ def _check_preferred_solution(runner) -> list[CheckResult]:
         )]
 
     try:
-        # Eligible unmanaged customer solutions.
+        # Signal 1: eligible unmanaged customer solutions.
         solutions = query_all(
             env_url, token,
             "solutions",
@@ -460,54 +465,10 @@ def _check_preferred_solution(runner) -> list[CheckResult]:
                 doc_link=_PREFSOL_DOC_LINK,
             )]
 
-        # Signal 2 + 3: caller identity, then caller's preferred solution lookup.
-        whoami = dataverse_get(env_url, token, "WhoAmI()")
-        user_id = whoami.get("UserId")
-        if not user_id:
-            return [CheckResult(
-                checkpoint_id="ENV-009", category="Environment",
-                priority=Priority.HIGH.value, status=Status.WARNING.value,
-                description=_PREFSOL_DESCRIPTION,
-                result=(
-                    "WhoAmI() returned a response without a UserId; cannot "
-                    "determine the current maker's preferred-solution selection."
-                ),
-                remediation=(
-                    "Re-authenticate to Dataverse and re-run FlightCheck so "
-                    "the active session identity can be determined."
-                ),
-                doc_link=_PREFSOL_DOC_LINK,
-            )]
-
-        try:
-            user_settings = dataverse_get(
-                env_url, token,
-                f"usersettingscollection({user_id})",
-                params={"$select": "_preferredsolution_value"},
-            )
-        except requests.HTTPError as e:
-            # 404 = caller has no usersettings record yet. This is deterministic
-            # and fixable (visit the maker portal once to auto-provision); call
-            # it out instead of letting the generic Exception branch swallow it.
-            if getattr(e.response, "status_code", None) == 404:
-                return [CheckResult(
-                    checkpoint_id="ENV-009", category="Environment",
-                    priority=Priority.HIGH.value, status=Status.WARNING.value,
-                    description=_PREFSOL_DESCRIPTION,
-                    result=(
-                        f"Current maker (UserId={user_id}) has no usersettings "
-                        f"record in this environment yet, so no preferred "
-                        f"solution can be selected."
-                    ),
-                    remediation=(
-                        "Open https://make.powerapps.com once with this "
-                        "account so Dataverse provisions a usersettings "
-                        "record, then re-run."
-                    ),
-                    doc_link=_PREFSOL_DOC_LINK,
-                )]
-            raise
-        selected_solution_id = user_settings.get("_preferredsolution_value")
+        # Signal 2: caller's preferred solution in one round-trip. Bound to
+        # the caller via the bearer token; no need to resolve UserId first.
+        preferred = dataverse_get(env_url, token, "GetPreferredSolution()")
+        selected_solution_id = (preferred or {}).get("solutionid")
 
         eligible_names = sorted(s.get("uniquename", "<unknown>") for s in solutions)
         eligible_summary = ", ".join(eligible_names)
@@ -568,16 +529,24 @@ def _check_preferred_solution(runner) -> list[CheckResult]:
         )]
     except Exception as e:
         # Per principle 3 (fail loudly): surface unexpected Dataverse failures
-        # as WARNING rather than silently passing.
+        # as WARNING rather than silently passing. Surface the HTTP status
+        # code when available so a 403 (insufficient privileges) is
+        # distinguishable from a 5xx (transient) at a glance (PR #128 review).
+        status_code = getattr(getattr(e, "response", None), "status_code", None)
+        status_hint = f" [HTTP {status_code}]" if status_code is not None else ""
         return [CheckResult(
             checkpoint_id="ENV-009", category="Environment",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=_PREFSOL_DESCRIPTION,
-            result=f"Unable to validate preferred solution: {type(e).__name__}: {e}",
+            result=(
+                f"Unable to validate preferred solution: "
+                f"{type(e).__name__}{status_hint}: {e}"
+            ),
             remediation=(
                 "Inspect the error above; common causes are insufficient "
-                "Dataverse permissions on the solution / usersettings tables "
-                "or a transient platform error."
+                "Dataverse privileges on the solution / usersettings tables "
+                "(typically surfaces as HTTP 403) or a transient platform "
+                "error (HTTP 5xx)."
             ),
             doc_link=_PREFSOL_DOC_LINK,
         )]

@@ -5,21 +5,20 @@
 ``solutions/ess-maker-skills/scripts/flightcheck/checks/environment.py``.
 
 Mocks the Dataverse Web API endpoints the check calls
-(``msdyn_employeeselfservicetemplateconfigs``, ``solutions``, ``WhoAmI()``,
-``usersettingscollection({UserId})``) with the ``responses`` library, then
-invokes the real production helper ``_check_preferred_solution`` and asserts on
-the resulting ``CheckResult``.
+(``solutions``, ``GetPreferredSolution()``) with the ``responses`` library,
+then invokes the real production helper ``_check_preferred_solution`` and
+asserts on the resulting ``CheckResult``.
 
 Mock backing: Dataverse Web API v9.2 is the ``documented`` tier per
 ``tests/fixtures/cassettes/INDEX.md`` line 49. Response shapes come from MS
-Learn entity reference pages:
+Learn entity reference / function reference pages:
 
 * solutions entity:
   https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solution
-* usersettings entity:
-  https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/usersettings
-* WhoAmI function:
-  https://learn.microsoft.com/power-apps/developer/data-platform/webapi/use-web-api-functions
+* GetPreferredSolution function:
+  https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/getpreferredsolution
+  (response-body shape uncertainty is documented in
+  ``tests/mocks/dataverse.py:get_preferred_solution``)
 """
 
 from __future__ import annotations
@@ -101,14 +100,20 @@ def _register_solutions(solutions: list[dict[str, Any]]) -> None:
     ))
 
 
-def _register_whoami() -> None:
-    responses.add(**dv.whoami(base_url=BASE_URL))
+def _register_get_preferred_solution(
+    selected_solution_id: str | None,
+    *,
+    uniquename: str | None = None,
+) -> None:
+    """Mock GetPreferredSolution() returning the given solution id.
 
-
-def _register_usersettings(selected_solution_id: str | None) -> None:
-    responses.add(**dv.usersettings(
+    Pass ``selected_solution_id=None`` to mock the "no preferred solution
+    selected" case (the body omits ``solutionid``).
+    """
+    responses.add(**dv.get_preferred_solution(
         base_url=BASE_URL,
-        preferred_solution_id=selected_solution_id,
+        solution_id=selected_solution_id,
+        uniquename=uniquename,
     ))
 
 
@@ -151,8 +156,7 @@ def test_warning_when_selected_solution_not_in_eligible_set(
     _register_solutions(solutions=[
         _solution_record(SOLUTION_ID_ELIGIBLE, "ESSCustomization"),
     ])
-    _register_whoami()
-    _register_usersettings(selected_solution_id=SOLUTION_ID_NOT_IN_LIST)
+    _register_get_preferred_solution(selected_solution_id=SOLUTION_ID_NOT_IN_LIST)
 
     results = _check_preferred_solution(runner)
     assert len(results) == 1
@@ -176,8 +180,7 @@ def test_warning_when_no_preferred_solution_selected(runner: _MinimalRunner) -> 
         _solution_record(SOLUTION_ID_ELIGIBLE, "ESSCustomization"),
         _solution_record(SOLUTION_ID_OTHER, "ContosoExtensions"),
     ])
-    _register_whoami()
-    _register_usersettings(selected_solution_id=None)
+    _register_get_preferred_solution(selected_solution_id=None)
 
     r = _check_preferred_solution(runner)[0]
     assert r.status == "Warning"
@@ -192,8 +195,7 @@ def test_passed_when_selected_solution_matches(runner: _MinimalRunner) -> None:
     _register_solutions(solutions=[
         _solution_record(SOLUTION_ID_ELIGIBLE, "ESSCustomization"),
     ])
-    _register_whoami()
-    _register_usersettings(selected_solution_id=SOLUTION_ID_ELIGIBLE)
+    _register_get_preferred_solution(selected_solution_id=SOLUTION_ID_ELIGIBLE)
 
     results = _check_preferred_solution(runner)
     assert len(results) == 1
@@ -212,8 +214,7 @@ def test_passed_when_selected_matches_one_of_many(runner: _MinimalRunner) -> Non
         _solution_record(SOLUTION_ID_ELIGIBLE, "ESSCustomization"),
         _solution_record(SOLUTION_ID_OTHER, "ContosoExtensions"),
     ])
-    _register_whoami()
-    _register_usersettings(selected_solution_id=SOLUTION_ID_OTHER)
+    _register_get_preferred_solution(selected_solution_id=SOLUTION_ID_OTHER)
 
     r = _check_preferred_solution(runner)[0]
     assert r.status == "Passed"
@@ -223,10 +224,16 @@ def test_passed_when_selected_matches_one_of_many(runner: _MinimalRunner) -> Non
 
 @responses.activate
 def test_warning_when_dataverse_returns_500(runner: _MinimalRunner) -> None:
-    """A transient platform error must surface as WARNING, not silently PASS."""
+    """A transient platform error must surface as WARNING, not silently PASS.
+
+    The status-code surfacing path (PR #128 review) is exercised by the
+    403 test below; on 5xx the requests/urllib3 retry layer swallows the
+    response object and raises a RetryError with no ``.response``, so
+    surfacing the code on 5xx isn't reliably possible from this layer.
+    """
     responses.add(
         "GET",
-        dv._query_url(
+        dv.build_query_url(
             BASE_URL,
             "solutions",
             select="solutionid,uniquename,friendlyname",
@@ -252,8 +259,7 @@ def test_warning_when_one_solution_and_no_preference(runner: _MinimalRunner) -> 
     _register_solutions(solutions=[
         _solution_record(SOLUTION_ID_ELIGIBLE, "ESSCustomization"),
     ])
-    _register_whoami()
-    _register_usersettings(selected_solution_id=None)
+    _register_get_preferred_solution(selected_solution_id=None)
 
     r = _check_preferred_solution(runner)[0]
     assert r.status == "Warning"
@@ -271,7 +277,7 @@ def test_warning_when_dataverse_returns_401(runner: _MinimalRunner) -> None:
     """
     responses.add(
         "GET",
-        dv._query_url(
+        dv.build_query_url(
             BASE_URL,
             "solutions",
             select="solutionid,uniquename,friendlyname",
@@ -289,27 +295,27 @@ def test_warning_when_dataverse_returns_401(runner: _MinimalRunner) -> None:
 
 
 @responses.activate
-def test_warning_when_usersettings_returns_404(runner: _MinimalRunner) -> None:
-    """A 404 on usersettings means the maker has never opened the portal.
+def test_warning_when_get_preferred_solution_returns_403(
+    runner: _MinimalRunner,
+) -> None:
+    """A 403 on GetPreferredSolution() must surface the status code.
 
-    Distinct from a generic 5xx (which surfaces under the catch-all WARNING):
-    this path has a deterministic, actionable remediation pointing the user
-    at https://make.powerapps.com to auto-provision their usersettings row.
+    Insufficient privilege on the system tables surfaces as HTTP 403. The
+    catch-all WARNING must expose the status code so the failure mode is
+    distinguishable from a transient 5xx (PR #128 review).
     """
     _register_solutions(solutions=[
         _solution_record(SOLUTION_ID_ELIGIBLE, "ESSCustomization"),
     ])
-    _register_whoami()
     responses.add(
         "GET",
-        f"{BASE_URL}/api/data/v9.2/usersettingscollection({dv.MOCK_USER_ID})"
-        f"?$select=_preferredsolution_value",
-        json={"error": {"code": "0x80060888", "message": "Resource not found"}},
-        status=404,
+        f"{BASE_URL}/api/data/v9.2/GetPreferredSolution()",
+        json={"error": {"code": "0x80040220", "message": "Principal user is missing privilege"}},
+        status=403,
     )
 
     r = _check_preferred_solution(runner)[0]
     assert r.status == "Warning"
-    assert "no usersettings record" in r.result
-    assert dv.MOCK_USER_ID in r.result
-    assert "make.powerapps.com" in r.remediation
+    assert "Unable to validate preferred solution" in r.result
+    assert "[HTTP 403]" in r.result
+    assert "privileges" in r.remediation

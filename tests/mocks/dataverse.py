@@ -25,6 +25,7 @@ for handing to `responses.add(...)` directly.
 References:
 - Dataverse Web API: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/perform-operations-web-api
 - WhoAmI function: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/use-web-api-functions
+- GetPreferredSolution function: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/getpreferredsolution
 - environmentvariabledefinition: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/environmentvariabledefinition
 - environmentvariablevalue: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/environmentvariablevalue
 - Production source: solutions/ess-maker-skills/scripts/auth.py
@@ -75,6 +76,11 @@ def _query_url(
     if qs:
         url += "?" + "&".join(qs)
     return url
+
+
+# Public alias — tests that register custom error-case responses (e.g. 500
+# on a real query URL) import this instead of touching the underscore name.
+build_query_url = _query_url
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -320,6 +326,55 @@ def usersettings(
         "_preferredsolution_value": preferred_solution_id,
     }
     return {"method": "GET", "url": url, "json": body, "status": 200}
+
+
+def get_preferred_solution(
+    *,
+    base_url: str,
+    solution_id: str | None = None,
+    uniquename: str | None = None,
+    friendlyname: str | None = None,
+) -> dict[str, Any]:
+    """Mock ``GET /GetPreferredSolution()``.
+
+    Web API reference:
+      https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/getpreferredsolution
+
+    UNCERTAINTY: the MS Learn reference page documents the return type
+    as ``crmbaseentity`` but does NOT include an example response body.
+    The shape used here is derived by composing three MS-documented
+    sources:
+
+      1. The .NET SDK ``GetPreferredSolutionResponse.PreferredSolution``
+         property is typed as ``Microsoft.Xrm.Sdk.Entity`` representing
+         a ``solution`` row:
+         https://learn.microsoft.com/dotnet/api/microsoft.crm.sdk.messages.getpreferredsolutionresponse.preferredsolution
+      2. The ``solution`` entity reference documents the field names
+         (``solutionid``, ``uniquename``, ``friendlyname``):
+         https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solution
+      3. The Web API serialisation conventions for a single-entity
+         response use the ``$metadata#<entityset>/$entity``
+         ``@odata.context`` form:
+         https://learn.microsoft.com/power-apps/developer/data-platform/webapi/retrieve-entity-using-web-api#basic-retrieve-operations
+
+    When ``solution_id`` is None, ``solutionid`` is omitted from the
+    body — the production check treats a missing ``solutionid`` as
+    "no preferred solution selected" rather than asserting on any
+    specific empty-response shape.
+    """
+    body: dict[str, Any] = {
+        "@odata.context": _api(base_url, "$metadata#solutions/$entity"),
+    }
+    if solution_id is not None:
+        body["solutionid"] = solution_id
+        body["uniquename"] = uniquename or "ESSCustomization"
+        body["friendlyname"] = friendlyname or "ESS Customization"
+    return {
+        "method": "GET",
+        "url": _api(base_url, "GetPreferredSolution()"),
+        "json": body,
+        "status": 200,
+    }
 
 
 def discover_tenant_challenge(
