@@ -209,7 +209,7 @@ class PPAdminClient:
 
     def find_environment_id_by_dataverse_url(self, env_url: str) -> str | None:
         """Find the BAP environment "name" (the BAP env id) whose
-        `linkedEnvironmentMetadata.instanceUrl` matches `env_url`.
+        linked Dataverse instance matches `env_url`.
 
         The BAP env id is NOT the same as the Dataverse OrganizationId.
         Every BAP admin endpoint (`/scopes/admin/environments/{env_id}/...`)
@@ -218,8 +218,13 @@ class PPAdminClient:
         which is what was breaking EXT-001 / ENV-001 and the entire
         Workday block (no flows discovered ⇒ deep checks skipped).
 
-        Matches by hostname comparison so trailing slash / casing
-        differences between config and BAP don't cause a miss.
+        Matches by hostname against BOTH `linkedEnvironmentMetadata.instanceUrl`
+        and `linkedEnvironmentMetadata.instanceApiUrl`. BAP advertises the
+        web hostname (e.g. ``org<hash>.crm12.dynamics.com``) on one field and
+        the Web API hostname (``org<hash>.api.crm12.dynamics.com``) on the
+        other; the config's `dataverseEndpoint` is typically the API form,
+        so checking only `instanceUrl` silently misses every match on a
+        tenant whose config uses the `.api.` hostname.
         """
         target_host = (urlparse(env_url.rstrip("/")).hostname or "").lower()
         if not target_host:
@@ -228,14 +233,14 @@ class PPAdminClient:
         if isinstance(envs, dict) and "_error" in envs:
             return None
         for env in envs:
-            instance_url = (
-                env.get("properties", {})
-                .get("linkedEnvironmentMetadata", {})
-                .get("instanceUrl", "")
-            )
-            instance_host = (urlparse(instance_url).hostname or "").lower()
-            if instance_host == target_host:
-                return env.get("name")
+            linked = env.get("properties", {}).get("linkedEnvironmentMetadata", {})
+            for url_field in ("instanceUrl", "instanceApiUrl"):
+                candidate = linked.get(url_field, "")
+                if not candidate:
+                    continue
+                candidate_host = (urlparse(candidate).hostname or "").lower()
+                if candidate_host == target_host:
+                    return env.get("name")
         return None
 
     # ----- Flow APIs -----
@@ -316,23 +321,34 @@ def derive_environment_id(
     where the two ids diverged.
 
     Preferred path (when `pp_admin` is supplied and authenticated):
-      list BAP admin environments and match `linkedEnvironmentMetadata.instanceUrl`
-      against `env_url`. The matching env's `name` is the BAP env id.
+      list BAP admin environments and match against
+      `linkedEnvironmentMetadata.instanceUrl` / `instanceApiUrl`. The
+      matching env's `name` is the BAP env id.
 
-    Fallback path (legacy / no BAP token yet):
+      If the BAP lookup MISSES (no env matches the hostname, e.g. the
+      user lacks admin access on that env), this function returns None
+      and lets the caller surface a clear "couldn't resolve via BAP"
+      message. We deliberately do NOT fall back to the WhoAmI /
+      OrganizationId path here: that value silently corrupts both BAP
+      admin calls (404s) and any deep links that embed the env id (the
+      deep link points at a non-existent env). A clean None lets
+      downstream callers (e.g., the Copilot Studio deep-link builder)
+      degrade gracefully to the homepage rather than fabricate a wrong
+      target.
+
+    Legacy fallback path (only when `pp_admin` is None):
       WhoAmI returns the Dataverse `OrganizationId`. This is wrong as a
       BAP env id but is retained so callers without a BAP client still
-      get *something* (some checks tolerate the wrong id; everything
-      hitting admin endpoints does not). Callers SHOULD pass
-      `pp_admin` to get the correct id.
+      get *something* for non-BAP checks. New callers SHOULD pass
+      `pp_admin` to get the correct id and surface a missed lookup
+      explicitly.
     """
     if pp_admin is not None:
-        bap_id = pp_admin.find_environment_id_by_dataverse_url(env_url)
-        if bap_id:
-            return bap_id
-        # Fall through to the legacy WhoAmI behavior so the caller still
-        # sees a (possibly wrong) value and a "could not resolve via BAP"
-        # diagnostic — easier to debug than a silent None.
+        # When BAP is reachable, trust the BAP answer (or its absence).
+        # A None here means "could not resolve via BAP" — callers should
+        # surface this rather than papering over with WhoAmI/OrganizationId,
+        # which corrupts both BAP admin calls and any URL that embeds env id.
+        return pp_admin.find_environment_id_by_dataverse_url(env_url)
 
     # HARD GATE: refuse to attach the Dataverse bearer to a non-HTTPS URL.
     # env_url is config-supplied so a misconfigured or hostile value could

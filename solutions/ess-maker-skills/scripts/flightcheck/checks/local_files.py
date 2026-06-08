@@ -17,6 +17,43 @@ import yaml
 from ..runner import CheckResult, Status, Priority
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
+STUDIO_BASE = "https://copilotstudio.microsoft.com"
+
+
+def _studio_agent_url(runner, agent_name: str) -> str | None:
+    """Build a Copilot Studio deep link to a specific agent's overview page.
+
+    Returns None when the BAP environment ID or the agent's botId can't be
+    resolved from the runner's parsed config — callers fall back to the
+    generic Copilot Studio homepage.
+
+    URL shape verified against a live tenant:
+      https://copilotstudio.microsoft.com/environments/{envId}/bots/{botId}/overview
+    """
+    if not runner or not agent_name:
+        return None
+    env_id = getattr(runner, "env_id", None)
+    if not env_id:
+        return None
+    config = getattr(runner, "config", None) or {}
+    bot_id = None
+    for agent in config.get("agents", []):
+        if agent.get("slug") == agent_name:
+            bot_id = agent.get("botId")
+            break
+    if not bot_id:
+        # Fall back to the single-agent shape used by older configs.
+        bot_id = (config.get("agent") or {}).get("botId")
+    if not bot_id:
+        return None
+    return f"{STUDIO_BASE}/environments/{env_id}/bots/{bot_id}/overview"
+
+
+def _studio_link_md(runner, agent_name: str, anchor: str = "Copilot Studio") -> str:
+    """Markdown link to the specific agent in Copilot Studio, or to the
+    homepage when the deep link can't be resolved."""
+    url = _studio_agent_url(runner, agent_name) or f"{STUDIO_BASE}/"
+    return f"[{anchor}]({url})"
 
 # Required topics that ESS agents should have (by schema name substring)
 REQUIRED_TOPICS = [
@@ -73,7 +110,7 @@ def _check_single_agent(agent_path: Path, agent_name: str, runner=None) -> list[
     label = agent_name.replace("-", " ").title()
 
     # ---- Agent identity (agent.mcs.yml) ----
-    results.extend(_check_agent_identity(agent_path, label))
+    results.extend(_check_agent_identity(agent_path, label, runner, agent_name))
 
     # ---- Required topics ----
     results.extend(_check_required_topics(agent_path, label))
@@ -96,10 +133,11 @@ def _check_single_agent(agent_path: Path, agent_name: str, runner=None) -> list[
     return results
 
 
-def _check_agent_identity(agent_path: Path, label: str) -> list[CheckResult]:
+def _check_agent_identity(agent_path: Path, label: str, runner=None, agent_name: str = "") -> list[CheckResult]:
     """Check agent.mcs.yml for instructions, name, starter prompts."""
     results = []
     agent_file = agent_path / "agent.mcs.yml"
+    studio_link = _studio_link_md(runner, agent_name, "the agent in Copilot Studio")
 
     if not agent_file.exists():
         results.append(CheckResult(
@@ -107,15 +145,42 @@ def _check_agent_identity(agent_path: Path, label: str) -> list[CheckResult]:
             priority=Priority.CRITICAL.value, status=Status.FAILED.value,
             description=f"{label}: Agent identity file",
             result="agent.mcs.yml not found",
-            remediation="Re-run /setup to extract agent files.",
+            remediation=f"Verify {studio_link} exists and you can open it, then re-run `/setup` to extract agent files.",
         ))
         return results
 
     content = agent_file.read_text(encoding="utf-8")
 
-    instructions_match = re.search(r'instructions:\s*[|>]?\s*\n((?:\s+.+\n)+)', content)
-    if instructions_match:
-        instruction_text = instructions_match.group(1).strip()
+    # Parse the YAML once and operate on the parsed dict. The earlier
+    # regex approach (``instructions:\s*[|>]?\s*\n…``) silently missed
+    # YAML's chomping-indicator block scalars (``|-``, ``|+``, ``>-``,
+    # ``>+``) — which Copilot Studio routinely emits — and reported
+    # the agent as having no instructions at all. yaml.safe_load
+    # handles every block-scalar variant correctly and matches the
+    # parsing pattern already used by run_local_file_checks at line
+    # ~451 for topic files.
+    parsed: dict | None = None
+    try:
+        loaded = yaml.safe_load(content)
+        if isinstance(loaded, dict):
+            parsed = loaded
+    except yaml.YAMLError:
+        parsed = None
+
+    if parsed is None:
+        results.append(CheckResult(
+            checkpoint_id="CONFIG-007", category=f"Configuration ({label})",
+            priority=Priority.CRITICAL.value, status=Status.FAILED.value,
+            description=f"{label}: Agent instructions",
+            result="agent.mcs.yml could not be parsed as YAML",
+            remediation=f"Re-extract the agent with `/setup`. If the problem persists, inspect {studio_link} and check for unsupported customizations.",
+            doc_link=f"{DOC_BASE}/customize",
+        ))
+        return results
+
+    instructions_value = parsed.get("instructions")
+    instruction_text = instructions_value.strip() if isinstance(instructions_value, str) else ""
+    if instruction_text:
         word_count = len(instruction_text.split())
         if word_count >= 50:
             results.append(CheckResult(
@@ -131,7 +196,7 @@ def _check_agent_identity(agent_path: Path, label: str) -> list[CheckResult]:
                 priority=Priority.CRITICAL.value, status=Status.WARNING.value,
                 description=f"{label}: Agent instructions",
                 result=f"Instructions seem short ({word_count} words)",
-                remediation="Expand agent instructions for better responses.",
+                remediation=f"Open {studio_link} and expand the agent instructions for better responses, then re-run `/setup`.",
                 doc_link=f"{DOC_BASE}/customize",
             ))
     else:
@@ -140,13 +205,19 @@ def _check_agent_identity(agent_path: Path, label: str) -> list[CheckResult]:
             priority=Priority.CRITICAL.value, status=Status.FAILED.value,
             description=f"{label}: Agent instructions",
             result="No instructions block found in agent.mcs.yml",
-            remediation="Add agent instructions in [Copilot Studio](https://copilotstudio.microsoft.com/), then re-extract with `/setup`.",
+            remediation=f"Open {studio_link} and add agent instructions on the Overview tab, then re-run `/setup`.",
             doc_link=f"{DOC_BASE}/customize",
         ))
 
-    prompt_count = len(re.findall(r'conversationStarters?:', content, re.IGNORECASE))
-    starter_items = re.findall(r'-\s+text:', content)
-    count = len(starter_items) if starter_items else prompt_count
+    # Starter prompts. Real Copilot Studio agent.mcs.yml uses the
+    # ``conversationStarters`` key whose value is a list of dicts with
+    # ``title`` + ``text`` fields. Parsing the YAML lets us count
+    # accurately regardless of indentation or quoting choices that
+    # tripped up the previous regex-based heuristic.
+    starters = parsed.get("conversationStarters") or parsed.get("conversationStarter") or []
+    if not isinstance(starters, list):
+        starters = []
+    count = sum(1 for item in starters if isinstance(item, dict) and item.get("text"))
     if count >= 3:
         results.append(CheckResult(
             checkpoint_id="CONFIG-005", category=f"Configuration ({label})",
@@ -160,8 +231,8 @@ def _check_agent_identity(agent_path: Path, label: str) -> list[CheckResult]:
             checkpoint_id="CONFIG-005", category=f"Configuration ({label})",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=f"{label}: Starter prompts",
-            result=f"Only {count} starter prompt(s) — recommend 6-12",
-            remediation="Add more starter prompts in [Copilot Studio](https://copilotstudio.microsoft.com/).",
+            result=f"Only {count} starter prompt(s) -- recommend 6-12",
+            remediation=f"Open {studio_link} and add more starter prompts on the Overview tab, then re-run `/setup`.",
             doc_link=f"{DOC_BASE}/customize#customize-starter-prompts",
         ))
     else:
@@ -170,7 +241,7 @@ def _check_agent_identity(agent_path: Path, label: str) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=f"{label}: Starter prompts",
             result="No starter prompts detected",
-            remediation="Add starter prompts in [Copilot Studio](https://copilotstudio.microsoft.com/).",
+            remediation=f"Open {studio_link} and add starter prompts on the Overview tab, then re-run `/setup`.",
             doc_link=f"{DOC_BASE}/customize#customize-starter-prompts",
         ))
 
