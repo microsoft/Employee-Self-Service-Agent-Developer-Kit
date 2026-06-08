@@ -106,13 +106,35 @@ after installing the Workday extension pack.
 5. Or run `/connect workday` for guided re-setup
 **Verify:** Re-run `/flightcheck --scope workday`
 
-### WD-CONN-102: Workday SAML signing certificate health
+### WD-CONN-102: Entra↔Workday SAML federation certificate health
+**Scope:** This check validates the X.509 signing certificate on the Entra
+Workday SAML enterprise app. It is **not** a check on the Power Platform
+Workday connector, ISU credentials, network connectivity, or OAuth client
+secrets — if any of those are the suspected root cause, look at WD-CONN-001,
+WD-CONN-101, WD-CONN-012, or WD-ENV-* instead.
+
+The same X.509 certificate gates two surfaces:
+  1. End-user SAML SSO into Workday (browser sign-in flow).
+  2. The OAuthUser/`ff0df` connection's runtime JWT-Bearer token exchange
+     with Workday — i.e., user-context Workday SOAP/REST calls invoked by
+     ESS topics through `WorkdaySystemGetCommonExecution`.
+
+A failure here does **not** affect the ISU/Basic-auth connections
+(`d6081` Context Generic, `0786a` Generic User) — those use username +
+password and have no certificate in their auth handshake. On a full /
+legacy install the ISU code paths keep working, so the agent looks
+partially healthy and the maker's admin-context tests pass while real
+employees can't run any user-context Workday topic. On a simplified
+install (1 connection ref, OAuthUser only) the entire Workday surface
+goes dark for end users.
+
 **Root cause:** The X.509 signing certificate on the federated Workday SAML
 enterprise app (Entra side) is missing, expired, expiring within 30 days, or
 out of sync with the certificate uploaded to Workday's tenant security setup.
-End-user SAML SSO into Workday fails silently when the two sides drift —
-ISU-credentialed runtime calls still succeed, so the agent appears healthy
-while user-context Workday flows break.
+End-user SAML SSO into Workday and the OAuthUser/`ff0df` runtime token
+exchange fail silently when the two sides drift — ISU-credentialed runtime
+calls still succeed (where present), so the agent appears healthy while
+user-context Workday flows break.
 **Fix (FAILED — no cert or all expired):**
 1. In Entra, open the federated Workday enterprise app → Single sign-on →
    SAML Signing Certificate → generate a new cert and download the
