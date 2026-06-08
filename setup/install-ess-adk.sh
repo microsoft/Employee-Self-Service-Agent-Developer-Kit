@@ -22,6 +22,7 @@ INSTALL_ROOT="${ESS_ADK_INSTALL_ROOT:-$HOME/source}"
 FLIGHTCHECK_ONLY="${FLIGHTCHECK_ONLY:-false}"
 REPO_URL="https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit.git"
 REPO_NAME="Employee-Self-Service-Agent-Developer-Kit"
+CODE_CMD=""
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -93,14 +94,15 @@ install_brew_pkg() {
 install_brew_cask() {
     local cask="$1"
     local name="${2:-$1}"
+    local app_path="${3:-}"
     if brew list --cask "$cask" &>/dev/null; then
         ok "$name (already installed)"
-    elif [[ -d "/Applications/Visual Studio Code.app" ]]; then
+    elif [[ -n "$app_path" && -d "$app_path" ]]; then
         ok "$name (already installed outside Homebrew)"
     else
         echo "    Installing $name ($cask)..."
         brew install --cask "$cask" || true
-        if brew list --cask "$cask" &>/dev/null || [[ -d "/Applications/Visual Studio Code.app" ]]; then
+        if brew list --cask "$cask" &>/dev/null || [[ -n "$app_path" && -d "$app_path" ]]; then
             ok "$name"
         else
             err "Failed to install $name. Try manually: brew install --cask $cask"
@@ -122,7 +124,7 @@ fi
 if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
     # Full maker kit tools
     install_brew_pkg "gh" "GitHub CLI"
-    install_brew_cask "visual-studio-code" "Visual Studio Code"
+    install_brew_cask "visual-studio-code" "Visual Studio Code" "/Applications/Visual Studio Code.app"
 fi
 
 ok "Toolchain installed / verified"
@@ -142,7 +144,7 @@ elif command -v python3.12 &>/dev/null; then
     PYTHON="$(command -v python3.12)"
 elif command -v python3 &>/dev/null; then
     PY_VER="$(python3 --version 2>&1 | grep -oE '[0-9]+\.[0-9]+')"
-    if [[ "$PY_VER" == "3.12" || "$PY_VER" > "3.12" ]]; then
+    if printf '%s\n' "3.12" "$PY_VER" | sort -V | head -n1 | grep -q "3.12"; then
         PYTHON="$(command -v python3)"
     fi
 fi
@@ -211,7 +213,10 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
         for ext in "${REQUIRED_EXTENSIONS[@]}"; do
             if ! "$CODE_CMD" --install-extension "$ext" --force 2>/dev/null; then
                 err "Failed to install required extension: $ext"
-                err "Sign in to VS Code with a GitHub account that has Copilot access, then re-run this script."
+                err "Possible causes:"
+                err "  - VS Code marketplace is unreachable (corporate proxy/firewall)"
+                err "  - No GitHub account with Copilot access signed in to VS Code"
+                err "Re-run this script after resolving the issue."
                 exit 1
             fi
             ok "$ext"
@@ -234,6 +239,10 @@ if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
     step "Running FlightCheck"
 
     MAKER_KIT_PATH="$REPO_PATH/solutions/ess-maker-skills"
+    if [[ ! -d "$MAKER_KIT_PATH" ]]; then
+        err "Maker kit path not found at $MAKER_KIT_PATH. Was the clone successful?"
+        exit 1
+    fi
     cd "$MAKER_KIT_PATH"
     FLIGHTCHECK_PYTHON="$VENV_PATH/bin/python"
     if [[ ! -x "$FLIGHTCHECK_PYTHON" ]]; then

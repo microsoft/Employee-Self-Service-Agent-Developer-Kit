@@ -87,7 +87,7 @@ python scripts/flightcheck/cli.py --scope full
 **macOS:**
 ```bash
 cd ~/source/Employee-Self-Service-Agent-Developer-Kit/solutions/ess-maker-skills
-.venv/bin/python scripts/flightcheck/cli.py --scope full
+../../.venv/bin/python scripts/flightcheck/cli.py --scope full
 ```
 
 ## Files

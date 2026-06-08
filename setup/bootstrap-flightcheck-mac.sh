@@ -25,5 +25,12 @@ if ! curl -fsSL "$INSTALLER_URL" -o "$TEMP_DIR/install-ess-adk.sh"; then
     exit 1
 fi
 
+# Verify the downloaded file looks like a valid script
+if [[ ! -s "$TEMP_DIR/install-ess-adk.sh" ]] || ! head -1 "$TEMP_DIR/install-ess-adk.sh" | grep -q '^#!/'; then
+    echo "  [ERR] Downloaded file appears invalid (empty or not a shell script)" >&2
+    echo "  A corporate proxy may be intercepting the request." >&2
+    exit 1
+fi
+
 # Run in-memory (source) to avoid any permission issues
 source "$TEMP_DIR/install-ess-adk.sh"
