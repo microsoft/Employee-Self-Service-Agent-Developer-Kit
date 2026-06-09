@@ -5,9 +5,9 @@
 ``solutions/ess-maker-skills/scripts/flightcheck/checks/environment.py``.
 
 Mocks the Dataverse Web API endpoints the check calls
-(``solutions``, ``GetPreferredSolution()``) with the ``responses`` library,
-then invokes the real production helper ``_check_preferred_solution`` and
-asserts on the resulting ``CheckResult``.
+(``solutions``, ``GetPreferredSolution()``, ``publishers({id})``) with the
+``responses`` library, then invokes the real production helper
+``_check_preferred_solution`` and asserts on the resulting ``CheckResult``.
 
 Mock backing: Dataverse Web API v9.2 is the ``documented`` tier per
 ``tests/fixtures/cassettes/INDEX.md`` line 49. Response shapes come from MS
@@ -19,6 +19,8 @@ Learn entity reference / function reference pages:
   https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/getpreferredsolution
   (response-body shape uncertainty is documented in
   ``tests/mocks/dataverse.py:get_preferred_solution``)
+* publisher entity:
+  https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/publisher
 """
 
 from __future__ import annotations
@@ -47,6 +49,10 @@ SOLUTION_ID_ELIGIBLE = "11111111-1111-1111-1111-111111111111"
 SOLUTION_ID_OTHER = "22222222-2222-2222-2222-222222222222"
 SOLUTION_ID_NOT_IN_LIST = "33333333-3333-3333-3333-333333333333"
 
+# Stable publisher GUIDs — one custom, one default-publisher.
+PUBLISHER_ID_CUSTOM = "aaaaaaaa-1111-1111-1111-111111111111"
+PUBLISHER_ID_DEFAULT = "bbbbbbbb-2222-2222-2222-222222222222"
+
 # Verbatim from the production check; if these drift, mock-builder URLs will
 # stop matching and tests will fail loudly with an unregistered-URL error.
 ELIGIBLE_SOLUTION_FILTER = (
@@ -54,6 +60,7 @@ ELIGIBLE_SOLUTION_FILTER = (
     "and uniquename ne 'Default' and uniquename ne 'Active' "
     "and solutiontype eq 0 and _parentsolutionid_value eq null"
 )
+ELIGIBLE_SOLUTION_SELECT = "solutionid,uniquename,friendlyname,_publisherid_value"
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -77,16 +84,27 @@ def runner(fake_dataverse_url: str, fake_token: str) -> _MinimalRunner:
 # ───────────────────────────────────────────────────────────────────────
 
 
-def _solution_record(solution_id: str, uniquename: str) -> dict[str, Any]:
-    """One ``solutions`` row matching $select=solutionid,uniquename,friendlyname.
+def _solution_record(
+    solution_id: str,
+    uniquename: str,
+    *,
+    publisher_id: str | None = PUBLISHER_ID_CUSTOM,
+) -> dict[str, Any]:
+    """One ``solutions`` row matching the production $select.
+
     Field naming per
     https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solution
+    Defaults model the eligible row pointing at a custom publisher; pass
+    ``publisher_id=PUBLISHER_ID_DEFAULT`` to model a row bound to the
+    env's Default Publisher, or ``publisher_id=None`` to model a row
+    with no publisher lookup populated.
     """
     return {
         "@odata.etag": 'W/"1"',
         "solutionid": solution_id,
         "uniquename": uniquename,
         "friendlyname": uniquename,
+        "_publisherid_value": publisher_id,
     }
 
 
@@ -95,7 +113,7 @@ def _register_solutions(solutions: list[dict[str, Any]]) -> None:
         base_url=BASE_URL,
         entity_set="solutions",
         records=solutions,
-        select="solutionid,uniquename,friendlyname",
+        select=ELIGIBLE_SOLUTION_SELECT,
         filter_expr=ELIGIBLE_SOLUTION_FILTER,
     ))
 
@@ -114,6 +132,32 @@ def _register_get_preferred_solution(
         base_url=BASE_URL,
         solution_id=selected_solution_id,
         uniquename=uniquename,
+    ))
+
+
+def _register_publisher(
+    publisher_id: str = PUBLISHER_ID_CUSTOM,
+    *,
+    uniquename: str = "ContosoPublisher",
+    customizationprefix: str = "contoso",
+    status: int = 200,
+) -> None:
+    """Mock the ``GET /publishers({id})?$select=...`` round-trip the
+    production check makes after a preferred-solution match.
+
+    Defaults model a customer-created publisher (the PASS path). Pass
+    ``uniquename="DefaultPublisherorg<suffix>"`` with
+    ``customizationprefix="cr<NNN>"`` to model the env's auto-provisioned
+    Default Publisher (the new WARNING path). Pass ``status=500`` to
+    drive the "publisher fetch failed" branch where the check degrades
+    gracefully to PASS without the publisher annotation.
+    """
+    responses.add(**dv.publisher(
+        base_url=BASE_URL,
+        publisher_id=publisher_id,
+        uniquename=uniquename,
+        customizationprefix=customizationprefix,
+        status=status,
     ))
 
 
@@ -196,6 +240,7 @@ def test_passed_when_selected_solution_matches(runner: _MinimalRunner) -> None:
         _solution_record(SOLUTION_ID_ELIGIBLE, "ESSCustomization"),
     ])
     _register_get_preferred_solution(selected_solution_id=SOLUTION_ID_ELIGIBLE)
+    _register_publisher()
 
     results = _check_preferred_solution(runner)
     assert len(results) == 1
@@ -204,6 +249,10 @@ def test_passed_when_selected_solution_matches(runner: _MinimalRunner) -> None:
     assert r.status == "Passed"
     assert "ESSCustomization" in r.result
     assert "selected" in r.result
+    # Custom publisher annotation surfaces on the PASS path for parity
+    # with the WARNING path (operator can confirm the binding at a glance).
+    assert "ContosoPublisher" in r.result
+    assert "contoso" in r.result
     # Principle 8: PASSED has no remediation.
     assert r.remediation == ""
 
@@ -215,11 +264,13 @@ def test_passed_when_selected_matches_one_of_many(runner: _MinimalRunner) -> Non
         _solution_record(SOLUTION_ID_OTHER, "ContosoExtensions"),
     ])
     _register_get_preferred_solution(selected_solution_id=SOLUTION_ID_OTHER)
+    _register_publisher()
 
     r = _check_preferred_solution(runner)[0]
     assert r.status == "Passed"
     assert "'ContosoExtensions'" in r.result
     assert "2 eligible unmanaged solution" in r.result
+    assert "ContosoPublisher" in r.result
 
 
 @responses.activate
@@ -240,6 +291,7 @@ def test_passed_when_guid_casing_differs_between_endpoints(
     _register_get_preferred_solution(
         selected_solution_id=SOLUTION_ID_ELIGIBLE.upper(),
     )
+    _register_publisher()
 
     r = _check_preferred_solution(runner)[0]
     assert r.status == "Passed"
@@ -260,7 +312,7 @@ def test_warning_when_dataverse_returns_500(runner: _MinimalRunner) -> None:
         dv.build_query_url(
             BASE_URL,
             "solutions",
-            select="solutionid,uniquename,friendlyname",
+            select=ELIGIBLE_SOLUTION_SELECT,
             filter_expr=ELIGIBLE_SOLUTION_FILTER,
         ),
         json={"error": {"code": "0x80040220", "message": "boom"}},
@@ -304,7 +356,7 @@ def test_warning_when_dataverse_returns_401(runner: _MinimalRunner) -> None:
         dv.build_query_url(
             BASE_URL,
             "solutions",
-            select="solutionid,uniquename,friendlyname",
+            select=ELIGIBLE_SOLUTION_SELECT,
             filter_expr=ELIGIBLE_SOLUTION_FILTER,
         ),
         json={"error": {"code": "0x80048306", "message": "token expired"}},
@@ -343,3 +395,103 @@ def test_warning_when_get_preferred_solution_returns_403(
     assert "Unable to validate preferred solution" in r.result
     assert "[HTTP 403]" in r.result
     assert "privileges" in r.remediation
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Publisher-quality branch (PR #128 follow-up — preferred solution is
+# correctly selected but is bound to the env's Default Publisher).
+# ───────────────────────────────────────────────────────────────────────
+
+
+@responses.activate
+def test_warning_when_preferred_solution_uses_default_publisher(
+    runner: _MinimalRunner,
+) -> None:
+    """E2E gap: preferred solution is unmanaged + selected, but is bound to
+    the env's auto-provisioned Default Publisher (uniquename starts with
+    ``DefaultPublisher`` and inherits the env's ``cr<NNN>`` prefix).
+
+    The functional selection is correct, so this is a hardening WARNING
+    (not a FAIL). The result must describe the observed state only; the
+    remediation must open with the hardening-recommendation prefix and
+    give a concrete reason before the click-path (AGENTS.md principle 9).
+    """
+    _register_solutions(solutions=[
+        _solution_record(
+            SOLUTION_ID_ELIGIBLE, "ESSCustomization",
+            publisher_id=PUBLISHER_ID_DEFAULT,
+        ),
+    ])
+    _register_get_preferred_solution(selected_solution_id=SOLUTION_ID_ELIGIBLE)
+    # A real Default Publisher value observed in
+    # tests/fixtures/cassettes/island_gateway_botcomponents.yaml.
+    _register_publisher(
+        publisher_id=PUBLISHER_ID_DEFAULT,
+        uniquename="DefaultPublisherorgeeac24d0",
+        customizationprefix="cr123",
+    )
+
+    r = _check_preferred_solution(runner)[0]
+    assert r.checkpoint_id == "ENV-009"
+    assert r.status == "Warning"
+    # Principle 8: result is observed state, no framing.
+    assert "Hardening recommendation" not in r.result
+    assert "ESSCustomization" in r.result
+    assert "Default Publisher" in r.result
+    assert "DefaultPublisherorgeeac24d0" in r.result
+    assert "cr123" in r.result
+    # Principle 9: framing + concrete reason BEFORE the click-path.
+    assert r.remediation.startswith("Hardening recommendation (not a functional blocker)")
+    assert "cr123" in r.remediation
+    assert "collide across environments" in r.remediation
+    assert "+ New publisher" in r.remediation
+
+
+@responses.activate
+def test_passed_when_publisher_fetch_fails_degrades_gracefully(
+    runner: _MinimalRunner,
+) -> None:
+    """If the /publishers({id}) round-trip fails, don't downgrade the verdict.
+
+    The preferred-solution selection itself is correct; a transient
+    failure on the publisher lookup should not flip PASS to WARNING. The
+    publisher annotation is simply omitted from the result.
+    """
+    _register_solutions(solutions=[
+        _solution_record(SOLUTION_ID_ELIGIBLE, "ESSCustomization"),
+    ])
+    _register_get_preferred_solution(selected_solution_id=SOLUTION_ID_ELIGIBLE)
+    _register_publisher(status=500)
+
+    r = _check_preferred_solution(runner)[0]
+    assert r.status == "Passed"
+    assert "ESSCustomization" in r.result
+    # No publisher annotation when the fetch failed.
+    assert "publisher:" not in r.result
+    assert r.remediation == ""
+
+
+@responses.activate
+def test_passed_when_solution_has_no_publisher_lookup(
+    runner: _MinimalRunner,
+) -> None:
+    """Defensive: if ``_publisherid_value`` is null on the matched solution,
+    skip the publisher round-trip and PASS without the annotation.
+
+    Real solutions always have a publisher, but the production code
+    treats a missing lookup as "skip the secondary check" rather than
+    asserting - this test pins that behaviour.
+    """
+    _register_solutions(solutions=[
+        _solution_record(
+            SOLUTION_ID_ELIGIBLE, "ESSCustomization", publisher_id=None,
+        ),
+    ])
+    _register_get_preferred_solution(selected_solution_id=SOLUTION_ID_ELIGIBLE)
+    # No publisher mock registered — if production tries to fetch, the
+    # responses library will raise ConnectionError and the test fails.
+
+    r = _check_preferred_solution(runner)[0]
+    assert r.status == "Passed"
+    assert "ESSCustomization" in r.result
+    assert "publisher:" not in r.result

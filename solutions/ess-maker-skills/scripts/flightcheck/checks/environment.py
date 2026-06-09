@@ -424,6 +424,37 @@ _ELIGIBLE_SOLUTION_FILTER = (
     "and solutiontype eq 0 and _parentsolutionid_value eq null"
 )
 
+# Fields fetched on each eligible solution. ``_publisherid_value`` is the
+# lookup column needed to follow up with a /publishers({id}) GET when the
+# preferred-solution match is found - it's the cheapest way to surface
+# the publisher without changing the response shape via $expand (which
+# would require new cassette evidence per AGENTS.md "What counts as the
+# same endpoint").
+_ELIGIBLE_SOLUTION_SELECT = "solutionid,uniquename,friendlyname,_publisherid_value"
+
+
+def _is_default_publisher(uniquename: str | None) -> bool:
+    """Return True when ``uniquename`` is the env's Default Publisher.
+
+    Dataverse provisions every environment with a system publisher whose
+    ``uniquename`` follows the pattern ``DefaultPublisher<orgsuffix>``
+    (e.g. ``DefaultPublisherorgeeac24d0`` - one such value is observable
+    in ``tests/fixtures/cassettes/island_gateway_botcomponents.yaml``).
+    Customer-created publishers use customer-chosen unique names that do
+    not start with the literal ``DefaultPublisher`` prefix, so a
+    case-insensitive ``startswith`` is a reliable signal.
+
+    A solution bound to the Default Publisher inherits the env's
+    ``cr<NNN>`` customization prefix - the install guide explicitly says
+    to use a publisher with a custom prefix so exported solutions don't
+    collide across environments:
+    https://learn.microsoft.com/en-us/microsoft-365/copilot/employee-self-service/install#set-up-a-preferred-solution
+    """
+    if not isinstance(uniquename, str):
+        return False
+    return uniquename.lower().startswith("defaultpublisher")
+
+
 
 def _try_parse_guid(value) -> uuid.UUID | None:
     """Return ``uuid.UUID(value)`` or ``None`` if value is not a parsable GUID.
@@ -466,7 +497,7 @@ def _check_preferred_solution(runner) -> list[CheckResult]:
         solutions = query_all(
             env_url, token,
             "solutions",
-            "solutionid,uniquename,friendlyname",
+            _ELIGIBLE_SOLUTION_SELECT,
             _ELIGIBLE_SOLUTION_FILTER,
         )
         if not solutions:
@@ -513,15 +544,89 @@ def _check_preferred_solution(runner) -> list[CheckResult]:
                 None,
             )
             if match:
+                matched_name = match.get("uniquename")
+                # Publisher quality: a customer-owned unmanaged solution that
+                # is bound to the env's Default Publisher inherits the
+                # ``cr<NNN>`` prefix and is unsuitable for ALM export per the
+                # install guide. Treat as a hardening WARNING - the preferred-
+                # solution selection itself is correct, only the publisher
+                # behind it is sub-optimal.
+                publisher_id = match.get("_publisherid_value")
+                if publisher_id:
+                    try:
+                        publisher = dataverse_get(
+                            env_url, token,
+                            f"publishers({publisher_id})",
+                            params={
+                                "$select": (
+                                    "uniquename,customizationprefix,friendlyname"
+                                ),
+                            },
+                        ) or {}
+                    except Exception:
+                        # Don't downgrade a good preferred-solution selection
+                        # over a transient publisher-fetch failure. Fall
+                        # through to PASS with the publisher field omitted;
+                        # the operator still sees the matched solution name.
+                        publisher = {}
+
+                    publisher_uniquename = publisher.get("uniquename")
+                    if _is_default_publisher(publisher_uniquename):
+                        publisher_prefix = publisher.get(
+                            "customizationprefix"
+                        ) or "<unknown>"
+                        return [CheckResult(
+                            checkpoint_id="ENV-009", category="Environment",
+                            priority=Priority.HIGH.value,
+                            status=Status.WARNING.value,
+                            description=_PREFSOL_DESCRIPTION,
+                            result=(
+                                f"Preferred solution '{matched_name}' is bound "
+                                f"to the environment's Default Publisher "
+                                f"('{publisher_uniquename}', prefix "
+                                f"'{publisher_prefix}')."
+                            ),
+                            remediation=(
+                                "Hardening recommendation (not a functional "
+                                "blocker). The Default Publisher's "
+                                f"'{publisher_prefix}' prefix is auto-generated "
+                                "per environment and is shared by every "
+                                "default-published artifact in that env, so "
+                                "exported components collide across "
+                                "environments and ALM provenance is unclear. "
+                                "Create a publisher with your organization's "
+                                "prefix (e.g. 'contoso') in the Power Platform "
+                                "Maker portal -> Solutions -> + New publisher, "
+                                "then either move existing customizations to a "
+                                "new solution that uses it or change the "
+                                "preferred solution to one already bound to "
+                                "that publisher."
+                            ),
+                            doc_link=_PREFSOL_DOC_LINK,
+                        )]
+
+                    # PASSED with publisher annotation when available.
+                    if publisher_uniquename:
+                        publisher_suffix = (
+                            f" (publisher: '{publisher_uniquename}'"
+                            f", prefix: '"
+                            f"{publisher.get('customizationprefix') or '<unknown>'}"
+                            f"')"
+                        )
+                    else:
+                        publisher_suffix = ""
+                else:
+                    publisher_suffix = ""
+
                 return [CheckResult(
                     checkpoint_id="ENV-009", category="Environment",
                     priority=Priority.HIGH.value, status=Status.PASSED.value,
                     description=_PREFSOL_DESCRIPTION,
                     result=(
-                        f"Current maker has selected '{match.get('uniquename')}' "
-                        f"as their preferred solution; it is one of "
-                        f"{len(solutions)} eligible unmanaged solution(s) in "
-                        f"this environment ({eligible_summary})."
+                        f"Current maker has selected '{matched_name}'"
+                        f"{publisher_suffix} as their preferred solution; it "
+                        f"is one of {len(solutions)} eligible unmanaged "
+                        f"solution(s) in this environment ({eligible_summary})."
                     ),
                     doc_link=_PREFSOL_DOC_LINK,
                 )]
