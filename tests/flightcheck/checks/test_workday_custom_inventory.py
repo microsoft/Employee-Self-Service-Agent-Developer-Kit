@@ -326,11 +326,87 @@ class TestCustomWorkflowInventory:
         # Pin specific actionable phrases the operator needs to act:
         assert "msdyn_employeeselfservicetemplateconfigs" in r.remediation
         assert "/create-eval" in r.remediation
-        # Note: the legacy "file an issue in the kit repo to add a
-        # catalog row" guidance is gone — the catalog is now resolved
-        # live from the customer's tenant, so kit-side PRs aren't the
-        # remediation. A MANUAL row means either genuinely-custom or
-        # extension pack not installed.
+        # AC3 ("found a new pattern? log it here" loop-back) is pinned
+        # separately by test_checklist_includes_gap_discovery_loopback
+        # below — keep that test in lockstep with the AC3 paragraph in
+        # _WD_WF_CAT_CHECKLIST.
+
+    @responses.activate
+    def test_checklist_includes_gap_discovery_loopback(
+        self, tmp_path: Path
+    ) -> None:
+        """AC3: the MANUAL remediation MUST include a "found a new
+        pattern? log it here" paragraph that closes the loop back to
+        the kit's gap-discovery process. Without it, customers who hit
+        a detection gap (e.g. a Pattern C wiring the walker doesn't
+        catch) or a scenario they believe should ship OOTB have no
+        canonical channel to forward that signal, and WD-WF-CAT-001
+        can't improve over time.
+
+        The original commit eb02d32 included this loop-back text; the
+        Dataverse-API refactor (0fb2383) dropped it on the rationale
+        that kit-side PRs aren't the remediation for the catalog
+        anymore. But AC3 is broader than the catalog — it covers
+        detection-pattern gaps and OOTB-promotion feedback too. Pin
+        the restored paragraph here so a future drive-by edit that
+        re-strips it fails CI, not silently ships a weaker checklist.
+        """
+        from flightcheck.checks.workday import _check_custom_workflow_inventory
+
+        agent_dir = tmp_path / "workspace" / "agents" / "ess-hr"
+        _write_topic_system_common_execution(
+            agent_dir / "topics" / "custom.mcs.yml",
+            scenario_name="msdyn_HRCustomAC3Test_Unknown",
+        )
+        # Empty managed-row response → scenario surfaces as MANUAL so
+        # the full _WD_WF_CAT_CHECKLIST renders (the loop-back text
+        # is part of the same checklist, not a separate row).
+        _register_template_configs_response(rows=[])
+
+        runner = _RunnerWithDataverse()
+        results = _check_custom_workflow_inventory(runner)
+
+        r = _result_by_id(results, "WD-WF-CAT-001")
+        assert r.status == "Manual"
+
+        # The verbatim AC3 framing phrase from the ticket. If this
+        # disappears the next time someone refactors the checklist,
+        # CI must catch it.
+        assert "Found a new pattern" in r.remediation, (
+            "AC3 loop-back framing dropped from checklist — operators "
+            "have no canonical channel to log gap-discovery feedback"
+        )
+        assert "gap-discovery process" in r.remediation, (
+            "AC3 must explicitly name the gap-discovery process so "
+            "operators understand where the loop closes"
+        )
+        # The actionable channel: the kit repo's issues page. Pin the
+        # exact URL — a typo'd link is worse than no link (operator
+        # files an issue against a 404 and the signal is lost).
+        assert (
+            "https://github.com/microsoft/"
+            "Employee-Self-Service-Agent-Developer-Kit/issues/new"
+        ) in r.remediation, (
+            "AC3 loop-back must link to the kit repo issues page so "
+            "feedback reaches the team that owns WD-WF-CAT-001"
+        )
+        # The three gap categories the loop-back exists to capture —
+        # if any are dropped, the loop closes on a narrower set of
+        # signals than AC3 requires.
+        assert "should ship OOTB" in r.remediation, (
+            "AC3 must invite OOTB-promotion feedback (scenarios "
+            "customers routinely build custom that Microsoft should "
+            "ship in the extension pack)"
+        )
+        assert "detection walker" in r.remediation, (
+            "AC3 must invite detection-pattern feedback (a topic "
+            "wiring shape the walker missed)"
+        )
+        assert "checklist above was insufficient" in r.remediation, (
+            "AC3 must invite checklist-completeness feedback (the "
+            "4-item checklist itself can grow as new failure modes "
+            "are discovered)"
+        )
 
     # ------------------------------------------------------------------
     # Pattern B (InvokeFlowAction → Workday-bound flow)
