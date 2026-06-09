@@ -14,9 +14,15 @@ silently break the "find what needs my attention" path the report
 was designed for.
 
 The three buckets are:
-  - ACTION REQUIRED:  Failed, Error, Warning
-  - MANUAL:           Manual, NotConfigured, Skipped
-  - PASSED:           Passed
+  - ACTION REQUIRED:  Failed, Error
+  - MANUAL:           Warning, Manual, NotConfigured
+  - PASSED:           Passed, Skipped
+
+Warnings live under MANUAL (not ACTION) because they're "should I
+worry?" questions the kit can't answer — the verification path is
+the operator's. Skipped lives under PASSED because the kit chose
+not to run the check (didn't apply / precondition not met); from a
+triage perspective the row needs no action.
 """
 
 from __future__ import annotations
@@ -71,7 +77,10 @@ def _make_result(checkpoint_id, status, priority="High", category="Test"):
 
 def test_bucket_results_assigns_statuses_to_correct_buckets():
     """Every status maps to exactly one of the three buckets per
-    the contract documented in runner.py."""
+    the contract documented in runner.py. Warning routes to MANUAL
+    (it's an operator-verification question, not a fix-this); Skipped
+    routes to PASSED (the kit chose not to run the check, so the
+    row isn't actionable)."""
     from flightcheck.runner import (
         bucket_results,
         BUCKET_ACTION,
@@ -94,21 +103,21 @@ def test_bucket_results_assigns_statuses_to_correct_buckets():
     manual_ids = [r.checkpoint_id for r in b[BUCKET_MANUAL]]
     passed_ids = [r.checkpoint_id for r in b[BUCKET_PASSED]]
 
-    assert set(action_ids) == {"FAIL-1", "ERR-1", "WARN-1"}
-    assert set(manual_ids) == {"MAN-1", "CFG-1", "SKIP-1"}
-    assert passed_ids == ["PASS-1"]
+    assert set(action_ids) == {"FAIL-1", "ERR-1"}
+    assert set(manual_ids) == {"WARN-1", "MAN-1", "CFG-1"}
+    assert set(passed_ids) == {"SKIP-1", "PASS-1"}
 
 
 def test_bucket_results_sorts_by_priority_then_status_then_id():
     """Within ACTION REQUIRED:
        - Critical-priority items come before High before Medium.
-       - Within the same priority, Failed comes before Warning.
+       - Within the same priority, Failed comes before Error.
        - Within the same priority + status, ids sort alphabetically.
     """
     from flightcheck.runner import bucket_results, BUCKET_ACTION
 
     results = [
-        _make_result("Z-WARN", "Warning", priority="Critical"),
+        _make_result("Z-ERR", "Error", priority="Critical"),
         _make_result("Z-FAIL", "Failed", priority="Critical"),
         _make_result("A-FAIL", "Failed", priority="Critical"),
         _make_result("HI-FAIL", "Failed", priority="High"),
@@ -116,7 +125,39 @@ def test_bucket_results_sorts_by_priority_then_status_then_id():
     ]
     ordered = [r.checkpoint_id for r in bucket_results(results)[BUCKET_ACTION]]
 
-    assert ordered == ["A-FAIL", "Z-FAIL", "Z-WARN", "HI-FAIL", "MED-FAIL"]
+    assert ordered == ["A-FAIL", "Z-FAIL", "Z-ERR", "HI-FAIL", "MED-FAIL"]
+
+
+def test_bucket_results_manual_bucket_sorts_warning_before_manual_then_notconfigured():
+    """Within the MANUAL bucket, Warning surfaces FIRST because it
+    carries an observed finding the kit chose to flag. Manual and
+    NotConfigured come after because they're "we didn't / couldn't
+    evaluate" rather than "we found something". Operators triaging
+    the manual section read top-to-bottom, so observed-findings-first
+    is the high-signal order."""
+    from flightcheck.runner import bucket_results, BUCKET_MANUAL
+
+    results = [
+        _make_result("CFG-1", "NotConfigured", priority="High"),
+        _make_result("MAN-1", "Manual", priority="High"),
+        _make_result("WARN-1", "Warning", priority="High"),
+    ]
+    ordered = [r.checkpoint_id for r in bucket_results(results)[BUCKET_MANUAL]]
+    assert ordered == ["WARN-1", "MAN-1", "CFG-1"]
+
+
+def test_bucket_results_passed_bucket_sorts_passed_before_skipped():
+    """Within PASSED, actual Passed rows come before Skipped rows so
+    the operator's "proof of work" sits at the top of the (collapsed)
+    section, with Skipped — which has no signal — below it."""
+    from flightcheck.runner import bucket_results, BUCKET_PASSED
+
+    results = [
+        _make_result("SKIP-1", "Skipped", priority="High"),
+        _make_result("PASS-1", "Passed", priority="High"),
+    ]
+    ordered = [r.checkpoint_id for r in bucket_results(results)[BUCKET_PASSED]]
+    assert ordered == ["PASS-1", "SKIP-1"]
 
 
 def test_bucket_results_unknown_status_lands_in_action_required():
@@ -200,6 +241,78 @@ def test_verdict_ready_subline_mentions_manual_count_when_present(tmp_path):
     assert "need manual verification" in html
 
 
+def test_verdict_warnings_subline_points_at_manual_section_not_action(tmp_path):
+    """READY_WITH_WARNINGS subline must direct the operator to
+    \"Needs manual verification\" \u2014 where warnings actually live
+    under the new bucketing. The old wording \"Action required\" was
+    a stale pointer once warnings moved out of that section, and
+    operators would scroll to an empty Action Required and miss the
+    warnings entirely."""
+    from flightcheck.runner import save_results
+    result = _build_run_with([_make_result("W-1", "Warning")])
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    # Find the verdict text block — the subline lives next to the
+    # verdict-warnings class on the banner.
+    m = re.search(r'<div class="verdict verdict-warnings">.*?</div>\s*</div>', html, flags=re.S)
+    assert m is not None, "verdict-warnings block not found"
+    verdict_block = m.group(0)
+
+    assert "Needs manual verification" in verdict_block, verdict_block
+    # The old wording must not regress \u2014 it would point the
+    # operator at an empty section.
+    assert "Action required" not in verdict_block, verdict_block
+
+
+def test_verdict_not_ready_subline_separates_action_from_verification(tmp_path):
+    """When the run is NOT_READY and also has warnings, the subline
+    must say BOTH where to act (Action required) AND where to
+    verify (Needs manual verification). Bundling them under one
+    section name misroutes the operator."""
+    from flightcheck.runner import save_results
+    result = _build_run_with([
+        _make_result("F-1", "Failed"),
+        _make_result("W-1", "Warning"),
+    ])
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    m = re.search(r'<div class="verdict verdict-not-ready">.*?</div>\s*</div>', html, flags=re.S)
+    assert m is not None
+    verdict_block = m.group(0)
+
+    assert "1 failing/errored" in verdict_block, verdict_block
+    assert "1 warning" in verdict_block, verdict_block
+    assert "need action" in verdict_block, verdict_block
+    assert "need manual verification" in verdict_block, verdict_block
+
+
+def test_verdict_not_ready_headline_counts_failures_only_not_warnings(tmp_path):
+    """The NOT_READY headline counts only blocking items
+    (Failed + Error). Warnings are NOT blockers \u2014 they live in
+    the manual-verification section \u2014 so counting them in the
+    headline would overstate the action load."""
+    from flightcheck.runner import save_results
+    result = _build_run_with([
+        _make_result("F-1", "Failed"),
+        _make_result("W-1", "Warning"),
+        _make_result("W-2", "Warning"),
+    ])
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    # Headline must read "Not ready — 1 issue need attention" (one
+    # failure), NOT "3 issues" (which would include the warnings).
+    m = re.search(r'<h2>Not ready[^<]*</h2>', html)
+    assert m is not None, html
+    headline = m.group(0)
+    assert "1 issue" in headline, headline
+    # Defensive: the old behavior was to add the warning count into
+    # the headline; this pin prevents a regression.
+    assert "3 issues" not in headline, headline
+
+
 # ---------------------------------------------------------------------------
 # Section rendering — the three stacked sections.
 # ---------------------------------------------------------------------------
@@ -280,11 +393,13 @@ def test_empty_section_shows_friendly_note_not_an_empty_table(tmp_path):
 
 
 def test_status_to_section_routing_in_rendered_html(tmp_path):
-    """Each status renders inside the section its bucket dictates —
-    not in some other section's table."""
+    """Each status renders inside the section its bucket dictates.
+    Warning lands under MANUAL (operator must verify); Skipped lands
+    under PASSED (kit chose not to run the check)."""
     from flightcheck.runner import save_results
     result = _build_run_with([
         _make_result("FAIL-X", "Failed"),
+        _make_result("WARN-X", "Warning"),
         _make_result("MAN-X", "Manual"),
         _make_result("SKIP-X", "Skipped"),
         _make_result("PASS-X", "Passed"),
@@ -307,26 +422,33 @@ def test_status_to_section_routing_in_rendered_html(tmp_path):
     assert "FAIL-X" in action_html
     assert "FAIL-X" not in manual_html and "FAIL-X" not in passed_html
 
-    # MAN + SKIP belong in manual (Skipped folds here per design)
+    # WARN + MAN belong in manual (Warning folds here per design —
+    # it's an operator-verification question, not a fix-this).
+    assert "WARN-X" in manual_html
     assert "MAN-X" in manual_html
-    assert "SKIP-X" in manual_html
+    assert "WARN-X" not in action_html and "WARN-X" not in passed_html
     assert "MAN-X" not in action_html and "MAN-X" not in passed_html
-    assert "SKIP-X" not in action_html and "SKIP-X" not in passed_html
 
-    # PASS belongs in passed
+    # PASS + SKIP belong in passed (Skipped folds here per design —
+    # the kit chose not to run the check, so the row needs no action).
     assert "PASS-X" in passed_html
+    assert "SKIP-X" in passed_html
     assert "PASS-X" not in action_html and "PASS-X" not in manual_html
+    assert "SKIP-X" not in action_html and "SKIP-X" not in manual_html
 
 
 def test_section_count_badge_matches_bucket_size(tmp_path):
     """The badge next to each section header shows the bucket count
-    so the operator sees scale before expanding."""
+    so the operator sees scale before expanding. Counts reflect the
+    new mapping: Warning is in MANUAL (not ACTION), Skipped is in
+    PASSED (not MANUAL)."""
     from flightcheck.runner import save_results
     result = _build_run_with([
         _make_result("F-1", "Failed"),
         _make_result("F-2", "Failed"),
         _make_result("W-1", "Warning"),
         _make_result("M-1", "Manual"),
+        _make_result("S-1", "Skipped"),
         _make_result("P-1", "Passed"),
         _make_result("P-2", "Passed"),
         _make_result("P-3", "Passed"),
@@ -342,9 +464,9 @@ def test_section_count_badge_matches_bucket_size(tmp_path):
         assert m is not None, f"No count badge for {section_id}"
         return m.group(1)
 
-    assert badge_count_for("section-action") == "3"   # 2 Failed + 1 Warning
-    assert badge_count_for("section-manual") == "1"   # 1 Manual
-    assert badge_count_for("section-passed") == "3"   # 3 Passed
+    assert badge_count_for("section-action") == "2"   # 2 Failed only
+    assert badge_count_for("section-manual") == "2"   # 1 Warning + 1 Manual
+    assert badge_count_for("section-passed") == "4"   # 3 Passed + 1 Skipped
 
 
 def test_action_rows_sorted_critical_before_high_in_html(tmp_path):
