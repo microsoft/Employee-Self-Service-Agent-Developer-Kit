@@ -520,6 +520,32 @@ def test_lic002_undetermined_license_read(monkeypatch):
     assert "carol@contoso.com" in r.result
 
 
+def test_lic002_group_only_all_licensed_passes_with_group_note(monkeypatch):
+    """AC7: shared only with a Premium-licensed security group => PASS, with an
+    informational note acknowledging licensing was verified via the group."""
+    members = [
+        {"id": "aad-1", "userPrincipalName": "alice@contoso.com", "accountEnabled": True},
+        {"id": "aad-2", "userPrincipalName": "bob@contoso.com", "accountEnabled": True},
+    ]
+    graph = _FakeGraph(
+        licenses={"aad-1": [_premium_license()], "aad-2": [_premium_license()]},
+        groups={"grp-aad": members},
+    )
+    _install_dataverse(
+        monkeypatch,
+        shares={"bot-1": [_principal("team", "team-1")]},
+        teams={"team-1": {"teamid": "team-1", "name": "ESS Users",
+                          "azureactivedirectoryobjectid": "grp-aad"}},
+    )
+    r = _lic002(_runner002(graph))[0]
+    from flightcheck.runner import Status
+    assert r.status == Status.PASSED.value
+    assert "2 shared-with user(s)" in r.result
+    # The note names the group so the maker sees licensing was verified via it.
+    assert "ESS Users" in r.result
+    assert "via shared group" in r.result
+
+
 def test_lic002_auth_expired_propagates(monkeypatch):
     """An expired Dataverse token must propagate (=> runner ERROR row),
     not be swallowed into a benign WARNING."""

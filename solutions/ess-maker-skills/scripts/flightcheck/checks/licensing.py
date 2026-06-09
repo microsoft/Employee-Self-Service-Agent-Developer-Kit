@@ -440,6 +440,7 @@ def _resolve_team(runner, team_id, entra, undetermined, notes):
                 f"group '{name}' has >= {MAX_MEMBERS_PER_GROUP} members; only the "
                 f"first {MAX_MEMBERS_PER_GROUP} were checked"
             )
+        added = 0
         for m in members[:MAX_MEMBERS_PER_GROUP]:
             upn = m.get("userPrincipalName")
             mid = m.get("id")
@@ -447,7 +448,15 @@ def _resolve_team(runner, team_id, entra, undetermined, notes):
             # disabled accounts — they can't trigger the flow, mirroring the
             # isdisabled skip in _resolve_systemuser.
             if upn and mid and m.get("accountEnabled") is not False:
+                if mid not in entra:
+                    added += 1
                 entra.setdefault(mid, upn)
+        # Acknowledge that licensing for these users was verified through their
+        # membership in the shared group (their licenseDetails reflects any
+        # group-based SKU assignment transitively).
+        notes.append(
+            f"resolved {added} licensable user(s) via shared group '{name}'"
+        )
         return
     # Owner / access team — resolve members via Dataverse teammembership.
     tm = query_all(
