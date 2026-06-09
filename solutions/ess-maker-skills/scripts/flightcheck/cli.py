@@ -110,6 +110,10 @@ def main():
         "--environment-id",
         help="Override the Power Platform environment ID (used by environment_picker.py)",
     )
+    parser.add_argument(
+        "--no-open", action="store_true",
+        help="Don't open the HTML report in a browser after running",
+    )
     args = parser.parse_args()
 
     # Load config
@@ -285,6 +289,14 @@ def main():
 
     # Save results
     save_results(result, args.output)
+
+    # Open HTML report in browser
+    if not args.no_open:
+        import webbrowser
+        report_path = os.path.join(args.output, "report.html")
+        if os.path.exists(report_path):
+            abs_path = os.path.abspath(report_path)
+            webbrowser.open(f"file://{abs_path}")
 
     # Exit code
     sys.exit(1 if result.failed > 0 else 0)
