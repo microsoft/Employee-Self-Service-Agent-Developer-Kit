@@ -11,20 +11,33 @@ Read `.local/config.json` for agent details (dataverseEndpoint, agent.botId,
 agent.name, agent.schemaName, agent.isManaged).
 
 **CRITICAL RULES (from retro):**
-- The 3 Workday connections need DIFFERENT configurations:
+- This step branches on `installPath` from config:
+  - **simplified** — the extension install prompts for only **2**
+    connections: OAuthUser (`ff0df`, Microsoft Entra ID Integrated) and
+    Dataverse. There are no ISU/Basic connections, no
+    `EmployeeContextRequestAccountName` env var, and no RaaS report. The
+    OAuthUser connection additionally requires a **Workday REST base
+    URL** field. User context comes from the REST `/workers/me`
+    endpoint via the **User Context V2** topic.
+  - **legacy** — the extension install prompts for **4** connections
+    (`d6081`, `0786a`, `ff0df`, Dataverse) with the ISU env var and the
+    `WD_User_Context` RaaS report, as documented in the legacy sections.
+- For the **legacy** path, the 3 Workday connections need DIFFERENT
+  configurations:
   - `d6081` (Context Generic) = Basic auth with ISU_WQL
   - `0786a` (Generic User) = Basic auth with ISU_GENERIC
   - `ff0df` (OAuthUser) = **Microsoft Entra ID Integrated** (SSO)
   This is because `ff0df` uses `runtimeSource: invoker` in the flow —
   it authenticates AS the employee, not as a service account.
-- Power Platform AUTO-FILLS connections 2 and 3 when you create #1.
-  The user MUST create each connection separately. Warn explicitly.
+- Power Platform AUTO-FILLS the other connections when you create the
+  first. The user MUST create each connection separately. Warn explicitly.
 - Name each connection distinctively (append the reference ID suffix)
   so they're distinguishable in dropdowns.
 - The topic redirect MUST be pushed automatically via push.py — do NOT
   leave it as a manual portal step.
 - After install, verify EVERYTHING programmatically: connection refs,
-  flows, env vars, topic redirect. Do NOT accept "done" without checking.
+  flows, env vars (legacy only), topic redirect. Do NOT accept "done"
+  without checking.
 - Environment variables are in the Default Solution, NOT a "Workday" solution.
 
 ---
@@ -104,6 +117,83 @@ Do this silently — do not tell the user about app role assignments.
 ---
 
 ## 3.4 — Guide extension pack installation
+
+Read `installPath` and `partialInstall` from `.local/connect/workday/config.json`.
+
+**If `partialInstall` is `true`**, the tenant has 1 or 2 legacy Workday
+connection refs (`d6081` and/or `0786a`) but not the full 3. Treat this
+as a **legacy repair**, not a fresh simplified install:
+
+- **Reuse** refs that already exist and show **Connected**.
+- **Repair or recreate** refs that exist but are not Connected.
+- **Create** only refs that are missing.
+
+Do NOT switch paths mid-repair. Use the **Legacy path** section below
+and surface a brief note to the user that you detected a partial legacy
+install and are completing that repair path.
+
+### Simplified path (2 connections)
+
+**Use this section when INSTALL_PATH is `simplified`.** Read
+`entraAppIdUri`, `oauthTokenUrl`, `oauthClientId`, `baseUrl`,
+`restBaseUrl`, and `tenant` from config.
+
+**Message:**
+
+Now let's install the Workday extension pack.
+
+1. Open your agent in [Copilot Studio](https://copilotstudio.microsoft.com/)
+2. Go to **Settings** → **Customize**
+3. Select **Workday** and choose **Install**
+
+You'll be asked to set up 2 connections.
+
+---
+
+**Connection 1 — OAuthUser SSO (`ff0df`)**
+Name it: `Workday SOAP - OAuthUser SSO (ff0df)`
+
+| Field | Value |
+|-------|-------|
+| **Authentication type** | **Microsoft Entra ID Integrated** |
+| **Microsoft Entra resource URL (Application ID URI)** | `{entraAppIdUri}` |
+| **Workday OAuth token URL** | `{oauthTokenUrl}` |
+| **Workday OAuth client ID** | `{oauthClientId}` |
+| **SOAP base URL** | `{baseUrl}` |
+| **Workday REST base URL** | `{restBaseUrl}` |
+| **Tenant name** | `{tenant}` |
+
+→ Sign in with your Microsoft account when prompted.
+
+> **If the OAuthUser connection screen does not show a "Workday REST
+> base URL" field**, you have an older Workday extension pack version
+> that only supports the 3-connection legacy install. Type **legacy**
+> and the skill will restart this step on the legacy path instead.
+
+---
+
+**Connection 2 — Dataverse**
+Should auto-connect with your account. Just click to confirm.
+
+---
+
+Once both show green checkmarks, click **Next** to complete the install.
+
+Type **done** when the installation finishes.
+
+**End message.**
+
+Wait for the user. Then go to section 3.5.
+
+**If the user types `legacy` instead of `done`** (older extension pack
+without the REST base URL field), set `installPath = legacy` in
+`.local/connect/workday/config.json`, then go back to step2 task 2 to run
+the legacy ISU/security-group/RaaS admin setup before retrying 3.4 on
+the Legacy path.
+
+### Legacy path (4 connections)
+
+**Use this section when INSTALL_PATH is `legacy`.**
 
 Read the ISU passwords from config (`isuWqlPassword`, `isuGenericPassword`).
 Read `entraAppIdUri`, `oauthTokenUrl`, `oauthClientId`, `baseUrl`, `tenant`
@@ -199,10 +289,24 @@ SELECT TOP 5 connectionreferencelogicalname,
   WHERE connectorid LIKE '%workday%'
 ```
 
-Check that all 3 Workday connection references exist and have
-`statuscode = 1` (Connected).
+Check the connection references based on `installPath`:
 
-If any show `statuscode != 1`, note which ones are broken.
+- **simplified** — expect the OAuthUser reference (`ff0df`) to exist
+  with `statuscode = 1` (Connected). `d6081`/`0786a` should NOT exist;
+  if they do, this is actually a legacy install — re-read step 1
+  detection.
+- **legacy** — expect all 3 Workday connection references
+  (`d6081`, `0786a`, `ff0df`) to exist with `statuscode = 1`.
+
+The Dataverse connection uses the platform Dataverse connector, not a
+`%workday%` one, so it does NOT appear in the query above. Confirm it
+from the green check it showed during the extension install in 3.4; the
+completion summary's `Connection: Dataverse` row reflects that install
+result, not this query. Do not report a Dataverse status this query
+cannot actually see.
+
+If any expected reference shows `statuscode != 1`, note which ones are
+broken.
 
 ### 3.5b — Verify flows are enabled
 
@@ -239,10 +343,16 @@ Type **done** when both flows are on.
 
 **End message.**
 
-### 3.5c — Verify environment variables
+### 3.5c — Verify environment variables (legacy path only)
 
-The environment variable `EmployeeContextRequestAccountName` must be
-set to the ISU_WQL account. This is the one that's usually missed.
+**Skip this entire sub-step if `installPath` is `simplified`.** The
+simplified install does not use the `EmployeeContextRequestAccountName`
+environment variable or the `WD_User_Context` RaaS report — user context
+comes from the REST `/workers/me` endpoint.
+
+For the **legacy** path: the environment variable
+`EmployeeContextRequestAccountName` must be set to the ISU_WQL account.
+This is the one that's usually missed.
 
 Try querying via Dataverse MCP:
 
@@ -280,8 +390,24 @@ Read the agent's `user-context-setup.mcs.yml` file:
 workspace/agents/{slug}/topics/user-context-setup.mcs.yml
 ```
 
-Check if it already contains a `BeginDialog` action pointing to
-`WorkdaySystemGetUserContext`.
+Check if it already contains a `BeginDialog` action pointing to the
+Workday user-context system topic.
+
+**Determine the correct redirect target based on `installPath`:**
+
+- **legacy** → the SOAP/RaaS user-context topic
+  `WorkdaySystemGetUserContext`.
+- **simplified** → the REST `/workers/me` user-context topic, which the
+  simplified extension pack ships as a V2 topic
+  (`WorkdaySystemGetUserContextV2`). Confirm the exact topic name by
+  listing the installed Workday system topics under
+  `.local/agents/{slug}/topics/` (look for the Workday "Set User Context"
+  system topic) and use that topic's actual dialog id. Do NOT assume the
+  legacy name on a simplified install.
+
+Save the resolved dialog id as USER_CONTEXT_DIALOG
+(e.g. `{SCHEMA_NAME}.topic.WorkdaySystemGetUserContext` for legacy or
+`{SCHEMA_NAME}.topic.WorkdaySystemGetUserContextV2` for simplified).
 
 **If the redirect already exists:** Good, skip this step.
 
@@ -307,7 +433,8 @@ Create a checkpoint:
 python scripts/checkpoint.py "Add User Context redirect to Workday"
 ```
 
-Replace the file content with:
+Replace the file content with (use the USER_CONTEXT_DIALOG resolved
+above as the `dialog` value):
 
 ```yaml
 kind: AdaptiveDialog
@@ -319,7 +446,7 @@ beginDialog:
     - kind: BeginDialog
       id: bfT9Kx
       displayName: Redirect to Workday System Get User Context
-      dialog: msdyn_copilotforemployeeselfservicehr.topic.WorkdaySystemGetUserContext
+      dialog: {USER_CONTEXT_DIALOG}
 ```
 
 Push the change:
@@ -342,7 +469,32 @@ python scripts/fetch_and_setup.py --url "{ENV_URL}" --bot-id "{BOT_ID}" --name "
 
 ### 3.5f — Show verification results
 
-Build a results table from all checks.
+Build a results table from all checks, based on `installPath`.
+
+For the topic redirect check, do not hard-code a single topic name.
+Treat the check as pass when `user-context-setup.mcs.yml` contains a
+`BeginDialog` that points to the resolved `USER_CONTEXT_DIALOG`.
+
+**If INSTALL_PATH is `simplified`:**
+
+**Message:**
+
+Post-install verification:
+
+| Check | Status |
+|-------|--------|
+| Connection: OAuthUser SSO (`ff0df`) | {✅ or ❌} |
+| Connection: Dataverse | {✅ or ❌} |
+| Flow: ESS HR Workday Get User Context | {✅ Enabled or ❌ Disabled} |
+| Flow: ESS HR Workday | {✅ Enabled or ❌ Disabled} |
+| Environment variables (legacy-only) | ✅ N/A for simplified |
+| Topic redirect: User Context → Workday user-context topic | {✅ Pushed or ❌ Missing} |
+
+{If any ❌ items, show specific fix instructions for each.}
+
+**End message.**
+
+**If INSTALL_PATH is `legacy`:**
 
 **Message:**
 
@@ -356,7 +508,7 @@ Post-install verification:
 | Flow: ESS HR Workday Get User Context | {✅ Enabled or ❌ Disabled} |
 | Flow: ESS HR Workday | {✅ Enabled or ❌ Disabled} |
 | Environment variable: AccountName | {✅ Set or ⚠️ Verify manually} |
-| Topic redirect: User Context → Workday | {✅ Pushed or ❌ Missing} |
+| Topic redirect: User Context → Workday user-context topic | {✅ Pushed or ❌ Missing} |
 
 {If any ❌ items, show specific fix instructions for each.}
 
