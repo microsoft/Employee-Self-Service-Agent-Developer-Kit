@@ -90,7 +90,7 @@ class PVAClient:
             )
 
         if cache.has_state_changed:
-            os.makedirs("my", exist_ok=True)
+            os.makedirs(".local", exist_ok=True)
             with open(cache_path, "w") as f:
                 f.write(cache.serialize())
 
