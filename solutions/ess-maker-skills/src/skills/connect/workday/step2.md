@@ -6,7 +6,7 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 **Do NOT show internal variable names or assignments to the user.** Never
 display text like "DOMAIN_NAME = ..." or "TENANT_NAME = ..." in chat.
 
-Read `my/connect/workday/config.json` for ALL values — WD_BASE_URL (baseUrl),
+Read `.local/connect/workday/config.json` for ALL values — WD_BASE_URL (baseUrl),
 WD_TENANT (tenant), WD_TOKEN_HOST (tokenHost), DOMAIN_NAME (domainName),
 TENANT_ID (tenantId), WD_ENTRA_APP_ID (entraAppId),
 WD_ENTRA_APP_ID_URI (entraAppIdUri), WD_OAUTH_TOKEN_URL (oauthTokenUrl),
@@ -69,7 +69,7 @@ scenarios (compensation, time off requests, contact updates).
 
 ### 2.1a — Check if Entra app already exists
 
-Read `my/connect/workday/config.json`. If `entraSSO` is `true` and
+Read `.local/connect/workday/config.json`. If `entraSSO` is `true` and
 `entraAppId` is set, an Entra app was already found in step 1.
 
 **If ENTRA_SSO_EXISTS is true:**
@@ -269,7 +269,7 @@ Type **done** when complete.
 
 Wait for the user.
 
-Update `my/connect/workday/config.json`:
+Update `.local/connect/workday/config.json`:
 ```json
 {
   "entraSSO": true,
@@ -410,13 +410,13 @@ which will verify authentication actually works.
 
 **Hold ISU_WQL_PASSWORD and ISU_GENERIC_PASSWORD in session memory only**
 for use in step 3 connection setup. Do NOT write them to
-`my/connect/workday/config.json` - ISU credentials are full reusable
+`.local/connect/workday/config.json` - ISU credentials are full reusable
 Workday user accounts (worse risk profile than the cert PFX passphrase
-in `step2-certificate.md`, which we also keep off disk), and `my/` is a
+in `step2-certificate.md`, which we also keep off disk), and `.local/` is a
 working directory contributors share, debug from, and occasionally
 commit by accident. The Power Platform connection ref encrypts and
 stores them server-side once step 3 wires the connections, so the
-on-disk copy in `my/` would be a duplicate worth eliminating.
+on-disk copy in `.local/` would be a duplicate worth eliminating.
 
 If the user comes back to step 3 in a new session and the passwords
 are gone from session memory, re-prompt for them at that point.
@@ -473,7 +473,7 @@ Wait for the user. Proceed to Task 4.
 
 ## Task 4: Register API Client
 
-Check `my/connect/workday/config.json` for `oauthClientId`. If it's
+Check `.local/connect/workday/config.json` for `oauthClientId`. If it's
 already set (discovered or saved previously), skip to the save step.
 
 **Message:**
@@ -541,7 +541,7 @@ Use the `vscode_askQuestions` tool:
 
 Save as OAUTH_CLIENT_ID.
 
-Update `my/connect/workday/config.json`:
+Update `.local/connect/workday/config.json`:
 ```json
 {
   "oauthClientId": "{OAUTH_CLIENT_ID}",
@@ -676,7 +676,7 @@ retry.
 
 ## Task 6: WD_User_Context RaaS Report
 
-Check `my/connect/workday/config.json`. If `raasReportExists` is `true`,
+Check `.local/connect/workday/config.json`. If `raasReportExists` is `true`,
 the report was already detected in step 1.
 
 **If report exists:**
@@ -946,7 +946,7 @@ Wait for the user on retry. Re-run `get_user_context`.
 
 ## 2.7 — Complete step 2
 
-Update `my/connect/workday/tasks.md` — change step 2 from
+Update `.local/connect/workday/tasks.md` — change step 2 from
 `- [ ]` to `- [x]`.
 
 **Message:**

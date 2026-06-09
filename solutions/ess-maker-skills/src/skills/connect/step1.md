@@ -7,7 +7,7 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 
 ## 1.1 — Check what's already connected
 
-Check which folders exist under `my/connect/`. For each folder that has a
+Check which folders exist under `.local/connect/`. For each folder that has a
 `tasks.md` where all items are checked, that integration is connected.
 
 Build a list of connected integrations (if any).
@@ -52,11 +52,11 @@ Wait for the user to respond.
 
 ### If the user chose ServiceNow (1 or "servicenow")
 
-Check if `my/connect/servicenow/tasks.md` exists.
+Check if `.local/connect/servicenow/tasks.md` exists.
 
 **If it exists and all items are checked:**
 
-Read `my/connect/servicenow/config.json` to get the current `authType`.
+Read `.local/connect/servicenow/config.json` to get the current `authType`.
 Map it to a display name:
 - `entra` → "Entra ID (interactive sign-in)"
 - `certificate` → "Certificate (service-to-service)"
@@ -101,14 +101,14 @@ Map the answer to SNOW_AUTH using the same rules as
 `src/skills/connect/servicenow/step1.md` section 1.1 (the per-product
 step1, NOT this top-level routing file).
 
-Update `my/connect/servicenow/config.json` — set `authType` to the new
+Update `.local/connect/servicenow/config.json` — set `authType` to the new
 value. Set `status` to `"in-progress"`. Reset all pack statuses in
 `packs` from `"installed"` to `"pending"`.
 
-Update `my/connect/servicenow/tasks.md` — reset steps 2, 3, and 4 from
+Update `.local/connect/servicenow/tasks.md` — reset steps 2, 3, and 4 from
 `- [x]` to `- [ ]`.
 
-Update `my/config.json` — remove the `connections.ServiceNow` entry (it
+Update `.local/config.json` — remove the `connections.ServiceNow` entry (it
 will be re-created by step 4 with the new auth type after verification).
 
 **Message:**
@@ -124,7 +124,7 @@ Switching to **{new auth display name}**. Picking up from step 2.
 
 **End message.**
 
-Read `my/connect/servicenow/config.json` to restore INSTANCE_NAME and
+Read `.local/connect/servicenow/config.json` to restore INSTANCE_NAME and
 other values. Then route by the new SNOW_AUTH:
 
 - If `entra` → read `src/skills/connect/servicenow/step2-entra.md`
@@ -135,12 +135,12 @@ other values. Then route by the new SNOW_AUTH:
 
 **If the user chose 3 (reconnect from scratch):**
 
-Reset `my/connect/servicenow/tasks.md` — all steps to `- [ ]`.
+Reset `.local/connect/servicenow/tasks.md` — all steps to `- [ ]`.
 
-Delete `my/connect/servicenow/config.json`.
+Delete `.local/connect/servicenow/config.json`.
 
 Copy `src/skills/connect/servicenow/tasks.md` to
-`my/connect/servicenow/tasks.md`.
+`.local/connect/servicenow/tasks.md`.
 
 **Message:**
 
@@ -159,10 +159,10 @@ Now read `src/skills/connect/servicenow/step1.md` and follow it.
 
 **If it exists and some items are unchecked:**
 
-Show the checklist from `my/connect/servicenow/tasks.md` (✅ for checked,
+Show the checklist from `.local/connect/servicenow/tasks.md` (✅ for checked,
 ⬜ for unchecked) followed by "Picking up where we left off."
 
-Read `my/connect/servicenow/config.json` to restore saved values
+Read `.local/connect/servicenow/config.json` to restore saved values
 (INSTANCE_NAME, SNOW_USAGE, SNOW_AUTH, etc.). Then find the first unchecked
 step and route as follows:
 
@@ -184,7 +184,7 @@ step and route as follows:
 **If it does not exist:**
 
 Copy `src/skills/connect/servicenow/tasks.md` to
-`my/connect/servicenow/tasks.md`.
+`.local/connect/servicenow/tasks.md`.
 
 **Message:**
 
@@ -203,11 +203,11 @@ Now read `src/skills/connect/servicenow/step1.md` and follow it.
 
 ### If the user chose Workday (2 or "workday")
 
-Check if `my/connect/workday/tasks.md` exists.
+Check if `.local/connect/workday/tasks.md` exists.
 
 **If it exists and all items are checked:**
 
-Read `my/connect/workday/config.json` to get the current tenant name.
+Read `.local/connect/workday/config.json` to get the current tenant name.
 
 **Message:**
 
@@ -224,12 +224,12 @@ Wait for the user.
 
 **If the user chose 2 (reconnect):**
 
-Reset `my/connect/workday/tasks.md` — all steps to `- [ ]`.
+Reset `.local/connect/workday/tasks.md` — all steps to `- [ ]`.
 
-Delete `my/connect/workday/config.json`.
+Delete `.local/connect/workday/config.json`.
 
 Copy `src/skills/connect/workday/tasks.md` to
-`my/connect/workday/tasks.md`.
+`.local/connect/workday/tasks.md`.
 
 **Message:**
 
@@ -247,10 +247,10 @@ Now read `src/skills/connect/workday/step1.md` and follow it.
 
 **If it exists and some items are unchecked:**
 
-Show the checklist from `my/connect/workday/tasks.md` (✅ for checked,
+Show the checklist from `.local/connect/workday/tasks.md` (✅ for checked,
 ⬜ for unchecked) followed by "Picking up where we left off."
 
-Read `my/connect/workday/config.json` to restore saved values. Then
+Read `.local/connect/workday/config.json` to restore saved values. Then
 find the first unchecked step and route:
 
 - **Step 1 unchecked** → read `src/skills/connect/workday/step1.md`
@@ -260,7 +260,7 @@ find the first unchecked step and route:
 **If it does not exist:**
 
 Copy `src/skills/connect/workday/tasks.md` to
-`my/connect/workday/tasks.md`.
+`.local/connect/workday/tasks.md`.
 
 **Message:**
 
