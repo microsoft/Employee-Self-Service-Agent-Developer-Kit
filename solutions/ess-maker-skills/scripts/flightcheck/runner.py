@@ -226,21 +226,32 @@ def save_results(run_result: RunResult, output_dir: str = "workspace/flightcheck
 
 
 # --- Result bucketing for the prioritized report layout --------------
+
+# Triage bucket model
+# ------------------------------------------------------------------
+# Results sort into one of three rendered sections, top to bottom:
 #
-# The report groups results into three buckets so the operator can
-# triage by skimming top-to-bottom:
+#   1. ACTION_REQUIRED — Failed, Error. These are checks that did
+#      not pass and the kit is confident the operator must act.
+#      The blocking signal — fix-this-now items only.
 #
-#   1. ACTION_REQUIRED — Failed, Error, Warning. The operator must
-#      look at these and either fix them or decide they're acceptable.
-#   2. MANUAL_VERIFICATION — Manual, NotConfigured, Skipped. The
-#      kit cannot programmatically confirm these; the operator must
-#      verify in the portal / vendor system, OR fix the underlying
-#      reason FlightCheck couldn't run the check (missing creds, etc.).
-#   3. PASSED — everything the kit confirmed is in a good state.
+#   2. MANUAL_VERIFICATION — Warning, Manual, NotConfigured. The
+#      kit cannot make a yes/no judgement, or surfaced a soft
+#      finding the operator should confirm is acceptable. Warnings
+#      live here (not in Action required) because they are "should
+#      I worry?" questions, not "fix this" instructions — the
+#      verification path is the operator's, not the kit's. NotConfigured
+#      means the kit had no creds/visibility to evaluate.
 #
-# Within each bucket results are sorted by:
+#   3. PASSED — Passed, Skipped. Skipped is grouped with Passed
+#      because the kit chose not to run the check (e.g. it didn't
+#      apply to this scope, or a precondition wasn't met); from the
+#      operator's triage perspective the row needs no action and
+#      should sit alongside the proof-of-work passes.
+#
+# Within each bucket, results are sorted by:
 #   - priority (Critical > High > Medium > Low > unknown last)
-#   - status (per BUCKET_STATUS_ORDER below — worst first within bucket)
+#   - status (per _BUCKET_STATUS_ORDER below — worst first within bucket)
 #   - checkpoint_id (alphabetical, stable within ties)
 #
 # The flat run-order `RunResult.results` list is preserved unchanged
@@ -256,23 +267,28 @@ BUCKET_PASSED = "passed"
 _STATUS_TO_BUCKET = {
     Status.FAILED.value: BUCKET_ACTION,
     Status.ERROR.value: BUCKET_ACTION,
-    Status.WARNING.value: BUCKET_ACTION,
+    Status.WARNING.value: BUCKET_MANUAL,
     Status.MANUAL.value: BUCKET_MANUAL,
     Status.NOT_CONFIGURED.value: BUCKET_MANUAL,
-    Status.SKIPPED.value: BUCKET_MANUAL,
+    Status.SKIPPED.value: BUCKET_PASSED,
     Status.PASSED.value: BUCKET_PASSED,
 }
 
 # Within-bucket status sort order — lower index = surfaced first.
 # Worst news in each bucket goes to the top.
 _BUCKET_STATUS_ORDER = {
+    # ACTION_REQUIRED — Failed first, then Error.
     Status.FAILED.value: 0,
     Status.ERROR.value: 1,
-    Status.WARNING.value: 2,
-    Status.MANUAL.value: 0,
-    Status.NOT_CONFIGURED.value: 1,
-    Status.SKIPPED.value: 2,
+    # MANUAL_VERIFICATION — Warning first because it carries an
+    # observed finding (vs Manual/NotConfigured, which are "we
+    # didn't / couldn't evaluate").
+    Status.WARNING.value: 0,
+    Status.MANUAL.value: 1,
+    Status.NOT_CONFIGURED.value: 2,
+    # PASSED — actual passes first, then Skipped (no signal).
     Status.PASSED.value: 0,
+    Status.SKIPPED.value: 1,
 }
 
 _PRIORITY_ORDER = {
@@ -324,10 +340,10 @@ def _generate_html_report(r: RunResult) -> str:
       - Verdict banner (green / yellow / red) with one-line summary
       - Summary count cards (Passed / Failed / Warnings / Manual /
         Not Configured / Skipped / Errors)
-      - Section 1: ACTION REQUIRED (Failed + Error + Warning)
-      - Section 2: NEEDS MANUAL VERIFICATION (Manual + NotConfigured + Skipped)
-      - Section 3: PASSED (collapsed by default — proof of work, not
-        a triage queue)
+      - Section 1: ACTION REQUIRED (Failed + Error)
+      - Section 2: NEEDS MANUAL VERIFICATION (Warning + Manual + NotConfigured)
+      - Section 3: PASSED (collapsed by default — proof of work plus
+        Skipped, not a triage queue)
     """
     buckets = bucket_results(r.results)
 
@@ -341,13 +357,14 @@ def _generate_html_report(r: RunResult) -> str:
         section_id="section-action",
         title="Action required",
         subtitle=(
-            "Items the kit found to be failing, errored, or showing a "
-            "warning. Review each one and either fix it or confirm it's "
-            "acceptable for your deployment."
+            "Items the kit confirmed are failing or errored. Fix each one "
+            "before deploying. (Warnings live under \u201cNeeds manual "
+            "verification\u201d below \u2014 they\u2019re questions the "
+            "kit can\u2019t answer for you, not blocking failures.)"
         ),
         empty_text=(
-            "No failing, errored, or warning items \u2014 nothing here "
-            "needs your attention."
+            "No failing or errored items \u2014 nothing here needs your "
+            "attention."
         ),
         rows_html=action_rows,
         count=len(buckets[BUCKET_ACTION]),
@@ -358,10 +375,11 @@ def _generate_html_report(r: RunResult) -> str:
         section_id="section-manual",
         title="Needs manual verification",
         subtitle=(
-            "The kit can't confirm these programmatically. Either "
-            "verify the state in the portal / vendor system, or fix the "
-            "reason the check couldn't run (missing credentials, "
-            "permissions, or feature not enabled)."
+            "Warnings and other findings the kit can\u2019t confirm "
+            "programmatically. For each row, verify the state in the "
+            "portal / vendor system and confirm it\u2019s acceptable, "
+            "or fix the reason the check couldn\u2019t run (missing "
+            "credentials, permissions, or feature not enabled)."
         ),
         empty_text=(
             "Nothing requires manual verification \u2014 every check "
@@ -376,8 +394,9 @@ def _generate_html_report(r: RunResult) -> str:
         section_id="section-passed",
         title="Passed",
         subtitle=(
-            "Items the kit confirmed are in a good state. Expand for "
-            "the full list."
+            "Items the kit confirmed are in a good state, plus checks "
+            "the kit chose to skip because they didn\u2019t apply to "
+            "this scope. Expand for the full list."
         ),
         empty_text="No passing items in this run.",
         rows_html=passed_rows,
@@ -517,16 +536,22 @@ def _verdict_text(r: RunResult) -> tuple[str, str, str, str]:
     Drives the single biggest signal on the page, so word choice
     matters: the headline answers "is my deployment OK?" in five
     words or less; the subline says exactly what to do next.
+
+    Section pointers in the subline reflect the bucket model:
+    Failed / Error live under "Action required"; Warning / Manual /
+    NotConfigured live under "Needs manual verification". Pointing
+    operators at the right section is the whole reason the verdict
+    has a subline.
     """
-    action_count = r.failed + r.errors + r.warnings
-    manual_count = r.manual + r.not_configured + r.skipped
+    failing = r.failed + r.errors
+    manual_count = r.warnings + r.manual + r.not_configured
 
     if r.overall == "READY":
         if manual_count:
             sub = (
                 f"All {r.passed} automated check(s) passed. "
                 f"{manual_count} item(s) need manual verification \u2014 "
-                "see the section below."
+                "see \u201cNeeds manual verification\u201d below."
             )
         else:
             sub = (
@@ -537,9 +562,9 @@ def _verdict_text(r: RunResult) -> tuple[str, str, str, str]:
 
     if r.overall == "READY_WITH_WARNINGS":
         sub = (
-            f"{r.warnings} warning(s) found. Review the items in "
-            "\u201cAction required\u201d below and confirm each is "
-            "acceptable before deploying."
+            f"{r.warnings} warning(s) found. Review each one in "
+            "\u201cNeeds manual verification\u201d below and confirm "
+            "it\u2019s acceptable before deploying."
         )
         return (
             "verdict-warnings",
@@ -549,17 +574,26 @@ def _verdict_text(r: RunResult) -> tuple[str, str, str, str]:
         )
 
     # NOT_READY (or any unrecognized overall) — treat as a blocker.
-    failing = r.failed + r.errors
-    issue_word = "issue" if action_count == 1 else "issues"
-    sub = (
-        f"{failing} failing/errored check(s) and {r.warnings} "
-        f"warning(s) need attention. Start with the \u201cAction "
-        "required\u201d section below."
-    )
+    # Headline counts failures/errors as the truly blocking items;
+    # warnings (now in the manual section) are mentioned in the
+    # subline so the operator knows their scale without thinking
+    # they're additional blockers.
+    issue_word = "issue" if failing == 1 else "issues"
+    if r.warnings:
+        sub = (
+            f"{failing} failing/errored check(s) need action; "
+            f"{r.warnings} warning(s) need manual verification. "
+            "Start with \u201cAction required\u201d below."
+        )
+    else:
+        sub = (
+            f"{failing} failing/errored check(s) need action. "
+            "See \u201cAction required\u201d below."
+        )
     return (
         "verdict-not-ready",
         "\u2717",
-        f"Not ready \u2014 {action_count} {issue_word} need attention",
+        f"Not ready \u2014 {failing} {issue_word} need attention",
         sub,
     )
 
