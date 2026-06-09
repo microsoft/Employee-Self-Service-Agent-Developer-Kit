@@ -31,6 +31,7 @@ import os
 # Add scripts/ to path so we can import auth
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import authenticate, query_all
+from http_errors import APIError
 
 
 def discover_agents(env_url, token):
@@ -124,7 +125,11 @@ def main():
     print("Authenticated.\n")
 
     print("Discovering agents...")
-    agents = discover_agents(env_url, token)
+    try:
+        agents = discover_agents(env_url, token)
+    except APIError as e:
+        print(e.format_for_terminal())
+        sys.exit(1)
 
     if not agents:
         print("No agents found in this environment.")

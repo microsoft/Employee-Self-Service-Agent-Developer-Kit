@@ -34,6 +34,8 @@ except ImportError:
     print("ERROR: 'urllib3' / 'requests' not found. Run: pip install requests")
     sys.exit(1)
 
+from http_errors import raise_api_error  # noqa: E402
+
 
 # Microsoft public client ID for Power Platform CLI / Dataverse delegated access.
 # Source: https://learn.microsoft.com/power-platform/admin/programmability-authentication-v2
@@ -203,7 +205,7 @@ def query_all(env_url, token, entity_set, select, filter_expr=None):
         resp = _SESSION.get(url, headers=headers, timeout=120, verify=True)
         if resp.status_code == 401:
             raise AuthExpiredError("Dataverse returned 401 (token expired or invalid)")
-        resp.raise_for_status()
+        raise_api_error(resp, resource_name=entity_set, operation="read")
         data = resp.json()
         records = data.get("value", [])
         all_records.extend(records)
@@ -324,7 +326,7 @@ def update_record(env_url, token, entity_set, record_id, data):
     resp = _SESSION.patch(url, headers=headers, json=data, timeout=60, verify=True)
     if resp.status_code == 401:
         raise AuthExpiredError("Dataverse returned 401 (token expired or invalid)")
-    resp.raise_for_status()
+    raise_api_error(resp, resource_name=entity_set, operation="update")
     return True
 
 
@@ -341,7 +343,7 @@ def create_record(env_url, token, entity_set, data):
     resp = _SESSION.post(url, headers=headers, json=data, timeout=60, verify=True)
     if resp.status_code == 401:
         raise AuthExpiredError("Dataverse returned 401 (token expired or invalid)")
-    resp.raise_for_status()
+    raise_api_error(resp, resource_name=entity_set, operation="create")
     result = resp.json()
     return result.get("botcomponentid", result.get("id"))
 
@@ -357,7 +359,7 @@ def delete_record(env_url, token, entity_set, record_id):
     resp = _SESSION.delete(url, headers=headers, timeout=60, verify=True)
     if resp.status_code == 401:
         raise AuthExpiredError("Dataverse returned 401 (token expired or invalid)")
-    resp.raise_for_status()
+    raise_api_error(resp, resource_name=entity_set, operation="delete")
     return True
 
 
