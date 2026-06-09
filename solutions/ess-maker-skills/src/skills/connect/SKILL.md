@@ -44,7 +44,7 @@ Each integration has its own folder with its own tasks.md and step files:
   - State file: `.local/connect/workday/tasks.md`
   - Config file: `.local/connect/workday/config.json`
   - Step 1: `step1.md` — gather info, MCP setup, connectivity check, detect existing state (Entra app, extension pack, RaaS report) and classify the install path (simplified vs legacy)
-  - Step 2: `step2.md` — admin setup. Simplified path = Entra SSO only. Legacy path = Entra SSO + ISU accounts, security groups, auth policies, API client, domain permissions, RaaS report
+  - Step 2: `step2.md` — admin setup. Simplified path = Entra SSO + register the Workday API client (the `ff0df` connection's `oauthClientId`). Legacy path = Entra SSO + ISU accounts, security groups, auth policies, API client, domain permissions, RaaS report
   - Step 3: `step3.md` — extension pack install (or diagnose existing), connection setup (simplified: 2 connections; legacy: 4 connections / 3 auth types), post-install verification, topic redirect auto-push, end-to-end test
 
 **Workday key principles:**
@@ -55,7 +55,9 @@ Each integration has its own folder with its own tasks.md and step files:
     accounts, no security groups, no RaaS report. User context comes
     from the Workday REST `/workers/me` endpoint via the V2 user-context
     topic. The OAuthUser connection requires a **Workday REST base URL**
-    field in addition to the SOAP base URL.
+    field in addition to the SOAP base URL, and signs in with a
+    customer-registered **Workday API client** whose Client ID
+    (`oauthClientId`) is captured during admin setup.
   - **Legacy** — the older 4-connection install (`d6081`, `0786a`,
     `ff0df`, Dataverse) with ISU accounts, security groups, and the
     `WD_User_Context` RaaS report. Still fully supported; keep existing

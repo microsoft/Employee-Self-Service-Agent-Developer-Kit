@@ -10,6 +10,7 @@ Read `.local/connect/workday/config.json` for ALL values — WD_BASE_URL (baseUr
 WD_TENANT (tenant), WD_TOKEN_HOST (tokenHost), DOMAIN_NAME (domainName),
 TENANT_ID (tenantId), WD_ENTRA_APP_ID (entraAppId),
 WD_ENTRA_APP_ID_URI (entraAppIdUri), WD_OAUTH_TOKEN_URL (oauthTokenUrl),
+WD_OAUTH_CLIENT_ID (oauthClientId),
 ENTRA_SSO_EXISTS (entraSSO), REPORT_OWNER (reportOwner),
 RAAS_REPORT_EXISTS (raasReportExists).
 
@@ -21,10 +22,13 @@ Do NOT ask the user about MCP internals — handle reconnection silently.
 
 **CRITICAL RULES (from retro):**
 - There are TWO install paths (set as `installPath` in config by step 1):
-  - **simplified** — only Task 1 (Entra SSO) applies. ISU accounts,
-    security groups, auth policies, API client, domain permissions, and
-    the RaaS report are NOT needed (the `ff0df` connection + REST
-    `/workers/me` replace them). After Task 1, skip straight to 2.7.
+  - **simplified** — Task 1 (Entra SSO) and Task 4 (Register API
+    Client) apply. ISU accounts, security groups, auth policies, domain
+    permissions, and the RaaS report are NOT needed (the `ff0df`
+    connection + REST `/workers/me` replace them). The `ff0df` OAuthUser
+    connection still signs in with a Workday API client whose Client ID
+    (`oauthClientId`) is entered at install time, so Task 4 is required.
+    After Task 1, do Task 4, then skip to 2.7.
   - **legacy** — all 6 tasks apply, as documented below.
   Read `installPath` from `my/connect/workday/config.json` and follow
   the matching path. When in doubt for a fresh install, the path is
@@ -57,15 +61,16 @@ Read `installPath` from `my/connect/workday/config.json`.
 
 **Message:**
 
-There's just one admin task for the streamlined Workday setup: enabling
-Microsoft Entra single sign-on so employees authenticate as themselves.
-I'll handle as much as possible automatically and verify it before
+There are two admin tasks for the streamlined Workday setup: enabling
+Microsoft Entra single sign-on so employees authenticate as themselves,
+and registering the Workday API client the connection signs in with.
+I'll handle as much as possible automatically and verify each before
 moving on.
 
 **End message.**
 
-Do Task 1 (Entra SSO Setup) below, then skip directly to section 2.7.
-Do NOT do Tasks 2–6.
+Do Task 1 (Entra SSO Setup) and Task 4 (Register API Client) below, then
+skip directly to section 2.7. Do NOT do Tasks 2, 3, 5, or 6.
 
 **If INSTALL_PATH is `legacy`:**
 
@@ -120,12 +125,14 @@ with Application ID URI `{WD_ENTRA_APP_ID_URI}`.
 
 **End message.**
 
-Skip to Task 2.
+If `installPath` is `simplified`, skip to Task 4. Otherwise continue to
+Task 2.
 
 **If the connector is NOT pre-authorized:** add it using `az rest`
 to PATCH `api.preAuthorizedApplications` (follow the pattern in
-`src/skills/connect/azure/app-registration.md` section B.5). Then
-skip to Task 2.
+`src/skills/connect/azure/app-registration.md` section B.5). Then, if
+`installPath` is `simplified`, skip to Task 4; otherwise continue to
+Task 2.
 
 **If ENTRA_SSO_EXISTS is false:** proceed to 2.1b.
 
@@ -307,14 +314,19 @@ Update `.local/connect/workday/config.json`:
 }
 ```
 
+**Task 1 done.** If `installPath` is `simplified`, skip Tasks 2 and 3 and
+go to **Task 4 (Register API Client)** now. If `legacy`, continue to
+Task 2.
+
 ---
 
 ## Task 2: ISU Accounts and Security Groups
 
-**LEGACY PATH ONLY.** If `installPath` is `simplified`, skip Tasks 2–6
-entirely and go to section 2.7 now — the simplified install needs no ISU
-accounts, security groups, auth policies, API client, domain
-permissions, or RaaS report.
+**LEGACY PATH ONLY.** If `installPath` is `simplified`, skip Tasks 2 and
+3 and go to **Task 4 (Register API Client)** now; after Task 4, skip
+Tasks 5 and 6 and go to section 2.7. The simplified install still needs
+the API client but no ISU accounts, security groups, auth policies,
+domain permissions, or RaaS report.
 
 **Do NOT skip this task based on pre-flight.** The pre-flight uses
 the MCP admin credentials, not ISU credentials. Always verify ISU
@@ -587,6 +599,9 @@ Update `.local/connect/workday/config.json`:
 ✅ API client registered.
 
 **End message.**
+
+**If `installPath` is `simplified`, admin setup is done - skip Tasks 5
+and 6 and go to section 2.7 now.** For legacy, continue to Task 5.
 
 ---
 

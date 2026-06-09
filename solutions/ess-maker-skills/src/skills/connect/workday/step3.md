@@ -295,6 +295,13 @@ Check the connection references based on `installPath`:
 - **legacy** — expect all 3 Workday connection references
   (`d6081`, `0786a`, `ff0df`) to exist with `statuscode = 1`.
 
+The Dataverse connection uses the platform Dataverse connector, not a
+`%workday%` one, so it does NOT appear in the query above. Confirm it
+from the green check it showed during the extension install in 3.4; the
+completion summary's `Connection: Dataverse` row reflects that install
+result, not this query. Do not report a Dataverse status this query
+cannot actually see.
+
 If any expected reference shows `statuscode != 1`, note which ones are
 broken.
 

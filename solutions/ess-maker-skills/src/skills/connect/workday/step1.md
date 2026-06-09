@@ -13,13 +13,15 @@ display text like "BASE_URL = ..." or "TENANT = ..." in chat.
     needs only the OAuthUser connection (`ff0df`) + Dataverse. No ISU
     service accounts, no security groups, no RaaS report. User context
     comes from the Workday REST `/workers/me` endpoint.
-  - **Legacy** — the older 3-connection install (`d6081`, `0786a`,
-    `ff0df`) with ISU accounts, security groups, and the
-    `WD_User_Context` RaaS report. Still fully supported; keep existing
-    installs on this path.
+  - **Legacy** — the older 4-connection install (the 3 Workday SOAP
+    refs `d6081`, `0786a`, `ff0df` plus Dataverse) with ISU accounts,
+    security groups, and the `WD_User_Context` RaaS report. Still fully
+    supported; keep existing installs on this path.
   For a FRESH install (no Workday extension pack detected yet), DEFAULT
-  to simplified. Only use legacy when the tenant already has a
-  3-connection install in place.
+  to simplified. Only use legacy when the tenant already has the 3
+  Workday SOAP connection refs (`d6081`, `0786a`, `ff0df`) in place
+  (Dataverse is common to both paths, so it is not part of the count
+  that drives detection).
 - Entra SSO is MANDATORY for BOTH paths. Do NOT offer to skip it. The
   OAuthUser connection (`ff0df`) uses `runtimeSource: invoker` which
   requires employee identity via Entra SSO regardless of install path.
