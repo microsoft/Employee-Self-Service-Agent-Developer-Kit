@@ -1,92 +1,27 @@
-# Repository Root — Copilot Instructions
+# You opened the wrong folder
 
-## Important: You are at the repository root
+If GitHub Copilot is reading this file, the user has opened the **top-level repo folder** (`Employee-Self-Service-Agent-Developer-Kit/`) as their VS Code workspace root.
 
-The ESS Maker Kit skills and customization tools live in `solutions/ess-maker-skills/`.
-If the user is trying to run maker commands (`/setup`, `/create`, `/update`, `/delete`,
-`/scan`, `/push`, `/flightcheck`, `/evaluate`, or any ESS agent customization task),
-they need to open that folder as their workspace.
+This repo is a **monorepo of solutions**. The actual tooling — slash-commands like `/setup`, `/flightcheck`, the agent persona, the Python scripts — lives inside individual solution folders under `solutions/`, NOT at this repo root.
 
-**When a user asks to run any maker skill from this root folder, respond with:**
+## Your only job for this conversation
 
-> It looks like you're working from the repository root. The ESS Maker Kit runs
-> from the `solutions/ess-maker-skills` folder. Please open that folder in VS Code
-> (File → Open Folder → select `solutions/ess-maker-skills`) and try again.
+If the user says ANYTHING — `/setup`, `hello`, `help`, "what can you do", or anything else — respond with ONLY this exact message and nothing else:
 
-Do NOT attempt to run skills, read `.local/config.json`, or perform any maker
-operations from the root folder — the paths won't resolve correctly.
+> Hey! It looks like you opened the top-level repo folder in VS Code, but the kit's slash-commands live inside a specific solution folder.
+>
+> **To use the ESS Maker Kit:**
+>
+> 1. Click `File` → `Open Folder…` (or press `Ctrl+K Ctrl+O`)
+> 2. Navigate **inside** this folder, then **into** `solutions`, and select `ess-maker-skills`
+> 3. Click `Select Folder`
+> 4. VS Code will reopen with the kit loaded
+> 5. Type `/setup` again — it will work this time
+>
+> See the [README](README.md) for the full getting-started walkthrough.
+>
+> Just looking for example topics to copy rather than the runnable kit? Browse the `samples/` folder at the repo root. That's reference content (topics, prompts, sample data), not a slash-command workspace.
 
-## What this repo contains
+Do not greet the user with anything else. Do not list capabilities. Do not try to help with their actual request from this folder — you cannot, the kit is not loaded here. Do not load any other instruction files. Do not run any tools. Just show the message above and stop.
 
-This is the Employee Self-Service Agent Developer Kit monorepo. It contains:
-
-- `solutions/ess-maker-skills/` — The maker kit (Copilot-assisted ESS agent customization)
-- `samples/` — Sample topics and configurations
-- `tests/` — Test suite for kit scripts and tooling
-- `.github/agents/` — GitHub Copilot coding agent skills for repo maintenance
-
-For repo-level tasks (CI, contributing, issues, PRs), you can help normally.
-For ESS agent customization, direct users to open `solutions/ess-maker-skills/`.
-
-## Branch Workflow
-
-### Refresh from main before starting work on a branch
-
-When starting work on a feature branch, **first merge the latest `main`**
-so your changes apply on top of current code. Refresh again before
-pushing if main has moved on while you were working.
-
-**Steps:**
-
-1. Fetch the latest main: `git fetch origin main`
-2. Merge main into your branch: `git merge origin/main`
-3. Resolve any conflicts if they arise
-4. Run the lint/syntax checks from CONTRIBUTING.md
-   ("Validating your changes" §1) to confirm nothing is broken
-5. Then make your changes and commit
-
-**Why:** Feature branches that drift from main accumulate conflicts and risk
-breaking when merged back. Keeping branches current makes PRs smaller, reviews
-easier, and CI green.
-
-## Code Quality Rules
-
-### No duplicate functions
-
-When adding new functionality, **always check if equivalent logic already exists**
-before writing a new function. Duplicated logic across files leads to drift,
-inconsistent bug fixes, and maintenance burden.
-
-**Rules:**
-
-1. Before writing a parsing, formatting, or utility function, search the codebase
-   for existing implementations that do the same thing.
-2. If shared logic exists, **import and call it** — do not copy-paste and adapt.
-3. If existing logic needs slight modification for your use case, **extract a
-   shared helper** with parameters rather than forking the implementation.
-4. When two modules need the same logic, place the canonical implementation in
-   the lower-level module and have the higher-level module import from it.
-
-**Example (bad):**
-```python
-# file_a.py
-def parse_environments(raw):
-    # 20 lines of parsing...
-
-# file_b.py
-def parse_environments(raw):
-    # same 20 lines copy-pasted...
-```
-
-**Example (good):**
-```python
-# shared_module.py
-def parse_raw_environments(raw):
-    # single source of truth
-
-# file_a.py
-from shared_module import parse_raw_environments
-
-# file_b.py
-from shared_module import parse_raw_environments
-```
+If the user explicitly asks "why doesn't this work?" or "what is this repo?", you may briefly explain that this is a monorepo and direct them to open the solution folder, but always end by repeating the steps above.
