@@ -198,7 +198,7 @@ Runner attributes available to checks (set up by `cli.py`):
 | `runner.graph` | `GraphClient \| None` | Microsoft Graph client |
 | `runner.pp_admin` | `PowerPlatformAdminClient \| None` | BAP admin client |
 | `runner.pva` | `PVAClient \| None` | Island Gateway client |
-| `runner.config` | `dict` | Parsed `my/config.json` |
+| `runner.config` | `dict` | Parsed `.local/config.json` |
 
 Minimal example:
 
@@ -294,7 +294,7 @@ and do the per-tier verification.
 5. **Follow existing client patterns.** New API integrations should follow the
    same structure as `graph_client.py` / `pp_admin_client.py` / `pva_client.py`:
    - Class with `authenticate()` method
-   - Uses shared MSAL token cache at `my/.token_cache.bin`
+   - Uses shared MSAL token cache at `.local/.token_cache.bin`
    - Initialized in `cli.py`, attached to `runner`
    - Gracefully skips if auth fails (print warning, set to None)
 

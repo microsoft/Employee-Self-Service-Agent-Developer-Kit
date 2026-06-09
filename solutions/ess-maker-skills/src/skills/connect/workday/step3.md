@@ -6,8 +6,8 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 **Do NOT show internal variable names or assignments to the user.** Never
 display text like "ENV_URL = ..." or "BOT_ID = ..." in chat.
 
-Read `my/connect/workday/config.json` for ALL values.
-Read `my/config.json` for agent details (dataverseEndpoint, agent.botId,
+Read `.local/connect/workday/config.json` for ALL values.
+Read `.local/config.json` for agent details (dataverseEndpoint, agent.botId,
 agent.name, agent.schemaName, agent.isManaged).
 
 **CRITICAL RULES (from retro):**
@@ -31,7 +31,7 @@ agent.name, agent.schemaName, agent.isManaged).
 
 ## 3.1 — Check if extension pack is already installed
 
-Read `my/connect/workday/config.json` for `extensionInstalled`.
+Read `.local/connect/workday/config.json` for `extensionInstalled`.
 
 If step 1 already detected connection references exist, the extension
 pack is installed. Skip to section 3.5 (diagnose/fix existing install).
@@ -48,7 +48,7 @@ Preparing your agent for the Workday extension...
 
 **End message.**
 
-Read `my/config.json` to get agent details. Run:
+Read `.local/config.json` to get agent details. Run:
 
 ```
 python scripts/fetch_and_setup.py --url "{ENV_URL}" --bot-id "{BOT_ID}" --name "{BOT_NAME}" --schema "{SCHEMA_NAME}" {--managed if IS_MANAGED}
@@ -277,7 +277,7 @@ Wait for the user.
 Read the agent's `user-context-setup.mcs.yml` file:
 
 ```
-my/agents/{slug}/topics/user-context-setup.mcs.yml
+workspace/agents/{slug}/topics/user-context-setup.mcs.yml
 ```
 
 Check if it already contains a `BeginDialog` action pointing to
@@ -433,11 +433,11 @@ and verify the full permission list.
 
 ## 3.7 — Complete
 
-Update `my/connect/workday/tasks.md` — change step 3 to `- [x]`.
+Update `.local/connect/workday/tasks.md` — change step 3 to `- [x]`.
 
-Update `my/connect/workday/config.json` — set `"status": "connected"`.
+Update `.local/connect/workday/config.json` — set `"status": "connected"`.
 
-Update `my/config.json` — add or merge:
+Update `.local/config.json` — add or merge:
 
 ```json
 {

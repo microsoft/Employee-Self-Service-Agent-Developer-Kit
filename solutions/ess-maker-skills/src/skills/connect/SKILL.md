@@ -15,7 +15,7 @@ pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
 
 Read `src/skills/connect/step1.md` and follow it.
 
-(Step 1 asks which integration. It checks `my/connect/{integration}/tasks.md`
+(Step 1 asks which integration. It checks `.local/connect/{integration}/tasks.md`
 for existing state — completed, in-progress, or fresh. Then it dispatches to
 the integration-specific step files.)
 
@@ -27,8 +27,8 @@ Each integration has its own folder with its own tasks.md and step files:
 
 - **ServiceNow**: `src/skills/connect/servicenow/`
   - Tasks template: `src/skills/connect/servicenow/tasks.md`
-  - State file: `my/connect/servicenow/tasks.md`
-  - Config file: `my/connect/servicenow/config.json`
+  - State file: `.local/connect/servicenow/tasks.md`
+  - Config file: `.local/connect/servicenow/config.json`
   - Step 1: `step1.md` — instance info, MCP setup, connectivity check
   - Step 2 (Entra): `step2-entra.md` — create Entra app registration for user login
   - Step 2 (Certificate): `step2-certificate.md` — create two Entra apps + OIDC + system user
@@ -41,8 +41,8 @@ Each integration has its own folder with its own tasks.md and step files:
 
 - **Workday**: `src/skills/connect/workday/`
   - Tasks template: `src/skills/connect/workday/tasks.md`
-  - State file: `my/connect/workday/tasks.md`
-  - Config file: `my/connect/workday/config.json`
+  - State file: `.local/connect/workday/tasks.md`
+  - Config file: `.local/connect/workday/config.json`
   - Step 1: `step1.md` — gather info, MCP setup, connectivity check, detect existing state (Entra app, extension pack, RaaS report)
   - Step 2: `step2.md` — Entra SSO setup (mandatory), ISU accounts, security groups, auth policies, API client, domain permissions, RaaS report
   - Step 3: `step3.md` — extension pack install (or diagnose existing), connection setup (3 different auth types), post-install verification, topic redirect auto-push, end-to-end test

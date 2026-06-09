@@ -31,5 +31,5 @@ Rules:
    situation, stay silent and proceed to the next action.
 
 After reading SKILL.md, your first action is to check for
-`my/onboarding/tasks.md`. If starting fresh, your first message to the user
+`workspace/onboarding/tasks.md`. If starting fresh, your first message to the user
 is the checklist table from the Fresh Start section.

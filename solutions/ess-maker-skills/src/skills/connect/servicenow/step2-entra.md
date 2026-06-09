@@ -9,7 +9,7 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 display text like "APP_CLIENT_ID = ..." or "OIDC_ENTITY_SYS_ID = ..." in
 chat. The user should only see Message blocks and tool output tables.
 
-Read `my/connect/servicenow/config.json` for INSTANCE_NAME.
+Read `.local/connect/servicenow/config.json` for INSTANCE_NAME.
 
 **Do NOT ask the user any questions or show any messages before reading
 login.md in section 2.1.** Go directly to 2.1.
@@ -110,7 +110,7 @@ create_record(table="sys_user", data="{\"user_name\": \"{ENTRA_UPN}\", \"email\"
 Save the `sys_id` from the response as CREATED_USER_SYS_ID.
 
 **Immediately save CREATED_USER_SYS_ID** to
-`my/connect/servicenow/config.json` under `entra.createdUserSysId`.
+`.local/connect/servicenow/config.json` under `entra.createdUserSysId`.
 This ensures the created user is tracked for cleanup if later steps fail.
 
 **Message (do NOT wait for user response — continue immediately):**
@@ -293,7 +293,7 @@ and tell the user to link them manually in ServiceNow admin.
 
 ## 2.7 — Save config and display results
 
-Update `my/connect/servicenow/config.json` — add an `entra` object:
+Update `.local/connect/servicenow/config.json` — add an `entra` object:
 
 ```json
 {
@@ -318,7 +318,7 @@ If CREATED_USER_SYS_ID was set (user was created in step 2.3), also add:
 }
 ```
 
-Update `my/connect/servicenow/tasks.md` — change step 2 from
+Update `.local/connect/servicenow/tasks.md` — change step 2 from
 `- [ ]` to `- [x]`.
 
 **Message:**

@@ -6,7 +6,7 @@ locally AND pushing the deletion to the live environment via push.
 
 ## CRITICAL — Local Files Are a Working Copy
 
-The files in `my/agents/{slug}/evaluations/` are a **working copy**. Deleting
+The files in `workspace/agents/{slug}/evaluations/` are a **working copy**. Deleting
 a local file is NOT the same as deleting the test case from the live agent.
 You MUST push the deletion via `push.py`. **NEVER stop after deleting only
 the local file.**
@@ -20,7 +20,7 @@ children first, then the parent. Do NOT push partial deletions.
 
 ## Rules
 
-- ALWAYS read `my/config.json` to get the agent folder, slug, and schema name.
+- ALWAYS read `.local/config.json` to get the agent folder, slug, and schema name.
 - ALWAYS checkpoint before deleting anything.
 - ALWAYS push the deletion to Copilot Studio after removing files.
 - NEVER delete a file without confirming with the user first.
@@ -28,7 +28,7 @@ children first, then the parent. Do NOT push partial deletions.
 
 ## Step 1: Identify What to Delete
 
-Read `my/config.json` to get `agent.folder`.
+Read `.local/config.json` to get `agent.folder`.
 
 List files in `{agent.folder}/evaluations/`. Read the `.component-map.json`
 to understand parent→child relationships (entries with
