@@ -78,7 +78,11 @@ from pathlib import Path
 
 import yaml
 
-from auth import query_all, retrieve_shared_principals_and_access
+from auth import (
+    AuthExpiredError,
+    query_all,
+    retrieve_shared_principals_and_access,
+)
 
 from ..runner import CheckResult, Priority, Status
 
@@ -210,15 +214,23 @@ def _check_traditional_flow_licensing(runner) -> list[CheckResult]:
 
     # Resolve each referenced flow's connectors.
     premium_flows: list[dict] = []   # {flow_id, name, connectors:[...]}
-    unresolved: list[str] = []
+    not_found: list[str] = []        # 404 / None — flow genuinely absent
+    auth_blocked: list[str] = []     # 401/403 — permission or expired token
     standard_count = 0
     for flow_id in sorted(all_flow_ids):
         try:
             detail = pp.get_flow(env_id, flow_id)
         except Exception:
             detail = None
+        # pp_admin maps 401/403 to {"_error", "_status"} (it does not raise),
+        # so an unprivileged or expired session leaves every flow unreadable.
+        # That must NOT read as a clean PASS — distinguish it from a flow that
+        # is simply not in the environment.
+        if isinstance(detail, dict) and detail.get("_status") in (401, 403):
+            auth_blocked.append(flow_id)
+            continue
         if not detail or (isinstance(detail, dict) and detail.get("_error")):
-            unresolved.append(flow_id)
+            not_found.append(flow_id)
             continue
         premium = _premium_connectors_in_flow(detail)
         if premium:
@@ -231,11 +243,48 @@ def _check_traditional_flow_licensing(runner) -> list[CheckResult]:
             standard_count += 1
 
     if not premium_flows:
+        # Every flow was unreadable due to permission/token and nothing
+        # resolved — we can't assert anything, so SKIP (mirrors the
+        # no-pp_admin branch) rather than falsely PASS.
+        if auth_blocked and standard_count == 0:
+            return [CheckResult(
+                checkpoint_id="LIC-FLOW-001", category="Licensing",
+                priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+                description="Agent flow licensing",
+                result=(
+                    f"{len(auth_blocked)} agent-invoked flow(s) could not be read "
+                    "(insufficient Power Platform admin rights or an expired token)."
+                ),
+                remediation=(
+                    "Re-run FlightCheck signed in with a Power Platform Administrator "
+                    "account so each agent-invoked flow's connector tier can be read."
+                ),
+                doc_link=PA_LICENSING_FAQ,
+            )]
         detail_bits = [f"{len(all_flow_ids)} agent-invoked flow(s) checked"]
         if standard_count:
             detail_bits.append(f"{standard_count} bind only standard connectors")
-        if unresolved:
-            detail_bits.append(f"{len(unresolved)} could not be resolved in the environment")
+        if not_found:
+            detail_bits.append(f"{len(not_found)} not found in the environment")
+        # Some flows were readable but others were auth-blocked — a
+        # premium-connector flow may be hidden among the unreadable ones, so
+        # this can't be a clean PASS.
+        if auth_blocked:
+            return [CheckResult(
+                checkpoint_id="LIC-FLOW-001", category="Licensing",
+                priority=Priority.HIGH.value, status=Status.WARNING.value,
+                description="Agent flow licensing",
+                result=(
+                    "; ".join(detail_bits)
+                    + f"; {len(auth_blocked)} could not be read (permission/token)."
+                ),
+                remediation=(
+                    "A premium-connector flow may be hidden among the flow(s) that "
+                    "could not be read. Re-run FlightCheck with Power Platform "
+                    "Administrator rights to confirm the licensing exposure."
+                ),
+                doc_link=PA_LICENSING_FAQ,
+            )]
         return [CheckResult(
             checkpoint_id="LIC-FLOW-001", category="Licensing",
             priority=Priority.HIGH.value, status=Status.PASSED.value,
@@ -254,8 +303,13 @@ def _check_traditional_flow_licensing(runner) -> list[CheckResult]:
         f"{len(premium_flows)} agent-invoked flow(s) bind a premium or custom "
         f"connector: " + "; ".join(lines)
     )
-    if unresolved:
-        result += f" ({len(unresolved)} referenced flow(s) could not be resolved)"
+    if not_found:
+        result += f" ({len(not_found)} referenced flow(s) not found in the environment)"
+    if auth_blocked:
+        result += (
+            f" ({len(auth_blocked)} referenced flow(s) could not be read — "
+            "permission/token; more premium flows may be unlisted)"
+        )
 
     remediation = (
         "Premium, custom, and on-premises data gateway connectors require every end "
@@ -389,7 +443,10 @@ def _resolve_team(runner, team_id, entra, undetermined, notes):
         for m in members[:MAX_MEMBERS_PER_GROUP]:
             upn = m.get("userPrincipalName")
             mid = m.get("id")
-            if upn and mid:  # users carry a UPN; nested groups/devices don't
+            # users carry a UPN (nested groups/devices don't); skip explicitly
+            # disabled accounts — they can't trigger the flow, mirroring the
+            # isdisabled skip in _resolve_systemuser.
+            if upn and mid and m.get("accountEnabled") is not False:
                 entra.setdefault(mid, upn)
         return
     # Owner / access team — resolve members via Dataverse teammembership.
@@ -481,6 +538,12 @@ def _check_shared_user_licensing(runner) -> list[CheckResult]:
     for bot_id in bot_ids:
         try:
             resp = retrieve_shared_principals_and_access(env_url, dv_token, bot_id)
+        except AuthExpiredError:
+            # An expired/invalid Dataverse token must surface as a blocking
+            # ERROR (via the runner), not a benign per-bot WARNING — and it
+            # must behave the same whichever Dataverse call hits it first
+            # (_resolve_systemuser/_resolve_team let it propagate too).
+            raise
         except Exception as e:
             undetermined.append(f"could not read sharing for agent {bot_id}: {e}")
             enumerate_failed = True

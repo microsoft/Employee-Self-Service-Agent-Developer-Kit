@@ -206,7 +206,7 @@ def test_unresolved_flow_noted_but_not_fatal(tmp_path, monkeypatch):
     r = _by_id(_run(runner), "LIC-FLOW-001")
     from flightcheck.runner import Status
     assert r.status == Status.WARNING.value
-    assert "could not be resolved" in r.result
+    assert "not found in the environment" in r.result
 
 
 def test_get_flow_exception_is_swallowed(tmp_path, monkeypatch):
@@ -218,11 +218,52 @@ def test_get_flow_exception_is_swallowed(tmp_path, monkeypatch):
         raise RuntimeError("transient")
 
     runner = _runner(get_flow)
-    # Must not raise; unresolved => no premium flow => PASSED with note.
+    # Must not raise; not-found => no premium flow, no auth gap => PASSED with note.
     r = _by_id(_run(runner), "LIC-FLOW-001")
     from flightcheck.runner import Status
     assert r.status == Status.PASSED.value
-    assert "could not be resolved" in r.result
+    assert "not found in the environment" in r.result
+
+
+def test_lic001_all_auth_blocked_is_skipped(tmp_path, monkeypatch):
+    """All flows unreadable due to 401/403 => SKIPPED, never a false PASS."""
+    _require_validated_pp_mock()
+    _make_agent_with_flows(tmp_path, [FLOW_A, FLOW_B])
+    monkeypatch.chdir(tmp_path)
+
+    def get_flow(env_id, flow_id):
+        return {"_error": "insufficient_permissions", "_status": 403}
+
+    runner = _runner(get_flow)
+    r = _by_id(_run(runner), "LIC-FLOW-001")
+    from flightcheck.runner import Status
+    assert r.status == Status.SKIPPED.value
+    assert runner._lic_flow_premium_present is False
+    assert "could not be read" in r.result
+
+
+def test_lic001_partial_auth_blocked_is_warning(tmp_path, monkeypatch):
+    """Some flows readable (standard) but others 401/403 => WARNING, not PASS,
+    because a premium flow may be hidden among the unreadable ones."""
+    pp = _require_validated_pp_mock()
+    _make_agent_with_flows(tmp_path, [FLOW_A, FLOW_B])
+    monkeypatch.chdir(tmp_path)
+
+    def get_flow(env_id, flow_id):
+        if flow_id == FLOW_A:
+            return pp.flow_detail(
+                flow_id=flow_id,
+                connection_refs={"r": pp.flow_connector_ref(
+                    api_name="shared_office365", tier="Standard")},
+            )
+        return {"_error": "token_expired", "_status": 401}
+
+    runner = _runner(get_flow)
+    r = _by_id(_run(runner), "LIC-FLOW-001")
+    from flightcheck.runner import Status
+    assert r.status == Status.WARNING.value
+    assert "could not be read" in r.result
+    assert runner._lic_flow_premium_present is False
 
 
 # ===========================================================================
@@ -477,4 +518,35 @@ def test_lic002_undetermined_license_read(monkeypatch):
     from flightcheck.runner import Status
     assert r.status == Status.WARNING.value
     assert "carol@contoso.com" in r.result
+
+
+def test_lic002_auth_expired_propagates(monkeypatch):
+    """An expired Dataverse token must propagate (=> runner ERROR row),
+    not be swallowed into a benign WARNING."""
+    from auth import AuthExpiredError
+    _install_dataverse(monkeypatch, shares={"bot-1": AuthExpiredError("401")})
+    with pytest.raises(AuthExpiredError):
+        _lic002(_runner002(_FakeGraph()))
+
+
+def test_lic002_disabled_group_member_skipped(monkeypatch):
+    """A disabled Entra group member is excluded (can't trigger the flow), so
+    they don't count toward 'missing' / push the check to FAIL."""
+    members = [
+        {"id": "aad-1", "userPrincipalName": "alice@contoso.com", "accountEnabled": True},
+        {"id": "aad-2", "userPrincipalName": "bob@contoso.com", "accountEnabled": False},
+    ]
+    # alice licensed; bob is disabled+unlicensed but must be ignored.
+    graph = _FakeGraph(licenses={"aad-1": [_premium_license()]}, groups={"grp-aad": members})
+    _install_dataverse(
+        monkeypatch,
+        shares={"bot-1": [_principal("team", "team-1")]},
+        teams={"team-1": {"teamid": "team-1", "name": "HR Group",
+                          "azureactivedirectoryobjectid": "grp-aad"}},
+    )
+    r = _lic002(_runner002(graph))[0]
+    from flightcheck.runner import Status
+    assert r.status == Status.PASSED.value
+    assert "1 shared-with user(s)" in r.result  # only alice
+    assert "bob@contoso.com" not in r.result
 
