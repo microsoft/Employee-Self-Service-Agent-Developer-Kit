@@ -4,13 +4,37 @@ A monorepo of solutions, samples, and tooling for the Microsoft Employee Self-Se
 
 > **This repo is intended as an example or learning tool.** It is not a Microsoft product or a supported service. See [SUPPORT.md](SUPPORT.md) for the support model and [SECURITY.md](SECURITY.md) for reporting security issues.
 
+## Getting started
+
+This repo is a **monorepo of solutions** under [`solutions/`](solutions/). Each solution is a self-contained tool with its own purpose, dependencies, and instructions.
+
+**To use a solution, open its folder in VS Code as the workspace root** — not the repo root. Each solution's slash-commands, Copilot instructions, and scripts are scoped to that folder.
+
+### How to open a solution folder in VS Code
+
+Pick whichever option fits how you work:
+
+- **Command line:**
+  ```bash
+  git clone https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit.git
+  code Employee-Self-Service-Agent-Developer-Kit/solutions/ess-maker-skills
+  ```
+  *(The `code` command requires VS Code's CLI to be on your PATH. On macOS/Linux it usually is by default. On Windows, install via the VS Code installer's "Add to PATH" option.)*
+
+- **VS Code menu:** `File` → `Open Folder...` → navigate to the `solutions/ess-maker-skills/` subfolder of your clone → click `Select Folder`.
+
+- **File Explorer / Finder (right-click):** Right-click the `solutions/ess-maker-skills/` folder → `Open with Code` (Windows) or `New VS Code Window at Folder` (macOS, after enabling the Finder integration in VS Code's Code → Preferences → Settings).
+
+Once the folder is open as the workspace root, the `/setup`, `/flightcheck`, and other slash-commands appear in GitHub Copilot Chat.
+
 ## Solutions
 
-| Solution | Description |
-|----------|-------------|
-| [`solutions/ess-maker-skills/`](solutions/ess-maker-skills/) | VS Code workspace toolkit. Customize and deploy your ESS agent using GitHub Copilot — no deep platform knowledge required. |
+| Folder | What it does | How to use |
+|---|---|---|
+| [`solutions/ess-maker-skills/`](solutions/ess-maker-skills/) | Customize your ESS agent using GitHub Copilot in VS Code — no deep platform knowledge required. | Open the folder in VS Code, then type `/setup` in Copilot Chat. |
+| `solutions/ess-flightcheck/` *(planned — see [#69](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/issues/69))* | Validate your ESS deployment readiness. Runs licensing, identity, integration, and configuration checks against your live environment. | Open the folder in VS Code and type `/flightcheck` in Copilot Chat — or run `python cli.py --scope full` standalone (no LLM needed). |
 
-Additional solutions (FlightCheck standalone, evaluation harnesses, etc.) will be added under `solutions/` over time.
+Additional solutions will be added under `solutions/` over time.
 
 ## Getting Started
 
@@ -35,7 +59,8 @@ Reference content used directly by customers — topic YAMLs, template-config XM
 ```
 .github/                Repo-level CI, CodeQL, Dependabot, issue templates, labels
 solutions/
-  ess-maker-skills/     VS Code workspace toolkit (scripts, prompts, MCP servers)
+  ess-maker-skills/     Maker kit — customize your ESS agent in VS Code with Copilot
+  ess-flightcheck/      (planned) Standalone deployment-readiness validator
 samples/                Reference topics, template configs, evaluation test sets (peer to solutions/)
 LICENSE                 MIT
 SECURITY.md             Microsoft MSRC reporting path
