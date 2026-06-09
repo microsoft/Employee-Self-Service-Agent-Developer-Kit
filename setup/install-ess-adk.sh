@@ -304,8 +304,7 @@ if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
         fi
 
         # Re-run with --select
-        SELECT_OUTPUT=$("$FLIGHTCHECK_PYTHON" "$DISCOVER_PY" --list-environments --select "$ENV_CHOICE" 2>&1)
-        if [[ $? -ne 0 ]]; then
+        if ! SELECT_OUTPUT=$("$FLIGHTCHECK_PYTHON" "$DISCOVER_PY" --list-environments --select "$ENV_CHOICE" 2>&1); then
             err "Environment selection failed."
             exit 1
         fi
@@ -331,8 +330,7 @@ if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
         echo "    Discovering agents in this environment..."
         echo ""
 
-        AGENT_OUTPUT=$("$FLIGHTCHECK_PYTHON" "$DISCOVER_PY" --url "$ENV_URL" 2>&1) || true
-        AGENT_EXIT=$?
+        AGENT_OUTPUT=$("$FLIGHTCHECK_PYTHON" "$DISCOVER_PY" --url "$ENV_URL" 2>&1) && AGENT_EXIT=0 || AGENT_EXIT=$?
         echo "$AGENT_OUTPUT"
 
         if [[ $AGENT_EXIT -ne 0 ]] || echo "$AGENT_OUTPUT" | grep -q "^ERROR:"; then
@@ -372,35 +370,37 @@ if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
             fi
         fi
 
-        # Create .local directory and write config
+        # Create .local directory and write config (use Python for safe JSON escaping)
         mkdir -p "$LOCAL_DIR"
 
-        if [[ -n "$BOT_ID" ]]; then
-            AGENTS_JSON="[{\"name\":\"$AGENT_NAME\",\"botId\":\"$BOT_ID\",\"schemaName\":\"$SCHEMA_NAME\",\"isManaged\":$IS_MANAGED,\"slug\":\"flightcheck-only\",\"folder\":\"\"}]"
-            ACTIVE_AGENT="\"flightcheck-only\""
-        else
-            AGENTS_JSON="[]"
-            ACTIVE_AGENT="\"\""
-        fi
-
-        cat > "$CONFIG_PATH" <<EOF
-{
-    "configVersion": 1,
-    "setup": "flightcheck-only",
-    "dataverseEndpoint": "$ENV_URL",
-    "flightCheckOnly": true,
-    "agent": {
-        "name": "$AGENT_NAME",
-        "botId": "$BOT_ID",
-        "schemaName": "$SCHEMA_NAME",
-        "isManaged": $IS_MANAGED,
-        "slug": "flightcheck-only",
-        "folder": ""
+        "$FLIGHTCHECK_PYTHON" -c "
+import json, sys
+config = {
+    'configVersion': 1,
+    'setup': 'flightcheck-only',
+    'dataverseEndpoint': sys.argv[1],
+    'flightCheckOnly': True,
+    'agent': {
+        'name': sys.argv[2],
+        'botId': sys.argv[3],
+        'schemaName': sys.argv[4],
+        'isManaged': sys.argv[5] == 'true',
+        'slug': 'flightcheck-only',
+        'folder': ''
     },
-    "agents": $AGENTS_JSON,
-    "activeAgent": $ACTIVE_AGENT
+    'agents': [{
+        'name': sys.argv[2],
+        'botId': sys.argv[3],
+        'schemaName': sys.argv[4],
+        'isManaged': sys.argv[5] == 'true',
+        'slug': 'flightcheck-only',
+        'folder': ''
+    }] if sys.argv[3] else [],
+    'activeAgent': 'flightcheck-only' if sys.argv[3] else ''
 }
-EOF
+with open(sys.argv[6], 'w', encoding='utf-8') as f:
+    json.dump(config, f, indent=4)
+" "$ENV_URL" "$AGENT_NAME" "$BOT_ID" "$SCHEMA_NAME" "$IS_MANAGED" "$CONFIG_PATH"
         ok "Created $CONFIG_PATH"
     fi
 
