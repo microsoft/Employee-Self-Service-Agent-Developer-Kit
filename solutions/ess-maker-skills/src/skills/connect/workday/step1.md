@@ -261,6 +261,12 @@ Save the results, then classify the install:
   `d6081`/`0786a` are absent → extension pack installed on the
   **simplified** path. Set EXTENSION_INSTALLED = true and
   INSTALL_PATH = `simplified`.
+- If **either `d6081` or `0786a` is present** (i.e. any legacy-only
+  connection ref exists, even partially) → treat as a partial/failed
+  **legacy** install. Set EXTENSION_INSTALLED = true and
+  INSTALL_PATH = `legacy`, and save PARTIAL_INSTALL = true so step3 can
+  warn the user and finish the missing connection(s) instead of starting
+  a fresh simplified install on top.
 - If **no** Workday connection references exist → fresh install. Set
   EXTENSION_INSTALLED = false and INSTALL_PATH = `simplified` (the
   default for new installs).
@@ -352,7 +358,8 @@ Update `.local/connect/workday/config.json` — merge all discovered values:
   "entraAppObjectId": "{WD_ENTRA_APP_OBJECT_ID or null}",
   "entraSSO": true/false,
   "reportOwner": "{REPORT_OWNER or null}",
-  "raasReportExists": true/false
+  "raasReportExists": true/false,
+  "partialInstall": true/false
 }
 ```
 

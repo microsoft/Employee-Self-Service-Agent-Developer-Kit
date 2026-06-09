@@ -118,7 +118,16 @@ Do this silently — do not tell the user about app role assignments.
 
 ## 3.4 — Guide extension pack installation
 
-Read `installPath` from `my/connect/workday/config.json`.
+Read `installPath` and `partialInstall` from `my/connect/workday/config.json`.
+
+**If `partialInstall` is `true`**, the tenant has 1 or 2 legacy Workday
+connection refs (`d6081` and/or `0786a`) but not the full 3 — likely a
+prior install that errored out. Do NOT start a fresh simplified install
+on top. Use the **Legacy path** section below, walk the user through
+creating the missing connection(s) only, and skip the connections that
+already show as configured in Power Platform. Surface a brief note to
+the user that you detected a partial legacy install and are completing
+it rather than switching paths.
 
 ### Simplified path (2 connections)
 
@@ -153,6 +162,11 @@ Name it: `Workday SOAP - OAuthUser SSO (ff0df)`
 
 → Sign in with your Microsoft account when prompted.
 
+> **If the OAuthUser connection screen does not show a "Workday REST
+> base URL" field**, you have an older Workday extension pack version
+> that only supports the 3-connection legacy install. Type **legacy**
+> and the skill will restart this step on the legacy path instead.
+
 ---
 
 **Connection 2 — Dataverse**
@@ -167,6 +181,12 @@ Type **done** when the installation finishes.
 **End message.**
 
 Wait for the user. Then go to section 3.5.
+
+**If the user types `legacy` instead of `done`** (older extension pack
+without the REST base URL field), set `installPath = legacy` in
+`my/connect/workday/config.json`, then go back to step2 task 2 to run
+the legacy ISU/security-group/RaaS admin setup before retrying 3.4 on
+the Legacy path.
 
 ### Legacy path (4 connections)
 
