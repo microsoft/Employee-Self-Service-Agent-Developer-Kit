@@ -27,7 +27,7 @@ Then read `src/skills/topics/create/SKILL.md` and follow the template config pat
 - Do NOT run terminal commands or scripts. Use built-in file reading and writing tools only.
 - ALWAYS read existing workflow files in the user's agent folder (`{agent.folder}/workflows/`) as schema examples before generating any workflow JSON.
 - ALWAYS read the agent's `connectionreferences.mcs.yml` to understand connector wiring.
-- ALWAYS read `my/config.json` to get the agent folder name.
+- ALWAYS read `.local/config.json` to get the agent folder name.
 - Create the workflow in a new folder: `{agent.folder}/workflows/{WorkflowName}-{GUID}/`
 - Write both `metadata.yml` and `workflow.json` into that folder.
 - After writing, check for errors using the diagnostics tool.
@@ -45,10 +45,10 @@ From their response, determine:
 
 ## Step 2: Check Existing Workflows
 
-Read `my/agents/{agent.slug}/workflows.md` to see if a suitable workflow already exists. If the agent already has a workflow that does something similar, tell the user:
+Read `workspace/agents/{agent.slug}/workflows.md` to see if a suitable workflow already exists. If the agent already has a workflow that does something similar, tell the user:
 - "Your agent already has a workflow called '{name}' that {does X}. Would you like to use that one, or create a new one?"
 
-Also check `my/agents/{agent.slug}/connections.md` to see which connectors are already configured. If the needed connector isn't available, tell the user they'll need to add it through the Copilot Studio portal first.
+Also check `workspace/agents/{agent.slug}/connections.md` to see which connectors are already configured. If the needed connector isn't available, tell the user they'll need to add it through the Copilot Studio portal first.
 
 ## Step 3: Generate the Workflow
 
@@ -76,7 +76,7 @@ isTransacted: true
 
 ### workflow.json
 Customize the template by:
-1. Setting the correct `connectionReferences` — match the `connectionReferenceLogicalName` to a value from `my/agents/{agent.slug}/connections.md`
+1. Setting the correct `connectionReferences` — match the `connectionReferenceLogicalName` to a value from `workspace/agents/{agent.slug}/connections.md`
 2. Defining trigger inputs — what the topic will pass to the workflow
 3. Adding the correct connector action — use the right `operationId` for the task
 4. Defining the response outputs — what data goes back to the topic

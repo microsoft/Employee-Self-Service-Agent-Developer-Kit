@@ -52,6 +52,7 @@ from flightcheck.checks.workday import run_workday_checks
 from flightcheck.checks.servicenow import run_servicenow_checks
 from flightcheck.checks.local_files import run_local_file_checks
 from flightcheck.checks.publishing import run_publishing_checks
+from flightcheck.checks.licensing import run_licensing_checks
 
 
 SCOPE_MAP = {
@@ -73,6 +74,7 @@ SCOPE_MAP = {
     ],
     "local": [("Local Files", run_local_file_checks)],
     "publishing": [("Publishing", run_publishing_checks)],
+    "licensing": [("Licensing", run_licensing_checks)],
 }
 
 FULL_SCOPE = [
@@ -84,6 +86,7 @@ FULL_SCOPE = [
     ("Graph Connector KB", run_graph_connector_kb_checks),
     ("ServiceNow", run_servicenow_checks),
     ("Local Files", run_local_file_checks),
+    ("Licensing", run_licensing_checks),
     ("Publishing", run_publishing_checks),
 ]
 
@@ -293,10 +296,11 @@ def _print_prioritized_summary(result):
     Three sections, biggest signal first:
       1. Verdict banner (one line).
       2. Counts strip.
-      3. ACTION REQUIRED — full per-row detail (Failed / Error / Warning).
-      4. NEEDS MANUAL VERIFICATION — one line per row (Manual /
-         NotConfigured / Skipped).
-      5. PASSED — count only, point to report.html for the list.
+      3. ACTION REQUIRED — full per-row detail (Failed / Error).
+      4. NEEDS MANUAL VERIFICATION — one line per row (Warning /
+         Manual / NotConfigured).
+      5. PASSED — count only (includes Passed + Skipped); point to
+         report.html for the list.
 
     The goal is for an operator scanning the terminal to see, in
     order: am I OK? what must I fix? what must I verify? — without
@@ -320,11 +324,15 @@ def _print_prioritized_summary(result):
                   "verification -- see below)")
     elif result.overall == "READY_WITH_WARNINGS":
         print(f"  [WARN]  Ready with warnings -- {result.warnings} "
-              "warning(s) to review")
+              "warning(s) to verify")
     else:
-        action_total = result.failed + result.errors + result.warnings
-        word = "issue" if action_total == 1 else "issues"
-        print(f"  [FAIL]  Not ready -- {action_total} {word} need "
+        # Headline counts only the blocking items (failures + errors).
+        # Warnings live in the manual-verification section and aren't
+        # blockers, so counting them here would overstate the action
+        # load.
+        failing = result.failed + result.errors
+        word = "issue" if failing == 1 else "issues"
+        print(f"  [FAIL]  Not ready -- {failing} {word} need "
               "attention")
 
     print()

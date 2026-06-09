@@ -25,6 +25,8 @@ for handing to `responses.add(...)` directly.
 References:
 - Dataverse Web API: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/perform-operations-web-api
 - WhoAmI function: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/use-web-api-functions
+- GetPreferredSolution function: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/getpreferredsolution
+- publisher: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/publisher
 - environmentvariabledefinition: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/environmentvariabledefinition
 - environmentvariablevalue: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/environmentvariablevalue
 - Production source: solutions/ess-maker-skills/scripts/auth.py
@@ -75,6 +77,11 @@ def _query_url(
     if qs:
         url += "?" + "&".join(qs)
     return url
+
+
+# Public alias — tests that register custom error-case responses (e.g. 500
+# on a real query URL) import this instead of touching the underscore name.
+build_query_url = _query_url
 
 
 # ────────────────────────────────────────────────────────────────────────
@@ -292,6 +299,112 @@ def whoami(*, base_url: str, **kwargs: Any) -> dict[str, Any]:
         "url": _api(base_url, "WhoAmI()"),
         "json": who_am_i(**kwargs),
         "status": 200,
+    }
+
+
+def get_preferred_solution(
+    *,
+    base_url: str,
+    solution_id: str | None = None,
+    uniquename: str | None = None,
+    friendlyname: str | None = None,
+) -> dict[str, Any]:
+    """Mock ``GET /GetPreferredSolution()``.
+
+    Web API reference:
+      https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/getpreferredsolution
+
+    UNCERTAINTY: the MS Learn reference page documents the return type
+    as ``crmbaseentity`` but does NOT include an example response body.
+    The shape used here is derived by composing three MS-documented
+    sources:
+
+      1. The .NET SDK ``GetPreferredSolutionResponse.PreferredSolution``
+         property is typed as ``Microsoft.Xrm.Sdk.Entity`` representing
+         a ``solution`` row:
+         https://learn.microsoft.com/dotnet/api/microsoft.crm.sdk.messages.getpreferredsolutionresponse.preferredsolution
+      2. The ``solution`` entity reference documents the field names
+         (``solutionid``, ``uniquename``, ``friendlyname``):
+         https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solution
+      3. The Web API serialisation conventions for a single-entity
+         response use the ``$metadata#<entityset>/$entity``
+         ``@odata.context`` form:
+         https://learn.microsoft.com/power-apps/developer/data-platform/webapi/retrieve-entity-using-web-api#basic-retrieve-operations
+
+    When ``solution_id`` is None, ``solutionid`` is omitted from the
+    body — the production check treats a missing ``solutionid`` as
+    "no preferred solution selected" rather than asserting on any
+    specific empty-response shape.
+    """
+    body: dict[str, Any] = {
+        "@odata.context": _api(base_url, "$metadata#solutions/$entity"),
+    }
+    if solution_id is not None:
+        body["solutionid"] = solution_id
+        body["uniquename"] = uniquename or "ESSCustomization"
+        body["friendlyname"] = friendlyname or "ESS Customization"
+    return {
+        "method": "GET",
+        "url": _api(base_url, "GetPreferredSolution()"),
+        "json": body,
+        "status": 200,
+    }
+
+
+def publisher(
+    *,
+    base_url: str,
+    publisher_id: str,
+    uniquename: str = "ContosoPublisher",
+    customizationprefix: str = "contoso",
+    friendlyname: str | None = None,
+    status: int = 200,
+) -> dict[str, Any]:
+    """Mock ``GET /publishers({publisherid})?$select=...``.
+
+    Web API reference:
+      https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/publisher
+
+    The MS Learn publisher entity reference documents the columns used
+    here (``publisherid``, ``uniquename``, ``customizationprefix``,
+    ``friendlyname``). The ENV-009 check fetches this record after the
+    preferred-solution match to detect when the solution is bound to
+    the env's auto-provisioned Default Publisher (``uniquename``
+    starting with ``DefaultPublisher``) instead of a customer-created
+    publisher.
+
+    Defaults model a customer-created publisher with the ``contoso``
+    prefix. To simulate the Default Publisher, callers should pass
+    ``uniquename="DefaultPublisherorg<suffix>"`` and
+    ``customizationprefix="cr<NNN>"`` - one such Default Publisher value
+    (``DefaultPublisherorgeeac24d0``) is observable in
+    ``tests/fixtures/cassettes/island_gateway_botcomponents.yaml``.
+
+    The production call site uses the same ``$select`` field list every
+    time; this builder hard-codes that querystring so ``responses``
+    matches strictly. A non-200 ``status`` causes the body to be
+    returned with the supplied status code so callers can drive the
+    "publisher fetch failed" code path.
+    """
+    body: dict[str, Any] = {
+        "@odata.context": _api(
+            base_url,
+            "$metadata#publishers(uniquename,customizationprefix,friendlyname)/$entity",
+        ),
+        "publisherid": publisher_id,
+        "uniquename": uniquename,
+        "customizationprefix": customizationprefix,
+        "friendlyname": friendlyname or uniquename,
+    }
+    url = (
+        _api(base_url, f"publishers({publisher_id})")
+        + f"?$select={quote('uniquename,customizationprefix,friendlyname', safe=',')}"
+    )
+    return {
+        "method": "GET",
+        "url": url,
+        "json": body,
+        "status": status,
     }
 
 

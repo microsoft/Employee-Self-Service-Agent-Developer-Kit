@@ -521,6 +521,19 @@ if ($FlightCheckOnly) {
     $localDir = Join-Path $workspace '.local'
     $configPath = Join-Path $localDir 'config.json'
 
+    # Resolve python command early — needed for both discovery and fetch
+    $pythonExe = Resolve-Python
+    if (-not $pythonExe) {
+        throw 'Python not found on PATH or known locations. Cannot run FlightCheck.'
+    }
+    if ($pythonExe -eq 'py -3.12') {
+        $pyCmd = 'py'; $pyBaseArgs = @('-3.12')
+    } elseif ($pythonExe -eq 'py -3') {
+        $pyCmd = 'py'; $pyBaseArgs = @('-3')
+    } else {
+        $pyCmd = $pythonExe; $pyBaseArgs = @()
+    }
+
     if (Test-Path $configPath) {
         Write-Host ''
         Write-Host "    Config already exists at $configPath" -ForegroundColor White
@@ -538,22 +551,9 @@ if ($FlightCheckOnly) {
     if (-not (Test-Path $configPath)) {
         $scriptsDir = Join-Path $workspace 'scripts'
         $discoverPy = Join-Path $scriptsDir 'discover.py'
-        $pythonExe = Resolve-Python
 
-        if (-not $pythonExe) {
-            throw 'Python not found on PATH or known locations. Cannot run environment discovery.'
-        }
         if (-not (Test-Path $discoverPy)) {
             throw "discover.py not found at $discoverPy. Was the repo cloned correctly?"
-        }
-
-        # Build the base python command components for consistent invocation
-        if ($pythonExe -eq 'py -3.12') {
-            $pyCmd = 'py'; $pyBaseArgs = @('-3.12')
-        } elseif ($pythonExe -eq 'py -3') {
-            $pyCmd = 'py'; $pyBaseArgs = @('-3')
-        } else {
-            $pyCmd = $pythonExe; $pyBaseArgs = @()
         }
 
         # --- Step 1: List environments and let user pick ---
@@ -689,6 +689,52 @@ if ($FlightCheckOnly) {
         $json = $config | ConvertTo-Json -Depth 4 -Compress:$false
         [System.IO.File]::WriteAllText($configPath, $json, (New-Object System.Text.UTF8Encoding $false))
         Write-Ok "Created $configPath"
+    }
+
+    # --- Read config values if they came from an existing file ---
+    if (-not $botId -and (Test-Path $configPath)) {
+        $existingConfig = Get-Content $configPath -Raw | ConvertFrom-Json
+        $envUrl = $existingConfig.dataverseEndpoint
+        $botId = $existingConfig.agent.botId
+        $agentName = $existingConfig.agent.name
+        $schemaName = $existingConfig.agent.schemaName
+        $isManaged = $existingConfig.agent.isManaged
+    }
+
+    # --- Fetch solution snapshot for local file checks ---
+    if ($botId) {
+        Write-Step 'Fetching agent solution from Dataverse'
+        $fetchPy = Join-Path $workspace 'scripts\fetch_and_setup.py'
+        if (Test-Path $fetchPy) {
+            Push-Location $workspace
+            try {
+                $fetchArgs = $pyBaseArgs + @(
+                    $fetchPy,
+                    '--url', $envUrl,
+                    '--bot-id', $botId,
+                    '--name', $agentName,
+                    '--schema', $schemaName
+                )
+                if ($isManaged) { $fetchArgs += '--managed' }
+
+                Start-Spinner "fetching agent solution"
+                $fetchOutput = & $pyCmd @fetchArgs 2>&1
+                $fetchExit = $LASTEXITCODE
+                Stop-Spinner "fetching agent solution"
+
+                if ($fetchExit -eq 0) {
+                    Write-Ok 'Agent solution fetched and extracted'
+                } else {
+                    Write-Warn2 'fetch_and_setup.py exited with errors. Local file checks may be skipped.'
+                    foreach ($line in $fetchOutput) { Write-Host "      $line" }
+                }
+            } finally { Pop-Location }
+        } else {
+            Write-Warn2 "fetch_and_setup.py not found at $fetchPy. Local file checks will be skipped."
+        }
+    } else {
+        Write-Host ''
+        Write-Host '    [info] No agent selected — skipping solution fetch (local file checks will be skipped).' -ForegroundColor Gray
     }
 
     # --- Run FlightCheck ---

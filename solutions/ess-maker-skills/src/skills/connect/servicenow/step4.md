@@ -6,8 +6,8 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 **Do NOT show internal variable names or assignments to the user.** Never
 display text like "ENV_URL = ..." or "BOT_ID = ..." in chat.
 
-Read `my/connect/servicenow/config.json` for INSTANCE_NAME, SNOW_USAGE, etc.
-Read `my/config.json` for the agent details (dataverseEndpoint, agent.botId,
+Read `.local/connect/servicenow/config.json` for INSTANCE_NAME, SNOW_USAGE, etc.
+Read `.local/config.json` for the agent details (dataverseEndpoint, agent.botId,
 agent.name, agent.schemaName, agent.isManaged).
 
 ---
@@ -21,7 +21,7 @@ This takes about 10–20 seconds...
 
 **End message.**
 
-Read `my/config.json` to get the agent details. Set:
+Read `.local/config.json` to get the agent details. Set:
 - ENV_URL = `dataverseEndpoint`
 - BOT_ID = `agent.botId`
 - BOT_NAME = `agent.name`
@@ -44,12 +44,12 @@ Wait for the script to complete. Check the output for:
 
 ### If template configs > 0 AND new ServiceNow topics are visible
 
-Update `my/connect/servicenow/tasks.md` — change step 4 from
+Update `.local/connect/servicenow/tasks.md` — change step 4 from
 `- [ ]` to `- [x]`.
 
-Update `my/connect/servicenow/config.json` — set `"status": "connected"`.
+Update `.local/connect/servicenow/config.json` — set `"status": "connected"`.
 
-Update `my/config.json` — add or update a `connections` object:
+Update `.local/config.json` — add or update a `connections` object:
 
 ```json
 {

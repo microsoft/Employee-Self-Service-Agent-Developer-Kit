@@ -14,11 +14,11 @@ This skill scans a cloned ESS agent for compile errors and walks the user throug
 
 ## Step 1: Read Config
 
-Read `my/config.json` to get the agent details:
+Read `.local/config.json` to get the agent details:
 - `agent.folder` — the name of the cloned agent folder (e.g., `Employee Self-Service HR`)
 - `agent.slug` — the slugified name (e.g., `employee-self-service-hr`)
 
-If `my/config.json` doesn't exist or doesn't have `agent.folder`, tell the user: "I can't find your agent configuration. Run `/setup` first." Then STOP.
+If `.local/config.json` doesn't exist or doesn't have `agent.folder`, tell the user: "I can't find your agent configuration. Run `/setup` first." Then STOP.
 
 ## Step 2: Quick Scan (before checkpoint)
 
@@ -73,7 +73,7 @@ After scanning, group the errors into these categories:
 ### Category 3: Missing Dialog Reference
 **Error message**: `Dialog with id '{schema}.topic.{name}' not found`
 **What it means**: The topic references another topic using a `BeginDialog` action, but the schema name in the reference is wrong. Common cause: truncated schema name (e.g., `msdyn_copilotforemployeeselfservice` instead of `msdyn_copilotforemployeeselfservicehr`).
-**Fix**: Look at the incorrect dialog reference. Read `my/config.json` to get the correct `agent.schemaName`. Replace the wrong schema prefix with the correct one. For example, if the error says `msdyn_copilotforemployeeselfservice.topic.WorkdayManagerCheck` and the correct schemaName is `msdyn_copilotforemployeeselfservicehr`, replace `msdyn_copilotforemployeeselfservice` with `msdyn_copilotforemployeeselfservicehr` in the file.
+**Fix**: Look at the incorrect dialog reference. Read `.local/config.json` to get the correct `agent.schemaName`. Replace the wrong schema prefix with the correct one. For example, if the error says `msdyn_copilotforemployeeselfservice.topic.WorkdayManagerCheck` and the correct schemaName is `msdyn_copilotforemployeeselfservicehr`, replace `msdyn_copilotforemployeeselfservice` with `msdyn_copilotforemployeeselfservicehr` in the file.
 
 ### Unknown Errors
 If you find errors that don't match any of the above categories, list them separately and tell the user: "I found some errors I don't have an automatic fix for. Here's what they are:" Then list them and suggest the user check the Copilot Studio documentation.

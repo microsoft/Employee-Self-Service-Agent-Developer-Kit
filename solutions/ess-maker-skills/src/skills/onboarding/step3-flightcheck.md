@@ -27,7 +27,7 @@ Use the `vscode_askQuestions` tool:
 
 **If they choose "Skip":**
 
-Do NOT update `my/onboarding/tasks.md`. Step 5 stays unchecked so
+Do NOT update `workspace/onboarding/tasks.md`. Step 5 stays unchecked so
 `/setup` will offer the readiness check again on the next run.
 
 **Message:**
@@ -61,13 +61,13 @@ python scripts/flightcheck/cli.py --scope full
 
 Wait for the script to finish.
 
-Update `my/onboarding/tasks.md` — change step 5 from `- [ ]` to `- [x]`.
+Update `workspace/onboarding/tasks.md` — change step 5 from `- [ ]` to `- [x]`.
 
 ---
 
 ## 3.3 — Present results
 
-Read `my/flightcheck/results.json`. Present the results using the same
+Read `workspace/flightcheck/results.json`. Present the results using the same
 format as `src/skills/flightcheck/SKILL.md` Step 3 (summary banner →
 category breakdown table → issues table → next steps). Follow that format
 exactly.

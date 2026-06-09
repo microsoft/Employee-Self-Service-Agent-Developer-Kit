@@ -234,8 +234,8 @@ For detailed patterns, see `src/reference/ess-docs/customization/customize.md`.
 - New scenarios only need a **template config** in Dataverse (XML SOAP template) + a **topic** — do NOT create new flows
 - Topics call the shared system topic (`WorkdaySystemGetCommonExecution`) which routes through the shared flow
 - The shared flow reads the template config by `scenarioName` and executes the Workday SOAP API call
-- **Entra SSO is mandatory.** The OAuthUser connection (`ff0df`) uses `runtimeSource: invoker` — it authenticates to Workday AS the employee. The other two connections (`d6081`, `0786a`) use Basic auth with ISU service accounts.
-- **Three connections, three different auth types.** Never use the same auth type for all three. See the connect skill step3.md for the exact mapping.
+- **Entra SSO is mandatory.** The OAuthUser connection (`ff0df`) uses `runtimeSource: invoker` — it authenticates to Workday AS the employee. This applies to both install paths.
+- **Two install paths.** Microsoft ships a **simplified** install (OAuthUser `ff0df` + Dataverse only; no ISU accounts, security groups, or RaaS report — user context comes from the REST `/workers/me` endpoint) and a **legacy** install (the older 4-connection setup where `d6081` and `0786a` use Basic auth with ISU service accounts). Fresh installs default to simplified; existing legacy installs stay supported. See the connect skill step1.md/step3.md for detection and the exact connection mapping.
 - See `src/reference/ess-docs/integrations/workday.md` for connector setup
 - See `src/reference/ess-docs/integrations/workday-extensibility.md` for extensibility patterns
 
