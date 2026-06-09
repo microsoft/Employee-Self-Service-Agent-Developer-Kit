@@ -217,6 +217,40 @@ def query_all(env_url, token, entity_set, select, filter_expr=None):
     return all_records
 
 
+def retrieve_shared_principals_and_access(env_url, token, bot_id):
+    """Return the principals a Dataverse ``bot`` record is shared with.
+
+    Calls the documented Dataverse Web API function
+    ``RetrieveSharedPrincipalsAndAccess(Target=bots(<bot_id>))``. Copilot
+    Studio "Share" writes to the underlying ``bot`` record's sharing, so
+    this is the supported source for "who is this agent shared with"
+    (the sharing pane's own data). Returns the parsed JSON, whose
+    ``PrincipalAccesses`` is a list of
+    ``{"AccessMask", "Principal": {"@odata.type", "ownerid"}}`` — the
+    ``@odata.type`` discriminates ``systemuser`` vs ``team`` and
+    ``ownerid`` is the principal's id.
+
+    Used by FlightCheck LIC-FLOW-002 (shared-user license verification)
+    and by the cassette recorder. The Target is passed as a parameter
+    alias holding an @odata.id entity reference — the documented Web API
+    invocation pattern for a function taking a crmbaseentity parameter.
+
+    Docs: https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/retrievesharedprincipalsandaccess
+    """
+    _validate_https_url(env_url)
+    target = quote(json.dumps({"@odata.id": f"bots({bot_id})"}), safe="")
+    url = (
+        f"{env_url}/api/data/v9.2/RetrieveSharedPrincipalsAndAccess"
+        f"(Target=@t)?@t={target}"
+    )
+    headers = {**HEADERS_BASE, "Authorization": f"Bearer {token}"}
+    resp = _SESSION.get(url, headers=headers, timeout=120, verify=True)
+    if resp.status_code == 401:
+        raise AuthExpiredError("Dataverse returned 401 (token expired or invalid)")
+    resp.raise_for_status()
+    return resp.json()
+
+
 def dataverse_get(env_url, token, path, params=None):
     """GET a Dataverse Web API endpoint that is not a paged table query.
 

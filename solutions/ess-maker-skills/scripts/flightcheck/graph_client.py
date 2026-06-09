@@ -377,3 +377,62 @@ class GraphClient:
         return self.get_all(
             f"/servicePrincipals/{service_principal_id}/claimsMappingPolicies"
         )
+
+    # ----- License & group membership (LIC-FLOW-002) -----
+
+    def get_user_license_details(self, user_id: str) -> list:
+        """List the license SKUs assigned to a user (directly or via group).
+
+        ``GET /users/{id}/licenseDetails`` returns ``licenseDetails``
+        objects, each with ``skuId``, ``skuPartNumber``, and
+        ``servicePlans`` (``[{servicePlanId, servicePlanName,
+        provisioningStatus, appliesTo}]``). Per the docs this includes
+        licenses assigned transitively through group-based licensing, so
+        the caller doesn't have to reconcile group license assignment
+        separately.
+
+        Used by LIC-FLOW-002 to check whether a user shared the agent has
+        a Power Automate / Power Apps Premium SKU required to run the
+        agent's premium-connector flows.
+
+        Source (validatable):
+          Schema: https://graph.microsoft.com/v1.0/$metadata
+                  EntityType Name="licenseDetails" (skuId Edm.Guid,
+                  skuPartNumber Edm.String, servicePlans
+                  Collection(servicePlanInfo))
+          Docs:   https://learn.microsoft.com/graph/api/user-list-licensedetails
+
+        Requires User.Read.All / Directory.Read.All (already requested).
+        Returns [] on HTTP 401/403 (partial-results default of get_all).
+        """
+        return self.get_all(f"/users/{user_id}/licenseDetails")
+
+    def get_group_transitive_members(
+        self, group_id: str, *, top: int = 999
+    ) -> list:
+        """List the transitive members (users, nested) of a group.
+
+        ``GET /groups/{id}/transitiveMembers`` flattens nested group
+        membership server-side, so every user that ultimately belongs to
+        the group is returned in one paginated collection (no manual
+        depth recursion needed). Used by LIC-FLOW-002 when an agent is
+        shared with a Microsoft Entra group-backed Dataverse team — each
+        member's license must be checked.
+
+        ``$select`` is narrowed to the id/UPN/type fields the caller
+        needs; ``@odata.type`` distinguishes ``#microsoft.graph.user``
+        from nested groups/devices.
+
+        Source (validatable):
+          Schema: https://graph.microsoft.com/v1.0/$metadata
+                  NavigationProperty Name="transitiveMembers" on group
+          Docs:   https://learn.microsoft.com/graph/api/group-list-transitivemembers
+
+        Requires GroupMember.Read.All / Directory.Read.All. Returns
+        whatever was collected on HTTP 401/403 (get_all default).
+        """
+        params = {
+            "$select": "id,userPrincipalName,displayName,accountEnabled",
+            "$top": str(top),
+        }
+        return self.get_all(f"/groups/{group_id}/transitiveMembers", params=params)

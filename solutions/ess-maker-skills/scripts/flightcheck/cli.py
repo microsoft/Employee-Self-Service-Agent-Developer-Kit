@@ -52,6 +52,7 @@ from flightcheck.checks.workday import run_workday_checks
 from flightcheck.checks.servicenow import run_servicenow_checks
 from flightcheck.checks.local_files import run_local_file_checks
 from flightcheck.checks.publishing import run_publishing_checks
+from flightcheck.checks.licensing import run_licensing_checks
 
 
 SCOPE_MAP = {
@@ -73,6 +74,7 @@ SCOPE_MAP = {
     ],
     "local": [("Local Files", run_local_file_checks)],
     "publishing": [("Publishing", run_publishing_checks)],
+    "licensing": [("Licensing", run_licensing_checks)],
 }
 
 FULL_SCOPE = [
@@ -84,6 +86,7 @@ FULL_SCOPE = [
     ("Graph Connector KB", run_graph_connector_kb_checks),
     ("ServiceNow", run_servicenow_checks),
     ("Local Files", run_local_file_checks),
+    ("Licensing", run_licensing_checks),
     ("Publishing", run_publishing_checks),
 ]
 
