@@ -661,7 +661,7 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
                 f"before deleting** \u2014 the platform does not warn if you "
                 f"delete a connection that something else depends on. "
                 f"To verify: "
-                f"(1) open [Power Apps \u2192 Connections]({connections_url}) "
+                f"(1) open [Power Automate \u2192 Connections]({connections_url}) "
                 f"and click '{conn_name}' \u2014 the detail page lists apps "
                 f"that depend on it; "
                 f"(2) open [Power Automate \u2192 My flows]"
@@ -672,7 +672,7 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
                 f"(https://make.powerapps.com/environments/{runner.env_id}/solutions) "
                 f"and check their **Objects \u2192 Connection references**. "
                 f"If nothing depends on '{conn_name}', delete it from the "
-                f"Power Apps Connections list."
+                f"Power Automate Connections list."
             ),
         ))
 

@@ -306,7 +306,7 @@ def test_env_004_unbound_conn_remediation_lists_three_verification_paths(monkeyp
         if r.checkpoint_id.startswith("ENV-004-UC-")
     )
     rem = uc.remediation or ""
-    # 1. Power Apps Connections detail page (shows app dependencies).
+    # 1. Power Automate Connections detail page (shows app dependencies).
     assert "Connections" in rem and "make.powerautomate.com/environments/env-deeplinks/connections" in rem, rem
     # 2. Power Automate flows (the only place flow dependencies show up).
     assert "Power Automate" in rem, rem
