@@ -102,6 +102,40 @@ def organization(
     }
 
 
+def license_detail(
+    *,
+    sku_id: str = "00000000-0000-0000-0000-0000000000fa",
+    sku_part_number: str = "FLOW_PER_USER",
+    service_plans: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build a single Graph licenseDetails record.
+
+    Consumed by LIC-FLOW-002 via
+    flightcheck/graph_client.py:get_user_license_details
+    (``GET /users/{id}/licenseDetails``).
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="licenseDetails" (skuId Edm.Guid,
+              skuPartNumber Edm.String, servicePlans
+              Collection(servicePlanInfo))
+      Docs:   https://learn.microsoft.com/graph/api/user-list-licensedetails
+    """
+    if service_plans is None:
+        service_plans = [{
+            "servicePlanId": "00000000-0000-0000-0000-0000000000fb",
+            "servicePlanName": sku_part_number,
+            "provisioningStatus": "Success",
+            "appliesTo": "User",
+        }]
+    return {
+        "id": f"{sku_id}_detail",
+        "skuId": sku_id,
+        "skuPartNumber": sku_part_number,
+        "servicePlans": service_plans,
+    }
+
+
 def user(
     *,
     user_id: str = MOCK_USER_ID,

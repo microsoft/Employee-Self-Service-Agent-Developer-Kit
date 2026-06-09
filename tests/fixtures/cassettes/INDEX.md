@@ -48,7 +48,7 @@ the PR.
 | **Power Platform Admin API (BAP)** | `documented` | MS Learn `https://learn.microsoft.com/power-platform/admin/programmability-resources` + `programmability-authentication-v2`. PowerShell module source at `Microsoft.PowerApps.Administration.PowerShell` is a useful supplementary reference. | No public OpenAPI spec. Probed `https://api.bap.microsoft.com/.../swagger/docs/v1` → 401. |
 | **Dataverse Web API v9.2** | `documented` | MS Learn `https://learn.microsoft.com/power-apps/developer/data-platform/webapi/`. Per-org `$metadata` exists at `{org}/api/data/v9.2/$metadata` but requires auth, so it's not a no-tenant validation path. | Excellent prose docs with example responses for every operation. |
 | **PowerApps Admin API** (`/Microsoft.PowerApps/...`) | `validated` | Cassette at `flightcheck_pp_admin.yaml`. | Connection enumeration uses this host. |
-| **Power Automate Admin API** (`/Microsoft.ProcessSimple/.../v2/flows`) | `validated` | Hosted on `api.flow.microsoft.com` (NOT `api.powerapps.com`) and requires a `service.flow.microsoft.com//.default` audience token. Cassette to be re-captured against the correct host. | Admin flow listing — Power Automate audience required. |
+| **Power Automate Admin API** (`/Microsoft.ProcessSimple/.../v2/flows`) | `validated` | Hosted on `api.flow.microsoft.com` (NOT `api.powerapps.com`) and requires a `service.flow.microsoft.com//.default` audience token. Captured at `flightcheck_flow_licensing.yaml` (correct host). | Admin flow listing + per-flow detail — Power Automate audience required. |
 | **PVA Island Gateway** (`/api/botmanagement/v1/...`) | `validated` | Cassette at `island_gateway_botcomponents.yaml`. | Internal Copilot Studio API; not publicly documented. |
 | **Workday SOAP** (Human_Resources, Identity_Management, Compensation, Absence_Management, etc.) | `validated` | Cassettes at `flightcheck_workday.yaml`, `workday_config.yaml`. | Vendor docs require Workday Community login; tenant-specific WSDL varies. |
 | **Workday WQL / REST** (`/ccx/api/wql/v1/...`, `/ccx/api/v1/...`) | `validated` | Cassette at `workday_wql_admin.yaml`. **Known auth blocker** — see "Workday WQL config-validation pattern" section below before authoring any runtime check on this cassette. | Per-tenant API client registration creates the chicken-and-egg blocker. |
@@ -76,7 +76,8 @@ table, it is not confirmed — see `tests/AGENTS.md` for what to do next.
 | Power Platform Admin (BAP) | `GET /providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/{env_id}` | 200 | `flightcheck_pp_admin.yaml` |
 | Power Platform Admin (BAP) | `GET /providers/Microsoft.BusinessAppPlatform/scopes/admin/apiPolicies` | 200 | `flightcheck_pp_admin.yaml` |
 | PowerApps | `GET /providers/Microsoft.PowerApps/scopes/admin/environments/{env_id}/connections` | 200 | `flightcheck_pp_admin.yaml` |
-| Power Automate | `GET https://api.flow.microsoft.com/providers/Microsoft.ProcessSimple/scopes/admin/environments/{env_id}/v2/flows` | 200 | (cassette to be re-captured — host correction) |
+| Power Automate | `GET https://api.flow.microsoft.com/providers/Microsoft.ProcessSimple/scopes/admin/environments/{env_id}/v2/flows` | 200 | `flightcheck_flow_licensing.yaml` |
+| Power Automate | `GET https://api.flow.microsoft.com/providers/Microsoft.ProcessSimple/scopes/admin/environments/{env_id}/flows/{flow_id}` (per-flow detail — `properties.connectionReferences.<ref>.apiDefinition.properties.{tier,isCustomApi}` carries the connector premium/custom signal LIC-FLOW-001 reads inline) | 200 | `flightcheck_flow_licensing.yaml` |
 | Workday OAuth2 | `POST /ccx/oauth2/{tenant}/token` (refresh_token grant via Basic auth) | 200 | `workday_wql_admin.yaml` |
 | Workday WQL | `GET /ccx/api/wql/v1/{tenant}/dataSources?limit=100&offset=N` (paginated catalog of all data sources) | 200 | `workday_wql_admin.yaml` |
 | Workday WQL | `GET /ccx/api/wql/v1/{tenant}/dataSources/{wid}` (data source detail incl. `requiredParameters`, `dataSourceFilters`, `filterIsRequired`) | 200 | `workday_wql_admin.yaml` |
@@ -308,3 +309,37 @@ one auth flow, one cassette, simpler request shape.
 | Microsoft Graph v1.0 | `GET /v1.0/subscribedSkus` | License / SKU validation | **No cassette required** — `validatable` via Graph CSDL. |
 | Dataverse | `GET /api/data/v9.2/connectionreferences?$select=connectionreferenceid,connectionreferencelogicalname,connectionreferencedisplayname,connectorid,connectionid,statuscode` | Workday integration **flavor detection**: deterministically distinguishes the OOTB simplified-Workday install (1 Workday connection reference shipped) from the full / legacy SOAP+custom install (3 Workday connection references shipped). Backs `WD-PKG-001` (package detection) and `WD-CONN-012` (package-aware connection-reference binding completeness). Same endpoint already powers `ENV-004` (general binding-state check in `flightcheck/checks/environment.py`). | **API contract remains `documented`** (response shape per the MS Learn `connectionreference` reference) — the cassette is not the contract evidence. **The cassettes ARE the fingerprint evidence**: the actual `connectionreferencelogicalname` suffixes shipped by Microsoft inside the simplified-install solution vs. the full/legacy solution are not on MS Learn. Both flavors use the same connector (`shared_workdaysoap`); the set of logical-name suffixes is the fingerprint. Captured by `tests/captures/record_dataverse_workday_connection_refs.py` against both a real OOTB-simplified tenant and a real full/legacy SOAP+custom tenant; redacted cassettes are committed at `dataverse_workday_connection_refs_simplified.yaml` (1 Workday ref: `_ff0df` / OAuthUser-OBO) and `dataverse_workday_connection_refs_full.yaml` (3 Workday refs: `_ff0df` / OAuthUser-OBO, `_0786a` / Generic User ISU, `_d6081` / Context Generic User ISU). `WD-PKG-001` matches against the trailing 5-hex suffix so the check is resilient to publisher-prefix changes. |
 | Dataverse | `GET /api/data/v9.2/botcomponents?$filter=name eq 'Workday [System] - 1: Set User Context V2'` | Required Workday topic installed | **No cassette required** — `documented`; verify against MS Learn `botcomponent` reference. |
+
+---
+
+## `flightcheck_flow_licensing.yaml` — flow licensing pre-flight (LIC-FLOW-001 / 002)
+
+Backs the traditional-flow licensing checks. Captured by
+`tests/captures/record_flightcheck_flow_licensing.py` against a real tenant
+(read-only). Eight interactions:
+
+- BAP `/environments` (env_id resolution by instanceUrl match).
+- Power Automate `/v2/flows` (list) + five per-flow `/flows/{id}` details. The
+  DETAIL response is the LIC-FLOW-001 contract: each
+  `properties.connectionReferences.<ref>.apiDefinition.properties` carries
+  `tier` ("Premium" / "Standard") and `isCustomApi` — the connector-tier signal
+  the check warns on. (The admin `/apis` connector catalog returns empty under
+  admin scope, so the tier is read inline from the flow detail instead.)
+- Dataverse `RetrieveSharedPrincipalsAndAccess(Target=bots({botId}))` — the
+  LIC-FLOW-002 principal source. Copilot Studio "Share" writes to the Dataverse
+  `bot` record's sharing, so this documented function returns the shared-with
+  principals (`PrincipalAccesses[].Principal.{@odata.type, ownerid}`). API
+  contract is `documented` (Dataverse); the cassette is shape evidence.
+
+LIC-FLOW-002 then resolves each principal to an Entra user via documented /
+validatable surfaces that need **no cassette**: Dataverse `systemusers` /
+`teams` / `teammemberships` (documented) and Graph `/users/{id}/licenseDetails`
++ `/groups/{id}/transitiveMembers` (validatable via CSDL). The required-license
+catalog is data-driven at
+`solutions/ess-maker-skills/scripts/flightcheck/data/flow_licensing_skus.yaml`.
+
+Note on classification: the native-agent-flow (Copilot Studio capacity / credits)
+vs Power-Automate-cloud-flow (per-user license) distinction is not cleanly
+determinable from the flow definition, so LIC-FLOW-001 anchors on the documented
+connector-tier signal rather than a guessed flow-type — see the module docstring
+in `flightcheck/checks/licensing.py`.

@@ -1,0 +1,44 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+#
+# LIC-FLOW-002 — required-license catalog (data-driven, maintained by the
+# platform team WITHOUT code changes).
+#
+# When an ESS agent invokes a Power Automate cloud flow that binds a premium,
+# custom, or on-premises data gateway connector, every end user who triggers
+# the flow must hold one of the licenses below. The seeded "Power Automate for
+# Microsoft 365" entitlement is NOT in this list because it does not cover
+# premium / custom / on-prem connectors.
+#
+# Matching (LIC-FLOW-002): a user is considered licensed if ANY of their Graph
+# /users/{id}/licenseDetails entries has a `skuPartNumber` in `sku_part_numbers`
+# OR a servicePlan whose `servicePlanName` is in `service_plan_names`.
+#
+# skuPartNumber values are the tenant-visible product part numbers from
+# /subscribedSkus. Cross-reference the friendly product names here:
+#   https://learn.microsoft.com/entra/identity/users/licensing-service-plan-reference
+# Update this file (not the check code) when Microsoft renames or adds a SKU
+# that grants premium Power Automate / Power Apps use rights.
+
+# Standalone Power Automate Premium / per-flow plans.
+sku_part_numbers:
+  - FLOW_PER_USER                 # Power Automate per user plan (Premium)
+  - FLOW_PER_USER_DEPT            # Power Automate per user plan (department)
+  - FLOW_PER_BUSINESS_PROCESS     # Power Automate per flow plan
+  - FLOW_BUSINESS_PROCESS         # Power Automate per flow plan (legacy name)
+  - POWERAUTOMATE_ATTENDED_RPA    # Power Automate Premium (with attended RPA)
+  - POWERAUTOMATE_UNATTENDED_RPA  # Power Automate unattended RPA add-on
+  # Power Apps Premium grants Power Automate premium use rights within the
+  # app context.
+  - POWERAPPS_PER_USER            # Power Apps per user plan (Premium)
+  - POWERAPPS_PER_APP             # Power Apps per app plan
+  - POWERAPPS_PER_USER_PLAN       # Power Apps per user (alternate part number)
+
+# Service plans (bundled in larger SKUs, e.g. Dynamics 365 enterprise plans)
+# that include premium Power Automate use rights.
+service_plan_names:
+  - FLOW_PER_USER
+  - POWERAUTOMATE_PREMIUM
+  - POWERAPPS_PER_USER
+  - Flow_Per_User
+  - DYN365_ENTERPRISE_PLAN1       # Dynamics 365 plans include Flow premium use rights
