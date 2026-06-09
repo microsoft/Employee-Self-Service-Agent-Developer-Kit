@@ -52,7 +52,7 @@ class PVAClient:
         """Acquire a PVA access token and discover gateway URL."""
         authority = f"https://login.microsoftonline.com/{self.tenant_id}"
         cache = msal.SerializableTokenCache()
-        cache_path = os.path.join("my", ".token_cache.bin")
+        cache_path = os.path.join(".local", ".token_cache.bin")
 
         if os.path.exists(cache_path):
             with open(cache_path, "r") as f:
@@ -90,7 +90,7 @@ class PVAClient:
             )
 
         if cache.has_state_changed:
-            os.makedirs("my", exist_ok=True)
+            os.makedirs(".local", exist_ok=True)
             with open(cache_path, "w") as f:
                 f.write(cache.serialize())
 

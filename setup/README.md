@@ -1,9 +1,17 @@
 # ESS ADK — One-Shot Installer
 
-A single PowerShell command that installs everything needed for the ESS Maker Kit: VS Code, Python 3.12, Git, GitHub CLI, Copilot extensions, pip dependencies, and clones the repo.
+A single command that installs everything needed for the ESS Maker Kit: VS Code, Python 3.12, Git, GitHub CLI, Copilot extensions, pip dependencies, and clones the repo.
+
+**Windows** (PowerShell):
 
 ```powershell
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap.ps1)
+```
+
+**macOS** (Terminal):
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-mac.sh)"
 ```
 
 Once complete, VS Code opens at `solutions/ess-maker-skills/`. Run `/setup` in Copilot Chat to connect your Dataverse environment.
@@ -36,10 +44,18 @@ The same Codespace environment can be used to run FlightCheck without the full m
 
 ## FlightCheck-Only Mode
 
-For users who want to run a pre-deployment readiness check on their Power Platform environment — no coding tools or VS Code required. Just run this command in PowerShell:
+For users who want to run a pre-deployment readiness check on their Power Platform environment — no coding tools or VS Code required. Just run this command:
+
+**Windows** (PowerShell):
 
 ```powershell
 iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck.ps1)
+```
+
+**macOS** (Terminal):
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-flightcheck-mac.sh)"
 ```
 
 That's it. The script handles everything automatically:
@@ -62,19 +78,29 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 Once you've run the installer once, you can re-run FlightCheck directly without going through setup again:
 
+**Windows:**
 ```powershell
 cd $env:USERPROFILE\source\Employee-Self-Service-Agent-Developer-Kit\solutions\ess-maker-skills
 python scripts/flightcheck/cli.py --scope full
+```
+
+**macOS:**
+```bash
+cd ~/source/Employee-Self-Service-Agent-Developer-Kit/solutions/ess-maker-skills
+../../.venv/bin/python scripts/flightcheck/cli.py --scope full
 ```
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `ess-adk-setup.winget.yaml` | Declarative DSC config consumed by `winget configure`. Installs VS Code, Python 3.12, PowerShell 7, Git, GitHub CLI. |
-| `Install-EssAdk.ps1` | Orchestrator. Installs toolchain via winget, installs pip dependencies, clones the repo, installs VS Code extensions, launches VS Code. Idempotent. With `-FlightCheckOnly`, installs minimal toolchain and runs interactive environment/agent discovery. |
-| `bootstrap.ps1` | One-liner entry point for the full maker kit install. Downloads the installer into `$env:TEMP` and runs it. |
-| `bootstrap-flightcheck.ps1` | One-liner entry point for FlightCheck-only install. Downloads the installer and runs it with `-FlightCheckOnly`. |
+| `Install-EssAdk.ps1` | Windows orchestrator. Installs toolchain via winget, pip dependencies, clones repo, installs extensions, launches VS Code. With `-FlightCheckOnly`, installs minimal toolchain and runs FlightCheck. |
+| `install-ess-adk.sh` | macOS orchestrator. Same as above but uses Homebrew. Set `FLIGHTCHECK_ONLY=true` for FlightCheck-only mode. |
+| `bootstrap.ps1` | Windows one-liner entry point (full maker kit). |
+| `bootstrap-flightcheck.ps1` | Windows one-liner entry point (FlightCheck only). |
+| `bootstrap-mac.sh` | macOS one-liner entry point (full maker kit). |
+| `bootstrap-flightcheck-mac.sh` | macOS one-liner entry point (FlightCheck only). |
+| `ess-adk-setup.winget.yaml` | Declarative DSC config consumed by `winget configure` (optional Windows path). |
 | `.devcontainer/devcontainer.json` | Codespace configuration. Pre-installs Python 3.12, pip dependencies, and Copilot extensions. |
 
 ## Dependencies
@@ -87,7 +113,7 @@ The installer provisions the following dependencies. Users do not need to instal
 |------|---------|---------|:-----------------:|
 | Python | 3.12 | Runtime for FlightCheck and maker scripts | ✅ |
 | Git | Latest | Clone the repo, version control | ✅ |
-| GitHub CLI (`gh`) | Latest | Device-code auth flow for private repo clone | ✅ |
+| GitHub CLI (`gh`) | Latest | Device-code auth flow for private repo clone | ❌ |
 | VS Code | Latest | Editor and Copilot host | ❌ |
 | PowerShell 7 | Latest | Script execution (Windows only) | ❌ |
 
@@ -119,6 +145,8 @@ The devcontainer provides an equivalent pre-built environment:
 
 ## How to test it locally
 
+### Windows
+
 From this folder:
 
 ```powershell
@@ -136,3 +164,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -Flight
 ```
 
 For air-gapped / locked-down environments, IT can mirror the files internally and serve them from an intranet URL by passing `-SourceBaseUrl`.
+
+### macOS
+
+From this folder:
+
+```bash
+# Full installer:
+bash install-ess-adk.sh
+
+# FlightCheck only:
+FLIGHTCHECK_ONLY=true bash install-ess-adk.sh
+
+# Custom install location:
+ESS_ADK_INSTALL_ROOT=~/projects bash install-ess-adk.sh
+
+# Test against a branch:
+ESS_ADK_BRANCH=my-feature bash install-ess-adk.sh
+```
+
+For air-gapped environments, set `ESS_ADK_SOURCE_URL` in the bootstrap scripts to point at your internal mirror.

@@ -29,7 +29,7 @@ and runs setup.py automatically. No MCP queries needed.
 If the script fails with an auth error, tell the user to check they selected
 the correct account with access to the environment, and re-run the command.
 
-When the script completes successfully, update `my/onboarding/tasks.md` —
+When the script completes successfully, update `workspace/onboarding/tasks.md` —
 change step 3 from `- [ ]` to `- [x]`.
 
 **Message:**
@@ -73,7 +73,7 @@ Wait for the user to respond.
 
 ## 2.3 — Finish
 
-Update `my/onboarding/tasks.md` — change step 4 from `- [ ]` to `- [x]`.
+Update `workspace/onboarding/tasks.md` — change step 4 from `- [ ]` to `- [x]`.
 
 **Message:**
 

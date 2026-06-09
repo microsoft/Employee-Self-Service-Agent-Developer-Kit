@@ -8,7 +8,7 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 **Do NOT show internal variable names or assignments to the user.** Never
 display text like "REDIRECT_URL = ..." or "CLIENT_SECRET = ..." in chat.
 
-Read `my/connect/servicenow/config.json` for INSTANCE_NAME.
+Read `.local/connect/servicenow/config.json` for INSTANCE_NAME.
 
 ---
 
@@ -198,7 +198,7 @@ If this call fails, log the error but continue — it's not blocking.
 
 ## 2.5 — Save config and display results
 
-Update `my/connect/servicenow/config.json` — add an `oauth` object:
+Update `.local/connect/servicenow/config.json` — add an `oauth` object:
 
 ```json
 {
@@ -212,7 +212,7 @@ Update `my/connect/servicenow/config.json` — add an `oauth` object:
 
 Do NOT store the client secret in config.json.
 
-Update `my/connect/servicenow/tasks.md` — change step 2 from
+Update `.local/connect/servicenow/tasks.md` — change step 2 from
 `- [ ]` to `- [x]`.
 
 **Message:**

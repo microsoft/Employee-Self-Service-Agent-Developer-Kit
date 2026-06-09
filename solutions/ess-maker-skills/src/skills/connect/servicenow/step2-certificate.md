@@ -10,7 +10,7 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 display text like "APP_A_CLIENT_ID = ..." or "OIDC_ENTITY_SYS_ID = ..." in
 chat. The user should only see Message blocks and tool output tables.
 
-Read `my/connect/servicenow/config.json` for INSTANCE_NAME.
+Read `.local/connect/servicenow/config.json` for INSTANCE_NAME.
 
 **Do NOT ask the user any questions or show any messages before reading
 login.md in section 2.1.** Go directly to 2.1.
@@ -41,7 +41,7 @@ When it completes, you will have APP_A_CLIENT_ID, APP_A_OBJECT_ID,
 and SCOPE_GUID.
 
 **Immediately save APP_A_CLIENT_ID and APP_A_OBJECT_ID** to
-`my/connect/servicenow/config.json` under `certificate.appAClientId`
+`.local/connect/servicenow/config.json` under `certificate.appAClientId`
 and `certificate.appAObjectId`.
 
 The certificate auth docs require an additional `aud` optional claim
@@ -142,11 +142,11 @@ From the terminal output, extract:
 - The thumbprint → save as CERT_THUMBPRINT
 
 **Save CERT_PFX_PATH, CERT_CER_PATH, and CERT_THUMBPRINT** to
-`my/connect/servicenow/config.json` under `certificate.certPfxPath`,
+`.local/connect/servicenow/config.json` under `certificate.certPfxPath`,
 `certificate.certCerPath`, and `certificate.certThumbprint`.
 
 **Do NOT write CERT_PASSWORD to disk.** The PFX password is a reusable
-credential — persisting it to `my/connect/servicenow/config.json` would
+credential — persisting it to `.local/connect/servicenow/config.json` would
 leave it sitting in the workspace even after the session ends. Keep it
 in session memory for the rest of this flow. If the session breaks,
 resume code in step3-certificate.md will re-prompt the user.
@@ -216,7 +216,7 @@ Extract the CER path from the output → save as CERT_CER_PATH.
 .cer file path directly.
 
 **Save CERT_PFX_PATH and CERT_CER_PATH** to
-`my/connect/servicenow/config.json` under `certificate.certPfxPath`
+`.local/connect/servicenow/config.json` under `certificate.certPfxPath`
 and `certificate.certCerPath`. Compute and save CERT_THUMBPRINT to
 `certificate.certThumbprint` (use
 `(Get-PfxCertificate -FilePath '{CERT_PFX_PATH}').Thumbprint` if not
@@ -338,7 +338,7 @@ Stop here. Do not proceed.
 For any other error, retry once. If still fails, show the error and stop.
 
 **Immediately save APP_B_CLIENT_ID and APP_B_OBJECT_ID** to
-`my/connect/servicenow/config.json` under `certificate.appBClientId`
+`.local/connect/servicenow/config.json` under `certificate.appBClientId`
 and `certificate.appBObjectId`.
 
 ---
@@ -425,7 +425,7 @@ Save the output as APP_B_SP_OBJECT_ID.
 For any other error, retry once, then show the error and stop.
 
 **Immediately save APP_B_SP_OBJECT_ID** to
-`my/connect/servicenow/config.json` under
+`.local/connect/servicenow/config.json` under
 `certificate.appBSpObjectId`.
 
 ---
@@ -562,7 +562,7 @@ Replace `{TENANT_ID}` with the actual value.
 Extract `sys_id` from the response → save as OIDC_CONFIG_SYS_ID.
 
 **Immediately save OIDC_CONFIG_SYS_ID** to
-`my/connect/servicenow/config.json` under
+`.local/connect/servicenow/config.json` under
 `certificate.oidcConfigSysId`.
 
 **If create returns 403**: fall back to querying for the built-in
@@ -677,7 +677,7 @@ Replace `{APP_B_SP_OBJECT_ID}` with the actual value.
 Save the `sys_id` from the response as CREATED_SVC_USER_SYS_ID.
 
 **Immediately save CREATED_SVC_USER_SYS_ID** to
-`my/connect/servicenow/config.json` under
+`.local/connect/servicenow/config.json` under
 `certificate.createdSvcUserSysId`. This ensures the created user is
 tracked for cleanup if later steps fail.
 
@@ -715,7 +715,7 @@ Wait for the user. Then proceed to 2.11.
 
 ## 2.11 — Save config and display results
 
-Update `my/connect/servicenow/config.json` — add a `certificate` object
+Update `.local/connect/servicenow/config.json` — add a `certificate` object
 (merge with any fields already saved in earlier steps):
 
 ```json
@@ -752,7 +752,7 @@ also add:
 }
 ```
 
-Update `my/connect/servicenow/tasks.md` — change step 2 from
+Update `.local/connect/servicenow/tasks.md` — change step 2 from
 `- [ ]` to `- [x]`.
 
 **Message:**
