@@ -233,21 +233,210 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
-# 7. FlightCheck-only: environment discovery
+# 7. FlightCheck-only: environment discovery, config, fetch, and run
 # ---------------------------------------------------------------------------
 if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
-    step "Running FlightCheck"
-
     MAKER_KIT_PATH="$REPO_PATH/solutions/ess-maker-skills"
     if [[ ! -d "$MAKER_KIT_PATH" ]]; then
         err "Maker kit path not found at $MAKER_KIT_PATH. Was the clone successful?"
         exit 1
     fi
     cd "$MAKER_KIT_PATH"
+
+    # Resolve python for discovery/fetch/flightcheck
     FLIGHTCHECK_PYTHON="$VENV_PATH/bin/python"
     if [[ ! -x "$FLIGHTCHECK_PYTHON" ]]; then
         FLIGHTCHECK_PYTHON="$PYTHON"
     fi
+
+    LOCAL_DIR=".local"
+    CONFIG_PATH="$LOCAL_DIR/config.json"
+    DISCOVER_PY="scripts/discover.py"
+    FETCH_PY="scripts/fetch_and_setup.py"
+
+    # --- Config: reuse or create ---
+    BOT_ID=""
+    ENV_URL=""
+    AGENT_NAME=""
+    SCHEMA_NAME=""
+    IS_MANAGED="true"
+
+    if [[ -f "$CONFIG_PATH" ]]; then
+        echo ""
+        echo "    Config already exists at $CONFIG_PATH"
+        read -rp "    Reconfigure? (Y/N): " RECONFIGURE
+        if [[ "$RECONFIGURE" =~ ^[Yy] ]]; then
+            rm -f "$CONFIG_PATH"
+            ok "Removed existing config — starting fresh"
+        else
+            ok "Keeping existing config"
+        fi
+    fi
+
+    if [[ ! -f "$CONFIG_PATH" ]]; then
+        step "Configuring FlightCheck environment"
+
+        if [[ ! -f "$DISCOVER_PY" ]]; then
+            err "discover.py not found at $DISCOVER_PY. Was the repo cloned correctly?"
+            exit 1
+        fi
+
+        # --- Step 1: List environments ---
+        echo ""
+        echo "    Listing Power Platform environments in your tenant..."
+        echo "    A browser window will open for sign-in."
+        echo ""
+
+        ENV_OUTPUT=$("$FLIGHTCHECK_PYTHON" "$DISCOVER_PY" --list-environments 2>&1) || true
+        echo "$ENV_OUTPUT"
+
+        if echo "$ENV_OUTPUT" | grep -q "^ERROR:"; then
+            err "Environment listing failed."
+            exit 1
+        fi
+
+        echo ""
+        read -rp "    Select environment number from the list above: " ENV_CHOICE
+        ENV_CHOICE="${ENV_CHOICE// /}"
+        if [[ -z "$ENV_CHOICE" || ! "$ENV_CHOICE" =~ ^[0-9]+$ ]]; then
+            err "Invalid selection. Please re-run and pick a number."
+            exit 1
+        fi
+
+        # Re-run with --select
+        SELECT_OUTPUT=$("$FLIGHTCHECK_PYTHON" "$DISCOVER_PY" --list-environments --select "$ENV_CHOICE" 2>&1)
+        if [[ $? -ne 0 ]]; then
+            err "Environment selection failed."
+            exit 1
+        fi
+
+        ENV_JSON_LINE=$(echo "$SELECT_OUTPUT" | grep "^SELECTED_ENV_JSON:" | sed 's/^SELECTED_ENV_JSON://')
+        if [[ -z "$ENV_JSON_LINE" ]]; then
+            err "Could not parse environment selection output."
+            exit 1
+        fi
+
+        ENV_URL=$(echo "$ENV_JSON_LINE" | "$FLIGHTCHECK_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('instanceUrl','').rstrip('/'))")
+        ENV_DISPLAY=$(echo "$ENV_JSON_LINE" | "$FLIGHTCHECK_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('displayName',''))")
+
+        if [[ -z "$ENV_URL" ]]; then
+            err "Selected environment has no linked Dataverse URL."
+            exit 1
+        fi
+        ok "Environment: $ENV_DISPLAY"
+        ok "URL: $ENV_URL"
+
+        # --- Step 2: List agents ---
+        echo ""
+        echo "    Discovering agents in this environment..."
+        echo ""
+
+        AGENT_OUTPUT=$("$FLIGHTCHECK_PYTHON" "$DISCOVER_PY" --url "$ENV_URL" 2>&1) || true
+        AGENT_EXIT=$?
+        echo "$AGENT_OUTPUT"
+
+        if [[ $AGENT_EXIT -ne 0 ]] || echo "$AGENT_OUTPUT" | grep -q "^ERROR:"; then
+            warn "Agent discovery failed. Config will be created without a bot ID."
+            BOT_ID=""
+            AGENT_NAME="FlightCheck-only (no agent selected)"
+            SCHEMA_NAME=""
+            IS_MANAGED="true"
+        else
+            echo ""
+            read -rp "    Select agent number (or press Enter for environment-wide checks only): " AGENT_CHOICE
+            AGENT_CHOICE="${AGENT_CHOICE// /}"
+
+            if [[ -n "$AGENT_CHOICE" && "$AGENT_CHOICE" =~ ^[0-9]+$ ]]; then
+                AGENT_SELECT_OUTPUT=$("$FLIGHTCHECK_PYTHON" "$DISCOVER_PY" --url "$ENV_URL" --select "$AGENT_CHOICE" 2>&1) || true
+                AGENT_JSON_LINE=$(echo "$AGENT_SELECT_OUTPUT" | grep "^SELECTED_AGENT_JSON:" | sed 's/^SELECTED_AGENT_JSON://')
+
+                if [[ -n "$AGENT_JSON_LINE" ]]; then
+                    BOT_ID=$(echo "$AGENT_JSON_LINE" | "$FLIGHTCHECK_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('botid',''))")
+                    AGENT_NAME=$(echo "$AGENT_JSON_LINE" | "$FLIGHTCHECK_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('name',''))")
+                    SCHEMA_NAME=$(echo "$AGENT_JSON_LINE" | "$FLIGHTCHECK_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print(d.get('schemaname',''))")
+                    IS_MANAGED=$(echo "$AGENT_JSON_LINE" | "$FLIGHTCHECK_PYTHON" -c "import sys,json; d=json.load(sys.stdin); print('true' if d.get('ismanaged') else 'false')")
+                    ok "Agent: $AGENT_NAME"
+                else
+                    warn "Agent selection failed. Continuing without bot ID."
+                    BOT_ID=""
+                    AGENT_NAME="FlightCheck-only (no agent selected)"
+                    SCHEMA_NAME=""
+                    IS_MANAGED="true"
+                fi
+            else
+                warn "Skipping agent selection. Some agent-specific checks will be skipped."
+                BOT_ID=""
+                AGENT_NAME="FlightCheck-only (no agent selected)"
+                SCHEMA_NAME=""
+                IS_MANAGED="true"
+            fi
+        fi
+
+        # Create .local directory and write config
+        mkdir -p "$LOCAL_DIR"
+
+        if [[ -n "$BOT_ID" ]]; then
+            AGENTS_JSON="[{\"name\":\"$AGENT_NAME\",\"botId\":\"$BOT_ID\",\"schemaName\":\"$SCHEMA_NAME\",\"isManaged\":$IS_MANAGED,\"slug\":\"flightcheck-only\",\"folder\":\"\"}]"
+            ACTIVE_AGENT="\"flightcheck-only\""
+        else
+            AGENTS_JSON="[]"
+            ACTIVE_AGENT="\"\""
+        fi
+
+        cat > "$CONFIG_PATH" <<EOF
+{
+    "configVersion": 1,
+    "setup": "flightcheck-only",
+    "dataverseEndpoint": "$ENV_URL",
+    "flightCheckOnly": true,
+    "agent": {
+        "name": "$AGENT_NAME",
+        "botId": "$BOT_ID",
+        "schemaName": "$SCHEMA_NAME",
+        "isManaged": $IS_MANAGED,
+        "slug": "flightcheck-only",
+        "folder": ""
+    },
+    "agents": $AGENTS_JSON,
+    "activeAgent": $ACTIVE_AGENT
+}
+EOF
+        ok "Created $CONFIG_PATH"
+    fi
+
+    # --- Read config values if they came from an existing file ---
+    if [[ -z "$BOT_ID" && -f "$CONFIG_PATH" ]]; then
+        ENV_URL=$("$FLIGHTCHECK_PYTHON" -c "import sys,json; c=json.load(open('$CONFIG_PATH')); print(c.get('dataverseEndpoint',''))")
+        BOT_ID=$("$FLIGHTCHECK_PYTHON" -c "import sys,json; c=json.load(open('$CONFIG_PATH')); print(c.get('agent',{}).get('botId',''))")
+        AGENT_NAME=$("$FLIGHTCHECK_PYTHON" -c "import sys,json; c=json.load(open('$CONFIG_PATH')); print(c.get('agent',{}).get('name',''))")
+        SCHEMA_NAME=$("$FLIGHTCHECK_PYTHON" -c "import sys,json; c=json.load(open('$CONFIG_PATH')); print(c.get('agent',{}).get('schemaName',''))")
+        IS_MANAGED=$("$FLIGHTCHECK_PYTHON" -c "import sys,json; c=json.load(open('$CONFIG_PATH')); print('true' if c.get('agent',{}).get('isManaged') else 'false')")
+    fi
+
+    # --- Fetch solution snapshot for local file checks ---
+    if [[ -n "$BOT_ID" ]]; then
+        step "Fetching agent solution from Dataverse"
+        if [[ -f "$FETCH_PY" ]]; then
+            FETCH_ARGS=("$FETCH_PY" "--url" "$ENV_URL" "--bot-id" "$BOT_ID" "--name" "$AGENT_NAME" "--schema" "$SCHEMA_NAME")
+            if [[ "$IS_MANAGED" == "true" ]]; then
+                FETCH_ARGS+=("--managed")
+            fi
+
+            if "$FLIGHTCHECK_PYTHON" "${FETCH_ARGS[@]}" 2>&1; then
+                ok "Agent solution fetched and extracted"
+            else
+                warn "fetch_and_setup.py exited with errors. Local file checks may be skipped."
+            fi
+        else
+            warn "fetch_and_setup.py not found at $FETCH_PY. Local file checks will be skipped."
+        fi
+    else
+        echo ""
+        echo "    [info] No agent selected — skipping solution fetch (local file checks will be skipped)."
+    fi
+
+    # --- Run FlightCheck ---
+    step "Running FlightCheck"
     "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope full
     exit $?
 fi
