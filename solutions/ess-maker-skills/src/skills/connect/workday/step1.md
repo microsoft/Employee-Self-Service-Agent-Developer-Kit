@@ -7,9 +7,24 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 display text like "BASE_URL = ..." or "TENANT = ..." in chat.
 
 **CRITICAL RULES (from retro — read these before proceeding):**
-- Entra SSO is MANDATORY for the Workday extension pack. Do NOT offer
-  to skip it. The OAuthUser connection uses `runtimeSource: invoker`
-  which requires employee identity via Entra SSO.
+- There are TWO supported install paths. Detect which one applies
+  before doing any admin setup:
+  - **Simplified** (Microsoft's current default for new installs) —
+    needs only the OAuthUser connection (`ff0df`) + Dataverse. No ISU
+    service accounts, no security groups, no RaaS report. User context
+    comes from the Workday REST `/workers/me` endpoint.
+  - **Legacy** — the older 4-connection install (the 3 Workday SOAP
+    refs `d6081`, `0786a`, `ff0df` plus Dataverse) with ISU accounts,
+    security groups, and the `WD_User_Context` RaaS report. Still fully
+    supported; keep existing installs on this path.
+  For a FRESH install (no Workday extension pack detected yet), DEFAULT
+  to simplified. Only use legacy when the tenant already has the 3
+  Workday SOAP connection refs (`d6081`, `0786a`, `ff0df`) in place
+  (Dataverse is common to both paths, so it is not part of the count
+  that drives detection).
+- Entra SSO is MANDATORY for BOTH paths. Do NOT offer to skip it. The
+  OAuthUser connection (`ff0df`) uses `runtimeSource: invoker` which
+  requires employee identity via Entra SSO regardless of install path.
 - NEVER say "check with your teammates" or "ask your admin." Use Azure
   CLI, Workday MCP, and Dataverse MCP to discover state yourself.
 - NEVER accept "done" from the user without programmatic verification.
@@ -239,9 +254,24 @@ SELECT TOP 5 connectionreferencelogicalname, connectionreferencedisplayname,
   WHERE connectorid LIKE '%workday%'
 ```
 
-Save the results. If 3 Workday connection references exist (`d6081`,
-`0786a`, `ff0df`), the extension pack is already installed. Set
-EXTENSION_INSTALLED = true.
+Save the results, then classify the install:
+
+- If **3** Workday connection references exist (`d6081`, `0786a`,
+  `ff0df`) → extension pack installed on the **legacy** path. Set
+  EXTENSION_INSTALLED = true and INSTALL_PATH = `legacy`.
+- If only the OAuthUser reference (`ff0df`) exists (plus Dataverse) and
+  `d6081`/`0786a` are absent → extension pack installed on the
+  **simplified** path. Set EXTENSION_INSTALLED = true and
+  INSTALL_PATH = `simplified`.
+- If **either `d6081` or `0786a` is present** (i.e. any legacy-only
+  connection ref exists, even partially) → treat as a partial/failed
+  **legacy** install. Set EXTENSION_INSTALLED = true and
+  INSTALL_PATH = `legacy`, and save PARTIAL_INSTALL = true so step3 can
+  warn the user and finish the missing connection(s) instead of starting
+  a fresh simplified install on top.
+- If **no** Workday connection references exist → fresh install. Set
+  EXTENSION_INSTALLED = false and INSTALL_PATH = `simplified` (the
+  default for new installs).
 
 ### 1.7b — Check for existing Entra SSO app
 
@@ -279,10 +309,16 @@ Save as DOMAIN_NAME.
 **If no results found**: Set ENTRA_SSO_EXISTS = false. Still get
 DOMAIN_NAME and TENANT_ID.
 
-### 1.7c — Check for existing RaaS report owner
+### 1.7c — Check for existing RaaS report owner (legacy path only)
 
-Try known ISU account patterns for the WD_User_Context report. Run
-each silently via the Workday MCP `run_report` tool until one succeeds:
+**Skip this entire sub-step if INSTALL_PATH is `simplified`** — the
+simplified path uses the REST `/workers/me` endpoint for user context,
+not the `WD_User_Context` RaaS report. Set RAAS_REPORT_EXISTS = false
+and move on to 1.7d.
+
+For the **legacy** path, try known ISU account patterns for the
+WD_User_Context report. Run each silently via the Workday MCP
+`run_report` tool until one succeeds:
 
 1. `ISU_WQL_COPILOT@{DOMAIN_NAME}` / `WD_User_Context`
 2. `ISU_WQL_COPILOT@{WD_TENANT}` / `WD_User_Context`
@@ -293,10 +329,15 @@ Use a known test username like `lmcneil` in the params.
 If any succeeds, save the working report owner as REPORT_OWNER and
 set RAAS_REPORT_EXISTS = true.
 
-### 1.7d — Derive the OAuth token URL
+### 1.7d — Derive the OAuth token URL and REST base URL
 
-Build: `https://{WD_TOKEN_HOST}/ccx/oauth2/{WD_TENANT}/token`
+Build the OAuth token URL: `https://{WD_TOKEN_HOST}/ccx/oauth2/{WD_TENANT}/token`
 Save as WD_OAUTH_TOKEN_URL.
+
+Build the Workday REST base URL: `https://{WD_TOKEN_HOST}/ccx/api`
+Save as WD_REST_BASE_URL. The simplified-path OAuthUser connection
+requires this in addition to the SOAP base URL (it backs the
+`/workers/me` user-context lookup).
 
 ### 1.7e — Update config with discovered state
 
@@ -305,11 +346,13 @@ Update `.local/connect/workday/config.json` — merge all discovered values:
 ```json
 {
   "baseUrl": "{WD_BASE_URL}",
+  "restBaseUrl": "{WD_REST_BASE_URL}",
   "tenant": "{WD_TENANT}",
   "tokenHost": "{WD_TOKEN_HOST}",
   "oauthTokenUrl": "{WD_OAUTH_TOKEN_URL}",
   "domainName": "{DOMAIN_NAME}",
   "tenantId": "{TENANT_ID}",
+  "installPath": "simplified|legacy",
   "status": "in-progress",
   "extensionInstalled": true/false,
   "entraAppId": "{WD_ENTRA_APP_ID or null}",
@@ -317,7 +360,8 @@ Update `.local/connect/workday/config.json` — merge all discovered values:
   "entraAppObjectId": "{WD_ENTRA_APP_OBJECT_ID or null}",
   "entraSSO": true/false,
   "reportOwner": "{REPORT_OWNER or null}",
-  "raasReportExists": true/false
+  "raasReportExists": true/false,
+  "partialInstall": true/false
 }
 ```
 
@@ -329,6 +373,30 @@ Update `.local/connect/workday/tasks.md` — change step 1 from
 `- [ ]` to `- [x]`.
 
 Build a status summary from the detected state.
+
+**If INSTALL_PATH is `simplified`, show this table:**
+
+**Message:**
+
+✅ Connected to Workday tenant **{WD_TENANT}**.
+
+Here's what I found in your environment:
+
+| Check | Status |
+|-------|--------|
+| Workday connectivity | ✅ |
+| Entra SSO app | {✅ if ENTRA_SSO_EXISTS else "⬜ needs setup"} |
+| Extension pack installed | {✅ if EXTENSION_INSTALLED else "⬜ not yet"} |
+
+This tenant uses the streamlined Workday setup — just one Workday
+connection plus Dataverse. No service accounts or custom reports needed.
+
+{If ENTRA_SSO_EXISTS is false, add this line:}
+The Workday extension requires Entra SSO — I'll set that up in the next step.
+
+**End message.**
+
+**If INSTALL_PATH is `legacy`, show this table instead:**
 
 **Message:**
 
