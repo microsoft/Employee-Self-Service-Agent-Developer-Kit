@@ -13,7 +13,7 @@ checkpoint required.
 - **Before starting diagnosis**, suggest running `/flightcheck` first if the
   user hasn't recently. FlightCheck's automated checks often surface the root
   cause faster than manual walkthrough. If the user says they already ran it,
-  ask them to share the results from `my/flightcheck/results.json`.
+  ask them to share the results from `workspace/flightcheck/results.json`.
 - Track progress with todos if the diagnosis spans multiple configs.
 - Always read the relevant reference doc BEFORE presenting guidance — do not
   guess or paraphrase from memory.
@@ -26,7 +26,7 @@ checkpoint required.
 
 ## Step 1: Identify the Integration and Read Config
 
-Read `my/config.json` to determine:
+Read `.local/config.json` to determine:
 - Which agent is active (the `agent.folder` field)
 - Which integrations are configured
 

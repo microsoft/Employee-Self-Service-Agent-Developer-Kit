@@ -126,7 +126,7 @@ Stop here. Do not proceed.
 For any other error, retry once. If still fails, show the error and stop.
 
 **Immediately save APP_CLIENT_ID and APP_OBJECT_ID** to
-`my/connect/servicenow/config.json` under the relevant auth section
+`.local/connect/servicenow/config.json` under the relevant auth section
 (e.g., `entra.appClientId`, `entra.appObjectId`). This preserves state
 if the session breaks before the calling file's final config save.
 

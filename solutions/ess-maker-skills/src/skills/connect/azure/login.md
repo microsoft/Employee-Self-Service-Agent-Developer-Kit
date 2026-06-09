@@ -80,7 +80,7 @@ az account show --query tenantId -o tsv
 
 ## A.4 — Sign in with device code
 
-**Track attempts.** Read `my/.azure-login-attempts.json` if it exists.
+**Track attempts.** Read `.local/.azure-login-attempts.json` if it exists.
 If it does not exist, treat the current attempt count as `0`. Increment
 the counter and write it back:
 
@@ -104,7 +104,7 @@ Talk to your tenant admin and then run `/connect` again to retry.
 
 **End message.**
 
-Delete `my/.azure-login-attempts.json` so the next `/connect` run
+Delete `.local/.azure-login-attempts.json` so the next `/connect` run
 starts a fresh count, then stop here. Do not proceed.
 
 Otherwise, run this command in the terminal using `run_in_terminal`
@@ -168,7 +168,7 @@ az account show --query tenantId -o tsv
 Compare the output to TENANT_ID (case-insensitive).
 
 **If they match**: Azure login is complete. Delete
-`my/.azure-login-attempts.json` (success — clear the counter). Return
+`.local/.azure-login-attempts.json` (success — clear the counter). Return
 TENANT_ID to the calling file.
 
 **If they don't match**:
@@ -192,7 +192,7 @@ Go back to A.4 and retry.
 
 **If `az account show` fails** (not logged in):
 
-Read `my/.azure-login-attempts.json` to determine the current attempt
+Read `.local/.azure-login-attempts.json` to determine the current attempt
 count. If `attempts < 2`:
 
 **Message:**
@@ -218,7 +218,7 @@ Having trouble with the device-code sign-in. Let's try it manually:
 **End message.**
 
 **Bump the counter before waiting on the user.** Write
-`my/.azure-login-attempts.json`:
+`.local/.azure-login-attempts.json`:
 
 ```
 { "tenantId": "{TENANT_ID}", "attempts": 3 }
@@ -249,5 +249,5 @@ Talk to your tenant admin and try `/connect` again once resolved.
 
 **End message.**
 
-Delete `my/.azure-login-attempts.json` so the next `/connect` run
+Delete `.local/.azure-login-attempts.json` so the next `/connect` run
 starts clean. Stop. Do NOT route back into A.4 or the manual flow.
