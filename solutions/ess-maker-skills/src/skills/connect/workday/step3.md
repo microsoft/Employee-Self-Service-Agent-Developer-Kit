@@ -118,7 +118,7 @@ Do this silently — do not tell the user about app role assignments.
 
 ## 3.4 — Guide extension pack installation
 
-Read `installPath` and `partialInstall` from `my/connect/workday/config.json`.
+Read `installPath` and `partialInstall` from `.local/connect/workday/config.json`.
 
 **If `partialInstall` is `true`**, the tenant has 1 or 2 legacy Workday
 connection refs (`d6081` and/or `0786a`) but not the full 3 — likely a
@@ -184,7 +184,7 @@ Wait for the user. Then go to section 3.5.
 
 **If the user types `legacy` instead of `done`** (older extension pack
 without the REST base URL field), set `installPath = legacy` in
-`my/connect/workday/config.json`, then go back to step2 task 2 to run
+`.local/connect/workday/config.json`, then go back to step2 task 2 to run
 the legacy ISU/security-group/RaaS admin setup before retrying 3.4 on
 the Legacy path.
 

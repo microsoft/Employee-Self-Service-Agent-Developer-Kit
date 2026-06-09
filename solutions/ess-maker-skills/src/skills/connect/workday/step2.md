@@ -30,7 +30,7 @@ Do NOT ask the user about MCP internals — handle reconnection silently.
     (`oauthClientId`) is entered at install time, so Task 4 is required.
     After Task 1, do Task 4, then skip to 2.7.
   - **legacy** — all 6 tasks apply, as documented below.
-  Read `installPath` from `my/connect/workday/config.json` and follow
+  Read `installPath` from `.local/connect/workday/config.json` and follow
   the matching path. When in doubt for a fresh install, the path is
   `simplified`.
 - Entra SSO is MANDATORY on BOTH paths. Do not ask if the user wants it.
@@ -55,7 +55,7 @@ Do NOT ask the user about MCP internals — handle reconnection silently.
 
 ## 2.0 — Show task overview
 
-Read `installPath` from `my/connect/workday/config.json`.
+Read `installPath` from `.local/connect/workday/config.json`.
 
 **If INSTALL_PATH is `simplified`:**
 
