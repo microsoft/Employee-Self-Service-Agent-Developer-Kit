@@ -123,9 +123,56 @@ _REF_SUFFIX_ROLES = {
 # WD-CONN-102 — Workday SAML signing certificate health
 # ─────────────────────────────────────────────────────────────────────────
 #
-# The SAML signing certificate that Workday uses to validate
-# assertions from Entra (and that Entra uses to sign them) lives in
-# two places, both of which the operator wires up by hand during the
+# Why this check belongs in the Workday block (the SOAP/REST runtime
+# chain it sits on):
+#
+#   ESS user-context Workday calls execute through two Power Automate
+#   flows under workspace/agents/{slug}/workflows/ — ``ESS HR Workday``
+#   (SOAP, called by topics via ``WorkdaySystemGetCommonExecution``)
+#   and ``WorkdayRESTExecution`` (REST). Both flows declare exactly
+#   one Workday connection in their workflow.json:
+#
+#     "shared_workdaysoap": {
+#       "connection": {
+#         "connectionReferenceLogicalName":
+#             "new_sharedworkdaysoap_ff0df"
+#       },
+#       "runtimeSource": "invoker"
+#     }
+#
+#   The ``ff0df`` connection is configured with Power Platform's
+#   "Microsoft Entra ID Integrated" authentication type (per
+#   src/skills/connect/workday/step3.md lines 155-166), not Basic
+#   auth. That auth type authenticates the signed-in employee against
+#   a federated Workday enterprise app in Entra (Application ID URI
+#   ``http://www.workday.com/{WD_TENANT}``), which is the same
+#   enterprise app the connect skill provisions in step2.md lines
+#   191-264. The X.509 signing certificate WD-CONN-102 inspects lives
+#   on that enterprise app as a keyCredential. It is the most visible
+#   expiry-driven health signal on the federation app that the
+#   user-context SOAP/REST runtime path depends on.
+#
+# What expiry actually breaks (and what it doesn't):
+#
+#   * Will break: end-user browser-based SAML SSO into Workday's web
+#     UI (employees clicking "Sign in with Microsoft" on workday.com)
+#     — Entra cannot sign SAML assertions Workday will accept.
+#   * May break (depends on Workday API Client config): the
+#     ``ff0df``-routed OAuth exchange used by ``ESS HR Workday`` /
+#     ``WorkdayRESTExecution``. Power Platform "Microsoft Entra ID
+#     Integrated" exchanges an Entra-issued token at Workday's OAuth
+#     token endpoint; whether Workday validates that JWT against this
+#     X.509 public key (configured under the API Client's "Authorized
+#     Public Key") or against Entra's auto-rotating JWKS is a
+#     per-tenant setting and not exposed via the kit's APIs. The
+#     check therefore surfaces the cert state for operator triage
+#     rather than asserting a specific runtime break.
+#   * Will NOT break: ISU-routed SOAP over ``d6081`` (Context
+#     Generic) and ``0786a`` (Generic User). Those use HTTP Basic
+#     auth with ISU username + password — no certificate in the
+#     handshake.
+#
+# The cert lives in two places, both wired up by hand during the
 # Workday SSO onboarding tutorial:
 #
 #   * Entra side: as keyCredential entries on the federated Workday
@@ -2385,7 +2432,16 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
             remediation=(
                 "End-user SAML SSO into Workday will fail until a "
                 "valid signing certificate is uploaded on both "
-                "sides. Steps:\n"
+                "sides. In addition, the OAuth-routed "
+                "``new_sharedworkdaysoap_ff0df`` connection used by "
+                "the ``ESS HR Workday`` (SOAP) and "
+                "``WorkdayRESTExecution`` (REST) flows targets the "
+                "same federated Workday enterprise app; whether the "
+                "``ff0df`` runtime path is also affected depends on "
+                "whether the Workday API Client behind the OAuth "
+                "token endpoint validates the inbound JWT against "
+                "this X.509 public key (per-tenant Authorized "
+                "Public Key setting). Steps:\n"
                 "  1. In Entra, open the federated Workday "
                 "enterprise app -> Single sign-on -> SAML Signing "
                 "Certificate. Generate a new certificate (or rotate "
@@ -2425,7 +2481,13 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
             remediation=(
                 "Schedule a signing-certificate rotation before the "
                 "current cert expires. End-user SAML SSO into Workday "
-                "will start failing on the NotAfter date. Steps:\n"
+                "will start failing on the NotAfter date. The same "
+                "federated Workday enterprise app underpins the "
+                "OAuth-routed ``new_sharedworkdaysoap_ff0df`` "
+                "connection used by ``ESS HR Workday`` (SOAP) and "
+                "``WorkdayRESTExecution`` (REST); cert health on "
+                "that app is therefore a federation-health signal "
+                "for the SOAP/REST runtime path as well. Steps:\n"
                 "  1. In Entra, open the federated Workday enterprise "
                 "app -> Single sign-on -> SAML Signing Certificate. "
                 "Click 'New Certificate', save without activating yet, "
@@ -2501,12 +2563,20 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
                 "  b. Compare it byte-for-byte against the active "
                 "thumbprint listed for that app above. They MUST "
                 "match exactly.\n"
-                "  c. If they differ, end-user SAML SSO into Workday "
-                "is broken (ISU-credentialed runtime calls still "
-                "work, so the agent appears healthy while user-"
-                "context Workday flows fail). Re-upload the active "
-                "Entra Certificate (Base64) into the Workday 'X509 "
-                "Certificate' field.\n"
+                "  c. If they differ, end-user browser-based SAML "
+                "SSO into Workday is broken. The OAuth-routed "
+                "``new_sharedworkdaysoap_ff0df`` connection used by "
+                "the ``ESS HR Workday`` and ``WorkdayRESTExecution`` "
+                "flows targets the same federated Workday enterprise "
+                "app; the user-context SOAP/REST runtime path may "
+                "also be affected depending on whether the Workday "
+                "API Client behind the OAuth token endpoint "
+                "validates the inbound JWT against this X.509 "
+                "public key. The two ISU-credentialed connections "
+                "(``d6081``, ``0786a``) use HTTP Basic auth and are "
+                "not affected. Re-upload the active Entra "
+                "Certificate (Base64) into the Workday 'X509 "
+                "Certificate' field to restore parity.\n"
                 f"\n[Workday SSO setup]({doc_link})"
             ),
             doc_link=doc_link,

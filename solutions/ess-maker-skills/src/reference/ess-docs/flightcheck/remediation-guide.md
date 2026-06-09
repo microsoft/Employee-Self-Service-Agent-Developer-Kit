@@ -107,34 +107,63 @@ after installing the Workday extension pack.
 **Verify:** Re-run `/flightcheck --scope workday`
 
 ### WD-CONN-102: Entra↔Workday SAML federation certificate health
-**Scope:** This check validates the X.509 signing certificate on the Entra
-Workday SAML enterprise app. It is **not** a check on the Power Platform
-Workday connector, ISU credentials, network connectivity, or OAuth client
-secrets — if any of those are the suspected root cause, look at WD-CONN-001,
+**Scope:** This check validates the X.509 signing certificate on the
+federated Workday SAML enterprise app in Entra. It is **not** a check on
+Power Platform connector secrets, ISU credentials, network connectivity, or
+the Workday OAuth API Client's `client_secret` — for those see WD-CONN-001,
 WD-CONN-101, WD-CONN-012, or WD-ENV-* instead.
 
-The same X.509 certificate gates two surfaces:
-  1. End-user SAML SSO into Workday (browser sign-in flow).
-  2. The OAuthUser/`ff0df` connection's runtime JWT-Bearer token exchange
-     with Workday — i.e., user-context Workday SOAP/REST calls invoked by
-     ESS topics through `WorkdaySystemGetCommonExecution`.
+**Where the cert sits relative to the ESS SOAP/REST runtime path.**
+ESS user-context Workday calls execute through two Power Automate flows
+(verified in `workspace/agents/{slug}/workflows/`):
 
-A failure here does **not** affect the ISU/Basic-auth connections
-(`d6081` Context Generic, `0786a` Generic User) — those use username +
-password and have no certificate in their auth handshake. On a full /
-legacy install the ISU code paths keep working, so the agent looks
-partially healthy and the maker's admin-context tests pass while real
-employees can't run any user-context Workday topic. On a simplified
-install (1 connection ref, OAuthUser only) the entire Workday surface
-goes dark for end users.
+  * `ESS HR Workday` — the SOAP orchestrator topics call via
+    `WorkdaySystemGetCommonExecution`.
+  * `WorkdayRESTExecution` — the REST equivalent for newer scenarios.
+
+Both flows declare exactly one Workday connection:
+
+```json
+"shared_workdaysoap": {
+  "connection": {
+    "connectionReferenceLogicalName": "new_sharedworkdaysoap_ff0df"
+  },
+  "runtimeSource": "invoker"
+}
+```
+
+`ff0df` is configured with Power Platform's **"Microsoft Entra ID
+Integrated"** authentication type (see
+`src/skills/connect/workday/step3.md` lines 155–166), not Basic auth.
+"Microsoft Entra ID Integrated" authenticates the signed-in employee against
+a **federated Workday enterprise app** in Entra
+(Application ID URI: `http://www.workday.com/{WD_TENANT}`) — the same
+enterprise app the connect skill provisions in
+`src/skills/connect/workday/step2.md` lines 191–264. The X.509 signing
+certificate WD-CONN-102 inspects lives on that same enterprise app as a
+`keyCredential`. It is the signing key Entra uses to issue SAML assertions
+for browser-based Workday SSO and is the most visible expiry-driven artifact
+on the federation app that ESS's user-context SOAP/REST calls depend on.
+
+**What expiry actually breaks (and what it doesn't):**
+
+| Impact | Path | Why |
+|---|---|---|
+| **Will break** | Browser-based SAML SSO into Workday's web UI (employees clicking "Sign in with Microsoft" on workday.com) | Entra cannot sign SAML assertions Workday will accept |
+| **May break — verify Workday API Client config** | Power Platform OAuth exchange on the `ff0df` connection used by `ESS HR Workday` / `WorkdayRESTExecution` | Depends on whether the Workday API Client backing the OAuth token endpoint validates the inbound JWT assertion against this same X.509 public key (some tenants) or against Entra's published JWKS (other tenants). Check Workday → View API Client → Authorized Public Key. |
+| **Will not break** | SOAP calls over `d6081` (Context Generic) and `0786a` (Generic User) | HTTP Basic auth with ISU username + password; no certificate in the handshake |
+
+On a **full / legacy install** (3 connection refs), the ISU SOAP calls keep
+working when this cert expires, but the OAuthUser/`ff0df` path is at risk.
+On a **simplified install** (1 connection ref, OAuthUser only — see WD-PKG-001),
+`ff0df` is the entire Workday surface, so cert expiry combined with a
+JWT-validating Workday API Client takes user-facing Workday topics offline.
 
 **Root cause:** The X.509 signing certificate on the federated Workday SAML
-enterprise app (Entra side) is missing, expired, expiring within 30 days, or
-out of sync with the certificate uploaded to Workday's tenant security setup.
-End-user SAML SSO into Workday and the OAuthUser/`ff0df` runtime token
-exchange fail silently when the two sides drift — ISU-credentialed runtime
-calls still succeed (where present), so the agent appears healthy while
-user-context Workday flows break.
+enterprise app is missing, expired, expiring within 30 days, or out of sync
+with the certificate uploaded to Workday's tenant security setup. Minimum
+known impact is browser-based SAML SSO failure; OAuth exposure depends on
+the Workday API Client's Authorized Public Key setting (see table above).
 **Fix (FAILED — no cert or all expired):**
 1. In Entra, open the federated Workday enterprise app → Single sign-on →
    SAML Signing Certificate → generate a new cert and download the
