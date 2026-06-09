@@ -35,6 +35,16 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import responses
+
+from tests.conftest import (
+    FAKE_DATAVERSE_URL,
+    FAKE_TOKEN,
+    require_validated_mock,
+)
+from tests.mocks import dataverse as dv
+
+require_validated_mock(dv)
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -261,56 +271,10 @@ class TestCustomWorkflowInventory:
         assert "/create" in r.remediation or "/setup" in r.remediation
 
     # ------------------------------------------------------------------
-    # Catalog matching — PASSED path
-    # ------------------------------------------------------------------
-
-    def test_all_scenarios_in_catalog_passes(self, tmp_path: Path) -> None:
-        """When every discovered Pattern-A scenario is in the OOTB
-        catalog JSON, the check returns PASSED with a result that
-        states the catalog covers all references. Picks a scenario
-        name that is GUARANTEED to be in the catalog seed (verified
-        by reading the JSON itself) so this test doesn't drift if a
-        future PR renames a scenario."""
-        from flightcheck.checks.workday import (
-            WORKDAY_SCENARIO_CATALOG_PATH,
-            _check_custom_workflow_inventory,
-        )
-
-        # Pull a real catalog entry. If the catalog file is somehow
-        # empty/missing, this test is meaningless — skip it rather
-        # than pass falsely (every Pattern A ref would look "unknown"
-        # and the assertion below would fail confusingly).
-        catalog_data = json.loads(
-            WORKDAY_SCENARIO_CATALOG_PATH.read_text(encoding="utf-8")
-        )
-        scenarios = catalog_data.get("scenarios", [])
-        if not scenarios:
-            pytest.skip("Workday scenario catalog is empty — test cannot run")
-        known_scenario = scenarios[0]["scenarioName"]
-
-        agent_dir = tmp_path / "workspace" / "agents" / "ess-hr"
-        _write_topic_system_common_execution(
-            agent_dir / "topics" / "known.mcs.yml",
-            scenario_name=known_scenario,
-        )
-
-        runner = _MinimalRunner()
-        results = _check_custom_workflow_inventory(runner)
-
-        r = _result_by_id(results, "WD-WF-CAT-001")
-        assert r.status == "Passed", (
-            f"Expected PASSED for catalog-known scenario {known_scenario!r}, "
-            f"got {r.status}: result={r.result!r}"
-        )
-        # Pin that the result mentions the catalog file by path so an
-        # operator who wants to inspect / extend the catalog finds it.
-        assert "workday_scenario_catalog.json" in r.result
-        assert "OOTB" in r.result or "catalog" in r.result.lower()
-
-    # ------------------------------------------------------------------
     # Catalog matching — MANUAL path (the core acceptance criterion)
     # ------------------------------------------------------------------
 
+    @responses.activate
     def test_unknown_scenario_emits_manual_with_full_checklist(
         self, tmp_path: Path
     ) -> None:
@@ -324,13 +288,16 @@ class TestCustomWorkflowInventory:
         agent_dir = tmp_path / "workspace" / "agents" / "ess-hr"
         _write_topic_system_common_execution(
             agent_dir / "topics" / "custom.mcs.yml",
-            # A clearly-not-shipped name. If the catalog ever does
-            # include this exact string the test breaks loudly — that's
-            # the intended behaviour.
+            # A clearly-not-shipped name. If a managed row ever has this
+            # exact name the test breaks loudly — that's the intended
+            # behaviour.
             scenario_name="msdyn_HRCustomNotInCatalogXYZ_TestOnly",
         )
+        # Empty managed-row response → every discovered scenario is
+        # treated as custom and surfaces as MANUAL.
+        _register_template_configs_response(rows=[])
 
-        runner = _MinimalRunner()
+        runner = _RunnerWithDataverse()
         results = _check_custom_workflow_inventory(runner)
 
         r = _result_by_id(results, "WD-WF-CAT-001")
@@ -356,25 +323,28 @@ class TestCustomWorkflowInventory:
         assert "Payload shape" in r.remediation
         assert "Test prompt" in r.remediation
         assert "Auth health" in r.remediation
-        # AC3: gap-discovery loop must point at the issue tracker + the
-        # catalog file path so contributors close the loop.
-        assert "github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit" in r.remediation
-        assert "workday_scenario_catalog.json" in r.remediation
         # Pin specific actionable phrases the operator needs to act:
         assert "msdyn_employeeselfservicetemplateconfigs" in r.remediation
         assert "/create-eval" in r.remediation
+        # Note: the legacy "file an issue in the kit repo to add a
+        # catalog row" guidance is gone — the catalog is now resolved
+        # live from the customer's tenant, so kit-side PRs aren't the
+        # remediation. A MANUAL row means either genuinely-custom or
+        # extension pack not installed.
 
     # ------------------------------------------------------------------
     # Pattern B (InvokeFlowAction → Workday-bound flow)
     # ------------------------------------------------------------------
 
+    @responses.activate
     def test_invoke_flow_action_workday_bound_emits_manual(
         self, tmp_path: Path
     ) -> None:
         """Pattern B: a topic that calls a custom cloud flow bound to
-        `shared_workdaysoap` is ALWAYS unknown (the kit's catalog has
-        no concept of customer-built flow GUIDs) — surface MANUAL with
-        the flow GUID + topic location named verbatim."""
+        `shared_workdaysoap` is ALWAYS unknown (Dataverse template
+        configs key by scenarioName; customer-built flow GUIDs don't
+        appear there) — surface MANUAL with the flow GUID + topic
+        location named verbatim."""
         from flightcheck.checks.workday import _check_custom_workflow_inventory
 
         flow_id = "9f1b2c3d-aaaa-bbbb-cccc-111111111111"
@@ -389,8 +359,14 @@ class TestCustomWorkflowInventory:
             workflow_slug="ess-hr-workday-9f1b2c3d-xxxx",
             api_name="shared_workdaysoap",
         )
+        # Dataverse returns some managed rows — but flow-bound refs
+        # are ALWAYS unknown regardless of catalog contents, so this
+        # test still gets MANUAL.
+        _register_template_configs_response(rows=[
+            _template_config_row(name="msdyn_SomeOtherScenario", ismanaged=True),
+        ])
 
-        runner = _MinimalRunner()
+        runner = _RunnerWithDataverse()
         results = _check_custom_workflow_inventory(runner)
 
         r = _result_by_id(results, "WD-WF-CAT-001")
@@ -444,6 +420,7 @@ class TestCustomWorkflowInventory:
     # Bucketing (AGENTS.md principle #7)
     # ------------------------------------------------------------------
 
+    @responses.activate
     def test_multiple_unknowns_bucket_into_single_row(
         self, tmp_path: Path
     ) -> None:
@@ -460,8 +437,10 @@ class TestCustomWorkflowInventory:
                 agent_dir / "topics" / f"custom-{n}.mcs.yml",
                 scenario_name=f"msdyn_HRCustomBucketTest_{n}",
             )
+        # Empty managed-row response → all 3 surface as unknown.
+        _register_template_configs_response(rows=[])
 
-        runner = _MinimalRunner()
+        runner = _RunnerWithDataverse()
         results = _check_custom_workflow_inventory(runner)
 
         # Exactly one row, NOT three.
@@ -488,8 +467,9 @@ class TestCustomWorkflowInventory:
     # Caching contract (the check + the cross-link trailer share state)
     # ------------------------------------------------------------------
 
+    @responses.activate
     def test_discovery_results_cached_on_runner(self, tmp_path: Path) -> None:
-        """`_get_unknown_workday_scenarios` caches discovery on the
+        """`_check_custom_workflow_inventory` caches discovery on the
         runner so the topic walk runs at most once per flightcheck.
         Without this, `_check_workflows` (trailer) + the main check
         would walk every topic twice. Pin that both caches populate
@@ -501,8 +481,11 @@ class TestCustomWorkflowInventory:
             agent_dir / "topics" / "custom.mcs.yml",
             scenario_name="msdyn_HRCustomCacheTest",
         )
+        # Empty managed-row response so the scenario surfaces as
+        # unknown (which is what the cache needs to capture).
+        _register_template_configs_response(rows=[])
 
-        runner = _MinimalRunner()
+        runner = _RunnerWithDataverse()
         # Pre-condition: cache attributes absent.
         assert not hasattr(runner, "_workday_unknown_scenarios")
         assert not hasattr(runner, "_workday_discovered_scenarios")
@@ -542,11 +525,19 @@ class TestCrossLinkTrailer:
         monkeypatch.delenv("WORKDAY_TEST_EMPLOYEE_ID", raising=False)
         monkeypatch.chdir(tmp_path)
 
+    @responses.activate
     def test_trailer_emitted_when_unknowns_exist(self, tmp_path: Path) -> None:
         """AC2: when an unknown Workday workflow name is referenced in
         customer topics, the SOAP-test output MUST emit a cross-link
         row pointing at WD-WF-CAT-001 so an admin reading a clean
-        17-row pass doesn't miss the manual row below it."""
+        17-row pass doesn't miss the manual row below it.
+
+        Note: the trailer relies on `_get_unknown_workday_scenarios`
+        which in turn needs the live Dataverse catalog. Without
+        credentials the inventory check SKIPs and the trailer
+        self-suppresses (the main SKIPPED row is the single source of
+        truth). So this test wires up env_url/dv_token + a mocked
+        empty managed-row response so the unknown surfaces."""
         from flightcheck.checks.workday import _check_workflows
 
         agent_dir = tmp_path / "workspace" / "agents" / "ess-hr"
@@ -554,17 +545,14 @@ class TestCrossLinkTrailer:
             agent_dir / "topics" / "custom.mcs.yml",
             scenario_name="msdyn_HRCustomTrailerTest",
         )
+        # Empty managed-row response → topic scenario surfaces as
+        # unknown → trailer fires.
+        _register_template_configs_response(rows=[])
 
-        # No Workday credentials configured → _check_workflows exits
-        # via the credential-missing SKIP path BEFORE the trailer
-        # code. We need the trailer to run regardless, so we exercise
-        # the trailer on a runner whose `_workday_package_flavor` is
-        # "full" (so the gate doesn't fire) AND where the credential
-        # resolver still skips. The trailer code runs AFTER the
-        # SOAP-test loop, so it fires unconditionally when there are
-        # unknowns. Verify both rows present.
         @dataclass
         class R:
+            env_url: str = FAKE_DATAVERSE_URL
+            dv_token: str = FAKE_TOKEN
             config: dict = field(default_factory=dict)
 
         runner = R()
@@ -618,3 +606,256 @@ class TestCrossLinkTrailer:
             f"Trailer fired on clean workspace — should only fire when "
             f"unknowns exist. Got: {[(r.checkpoint_id, r.result) for r in trailer]}"
         )
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Catalog source resolution (Dataverse-only)
+#
+# The OOTB catalog is resolved by `_get_workday_ootb_catalog(runner)`:
+# a single Dataverse query against
+# `msdyn_employeeselfservicetemplateconfigs` filtered by
+# `ismanaged=true`. There is NO fallback — when the catalog cannot be
+# resolved, AGENTS.md principle #1 requires SKIPPED (no token) or
+# WARNING (query error) instead of a misleading PASSED. These tests
+# pin every leg of that decision matrix so a future refactor that
+# re-introduces a silent fallback fails CI.
+#
+# Per tests/AGENTS.md: Dataverse is the `documented` tier — no cassette
+# required, mock is built from MS Learn-documented response shape via
+# `tests.mocks.dataverse`. `require_validated_mock(dv)` at module top
+# enforces this can never silently downgrade to placeholder.
+# ─────────────────────────────────────────────────────────────────────────
+
+
+@dataclass
+class _RunnerWithDataverse:
+    """Runner that exposes env_url + dv_token so `_get_workday_ootb_catalog`
+    follows the Dataverse leg (default-skipped on `_MinimalRunner`)."""
+    env_url: str = FAKE_DATAVERSE_URL
+    dv_token: str = FAKE_TOKEN
+    config: dict[str, Any] = field(default_factory=dict)
+
+
+def _template_config_row(*, name: str, ismanaged: bool) -> dict[str, Any]:
+    """Build one `msdyn_employeeselfservicetemplateconfigs` record matching
+    the `msdyn_name,ismanaged` select projection the production helper
+    requests. Shape sourced from MS Learn Web API reference (the
+    `tests.mocks.dataverse` module is `documented` tier — see its
+    `MOCK_STATUS`)."""
+    return {
+        "@odata.etag": 'W/"1"',
+        "msdyn_name": name,
+        "ismanaged": ismanaged,
+    }
+
+
+def _register_template_configs_response(
+    *,
+    base_url: str = FAKE_DATAVERSE_URL,
+    rows: list[dict[str, Any]] | None = None,
+    status: int = 200,
+) -> None:
+    """Register a `responses` mock for the template-configs query. URL is
+    path-only (no query string) so it matches regardless of the exact
+    $select / $filter / paging params the production code builds."""
+    payload = dv.collection(rows or []) if status == 200 else {"error": {"message": "mock failure"}}
+    responses.add(
+        method="GET",
+        url=f"{base_url}/api/data/v9.2/msdyn_employeeselfservicetemplateconfigs",
+        json=payload,
+        status=status,
+    )
+
+
+class TestCatalogSource:
+    """Pin Dataverse-only semantics of `_get_workday_ootb_catalog`.
+    The four tests below cover every leg of the resolver's decision
+    matrix: (a) Dataverse-success with managed rows → catalog used,
+    (b) Dataverse-success with NO managed rows → check still runs (no
+    implicit PASS) and falls through to MANUAL because the
+    topic-referenced scenario is not in the managed set, (c) no
+    Dataverse token → SKIPPED (cannot validate without the catalog,
+    per AGENTS.md principle #1), (d) Dataverse query errors →
+    WARNING with the error message surfaced verbatim (per principle
+    #3 — fail loudly on API errors)."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_env(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+
+    @responses.activate
+    def test_dataverse_managed_rows_used_as_catalog(
+        self, tmp_path: Path
+    ) -> None:
+        """When Dataverse is reachable and returns a managed
+        (ismanaged=true) row whose `msdyn_name` matches a topic's
+        scenarioName, the scenario is treated as OOTB and the check
+        PASSES. The result text MUST name Dataverse + ismanaged=true
+        as the source so an operator inspecting a green report knows
+        the catalog was tenant-accurate."""
+        from flightcheck.checks.workday import _check_custom_workflow_inventory
+
+        custom_scenario = "msdyn_HRWorkdayTenantSpecificScenario_XYZ"
+        agent_dir = tmp_path / "workspace" / "agents" / "ess-hr"
+        _write_topic_system_common_execution(
+            agent_dir / "topics" / "tenant-scenario.mcs.yml",
+            scenario_name=custom_scenario,
+        )
+
+        # Tenant has this scenario installed as a managed template
+        # config — i.e. it ships in the customer's Workday extension
+        # pack. Without the live-Dataverse leg, this would surface
+        # as MANUAL (no JSON seed exists to fall back to).
+        _register_template_configs_response(rows=[
+            _template_config_row(name=custom_scenario, ismanaged=True),
+        ])
+
+        runner = _RunnerWithDataverse()
+        results = _check_custom_workflow_inventory(runner)
+
+        r = _result_by_id(results, "WD-WF-CAT-001")
+        assert r.status == "Passed", (
+            f"Dataverse-managed scenario must surface as PASSED — "
+            f"the Dataverse-resolution leg regressed. "
+            f"Got {r.status!r}: {r.result!r}"
+        )
+        # Source attribution pinned per principle #8 (`result` =
+        # observed). Operators must know the catalog was tenant-live.
+        assert "Dataverse" in r.result
+        assert "ismanaged=true" in r.result
+        # Cache populated with status "ok" for re-reads by the trailer.
+        assert runner._workday_ootb_catalog_cache[1] == "ok"
+        assert custom_scenario in runner._workday_ootb_catalog_cache[0]
+
+    @responses.activate
+    def test_dataverse_unmanaged_rows_excluded_from_catalog(
+        self, tmp_path: Path
+    ) -> None:
+        """`ismanaged=false` rows are customer-added template configs,
+        NOT shipped by the extension pack. They must NOT count as OOTB
+        — otherwise a customer who added a custom scenario via /create
+        would see it falsely treated as "validated by Microsoft" and
+        skip the MANUAL checklist that exists to catch payload /
+        auth / test-prompt gaps. Pin the filter explicitly."""
+        from flightcheck.checks.workday import _check_custom_workflow_inventory
+
+        custom_scenario = "msdyn_HRWorkdayCustomerAuthored_ABC"
+        agent_dir = tmp_path / "workspace" / "agents" / "ess-hr"
+        _write_topic_system_common_execution(
+            agent_dir / "topics" / "customer-auth.mcs.yml",
+            scenario_name=custom_scenario,
+        )
+
+        # Same name exists in Dataverse but ismanaged=false → customer-
+        # authored, not OOTB. Must NOT short-circuit the MANUAL row.
+        _register_template_configs_response(rows=[
+            _template_config_row(name=custom_scenario, ismanaged=False),
+        ])
+
+        runner = _RunnerWithDataverse()
+        results = _check_custom_workflow_inventory(runner)
+
+        r = _result_by_id(results, "WD-WF-CAT-001")
+        assert r.status == "Manual", (
+            f"ismanaged=false rows must NOT count as OOTB — "
+            f"the customer-added scenario should surface as MANUAL "
+            f"for review. Got {r.status!r}: result={r.result!r}"
+        )
+        assert custom_scenario in r.result
+        assert "ISU account" in r.remediation  # full checklist still emitted
+        # Cache: Dataverse WAS reached (status "ok"), it just returned
+        # no managed rows. The empty catalog correctly excludes the
+        # unmanaged scenario.
+        assert runner._workday_ootb_catalog_cache[1] == "ok"
+        assert custom_scenario not in runner._workday_ootb_catalog_cache[0]
+
+    @responses.activate
+    def test_dataverse_query_failure_emits_warning(
+        self, tmp_path: Path
+    ) -> None:
+        """When the Dataverse query errors (500, network issue, expired
+        token, etc.), the check MUST emit a WARNING that surfaces the
+        error rather than silently passing — per AGENTS.md principle
+        #3 ("fail loudly on API errors, never silently swallow them
+        as PASS"). There is no JSON fallback: a tenant-accurate
+        catalog is the only valid source of truth, and a query error
+        means we don't have one."""
+        from flightcheck.checks.workday import _check_custom_workflow_inventory
+
+        agent_dir = tmp_path / "workspace" / "agents" / "ess-hr"
+        _write_topic_system_common_execution(
+            agent_dir / "topics" / "some-scenario.mcs.yml",
+            scenario_name="msdyn_AnyScenario_DoesntMatter",
+        )
+
+        # Dataverse query 500s — must surface as WARNING, not PASSED
+        # and not MANUAL (we cannot tell if it's custom).
+        _register_template_configs_response(status=500)
+
+        runner = _RunnerWithDataverse()
+        results = _check_custom_workflow_inventory(runner)
+
+        r = _result_by_id(results, "WD-WF-CAT-001")
+        assert r.status == "Warning", (
+            f"Dataverse query failure must emit WARNING per "
+            f"AGENTS.md principle #3, got {r.status!r}: {r.result!r}"
+        )
+        # Result must name the failure mode so the operator can
+        # diagnose. Don't pin the exact error string (it comes from
+        # auth.query_all and may evolve) but pin the structural cues.
+        assert "Dataverse" in r.result
+        assert "msdyn_employeeselfservicetemplateconfigs" in r.result
+        assert "failed" in r.result.lower() or "error" in r.result.lower()
+        # Remediation must direct the operator to fix the underlying
+        # Dataverse problem (not work around it).
+        assert "Dataverse" in r.remediation
+        # Cache populated with the error status so re-reads don't
+        # re-query.
+        catalog, status_code = runner._workday_ootb_catalog_cache
+        assert catalog is None
+        assert status_code.startswith("query_error:")
+        # Unknown cache emptied so the trailer self-suppresses (the
+        # WARNING row is the single source of truth for this state).
+        assert runner._workday_unknown_scenarios == []
+
+    def test_no_dataverse_token_skips(self, tmp_path: Path) -> None:
+        """The CI / offline / no-auth runner has no env_url + dv_token.
+        The resolver MUST short-circuit to SKIPPED without attempting
+        any HTTP call (so this test doesn't even need
+        @responses.activate — any HTTP attempt would surface as a
+        connection error against an unrouted host). Per AGENTS.md
+        principle #1: without the catalog we cannot validate, so we
+        must not return PASSED."""
+        from flightcheck.checks.workday import _check_custom_workflow_inventory
+
+        agent_dir = tmp_path / "workspace" / "agents" / "ess-hr"
+        _write_topic_system_common_execution(
+            agent_dir / "topics" / "offline.mcs.yml",
+            scenario_name="msdyn_AnyScenario_DoesntMatter",
+        )
+
+        # `_MinimalRunner` has no env_url / dv_token — Dataverse path
+        # must short-circuit before any HTTP call.
+        runner = _MinimalRunner()
+        results = _check_custom_workflow_inventory(runner)
+
+        r = _result_by_id(results, "WD-WF-CAT-001")
+        assert r.status == "Skipped", (
+            f"No-Dataverse-token runner must SKIP per AGENTS.md "
+            f"principle #1, got {r.status!r}: {r.result!r}"
+        )
+        # Result must explain WHY this skipped (so the operator
+        # doesn't conflate it with the "Workday not wired up" SKIP).
+        assert "Dataverse" in r.result
+        assert "credentials" in r.result.lower() or "token" in r.result.lower()
+        # Remediation directs the operator at /setup so credentials get
+        # cached on the runner.
+        assert "/setup" in r.remediation or "Dataverse" in r.remediation
+        # Cache: catalog None with "no_token" status code.
+        catalog, status_code = runner._workday_ootb_catalog_cache
+        assert catalog is None
+        assert status_code == "no_token"
+        # Unknown cache emptied so the trailer self-suppresses.
+        assert runner._workday_unknown_scenarios == []

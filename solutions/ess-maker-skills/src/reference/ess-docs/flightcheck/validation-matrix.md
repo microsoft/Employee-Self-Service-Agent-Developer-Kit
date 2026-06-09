@@ -109,25 +109,34 @@ scenarios via two patterns:
 
 Both patterns exit the automated validation surface (the kit doesn't
 ship a Workday WSDL parser; per-tenant security domain / ISU config
-varies). WD-WF-CAT-001 walks
-`workspace/agents/*/topics/*.mcs.yml` for these patterns and emits a
-MANUAL row enumerating any scenarios NOT in the seed catalog at
-`scripts/flightcheck/data/workday_scenario_catalog.json`. The
-remediation carries a 4-item checklist (ISU account, payload shape vs.
-Workday WSDL, evaluation test prompt, connection-ref auth health) and
-a loop-back link inviting PRs to extend the catalog.
+varies). WD-WF-CAT-001 walks `workspace/agents/*/topics/*.mcs.yml`
+for these patterns and emits a MANUAL row enumerating any scenarios
+that aren't in the OOTB catalog. The OOTB catalog is resolved live
+from the customer's own Dataverse: the check queries
+`msdyn_employeeselfservicetemplateconfigs` and treats every
+`ismanaged=true` row as OOTB (auto-detects every scenario shipped by
+the installed Workday extension pack, with no kit-side curation
+needed). There is no fallback — if Dataverse credentials are missing
+the check returns SKIPPED, and if the Dataverse query errors the
+check returns WARNING surfacing the error verbatim. Returning PASSED
+without a tenant-accurate catalog would violate FlightCheck design
+principle #1 ("never return PASSED when the check cannot actually
+validate what it claims to validate"). The MANUAL remediation
+carries a 4-item checklist (ISU account, payload shape vs. Workday
+WSDL, evaluation test prompt, connection-ref auth health).
 
 | ID | Check | Priority | Method | Doc Link |
 |----|-------|----------|--------|----------|
-| WD-WF-CAT-001 | Workday custom-workflow inventory checklist (MANUAL) | High | Local file walk + JSON catalog diff | [workday-extensibility](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-extensibility) |
+| WD-WF-CAT-001 | Workday custom-workflow inventory checklist (MANUAL) | High | Local file walk + Dataverse managed-template-config diff (SKIP on no token, WARN on query error) | [workday-extensibility](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-extensibility) |
 | WD-WF-CAT-LINK | Cross-link trailer surfacing WD-WF-CAT-001 from inside the SOAP-test block | Medium | Computed from WD-WF-CAT-001 cache | [workday-extensibility](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-extensibility) |
 
 MANUAL rows do not fail readiness (per FlightCheck design principle #2)
 — they direct the operator to verify what the kit cannot. Address
-each scenario by either (a) confirming it against the 4-item checklist
-in the customer's environment, or (b) PR'ing the scenarioName to
-`workday_scenario_catalog.json` if it is in fact an OOTB scenario the
-seed list is missing.
+each scenario by confirming it against the 4-item checklist in the
+customer's environment. A scenario surfacing as MANUAL means it is
+NOT a managed row in the customer's tenant — either it is genuinely
+custom or the Workday extension pack is not installed in this
+environment.
 
 ## 6. Local Agent File Validation (Kit-exclusive)
 

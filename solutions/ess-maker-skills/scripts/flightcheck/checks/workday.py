@@ -227,9 +227,10 @@ def run_workday_checks(runner) -> list[CheckResult]:
 
     WD-WF-CAT-001 (custom-workflow inventory checklist) runs after the
     SOAP tests. It walks `workspace/agents/*/topics/*.mcs.yml` for
-    Workday scenario references that are NOT in the OOTB catalog
-    (`scripts/flightcheck/data/workday_scenario_catalog.json`) and
-    surfaces them as a MANUAL row with a 4-item operator checklist.
+    Workday scenario references that are NOT in the live OOTB catalog
+    resolved from the customer's Dataverse
+    (`msdyn_employeeselfservicetemplateconfigs` where `ismanaged=true`)
+    and surfaces them as a MANUAL row with a 4-item operator checklist.
     WD-WF-CAT-LINK is the corresponding cross-link trailer emitted
     from inside `_check_workflows` so admins reading a green 17-row
     SOAP report don't miss the manual row.
@@ -2179,22 +2180,25 @@ def _append_wd_wf_cat_link_trailer(runner, results: list[CheckResult]) -> None:
 # Data sources:
 #   * Local YAML walk (`workspace/agents/*/topics/*.mcs.yml`) —
 #     no API call, no cassette required.
-#   * Local JSON catalog (`scripts/flightcheck/data/`
-#     `workday_scenario_catalog.json`) — the known-OOTB set.
+#   * Live Dataverse query against
+#     `msdyn_employeeselfservicetemplateconfigs` filtered by
+#     `ismanaged=true` — the tenant-accurate OOTB scenario set.
 #   * Cached `runner._workday_package_flavor` (from WD-PKG-001) for
 #     the simplified-install gate per principle #11.
 #
 # Outputs:
-#   * One PASSED row if every discovered scenario is in the catalog.
+#   * One PASSED row if every discovered scenario is in the live
+#     Dataverse-resolved OOTB catalog.
 #   * One MANUAL row enumerating unknowns + the 4-item checklist
 #     (Principle #7 — bucketed, not per-resource).
 #   * One SKIPPED row on simplified install (no ISU/RaaS), missing
-#     workspace, or zero Workday references.
+#     workspace, zero Workday references, or missing Dataverse token
+#     (cannot resolve OOTB catalog → cannot make a PASS/FAIL claim
+#     per AGENTS.md principle #1).
+#   * One WARNING row if the Dataverse query errored — surfaces the
+#     error per principle #3 instead of silently passing.
 # Caches discovered + unknown lists on the runner so the WD-WF-CAT-LINK
 # trailer inside _check_workflows can reference them without re-walking.
-
-DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-WORKDAY_SCENARIO_CATALOG_PATH = DATA_DIR / "workday_scenario_catalog.json"
 
 # Marker for the shared Workday execution topic (Pattern A). The
 # `dialog:` field is fully-qualified and always contains this suffix
@@ -2202,21 +2206,76 @@ WORKDAY_SCENARIO_CATALOG_PATH = DATA_DIR / "workday_scenario_catalog.json"
 _WORKDAY_SYSTEM_DIALOG_SUFFIX = ".topic.WorkdaySystemGetCommonExecution"
 
 
-def _load_workday_scenario_catalog() -> set[str]:
-    """Read the JSON catalog and return the set of OOTB scenarioNames.
+def _load_workday_ootb_catalog_from_dataverse(
+    runner,
+) -> tuple[set[str] | None, str]:
+    """Query the customer's Dataverse tenant for OOTB Workday scenarios.
 
-    Returns an empty set if the file is missing or unparseable so the
-    check still runs (everything will look "unknown" — the operator's
-    cue that the catalog file needs attention, not a check crash).
+    Reads `msdyn_employeeselfservicetemplateconfigs` (the table the
+    Workday extension pack writes to during installation) and returns
+    the set of scenario names whose records are `ismanaged=true` —
+    i.e. shipped by Microsoft's managed solution, not added by the
+    customer. This is the tenant-accurate, drift-free source of truth
+    for "what counts as OOTB Workday."
+
+    Returns (catalog, status):
+        catalog: set[str] of scenario names on success, or None when
+                 the catalog could not be resolved.
+        status:  "ok"                   — query succeeded.
+                 "no_token"             — no Dataverse token / env URL
+                                          available; caller must SKIP
+                                          per AGENTS.md principle #1.
+                 "query_error: <msg>"   — Dataverse query errored;
+                                          caller must WARN per
+                                          principle #3 (fail loudly on
+                                          API errors).
     """
-    if not WORKDAY_SCENARIO_CATALOG_PATH.exists():
-        return set()
+    env_url = getattr(runner, "env_url", None)
+    dv_token = getattr(runner, "dv_token", None)
+    if not env_url or not dv_token:
+        return (None, "no_token")
     try:
-        data = json.loads(WORKDAY_SCENARIO_CATALOG_PATH.read_text(encoding="utf-8"))
-    except (json.JSONDecodeError, OSError):
-        return set()
-    scenarios = data.get("scenarios", [])
-    return {s.get("scenarioName", "") for s in scenarios if s.get("scenarioName")}
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+        from auth import query_all
+        rows = query_all(
+            env_url, dv_token,
+            "msdyn_employeeselfservicetemplateconfigs",
+            "msdyn_name,ismanaged",
+        )
+    except Exception as exc:  # noqa: BLE001 — surface the error verbatim
+        return (None, f"query_error: {exc}")
+    catalog = {
+        r.get("msdyn_name", "")
+        for r in rows
+        if r.get("ismanaged") is True and r.get("msdyn_name")
+    }
+    return (catalog, "ok")
+
+
+def _get_workday_ootb_catalog(
+    runner,
+) -> tuple[set[str] | None, str]:
+    """Resolve the Workday OOTB scenarioName catalog from Dataverse.
+
+    There is no fallback: the customer's own Dataverse tenant is the
+    only authoritative source for what the installed Workday extension
+    pack ships. If we can't reach it, the caller must SKIP or WARN per
+    AGENTS.md principle #1 (never return PASS when the check cannot
+    actually validate what it claims to validate).
+
+    Returns (catalog, status). See
+    `_load_workday_ootb_catalog_from_dataverse` for the status values.
+
+    Caches the resolution on `runner._workday_ootb_catalog_cache` so
+    repeated reads within one flightcheck invocation don't re-query
+    Dataverse.
+    """
+    cached = getattr(runner, "_workday_ootb_catalog_cache", None)
+    if cached is not None:
+        return cached
+    result = _load_workday_ootb_catalog_from_dataverse(runner)
+    runner._workday_ootb_catalog_cache = result
+    return result
 
 
 def _is_workday_bound_workflow_json(workflow_json_path: Path) -> bool:
@@ -2391,19 +2450,33 @@ def _get_unknown_workday_scenarios(runner) -> list[dict]:
     WD-WF-CAT-LINK trailer inside _check_workflows so the topic walk
     runs at most once per flightcheck invocation regardless of which
     check the runner schedules first.
+
+    The OOTB catalog this diff'd against comes from
+    `_get_workday_ootb_catalog` (live Dataverse). When the catalog
+    cannot be resolved (no token / query error), this function returns
+    an empty list — the WD-WF-CAT-001 main check is the single source
+    of truth for surfacing that condition (SKIPPED / WARNING). The
+    trailer self-suppresses in that case so we don't claim "0 unknowns"
+    when the truth is "we couldn't tell."
     """
     cached = getattr(runner, "_workday_unknown_scenarios", None)
     if cached is not None:
         return cached
     workspace_root_str = "workspace/agents"
     discovered = _discover_customer_workday_scenarios(Path(workspace_root_str))
-    catalog = _load_workday_scenario_catalog()
+    runner._workday_discovered_scenarios = discovered
+    if not discovered:
+        runner._workday_unknown_scenarios = []
+        return []
+    catalog, _status = _get_workday_ootb_catalog(runner)
+    if catalog is None:
+        runner._workday_unknown_scenarios = []
+        return []
     unknown = [
         ref for ref in discovered
         if ref["pattern"] == "invoke-flow-action"
         or (ref.get("scenarioName") and ref["scenarioName"] not in catalog)
     ]
-    runner._workday_discovered_scenarios = discovered
     runner._workday_unknown_scenarios = unknown
     return unknown
 
@@ -2461,39 +2534,40 @@ _WD_WF_CAT_CHECKLIST = (
     "on one of the ISU refs — reauthenticate in Power Platform Maker "
     "→ Connections.\n"
     "\n"
-    "Found a new pattern not in the kit's catalog? File an issue at "
-    "https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/issues/new "
-    "with title 'Workday scenario catalog gap: <scenarioName>' and "
-    "include the topic snippet, the template config XML, and the ADO "
-    "incident number if any. The catalog data file lives at "
-    "scripts/flightcheck/data/workday_scenario_catalog.json — PRs "
-    "adding new rows are welcome.\n"
-    "\n"
-    "Note: the kit's catalog seed is derived from the vendored ESS "
-    "samples (~28 scenarios). Microsoft's full extension-pack catalog "
-    "may include more — names above that look OOTB should be PR'd to "
-    "the catalog file rather than left as recurring MANUAL noise."
+    "Note: the OOTB Workday catalog is resolved live from the "
+    "customer's own Dataverse "
+    "(msdyn_employeeselfservicetemplateconfigs, filtered by "
+    "ismanaged=true), which auto-detects every scenario the installed "
+    "Workday extension pack ships. A scenario surfacing as MANUAL "
+    "means it is NOT a managed row in the customer's tenant — either "
+    "it is genuinely custom (work through the checklist above) or the "
+    "extension pack is not installed."
 )
 
 
 def _check_custom_workflow_inventory(runner) -> list[CheckResult]:
     """WD-WF-CAT-001 — Manual checklist for custom Workday workflows.
 
-    Gates:
+    Gates (in order):
       * `runner._workday_package_flavor == "simplified"` → SKIPPED
         (ISU/scenario inventory doesn't apply on the simplified
         install per AGENTS.md principle #11).
       * Missing `workspace/agents/` → SKIPPED.
-      * Zero Workday references discovered → SKIPPED.
+      * Zero Workday references discovered in any topic → SKIPPED.
+      * No Dataverse token / env URL → SKIPPED (we cannot resolve the
+        live OOTB catalog and must not return PASS per principle #1).
+      * Dataverse query errored → WARNING (surface the error per
+        principle #3 rather than silently swallowing it).
 
     Otherwise:
-      * Every discovered scenario in the OOTB catalog → PASSED.
+      * Every discovered scenario is a managed row in Dataverse → PASSED.
       * Any unknown / flow-bound reference → MANUAL with bucketed
         listing in `result` and the 4-item checklist in `remediation`.
 
-    Caches results on `runner._workday_unknown_scenarios` and
-    `runner._workday_discovered_scenarios` so the WD-WF-CAT-LINK
-    trailer inside _check_workflows can read them without re-walking.
+    Caches discovered list on `runner._workday_discovered_scenarios`
+    and the (possibly empty) unknown list on
+    `runner._workday_unknown_scenarios` so the WD-WF-CAT-LINK trailer
+    inside _check_workflows can read them without re-walking.
     """
     cp_id = "WD-WF-CAT-001"
     category = "Workday Workflows"
@@ -2522,10 +2596,14 @@ def _check_custom_workflow_inventory(runner) -> list[CheckResult]:
             doc_link=doc_link,
         )]
 
-    unknown = _get_unknown_workday_scenarios(runner)
-    discovered = getattr(runner, "_workday_discovered_scenarios", [])
+    # Discover Workday refs from topics first — no catalog needed for
+    # this step. If there are none, we can SKIP cleanly without even
+    # touching Dataverse.
+    discovered = _discover_customer_workday_scenarios(workspace_root)
+    runner._workday_discovered_scenarios = discovered
 
     if not discovered:
+        runner._workday_unknown_scenarios = []
         return [CheckResult(
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
@@ -2544,6 +2622,70 @@ def _check_custom_workflow_inventory(runner) -> list[CheckResult]:
             doc_link=doc_link,
         )]
 
+    # We have Workday refs in topics — we need the live Dataverse
+    # OOTB catalog to know which are custom. No fallback: if Dataverse
+    # is unreachable, we cannot make a PASS/FAIL claim (principle #1).
+    catalog, status_code = _get_workday_ootb_catalog(runner)
+
+    if catalog is None and status_code == "no_token":
+        # Suppress the trailer too — without the catalog we cannot
+        # legitimately list "unknowns."
+        runner._workday_unknown_scenarios = []
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=description,
+            result=(
+                f"Found {len(discovered)} Workday scenario reference(s) "
+                "in customer topics, but no Dataverse credentials are "
+                "available to resolve the live OOTB scenario catalog "
+                "(msdyn_employeeselfservicetemplateconfigs where "
+                "ismanaged=true). Cannot determine which references are "
+                "custom vs. OOTB without that lookup."
+            ),
+            remediation=(
+                "Re-run flightcheck after running /setup so Dataverse "
+                "credentials are cached on the runner, or run it in an "
+                "environment where the Dataverse MCP server is "
+                "authenticated."
+            ),
+            doc_link=doc_link,
+        )]
+
+    if catalog is None:
+        # query_error: <msg> — surface verbatim per principle #3.
+        err_msg = status_code.removeprefix("query_error: ") or "unknown error"
+        runner._workday_unknown_scenarios = []
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=description,
+            result=(
+                f"Found {len(discovered)} Workday scenario reference(s) "
+                "in customer topics, but the Dataverse query for the "
+                "live OOTB scenario catalog "
+                "(msdyn_employeeselfservicetemplateconfigs where "
+                f"ismanaged=true) failed: {err_msg}. Cannot determine "
+                "which references are custom vs. OOTB until the query "
+                "succeeds."
+            ),
+            remediation=(
+                "Investigate the Dataverse error above. Common causes: "
+                "expired Dataverse token (re-run /setup), table not "
+                "present in this environment (ESS solution not "
+                "installed), or transient service outage (retry)."
+            ),
+            doc_link=doc_link,
+        )]
+
+    # Catalog resolved cleanly — compute unknowns and cache them.
+    unknown = [
+        ref for ref in discovered
+        if ref["pattern"] == "invoke-flow-action"
+        or (ref.get("scenarioName") and ref["scenarioName"] not in catalog)
+    ]
+    runner._workday_unknown_scenarios = unknown
+
     if not unknown:
         return [CheckResult(
             checkpoint_id=cp_id, category=category,
@@ -2551,9 +2693,10 @@ def _check_custom_workflow_inventory(runner) -> list[CheckResult]:
             description=description,
             result=(
                 f"Found {len(discovered)} Workday scenario reference(s) "
-                "in customer topics. All are in the OOTB scenario catalog "
-                "(scripts/flightcheck/data/workday_scenario_catalog.json) "
-                "and require no manual review."
+                "in customer topics. All are managed rows in the "
+                "customer's Dataverse "
+                "(msdyn_employeeselfservicetemplateconfigs where "
+                "ismanaged=true) and require no manual review."
             ),
             doc_link=doc_link,
         )]
