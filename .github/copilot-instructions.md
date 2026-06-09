@@ -19,6 +19,8 @@ If the user says ANYTHING — `/setup`, `hello`, `help`, "what can you do", or a
 > 5. Type `/setup` again — it will work this time
 >
 > See the [README](README.md) for the full getting-started walkthrough.
+>
+> Just looking for example topics to copy rather than the runnable kit? Browse the `samples/` folder at the repo root. That's reference content (topics, prompts, sample data), not a slash-command workspace.
 
 Do not greet the user with anything else. Do not list capabilities. Do not try to help with their actual request from this folder — you cannot, the kit is not loaded here. Do not load any other instruction files. Do not run any tools. Just show the message above and stop.
 
