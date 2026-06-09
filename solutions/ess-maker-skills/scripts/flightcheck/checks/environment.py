@@ -7,6 +7,8 @@ ESS FlightCheck — Environment Configuration Validation (ENV-xxx)
 Checks Power Platform environment, Dataverse, DLP policies, and related config.
 """
 
+import uuid
+
 from ..runner import CheckResult, Status, Priority
 from ._maker_urls import (
     maker_connections_url,
@@ -14,7 +16,7 @@ from ._maker_urls import (
     maker_solutions_url,
 )
 from .connections import get_connection_status
-from auth import query_all  # scripts/auth.py, on path via cli.py
+from auth import query_all, dataverse_get, AuthExpiredError  # scripts/auth.py, on path via cli.py
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
 
@@ -339,6 +341,9 @@ def run_environment_checks(runner) -> list[CheckResult]:
                 "[Power Platform admin center](https://admin.powerplatform.microsoft.com/) under **Security \u2192 Data and privacy \u2192 Data policy**."
             ),
         ))
+
+    # ---- ENV-009: Maker has preferred customization solution selected ----
+    results.extend(_check_preferred_solution(runner))
 
     return results
 
@@ -677,3 +682,336 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
         ))
 
     return results
+
+
+# ---------------------------------------------------------------------------
+# ENV-009: Maker has preferred customization solution selected
+#
+# Background: ESS install guidance (src/reference/ess-docs/deployment/install.md,
+# lines 19-45) tells operators to create a customer-owned unmanaged solution and
+# select it as their *preferred solution* so that new Copilot Studio / Maker
+# portal customizations land in that solution instead of in the Default
+# Solution. The preferred-solution selection is stored per user (on the
+# `usersettings` table), not per environment, so this check validates the
+# *current FlightCheck caller's* selection - it is honest about that scope in
+# the description and result text.
+#
+# Signals (all GET, no writes):
+#  1. Eligible unmanaged solutions
+#     GET /solutions?$filter=ismanaged eq false and isvisible eq true
+#         and uniquename ne 'Default' and uniquename ne 'Active'
+#         and solutiontype eq 0 and _parentsolutionid_value eq null
+#  2. Caller's preferred solution (single round-trip, bound to the caller
+#     via the bearer token - no separate WhoAmI() lookup needed)
+#     GET /GetPreferredSolution()
+#     -> https://learn.microsoft.com/power-apps/developer/data-platform/webapi/reference/getpreferredsolution
+#
+# UNCERTAINTY: the MS Learn reference for GetPreferredSolution() documents
+# the return type as `crmbaseentity` but does not include an example
+# response body. The code below treats the response defensively:
+#  * A body that contains `solutionid` is the selected solution; we then
+#    compare it against the eligible set above.
+#  * A body that omits `solutionid` (or any decode/empty-body edge case
+#    that bubbles up as an exception) is reported via the generic catch-all
+#    WARNING with the HTTP status code surfaced (per PR #128 review).
+#
+# Verdict map (always exactly one CheckResult emitted):
+#   * SKIPPED  - env_url or dv_token missing.
+#   * FAILED   - signal (1) returns 0 candidate solutions.
+#   * WARNING  - candidates exist but caller's selected preferred solution
+#                does not match any candidate. Framed as a hardening
+#                recommendation per AGENTS.md principle 9 (not a functional
+#                blocker).
+#   * PASSED   - candidates exist and caller's selected preferred solution is
+#                one of them.
+# ---------------------------------------------------------------------------
+
+# Pinned to the current canonical MS Learn path. The module-level DOC_BASE
+# points at /copilot/microsoft-365/employee-self-service which 301-redirects
+# to /microsoft-365/copilot/employee-self-service; bypass the redirect here
+# so this link stays stable without rewriting DOC_BASE (out of scope for this PR).
+_PREFSOL_DOC_LINK = (
+    "https://learn.microsoft.com/en-us/microsoft-365/copilot/"
+    "employee-self-service/install#set-up-a-preferred-solution"
+)
+_PREFSOL_DESCRIPTION = "Maker has preferred customization solution selected"
+
+# OData filter that excludes Microsoft-installed and system solutions, leaving
+# only customer-created unmanaged top-level solutions. Verified against a live
+# tenant - it narrowed 3 raw matches down to 1 correct ESSCustomization row.
+# Notes:
+#  * `solutiontype eq 0` excludes patch/upgrade solutions.
+#  * `_parentsolutionid_value eq null` further excludes any nested children.
+#  * `_publisherid_value ne null` is intentionally NOT used - null comparisons
+#    on lookup columns are inconsistently supported across Dataverse versions.
+_ELIGIBLE_SOLUTION_FILTER = (
+    "ismanaged eq false and isvisible eq true "
+    "and uniquename ne 'Default' and uniquename ne 'Active' "
+    "and solutiontype eq 0 and _parentsolutionid_value eq null"
+)
+
+# Fields fetched on each eligible solution. ``_publisherid_value`` is the
+# lookup column needed to follow up with a /publishers({id}) GET when the
+# preferred-solution match is found - it's the cheapest way to surface
+# the publisher without changing the response shape via $expand (which
+# would require new cassette evidence per AGENTS.md "What counts as the
+# same endpoint").
+_ELIGIBLE_SOLUTION_SELECT = "solutionid,uniquename,friendlyname,_publisherid_value"
+
+
+def _is_default_publisher(uniquename: str | None) -> bool:
+    """Return True when ``uniquename`` is the env's Default Publisher.
+
+    Dataverse provisions every environment with a system publisher whose
+    ``uniquename`` follows the pattern ``DefaultPublisher<orgsuffix>``
+    (e.g. ``DefaultPublisherorgeeac24d0`` - one such value is observable
+    in ``tests/fixtures/cassettes/island_gateway_botcomponents.yaml``).
+    Customer-created publishers use customer-chosen unique names that do
+    not start with the literal ``DefaultPublisher`` prefix, so a
+    case-insensitive ``startswith`` is a reliable signal.
+
+    A solution bound to the Default Publisher inherits the env's
+    ``cr<NNN>`` customization prefix - the install guide explicitly says
+    to use a publisher with a custom prefix so exported solutions don't
+    collide across environments:
+    https://learn.microsoft.com/en-us/microsoft-365/copilot/employee-self-service/install#set-up-a-preferred-solution
+    """
+    if not isinstance(uniquename, str):
+        return False
+    return uniquename.lower().startswith("defaultpublisher")
+
+
+
+def _try_parse_guid(value) -> uuid.UUID | None:
+    """Return ``uuid.UUID(value)`` or ``None`` if value is not a parsable GUID.
+
+    Used to normalise Dataverse-returned ``solutionid`` strings (which may
+    differ in case or ``{braces}`` between endpoints) before equality
+    comparison. Non-string / non-GUID inputs (including ``None`` and empty
+    string) return ``None`` so callers can treat them as "no value".
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return uuid.UUID(value)
+    except (ValueError, AttributeError):
+        return None
+
+
+def _check_preferred_solution(runner) -> list[CheckResult]:
+    """ENV-009: Validate the maker has selected a preferred customization solution.
+
+    Always emits exactly one CheckResult (per principle 7 - bucket multi-resource
+    findings). Never raises - all errors are caught and turned into WARNING
+    results so a transient Dataverse failure does not abort the whole flightcheck
+    run.
+    """
+    env_url = getattr(runner, "env_url", None)
+    token = getattr(runner, "dv_token", None)
+
+    if not env_url or not token:
+        return [CheckResult(
+            checkpoint_id="ENV-009", category="Environment",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=_PREFSOL_DESCRIPTION,
+            result="Dataverse URL or access token not available in this run.",
+            doc_link=_PREFSOL_DOC_LINK,
+        )]
+
+    try:
+        # Signal 1: eligible unmanaged customer solutions.
+        solutions = query_all(
+            env_url, token,
+            "solutions",
+            _ELIGIBLE_SOLUTION_SELECT,
+            _ELIGIBLE_SOLUTION_FILTER,
+        )
+        if not solutions:
+            return [CheckResult(
+                checkpoint_id="ENV-009", category="Environment",
+                priority=Priority.HIGH.value, status=Status.FAILED.value,
+                description=_PREFSOL_DESCRIPTION,
+                result=(
+                    "No customer-created unmanaged solutions found in this "
+                    "environment. Customizations made via the kit have nowhere "
+                    "to land except the Default Solution, which is not "
+                    "exportable as an ALM artifact."
+                ),
+                remediation=(
+                    "Create an unmanaged solution in the Power Platform Maker "
+                    "portal (Solutions -> + New solution) using a custom "
+                    "publisher, then select it as your preferred solution. See "
+                    "the ESS install guide for the recommended naming and "
+                    "publisher conventions."
+                ),
+                doc_link=_PREFSOL_DOC_LINK,
+            )]
+
+        # Signal 2: caller's preferred solution in one round-trip. Bound to
+        # the caller via the bearer token; no need to resolve UserId first.
+        preferred = dataverse_get(env_url, token, "GetPreferredSolution()")
+        selected_solution_id = (preferred or {}).get("solutionid")
+
+        eligible_names = sorted(s.get("uniquename", "<unknown>") for s in solutions)
+        eligible_summary = ", ".join(eligible_names)
+
+        # Normalise GUIDs to uuid.UUID for the membership compare so casing
+        # or `{braces}` differences between the two response sources never
+        # cause a false WARNING. Defensive parse — malformed values fall
+        # through to the WARNING branch below (treated as "no selection").
+        selected_uuid = _try_parse_guid(selected_solution_id)
+
+        if selected_uuid is not None:
+            match = next(
+                (
+                    s for s in solutions
+                    if _try_parse_guid(s.get("solutionid")) == selected_uuid
+                ),
+                None,
+            )
+            if match:
+                matched_name = match.get("uniquename")
+                # Publisher quality: a customer-owned unmanaged solution that
+                # is bound to the env's Default Publisher inherits the
+                # ``cr<NNN>`` prefix and is unsuitable for ALM export per the
+                # install guide. Treat as a hardening WARNING - the preferred-
+                # solution selection itself is correct, only the publisher
+                # behind it is sub-optimal.
+                publisher_id = match.get("_publisherid_value")
+                if publisher_id:
+                    try:
+                        publisher = dataverse_get(
+                            env_url, token,
+                            f"publishers({publisher_id})",
+                            params={
+                                "$select": (
+                                    "uniquename,customizationprefix,friendlyname"
+                                ),
+                            },
+                        ) or {}
+                    except Exception:
+                        # Don't downgrade a good preferred-solution selection
+                        # over a transient publisher-fetch failure. Fall
+                        # through to PASS with the publisher field omitted;
+                        # the operator still sees the matched solution name.
+                        publisher = {}
+
+                    publisher_uniquename = publisher.get("uniquename")
+                    if _is_default_publisher(publisher_uniquename):
+                        publisher_prefix = publisher.get(
+                            "customizationprefix"
+                        ) or "<unknown>"
+                        return [CheckResult(
+                            checkpoint_id="ENV-009", category="Environment",
+                            priority=Priority.HIGH.value,
+                            status=Status.WARNING.value,
+                            description=_PREFSOL_DESCRIPTION,
+                            result=(
+                                f"Preferred solution '{matched_name}' is bound "
+                                f"to the environment's Default Publisher "
+                                f"('{publisher_uniquename}', prefix "
+                                f"'{publisher_prefix}')."
+                            ),
+                            remediation=(
+                                "Hardening recommendation (not a functional "
+                                "blocker). The Default Publisher's "
+                                f"'{publisher_prefix}' prefix is auto-generated "
+                                "per environment and is shared by every "
+                                "default-published artifact in that env, so "
+                                "exported components collide across "
+                                "environments and ALM provenance is unclear. "
+                                "Create a publisher with your organization's "
+                                "prefix (e.g. 'contoso') in the Power Platform "
+                                "Maker portal -> Solutions -> + New publisher, "
+                                "then either move existing customizations to a "
+                                "new solution that uses it or change the "
+                                "preferred solution to one already bound to "
+                                "that publisher."
+                            ),
+                            doc_link=_PREFSOL_DOC_LINK,
+                        )]
+
+                    # PASSED with publisher annotation when available.
+                    if publisher_uniquename:
+                        publisher_suffix = (
+                            f" (publisher: '{publisher_uniquename}'"
+                            f", prefix: '"
+                            f"{publisher.get('customizationprefix') or '<unknown>'}"
+                            f"')"
+                        )
+                    else:
+                        publisher_suffix = ""
+                else:
+                    publisher_suffix = ""
+
+                return [CheckResult(
+                    checkpoint_id="ENV-009", category="Environment",
+                    priority=Priority.HIGH.value, status=Status.PASSED.value,
+                    description=_PREFSOL_DESCRIPTION,
+                    result=(
+                        f"Current maker has selected '{matched_name}'"
+                        f"{publisher_suffix} as their preferred solution; it "
+                        f"is one of {len(solutions)} eligible unmanaged "
+                        f"solution(s) in this environment ({eligible_summary})."
+                    ),
+                    doc_link=_PREFSOL_DOC_LINK,
+                )]
+
+        # Either no preferred solution selected, or the selection points to a
+        # solution outside the eligible set (e.g. a managed solution or
+        # Default). Both collapse into the same hardening warning - the action
+        # is identical.
+        return [CheckResult(
+            checkpoint_id="ENV-009", category="Environment",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=_PREFSOL_DESCRIPTION,
+            result=(
+                f"The current maker account has not selected any of the "
+                f"{len(solutions)} eligible unmanaged solution(s) "
+                f"({eligible_summary}) as their preferred solution."
+            ),
+            remediation=(
+                "Hardening recommendation (not a functional blocker). "
+                "Selecting a preferred solution ensures future Copilot Studio "
+                "/ Maker portal customizations consistently land in a "
+                "customer-owned, exportable solution rather than the Default "
+                "Solution (which can't be exported between environments). "
+                "Open the Power Platform Maker portal -> Solutions, select "
+                "the intended unmanaged solution, and choose 'Set preferred "
+                "solution'."
+            ),
+            doc_link=_PREFSOL_DOC_LINK,
+        )]
+
+    except AuthExpiredError as e:
+        return [CheckResult(
+            checkpoint_id="ENV-009", category="Environment",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=_PREFSOL_DESCRIPTION,
+            result=str(e),
+            remediation="Re-run FlightCheck to refresh the access token.",
+            doc_link=_PREFSOL_DOC_LINK,
+        )]
+    except Exception as e:
+        # Per principle 3 (fail loudly): surface unexpected Dataverse failures
+        # as WARNING rather than silently passing. Surface the HTTP status
+        # code when available so a 403 (insufficient privileges) is
+        # distinguishable from a 5xx (transient) at a glance (PR #128 review).
+        status_code = getattr(getattr(e, "response", None), "status_code", None)
+        status_hint = f" [HTTP {status_code}]" if status_code is not None else ""
+        return [CheckResult(
+            checkpoint_id="ENV-009", category="Environment",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=_PREFSOL_DESCRIPTION,
+            result=(
+                f"Unable to validate preferred solution: "
+                f"{type(e).__name__}{status_hint}: {e}"
+            ),
+            remediation=(
+                "Inspect the error above; common causes are insufficient "
+                "Dataverse privileges on the solution / usersettings tables "
+                "(typically surfaces as HTTP 403) or a transient platform "
+                "error (HTTP 5xx)."
+            ),
+            doc_link=_PREFSOL_DOC_LINK,
+        )]

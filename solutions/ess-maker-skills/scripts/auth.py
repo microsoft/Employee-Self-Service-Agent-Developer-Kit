@@ -217,6 +217,61 @@ def query_all(env_url, token, entity_set, select, filter_expr=None):
     return all_records
 
 
+def dataverse_get(env_url, token, path, params=None):
+    """GET a Dataverse Web API endpoint that is not a paged table query.
+
+    Use this for function calls (e.g. ``WhoAmI()``) and single-record reads
+    (e.g. ``usersettingscollection({systemuserid})``) where ``query_all`` does
+    not fit — ``query_all`` always appends ``$select`` and follows
+    ``@odata.nextLink``.
+
+    Parameters
+    ----------
+    env_url : str
+        Base environment URL (e.g. ``https://contoso.crm.dynamics.com``).
+    token : str
+        Dataverse bearer token.
+    path : str
+        Path relative to ``/api/data/v9.2/`` (no leading slash). Example:
+        ``"WhoAmI()"`` or ``"usersettingscollection(11111111-...)``.
+    params : dict | None
+        Optional querystring parameters (e.g. ``{"$select": "_preferredsolution_value"}``).
+
+    Returns
+    -------
+    dict
+        Parsed JSON response body.
+
+    Raises
+    ------
+    AuthExpiredError
+        If the response is 401.
+    requests.HTTPError
+        For other non-2xx responses (raised via ``raise_for_status``).
+    """
+    _validate_https_url(env_url)
+    # Catch developer mistakes where the absolute base path is passed in.
+    # `.lstrip('/')` below would silently strip a leading slash; without
+    # these asserts, `'/api/data/v9.2/WhoAmI()'` becomes a double-prefixed
+    # URL and `'api/data/v9.2/WhoAmI()'` becomes a malformed one. The doc
+    # says "path relative to /api/data/v9.2/" — enforce it.
+    assert not path.startswith("/"), (
+        f"dataverse_get path must be relative to /api/data/v9.2/ "
+        f"(no leading slash), got: {path!r}"
+    )
+    assert not path.lower().startswith("api/data/"), (
+        f"dataverse_get path must be relative to /api/data/v9.2/ "
+        f"(do not include it), got: {path!r}"
+    )
+    headers = {**HEADERS_BASE, "Authorization": f"Bearer {token}"}
+    url = f"{env_url}/api/data/v9.2/{path.lstrip('/')}"
+    resp = _SESSION.get(url, headers=headers, params=params, timeout=60, verify=True)
+    if resp.status_code == 401:
+        raise AuthExpiredError("Dataverse returned 401 (token expired or invalid)")
+    resp.raise_for_status()
+    return resp.json()
+
+
 def update_record(env_url, token, entity_set, record_id, data):
     """Update a single Dataverse record via PATCH.
 
