@@ -11,11 +11,14 @@ The SOAP tests reuse the Kit's Workday MCP client (src/mcp/workday/client.py)
 or, when running standalone, build SOAP envelopes directly with httpx.
 """
 
+import base64
+import binascii
 import getpass
 import json
 import os
 import re
 import sys
+from datetime import datetime, timedelta, timezone
 from xml.sax.saxutils import escape as xml_escape
 
 # Use defusedxml everywhere we parse SOAP responses. Workday talks to us over
@@ -116,6 +119,116 @@ _REF_SUFFIX_ROLES = {
     "0786a": "Generic User (ISU)",
     "d6081": "Context Generic User (ISU)",
 }
+
+# ─────────────────────────────────────────────────────────────────────────
+# WD-CONN-102 — Workday SAML signing certificate health
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Why this check belongs in the Workday block (the SOAP/REST runtime
+# chain it sits on):
+#
+#   ESS user-context Workday calls execute through two Power Automate
+#   flows under workspace/agents/{slug}/workflows/ — ``ESS HR Workday``
+#   (SOAP, called by topics via ``WorkdaySystemGetCommonExecution``)
+#   and ``WorkdayRESTExecution`` (REST). Both flows declare exactly
+#   one Workday connection in their workflow.json:
+#
+#     "shared_workdaysoap": {
+#       "connection": {
+#         "connectionReferenceLogicalName":
+#             "new_sharedworkdaysoap_ff0df"
+#       },
+#       "runtimeSource": "invoker"
+#     }
+#
+#   The ``ff0df`` connection is configured with Power Platform's
+#   "Microsoft Entra ID Integrated" authentication type (per
+#   src/skills/connect/workday/step3.md lines 155-166), not Basic
+#   auth. That auth type authenticates the signed-in employee against
+#   a federated Workday enterprise app in Entra (Application ID URI
+#   ``http://www.workday.com/{WD_TENANT}``), which is the same
+#   enterprise app the connect skill provisions in step2.md lines
+#   191-264. The X.509 signing certificate WD-CONN-102 inspects lives
+#   on that enterprise app as a keyCredential. It is the most visible
+#   expiry-driven health signal on the federation app that the
+#   user-context SOAP/REST runtime path depends on.
+#
+# What expiry actually breaks (and what it doesn't):
+#
+#   * Will break: end-user browser-based SAML SSO into Workday's web
+#     UI (employees clicking "Sign in with Microsoft" on workday.com)
+#     — Entra cannot sign SAML assertions Workday will accept.
+#   * May break (depends on Workday API Client config): the
+#     ``ff0df``-routed OAuth exchange used by ``ESS HR Workday`` /
+#     ``WorkdayRESTExecution``. Power Platform "Microsoft Entra ID
+#     Integrated" exchanges an Entra-issued token at Workday's OAuth
+#     token endpoint; whether Workday validates that JWT against this
+#     X.509 public key (configured under the API Client's "Authorized
+#     Public Key") or against Entra's auto-rotating JWKS is a
+#     per-tenant setting and not exposed via the kit's APIs. The
+#     check therefore surfaces the cert state for operator triage
+#     rather than asserting a specific runtime break.
+#   * Will NOT break: ISU-routed SOAP over ``d6081`` (Context
+#     Generic) and ``0786a`` (Generic User). Those use HTTP Basic
+#     auth with ISU username + password — no certificate in the
+#     handshake.
+#
+# The cert lives in two places, both wired up by hand during the
+# Workday SSO onboarding tutorial:
+#
+#   * Entra side: as keyCredential entries on the federated Workday
+#     enterprise app's servicePrincipal. Microsoft Graph exposes
+#     these on the v1.0 servicePrincipal entity, but the LIST endpoint
+#     omits the `keyCredentials` field by default — the response only
+#     carries it when ``$select`` projects it explicitly. WD-CONN-102
+#     uses ``graph.get_workday_saml_service_principals()`` which sets
+#     the right ``$select`` clause.
+#
+#   * Workday side: as a row in "Edit Tenant Setup - Security ->
+#     SAML Identity Providers". This is NOT reachable via any public
+#     Workday API the kit talks to (the SOAP RaaS / Worker services
+#     don't expose tenant security configuration). Comparison of the
+#     two thumbprints is therefore an operator step.
+#
+# WD-CONN-102 reads the Entra side automatically, surfaces the
+# current active-cert thumbprint and NotAfter date, and emits a
+# MANUAL CheckResult on the happy path with the precise Workday
+# navigation steps. It auto-escalates to WARNING when the active
+# cert is within CERT_EXPIRY_WARN_DAYS of expiry (or not yet valid),
+# and to FAILED when no cert exists or all certs are expired.
+#
+# A single SAML signing certificate uploaded to Workday produces TWO
+# keyCredential entries with the SAME ``customKeyIdentifier`` — one
+# with ``usage="Sign"`` (Entra's view of the private key) and one
+# with ``usage="Verify"`` (Workday's view of the public key). They
+# are coalesced into one logical certificate before classification.
+#
+# Source (validatable):
+#   Schema: https://graph.microsoft.com/v1.0/$metadata
+#           ComplexType Name="keyCredential" — fields used here:
+#             customKeyIdentifier (Edm.Binary, nullable) —
+#               base64-encoded SHA-1 thumbprint of the DER cert
+#             keyId (Edm.Guid)
+#             startDateTime, endDateTime (Edm.DateTimeOffset)
+#             usage (Edm.String, "Sign" | "Verify")
+#             type (Edm.String, "AsymmetricX509Cert" for SAML certs)
+#   Docs:   https://learn.microsoft.com/graph/api/resources/keycredential
+
+# Active cert is flagged WARNING when its NotAfter is within this many
+# days of "now". Aligned with the typical 30-day rotation window
+# operators schedule for SAML cert rollovers.
+CERT_EXPIRY_WARN_DAYS = 30
+
+# Authoritative reference for both halves of the Workday SAML cert
+# install: Task 1 walks the operator through generating the X.509
+# public key Workday will trust, Task 2 walks them through pasting
+# its thumbprint into "Edit Tenant Setup - Security". Verified in
+# src/reference/ess-docs/integrations/workday.md (lines 77-104) which
+# is the vendored snapshot of this MS Learn page.
+_WORKDAY_SSO_DOC_LINK = (
+    "https://learn.microsoft.com/en-us/copilot/microsoft-365/"
+    "employee-self-service/workday#task-1-create-the-x509-public-key"
+)
 
 # The 17 ESS Workday workflow definitions (ported from Test-WorkdayWorkflows.ps1)
 WORKFLOWS = [
@@ -222,6 +335,13 @@ def run_workday_checks(runner) -> list[CheckResult]:
     runs at the end of the workday block when WD-PKG-001 detected a
     known flavor, so its diagnostic can list which Microsoft-shipped
     refs are bound vs. unbound for the detected flavor.
+
+    WD-CONN-102 (Workday SAML signing certificate health) runs BEFORE
+    the no-Workday-integration early-return — the Entra Workday SAML
+    SP can exist (and its signing cert can be unhealthy) independent
+    of whether the Power Platform Workday connector is installed yet,
+    so this check is pre-deployment readiness even when the rest of
+    the Workday block would skip.
     """
     results: list[CheckResult] = []
 
@@ -235,6 +355,14 @@ def run_workday_checks(runner) -> list[CheckResult]:
 
     flavor = getattr(runner, "_workday_package_flavor", None)
 
+    # WD-CONN-102 — Workday SAML signing certificate health. Runs
+    # before the no-Workday-integration early-return because the Entra
+    # SAML SP is a pre-deployment dependency: the cert can be expired
+    # or missing before the customer has finished installing the
+    # Power Platform Workday connector, and we want to surface that
+    # gap pre-deploy. Gated only on graph availability (the check
+    # itself handles "no SAML SP found" as NOT_CONFIGURED).
+    results.extend(_check_saml_certificate_health(runner))
     # WD-CONN-010 — Workday single-Entra-tenant federation alignment.
     # Runs BEFORE the no-Workday early-return gate below because the
     # conflict scenario (a second Entra tenant wired up against a
@@ -1803,6 +1931,648 @@ def _format_unhealthy_remediation(entry: dict, env_id: str) -> str:
         f"{prefix} {hint} Connection is not referenced by any flow. Either "
         f"owner investigates at {maker_url} or delete as orphan: `{delete_cmd}`"
     )
+
+
+def _format_cert_thumbprint(custom_key_identifier: str | None) -> tuple[str, bool]:
+    """Decode a base64 ``customKeyIdentifier`` into the colon-separated
+    uppercase hex thumbprint format Workday displays.
+
+    Returns ``(display_string, is_valid)``. ``is_valid`` is True only
+    when the input decodes to exactly 20 bytes (the SHA-1 digest of
+    the DER-encoded cert that Graph stores in ``customKeyIdentifier``).
+    For malformed or wrong-length inputs the original string is
+    returned with a ``(malformed)`` suffix so the operator can still
+    eyeball something in the result text without the check crashing.
+
+    Source (validatable): Microsoft Graph CSDL describes
+    ``customKeyIdentifier`` as Edm.Binary; for AsymmetricX509Cert
+    credentials it carries the SHA-1 thumbprint of the DER cert,
+    which is always 20 bytes. Reference:
+    https://learn.microsoft.com/graph/api/resources/keycredential
+    """
+    if not custom_key_identifier:
+        return ("(none)", False)
+    try:
+        # Graph returns customKeyIdentifier as a standard base64
+        # string. binascii.Error is the documented exception for any
+        # malformed base64 input.
+        decoded = base64.b64decode(custom_key_identifier, validate=True)
+    except (binascii.Error, ValueError):
+        return (f"{custom_key_identifier} (malformed)", False)
+    if len(decoded) != 20:
+        return (f"{custom_key_identifier} (malformed)", False)
+    return (":".join(f"{b:02X}" for b in decoded), True)
+
+
+def _parse_cert_datetime(iso_str: str | None) -> datetime | None:
+    """Parse a Graph ``Edm.DateTimeOffset`` (ISO-8601 with ``Z`` suffix
+    or explicit offset) into a timezone-aware ``datetime`` in UTC.
+
+    Returns ``None`` on parse failure or empty input. WD-CONN-102
+    treats unparseable dates as "unknown" rather than crashing — we'd
+    rather emit a slightly degraded result text than fail the whole
+    Workday block on a single malformed timestamp.
+    """
+    if not iso_str:
+        return None
+    s = iso_str.strip()
+    if not s:
+        return None
+    # fromisoformat in 3.11+ accepts the trailing "Z" only from 3.11
+    # onwards; normalize defensively. (CI pins 3.11+.)
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        # Graph always returns offset-aware timestamps in practice, but
+        # if a naive datetime slips through, assume UTC rather than
+        # raising — the alternative would crash the whole check.
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _group_workday_cert_keycredentials(
+    key_credentials: list[dict],
+) -> list[dict]:
+    """Coalesce a service principal's keyCredentials into one logical
+    certificate per ``customKeyIdentifier``.
+
+    Filters to ``type == "AsymmetricX509Cert"`` (other types like
+    Symmetric/X509CertAndPassword aren't SAML signing certs).
+
+    A single uploaded SAML signing cert appears in Graph as TWO
+    entries with the SAME ``customKeyIdentifier`` — usage=Sign for
+    the Entra-side private key and usage=Verify for the public
+    half. Counting them separately would double-report "you have 2
+    certs" when really you have 1. We group by ``customKeyIdentifier``
+    and prefer the Sign entry for metadata (it's the entry that
+    actually goes "live" when Entra signs an outgoing assertion).
+
+    Returns a list of dicts in keyCredentials-API order, each with:
+        customKeyIdentifier, key_id, usage (the surviving entry's
+        usage), display_name, start, end (parsed datetimes), raw
+        (the surviving entry — used for diagnostic detail), and
+        usages_seen (set of usage strings observed for this CKI —
+        used to flag the cert as "Sign-only" or "Verify-only", which
+        would indicate an incomplete upload).
+    """
+    by_cki: dict[str, dict] = {}
+    order: list[str] = []
+    for kc in key_credentials or []:
+        if not isinstance(kc, dict):
+            continue
+        if kc.get("type") != "AsymmetricX509Cert":
+            continue
+        cki = kc.get("customKeyIdentifier") or ""
+        if not cki:
+            # Defensive: no CKI ⇒ can't coalesce. Use the keyId so
+            # malformed entries are still surfaced rather than dropped
+            # silently, but flag them as "(no thumbprint)" downstream.
+            cki = f"__no_cki__:{kc.get('keyId', '')}"
+        usage = kc.get("usage") or ""
+        if cki not in by_cki:
+            order.append(cki)
+            by_cki[cki] = {
+                "customKeyIdentifier": kc.get("customKeyIdentifier") or "",
+                "key_id": kc.get("keyId") or "",
+                "usage": usage,
+                "display_name": kc.get("displayName") or "",
+                "start": _parse_cert_datetime(kc.get("startDateTime")),
+                "end": _parse_cert_datetime(kc.get("endDateTime")),
+                "raw": kc,
+                "usages_seen": {usage} if usage else set(),
+            }
+        else:
+            entry = by_cki[cki]
+            if usage:
+                entry["usages_seen"].add(usage)
+            # Prefer the Sign entry's metadata over Verify (Sign is
+            # what Entra actually invokes when minting an assertion).
+            if entry["usage"] != "Sign" and usage == "Sign":
+                entry["usage"] = "Sign"
+                entry["display_name"] = kc.get("displayName") or entry["display_name"]
+                # Sign and Verify share start/end in practice, but
+                # take Sign's if present.
+                s = _parse_cert_datetime(kc.get("startDateTime"))
+                e = _parse_cert_datetime(kc.get("endDateTime"))
+                if s is not None:
+                    entry["start"] = s
+                if e is not None:
+                    entry["end"] = e
+                entry["raw"] = kc
+    return [by_cki[c] for c in order]
+
+
+def _select_active_workday_cert(
+    cert_groups: list[dict],
+    preferred_thumbprint: str | None,
+    now: datetime,
+) -> tuple[dict | None, list[dict]]:
+    """Pick the *active* SAML signing cert out of a list of grouped
+    certs, returning ``(active, rollover_others)``.
+
+    When multiple AsymmetricX509Cert keyCredentials exist on the SP
+    (during a rollover window the operator uploads the new cert
+    alongside the old one), Entra exposes
+    ``preferredTokenSigningKeyThumbprint`` to identify which one is
+    currently in use. The value is a hex string (no separators); we
+    compare it against each cert's decoded thumbprint, case-folded.
+
+    Fallback when ``preferredTokenSigningKeyThumbprint`` is not set:
+    pick the first cert whose [startDateTime, endDateTime] window
+    contains ``now``. If none is currently valid, fall back to the
+    first cert in API order so we still surface *something* (callers
+    will classify that as expired or not-yet-valid downstream).
+    """
+    if not cert_groups:
+        return (None, [])
+
+    pref = (preferred_thumbprint or "").strip().lower()
+    if pref:
+        # Compare against the hex form WITHOUT colons (Entra's
+        # preferredTokenSigningKeyThumbprint is colon-free).
+        for cert in cert_groups:
+            display, ok = _format_cert_thumbprint(cert["customKeyIdentifier"])
+            if not ok:
+                continue
+            hex_no_colon = display.replace(":", "").lower()
+            if hex_no_colon == pref:
+                others = [c for c in cert_groups if c is not cert]
+                return (cert, others)
+
+    # No preferred thumbprint match — pick the first currently-valid
+    # cert (start <= now <= end). Treat unparseable dates as "no
+    # opinion" so we don't accidentally elect an obviously-expired
+    # cert over a healthy one with missing metadata.
+    for cert in cert_groups:
+        start, end = cert["start"], cert["end"]
+        if start is not None and start > now:
+            continue
+        if end is not None and end < now:
+            continue
+        others = [c for c in cert_groups if c is not cert]
+        return (cert, others)
+
+    # Nothing currently valid — pick the one with the latest endDateTime
+    # so the operator's diagnostic centers on "most recent expiry" rather
+    # than "first one we happened to see". Ties / missing dates fall back
+    # to API order.
+    with_end = [c for c in cert_groups if c["end"] is not None]
+    if with_end:
+        active = max(with_end, key=lambda c: c["end"])
+    else:
+        active = cert_groups[0]
+    others = [c for c in cert_groups if c is not active]
+    return (active, others)
+
+
+def _format_cert_detail_line(cert: dict, now: datetime) -> str:
+    """Render one cert group as a one-line summary for result text."""
+    display, _ok = _format_cert_thumbprint(cert["customKeyIdentifier"])
+    end = cert["end"]
+    if end is None:
+        expiry_str = "NotAfter=(unknown)"
+    else:
+        days = (end.date() - now.date()).days
+        if days < 0:
+            expiry_str = f"NotAfter={end.date().isoformat()} (EXPIRED {-days} days ago)"
+        else:
+            expiry_str = f"NotAfter={end.date().isoformat()} ({days} days remaining)"
+    start = cert["start"]
+    start_str = ""
+    if start is not None and start > now:
+        days_until = (start.date() - now.date()).days
+        start_str = f", NotBefore={start.date().isoformat()} (not yet valid for {days_until} more days)"
+    usages = sorted(cert.get("usages_seen") or set())
+    usage_str = "+".join(usages) if usages else "(no usage)"
+    name = cert.get("display_name") or "(no displayName)"
+    return f"thumbprint={display} [{usage_str}] '{name}' — {expiry_str}{start_str}"
+
+
+def _check_saml_certificate_health(runner) -> list[CheckResult]:
+    """WD-CONN-102 — Workday SAML signing certificate health.
+
+    Reads Entra-side keyCredential metadata for the federated Workday
+    SAML enterprise app(s) and surfaces:
+
+      * FAILED — SP exists but has no AsymmetricX509Cert
+        keyCredentials, OR all the credentials have expired.
+      * WARNING (hardening) — the active cert is expiring within
+        ``CERT_EXPIRY_WARN_DAYS`` days, OR its NotBefore is in the
+        future (not yet valid).
+      * MANUAL — active cert is healthy. The operator must compare
+        its thumbprint against the row in Workday's "Edit Tenant
+        Setup - Security -> SAML Identity Providers" because that
+        is not reachable from any Workday API the kit talks to.
+      * NOT_CONFIGURED — no federated Workday SAML enterprise app
+        registered in this tenant (the check is N/A — SAML SSO is
+        an optional add-on; ESS runtime calls authenticate via ISU
+        credentials, not via SAML).
+
+    Per AGENTS.md principle 7, multiple SPs are coalesced into at
+    most one CheckResult per distinct status. The result text lists
+    each SP and its per-cert detail; the remediation is a single
+    shared block keyed off the dominant bucket.
+
+    Mock tier (validatable): backed by Microsoft Graph
+    (MOCK_STATUS = "validatable" per tests/mocks/graph.py — schema
+    pinned against https://graph.microsoft.com/v1.0/$metadata for
+    ``servicePrincipal`` and ``keyCredential``). No cassette
+    required.
+    """
+    cp_id = "WD-CONN-102"
+    category = "Workday"
+    description = "Workday SAML signing certificate health"
+    doc_link = _WORKDAY_SSO_DOC_LINK
+
+    graph = getattr(runner, "graph", None)
+    if graph is None:
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=description,
+            result="Microsoft Graph client unavailable — skipping.",
+            remediation=(
+                "Re-run FlightCheck after Graph authentication succeeds."
+            ),
+            doc_link=doc_link,
+        )]
+
+    # Single Graph round-trip: ask the listing call to raise
+    # PermissionError on 401/403 instead of swallowing it into an
+    # empty list (get_all()'s default would otherwise masquerade
+    # "missing Application.Read.All consent" as "no Workday SAML
+    # app exists" and produce a falsely reassuring NOT_CONFIGURED).
+    # Same defensive pattern AUTH-006 / WD-CONN-010 use.
+    try:
+        workday_sps = graph.get_workday_saml_service_principals(
+            raise_on_permission_error=True,
+        )
+    except PermissionError as e:
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=description,
+            result=(
+                f"Cannot read Entra service principals: {e} "
+                "(HTTP 403 typically means Application.Read.All "
+                "is not consented)."
+            ),
+            remediation=(
+                "Grant Application.Read.All (or Directory.Read.All) "
+                "consent on the Graph app registration the kit uses, "
+                "then re-run FlightCheck. Without this consent the "
+                "check cannot tell whether a Workday SAML app exists "
+                "or read its certificate metadata."
+            ),
+            doc_link=doc_link,
+        )]
+    except Exception as e:
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=description,
+            result=f"Unable to query Entra service principals: {e}",
+            remediation=(
+                "Requires Application.Read.All (or Directory.Read.All) "
+                "consented on the Graph app registration. Re-run "
+                "FlightCheck after granting consent."
+            ),
+            doc_link=doc_link,
+        )]
+
+    if not workday_sps:
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            description=description,
+            result=(
+                "No federated Workday SAML enterprise app found in "
+                "Entra (filter: displayName starts with 'Workday' "
+                "and preferredSingleSignOnMode eq 'saml'). ESS uses "
+                "ISU credentials for runtime Workday calls, so end-"
+                "user SAML SSO into Workday is optional — but if your "
+                "deployment includes user-context Workday flows, "
+                "this means SAML SSO isn't configured and the "
+                "associated signing certificate health cannot be "
+                "validated."
+            ),
+            remediation=(
+                "If you don't use SAML SSO between Entra and Workday, "
+                "this check is not applicable. If you do, register "
+                "the Workday enterprise app from the Entra gallery, "
+                "configure SAML SSO, and upload the signing "
+                "certificate per the Workday SSO setup tasks."
+            ),
+            doc_link=doc_link,
+        )]
+
+    # ``saml_entity_ids`` (the canonical helper) is already imported
+    # at module load from ``._saml_utils``. The previous lazy import
+    # against ``checks.authentication._saml_entity_ids`` was a stale
+    # reference from before the helper was extracted to _saml_utils —
+    # it raised ImportError as soon as any Workday SAML SP with certs
+    # was returned, masking every cert-classification branch below.
+    now = datetime.now(timezone.utc)
+
+    # Classify each SP into exactly one of these buckets. Each list
+    # holds (sp_summary_string, remediation_hint) tuples so the
+    # output emitter can keep result text and remediation text
+    # aligned per bucket.
+    failed_entries: list[dict] = []
+    warning_entries: list[dict] = []
+    manual_entries: list[dict] = []
+
+    for sp in workday_sps:
+        sp_name = sp.get("displayName", "(unknown)")
+        app_id = sp.get("appId", "?")
+        sp_id = sp.get("id", "")
+        # Use the same id-suffix shortening WD-CONN-101 uses so
+        # operators can disambiguate "Workday" / "Workday Sandbox"
+        # rows that share the same display name.
+        id_suffix = sp_id[-6:] if sp_id else "?"
+        entity_ids = saml_entity_ids(sp.get("servicePrincipalNames") or [])
+        entity_ids_str = ", ".join(entity_ids) if entity_ids else "(none surfaced)"
+
+        cert_groups = _group_workday_cert_keycredentials(
+            sp.get("keyCredentials") or []
+        )
+
+        sp_header = (
+            f"  - {sp_name} (appId={app_id}, sp={id_suffix})\n"
+            f"    entity IDs: {entity_ids_str}"
+        )
+
+        if not cert_groups:
+            failed_entries.append({
+                "sp_name": sp_name,
+                "summary": (
+                    f"{sp_header}\n"
+                    f"    NO X.509 signing certificate registered on this app."
+                ),
+                "reason": "no_certs",
+            })
+            continue
+
+        active, others = _select_active_workday_cert(
+            cert_groups,
+            sp.get("preferredTokenSigningKeyThumbprint"),
+            now,
+        )
+
+        if active is None:
+            # Defensive: _select_active_workday_cert should always
+            # return SOMETHING when cert_groups is non-empty, but if
+            # it ever doesn't, treat as failed rather than crashing.
+            failed_entries.append({
+                "sp_name": sp_name,
+                "summary": (
+                    f"{sp_header}\n"
+                    f"    Unable to identify an active signing certificate."
+                ),
+                "reason": "no_active",
+            })
+            continue
+
+        active_end = active["end"]
+        active_start = active["start"]
+        all_expired = all(
+            (c["end"] is not None and c["end"] < now) for c in cert_groups
+        )
+
+        cert_line = _format_cert_detail_line(active, now)
+        rollover_lines = [
+            f"      rollover: {_format_cert_detail_line(c, now)}"
+            for c in others
+        ]
+        rollover_block = ("\n" + "\n".join(rollover_lines)) if rollover_lines else ""
+
+        if all_expired:
+            failed_entries.append({
+                "sp_name": sp_name,
+                "summary": (
+                    f"{sp_header}\n"
+                    f"    active: {cert_line}{rollover_block}"
+                ),
+                "reason": "all_expired",
+            })
+        elif active_end is not None and active_end < now:
+            # Active cert by preferred thumbprint is expired even
+            # though a rollover cert exists — operator forgot to
+            # update preferredTokenSigningKeyThumbprint after
+            # rolling over. Surface as FAILED with rollover hint.
+            failed_entries.append({
+                "sp_name": sp_name,
+                "summary": (
+                    f"{sp_header}\n"
+                    f"    active: {cert_line}{rollover_block}\n"
+                    "    Note: a rollover certificate exists; the "
+                    "active selection has not been updated."
+                ),
+                "reason": "active_expired_rollover_exists",
+            })
+        elif active_start is not None and active_start > now:
+            warning_entries.append({
+                "sp_name": sp_name,
+                "summary": (
+                    f"{sp_header}\n"
+                    f"    active: {cert_line}{rollover_block}"
+                ),
+                "reason": "not_yet_valid",
+            })
+        elif (
+            active_end is None
+            or (active_end - now) <= timedelta(days=CERT_EXPIRY_WARN_DAYS)
+        ):
+            warning_entries.append({
+                "sp_name": sp_name,
+                "summary": (
+                    f"{sp_header}\n"
+                    f"    active: {cert_line}{rollover_block}"
+                ),
+                "reason": "unknown_expiry" if active_end is None else "expiring_soon",
+            })
+        else:
+            manual_entries.append({
+                "sp_name": sp_name,
+                "summary": (
+                    f"{sp_header}\n"
+                    f"    active: {cert_line}{rollover_block}"
+                ),
+            })
+
+    results: list[CheckResult] = []
+
+    if failed_entries:
+        bodies = "\n".join(e["summary"] for e in failed_entries)
+        results.append(CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            description=description,
+            result=(
+                f"{len(failed_entries)} Workday SAML app(s) have an "
+                "unusable signing certificate (no AsymmetricX509Cert "
+                "keyCredentials, all credentials expired, or the "
+                "active selection expired with no replacement live):\n"
+                f"{bodies}"
+            ),
+            remediation=(
+                "End-user SAML SSO into Workday will fail until a "
+                "valid signing certificate is uploaded on both "
+                "sides. In addition, the OAuth-routed "
+                "``new_sharedworkdaysoap_ff0df`` connection used by "
+                "the ``ESS HR Workday`` (SOAP) and "
+                "``WorkdayRESTExecution`` (REST) flows targets the "
+                "same federated Workday enterprise app; whether the "
+                "``ff0df`` runtime path is also affected depends on "
+                "whether the Workday API Client behind the OAuth "
+                "token endpoint validates the inbound JWT against "
+                "this X.509 public key (per-tenant Authorized "
+                "Public Key setting). Steps:\n"
+                "  1. In Entra, open the federated Workday "
+                "enterprise app -> Single sign-on -> SAML Signing "
+                "Certificate. Generate a new certificate (or rotate "
+                "the existing one) and download the "
+                "Certificate (Base64).\n"
+                "  2. In Workday, search for 'Edit Tenant Setup - "
+                "Security', open the task, and update the row for "
+                "the matching 'Service Provider ID' in the 'SAML "
+                "Identity Providers' grid. Paste the new "
+                "Certificate (Base64) into the 'X509 Certificate' "
+                "field.\n"
+                "  3. After both sides are updated, set Entra's "
+                "preferredTokenSigningKeyThumbprint (or the "
+                "'Make certificate active' toggle in the portal) "
+                "to the new thumbprint.\n"
+                "  4. Re-run FlightCheck to confirm the new active "
+                f"cert is healthy. [Workday SSO setup]({doc_link})"
+            ),
+            doc_link=doc_link,
+        ))
+
+    if warning_entries:
+        bodies = "\n".join(e["summary"] for e in warning_entries)
+        # Hardening framing per AGENTS.md principle 9 — these aren't
+        # functional blockers today, only operational risk.
+        results.append(CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=description,
+            result=(
+                "Hardening recommendation (not a functional blocker): "
+                f"{len(warning_entries)} Workday SAML app(s) have a "
+                "signing certificate that is expiring soon (within "
+                f"{CERT_EXPIRY_WARN_DAYS} days), not yet valid, or has unknown expiry metadata:\n"
+                f"{bodies}"
+            ),
+            remediation=(
+                "Schedule a signing-certificate rotation before the "
+                "current cert expires. End-user SAML SSO into Workday "
+                "will start failing on the NotAfter date. The same "
+                "federated Workday enterprise app underpins the "
+                "OAuth-routed ``new_sharedworkdaysoap_ff0df`` "
+                "connection used by ``ESS HR Workday`` (SOAP) and "
+                "``WorkdayRESTExecution`` (REST); cert health on "
+                "that app is therefore a federation-health signal "
+                "for the SOAP/REST runtime path as well. Steps:\n"
+                "  1. In Entra, open the federated Workday enterprise "
+                "app -> Single sign-on -> SAML Signing Certificate. "
+                "Click 'New Certificate', save without activating yet, "
+                "and download the Certificate (Base64).\n"
+                "  2. In Workday, search for 'Edit Tenant Setup - "
+                "Security', open the task, and add the new "
+                "Certificate (Base64) to the row for the matching "
+                "'Service Provider ID' in the 'SAML Identity "
+                "Providers' grid.\n"
+                "  3. During a low-traffic window, activate the new "
+                "certificate in Entra (sets "
+                "preferredTokenSigningKeyThumbprint to the new "
+                "value).\n"
+                "  4. Re-run FlightCheck after the rotation to "
+                "confirm WD-CONN-102 reports MANUAL on the new cert. "
+                f"[Workday SSO setup]({doc_link})"
+            ),
+            doc_link=doc_link,
+        ))
+
+    if manual_entries:
+        bodies = "\n".join(e["summary"] for e in manual_entries)
+        intro = (
+            "1 federated Workday SAML app has a healthy active signing "
+            "certificate in Entra"
+            if len(manual_entries) == 1
+            else (
+                f"{len(manual_entries)} federated Workday SAML apps "
+                "have a healthy active signing certificate in Entra"
+            )
+        )
+        results.append(CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.MANUAL.value,
+            description=description,
+            result=(
+                f"{intro}. Manual thumbprint comparison required "
+                "against Workday — the Workday 'X509 Certificate' "
+                "field is not exposed via any Workday API the kit "
+                "talks to (the SOAP RaaS / Worker services don't "
+                "surface tenant security configuration). Detected:\n"
+                f"{bodies}"
+            ),
+            remediation=(
+                "Manual verification required — compare the active "
+                "Entra thumbprint above against the certificate "
+                "Workday has on file for the same Service Provider ID. "
+                "ESS uses exactly one of the federated apps listed "
+                "above; identify it via Workday first, then verify "
+                "only that app's thumbprint.\n"
+                "\n"
+                "Step 1 — Identify the active Entra app from inside "
+                "Workday:\n"
+                "  a. Sign in to the Workday tenant ESS connects to.\n"
+                "  b. In the global search box, type 'Edit Tenant "
+                "Setup - Security' and open the task.\n"
+                "  c. Scroll to the 'SAML Identity Providers' "
+                "section. Find the row that is enabled (the "
+                "'Disabled' checkbox is unchecked) and whose 'Used "
+                "for Environments' matches the environment ESS "
+                "connects to.\n"
+                "  d. Note that row's 'Service Provider ID' value "
+                "(e.g. http://www.workday.com/contoso_prod).\n"
+                "  e. Match that value to one of the 'entity IDs' "
+                "listed above — the matching row is the active "
+                "Entra app.\n"
+                "\n"
+                "Step 2 — Compare the thumbprints:\n"
+                "  a. In Workday, in that same row, open the 'X509 "
+                "Certificate' value and view its details — Workday "
+                "displays the SHA-1 thumbprint in colon-separated "
+                "uppercase hex (matches the format shown above).\n"
+                "  b. Compare it byte-for-byte against the active "
+                "thumbprint listed for that app above. They MUST "
+                "match exactly.\n"
+                "  c. If they differ, end-user browser-based SAML "
+                "SSO into Workday is broken. The OAuth-routed "
+                "``new_sharedworkdaysoap_ff0df`` connection used by "
+                "the ``ESS HR Workday`` and ``WorkdayRESTExecution`` "
+                "flows targets the same federated Workday enterprise "
+                "app; the user-context SOAP/REST runtime path may "
+                "also be affected depending on whether the Workday "
+                "API Client behind the OAuth token endpoint "
+                "validates the inbound JWT against this X.509 "
+                "public key. The two ISU-credentialed connections "
+                "(``d6081``, ``0786a``) use HTTP Basic auth and are "
+                "not affected. Re-upload the active Entra "
+                "Certificate (Base64) into the Workday 'X509 "
+                "Certificate' field to restore parity.\n"
+                f"\n[Workday SSO setup]({doc_link})"
+            ),
+            doc_link=doc_link,
+        ))
+
+    return results
 
 
 def _get_in_use_workday_connection_names(runner) -> set[str] | None:
