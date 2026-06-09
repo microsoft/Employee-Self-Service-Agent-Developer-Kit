@@ -336,10 +336,84 @@ def workday_connection_reference(
     }
 
 
+def flow_connector_ref(
+    *,
+    api_name: str = "shared_workdaysoap",
+    tier: str = "Premium",
+    is_custom_api: bool = False,
+    display_name: str | None = None,
+) -> dict[str, Any]:
+    """Build a single ``connectionReferences`` entry as it appears in the
+    flow DETAIL response (``get_flow``), carrying the connector-tier signal
+    LIC-FLOW-001 reads.
+
+    Shape pinned by tests/fixtures/cassettes/flightcheck_flow_licensing.yaml:
+    each connection reference nests the connector definition under
+    ``apiDefinition.properties`` with ``tier`` ("Premium" / "Standard") and
+    ``isCustomApi``. Real connectors observed: shared_workdaysoap=Premium,
+    shared_commondataserviceforapps=Premium, shared_conversionservice=Standard.
+    """
+    disp = display_name or api_name
+    return {
+        "apiName": api_name,
+        "connectionName": f"conn-{api_name}",
+        "connectionReferenceLogicalName": f"ref_{api_name}",
+        "tier": tier,
+        "apiDefinition": {
+            "name": api_name,
+            "id": f"/providers/Microsoft.PowerApps/apis/{api_name}",
+            "type": "/providers/Microsoft.PowerApps/apis",
+            "properties": {
+                "displayName": disp,
+                "tier": tier,
+                "isCustomApi": is_custom_api,
+                "capabilities": ["actions"],
+            },
+        },
+    }
+
+
+def flow_detail(
+    *,
+    flow_id: str | None = None,
+    env_id: str = MOCK_ENV_ID,
+    display_name: str = "ESS HR Workday",
+    trigger_kind: str | None = "Skills",
+    connection_refs: Mapping[str, Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Build a flow DETAIL record (``GET .../flows/{id}``) for LIC-FLOW-001.
+
+    ``connection_refs`` maps a ref key → a :func:`flow_connector_ref` dict.
+    ``trigger_kind`` populates ``definitionSummary.triggers[0].kind``
+    ("Skills" / "VirtualAgent" for agent-invoked; pass None for a
+    non-agent trigger). Shape pinned by flightcheck_flow_licensing.yaml.
+    """
+    effective_id = flow_id or "00000000-0000-0000-0000-000000007201"
+    triggers = [{
+        "type": "Request" if trigger_kind else "Recurrence",
+        "kind": trigger_kind,
+    }]
+    props: dict[str, Any] = {
+        "displayName": display_name,
+        "state": "Started",
+        "userType": "Owner",
+        "definitionSummary": {"triggers": triggers, "actions": [], "description": ""},
+        "connectionReferences": dict(connection_refs or {}),
+    }
+    return {
+        "name": effective_id,
+        "id": (
+            f"/providers/Microsoft.ProcessSimple/environments/{env_id}"
+            f"/flows/{effective_id}"
+        ),
+        "type": "Microsoft.ProcessSimple/environments/flows",
+        "properties": props,
+    }
+
+
 # ────────────────────────────────────────────────────────────────────────
 # Collection wrappers
 # ────────────────────────────────────────────────────────────────────────
-
 
 def collection(
     records: Iterable[Mapping[str, Any]],

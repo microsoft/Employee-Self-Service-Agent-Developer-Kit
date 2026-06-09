@@ -34,6 +34,7 @@ from defusedxml import ElementTree as ET
 from defusedxml.common import DefusedXmlException
 
 from ..runner import CheckResult, Status, Priority
+from ._maker_urls import maker_connections_url
 from ._saml_utils import (
     WORKDAY_SAML_SP_FILTER,
     WORKDAY_SSO_TUTORIAL_DOC,
@@ -1845,17 +1846,6 @@ def _extract_connector_name(conn: dict) -> str:
     return match.group(1) if match else "shared_workdaysoap"
 
 
-def _maker_connections_url(env_id: str) -> str:
-    """Direct link to the Power Automate maker connections page.
-
-    We use make.powerautomate.com over make.powerapps.com because the
-    PowerAutomate experience renders the env-scoped connections list
-    more reliably across the multiple PPAC IA churns observed in
-    2024-2026.
-    """
-    return f"https://make.powerautomate.com/environments/{env_id}/connections"
-
-
 def _format_unhealthy_detail(entry: dict) -> str:
     """Single-connection detail line for the ``result`` field.
 
@@ -1897,7 +1887,7 @@ def _format_unhealthy_remediation(entry: dict, env_id: str) -> str:
     in_use = entry["in_use"]
     conn_name = c.get("name", "")
     connector = _extract_connector_name(c)
-    maker_url = _maker_connections_url(env_id)
+    maker_url = maker_connections_url(env_id)
     delete_cmd = (
         f"Remove-AdminPowerAppConnection -EnvironmentName {env_id} "
         f"-ConnectionName {conn_name} -ConnectorName {connector}"

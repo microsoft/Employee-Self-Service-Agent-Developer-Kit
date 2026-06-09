@@ -55,14 +55,24 @@ def _studio_link_md(runner, agent_name: str, anchor: str = "Copilot Studio") -> 
     url = _studio_agent_url(runner, agent_name) or f"{STUDIO_BASE}/"
     return f"[{anchor}]({url})"
 
-# Required topics that ESS agents should have (by schema name substring)
+# Required topics that ESS agents should have. The `pattern` is a regex
+# matched against the **normalized** filename stem (lowercase + all
+# non-alphanumerics stripped) of every file under topics/. Normalization
+# is required because filenames are slugged with hyphens
+# (response-preparation.mcs.yml) but the patterns are written without
+# separators so a single pattern matches every hyphenation choice
+# Copilot Studio / extract.py might emit.
 REQUIRED_TOPICS = [
     {"id": "TOPIC-001", "pattern": "usercontext", "name": "[Admin] User Context - Setup", "priority": "Critical"},
     {"id": "TOPIC-002", "pattern": "responsepreparation", "name": "[System] Response Preparation", "priority": "Critical"},
     {"id": "TOPIC-004", "pattern": "sensitivetopic", "name": "[Example] Sensitive Topics", "priority": "High"},
     {"id": "TOPIC-005", "pattern": "onerror", "name": "[System] On Error", "priority": "High"},
     {"id": "TOPIC-009", "pattern": "emotionalintelligence|emotionalquotient", "name": "Emotional Intelligence", "priority": "High"},
-    {"id": "TOPIC-010", "pattern": "ambiguity", "name": "Ambiguity Clarification", "priority": "High"},
+    # The ESS template ships this as ``seek-clarification-to-avoid-ambiguous-answers``;
+    # normalized that becomes ``seekclarificationtoavoidambiguousanswers``. Pattern
+    # ``ambigu|clarif`` matches both "ambiguous" and "clarification" so the check
+    # passes whether the user adapts the topic name toward either concept.
+    {"id": "TOPIC-010", "pattern": "ambigu|clarif", "name": "Ambiguity Clarification", "priority": "High"},
 ]
 
 
@@ -113,7 +123,7 @@ def _check_single_agent(agent_path: Path, agent_name: str, runner=None) -> list[
     results.extend(_check_agent_identity(agent_path, label, runner, agent_name))
 
     # ---- Required topics ----
-    results.extend(_check_required_topics(agent_path, label))
+    results.extend(_check_required_topics(agent_path, label, runner, agent_name))
 
     # ---- Topic count ----
     results.extend(_check_topic_inventory(agent_path, label))
@@ -128,7 +138,7 @@ def _check_single_agent(agent_path: Path, agent_name: str, runner=None) -> list[
     results.extend(_check_template_configs(agent_path, label))
 
     # ---- Knowledge source readiness ----
-    results.extend(_check_knowledge_sources(agent_path, label, runner))
+    results.extend(_check_knowledge_sources(agent_path, label, runner, agent_name))
 
     return results
 
@@ -248,10 +258,11 @@ def _check_agent_identity(agent_path: Path, label: str, runner=None, agent_name:
     return results
 
 
-def _check_required_topics(agent_path: Path, label: str) -> list[CheckResult]:
+def _check_required_topics(agent_path: Path, label: str, runner=None, agent_name: str = "") -> list[CheckResult]:
     """Check that required system/admin topics exist."""
     results = []
     topics_dir = agent_path / "topics"
+    studio_link = _studio_link_md(runner, agent_name, "Copilot Studio")
 
     if not topics_dir.exists():
         for req in REQUIRED_TOPICS:
@@ -263,17 +274,29 @@ def _check_required_topics(agent_path: Path, label: str) -> list[CheckResult]:
             ))
         return results
 
-    topic_contents = {}
+    # Normalize each filename stem the same way pattern-authors expect:
+    # lowercase + drop every non-alphanumeric character. This collapses
+    # ``response-preparation.mcs.yml`` to ``responsepreparation`` so a
+    # single pattern like ``responsepreparation`` matches regardless of
+    # whether extract.py emitted hyphens, underscores, or a different
+    # casing. Pre-fix the matcher compared the raw hyphenated filename
+    # against the no-separator pattern and missed every system topic.
+    #
+    # We deliberately do NOT scan the topic's YAML body anymore: system
+    # topics like response-preparation.mcs.yml don't carry their schema
+    # name in the body at all (just ``kind: AdaptiveDialog`` + actions),
+    # and a body scan is a false-positive trap — any topic mentioning
+    # "on error" anywhere in its dialog text would satisfy TOPIC-005.
+    # Filename is the authoritative slug derived from the Dataverse
+    # botcomponents.name by extract.py.
+    normalized_stems = []
     for tf in topics_dir.glob("*.mcs.yml"):
-        topic_contents[tf.name.lower()] = tf.read_text(encoding="utf-8", errors="replace")
+        stem = tf.name.lower().replace(".mcs.yml", "")
+        normalized_stems.append(re.sub(r"[^a-z0-9]", "", stem))
 
     for req in REQUIRED_TOPICS:
         pattern = req["pattern"]
-        found = False
-        for fname, content in topic_contents.items():
-            if re.search(pattern, fname) or re.search(pattern, content, re.IGNORECASE):
-                found = True
-                break
+        found = any(re.search(pattern, stem) for stem in normalized_stems)
 
         if found:
             results.append(CheckResult(
@@ -289,7 +312,7 @@ def _check_required_topics(agent_path: Path, label: str) -> list[CheckResult]:
                 priority=req["priority"], status=Status.WARNING.value,
                 description=f"{label}: {req['name']}",
                 result="Required topic not found in extracted files",
-                remediation=f"Verify '{req['name']}' exists in [Copilot Studio](https://copilotstudio.microsoft.com/).",
+                remediation=f"Verify '{req['name']}' exists in {studio_link} \u2192 Topics.",
                 doc_link=f"{DOC_BASE}/customize#customize-topics",
             ))
 
@@ -440,6 +463,31 @@ def _get_disabled_topic_names(runner, agent_name: str) -> set[str]:
         return set()
 
 
+_XML_ATTR_KEY_RE = re.compile(r"^(\s+)([@#][A-Za-z_][\w.-]*)(\s*:(?:\s|$))", re.MULTILINE)
+
+
+def _salvage_xml_attribute_yaml(content: str) -> str:
+    """Quote bare ``@key:`` / ``#key:`` keys so PyYAML can parse the document.
+
+    Copilot Studio's topic export embeds connector-action response schemas
+    derived from XML/XSD definitions (e.g. Workday SOAP actions). It emits
+    XML attribute markers (``@type``) and text-node markers (``#text``) as
+    unquoted YAML keys, even though ``@`` and ``#`` are reserved indicators
+    in YAML 1.2 that must be quoted. Copilot Studio's own parser accepts
+    them; PyYAML correctly does not.
+
+    The maker can't fix this — it's not their YAML — and editing the file
+    locally would be overwritten on the next ``/scan``. Quote them in a
+    salvaged copy so CONFIG-014 can still inspect ``modelDescription`` for
+    these topics. The on-disk file is never mutated.
+
+    Only keys that begin with ``@`` or ``#`` at the start of a mapping line
+    are rewritten; any other YAML construct is left exactly as the parser
+    saw it, so a genuinely-broken file still raises.
+    """
+    return _XML_ATTR_KEY_RE.sub(r'\1"\2"\3', content)
+
+
 def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_name: str = "") -> list[CheckResult]:
     """CONFIG-014: Check that topic descriptions are specific enough for AI routing."""
     results = []
@@ -456,11 +504,16 @@ def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_n
 
     too_short: list[str] = []
     has_placeholder: list[str] = []
-    parse_errors: list[str] = []
+    # Files we couldn't parse even after salvaging Copilot Studio's
+    # XML-attribute-style keys. These are the only ones worth surfacing —
+    # the salvaged-and-parsed case is silent because the salvage is a
+    # workaround for a known upstream quirk, not maker-actionable.
+    unparseable: list[str] = []
     checked = 0
 
     # Query Dataverse for disabled topics to skip them
     disabled_topics = _get_disabled_topic_names(runner, agent_name)
+    studio_link = _studio_link_md(runner, agent_name, "the agent in Copilot Studio")
 
     for tf in sorted(topics_dir.glob("*.mcs.yml")):
         # Match the exact filename stem against the system-topic set — a
@@ -480,11 +533,27 @@ def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_n
         # key: that way we correctly handle every valid scalar form
         # (literal `|`, folded `>`, single/double-quoted, plain) and any
         # trailing-comment / odd-indentation cases the regex would miss.
+        #
+        # Two-pass parse: on YAMLError, try once more after quoting the
+        # XML-attribute keys Copilot Studio emits unquoted for
+        # connector-action schemas (see _salvage_xml_attribute_yaml).
+        # The salvage is silent on success — it's a workaround for a known
+        # upstream quirk, not something a maker can act on. If the second
+        # pass still fails the file goes on ``unparseable`` and we surface
+        # it as a low-priority Skipped row.
         try:
             doc = yaml.safe_load(content) or {}
-        except yaml.YAMLError as e:
-            parse_errors.append(f"{stem} ({e.__class__.__name__})")
-            continue
+        except yaml.YAMLError:
+            salvaged = _salvage_xml_attribute_yaml(content)
+            if salvaged != content:
+                try:
+                    doc = yaml.safe_load(salvaged) or {}
+                except yaml.YAMLError:
+                    unparseable.append(tf.name)
+                    continue
+            else:
+                unparseable.append(tf.name)
+                continue
 
         if not isinstance(doc, dict):
             # Topic file isn't a YAML mapping — nothing to check.
@@ -523,14 +592,29 @@ def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_n
         if word_count < _MIN_DESCRIPTION_WORDS:
             too_short.append(f"{display_name} ({word_count} words)")
 
-    # Report YAML parse errors so they don't silently skip checks
-    if parse_errors:
+    # If a file couldn't be parsed even after quoting Copilot Studio's
+    # XML-attribute-style keys, surface a single low-noise Skipped row so
+    # there's an audit trail. We deliberately do NOT recommend "fix the
+    # YAML" — in practice the file came verbatim from Copilot Studio's
+    # exporter and is overwritten on the next ``/scan``.
+    if unparseable:
+        names = ", ".join(unparseable[:10])
+        overflow = f" (+{len(unparseable) - 10} more)" if len(unparseable) > 10 else ""
+        studio_link_for_unparseable = _studio_link_md(runner, agent_name, "the agent in Copilot Studio")
         results.append(CheckResult(
             checkpoint_id="CONFIG-014", category=f"Topics ({label})",
-            priority=Priority.MEDIUM.value, status=Status.WARNING.value,
-            description=f"{label}: Topic YAML parse errors",
-            result=f"{len(parse_errors)} topic file(s) failed to parse: {', '.join(parse_errors[:5])}{'...' if len(parse_errors) > 5 else ''}",
-            remediation="Open the listed files and fix the YAML syntax errors so they can be validated.",
+            priority=Priority.LOW.value, status=Status.SKIPPED.value,
+            description=f"{label}: Topic description quality (unparseable files skipped)",
+            result=(
+                f"{len(unparseable)} topic file(s) could not be parsed as YAML and were "
+                f"skipped for description-quality checks: {names}{overflow}"
+            ),
+            remediation=(
+                f"These files were written verbatim by Copilot Studio's exporter. "
+                f"Open each topic in {studio_link_for_unparseable} \u2192 Topics and confirm "
+                "it loads in the Code editor without errors. If it does, no action is needed; "
+                "if it doesn't, edit the topic in the Code editor and save \u2014 then re-run `/scan`."
+            ),
         ))
 
     if not checked:
@@ -552,7 +636,7 @@ def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_n
             priority=Priority.MEDIUM.value, status=Status.FAILED.value,
             description=f"{label}: Topic descriptions contain placeholders",
             result=f"{len(has_placeholder)} topic(s) have placeholder text instead of a real description. Topics: {topic_list}",
-            remediation="Open these topics in Copilot Studio and replace the placeholder text in the Description field with specific trigger conditions and examples.",
+            remediation=f"Open {studio_link} \u2192 Topics and replace the placeholder text in each topic's Description field with specific trigger conditions and examples.",
             doc_link=f"{DOC_BASE}/customize#customize-topics",
         ))
 
@@ -563,7 +647,7 @@ def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_n
             priority=Priority.MEDIUM.value, status=Status.WARNING.value,
             description=f"{label}: Topic descriptions too short",
             result=f"{len(too_short)} topic(s) under {_MIN_DESCRIPTION_WORDS} words: {', '.join(too_short[:5])}{'...' if len(too_short) > 5 else ''}",
-            remediation="Expand descriptions with trigger conditions, valid examples, and exclusion criteria for better routing.",
+            remediation=f"Open {studio_link} \u2192 Topics and expand each topic's description with trigger conditions, valid examples, and exclusion criteria for better routing.",
             doc_link=f"{DOC_BASE}/customize#customize-topics",
         ))
 
@@ -607,7 +691,7 @@ _READY_STATUSES = {"completed", "indexed", "ready", "succeeded"}
 _NOT_READY_STATUSES = {"pending", "crawling", "queued", "provisioning", "failed", "error"}
 
 
-def _check_knowledge_sources(agent_path: Path, label: str, runner=None) -> list[CheckResult]:
+def _check_knowledge_sources(agent_path: Path, label: str, runner=None, agent_name: str = "") -> list[CheckResult]:
     """
     CONFIG-013: Verify that all configured knowledge sources have completed
     their initial crawl and are fully indexed.
@@ -623,7 +707,7 @@ def _check_knowledge_sources(agent_path: Path, label: str, runner=None) -> list[
             checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description=f"{label}: Knowledge source readiness",
-            result="No knowledge directory found — no sources configured",
+            result="No knowledge directory found \u2014 no sources configured",
         ))
         return results
 
@@ -648,14 +732,14 @@ def _check_knowledge_sources(agent_path: Path, label: str, runner=None) -> list[
             checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description=f"{label}: Knowledge source readiness",
-            result="Cannot verify — Copilot Studio API authentication required",
+            result="Cannot verify \u2014 Copilot Studio API authentication required",
         ))
         return results
 
-    return _check_knowledge_sources_via_gateway(pva, bot_id, knowledge_files, label)
+    return _check_knowledge_sources_via_gateway(pva, bot_id, knowledge_files, label, runner, agent_name)
 
 
-def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list, label: str) -> list[CheckResult]:
+def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list, label: str, runner=None, agent_name: str = "") -> list[CheckResult]:
     """Check knowledge source status using the Island Gateway API.
 
     Note on local-to-remote matching: the local filename is derived from the
@@ -665,6 +749,8 @@ def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list
     components, so we use a count comparison plus per-remote status check.
     """
     results = []
+    studio_link = _studio_link_md(runner, agent_name, "the agent in Copilot Studio")
+    knowledge_path_hint = f"workspace/agents/{agent_name}/knowledge/" if agent_name else "workspace/agents/{slug}/knowledge/"
 
     try:
         sources = pva.get_knowledge_sources(bot_id)
@@ -674,7 +760,7 @@ def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=f"{label}: Knowledge source crawl status",
             result=f"Could not query Copilot Studio API: {e}",
-            remediation="Check authentication and retry. Verify status manually in Copilot Studio → Knowledge.",
+            remediation=f"Check authentication and retry. Verify status manually under {studio_link} \u2192 Knowledge.",
         ))
         return results
 
@@ -691,10 +777,10 @@ def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list
                 "component(s) returned from Copilot Studio. Some sources may not be published."
             ),
             remediation=(
-                "Publish the agent in Copilot Studio to provision missing sources, "
+                f"Publish {studio_link} to provision missing sources, "
                 "or remove the local file if it should not exist. Identify mismatched "
-                "sources by comparing filenames in workspace/agents/{slug}/knowledge/ against "
-                "Copilot Studio → Knowledge."
+                f"sources by comparing filenames in {knowledge_path_hint} against the "
+                f"Knowledge tab in {studio_link}."
             ),
         ))
 
@@ -725,7 +811,7 @@ def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list
                 checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
                 priority=Priority.HIGH.value, status=Status.PASSED.value,
                 description=f"{label}: '{name}' ({source_type})",
-                result=f"Status: {crawl_status} — indexed and ready",
+                result=f"Status: {crawl_status} \u2014 indexed and ready",
             ))
         elif crawl_status in _NOT_READY_STATUSES:
             all_ready = False
@@ -733,11 +819,11 @@ def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list
                 checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
                 priority=Priority.HIGH.value, status=Status.FAILED.value,
                 description=f"{label}: '{name}' ({source_type})",
-                result=f"Status: {crawl_status} — not ready for deployment",
+                result=f"Status: {crawl_status} \u2014 not ready for deployment",
                 remediation=(
                     f"Knowledge source '{name}' has not completed indexing. "
-                    "Wait for the crawl to finish, or check for errors in "
-                    "Copilot Studio → Knowledge."
+                    f"Wait for the crawl to finish, or check for errors under "
+                    f"{studio_link} \u2192 Knowledge."
                 ),
             ))
         elif crawl_status:
@@ -750,7 +836,7 @@ def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list
                 description=f"{label}: '{name}' ({source_type})",
                 result=f"Unknown crawl status: {crawl_status}",
                 remediation=(
-                    "Verify in Copilot Studio → Knowledge whether the source has "
+                    f"Verify under {studio_link} \u2192 Knowledge whether the source has "
                     "finished indexing. File an issue so this status string can be "
                     "added to the readiness allowlist."
                 ),
@@ -768,7 +854,7 @@ def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list
                     "API did not return a `status` field for this source."
                 ),
                 remediation=(
-                    "Verify in Copilot Studio → Knowledge whether the source has "
+                    f"Verify under {studio_link} \u2192 Knowledge whether the source has "
                     "finished indexing before deploying."
                 ),
             ))
