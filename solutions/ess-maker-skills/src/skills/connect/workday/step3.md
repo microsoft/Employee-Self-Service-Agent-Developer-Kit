@@ -121,13 +121,16 @@ Do this silently — do not tell the user about app role assignments.
 Read `installPath` and `partialInstall` from `.local/connect/workday/config.json`.
 
 **If `partialInstall` is `true`**, the tenant has 1 or 2 legacy Workday
-connection refs (`d6081` and/or `0786a`) but not the full 3 — likely a
-prior install that errored out. Do NOT start a fresh simplified install
-on top. Use the **Legacy path** section below, walk the user through
-creating the missing connection(s) only, and skip the connections that
-already show as configured in Power Platform. Surface a brief note to
-the user that you detected a partial legacy install and are completing
-it rather than switching paths.
+connection refs (`d6081` and/or `0786a`) but not the full 3. Treat this
+as a **legacy repair**, not a fresh simplified install:
+
+- **Reuse** refs that already exist and show **Connected**.
+- **Repair or recreate** refs that exist but are not Connected.
+- **Create** only refs that are missing.
+
+Do NOT switch paths mid-repair. Use the **Legacy path** section below
+and surface a brief note to the user that you detected a partial legacy
+install and are completing that repair path.
 
 ### Simplified path (2 connections)
 
@@ -398,7 +401,7 @@ Workday user-context system topic.
   simplified extension pack ships as a V2 topic
   (`WorkdaySystemGetUserContextV2`). Confirm the exact topic name by
   listing the installed Workday system topics under
-  `my/agents/{slug}/topics/` (look for the Workday "Set User Context"
+  `.local/agents/{slug}/topics/` (look for the Workday "Set User Context"
   system topic) and use that topic's actual dialog id. Do NOT assume the
   legacy name on a simplified install.
 
@@ -468,6 +471,10 @@ python scripts/fetch_and_setup.py --url "{ENV_URL}" --bot-id "{BOT_ID}" --name "
 
 Build a results table from all checks, based on `installPath`.
 
+For the topic redirect check, do not hard-code a single topic name.
+Treat the check as pass when `user-context-setup.mcs.yml` contains a
+`BeginDialog` that points to the resolved `USER_CONTEXT_DIALOG`.
+
 **If INSTALL_PATH is `simplified`:**
 
 **Message:**
@@ -480,7 +487,8 @@ Post-install verification:
 | Connection: Dataverse | {✅ or ❌} |
 | Flow: ESS HR Workday Get User Context | {✅ Enabled or ❌ Disabled} |
 | Flow: ESS HR Workday | {✅ Enabled or ❌ Disabled} |
-| Topic redirect: User Context → Workday | {✅ Pushed or ❌ Missing} |
+| Environment variables (legacy-only) | ✅ N/A for simplified |
+| Topic redirect: User Context → Workday user-context topic | {✅ Pushed or ❌ Missing} |
 
 {If any ❌ items, show specific fix instructions for each.}
 
@@ -500,7 +508,7 @@ Post-install verification:
 | Flow: ESS HR Workday Get User Context | {✅ Enabled or ❌ Disabled} |
 | Flow: ESS HR Workday | {✅ Enabled or ❌ Disabled} |
 | Environment variable: AccountName | {✅ Set or ⚠️ Verify manually} |
-| Topic redirect: User Context → Workday | {✅ Pushed or ❌ Missing} |
+| Topic redirect: User Context → Workday user-context topic | {✅ Pushed or ❌ Missing} |
 
 {If any ❌ items, show specific fix instructions for each.}
 
