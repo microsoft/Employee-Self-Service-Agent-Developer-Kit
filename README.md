@@ -8,24 +8,52 @@ A monorepo of solutions, samples, and tooling for the Microsoft Employee Self-Se
 
 This repo is a **monorepo of solutions** under [`solutions/`](solutions/). Each solution is a self-contained tool with its own purpose, dependencies, and instructions.
 
-**To use a solution, open its folder in VS Code as the workspace root** — not the repo root. Each solution's slash-commands, Copilot instructions, and scripts are scoped to that folder.
+### ⚠️ Important: open the right folder in VS Code
 
-### How to open a solution folder in VS Code
+The kit's slash-commands (`/setup`, `/flightcheck`, etc.) **only appear when you open a specific solution folder as your VS Code workspace** — not the top-level repo folder. If you open the wrong folder, Copilot Chat will not know about the kit and `/setup` will do nothing.
 
-Pick whichever option fits how you work:
+### How to open `ess-maker-skills` as a workspace (no terminal needed)
 
-- **Command line:**
-  ```bash
-  git clone https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit.git
-  code Employee-Self-Service-Agent-Developer-Kit/solutions/ess-maker-skills
-  ```
-  *(The `code` command requires VS Code's CLI to be on your PATH. On macOS/Linux it usually is by default. On Windows, install via the VS Code installer's "Add to PATH" option.)*
+1. **Get the code.**
+   On the GitHub page, click the green **`< > Code`** button → **`Download ZIP`**. Unzip the file somewhere on your computer (for example, `Documents\Employee-Self-Service-Agent-Developer-Kit`). *(Or, if you already use Git, clone the repo with your tool of choice — GitHub Desktop, Visual Studio, etc.)*
 
-- **VS Code menu:** `File` → `Open Folder...` → navigate to the `solutions/ess-maker-skills/` subfolder of your clone → click `Select Folder`.
+2. **Open VS Code.**
 
-- **File Explorer / Finder (right-click):** Right-click the `solutions/ess-maker-skills/` folder → `Open with Code` (Windows) or `New VS Code Window at Folder` (macOS, after enabling the Finder integration in VS Code's Code → Preferences → Settings).
+3. **Click `File` → `Open Folder…`** (keyboard shortcut: `Ctrl+K Ctrl+O`).
 
-Once the folder is open as the workspace root, the `/setup`, `/flightcheck`, and other slash-commands appear in GitHub Copilot Chat.
+4. **Navigate INSIDE the unzipped folder, then INTO `solutions`, and select `ess-maker-skills`.**
+
+   The full path you select should look like:
+   ```
+   Employee-Self-Service-Agent-Developer-Kit\solutions\ess-maker-skills
+   ```
+
+   ✅ **Correct** — pick this:
+   ```
+   Employee-Self-Service-Agent-Developer-Kit\
+     solutions\
+       ess-maker-skills\    ← select this folder, then click "Select Folder"
+   ```
+
+   ❌ **Wrong** — do NOT pick the top-level folder:
+   ```
+   Employee-Self-Service-Agent-Developer-Kit\    ← do NOT pick this
+   ```
+
+5. **Click `Select Folder`.** VS Code will open with `ess-maker-skills` as your workspace root.
+
+6. **Open Copilot Chat.** Click the chat icon in the left sidebar (or press `Ctrl+Alt+I`).
+
+7. **Type `/setup`** and press Enter. The kit will guide you from there.
+
+### "I opened the wrong folder — now what?"
+
+If you typed `/setup` and nothing happened, you probably opened the top-level repo folder. Check the file Explorer in VS Code's left sidebar:
+
+- If you see `solutions`, `samples`, `LICENSE`, `CONTRIBUTING.md` — **you're at the wrong level.**
+- If you see `.github`, `scripts`, `src`, `workspace` — **you're in the right place.**
+
+To fix it: `File` → `Open Folder...` again, this time double-click into `solutions`, click on `ess-maker-skills` once to select it, then click `Select Folder`.
 
 ## Solutions
 
