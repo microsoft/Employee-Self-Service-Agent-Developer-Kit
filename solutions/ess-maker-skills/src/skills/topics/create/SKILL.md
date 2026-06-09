@@ -6,7 +6,7 @@ This skill guides the user through creating a new Copilot Studio topic.
 
 - Do NOT run terminal commands or scripts. Use built-in file reading and writing tools only.
 - ALWAYS read existing topic files in the user's agent folder (`{agent.folder}/topics/`) as schema examples before generating any YAML.
-- ALWAYS read `my/config.json` to get the agent folder name and schema name.
+- ALWAYS read `.local/config.json` to get the agent folder name and schema name.
 - Write the new topic file to `{agent.folder}/topics/{TopicName}.mcs.yml`.
 - After writing the file, check for errors using the diagnostics tool on the new file.
 - **TEMPLATE CONFIG IS THE DEFAULT**: For any scenario that calls ServiceNow or Workday, use the **Template Config + Shared Flow** pattern. This is the official ESS extensibility pattern. The topic calls the existing shared system topic (e.g., `ServiceNowHRSDSystemGetCommonExecution`), which invokes the shared orchestrator flow. Do NOT create standalone cloud flows for these connectors.
@@ -113,11 +113,11 @@ For any scenario that involves data collection + external system calls, think th
 
 ## Step 4: Check for Existing Patterns
 
-Read the agent snapshot at `my/agents/{agent.slug}/topics.md` to see if similar topics already exist. If a similar pattern exists:
+Read the agent snapshot at `workspace/agents/{agent.slug}/topics.md` to see if similar topics already exist. If a similar pattern exists:
 - Tell the user: "I found a similar topic ({name}) that does {X}. I'll use its pattern as a reference."
 - Read the existing topic file to understand the action chain.
 
-If the topic calls a workflow, check `my/agents/{agent.slug}/workflows.md` to see if a suitable workflow already exists. If not, tell the user they'll also need a workflow and offer to create one after the topic.
+If the topic calls a workflow, check `workspace/agents/{agent.slug}/workflows.md` to see if a suitable workflow already exists. If not, tell the user they'll also need a workflow and offer to create one after the topic.
 
 ## Step 5: Generate the Topic YAML
 
@@ -162,7 +162,7 @@ The topic calls the shared system topic, which looks up a template config by
 topic to work. **Create it before writing the topic file.**
 
 1. **Try to use the Dataverse MCP** regardless of what `templateConfigsDiscovered`
-   says in `my/config.json`. The flag may be stale. Search for Dataverse tools
+   says in `.local/config.json`. The flag may be stale. Search for Dataverse tools
    by calling `tool_search_tool_regex` with pattern `dataverse|Dataverse`.
    If tools are found, proceed with automated creation. If no tools are found,
    fall back to manual instructions (see "Manual Fallback" below).
@@ -206,7 +206,7 @@ its steps. The user should not have to manage the dependency chain manually.
 
 ### 6.3 — Write the topic file
 
-1. Read `my/config.json` to get `agent.folder`.
+1. Read `.local/config.json` to get `agent.folder`.
 2. Write the topic file to `{agent.folder}/topics/{filename}.mcs.yml`.
 
 ### 6.4 — Scan for errors

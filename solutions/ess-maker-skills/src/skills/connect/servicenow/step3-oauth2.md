@@ -8,7 +8,7 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 **Do NOT show internal variable names or assignments to the user.** Never
 display text like "CLIENT_ID = ..." or "PACK_NAME = ..." in chat.
 
-Read `my/connect/servicenow/config.json` to restore INSTANCE_NAME,
+Read `.local/connect/servicenow/config.json` to restore INSTANCE_NAME,
 SNOW_USAGE (from `usage`), CLIENT_ID (from `oauth.clientId`).
 
 The CLIENT_SECRET should still be in memory from step 2. If the agent
@@ -92,10 +92,10 @@ Wait for the user to paste the URL. Save it as CORRECT_REDIRECT.
 Call the ServiceNow MCP `update_record` tool to fix the redirect URL:
 
 - `table`: `"oauth_entity"`
-- `sys_id`: read from `my/connect/servicenow/config.json` at `oauth.sysId`
+- `sys_id`: read from `.local/connect/servicenow/config.json` at `oauth.sysId`
 - `data`: `"{\"redirect_url\": \"{CORRECT_REDIRECT}\"}"`
 
-Update `my/connect/servicenow/config.json` — set `oauth.redirectUrl` to
+Update `.local/connect/servicenow/config.json` — set `oauth.redirectUrl` to
 CORRECT_REDIRECT.
 
 **Message:**
@@ -152,10 +152,10 @@ Go back to section 3.2 with CURRENT_PACK set to `hrsd`.
 
 **Otherwise (single pack, or second pack just finished):**
 
-Update `my/connect/servicenow/tasks.md` — change step 3 from
+Update `.local/connect/servicenow/tasks.md` — change step 3 from
 `- [ ]` to `- [x]`.
 
-Update `my/connect/servicenow/config.json` — set the status of each
+Update `.local/connect/servicenow/config.json` — set the status of each
 installed pack from `"pending"` to `"installed"` in the `packs` object.
 
 **Message:**

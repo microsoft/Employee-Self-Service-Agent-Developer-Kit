@@ -6,7 +6,7 @@ environment via push.
 
 ## CRITICAL — Local Files Are a Working Copy
 
-The files in `my/agents/{slug}/` are a **working copy** of what's deployed in
+The files in `workspace/agents/{slug}/` are a **working copy** of what's deployed in
 Copilot Studio. Deleting a local file is NOT the same as deleting the topic
 from the live agent. You MUST push the deletion to Copilot Studio via
 `push.py` for it to take effect. **NEVER stop after deleting only the local
@@ -14,7 +14,7 @@ file.**
 
 ## Rules
 
-- ALWAYS read `my/config.json` to get the agent folder, slug, and schema name.
+- ALWAYS read `.local/config.json` to get the agent folder, slug, and schema name.
 - ALWAYS checkpoint before deleting anything.
 - ALWAYS push the deletion to Copilot Studio after removing the local file.
 - NEVER delete a file without confirming with the user first.
@@ -23,7 +23,7 @@ file.**
 
 ## Step 1: Identify the Topic
 
-Read `my/config.json` to get `agent.folder` and `agent.slug`.
+Read `.local/config.json` to get `agent.folder` and `agent.slug`.
 
 If the user named a specific topic, find the matching file in
 `{agent.folder}/topics/`. Match by:
