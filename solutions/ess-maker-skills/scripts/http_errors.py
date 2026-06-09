@@ -41,18 +41,29 @@ class APIError(requests.exceptions.HTTPError):
     still catch it. Adds structured fields for display formatting.
     """
 
-    def __init__(self, response, resource_name=None, operation=None,
-                 required_role=None, message=None, tip=None):
-        self.status_code = response.status_code if response is not None else 0
+    def __init__(self, response=None, resource_name=None, operation=None,
+                 required_role=None, message=None, tip=None, status_code=None):
+        # When a response is provided (the common case), pull diagnostics
+        # from it. When it isn't (e.g. a synthetic AuthExpiredError raised
+        # by something that doesn't have a Response on hand), the caller
+        # must supply status_code so the friendly message picks the right
+        # template.
+        if response is not None:
+            self.status_code = response.status_code
+            self.url = (response.request.url if response.request else None)
+            self.request_id = response.headers.get("x-ms-request-id")
+            self._method = (
+                response.request.method if response.request else None
+            )
+        else:
+            self.status_code = status_code or 0
+            self.url = None
+            self.request_id = None
+            self._method = None
+
         self.resource_name = resource_name
         self.operation = operation or "access"
         self.required_role = required_role
-        self.url = (response.request.url if response is not None
-                    and response.request else None)
-        self.request_id = (
-            response.headers.get("x-ms-request-id")
-            if response is not None else None
-        )
 
         # Build user-facing message
         friendly = _friendly_name(resource_name)
@@ -84,15 +95,7 @@ class APIError(requests.exceptions.HTTPError):
         if self.url:
             # Truncate URL to avoid leaking full query strings
             display_url = self.url.split("?")[0]
-            method_verb = (self.operation or "GET").upper()
-            if method_verb in ("READ", "ACCESS"):
-                method_verb = "GET"
-            elif method_verb == "UPDATE":
-                method_verb = "PATCH"
-            elif method_verb == "CREATE":
-                method_verb = "POST"
-            elif method_verb == "DELETE":
-                method_verb = "DELETE"
+            method_verb = (self._method or "GET").upper()
             lines.append(
                 f"  Detail: HTTP {self.status_code} — {method_verb} {display_url}"
             )
@@ -112,7 +115,7 @@ def _build_message(status_code, friendly_resource, operation, required_role):
         )
     if status_code == 401:
         return (
-            "Your session has expired or the token is invalid."
+            "Your session has expired or the token is invalid (HTTP 401)."
         )
     if status_code == 403:
         return (
