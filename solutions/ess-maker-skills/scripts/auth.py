@@ -34,6 +34,8 @@ except ImportError:
     print("ERROR: 'urllib3' / 'requests' not found. Run: pip install requests")
     sys.exit(1)
 
+from http_errors import APIError, raise_api_error  # noqa: E402
+
 
 # Microsoft public client ID for Power Platform CLI / Dataverse delegated access.
 # Source: https://learn.microsoft.com/power-platform/admin/programmability-authentication-v2
@@ -59,9 +61,27 @@ HEADERS_BASE = {
 }
 
 
-class AuthExpiredError(RuntimeError):
+class AuthExpiredError(APIError):
     """Raised when a Dataverse call returns 401. Callers can catch this and
-    re-authenticate without losing in-flight push state."""
+    re-authenticate without losing in-flight push state.
+
+    Subclasses APIError so generic ``except APIError`` handlers (e.g. in
+    discover.py, fetch_and_setup.py) also catch 401s and render the friendly
+    "session expired" message. Code that wants to specifically intercept 401
+    for re-auth (push.py) keeps using ``except AuthExpiredError``.
+    """
+
+    def __init__(self, message=None, response=None):
+        # Preserve the legacy positional ``message`` argument for callers and
+        # tests that construct AuthExpiredError("...") directly. When a real
+        # Response is available, pass it through so URL / method / request_id
+        # show up in format_for_terminal() output.
+        super().__init__(
+            response=response,
+            status_code=401,
+            operation="access",
+            message=message,
+        )
 
 
 # Module-level requests Session with bounded retry-with-backoff for 429/5xx.
@@ -202,8 +222,8 @@ def query_all(env_url, token, entity_set, select, filter_expr=None):
         page += 1
         resp = _SESSION.get(url, headers=headers, timeout=120, verify=True)
         if resp.status_code == 401:
-            raise AuthExpiredError("Dataverse returned 401 (token expired or invalid)")
-        resp.raise_for_status()
+            raise AuthExpiredError(response=resp)
+        raise_api_error(resp, resource_name=entity_set, operation="read")
         data = resp.json()
         records = data.get("value", [])
         all_records.extend(records)
@@ -246,7 +266,7 @@ def retrieve_shared_principals_and_access(env_url, token, bot_id):
     headers = {**HEADERS_BASE, "Authorization": f"Bearer {token}"}
     resp = _SESSION.get(url, headers=headers, timeout=120, verify=True)
     if resp.status_code == 401:
-        raise AuthExpiredError("Dataverse returned 401 (token expired or invalid)")
+        raise AuthExpiredError(response=resp)
     resp.raise_for_status()
     return resp.json()
 
@@ -301,7 +321,7 @@ def dataverse_get(env_url, token, path, params=None):
     url = f"{env_url}/api/data/v9.2/{path.lstrip('/')}"
     resp = _SESSION.get(url, headers=headers, params=params, timeout=60, verify=True)
     if resp.status_code == 401:
-        raise AuthExpiredError("Dataverse returned 401 (token expired or invalid)")
+        raise AuthExpiredError(response=resp)
     resp.raise_for_status()
     return resp.json()
 
@@ -323,8 +343,8 @@ def update_record(env_url, token, entity_set, record_id, data):
     url = f"{env_url}/api/data/v9.2/{entity_set}({record_id})"
     resp = _SESSION.patch(url, headers=headers, json=data, timeout=60, verify=True)
     if resp.status_code == 401:
-        raise AuthExpiredError("Dataverse returned 401 (token expired or invalid)")
-    resp.raise_for_status()
+        raise AuthExpiredError(response=resp)
+    raise_api_error(resp, resource_name=entity_set, operation="update")
     return True
 
 
@@ -340,8 +360,8 @@ def create_record(env_url, token, entity_set, data):
     url = f"{env_url}/api/data/v9.2/{entity_set}"
     resp = _SESSION.post(url, headers=headers, json=data, timeout=60, verify=True)
     if resp.status_code == 401:
-        raise AuthExpiredError("Dataverse returned 401 (token expired or invalid)")
-    resp.raise_for_status()
+        raise AuthExpiredError(response=resp)
+    raise_api_error(resp, resource_name=entity_set, operation="create")
     result = resp.json()
     return result.get("botcomponentid", result.get("id"))
 
@@ -356,8 +376,8 @@ def delete_record(env_url, token, entity_set, record_id):
     url = f"{env_url}/api/data/v9.2/{entity_set}({record_id})"
     resp = _SESSION.delete(url, headers=headers, timeout=60, verify=True)
     if resp.status_code == 401:
-        raise AuthExpiredError("Dataverse returned 401 (token expired or invalid)")
-    resp.raise_for_status()
+        raise AuthExpiredError(response=resp)
+    raise_api_error(resp, resource_name=entity_set, operation="delete")
     return True
 
 

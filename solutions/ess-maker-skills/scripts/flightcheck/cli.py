@@ -26,6 +26,8 @@ import argparse
 import json
 import os
 import sys
+import webbrowser
+from pathlib import Path
 
 # Ensure scripts/ is on the path so we can import auth
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -95,6 +97,25 @@ FULL_SCOPE = [
 ]
 
 
+def open_report_in_browser(output_dir):
+    """Open the FlightCheck HTML report in the default browser.
+
+    Uses ``Path.as_uri()`` to build an RFC 8089 ``file://`` URI so paths
+    with spaces or non-ASCII characters (e.g. Windows OneDrive paths like
+    ``C:\\Users\\foo\\OneDrive - Microsoft Corporation\\...``) open
+    reliably across platforms.
+
+    Returns:
+        True if a browser tab was launched, False if the report file is
+        missing (e.g. FlightCheck aborted before save_results ran) or
+        ``webbrowser.open()`` reported it could not find a browser.
+    """
+    report_path = Path(output_dir) / "report.html"
+    if not report_path.exists():
+        return False
+    return webbrowser.open(report_path.resolve().as_uri())
+
+
 def main():
     parser = argparse.ArgumentParser(description="ESS FlightCheck — Pre-deployment Validator")
     parser.add_argument(
@@ -113,6 +134,10 @@ def main():
     parser.add_argument(
         "--environment-id",
         help="Override the Power Platform environment ID (used by environment_picker.py)",
+    )
+    parser.add_argument(
+        "--no-open", action="store_true",
+        help="Don't open the HTML report in a browser after running",
     )
     args = parser.parse_args()
 
@@ -289,6 +314,10 @@ def main():
 
     # Save results
     save_results(result, args.output)
+
+    # Open HTML report in browser (skip with --no-open for CI / headless runs)
+    if not args.no_open:
+        open_report_in_browser(args.output)
 
     # Exit code
     sys.exit(1 if result.failed > 0 else 0)

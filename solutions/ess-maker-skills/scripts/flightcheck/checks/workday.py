@@ -2,20 +2,26 @@
 # Licensed under the MIT License.
 
 """
-ESS FlightCheck — Workday Deep Validation (WD-ENV-xxx, WD-CONN-xxx, WD-FLOW-xxx, WD-WF-xxx)
+ESS FlightCheck — Workday Deep Validation (WD-ENV-xxx, WD-CONN-xxx, WD-FLOW-xxx, WD-WF-xxx, WD-WF-CAT-xxx)
 
 Validates Workday environment variables, connection references, flow status,
-and tests all 17 ESS SOAP workflows against the actual Workday API.
+tests all 17 ESS SOAP workflows against the actual Workday API, and surfaces
+a manual checklist for any Workday scenario referenced in customer topics
+that is outside the OOTB scenario catalog (WD-WF-CAT-001).
 
 The SOAP tests reuse the Kit's Workday MCP client (src/mcp/workday/client.py)
 or, when running standalone, build SOAP envelopes directly with httpx.
 """
 
+import base64
+import binascii
 import getpass
 import json
 import os
 import re
 import sys
+from pathlib import Path
+from datetime import datetime, timedelta, timezone
 from xml.sax.saxutils import escape as xml_escape
 
 # Use defusedxml everywhere we parse SOAP responses. Workday talks to us over
@@ -116,6 +122,116 @@ _REF_SUFFIX_ROLES = {
     "0786a": "Generic User (ISU)",
     "d6081": "Context Generic User (ISU)",
 }
+
+# ─────────────────────────────────────────────────────────────────────────
+# WD-CONN-102 — Workday SAML signing certificate health
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Why this check belongs in the Workday block (the SOAP/REST runtime
+# chain it sits on):
+#
+#   ESS user-context Workday calls execute through two Power Automate
+#   flows under workspace/agents/{slug}/workflows/ — ``ESS HR Workday``
+#   (SOAP, called by topics via ``WorkdaySystemGetCommonExecution``)
+#   and ``WorkdayRESTExecution`` (REST). Both flows declare exactly
+#   one Workday connection in their workflow.json:
+#
+#     "shared_workdaysoap": {
+#       "connection": {
+#         "connectionReferenceLogicalName":
+#             "new_sharedworkdaysoap_ff0df"
+#       },
+#       "runtimeSource": "invoker"
+#     }
+#
+#   The ``ff0df`` connection is configured with Power Platform's
+#   "Microsoft Entra ID Integrated" authentication type (per
+#   src/skills/connect/workday/step3.md lines 155-166), not Basic
+#   auth. That auth type authenticates the signed-in employee against
+#   a federated Workday enterprise app in Entra (Application ID URI
+#   ``http://www.workday.com/{WD_TENANT}``), which is the same
+#   enterprise app the connect skill provisions in step2.md lines
+#   191-264. The X.509 signing certificate WD-CONN-102 inspects lives
+#   on that enterprise app as a keyCredential. It is the most visible
+#   expiry-driven health signal on the federation app that the
+#   user-context SOAP/REST runtime path depends on.
+#
+# What expiry actually breaks (and what it doesn't):
+#
+#   * Will break: end-user browser-based SAML SSO into Workday's web
+#     UI (employees clicking "Sign in with Microsoft" on workday.com)
+#     — Entra cannot sign SAML assertions Workday will accept.
+#   * May break (depends on Workday API Client config): the
+#     ``ff0df``-routed OAuth exchange used by ``ESS HR Workday`` /
+#     ``WorkdayRESTExecution``. Power Platform "Microsoft Entra ID
+#     Integrated" exchanges an Entra-issued token at Workday's OAuth
+#     token endpoint; whether Workday validates that JWT against this
+#     X.509 public key (configured under the API Client's "Authorized
+#     Public Key") or against Entra's auto-rotating JWKS is a
+#     per-tenant setting and not exposed via the kit's APIs. The
+#     check therefore surfaces the cert state for operator triage
+#     rather than asserting a specific runtime break.
+#   * Will NOT break: ISU-routed SOAP over ``d6081`` (Context
+#     Generic) and ``0786a`` (Generic User). Those use HTTP Basic
+#     auth with ISU username + password — no certificate in the
+#     handshake.
+#
+# The cert lives in two places, both wired up by hand during the
+# Workday SSO onboarding tutorial:
+#
+#   * Entra side: as keyCredential entries on the federated Workday
+#     enterprise app's servicePrincipal. Microsoft Graph exposes
+#     these on the v1.0 servicePrincipal entity, but the LIST endpoint
+#     omits the `keyCredentials` field by default — the response only
+#     carries it when ``$select`` projects it explicitly. WD-CONN-102
+#     uses ``graph.get_workday_saml_service_principals()`` which sets
+#     the right ``$select`` clause.
+#
+#   * Workday side: as a row in "Edit Tenant Setup - Security ->
+#     SAML Identity Providers". This is NOT reachable via any public
+#     Workday API the kit talks to (the SOAP RaaS / Worker services
+#     don't expose tenant security configuration). Comparison of the
+#     two thumbprints is therefore an operator step.
+#
+# WD-CONN-102 reads the Entra side automatically, surfaces the
+# current active-cert thumbprint and NotAfter date, and emits a
+# MANUAL CheckResult on the happy path with the precise Workday
+# navigation steps. It auto-escalates to WARNING when the active
+# cert is within CERT_EXPIRY_WARN_DAYS of expiry (or not yet valid),
+# and to FAILED when no cert exists or all certs are expired.
+#
+# A single SAML signing certificate uploaded to Workday produces TWO
+# keyCredential entries with the SAME ``customKeyIdentifier`` — one
+# with ``usage="Sign"`` (Entra's view of the private key) and one
+# with ``usage="Verify"`` (Workday's view of the public key). They
+# are coalesced into one logical certificate before classification.
+#
+# Source (validatable):
+#   Schema: https://graph.microsoft.com/v1.0/$metadata
+#           ComplexType Name="keyCredential" — fields used here:
+#             customKeyIdentifier (Edm.Binary, nullable) —
+#               base64-encoded SHA-1 thumbprint of the DER cert
+#             keyId (Edm.Guid)
+#             startDateTime, endDateTime (Edm.DateTimeOffset)
+#             usage (Edm.String, "Sign" | "Verify")
+#             type (Edm.String, "AsymmetricX509Cert" for SAML certs)
+#   Docs:   https://learn.microsoft.com/graph/api/resources/keycredential
+
+# Active cert is flagged WARNING when its NotAfter is within this many
+# days of "now". Aligned with the typical 30-day rotation window
+# operators schedule for SAML cert rollovers.
+CERT_EXPIRY_WARN_DAYS = 30
+
+# Authoritative reference for both halves of the Workday SAML cert
+# install: Task 1 walks the operator through generating the X.509
+# public key Workday will trust, Task 2 walks them through pasting
+# its thumbprint into "Edit Tenant Setup - Security". Verified in
+# src/reference/ess-docs/integrations/workday.md (lines 77-104) which
+# is the vendored snapshot of this MS Learn page.
+_WORKDAY_SSO_DOC_LINK = (
+    "https://learn.microsoft.com/en-us/copilot/microsoft-365/"
+    "employee-self-service/workday#task-1-create-the-x509-public-key"
+)
 
 # The 17 ESS Workday workflow definitions (ported from Test-WorkdayWorkflows.ps1)
 WORKFLOWS = [
@@ -222,6 +338,23 @@ def run_workday_checks(runner) -> list[CheckResult]:
     runs at the end of the workday block when WD-PKG-001 detected a
     known flavor, so its diagnostic can list which Microsoft-shipped
     refs are bound vs. unbound for the detected flavor.
+
+    WD-WF-CAT-001 (custom-workflow inventory checklist) runs after the
+    SOAP tests. It walks `workspace/agents/*/topics/*.mcs.yml` for
+    Workday scenario references that are NOT in the live OOTB catalog
+    resolved from the customer's Dataverse
+    (`msdyn_employeeselfservicetemplateconfigs` where `ismanaged=true`)
+    and surfaces them as a MANUAL row with a 4-item operator checklist.
+    WD-WF-CAT-LINK is the corresponding cross-link trailer emitted
+    from inside `_check_workflows` so admins reading a green 17-row
+    SOAP report don't miss the manual row.
+
+    WD-CONN-102 (Workday SAML signing certificate health) runs BEFORE
+    the no-Workday-integration early-return — the Entra Workday SAML
+    SP can exist (and its signing cert can be unhealthy) independent
+    of whether the Power Platform Workday connector is installed yet,
+    so this check is pre-deployment readiness even when the rest of
+    the Workday block would skip.
     """
     results: list[CheckResult] = []
 
@@ -235,6 +368,14 @@ def run_workday_checks(runner) -> list[CheckResult]:
 
     flavor = getattr(runner, "_workday_package_flavor", None)
 
+    # WD-CONN-102 — Workday SAML signing certificate health. Runs
+    # before the no-Workday-integration early-return because the Entra
+    # SAML SP is a pre-deployment dependency: the cert can be expired
+    # or missing before the customer has finished installing the
+    # Power Platform Workday connector, and we want to surface that
+    # gap pre-deploy. Gated only on graph availability (the check
+    # itself handles "no SAML SP found" as NOT_CONFIGURED).
+    results.extend(_check_saml_certificate_health(runner))
     # WD-CONN-010 — Workday single-Entra-tenant federation alignment.
     # Runs BEFORE the no-Workday early-return gate below because the
     # conflict scenario (a second Entra tenant wired up against a
@@ -274,6 +415,16 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # the operator sees binding diagnostics in context with the other
     # connection checks above.
     results.extend(_check_package_connection_completeness(runner))
+
+    # WD-WF-CAT-001 — Workday custom-workflow inventory checklist.
+    # Runs after the SOAP tests so the WD-WF-CAT-LINK trailer that
+    # `_check_workflows` emits inside its own returns has already
+    # populated `runner._workday_unknown_scenarios` (the trailer
+    # triggers the lazy discovery walk via _get_unknown_workday_scenarios).
+    # Emitting WD-WF-CAT-001 here ensures the full manual checklist
+    # appears in the per-Workday-block output even if there were no
+    # SOAP tests run (e.g. credentials unavailable).
+    results.extend(_check_custom_workflow_inventory(runner))
 
     return results
 
@@ -1805,6 +1956,648 @@ def _format_unhealthy_remediation(entry: dict, env_id: str) -> str:
     )
 
 
+def _format_cert_thumbprint(custom_key_identifier: str | None) -> tuple[str, bool]:
+    """Decode a base64 ``customKeyIdentifier`` into the colon-separated
+    uppercase hex thumbprint format Workday displays.
+
+    Returns ``(display_string, is_valid)``. ``is_valid`` is True only
+    when the input decodes to exactly 20 bytes (the SHA-1 digest of
+    the DER-encoded cert that Graph stores in ``customKeyIdentifier``).
+    For malformed or wrong-length inputs the original string is
+    returned with a ``(malformed)`` suffix so the operator can still
+    eyeball something in the result text without the check crashing.
+
+    Source (validatable): Microsoft Graph CSDL describes
+    ``customKeyIdentifier`` as Edm.Binary; for AsymmetricX509Cert
+    credentials it carries the SHA-1 thumbprint of the DER cert,
+    which is always 20 bytes. Reference:
+    https://learn.microsoft.com/graph/api/resources/keycredential
+    """
+    if not custom_key_identifier:
+        return ("(none)", False)
+    try:
+        # Graph returns customKeyIdentifier as a standard base64
+        # string. binascii.Error is the documented exception for any
+        # malformed base64 input.
+        decoded = base64.b64decode(custom_key_identifier, validate=True)
+    except (binascii.Error, ValueError):
+        return (f"{custom_key_identifier} (malformed)", False)
+    if len(decoded) != 20:
+        return (f"{custom_key_identifier} (malformed)", False)
+    return (":".join(f"{b:02X}" for b in decoded), True)
+
+
+def _parse_cert_datetime(iso_str: str | None) -> datetime | None:
+    """Parse a Graph ``Edm.DateTimeOffset`` (ISO-8601 with ``Z`` suffix
+    or explicit offset) into a timezone-aware ``datetime`` in UTC.
+
+    Returns ``None`` on parse failure or empty input. WD-CONN-102
+    treats unparseable dates as "unknown" rather than crashing — we'd
+    rather emit a slightly degraded result text than fail the whole
+    Workday block on a single malformed timestamp.
+    """
+    if not iso_str:
+        return None
+    s = iso_str.strip()
+    if not s:
+        return None
+    # fromisoformat in 3.11+ accepts the trailing "Z" only from 3.11
+    # onwards; normalize defensively. (CI pins 3.11+.)
+    if s.endswith("Z"):
+        s = s[:-1] + "+00:00"
+    try:
+        dt = datetime.fromisoformat(s)
+    except ValueError:
+        return None
+    if dt.tzinfo is None:
+        # Graph always returns offset-aware timestamps in practice, but
+        # if a naive datetime slips through, assume UTC rather than
+        # raising — the alternative would crash the whole check.
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
+def _group_workday_cert_keycredentials(
+    key_credentials: list[dict],
+) -> list[dict]:
+    """Coalesce a service principal's keyCredentials into one logical
+    certificate per ``customKeyIdentifier``.
+
+    Filters to ``type == "AsymmetricX509Cert"`` (other types like
+    Symmetric/X509CertAndPassword aren't SAML signing certs).
+
+    A single uploaded SAML signing cert appears in Graph as TWO
+    entries with the SAME ``customKeyIdentifier`` — usage=Sign for
+    the Entra-side private key and usage=Verify for the public
+    half. Counting them separately would double-report "you have 2
+    certs" when really you have 1. We group by ``customKeyIdentifier``
+    and prefer the Sign entry for metadata (it's the entry that
+    actually goes "live" when Entra signs an outgoing assertion).
+
+    Returns a list of dicts in keyCredentials-API order, each with:
+        customKeyIdentifier, key_id, usage (the surviving entry's
+        usage), display_name, start, end (parsed datetimes), raw
+        (the surviving entry — used for diagnostic detail), and
+        usages_seen (set of usage strings observed for this CKI —
+        used to flag the cert as "Sign-only" or "Verify-only", which
+        would indicate an incomplete upload).
+    """
+    by_cki: dict[str, dict] = {}
+    order: list[str] = []
+    for kc in key_credentials or []:
+        if not isinstance(kc, dict):
+            continue
+        if kc.get("type") != "AsymmetricX509Cert":
+            continue
+        cki = kc.get("customKeyIdentifier") or ""
+        if not cki:
+            # Defensive: no CKI ⇒ can't coalesce. Use the keyId so
+            # malformed entries are still surfaced rather than dropped
+            # silently, but flag them as "(no thumbprint)" downstream.
+            cki = f"__no_cki__:{kc.get('keyId', '')}"
+        usage = kc.get("usage") or ""
+        if cki not in by_cki:
+            order.append(cki)
+            by_cki[cki] = {
+                "customKeyIdentifier": kc.get("customKeyIdentifier") or "",
+                "key_id": kc.get("keyId") or "",
+                "usage": usage,
+                "display_name": kc.get("displayName") or "",
+                "start": _parse_cert_datetime(kc.get("startDateTime")),
+                "end": _parse_cert_datetime(kc.get("endDateTime")),
+                "raw": kc,
+                "usages_seen": {usage} if usage else set(),
+            }
+        else:
+            entry = by_cki[cki]
+            if usage:
+                entry["usages_seen"].add(usage)
+            # Prefer the Sign entry's metadata over Verify (Sign is
+            # what Entra actually invokes when minting an assertion).
+            if entry["usage"] != "Sign" and usage == "Sign":
+                entry["usage"] = "Sign"
+                entry["display_name"] = kc.get("displayName") or entry["display_name"]
+                # Sign and Verify share start/end in practice, but
+                # take Sign's if present.
+                s = _parse_cert_datetime(kc.get("startDateTime"))
+                e = _parse_cert_datetime(kc.get("endDateTime"))
+                if s is not None:
+                    entry["start"] = s
+                if e is not None:
+                    entry["end"] = e
+                entry["raw"] = kc
+    return [by_cki[c] for c in order]
+
+
+def _select_active_workday_cert(
+    cert_groups: list[dict],
+    preferred_thumbprint: str | None,
+    now: datetime,
+) -> tuple[dict | None, list[dict]]:
+    """Pick the *active* SAML signing cert out of a list of grouped
+    certs, returning ``(active, rollover_others)``.
+
+    When multiple AsymmetricX509Cert keyCredentials exist on the SP
+    (during a rollover window the operator uploads the new cert
+    alongside the old one), Entra exposes
+    ``preferredTokenSigningKeyThumbprint`` to identify which one is
+    currently in use. The value is a hex string (no separators); we
+    compare it against each cert's decoded thumbprint, case-folded.
+
+    Fallback when ``preferredTokenSigningKeyThumbprint`` is not set:
+    pick the first cert whose [startDateTime, endDateTime] window
+    contains ``now``. If none is currently valid, fall back to the
+    first cert in API order so we still surface *something* (callers
+    will classify that as expired or not-yet-valid downstream).
+    """
+    if not cert_groups:
+        return (None, [])
+
+    pref = (preferred_thumbprint or "").strip().lower()
+    if pref:
+        # Compare against the hex form WITHOUT colons (Entra's
+        # preferredTokenSigningKeyThumbprint is colon-free).
+        for cert in cert_groups:
+            display, ok = _format_cert_thumbprint(cert["customKeyIdentifier"])
+            if not ok:
+                continue
+            hex_no_colon = display.replace(":", "").lower()
+            if hex_no_colon == pref:
+                others = [c for c in cert_groups if c is not cert]
+                return (cert, others)
+
+    # No preferred thumbprint match — pick the first currently-valid
+    # cert (start <= now <= end). Treat unparseable dates as "no
+    # opinion" so we don't accidentally elect an obviously-expired
+    # cert over a healthy one with missing metadata.
+    for cert in cert_groups:
+        start, end = cert["start"], cert["end"]
+        if start is not None and start > now:
+            continue
+        if end is not None and end < now:
+            continue
+        others = [c for c in cert_groups if c is not cert]
+        return (cert, others)
+
+    # Nothing currently valid — pick the one with the latest endDateTime
+    # so the operator's diagnostic centers on "most recent expiry" rather
+    # than "first one we happened to see". Ties / missing dates fall back
+    # to API order.
+    with_end = [c for c in cert_groups if c["end"] is not None]
+    if with_end:
+        active = max(with_end, key=lambda c: c["end"])
+    else:
+        active = cert_groups[0]
+    others = [c for c in cert_groups if c is not active]
+    return (active, others)
+
+
+def _format_cert_detail_line(cert: dict, now: datetime) -> str:
+    """Render one cert group as a one-line summary for result text."""
+    display, _ok = _format_cert_thumbprint(cert["customKeyIdentifier"])
+    end = cert["end"]
+    if end is None:
+        expiry_str = "NotAfter=(unknown)"
+    else:
+        days = (end.date() - now.date()).days
+        if days < 0:
+            expiry_str = f"NotAfter={end.date().isoformat()} (EXPIRED {-days} days ago)"
+        else:
+            expiry_str = f"NotAfter={end.date().isoformat()} ({days} days remaining)"
+    start = cert["start"]
+    start_str = ""
+    if start is not None and start > now:
+        days_until = (start.date() - now.date()).days
+        start_str = f", NotBefore={start.date().isoformat()} (not yet valid for {days_until} more days)"
+    usages = sorted(cert.get("usages_seen") or set())
+    usage_str = "+".join(usages) if usages else "(no usage)"
+    name = cert.get("display_name") or "(no displayName)"
+    return f"thumbprint={display} [{usage_str}] '{name}' — {expiry_str}{start_str}"
+
+
+def _check_saml_certificate_health(runner) -> list[CheckResult]:
+    """WD-CONN-102 — Workday SAML signing certificate health.
+
+    Reads Entra-side keyCredential metadata for the federated Workday
+    SAML enterprise app(s) and surfaces:
+
+      * FAILED — SP exists but has no AsymmetricX509Cert
+        keyCredentials, OR all the credentials have expired.
+      * WARNING (hardening) — the active cert is expiring within
+        ``CERT_EXPIRY_WARN_DAYS`` days, OR its NotBefore is in the
+        future (not yet valid).
+      * MANUAL — active cert is healthy. The operator must compare
+        its thumbprint against the row in Workday's "Edit Tenant
+        Setup - Security -> SAML Identity Providers" because that
+        is not reachable from any Workday API the kit talks to.
+      * NOT_CONFIGURED — no federated Workday SAML enterprise app
+        registered in this tenant (the check is N/A — SAML SSO is
+        an optional add-on; ESS runtime calls authenticate via ISU
+        credentials, not via SAML).
+
+    Per AGENTS.md principle 7, multiple SPs are coalesced into at
+    most one CheckResult per distinct status. The result text lists
+    each SP and its per-cert detail; the remediation is a single
+    shared block keyed off the dominant bucket.
+
+    Mock tier (validatable): backed by Microsoft Graph
+    (MOCK_STATUS = "validatable" per tests/mocks/graph.py — schema
+    pinned against https://graph.microsoft.com/v1.0/$metadata for
+    ``servicePrincipal`` and ``keyCredential``). No cassette
+    required.
+    """
+    cp_id = "WD-CONN-102"
+    category = "Workday"
+    description = "Workday SAML signing certificate health"
+    doc_link = _WORKDAY_SSO_DOC_LINK
+
+    graph = getattr(runner, "graph", None)
+    if graph is None:
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=description,
+            result="Microsoft Graph client unavailable — skipping.",
+            remediation=(
+                "Re-run FlightCheck after Graph authentication succeeds."
+            ),
+            doc_link=doc_link,
+        )]
+
+    # Single Graph round-trip: ask the listing call to raise
+    # PermissionError on 401/403 instead of swallowing it into an
+    # empty list (get_all()'s default would otherwise masquerade
+    # "missing Application.Read.All consent" as "no Workday SAML
+    # app exists" and produce a falsely reassuring NOT_CONFIGURED).
+    # Same defensive pattern AUTH-006 / WD-CONN-010 use.
+    try:
+        workday_sps = graph.get_workday_saml_service_principals(
+            raise_on_permission_error=True,
+        )
+    except PermissionError as e:
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=description,
+            result=(
+                f"Cannot read Entra service principals: {e} "
+                "(HTTP 403 typically means Application.Read.All "
+                "is not consented)."
+            ),
+            remediation=(
+                "Grant Application.Read.All (or Directory.Read.All) "
+                "consent on the Graph app registration the kit uses, "
+                "then re-run FlightCheck. Without this consent the "
+                "check cannot tell whether a Workday SAML app exists "
+                "or read its certificate metadata."
+            ),
+            doc_link=doc_link,
+        )]
+    except Exception as e:
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=description,
+            result=f"Unable to query Entra service principals: {e}",
+            remediation=(
+                "Requires Application.Read.All (or Directory.Read.All) "
+                "consented on the Graph app registration. Re-run "
+                "FlightCheck after granting consent."
+            ),
+            doc_link=doc_link,
+        )]
+
+    if not workday_sps:
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            description=description,
+            result=(
+                "No federated Workday SAML enterprise app found in "
+                "Entra (filter: displayName starts with 'Workday' "
+                "and preferredSingleSignOnMode eq 'saml'). ESS uses "
+                "ISU credentials for runtime Workday calls, so end-"
+                "user SAML SSO into Workday is optional — but if your "
+                "deployment includes user-context Workday flows, "
+                "this means SAML SSO isn't configured and the "
+                "associated signing certificate health cannot be "
+                "validated."
+            ),
+            remediation=(
+                "If you don't use SAML SSO between Entra and Workday, "
+                "this check is not applicable. If you do, register "
+                "the Workday enterprise app from the Entra gallery, "
+                "configure SAML SSO, and upload the signing "
+                "certificate per the Workday SSO setup tasks."
+            ),
+            doc_link=doc_link,
+        )]
+
+    # ``saml_entity_ids`` (the canonical helper) is already imported
+    # at module load from ``._saml_utils``. The previous lazy import
+    # against ``checks.authentication._saml_entity_ids`` was a stale
+    # reference from before the helper was extracted to _saml_utils —
+    # it raised ImportError as soon as any Workday SAML SP with certs
+    # was returned, masking every cert-classification branch below.
+    now = datetime.now(timezone.utc)
+
+    # Classify each SP into exactly one of these buckets. Each list
+    # holds (sp_summary_string, remediation_hint) tuples so the
+    # output emitter can keep result text and remediation text
+    # aligned per bucket.
+    failed_entries: list[dict] = []
+    warning_entries: list[dict] = []
+    manual_entries: list[dict] = []
+
+    for sp in workday_sps:
+        sp_name = sp.get("displayName", "(unknown)")
+        app_id = sp.get("appId", "?")
+        sp_id = sp.get("id", "")
+        # Use the same id-suffix shortening WD-CONN-101 uses so
+        # operators can disambiguate "Workday" / "Workday Sandbox"
+        # rows that share the same display name.
+        id_suffix = sp_id[-6:] if sp_id else "?"
+        entity_ids = saml_entity_ids(sp.get("servicePrincipalNames") or [])
+        entity_ids_str = ", ".join(entity_ids) if entity_ids else "(none surfaced)"
+
+        cert_groups = _group_workday_cert_keycredentials(
+            sp.get("keyCredentials") or []
+        )
+
+        sp_header = (
+            f"  - {sp_name} (appId={app_id}, sp={id_suffix})\n"
+            f"    entity IDs: {entity_ids_str}"
+        )
+
+        if not cert_groups:
+            failed_entries.append({
+                "sp_name": sp_name,
+                "summary": (
+                    f"{sp_header}\n"
+                    f"    NO X.509 signing certificate registered on this app."
+                ),
+                "reason": "no_certs",
+            })
+            continue
+
+        active, others = _select_active_workday_cert(
+            cert_groups,
+            sp.get("preferredTokenSigningKeyThumbprint"),
+            now,
+        )
+
+        if active is None:
+            # Defensive: _select_active_workday_cert should always
+            # return SOMETHING when cert_groups is non-empty, but if
+            # it ever doesn't, treat as failed rather than crashing.
+            failed_entries.append({
+                "sp_name": sp_name,
+                "summary": (
+                    f"{sp_header}\n"
+                    f"    Unable to identify an active signing certificate."
+                ),
+                "reason": "no_active",
+            })
+            continue
+
+        active_end = active["end"]
+        active_start = active["start"]
+        all_expired = all(
+            (c["end"] is not None and c["end"] < now) for c in cert_groups
+        )
+
+        cert_line = _format_cert_detail_line(active, now)
+        rollover_lines = [
+            f"      rollover: {_format_cert_detail_line(c, now)}"
+            for c in others
+        ]
+        rollover_block = ("\n" + "\n".join(rollover_lines)) if rollover_lines else ""
+
+        if all_expired:
+            failed_entries.append({
+                "sp_name": sp_name,
+                "summary": (
+                    f"{sp_header}\n"
+                    f"    active: {cert_line}{rollover_block}"
+                ),
+                "reason": "all_expired",
+            })
+        elif active_end is not None and active_end < now:
+            # Active cert by preferred thumbprint is expired even
+            # though a rollover cert exists — operator forgot to
+            # update preferredTokenSigningKeyThumbprint after
+            # rolling over. Surface as FAILED with rollover hint.
+            failed_entries.append({
+                "sp_name": sp_name,
+                "summary": (
+                    f"{sp_header}\n"
+                    f"    active: {cert_line}{rollover_block}\n"
+                    "    Note: a rollover certificate exists; the "
+                    "active selection has not been updated."
+                ),
+                "reason": "active_expired_rollover_exists",
+            })
+        elif active_start is not None and active_start > now:
+            warning_entries.append({
+                "sp_name": sp_name,
+                "summary": (
+                    f"{sp_header}\n"
+                    f"    active: {cert_line}{rollover_block}"
+                ),
+                "reason": "not_yet_valid",
+            })
+        elif (
+            active_end is None
+            or (active_end - now) <= timedelta(days=CERT_EXPIRY_WARN_DAYS)
+        ):
+            warning_entries.append({
+                "sp_name": sp_name,
+                "summary": (
+                    f"{sp_header}\n"
+                    f"    active: {cert_line}{rollover_block}"
+                ),
+                "reason": "unknown_expiry" if active_end is None else "expiring_soon",
+            })
+        else:
+            manual_entries.append({
+                "sp_name": sp_name,
+                "summary": (
+                    f"{sp_header}\n"
+                    f"    active: {cert_line}{rollover_block}"
+                ),
+            })
+
+    results: list[CheckResult] = []
+
+    if failed_entries:
+        bodies = "\n".join(e["summary"] for e in failed_entries)
+        results.append(CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            description=description,
+            result=(
+                f"{len(failed_entries)} Workday SAML app(s) have an "
+                "unusable signing certificate (no AsymmetricX509Cert "
+                "keyCredentials, all credentials expired, or the "
+                "active selection expired with no replacement live):\n"
+                f"{bodies}"
+            ),
+            remediation=(
+                "End-user SAML SSO into Workday will fail until a "
+                "valid signing certificate is uploaded on both "
+                "sides. In addition, the OAuth-routed "
+                "``new_sharedworkdaysoap_ff0df`` connection used by "
+                "the ``ESS HR Workday`` (SOAP) and "
+                "``WorkdayRESTExecution`` (REST) flows targets the "
+                "same federated Workday enterprise app; whether the "
+                "``ff0df`` runtime path is also affected depends on "
+                "whether the Workday API Client behind the OAuth "
+                "token endpoint validates the inbound JWT against "
+                "this X.509 public key (per-tenant Authorized "
+                "Public Key setting). Steps:\n"
+                "  1. In Entra, open the federated Workday "
+                "enterprise app -> Single sign-on -> SAML Signing "
+                "Certificate. Generate a new certificate (or rotate "
+                "the existing one) and download the "
+                "Certificate (Base64).\n"
+                "  2. In Workday, search for 'Edit Tenant Setup - "
+                "Security', open the task, and update the row for "
+                "the matching 'Service Provider ID' in the 'SAML "
+                "Identity Providers' grid. Paste the new "
+                "Certificate (Base64) into the 'X509 Certificate' "
+                "field.\n"
+                "  3. After both sides are updated, set Entra's "
+                "preferredTokenSigningKeyThumbprint (or the "
+                "'Make certificate active' toggle in the portal) "
+                "to the new thumbprint.\n"
+                "  4. Re-run FlightCheck to confirm the new active "
+                f"cert is healthy. [Workday SSO setup]({doc_link})"
+            ),
+            doc_link=doc_link,
+        ))
+
+    if warning_entries:
+        bodies = "\n".join(e["summary"] for e in warning_entries)
+        # Hardening framing per AGENTS.md principle 9 — these aren't
+        # functional blockers today, only operational risk.
+        results.append(CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=description,
+            result=(
+                "Hardening recommendation (not a functional blocker): "
+                f"{len(warning_entries)} Workday SAML app(s) have a "
+                "signing certificate that is expiring soon (within "
+                f"{CERT_EXPIRY_WARN_DAYS} days), not yet valid, or has unknown expiry metadata:\n"
+                f"{bodies}"
+            ),
+            remediation=(
+                "Schedule a signing-certificate rotation before the "
+                "current cert expires. End-user SAML SSO into Workday "
+                "will start failing on the NotAfter date. The same "
+                "federated Workday enterprise app underpins the "
+                "OAuth-routed ``new_sharedworkdaysoap_ff0df`` "
+                "connection used by ``ESS HR Workday`` (SOAP) and "
+                "``WorkdayRESTExecution`` (REST); cert health on "
+                "that app is therefore a federation-health signal "
+                "for the SOAP/REST runtime path as well. Steps:\n"
+                "  1. In Entra, open the federated Workday enterprise "
+                "app -> Single sign-on -> SAML Signing Certificate. "
+                "Click 'New Certificate', save without activating yet, "
+                "and download the Certificate (Base64).\n"
+                "  2. In Workday, search for 'Edit Tenant Setup - "
+                "Security', open the task, and add the new "
+                "Certificate (Base64) to the row for the matching "
+                "'Service Provider ID' in the 'SAML Identity "
+                "Providers' grid.\n"
+                "  3. During a low-traffic window, activate the new "
+                "certificate in Entra (sets "
+                "preferredTokenSigningKeyThumbprint to the new "
+                "value).\n"
+                "  4. Re-run FlightCheck after the rotation to "
+                "confirm WD-CONN-102 reports MANUAL on the new cert. "
+                f"[Workday SSO setup]({doc_link})"
+            ),
+            doc_link=doc_link,
+        ))
+
+    if manual_entries:
+        bodies = "\n".join(e["summary"] for e in manual_entries)
+        intro = (
+            "1 federated Workday SAML app has a healthy active signing "
+            "certificate in Entra"
+            if len(manual_entries) == 1
+            else (
+                f"{len(manual_entries)} federated Workday SAML apps "
+                "have a healthy active signing certificate in Entra"
+            )
+        )
+        results.append(CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.MANUAL.value,
+            description=description,
+            result=(
+                f"{intro}. Manual thumbprint comparison required "
+                "against Workday — the Workday 'X509 Certificate' "
+                "field is not exposed via any Workday API the kit "
+                "talks to (the SOAP RaaS / Worker services don't "
+                "surface tenant security configuration). Detected:\n"
+                f"{bodies}"
+            ),
+            remediation=(
+                "Manual verification required — compare the active "
+                "Entra thumbprint above against the certificate "
+                "Workday has on file for the same Service Provider ID. "
+                "ESS uses exactly one of the federated apps listed "
+                "above; identify it via Workday first, then verify "
+                "only that app's thumbprint.\n"
+                "\n"
+                "Step 1 — Identify the active Entra app from inside "
+                "Workday:\n"
+                "  a. Sign in to the Workday tenant ESS connects to.\n"
+                "  b. In the global search box, type 'Edit Tenant "
+                "Setup - Security' and open the task.\n"
+                "  c. Scroll to the 'SAML Identity Providers' "
+                "section. Find the row that is enabled (the "
+                "'Disabled' checkbox is unchecked) and whose 'Used "
+                "for Environments' matches the environment ESS "
+                "connects to.\n"
+                "  d. Note that row's 'Service Provider ID' value "
+                "(e.g. http://www.workday.com/contoso_prod).\n"
+                "  e. Match that value to one of the 'entity IDs' "
+                "listed above — the matching row is the active "
+                "Entra app.\n"
+                "\n"
+                "Step 2 — Compare the thumbprints:\n"
+                "  a. In Workday, in that same row, open the 'X509 "
+                "Certificate' value and view its details — Workday "
+                "displays the SHA-1 thumbprint in colon-separated "
+                "uppercase hex (matches the format shown above).\n"
+                "  b. Compare it byte-for-byte against the active "
+                "thumbprint listed for that app above. They MUST "
+                "match exactly.\n"
+                "  c. If they differ, end-user browser-based SAML "
+                "SSO into Workday is broken. The OAuth-routed "
+                "``new_sharedworkdaysoap_ff0df`` connection used by "
+                "the ``ESS HR Workday`` and ``WorkdayRESTExecution`` "
+                "flows targets the same federated Workday enterprise "
+                "app; the user-context SOAP/REST runtime path may "
+                "also be affected depending on whether the Workday "
+                "API Client behind the OAuth token endpoint "
+                "validates the inbound JWT against this X.509 "
+                "public key. The two ISU-credentialed connections "
+                "(``d6081``, ``0786a``) use HTTP Basic auth and are "
+                "not affected. Re-upload the active Entra "
+                "Certificate (Base64) into the Workday 'X509 "
+                "Certificate' field to restore parity.\n"
+                f"\n[Workday SSO setup]({doc_link})"
+            ),
+            doc_link=doc_link,
+        ))
+
+    return results
+
+
 def _get_in_use_workday_connection_names(runner) -> set[str] | None:
     """Return the set of Workday connection names referenced by any
     flow in the environment, or ``None`` if we couldn't determine it.
@@ -1908,11 +2701,13 @@ def _check_workflows(runner) -> list[CheckResult]:
     """
     flavor = getattr(runner, "_workday_package_flavor", None)
     if flavor == "simplified":
-        return [_simplified_install_skip(
+        results = [_simplified_install_skip(
             checkpoint_id="WD-WF-000",
             description="Workday SOAP workflow tests",
             category="Workday Workflows",
         )]
+        _append_wd_wf_cat_link_trailer(runner, results)
+        return results
 
     results = []
 
@@ -1931,6 +2726,7 @@ def _check_workflows(runner) -> list[CheckResult]:
             result="Workday not configured - skipping 17 workflow tests",
             remediation="Run /connect workday first, then re-run /flightcheck.",
         ))
+        _append_wd_wf_cat_link_trailer(runner, results)
         return results
 
     if not test_employee:
@@ -1941,6 +2737,7 @@ def _check_workflows(runner) -> list[CheckResult]:
             result="No test employee ID provided - skipping workflow tests",
             remediation="Re-run flightcheck and enter a test employee ID when prompted.",
         ))
+        _append_wd_wf_cat_link_trailer(runner, results)
         return results
 
     # Safe to log here - tenant is from the metadata-only resolver, but we
@@ -1958,6 +2755,7 @@ def _check_workflows(runner) -> list[CheckResult]:
             result="httpx not installed - skipping",
             remediation="pip install httpx",
         ))
+        _append_wd_wf_cat_link_trailer(runner, results)
         return results
 
     # --- Now resolve credentials. From this point on the local scope holds
@@ -1975,6 +2773,7 @@ def _check_workflows(runner) -> list[CheckResult]:
                 "username and password to test the 17 workflows."
             ),
         ))
+        _append_wd_wf_cat_link_trailer(runner, results)
         return results
 
     import datetime
@@ -2064,7 +2863,636 @@ def _check_workflows(runner) -> list[CheckResult]:
                     description=desc, result=f"Error: {error[:100]}",
                 ))
 
+    # Cross-link trailer (WD-WF-CAT-LINK) — surfaces the WD-WF-CAT-001
+    # manual checklist from inside the SOAP-test output so admins
+    # reading a clean 17-row pass don't miss the custom-scenario
+    # inventory row. See `_append_wd_wf_cat_link_trailer` for why this
+    # also fires on the credential-missing skip path.
+    _append_wd_wf_cat_link_trailer(runner, results)
+
     return results
+
+
+def _append_wd_wf_cat_link_trailer(runner, results: list[CheckResult]) -> None:
+    """Append the WD-WF-CAT-LINK row to `results` if there are unknown
+    Workday scenario references in customer topics.
+
+    Called from EVERY exit path of `_check_workflows` (not just the
+    SOAP-test-loop-completed path) so the cross-link surfaces even
+    when SOAP tests are skipped for credential-missing reasons.
+    AC2 ("Linked from Test-WorkdayWorkflows output when an unknown
+    workflow name is referenced in customer topics") needs the link
+    to appear regardless of whether the operator has configured ISU
+    creds yet — the inventory of custom scenarios doesn't depend on
+    Workday connectivity.
+
+    The result text is deliberately worded "above" without naming
+    "17 SOAP tests" because some exit paths emit zero SOAP rows.
+    """
+    unknown = _get_unknown_workday_scenarios(runner)
+    if not unknown:
+        return
+    results.append(CheckResult(
+        checkpoint_id="WD-WF-CAT-LINK", category="Workday Workflows",
+        priority=Priority.MEDIUM.value, status=Status.MANUAL.value,
+        description="Custom Workday scenarios outside the SOAP-test catalog",
+        result=(
+            f"{len(unknown)} Workday scenario reference(s) in customer "
+            "topics are NOT covered by the automated SOAP tests in this "
+            "Workday Workflows block."
+        ),
+        remediation=(
+            "See WD-WF-CAT-001 for the per-scenario list and the "
+            "manual verification checklist (ISU account, payload "
+            "shape vs. Workday WSDL, evaluation test prompt, "
+            "connection-ref auth health)."
+        ),
+    ))
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# WD-WF-CAT-001 — Workday custom-workflow inventory checklist (MANUAL)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# The kit hard-codes a 17-workflow SOAP-test catalog (`WORKFLOWS`
+# above). Customers wire up additional Workday scenarios two ways:
+#
+#   1. Template-config + topic — a topic calls
+#      `dialog: msdyn_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution`
+#      with a `scenarioName: msdyn_...` value. The shared flow reads
+#      the matching template config row from Dataverse by ScenarioName
+#      and executes the SOAP request.
+#   2. Standalone topic + cloud flow — `kind: InvokeFlowAction`
+#      pointing at a Power Automate flow bound to `shared_workdaysoap`.
+#
+# Both paths exit FlightCheck's automated validation surface. The
+# kit cannot:
+#   * Parse tenant-specific Workday WSDL to validate payload shape.
+#   * Read template config XML field-by-field against the WSDL.
+#   * Confirm the ISU used by the custom scenario has the right
+#     Workday security domain.
+#   * Tell whether an evaluation test exists for the custom scenario.
+#
+# Per AGENTS.md principle #2, this is the canonical MANUAL pattern:
+# the kit observes one side (topic references scenario X), the
+# operator verifies the other side (Workday-tenant configuration).
+#
+# Data sources:
+#   * Local YAML walk (`workspace/agents/*/topics/*.mcs.yml`) —
+#     no API call, no cassette required.
+#   * Live Dataverse query against
+#     `msdyn_employeeselfservicetemplateconfigs` filtered by
+#     `ismanaged=true` — the tenant-accurate OOTB scenario set.
+#   * Cached `runner._workday_package_flavor` (from WD-PKG-001) for
+#     the simplified-install gate per principle #11.
+#
+# Outputs:
+#   * One PASSED row if every discovered scenario is in the live
+#     Dataverse-resolved OOTB catalog.
+#   * One MANUAL row enumerating unknowns + the 4-item checklist
+#     (Principle #7 — bucketed, not per-resource).
+#   * One SKIPPED row on simplified install (no ISU/RaaS), missing
+#     workspace, zero Workday references, or missing Dataverse token
+#     (cannot resolve OOTB catalog → cannot make a PASS/FAIL claim
+#     per AGENTS.md principle #1).
+#   * One WARNING row if the Dataverse query errored — surfaces the
+#     error per principle #3 instead of silently passing.
+# Caches discovered + unknown lists on the runner so the WD-WF-CAT-LINK
+# trailer inside _check_workflows can reference them without re-walking.
+
+# Marker for the shared Workday execution topic (Pattern A). The
+# `dialog:` field is fully-qualified and always contains this suffix
+# regardless of agent publisher prefix.
+_WORKDAY_SYSTEM_DIALOG_SUFFIX = ".topic.WorkdaySystemGetCommonExecution"
+
+
+def _load_workday_ootb_catalog_from_dataverse(
+    runner,
+) -> tuple[set[str] | None, str]:
+    """Query the customer's Dataverse tenant for OOTB Workday scenarios.
+
+    Reads `msdyn_employeeselfservicetemplateconfigs` (the table the
+    Workday extension pack writes to during installation) and returns
+    the set of scenario names whose records are `ismanaged=true` —
+    i.e. shipped by Microsoft's managed solution, not added by the
+    customer. This is the tenant-accurate, drift-free source of truth
+    for "what counts as OOTB Workday."
+
+    Returns (catalog, status):
+        catalog: set[str] of scenario names on success, or None when
+                 the catalog could not be resolved.
+        status:  "ok"                   — query succeeded.
+                 "no_token"             — no Dataverse token / env URL
+                                          available; caller must SKIP
+                                          per AGENTS.md principle #1.
+                 "query_error: <msg>"   — Dataverse query errored;
+                                          caller must WARN per
+                                          principle #3 (fail loudly on
+                                          API errors).
+    """
+    env_url = getattr(runner, "env_url", None)
+    dv_token = getattr(runner, "dv_token", None)
+    if not env_url or not dv_token:
+        return (None, "no_token")
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+        from auth import query_all
+        rows = query_all(
+            env_url, dv_token,
+            "msdyn_employeeselfservicetemplateconfigs",
+            "msdyn_name,ismanaged",
+        )
+    except Exception as exc:  # noqa: BLE001 — surface the error verbatim
+        return (None, f"query_error: {exc}")
+    catalog = {
+        r.get("msdyn_name", "")
+        for r in rows
+        if r.get("ismanaged") is True and r.get("msdyn_name")
+    }
+    return (catalog, "ok")
+
+
+def _get_workday_ootb_catalog(
+    runner,
+) -> tuple[set[str] | None, str]:
+    """Resolve the Workday OOTB scenarioName catalog from Dataverse.
+
+    There is no fallback: the customer's own Dataverse tenant is the
+    only authoritative source for what the installed Workday extension
+    pack ships. If we can't reach it, the caller must SKIP or WARN per
+    AGENTS.md principle #1 (never return PASS when the check cannot
+    actually validate what it claims to validate).
+
+    Returns (catalog, status). See
+    `_load_workday_ootb_catalog_from_dataverse` for the status values.
+
+    Caches the resolution on `runner._workday_ootb_catalog_cache` so
+    repeated reads within one flightcheck invocation don't re-query
+    Dataverse.
+    """
+    cached = getattr(runner, "_workday_ootb_catalog_cache", None)
+    if cached is not None:
+        return cached
+    result = _load_workday_ootb_catalog_from_dataverse(runner)
+    runner._workday_ootb_catalog_cache = result
+    return result
+
+
+def _is_workday_bound_workflow_json(workflow_json_path: Path) -> bool:
+    """Return True if a Power Automate workflow.json references the
+    Workday SOAP connector (`shared_workdaysoap`) anywhere in its
+    `connectionReferences` block.
+
+    Used to qualify Pattern B (InvokeFlowAction) references: a flow
+    is "Workday-bound" if any of its connection references binds to
+    the Workday SOAP connector. Conservative — a flow that touches
+    both Workday and another connector still counts as Workday-bound
+    so the operator gets surfaced for review.
+    """
+    if not workflow_json_path.exists():
+        return False
+    try:
+        data = json.loads(workflow_json_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    conn_refs = data.get("properties", {}).get("connectionReferences", {})
+    for ref in conn_refs.values():
+        api_obj = ref.get("api", {})
+        if api_obj.get("name", "") == "shared_workdaysoap":
+            return True
+        # Fallback for older flow JSON shapes that put it directly:
+        if ref.get("apiId", "").lower().endswith(WORKDAY_SOAP_CONNECTOR_SUFFIX):
+            return True
+    return False
+
+
+def _build_workflow_id_to_path_index(agent_dir: Path) -> dict[str, Path]:
+    """Walk `agent_dir/workflows/*/metadata.yml`, parse the workflowId
+    out of each, and return {workflowId(lowercase): workflow.json path}.
+
+    Built once per agent so Pattern-B lookups are O(1) per topic
+    reference. Metadata YAML format is documented in
+    workspace/agents/{slug}/workflows/<dir>/metadata.yml — single key
+    `workflowId:` plus `jsonFileName:` (always `workflow.json`).
+    """
+    index: dict[str, Path] = {}
+    workflows_dir = agent_dir / "workflows"
+    if not workflows_dir.exists():
+        return index
+    for sub in workflows_dir.iterdir():
+        if not sub.is_dir():
+            continue
+        metadata = sub / "metadata.yml"
+        if not metadata.exists():
+            continue
+        try:
+            content = metadata.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        m = re.search(r"^\s*workflowId\s*:\s*([0-9a-fA-F-]{36})\s*$", content, re.MULTILINE)
+        if m:
+            workflow_json = sub / "workflow.json"
+            index[m.group(1).lower()] = workflow_json
+    return index
+
+
+def _scan_topic_for_workday_refs(
+    topic_path: Path, agent_slug: str, workflow_index: dict[str, Path],
+) -> list[dict]:
+    """Scan a single topic YAML for Workday scenario references.
+
+    Returns a list of dicts, one per reference found. Each dict has:
+      agent:        the agent folder slug
+      topic:        topic filename
+      line:         1-based line number of the trigger line
+      scenarioName: str | None  (None for Pattern B)
+      pattern:      "system-common-execution" | "invoke-flow-action"
+      flowId:       str | None  (set only for Pattern B)
+    """
+    try:
+        lines = topic_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+
+    refs: list[dict] = []
+
+    # Pattern A: line ending in WorkdaySystemGetCommonExecution; walk
+    # back to find the nearest scenarioName: above it (within ~30
+    # lines — the typical BeginDialog block size).
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if "dialog:" in stripped and _WORKDAY_SYSTEM_DIALOG_SUFFIX in stripped:
+            scenario_line = None
+            scenario_value = None
+            for j in range(i - 1, max(-1, i - 31), -1):
+                back = lines[j].strip()
+                m = re.match(r"^scenarioName\s*:\s*=?\s*\"?([\w]+)\"?\s*$", back)
+                if m:
+                    scenario_line = j + 1
+                    scenario_value = m.group(1)
+                    break
+            refs.append({
+                "agent": agent_slug,
+                "topic": topic_path.name,
+                "line": scenario_line if scenario_line else i + 1,
+                "scenarioName": scenario_value,
+                "pattern": "system-common-execution",
+                "flowId": None,
+            })
+
+    # Pattern B: InvokeFlowAction → flowId → workflow.json bound to
+    # shared_workdaysoap. Pull every (kind:InvokeFlowAction, flowId)
+    # pair, then qualify against the workflow index.
+    in_invoke_block = False
+    invoke_start_line = -1
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if re.match(r"^-?\s*kind\s*:\s*InvokeFlowAction\s*$", stripped):
+            in_invoke_block = True
+            invoke_start_line = i + 1
+            continue
+        if in_invoke_block:
+            m = re.match(r"^flowId\s*:\s*([0-9a-fA-F-]{36})\s*$", stripped)
+            if m:
+                flow_id = m.group(1).lower()
+                workflow_json = workflow_index.get(flow_id)
+                if workflow_json and _is_workday_bound_workflow_json(workflow_json):
+                    refs.append({
+                        "agent": agent_slug,
+                        "topic": topic_path.name,
+                        "line": invoke_start_line,
+                        "scenarioName": None,
+                        "pattern": "invoke-flow-action",
+                        "flowId": flow_id,
+                    })
+                in_invoke_block = False
+                invoke_start_line = -1
+            # Heuristic close: a new top-level `- kind:` line ends
+            # the current InvokeFlowAction block without a flowId.
+            elif re.match(r"^-\s*kind\s*:", stripped) and i > invoke_start_line - 1:
+                in_invoke_block = False
+                invoke_start_line = -1
+    return refs
+
+
+def _discover_customer_workday_scenarios(
+    workspace_root: Path = Path("workspace/agents"),
+) -> list[dict]:
+    """Walk every agent under workspace_root and return all Workday
+    scenario references (Pattern A + Pattern B). Returns [] when the
+    workspace doesn't exist (callers should treat that as SKIPPED, not
+    PASSED — see _check_custom_workflow_inventory).
+    """
+    if not workspace_root.exists():
+        return []
+    discovered: list[dict] = []
+    for agent_dir in sorted(workspace_root.iterdir()):
+        if not agent_dir.is_dir() or agent_dir.name.startswith("."):
+            continue
+        topics_dir = agent_dir / "topics"
+        if not topics_dir.exists():
+            continue
+        workflow_index = _build_workflow_id_to_path_index(agent_dir)
+        for topic_file in sorted(topics_dir.glob("*.mcs.yml")):
+            discovered.extend(
+                _scan_topic_for_workday_refs(
+                    topic_file, agent_dir.name, workflow_index,
+                )
+            )
+    return discovered
+
+
+def _get_unknown_workday_scenarios(runner) -> list[dict]:
+    """Return the cached list of unknown Workday refs, computing and
+    caching it on first read.
+
+    Used by both _check_custom_workflow_inventory and the
+    WD-WF-CAT-LINK trailer inside _check_workflows so the topic walk
+    runs at most once per flightcheck invocation regardless of which
+    check the runner schedules first.
+
+    The OOTB catalog this diff'd against comes from
+    `_get_workday_ootb_catalog` (live Dataverse). When the catalog
+    cannot be resolved (no token / query error), this function returns
+    an empty list — the WD-WF-CAT-001 main check is the single source
+    of truth for surfacing that condition (SKIPPED / WARNING). The
+    trailer self-suppresses in that case so we don't claim "0 unknowns"
+    when the truth is "we couldn't tell."
+    """
+    cached = getattr(runner, "_workday_unknown_scenarios", None)
+    if cached is not None:
+        return cached
+    workspace_root_str = "workspace/agents"
+    discovered = _discover_customer_workday_scenarios(Path(workspace_root_str))
+    runner._workday_discovered_scenarios = discovered
+    if not discovered:
+        runner._workday_unknown_scenarios = []
+        return []
+    catalog, _status = _get_workday_ootb_catalog(runner)
+    if catalog is None:
+        runner._workday_unknown_scenarios = []
+        return []
+    unknown = [
+        ref for ref in discovered
+        if ref["pattern"] == "invoke-flow-action"
+        or (ref.get("scenarioName") and ref["scenarioName"] not in catalog)
+    ]
+    runner._workday_unknown_scenarios = unknown
+    return unknown
+
+
+def _format_unknown_scenarios(unknown: list[dict]) -> str:
+    """Format the unknown-refs list for the result field. One block per
+    reference, agent + topic + line cited verbatim per AGENTS.md
+    principle #8 (result = what the kit observed).
+    """
+    lines: list[str] = []
+    for ref in unknown:
+        if ref["pattern"] == "system-common-execution":
+            name = ref.get("scenarioName") or "(scenarioName not found in topic)"
+            lines.append(f"  • {name}")
+            lines.append(
+                f"    Topic:    topics/{ref['topic']}:{ref['line']}"
+            )
+            lines.append("    Pattern:  WorkdaySystemGetCommonExecution + scenarioName")
+        else:  # invoke-flow-action
+            lines.append(f"  • <flow-bound, no scenarioName> ({ref.get('flowId', '')})")
+            lines.append(
+                f"    Topic:    topics/{ref['topic']}:{ref['line']}"
+            )
+            lines.append("    Pattern:  InvokeFlowAction → flow bound to shared_workdaysoap")
+        lines.append(f"    Agent:    {ref['agent']}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+_WD_WF_CAT_CHECKLIST = (
+    "Manual verification required — the kit cannot validate custom "
+    "Workday scenarios end-to-end. For EACH scenario listed above:\n"
+    "\n"
+    "  1. ISU account: Confirm which ISU registered in Workday is used "
+    "by this scenario. Default is the account in environment variable "
+    "EmployeeContextRequestAccountName (see WD-ENV-001 output). Custom "
+    "scenarios may use a different ISU — verify in the template config "
+    "XML in Dataverse (Power Platform Maker → Tables → "
+    "msdyn_employeeselfservicetemplateconfigs → search ScenarioName).\n"
+    "\n"
+    "  2. Payload shape: Open the template config XML and confirm the "
+    "SOAP request body matches the Workday WSDL for the named service. "
+    "Field names, reference types, and required vs. optional elements "
+    "MUST match the Workday contract. Mismatches surface at runtime as "
+    "the 'Workflow Contract/Payload Mismatch' failure mode.\n"
+    "\n"
+    "  3. Test prompt: Add at least one evaluation test case to the "
+    "agent's evaluations/ folder that exercises the scenario end-to-end "
+    "with a known-good employee. Use /create-eval and tag the test set "
+    "with the scenario name.\n"
+    "\n"
+    "  4. Auth health: Re-check the WD-CONN-* connection token health "
+    "output for the connection reference this scenario uses. "
+    "Intermittent auth failures usually trace to a stale OAuth token "
+    "on one of the ISU refs — reauthenticate in Power Platform Maker "
+    "→ Connections.\n"
+    "\n"
+    "Note: the OOTB Workday catalog is resolved live from the "
+    "customer's own Dataverse "
+    "(msdyn_employeeselfservicetemplateconfigs, filtered by "
+    "ismanaged=true), which auto-detects every scenario the installed "
+    "Workday extension pack ships. A scenario surfacing as MANUAL "
+    "means it is NOT a managed row in the customer's tenant — either "
+    "it is genuinely custom (work through the checklist above) or the "
+    "extension pack is not installed.\n"
+    "\n"
+    "Found a new pattern? Log it back to the gap-discovery process. "
+    "File an issue at "
+    "https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/issues/new "
+    "with title 'Workday gap-discovery: <short summary>' if any of "
+    "the following apply:\n"
+    "  • This MANUAL row surfaced a scenario that you believe should "
+    "ship OOTB in the Workday extension pack (forward to Microsoft "
+    "ESS so the next pack revision can include it).\n"
+    "  • A Workday-bound topic in your agent did NOT surface here but "
+    "should have (the detection walker missed a new wiring pattern — "
+    "Pattern C or beyond; attach the topic YAML snippet so a new "
+    "detection rule can be added to _scan_topic_for_workday_refs).\n"
+    "  • The 4-item checklist above was insufficient for diagnosing "
+    "your scenario (propose the additional verification step).\n"
+    "Include the topic YAML snippet, the scenarioName / flowId, and "
+    "the ADO incident number if any. Closing the loop here is how "
+    "WD-WF-CAT-001 gets better over time."
+)
+
+
+def _check_custom_workflow_inventory(runner) -> list[CheckResult]:
+    """WD-WF-CAT-001 — Manual checklist for custom Workday workflows.
+
+    Gates (in order):
+      * `runner._workday_package_flavor == "simplified"` → SKIPPED
+        (ISU/scenario inventory doesn't apply on the simplified
+        install per AGENTS.md principle #11).
+      * Missing `workspace/agents/` → SKIPPED.
+      * Zero Workday references discovered in any topic → SKIPPED.
+      * No Dataverse token / env URL → SKIPPED (we cannot resolve the
+        live OOTB catalog and must not return PASS per principle #1).
+      * Dataverse query errored → WARNING (surface the error per
+        principle #3 rather than silently swallowing it).
+
+    Otherwise:
+      * Every discovered scenario is a managed row in Dataverse → PASSED.
+      * Any unknown / flow-bound reference → MANUAL with bucketed
+        listing in `result` and the 4-item checklist in `remediation`.
+
+    Caches discovered list on `runner._workday_discovered_scenarios`
+    and the (possibly empty) unknown list on
+    `runner._workday_unknown_scenarios` so the WD-WF-CAT-LINK trailer
+    inside _check_workflows can read them without re-walking.
+    """
+    cp_id = "WD-WF-CAT-001"
+    category = "Workday Workflows"
+    description = "Workday custom-workflow inventory checklist"
+    doc_link = f"{DOC_BASE}/workday-extensibility"
+
+    flavor = getattr(runner, "_workday_package_flavor", None)
+    if flavor == "simplified":
+        return [_simplified_install_skip(
+            checkpoint_id=cp_id,
+            description=description,
+            category=category,
+        )]
+
+    workspace_root = Path("workspace/agents")
+    if not workspace_root.exists():
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=description,
+            result="workspace/agents/ directory not found.",
+            remediation=(
+                "Run /setup to extract agent files before this check "
+                "can enumerate Workday scenario references in topics."
+            ),
+            doc_link=doc_link,
+        )]
+
+    # Discover Workday refs from topics first — no catalog needed for
+    # this step. If there are none, we can SKIP cleanly without even
+    # touching Dataverse.
+    discovered = _discover_customer_workday_scenarios(workspace_root)
+    runner._workday_discovered_scenarios = discovered
+
+    if not discovered:
+        runner._workday_unknown_scenarios = []
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=description,
+            result=(
+                "No Workday scenario references found in any agent topic. "
+                "Either Workday is not wired into the customer's agent yet, "
+                "or its topics are not yet extracted to "
+                "workspace/agents/*/topics/."
+            ),
+            remediation=(
+                "If the customer intends to use Workday, run /create to add "
+                "a Workday scenario topic, or /setup to re-extract topics "
+                "if you expected references to be present."
+            ),
+            doc_link=doc_link,
+        )]
+
+    # We have Workday refs in topics — we need the live Dataverse
+    # OOTB catalog to know which are custom. No fallback: if Dataverse
+    # is unreachable, we cannot make a PASS/FAIL claim (principle #1).
+    catalog, status_code = _get_workday_ootb_catalog(runner)
+
+    if catalog is None and status_code == "no_token":
+        # Suppress the trailer too — without the catalog we cannot
+        # legitimately list "unknowns."
+        runner._workday_unknown_scenarios = []
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=description,
+            result=(
+                f"Found {len(discovered)} Workday scenario reference(s) "
+                "in customer topics, but no Dataverse credentials are "
+                "available to resolve the live OOTB scenario catalog "
+                "(msdyn_employeeselfservicetemplateconfigs where "
+                "ismanaged=true). Cannot determine which references are "
+                "custom vs. OOTB without that lookup."
+            ),
+            remediation=(
+                "Re-run flightcheck after running /setup so Dataverse "
+                "credentials are cached on the runner, or run it in an "
+                "environment where the Dataverse MCP server is "
+                "authenticated."
+            ),
+            doc_link=doc_link,
+        )]
+
+    if catalog is None:
+        # query_error: <msg> — surface verbatim per principle #3.
+        err_msg = status_code.removeprefix("query_error: ") or "unknown error"
+        runner._workday_unknown_scenarios = []
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=description,
+            result=(
+                f"Found {len(discovered)} Workday scenario reference(s) "
+                "in customer topics, but the Dataverse query for the "
+                "live OOTB scenario catalog "
+                "(msdyn_employeeselfservicetemplateconfigs where "
+                f"ismanaged=true) failed: {err_msg}. Cannot determine "
+                "which references are custom vs. OOTB until the query "
+                "succeeds."
+            ),
+            remediation=(
+                "Investigate the Dataverse error above. Common causes: "
+                "expired Dataverse token (re-run /setup), table not "
+                "present in this environment (ESS solution not "
+                "installed), or transient service outage (retry)."
+            ),
+            doc_link=doc_link,
+        )]
+
+    # Catalog resolved cleanly — compute unknowns and cache them.
+    unknown = [
+        ref for ref in discovered
+        if ref["pattern"] == "invoke-flow-action"
+        or (ref.get("scenarioName") and ref["scenarioName"] not in catalog)
+    ]
+    runner._workday_unknown_scenarios = unknown
+
+    if not unknown:
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
+            description=description,
+            result=(
+                f"Found {len(discovered)} Workday scenario reference(s) "
+                "in customer topics. All are managed rows in the "
+                "customer's Dataverse "
+                "(msdyn_employeeselfservicetemplateconfigs where "
+                "ismanaged=true) and require no manual review."
+            ),
+            doc_link=doc_link,
+        )]
+
+    body = _format_unknown_scenarios(unknown)
+    return [CheckResult(
+        checkpoint_id=cp_id, category=category,
+        priority=Priority.HIGH.value, status=Status.MANUAL.value,
+        description=description,
+        result=(
+            f"Found {len(unknown)} Workday scenario reference(s) in "
+            "customer topics that the kit cannot validate end-to-end "
+            "(not in the OOTB catalog):\n\n"
+            f"{body}"
+        ),
+        remediation=_WD_WF_CAT_CHECKLIST,
+        doc_link=doc_link,
+    )]
 
 
 # ---- Credential Resolution ----

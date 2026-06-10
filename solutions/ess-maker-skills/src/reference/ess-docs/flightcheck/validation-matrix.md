@@ -68,6 +68,7 @@ and extended with local file validation checks unique to the Copilot Kit.
 | WD-ENV-003 | EmployeeContextRequestReportInstanceName verified | High | Dataverse REST | [workday#step-4-environment-variables](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday#step-4-environment-variables) |
 | WD-CONN-001 | Workday connections summary | High | PP Admin API | [workday#step-3-connection-references](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday#step-3-connection-references) |
 | WD-CONN-nnn | Individual connection status | High | PP Admin API | [workday#step-3-connection-references](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday#step-3-connection-references) |
+| WD-CONN-102 | Workday SAML signing certificate health (Entra-automated, Workday-manual comparison) | High | Microsoft Graph (servicePrincipal.keyCredentials) | [workday#task-1-create-the-x509-public-key](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday#task-1-create-the-x509-public-key) |
 | WD-FLOW-nnn | Individual flow enabled/disabled | High | PP Admin API | [workday#topics](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday#topics) |
 
 ### Workday SOAP Workflow Tests (WD-WF-xxx)
@@ -93,6 +94,50 @@ Tests all 17 ESS pre-configured workflows against the Workday API. Requires ISU 
 | WD-WF-015 | Emergency Contact | Human_Resources | Read | ⚠️ | Personal Data |
 | WD-WF-016 | Update Email | Human_Resources | Write | | Contact Information |
 | WD-WF-017 | Update Phone | Human_Resources | Write | | Contact Information |
+
+### Workday Custom-Workflow Inventory (WD-WF-CAT-xxx) — Manual
+
+The 17 SOAP tests above cover only the OOTB workflows the kit ships
+SOAP envelopes for. Customers routinely wire up additional Workday
+scenarios via two patterns:
+
+- **Pattern A** — Topic that calls
+  `WorkdaySystemGetCommonExecution` with a `scenarioName` of a
+  template-config record in Dataverse.
+- **Pattern B** — Standalone topic that calls a customer-built cloud
+  flow bound to the `shared_workdaysoap` connector via
+  `InvokeFlowAction`.
+
+Both patterns exit the automated validation surface (the kit doesn't
+ship a Workday WSDL parser; per-tenant security domain / ISU config
+varies). WD-WF-CAT-001 walks `workspace/agents/*/topics/*.mcs.yml`
+for these patterns and emits a MANUAL row enumerating any scenarios
+that aren't in the OOTB catalog. The OOTB catalog is resolved live
+from the customer's own Dataverse: the check queries
+`msdyn_employeeselfservicetemplateconfigs` and treats every
+`ismanaged=true` row as OOTB (auto-detects every scenario shipped by
+the installed Workday extension pack, with no kit-side curation
+needed). There is no fallback — if Dataverse credentials are missing
+the check returns SKIPPED, and if the Dataverse query errors the
+check returns WARNING surfacing the error verbatim. Returning PASSED
+without a tenant-accurate catalog would violate FlightCheck design
+principle #1 ("never return PASSED when the check cannot actually
+validate what it claims to validate"). The MANUAL remediation
+carries a 4-item checklist (ISU account, payload shape vs. Workday
+WSDL, evaluation test prompt, connection-ref auth health).
+
+| ID | Check | Priority | Method | Doc Link |
+|----|-------|----------|--------|----------|
+| WD-WF-CAT-001 | Workday custom-workflow inventory checklist (MANUAL) | High | Local file walk + Dataverse managed-template-config diff (SKIP on no token, WARN on query error) | [workday-extensibility](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-extensibility) |
+| WD-WF-CAT-LINK | Cross-link trailer surfacing WD-WF-CAT-001 from inside the SOAP-test block | Medium | Computed from WD-WF-CAT-001 cache | [workday-extensibility](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-extensibility) |
+
+MANUAL rows do not fail readiness (per FlightCheck design principle #2)
+— they direct the operator to verify what the kit cannot. Address
+each scenario by confirming it against the 4-item checklist in the
+customer's environment. A scenario surfacing as MANUAL means it is
+NOT a managed row in the customer's tenant — either it is genuinely
+custom or the Workday extension pack is not installed in this
+environment.
 
 ## 6. Local Agent File Validation (Kit-exclusive)
 
