@@ -98,8 +98,8 @@ DOC_LINK = (
 # Maker-facing data-sharing notice — VERBATIM. Surfaced whenever feedback is
 # (or should be) enabled so the maker can lift it directly into their privacy
 # documentation. Acceptance criteria require this exact wording; do not
-# paraphrase. The same constant is mirrored verbatim in the FlightCheck
-# reference docs (remediation-guide.md / validation-matrix.md).
+# paraphrase. The same constant is reproduced verbatim in the FlightCheck
+# remediation guide (remediation-guide.md); validation-matrix.md references it.
 # --------------------------------------------------------------------------
 MAKER_NOTICE = (
     "End-user feedback collected from Copilot responses in this deployment "
@@ -123,11 +123,10 @@ def render_directive(
     These checkpoints ask the operator to confirm a setting, not to diagnose a
     symptom they're already seeing — so the directive leads with "How to
     verify" (the actionable steps), not a "probable cause." The remaining
-    role-aware sections (Shared Steps #7433818 / #7433819 / #7433820) follow:
-    Scope + confidence (IT-admin scope, since Cloud Policy is admin-controlled)
-    and Still stuck. When ``notice`` is supplied, the verbatim data-sharing
-    notice is appended as a final section so it travels with the directive
-    output, not just the console.
+    role-aware sections follow: Scope + confidence (IT-admin scope, since
+    Cloud Policy is admin-controlled) and Still stuck. When ``notice`` is
+    supplied, the verbatim data-sharing notice is appended as a final section
+    so it travels with the directive output, not just the console.
 
     The WHY of acting lives in the ``CheckResult.result`` field (the impact +
     silent-failure mode), per the result-vs-remediation contract.
