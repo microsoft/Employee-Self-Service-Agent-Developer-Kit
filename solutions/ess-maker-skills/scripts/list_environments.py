@@ -39,7 +39,7 @@ def parse_raw_environments(raw_envs):
         linked = props.get("linkedEnvironmentMetadata", {})
         instance_url = linked.get("instanceUrl", "").rstrip("/")
         display_name = props.get("displayName", "Unknown")
-        env_type = props.get("environmentType", "Unknown")
+        env_type = props.get("environmentSku", props.get("environmentType", "Unknown"))
         state = props.get("states", {}).get("runtime", {}).get("id", "Unknown")
         env_id = env.get("name", "")
 

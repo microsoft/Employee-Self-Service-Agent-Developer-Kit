@@ -104,6 +104,88 @@ class TestListEnvironments:
         assert exc_info.value.code == 1
 
 
+class TestParseRawEnvironments:
+    """Tests for list_environments.parse_raw_environments().
+
+    Regression coverage for the env-type column that previously always
+    showed ``Unknown``: the real BAP Admin API returns the environment
+    type under ``environmentSku`` (e.g. Production, Sandbox, Developer),
+    not ``environmentType``. parse_raw_environments now reads
+    ``environmentSku`` first and falls back to ``environmentType`` for
+    forward-compat.
+    """
+
+    def test_reads_environment_sku(self):
+        """The current BAP shape (environmentSku set) populates env type."""
+        import list_environments
+
+        envs = [pp.environment(display_name="Prod-Like")]
+        # Confirm the test fixture matches the real API shape we depend on.
+        assert envs[0]["properties"]["environmentSku"] == "Production"
+
+        parsed = list_environments.parse_raw_environments(envs)
+        assert parsed[0]["type"] == "Production"
+
+    def test_falls_back_to_environment_type_when_sku_missing(self):
+        """Forward-compat: if the API ever drops Sku, the legacy field wins."""
+        import list_environments
+
+        envs = [{
+            "name": "env-legacy",
+            "properties": {
+                "displayName": "Legacy",
+                # No environmentSku key at all
+                "environmentType": "Sandbox",
+                "linkedEnvironmentMetadata": {
+                    "instanceUrl": "https://legacy.crm.dynamics.com/",
+                    "geo": "US",
+                },
+                "states": {"runtime": {"id": "Enabled"}},
+            },
+        }]
+
+        parsed = list_environments.parse_raw_environments(envs)
+        assert parsed[0]["type"] == "Sandbox"
+
+    def test_returns_unknown_when_both_fields_missing(self):
+        """Defensive default when the API returns neither field."""
+        import list_environments
+
+        envs = [{
+            "name": "env-bare",
+            "properties": {
+                "displayName": "Bare",
+                "linkedEnvironmentMetadata": {
+                    "instanceUrl": "https://bare.crm.dynamics.com/",
+                },
+                "states": {"runtime": {"id": "Enabled"}},
+            },
+        }]
+
+        parsed = list_environments.parse_raw_environments(envs)
+        assert parsed[0]["type"] == "Unknown"
+
+    def test_environment_sku_wins_over_environment_type(self):
+        """When both fields are present, prefer the current API field."""
+        import list_environments
+
+        envs = [{
+            "name": "env-both",
+            "properties": {
+                "displayName": "Both",
+                "environmentSku": "Developer",
+                "environmentType": "Sandbox",  # legacy / stale
+                "linkedEnvironmentMetadata": {
+                    "instanceUrl": "https://both.crm.dynamics.com/",
+                },
+                "states": {"runtime": {"id": "Enabled"}},
+            },
+        }]
+
+        parsed = list_environments.parse_raw_environments(envs)
+        assert parsed[0]["type"] == "Developer"
+
+
 class TestPrintEnvironmentTable:
     """Tests for list_environments.print_environment_table()."""
 
