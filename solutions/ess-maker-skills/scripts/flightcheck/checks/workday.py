@@ -398,6 +398,12 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # --- SOAP Workflow Tests (only if Workday MCP creds available) ---
     results.extend(_check_workflows(runner))
 
+    # WD-SEC-003 — Personal Data domain write-permission probe.
+    # Runs right after _check_workflows so it can reuse the same
+    # ISU credentials the operator just supplied (no second prompt)
+    # and so its result sits next to WD-WF-016/017 in the report.
+    results.extend(_check_personal_data_write_permission(runner))
+
     # WD-CONN-012 — package-aware binding completeness; runs last so
     # the operator sees binding diagnostics in context with the other
     # connection checks above.
@@ -2835,6 +2841,420 @@ def _check_workflows(runner) -> list[CheckResult]:
                 ))
 
     return results
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# WD-SEC-003 — Workday Personal Data domain write-permission probe
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Why this check exists:
+#
+#   ESS personal-contact write topics (Update Email, Update Phone) call
+#   Maintain_Contact_Information / Edit_Worker_Additional_Data via the
+#   Workday Human_Resources SOAP service. The runtime security group
+#   that authorizes the write is resolved per employee, and a
+#   mis-scoped intersection group can pass WD-WF-001..015 (read paths
+#   on other domains) yet still return HTTP 400 "Processing error
+#   occurred. The task submitted is not authorized" for personal
+#   contact updates only.
+#
+#   WD-WF-016 / WD-WF-017 already exercise the same SOAP envelope but
+#   only emit a coarse "permission denied → grant Contact Information"
+#   remediation that does not name the Personal Data domain or the
+#   Employee as Self intersection group. WD-SEC-003 parses the
+#   faultstring with precision and emits the specific Personal Data +
+#   Employee as Self remediation that resolves the source incident.
+#
+# Why this check is split into runtime-probe + MANUAL modes:
+#
+#   The ticket originally proposed validating via SOAP
+#   Get_Security_Groups / Get_Domain_Security_Policies. Per the 2026-05
+#   capture attempt recorded in tests/fixtures/cassettes/workday_config.yaml,
+#   those admin operations return a SOAP fault
+#   ("Element not found=…_Request-urn:com.workday/bsvc") on the
+#   publicly-exposed Identity_Management endpoint — they are not
+#   reachable via WS-Security UsernameToken from outside the Workday
+#   UI. The WQL alternative is blocked by the chicken-and-egg OAuth
+#   API Client registration documented in
+#   tests/fixtures/cassettes/INDEX.md "Workday WQL config-validation
+#   pattern → KNOWN BLOCKER", and domain-level permissions are not
+#   modeled as a WQL data source per the same file's line 293.
+#
+#   The runtime-probe mode (Mode A) is therefore the strongest signal
+#   the kit can produce on the full / legacy install where ISU
+#   credentials are available: issue the same SOAP envelope ESS would
+#   issue at runtime and parse the faultstring. On the simplified
+#   install — or when no ISU creds were supplied — Mode B emits a
+#   MANUAL CheckResult with the exact Workday UI navigation, mirroring
+#   the WD-CONN-010 / WD-CONN-102 pattern documented in FlightCheck
+#   AGENTS.md design principle #2.
+#
+# Cardinal-rule compliance:
+#
+#   The probe reuses _build_write_test_body and _soap_call — no new
+#   SOAP envelope is introduced. The underlying API contract
+#   (POST /ccx/service/{tenant}/Human_Resources/v40.0,
+#   Get_Change_Work_Contact_Information_Event_Request) is already
+#   covered by the validated-tier flightcheck_workday.yaml cassette
+#   used by WD-WF-016 / WD-WF-017. Per the AGENTS.md "same endpoint =
+#   method + path" rule, no new cassette is required for this check.
+
+WD_SEC_003_DOC_LINK = (
+    "https://learn.microsoft.com/en-us/copilot/microsoft-365/"
+    "employee-self-service/workday"
+)
+
+# Faultstring substrings the probe matches against. Lowercased for
+# resilience to Workday version differences. Source: the customer
+# incident referenced by the WD-SEC-003 ADO ticket — a 400 with
+# "Processing error occurred. The task submitted is not authorized"
+# returned from Get_Change_Work_Contact_Information_Event_Request
+# when the resolved security group lacks Modify on the Personal Data
+# domain.
+_PERSONAL_DATA_DENIED_PATTERNS = (
+    "task submitted is not authorized",
+    "processing error occurred",
+    "not authorized",
+)
+
+# Faultstrings indicating the write API itself is REACHABLE — the
+# only problem is that the test employee has no open
+# Change_Work_Contact_Information event. PASS in that case: Workday
+# returned a clean "no data" / "invalid reference" rather than a
+# permission denial. The Personal Data permission resolution
+# succeeded; the request just had no event to fetch.
+_PERSONAL_DATA_BENIGN_PATTERNS = (
+    "worker not found",
+    "invalid_id",
+    "invalid id",
+    "no event_target_information",
+    "invalid reference",
+    "no matching",
+)
+
+# Auth-class faults — routed to WD-CONN-101 (ISU credential health)
+# rather than treated as a permission problem. The distinction
+# matters because the operator fix is different: WD-CONN-101 ⇒
+# "password rotated, re-bind connection"; WD-SEC-003 ⇒ "Workday admin
+# grant Personal Data domain Modify".
+_PERSONAL_DATA_AUTH_PATTERNS = (
+    "invalid username",
+    "invalid password",
+    "authentication failed",
+    "http 401",
+)
+
+
+def _classify_personal_data_write_response(soap_result: dict) -> str:
+    """Classify a `_soap_call` return dict into one of:
+    'pass', 'denied', 'auth', 'unknown'.
+
+    `soap_result` is the {success, response|error} dict returned by
+    `_soap_call`. Order matters: auth patterns are checked first so a
+    401 doesn't get misclassified as a permission denial when the
+    upstream auth never succeeded in the first place.
+    """
+    if soap_result.get("success"):
+        return "pass"
+    err = (soap_result.get("error") or "").lower()
+    if not err:
+        return "unknown"
+    if any(p in err for p in _PERSONAL_DATA_AUTH_PATTERNS):
+        return "auth"
+    if any(p in err for p in _PERSONAL_DATA_DENIED_PATTERNS):
+        return "denied"
+    if any(p in err for p in _PERSONAL_DATA_BENIGN_PATTERNS):
+        return "pass"
+    return "unknown"
+
+
+# Reusable MANUAL-mode remediation. Same prose surfaces from every
+# branch that falls back to operator verification (simplified install,
+# no ISU creds, no test employee, unknown fault signature) so the
+# Workday UI navigation lives in exactly one place.
+_WD_SEC_003_MANUAL_REMEDIATION = (
+    "Manual verification required — ESS personal-contact write topics "
+    "(Update Email, Update Phone) call "
+    "Maintain_Contact_Information / Edit_Worker_Additional_Data on "
+    "Workday's Personal Data domain. The runtime security group that "
+    "authorizes the write is resolved per employee, so a mis-scoped "
+    "intersection group can pass other FlightCheck probes yet still "
+    "400 with 'task submitted is not authorized' at runtime. The kit "
+    "cannot read Workday's domain security policies via any currently "
+    "public admin API (SOAP Get_Domain_Security_Policies is not "
+    "exposed outside the Workday UI, and WQL does not model "
+    "domain-level permissions). Confirm the configuration in Workday "
+    "before publishing.\n"
+    "\n"
+    "Step 1 — Verify Personal Data domain has Employee as Self with Modify:\n"
+    "  a. Sign in to the Workday tenant ESS connects to.\n"
+    "  b. In the global search box, type 'View Security Group' and "
+    "open the task.\n"
+    "  c. Search for 'Employee as Self' (or the equivalent "
+    "intersection group your tenant uses for self-service "
+    "permissions).\n"
+    "  d. From the group's related actions, open Security Group → "
+    "Maintain Permissions for Security Group.\n"
+    "  e. Switch to the 'Domain Security Policy Permissions' tab.\n"
+    "  f. Confirm the 'Personal Data' domain row shows Modify "
+    "permission granted (Modify Self for an intersection group like "
+    "Employee as Self — Modify All if your tenant uses a regular "
+    "group instead).\n"
+    "\n"
+    "Step 2 — Verify business process initiators:\n"
+    "  a. In Workday's global search, type 'Edit Business Process "
+    "Security Policy' and open the task.\n"
+    "  b. Open 'Maintain Contact Information' (Personal Data business "
+    "process).\n"
+    "  c. Confirm the Initiator column lists 'Employee as Self' (or "
+    "the equivalent group from Step 1).\n"
+    "  d. Repeat Steps 2a-c for 'Edit Worker Additional Data' if your "
+    "topics also call that business process.\n"
+    "\n"
+    "Step 3 — Activate any pending security policy changes:\n"
+    "  a. If you edited a Domain or Business Process policy above, "
+    "Workday holds the changes as pending until activated.\n"
+    "  b. In the global search box, type 'Activate Pending Security "
+    "Policy Changes' and run the task.\n"
+    "  c. Re-run FlightCheck after activation to confirm the runtime "
+    "probe now passes.\n"
+    "\n"
+    "MANUAL items do not fail readiness — the overall report still "
+    "passes, but the operator owns the verification."
+)
+
+
+def _check_personal_data_write_permission(runner) -> list[CheckResult]:
+    """WD-SEC-003 — Probe Workday Personal Data domain write permission
+    for ESS personal-contact write topics (Update Email, Update Phone).
+
+    Two operating modes:
+
+    * Mode A (runtime probe, full/legacy install + ISU creds): issues
+      Get_Change_Work_Contact_Information_Event_Request via the
+      existing `_soap_call` helper and parses the faultstring for the
+      specific 'task submitted is not authorized' signature documented
+      in the WD-SEC-003 source incident. FAIL on denial, PASS on a
+      benign 'worker not found' / 'invalid reference', WARN on auth
+      faults (routed to WD-CONN-101 which owns ISU credential health),
+      WARN on unknown fault signatures with MANUAL fallback remediation.
+
+    * Mode B (MANUAL, simplified install OR no ISU creds): emits a
+      MANUAL CheckResult with the exact Workday UI navigation. The
+      simplified install routes contact writes through OBO with the
+      signed-in user's Workday identity — there is no ISU to probe
+      from FlightCheck, and the relevant group is each employee's own
+      'Employee as Self' intersection group.
+
+    Install-flavor gating follows AGENTS.md design principle #11: the
+    simplified-install branch fires ONLY on a positive
+    `flavor == "simplified"` match; every other verdict (including
+    `None` for backwards-compat with minimal test runners) falls
+    through to the runtime probe.
+    """
+    cp_id = "WD-SEC-003"
+    category = "Workday"
+    description = (
+        "Workday Personal Data domain write permission "
+        "(Employee as Self)"
+    )
+    doc_link = WD_SEC_003_DOC_LINK
+
+    flavor = getattr(runner, "_workday_package_flavor", None)
+    if flavor == "simplified":
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.MANUAL.value,
+            description=description,
+            result=(
+                "WD-PKG-001 detected the simplified Workday install "
+                "shape (1 connection reference, OBO/OAuthUser). On "
+                "the simplified install, ESS personal-contact write "
+                "topics execute as the signed-in employee against "
+                "their own Workday identity — there is no ISU "
+                "service account to probe from FlightCheck. The "
+                "runtime permission resolves against each employee's "
+                "own 'Employee as Self' intersection group, which "
+                "must have Modify on the Personal Data domain for "
+                "Update Email / Update Phone to succeed."
+            ),
+            remediation=_WD_SEC_003_MANUAL_REMEDIATION,
+            doc_link=doc_link,
+        )]
+
+    # --- Mode A — runtime probe via Get_Change_Work_Contact_Information ---
+    # Resolve metadata first (kept off the credential taint graph) so
+    # we can fall back to a clean SKIPPED when Workday isn't configured
+    # at all rather than emitting a spurious MANUAL/FAIL.
+    wd_base_url, wd_tenant, test_employee = _resolve_workday_metadata(runner)
+    if not wd_base_url or not wd_tenant:
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=description,
+            result=(
+                "Workday base URL / tenant not configured — cannot "
+                "probe Personal Data domain write permission."
+            ),
+            remediation=(
+                "Run /connect workday first, then re-run /flightcheck. "
+                "Without Workday connectivity the kit cannot exercise "
+                "the runtime write path that surfaces Personal Data "
+                "permission misconfigurations."
+            ),
+            doc_link=doc_link,
+        )]
+
+    if not test_employee:
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.MANUAL.value,
+            description=description,
+            result=(
+                "No test employee ID provided — cannot run the "
+                "runtime Get_Change_Work_Contact_Information probe. "
+                "Falling back to MANUAL verification."
+            ),
+            remediation=_WD_SEC_003_MANUAL_REMEDIATION,
+            doc_link=doc_link,
+        )]
+
+    try:
+        import httpx  # noqa: F401  (used inside _soap_call)
+    except ImportError:
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=description,
+            result="httpx not installed — cannot issue SOAP probe.",
+            remediation="pip install httpx",
+            doc_link=doc_link,
+        )]
+
+    # Credential resolution is split from metadata resolution to keep
+    # CodeQL's clear-text-logging taint analysis off the metadata path
+    # (same reason `_check_workflows` does it). From this point on we
+    # must not interpolate any local variable into a print/log.
+    wd_username, wd_password = _resolve_workday_credentials(runner, wd_tenant)
+    if not wd_username or not wd_password:
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.MANUAL.value,
+            description=description,
+            result=(
+                "Workday ISU credentials not provided — cannot run "
+                "the runtime Get_Change_Work_Contact_Information "
+                "probe. Falling back to MANUAL verification."
+            ),
+            remediation=_WD_SEC_003_MANUAL_REMEDIATION,
+            doc_link=doc_link,
+        )]
+
+    body = _build_write_test_body(test_employee)
+    soap_result = _soap_call(
+        wd_base_url, wd_tenant, wd_username, wd_password,
+        "Human_Resources", body,
+    )
+    verdict = _classify_personal_data_write_response(soap_result)
+
+    if verdict == "denied":
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            description=description,
+            result=(
+                "Workday returned 'task submitted is not authorized' "
+                "for Get_Change_Work_Contact_Information_Event_Request. "
+                "The resolved security group for the configured ISU "
+                "lacks Modify on the Personal Data domain — Update "
+                "Email / Update Phone topics will fail at runtime "
+                "with the same 400."
+            ),
+            remediation=(
+                "Workday admin action required — without this fix, "
+                "Update Email and Update Phone fail for every "
+                "employee with HTTP 400 'task submitted is not "
+                "authorized' even when WD-WF-001..015 pass.\n"
+                "\n"
+                "  a. In Workday, search for and open 'View Security "
+                "Group'.\n"
+                "  b. Look up 'Employee as Self' (or the equivalent "
+                "intersection group your tenant uses for self-service "
+                "permissions).\n"
+                "  c. From related actions, open Security Group → "
+                "Maintain Permissions for Security Group → 'Domain "
+                "Security Policy Permissions' tab.\n"
+                "  d. Grant Modify (Modify Self for an intersection "
+                "group) on the 'Personal Data' domain.\n"
+                "  e. In Workday, search for and open 'Edit Business "
+                "Process Security Policy' → 'Maintain Contact "
+                "Information'. Confirm 'Employee as Self' is listed "
+                "as an Initiator. Repeat for 'Edit Worker Additional "
+                "Data' if your topics call it.\n"
+                "  f. Search for and run 'Activate Pending Security "
+                "Policy Changes' to apply the edits.\n"
+                "  g. Re-run /flightcheck to confirm WD-SEC-003 now "
+                "passes."
+            ),
+            doc_link=doc_link,
+        )]
+
+    if verdict == "auth":
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=description,
+            result=(
+                "Workday rejected the probe with an auth-class fault "
+                "(401 / invalid username or password). Cannot "
+                "distinguish Personal Data permission denial from an "
+                "ISU credential problem when the connection itself "
+                "is not authenticating."
+            ),
+            remediation=(
+                "Resolve the underlying ISU credential issue first — "
+                "see WD-CONN-101 (Workday connection token health) "
+                "for the connection re-bind path. Once WD-CONN-101 "
+                "is green, re-run /flightcheck and WD-SEC-003 will "
+                "exercise the actual permission resolution."
+            ),
+            doc_link=doc_link,
+        )]
+
+    if verdict == "pass":
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
+            description=description,
+            result=(
+                "Workday accepted Get_Change_Work_Contact_Information_"
+                "Event_Request without a Personal Data permission "
+                "denial. The configured ISU resolves to a security "
+                "group with Modify on the Personal Data domain — "
+                "Update Email / Update Phone topics have the runtime "
+                "permission they need."
+            ),
+            doc_link=doc_link,
+        )]
+
+    # verdict == "unknown" — Workday returned an error we don't have a
+    # signature for. Surface the redacted error text and fall back to
+    # MANUAL guidance so the operator can verify in the Workday UI
+    # rather than treat the ambiguous response as either pass or fail.
+    err = (soap_result.get("error") or "(no error text)")[:200]
+    return [CheckResult(
+        checkpoint_id=cp_id, category=category,
+        priority=Priority.HIGH.value, status=Status.WARNING.value,
+        description=description,
+        result=(
+            "Workday returned an unrecognized response to "
+            "Get_Change_Work_Contact_Information_Event_Request: "
+            f"{err}. Cannot determine Personal Data permission state "
+            "from this fault signature."
+        ),
+        remediation=_WD_SEC_003_MANUAL_REMEDIATION,
+        doc_link=doc_link,
+    )]
 
 
 # ---- Credential Resolution ----

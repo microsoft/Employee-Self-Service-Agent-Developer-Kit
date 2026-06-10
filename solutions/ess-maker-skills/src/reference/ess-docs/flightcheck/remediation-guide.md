@@ -201,6 +201,88 @@ active Entra `Certificate (Base64)` into Workday.
 4. Or run `/troubleshoot` for guided ISU debugging
 **Verify:** Re-run `/flightcheck --scope workday`
 
+### WD-SEC-003: Personal Data domain write permission (Employee as Self)
+**Scope:** This check validates whether the resolved security group for
+ESS personal-contact write topics (Update Email, Update Phone) has the
+permissions needed to call `Maintain_Contact_Information` /
+`Edit_Worker_Additional_Data` on Workday's Personal Data domain. It is
+complementary to — not a replacement for — WD-WF-016 / WD-WF-017, which
+only emit a coarse "Contact Information" remediation that misses the
+intersection-group resolution problem this check exposes.
+
+**Why both the runtime probe and MANUAL fallback exist.** The original
+ticket proposed reading Workday's domain security policies directly via
+`Get_Security_Groups` / `Get_Domain_Security_Policies` SOAP (or the REST
+equivalents). Those admin operations are **not reachable** from outside
+the Workday UI on a typical tenant (see
+`tests/fixtures/cassettes/workday_config.yaml` — every captured
+`Get_API_Clients` / `Get_Authentication_Policies` returned the SOAP
+fault `Element not found=…_Request-urn:com.workday/bsvc`), and the WQL
+alternative is blocked by the chicken-and-egg OAuth API Client
+registration documented in `tests/fixtures/cassettes/INDEX.md` (WQL
+also does not model domain-level permissions at all). The check
+therefore probes the actual runtime write path on full / legacy
+installs (where an ISU exists) and delegates to the operator on
+simplified installs (where the write resolves against the signed-in
+employee's own Workday identity and there is no ISU to probe from
+FlightCheck).
+
+**On a full / legacy install (Mode A — runtime probe):** the check
+issues `Get_Change_Work_Contact_Information_Event_Request` via the same
+SOAP envelope the existing 17-workflow tests use, then classifies the
+response by faultstring:
+
+| Workday response | WD-SEC-003 verdict |
+|---|---|
+| 2xx success, or fault containing `Worker not found` / `Invalid_ID` / `Invalid reference` | **PASSED** — Personal Data resolution succeeded; the test employee just has no open contact-change event |
+| 400 with `Processing error occurred. The task submitted is not authorized` | **FAILED** — see fix steps below |
+| 401 / `Invalid username or password` | **WARNING** — auth itself is broken; resolve WD-CONN-101 first |
+| Anything else | **WARNING** with MANUAL fix steps (cannot guess permission state from an unknown fault) |
+
+**On a simplified install (Mode B — MANUAL):** the check emits one
+MANUAL row stating the kit cannot probe an ISU because the OBO/OAuthUser
+path runs as the signed-in employee, and that the Workday-side
+permission to verify is on each employee's own `Employee as Self`
+intersection group.
+
+**Root cause (FAILED):** The resolved security group for the configured
+ISU has read access to other Workday domains (which is why
+WD-WF-001..015 pass) but is missing **Modify** on the **Personal Data**
+domain. Common cause: a tenant with multiple intersection groups
+overlapping where the write permission resolves to a group that wasn't
+granted Personal Data modify rights when the others were.
+**Fix (FAILED):**
+1. In Workday, search for and open `View Security Group`.
+2. Look up `Employee as Self` (or the equivalent intersection group
+   your tenant uses for self-service permissions).
+3. From the group's related actions: `Security Group` → `Maintain
+   Permissions for Security Group` → `Domain Security Policy
+   Permissions` tab.
+4. Grant **Modify** on the `Personal Data` domain (`Modify Self` for an
+   intersection group like Employee as Self; `Modify All` if your
+   tenant uses a regular group instead).
+5. In Workday, search for and open `Edit Business Process Security
+   Policy` → `Maintain Contact Information`. Confirm `Employee as Self`
+   (or your equivalent) is listed as an Initiator. Repeat for `Edit
+   Worker Additional Data` if your topics call that business process.
+6. Search for and run `Activate Pending Security Policy Changes` — the
+   edits above are pending until you activate them.
+7. Re-run `/flightcheck --scope workday` to confirm WD-SEC-003 now
+   passes.
+
+**Fix (WARNING — auth fault):** Resolve WD-CONN-101 (ISU credential
+health) first — see the connection re-bind path under `WD-CONN-xxx`
+above. Once WD-CONN-101 is green, WD-SEC-003 will exercise the actual
+permission resolution.
+
+**Fix (MANUAL — simplified install or no ISU creds):** Follow the
+Workday UI navigation in the check's `remediation` field (Steps 1–3:
+verify Personal Data domain has the group with Modify, verify
+Maintain Contact Information / Edit Worker Additional Data initiators,
+activate any pending security policy changes). MANUAL items do not
+fail readiness.
+**Verify:** Re-run `/flightcheck --scope workday`
+
 ---
 
 ## Local Files
