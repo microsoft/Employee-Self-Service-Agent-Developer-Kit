@@ -168,6 +168,28 @@ function Test-IsWindowsArm64 {
     }
 }
 
+# Helper: read MSAL token cache and return unique signed-in usernames.
+# The cache is a JSON document (the .bin extension is misleading). Each
+# account entry has a `username` field. Multiple entries per user can
+# appear (one per tenant/realm); dedupe by lowercase username.
+# Returns @() on any parse failure — callers treat that as "unknown user".
+function Get-CachedUsernames {
+    param([Parameter(Mandatory)] [string] $CachePath)
+    if (-not (Test-Path $CachePath)) { return @() }
+    try {
+        $raw = Get-Content -LiteralPath $CachePath -Raw -ErrorAction Stop
+        if (-not $raw.Trim()) { return @() }
+        $cache = $raw | ConvertFrom-Json -ErrorAction Stop
+        if (-not $cache.Account) { return @() }
+        $names = foreach ($prop in $cache.Account.PSObject.Properties) {
+            if ($prop.Value.username) { $prop.Value.username }
+        }
+        return @($names | Sort-Object -Unique)
+    } catch {
+        return @()
+    }
+}
+
 # Helper: install pip requirements with ARM64-aware guardrails.
 #   - Upgrades pip first (failures are warnings, not fatal — older pip can still install).
 #   - Uses --prefer-binary so resolution favors wheels over sdists when possible.
@@ -651,8 +673,20 @@ if ($FlightCheckOnly) {
     # switch rather than making them hunt for the cache file.
     $tokenCacheFile = Join-Path $localDir '.token_cache.bin'
     if (Test-Path $tokenCacheFile) {
+        $cachedUsers = Get-CachedUsernames -CachePath $tokenCacheFile
         Write-Host ''
-        Write-Host '    Existing sign-in detected from a previous session.' -ForegroundColor White
+        if ($cachedUsers.Count -eq 1) {
+            Write-Host "    Existing sign-in detected: $($cachedUsers[0])" -ForegroundColor White
+        } elseif ($cachedUsers.Count -gt 1) {
+            Write-Host '    Existing sign-in detected for:' -ForegroundColor White
+            foreach ($u in $cachedUsers) {
+                Write-Host "      - $u" -ForegroundColor White
+            }
+        } else {
+            # Cache present but couldn't read the username (corrupt JSON,
+            # schema change, etc.). Fall back to the generic message.
+            Write-Host '    Existing sign-in detected from a previous session.' -ForegroundColor White
+        }
         Write-Host '    Sign in as a different account? (y/N)' -ForegroundColor Gray
         $switchAccount = Read-Host '    Switch account'
         if ($switchAccount -match '^[Yy]') {
