@@ -171,22 +171,34 @@ function Test-IsWindowsArm64 {
 # Helper: read MSAL token cache and return unique signed-in usernames.
 # The cache is a JSON document (the .bin extension is misleading). Each
 # account entry has a `username` field. Multiple entries per user can
-# appear (one per tenant/realm); dedupe by lowercase username.
-# Returns @() on any parse failure — callers treat that as "unknown user".
+# appear (one per tenant/realm); dedupe.
+#
+# Output contract: pipeline-emits zero or more username strings. Callers
+# MUST wrap the result with `@( ... )` to get a proper array — bare
+# assignment of a single-element pipeline output collapses to a string in
+# PowerShell (and `.Count` on that string then throws under
+# `Set-StrictMode -Version Latest`, which some users have in their
+# profile). Returns nothing on any parse failure — callers treat that as
+# "unknown user" and fall back to a generic prompt.
 function Get-CachedUsernames {
     param([Parameter(Mandatory)] [string] $CachePath)
-    if (-not (Test-Path $CachePath)) { return @() }
+    if (-not (Test-Path $CachePath)) { return }
     try {
         $raw = Get-Content -LiteralPath $CachePath -Raw -ErrorAction Stop
-        if (-not $raw.Trim()) { return @() }
+        if (-not $raw -or -not $raw.Trim()) { return }
         $cache = $raw | ConvertFrom-Json -ErrorAction Stop
-        if (-not $cache.Account) { return @() }
-        $names = foreach ($prop in $cache.Account.PSObject.Properties) {
-            if ($prop.Value.username) { $prop.Value.username }
+        if (-not $cache -or -not $cache.Account) { return }
+        $names = New-Object System.Collections.ArrayList
+        foreach ($prop in $cache.Account.PSObject.Properties) {
+            $u = $prop.Value.username
+            if ($u) { [void] $names.Add([string] $u) }
         }
-        return @($names | Sort-Object -Unique)
+        if ($names.Count -eq 0) { return }
+        # Emit each unique username into the pipeline. Caller wraps with @()
+        # to get a guaranteed array regardless of count.
+        $names | Sort-Object -Unique
     } catch {
-        return @()
+        return
     }
 }
 
@@ -673,7 +685,10 @@ if ($FlightCheckOnly) {
     # switch rather than making them hunt for the cache file.
     $tokenCacheFile = Join-Path $localDir '.token_cache.bin'
     if (Test-Path $tokenCacheFile) {
-        $cachedUsers = Get-CachedUsernames -CachePath $tokenCacheFile
+        # Force array context with @(...) — Get-CachedUsernames returns a
+        # [string[]] guarded by the unary comma operator, but belt-and-
+        # suspenders here in case the function output ever changes.
+        $cachedUsers = @(Get-CachedUsernames -CachePath $tokenCacheFile)
         Write-Host ''
         if ($cachedUsers.Count -eq 1) {
             Write-Host "    Existing sign-in detected: $($cachedUsers[0])" -ForegroundColor White
