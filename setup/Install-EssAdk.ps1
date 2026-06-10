@@ -639,6 +639,38 @@ if ($FlightCheckOnly) {
         }
     }
 
+    # --- Account selection: offer to clear cached MSAL tokens ---
+    # Runs before BOTH the discover.py auth (when reconfiguring) and the
+    # FlightCheck run (which also authenticates via cli.py), so a single
+    # prompt covers every code path that hits the MSAL cache.
+    # All FlightCheck clients share .local/.token_cache.bin. The cached
+    # tokens silently sign the next run in as whichever user authenticated
+    # last — desirable most of the time, but bites users who installed
+    # under one account and now need to FlightCheck a different tenant /
+    # different user (e.g. customer-engineer scenarios). Offer an explicit
+    # switch rather than making them hunt for the cache file.
+    $tokenCacheFile = Join-Path $localDir '.token_cache.bin'
+    if (Test-Path $tokenCacheFile) {
+        Write-Host ''
+        Write-Host '    Existing sign-in detected from a previous session.' -ForegroundColor White
+        Write-Host '    Sign in as a different account? (y/N)' -ForegroundColor Gray
+        $switchAccount = Read-Host '    Switch account'
+        if ($switchAccount -match '^[Yy]') {
+            try {
+                Remove-Item $tokenCacheFile -Force
+                Write-Ok 'Cleared sign-in cache - you will be prompted to sign in fresh'
+                Write-Host '    Tip: your browser may auto-SSO into the previous account.' -ForegroundColor DarkGray
+                Write-Host '          If so, sign out at https://login.microsoftonline.com' -ForegroundColor DarkGray
+                Write-Host '          or use an InPrivate/Incognito browser window.' -ForegroundColor DarkGray
+            } catch {
+                Write-Warn2 "Could not remove token cache at $tokenCacheFile - $($_.Exception.Message)"
+                Write-Warn2 'Continuing with cached sign-in.'
+            }
+        } else {
+            Write-Ok 'Using cached sign-in'
+        }
+    }
+
     if (-not (Test-Path $configPath)) {
         $scriptsDir = Join-Path $workspace 'scripts'
         $discoverPy = Join-Path $scriptsDir 'discover.py'
