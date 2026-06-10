@@ -761,11 +761,12 @@ if ($FlightCheckOnly) {
         Write-Warn2 "  cd $workspace"
         Write-Warn2 '  python scripts/flightcheck/cli.py --scope full'
     }
-    # ``return`` (not ``exit 0``) so the script ends without terminating the
-    # PowerShell host. When this installer is invoked via
-    # ``iex (irm .../bootstrap-flightcheck.ps1)`` from an interactive shell,
-    # ``exit`` closes the user's terminal window; ``return`` just stops the
-    # script and lets ``$LASTEXITCODE`` from cli.py propagate to callers.
+    # ``return`` (not ``exit 0``) so the script ends without terminating
+    # the PowerShell host. When this installer is invoked via
+    # ``iex (irm .../bootstrap-flightcheck.ps1)`` from an interactive
+    # shell, ``exit`` closes the user's terminal window; ``return`` just
+    # stops the script and leaves ``$LASTEXITCODE`` from ``cli.py``
+    # available to the calling session.
     return
 }
 
