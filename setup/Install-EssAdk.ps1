@@ -156,6 +156,102 @@ function Resolve-Python {
     return $null
 }
 
+# Helper: detect Windows ARM64 host. Used to add ARM64-specific guardrails to
+# pip install (cryptography only shipped win_arm64 wheels in 46.0+; older
+# resolutions fall back to a Rust source-build that needs VS Build Tools).
+function Test-IsWindowsArm64 {
+    try {
+        return ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -eq 'Arm64')
+    } catch {
+        # Older .NET Framework without RuntimeInformation. Fall back to env var.
+        return ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64')
+    }
+}
+
+# Helper: install pip requirements with ARM64-aware guardrails.
+#   - Upgrades pip first (failures are warnings, not fatal — older pip can still install).
+#   - Uses --prefer-binary so resolution favors wheels over sdists when possible.
+#   - On Windows ARM64, adds --only-binary cryptography. cryptography source
+#     builds need Rust + the MSVC linker (link.exe), which most ARM64 dev
+#     boxes don't have. Failing fast with a wheel-missing message is better
+#     than a 60-second Rust download + cryptic linker error.
+#   - On failure, prints actionable remediation (especially for ARM64).
+# Returns the pip install exit code so callers can decide what to do.
+function Install-PipRequirements {
+    param(
+        [Parameter(Mandatory)] [string] $PythonExe,
+        [Parameter(Mandatory)] [string] $RequirementsFile
+    )
+
+    # Normalize launcher invocation. 'py -3.12' / 'py -3' come back as space-
+    # separated strings from Resolve-Python; everything else is an absolute path.
+    if ($PythonExe -eq 'py -3.12' -or $PythonExe -eq 'py -3') {
+        $pyExe = 'py'
+        $pyPrefix = @(($PythonExe -split ' ')[1])
+    } else {
+        $pyExe = $PythonExe
+        $pyPrefix = @()
+    }
+
+    # 1. Pip self-upgrade. Warn-and-continue on failure so a transient pip
+    # issue doesn't mask a requirements install failure (or block the install
+    # entirely when the existing pip would have been good enough).
+    Start-Spinner 'upgrading pip'
+    $upgradeOutput = Invoke-Native {
+        & $pyExe @pyPrefix -m pip install --upgrade --quiet --disable-pip-version-check pip
+    }
+    $upgradeExit = $LASTEXITCODE
+    Stop-Spinner
+    if ($upgradeExit -ne 0) {
+        Write-Warn2 "pip self-upgrade returned exit code $upgradeExit (non-fatal, continuing)"
+        foreach ($line in $upgradeOutput) { Write-Host "      $line" }
+    }
+
+    # 2. Build pip install arguments.
+    $pipArgs = @(
+        '-m', 'pip', 'install',
+        '--quiet',
+        '--disable-pip-version-check',
+        '--prefer-binary',
+        '-r', $RequirementsFile
+    )
+    if (Test-IsWindowsArm64) {
+        # cryptography sdists trigger a Rust toolchain bootstrap; without
+        # VS Build Tools the cl/link.exe step fails. Force a wheel-only
+        # resolution for cryptography on ARM64.
+        $pipArgs += @('--only-binary', 'cryptography')
+    }
+
+    # 3. Install requirements.
+    Start-Spinner 'installing pip dependencies'
+    $pipOutput = Invoke-Native { & $pyExe @pyPrefix @pipArgs }
+    $pipExit = $LASTEXITCODE
+    Stop-Spinner
+    foreach ($line in $pipOutput) { Write-Host "      $line" }
+
+    if ($pipExit -eq 0) {
+        Write-Ok 'pip dependencies installed'
+    } else {
+        Write-Warn2 "pip install returned exit code $pipExit (non-fatal, /setup will retry)"
+        if (Test-IsWindowsArm64) {
+            Write-Host ''
+            Write-Warn2 'Windows ARM64 detected. A common cause is a missing win_arm64 wheel for'
+            Write-Warn2 "'cryptography' (a transitive dependency of msal). Options:"
+            Write-Warn2 '  (a) Recommended: install x64 Python and re-run. Side-by-side with the'
+            Write-Warn2 '      ARM64 build, then prefer the x64 interpreter for pip:'
+            Write-Warn2 '        winget install --id Python.Python.3.12 --architecture x64'
+            Write-Warn2 '        (or download from https://www.python.org/downloads/windows/)'
+            Write-Warn2 '      Verify with: python -c "import platform; print(platform.machine())"'
+            Write-Warn2 '      AMD64 wheels run under Windows ARM64 emulation (Prism).'
+            Write-Warn2 '  (b) Install Visual Studio Build Tools to build from source:'
+            Write-Warn2 '        winget install --id Microsoft.VisualStudio.2022.BuildTools'
+            Write-Warn2 '        (~7GB; select the "Desktop development with C++" workload)'
+        }
+    }
+
+    return $pipExit
+}
+
 # ---------------------------------------------------------------------------
 # 1. Preflight
 # ---------------------------------------------------------------------------
@@ -336,21 +432,7 @@ if (-not $pythonExe) {
         Write-Warn2 'requirements.txt not yet available (pre-clone). Will install after clone.'
         $deferPip = $true
     } else {
-        # Use Invoke-Native to avoid PS 5.1 stderr termination
-        Start-Spinner "installing pip dependencies"
-        if ($pythonExe -eq 'py -3.12' -or $pythonExe -eq 'py -3') {
-            $pyArgs = ($pythonExe -split ' ')[1]
-            $pipOutput = Invoke-Native { & py $pyArgs -m pip install --quiet --disable-pip-version-check -r $requirementsFile }
-        } else {
-            $pipOutput = Invoke-Native { & $pythonExe -m pip install --quiet --disable-pip-version-check -r $requirementsFile }
-        }
-        Stop-Spinner
-        foreach ($line in $pipOutput) { Write-Host "      $line" }
-        if ($LASTEXITCODE -eq 0) {
-            Write-Ok 'pip dependencies installed'
-        } else {
-            Write-Warn2 "pip install returned exit code $LASTEXITCODE (non-fatal, /setup will retry)"
-        }
+        $null = Install-PipRequirements -PythonExe $pythonExe -RequirementsFile $requirementsFile
     }
 }
 
@@ -483,20 +565,7 @@ if ($deferPip) {
         Write-Step 'Installing Python pip dependencies (deferred)'
         $pythonExe = Resolve-Python
         if ($pythonExe) {
-            Start-Spinner "installing pip dependencies"
-            if ($pythonExe -eq 'py -3.12' -or $pythonExe -eq 'py -3') {
-                $pyArgs = ($pythonExe -split ' ')[1]
-                $pipOutput = Invoke-Native { & py $pyArgs -m pip install --quiet --disable-pip-version-check -r $requirementsFile }
-            } else {
-                $pipOutput = Invoke-Native { & $pythonExe -m pip install --quiet --disable-pip-version-check -r $requirementsFile }
-            }
-            Stop-Spinner
-            foreach ($line in $pipOutput) { Write-Host "      $line" }
-            if ($LASTEXITCODE -eq 0) {
-                Write-Ok 'pip dependencies installed'
-            } else {
-                Write-Warn2 "pip install returned exit code $LASTEXITCODE (non-fatal, /setup will retry)"
-            }
+            $null = Install-PipRequirements -PythonExe $pythonExe -RequirementsFile $requirementsFile
         } else {
             Write-Warn2 'Python still not found. Run: pip install -r solutions/ess-maker-skills/scripts/requirements.txt'
         }
