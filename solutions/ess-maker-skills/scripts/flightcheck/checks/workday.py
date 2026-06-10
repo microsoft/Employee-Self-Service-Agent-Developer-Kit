@@ -2,10 +2,12 @@
 # Licensed under the MIT License.
 
 """
-ESS FlightCheck — Workday Deep Validation (WD-ENV-xxx, WD-CONN-xxx, WD-FLOW-xxx, WD-WF-xxx)
+ESS FlightCheck — Workday Deep Validation (WD-ENV-xxx, WD-CONN-xxx, WD-FLOW-xxx, WD-WF-xxx, WD-WF-CAT-xxx)
 
 Validates Workday environment variables, connection references, flow status,
-and tests all 17 ESS SOAP workflows against the actual Workday API.
+tests all 17 ESS SOAP workflows against the actual Workday API, and surfaces
+a manual checklist for any Workday scenario referenced in customer topics
+that is outside the OOTB scenario catalog (WD-WF-CAT-001).
 
 The SOAP tests reuse the Kit's Workday MCP client (src/mcp/workday/client.py)
 or, when running standalone, build SOAP envelopes directly with httpx.
@@ -18,6 +20,7 @@ import json
 import os
 import re
 import sys
+from pathlib import Path
 from datetime import datetime, timedelta, timezone
 from xml.sax.saxutils import escape as xml_escape
 
@@ -336,6 +339,16 @@ def run_workday_checks(runner) -> list[CheckResult]:
     known flavor, so its diagnostic can list which Microsoft-shipped
     refs are bound vs. unbound for the detected flavor.
 
+    WD-WF-CAT-001 (custom-workflow inventory checklist) runs after the
+    SOAP tests. It walks `workspace/agents/*/topics/*.mcs.yml` for
+    Workday scenario references that are NOT in the live OOTB catalog
+    resolved from the customer's Dataverse
+    (`msdyn_employeeselfservicetemplateconfigs` where `ismanaged=true`)
+    and surfaces them as a MANUAL row with a 4-item operator checklist.
+    WD-WF-CAT-LINK is the corresponding cross-link trailer emitted
+    from inside `_check_workflows` so admins reading a green 17-row
+    SOAP report don't miss the manual row.
+
     WD-CONN-102 (Workday SAML signing certificate health) runs BEFORE
     the no-Workday-integration early-return — the Entra Workday SAML
     SP can exist (and its signing cert can be unhealthy) independent
@@ -408,6 +421,16 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # the operator sees binding diagnostics in context with the other
     # connection checks above.
     results.extend(_check_package_connection_completeness(runner))
+
+    # WD-WF-CAT-001 — Workday custom-workflow inventory checklist.
+    # Runs after the SOAP tests so the WD-WF-CAT-LINK trailer that
+    # `_check_workflows` emits inside its own returns has already
+    # populated `runner._workday_unknown_scenarios` (the trailer
+    # triggers the lazy discovery walk via _get_unknown_workday_scenarios).
+    # Emitting WD-WF-CAT-001 here ensures the full manual checklist
+    # appears in the per-Workday-block output even if there were no
+    # SOAP tests run (e.g. credentials unavailable).
+    results.extend(_check_custom_workflow_inventory(runner))
 
     return results
 
@@ -2684,11 +2707,13 @@ def _check_workflows(runner) -> list[CheckResult]:
     """
     flavor = getattr(runner, "_workday_package_flavor", None)
     if flavor == "simplified":
-        return [_simplified_install_skip(
+        results = [_simplified_install_skip(
             checkpoint_id="WD-WF-000",
             description="Workday SOAP workflow tests",
             category="Workday Workflows",
         )]
+        _append_wd_wf_cat_link_trailer(runner, results)
+        return results
 
     results = []
 
@@ -2707,6 +2732,7 @@ def _check_workflows(runner) -> list[CheckResult]:
             result="Workday not configured - skipping 17 workflow tests",
             remediation="Run /connect workday first, then re-run /flightcheck.",
         ))
+        _append_wd_wf_cat_link_trailer(runner, results)
         return results
 
     if not test_employee:
@@ -2717,6 +2743,7 @@ def _check_workflows(runner) -> list[CheckResult]:
             result="No test employee ID provided - skipping workflow tests",
             remediation="Re-run flightcheck and enter a test employee ID when prompted.",
         ))
+        _append_wd_wf_cat_link_trailer(runner, results)
         return results
 
     # Safe to log here - tenant is from the metadata-only resolver, but we
@@ -2734,6 +2761,7 @@ def _check_workflows(runner) -> list[CheckResult]:
             result="httpx not installed - skipping",
             remediation="pip install httpx",
         ))
+        _append_wd_wf_cat_link_trailer(runner, results)
         return results
 
     # --- Now resolve credentials. From this point on the local scope holds
@@ -2751,6 +2779,7 @@ def _check_workflows(runner) -> list[CheckResult]:
                 "username and password to test the 17 workflows."
             ),
         ))
+        _append_wd_wf_cat_link_trailer(runner, results)
         return results
 
     import datetime
@@ -2840,8 +2869,51 @@ def _check_workflows(runner) -> list[CheckResult]:
                     description=desc, result=f"Error: {error[:100]}",
                 ))
 
+    # Cross-link trailer (WD-WF-CAT-LINK) — surfaces the WD-WF-CAT-001
+    # manual checklist from inside the SOAP-test output so admins
+    # reading a clean 17-row pass don't miss the custom-scenario
+    # inventory row. See `_append_wd_wf_cat_link_trailer` for why this
+    # also fires on the credential-missing skip path.
+    _append_wd_wf_cat_link_trailer(runner, results)
+
     return results
 
+
+def _append_wd_wf_cat_link_trailer(runner, results: list[CheckResult]) -> None:
+    """Append the WD-WF-CAT-LINK row to `results` if there are unknown
+    Workday scenario references in customer topics.
+
+    Called from EVERY exit path of `_check_workflows` (not just the
+    SOAP-test-loop-completed path) so the cross-link surfaces even
+    when SOAP tests are skipped for credential-missing reasons.
+    AC2 ("Linked from Test-WorkdayWorkflows output when an unknown
+    workflow name is referenced in customer topics") needs the link
+    to appear regardless of whether the operator has configured ISU
+    creds yet — the inventory of custom scenarios doesn't depend on
+    Workday connectivity.
+
+    The result text is deliberately worded "above" without naming
+    "17 SOAP tests" because some exit paths emit zero SOAP rows.
+    """
+    unknown = _get_unknown_workday_scenarios(runner)
+    if not unknown:
+        return
+    results.append(CheckResult(
+        checkpoint_id="WD-WF-CAT-LINK", category="Workday Workflows",
+        priority=Priority.MEDIUM.value, status=Status.MANUAL.value,
+        description="Custom Workday scenarios outside the SOAP-test catalog",
+        result=(
+            f"{len(unknown)} Workday scenario reference(s) in customer "
+            "topics are NOT covered by the automated SOAP tests in this "
+            "Workday Workflows block."
+        ),
+        remediation=(
+            "See WD-WF-CAT-001 for the per-scenario list and the "
+            "manual verification checklist (ISU account, payload "
+            "shape vs. Workday WSDL, evaluation test prompt, "
+            "connection-ref auth health)."
+        ),
+    ))
 
 # ─────────────────────────────────────────────────────────────────────────
 # WD-SEC-003 — Workday Personal Data domain write-permission probe
@@ -3253,6 +3325,591 @@ def _check_personal_data_write_permission(runner) -> list[CheckResult]:
             "from this fault signature."
         ),
         remediation=_WD_SEC_003_MANUAL_REMEDIATION,
+        doc_link=doc_link,
+    )]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# WD-WF-CAT-001 — Workday custom-workflow inventory checklist (MANUAL)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# The kit hard-codes a 17-workflow SOAP-test catalog (`WORKFLOWS`
+# above). Customers wire up additional Workday scenarios two ways:
+#
+#   1. Template-config + topic — a topic calls
+#      `dialog: msdyn_copilotforemployeeselfservicehr.topic.WorkdaySystemGetCommonExecution`
+#      with a `scenarioName: msdyn_...` value. The shared flow reads
+#      the matching template config row from Dataverse by ScenarioName
+#      and executes the SOAP request.
+#   2. Standalone topic + cloud flow — `kind: InvokeFlowAction`
+#      pointing at a Power Automate flow bound to `shared_workdaysoap`.
+#
+# Both paths exit FlightCheck's automated validation surface. The
+# kit cannot:
+#   * Parse tenant-specific Workday WSDL to validate payload shape.
+#   * Read template config XML field-by-field against the WSDL.
+#   * Confirm the ISU used by the custom scenario has the right
+#     Workday security domain.
+#   * Tell whether an evaluation test exists for the custom scenario.
+#
+# Per AGENTS.md principle #2, this is the canonical MANUAL pattern:
+# the kit observes one side (topic references scenario X), the
+# operator verifies the other side (Workday-tenant configuration).
+#
+# Data sources:
+#   * Local YAML walk (`workspace/agents/*/topics/*.mcs.yml`) —
+#     no API call, no cassette required.
+#   * Live Dataverse query against
+#     `msdyn_employeeselfservicetemplateconfigs` filtered by
+#     `ismanaged=true` — the tenant-accurate OOTB scenario set.
+#   * Cached `runner._workday_package_flavor` (from WD-PKG-001) for
+#     the simplified-install gate per principle #11.
+#
+# Outputs:
+#   * One PASSED row if every discovered scenario is in the live
+#     Dataverse-resolved OOTB catalog.
+#   * One MANUAL row enumerating unknowns + the 4-item checklist
+#     (Principle #7 — bucketed, not per-resource).
+#   * One SKIPPED row on simplified install (no ISU/RaaS), missing
+#     workspace, zero Workday references, or missing Dataverse token
+#     (cannot resolve OOTB catalog → cannot make a PASS/FAIL claim
+#     per AGENTS.md principle #1).
+#   * One WARNING row if the Dataverse query errored — surfaces the
+#     error per principle #3 instead of silently passing.
+# Caches discovered + unknown lists on the runner so the WD-WF-CAT-LINK
+# trailer inside _check_workflows can reference them without re-walking.
+
+# Marker for the shared Workday execution topic (Pattern A). The
+# `dialog:` field is fully-qualified and always contains this suffix
+# regardless of agent publisher prefix.
+_WORKDAY_SYSTEM_DIALOG_SUFFIX = ".topic.WorkdaySystemGetCommonExecution"
+
+
+def _load_workday_ootb_catalog_from_dataverse(
+    runner,
+) -> tuple[set[str] | None, str]:
+    """Query the customer's Dataverse tenant for OOTB Workday scenarios.
+
+    Reads `msdyn_employeeselfservicetemplateconfigs` (the table the
+    Workday extension pack writes to during installation) and returns
+    the set of scenario names whose records are `ismanaged=true` —
+    i.e. shipped by Microsoft's managed solution, not added by the
+    customer. This is the tenant-accurate, drift-free source of truth
+    for "what counts as OOTB Workday."
+
+    Returns (catalog, status):
+        catalog: set[str] of scenario names on success, or None when
+                 the catalog could not be resolved.
+        status:  "ok"                   — query succeeded.
+                 "no_token"             — no Dataverse token / env URL
+                                          available; caller must SKIP
+                                          per AGENTS.md principle #1.
+                 "query_error: <msg>"   — Dataverse query errored;
+                                          caller must WARN per
+                                          principle #3 (fail loudly on
+                                          API errors).
+    """
+    env_url = getattr(runner, "env_url", None)
+    dv_token = getattr(runner, "dv_token", None)
+    if not env_url or not dv_token:
+        return (None, "no_token")
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+        from auth import query_all
+        rows = query_all(
+            env_url, dv_token,
+            "msdyn_employeeselfservicetemplateconfigs",
+            "msdyn_name,ismanaged",
+        )
+    except Exception as exc:  # noqa: BLE001 — surface the error verbatim
+        return (None, f"query_error: {exc}")
+    catalog = {
+        r.get("msdyn_name", "")
+        for r in rows
+        if r.get("ismanaged") is True and r.get("msdyn_name")
+    }
+    return (catalog, "ok")
+
+
+def _get_workday_ootb_catalog(
+    runner,
+) -> tuple[set[str] | None, str]:
+    """Resolve the Workday OOTB scenarioName catalog from Dataverse.
+
+    There is no fallback: the customer's own Dataverse tenant is the
+    only authoritative source for what the installed Workday extension
+    pack ships. If we can't reach it, the caller must SKIP or WARN per
+    AGENTS.md principle #1 (never return PASS when the check cannot
+    actually validate what it claims to validate).
+
+    Returns (catalog, status). See
+    `_load_workday_ootb_catalog_from_dataverse` for the status values.
+
+    Caches the resolution on `runner._workday_ootb_catalog_cache` so
+    repeated reads within one flightcheck invocation don't re-query
+    Dataverse.
+    """
+    cached = getattr(runner, "_workday_ootb_catalog_cache", None)
+    if cached is not None:
+        return cached
+    result = _load_workday_ootb_catalog_from_dataverse(runner)
+    runner._workday_ootb_catalog_cache = result
+    return result
+
+
+def _is_workday_bound_workflow_json(workflow_json_path: Path) -> bool:
+    """Return True if a Power Automate workflow.json references the
+    Workday SOAP connector (`shared_workdaysoap`) anywhere in its
+    `connectionReferences` block.
+
+    Used to qualify Pattern B (InvokeFlowAction) references: a flow
+    is "Workday-bound" if any of its connection references binds to
+    the Workday SOAP connector. Conservative — a flow that touches
+    both Workday and another connector still counts as Workday-bound
+    so the operator gets surfaced for review.
+    """
+    if not workflow_json_path.exists():
+        return False
+    try:
+        data = json.loads(workflow_json_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    conn_refs = data.get("properties", {}).get("connectionReferences", {})
+    for ref in conn_refs.values():
+        api_obj = ref.get("api", {})
+        if api_obj.get("name", "") == "shared_workdaysoap":
+            return True
+        # Fallback for older flow JSON shapes that put it directly:
+        if ref.get("apiId", "").lower().endswith(WORKDAY_SOAP_CONNECTOR_SUFFIX):
+            return True
+    return False
+
+
+def _build_workflow_id_to_path_index(agent_dir: Path) -> dict[str, Path]:
+    """Walk `agent_dir/workflows/*/metadata.yml`, parse the workflowId
+    out of each, and return {workflowId(lowercase): workflow.json path}.
+
+    Built once per agent so Pattern-B lookups are O(1) per topic
+    reference. Metadata YAML format is documented in
+    workspace/agents/{slug}/workflows/<dir>/metadata.yml — single key
+    `workflowId:` plus `jsonFileName:` (always `workflow.json`).
+    """
+    index: dict[str, Path] = {}
+    workflows_dir = agent_dir / "workflows"
+    if not workflows_dir.exists():
+        return index
+    for sub in workflows_dir.iterdir():
+        if not sub.is_dir():
+            continue
+        metadata = sub / "metadata.yml"
+        if not metadata.exists():
+            continue
+        try:
+            content = metadata.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        m = re.search(r"^\s*workflowId\s*:\s*([0-9a-fA-F-]{36})\s*$", content, re.MULTILINE)
+        if m:
+            workflow_json = sub / "workflow.json"
+            index[m.group(1).lower()] = workflow_json
+    return index
+
+
+def _scan_topic_for_workday_refs(
+    topic_path: Path, agent_slug: str, workflow_index: dict[str, Path],
+) -> list[dict]:
+    """Scan a single topic YAML for Workday scenario references.
+
+    Returns a list of dicts, one per reference found. Each dict has:
+      agent:        the agent folder slug
+      topic:        topic filename
+      line:         1-based line number of the trigger line
+      scenarioName: str | None  (None for Pattern B)
+      pattern:      "system-common-execution" | "invoke-flow-action"
+      flowId:       str | None  (set only for Pattern B)
+    """
+    try:
+        lines = topic_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+
+    refs: list[dict] = []
+
+    # Pattern A: line ending in WorkdaySystemGetCommonExecution; walk
+    # back to find the nearest scenarioName: above it (within ~30
+    # lines — the typical BeginDialog block size).
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if "dialog:" in stripped and _WORKDAY_SYSTEM_DIALOG_SUFFIX in stripped:
+            scenario_line = None
+            scenario_value = None
+            for j in range(i - 1, max(-1, i - 31), -1):
+                back = lines[j].strip()
+                m = re.match(r"^scenarioName\s*:\s*=?\s*\"?([\w]+)\"?\s*$", back)
+                if m:
+                    scenario_line = j + 1
+                    scenario_value = m.group(1)
+                    break
+            refs.append({
+                "agent": agent_slug,
+                "topic": topic_path.name,
+                "line": scenario_line if scenario_line else i + 1,
+                "scenarioName": scenario_value,
+                "pattern": "system-common-execution",
+                "flowId": None,
+            })
+
+    # Pattern B: InvokeFlowAction → flowId → workflow.json bound to
+    # shared_workdaysoap. Pull every (kind:InvokeFlowAction, flowId)
+    # pair, then qualify against the workflow index.
+    in_invoke_block = False
+    invoke_start_line = -1
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if re.match(r"^-?\s*kind\s*:\s*InvokeFlowAction\s*$", stripped):
+            in_invoke_block = True
+            invoke_start_line = i + 1
+            continue
+        if in_invoke_block:
+            m = re.match(r"^flowId\s*:\s*([0-9a-fA-F-]{36})\s*$", stripped)
+            if m:
+                flow_id = m.group(1).lower()
+                workflow_json = workflow_index.get(flow_id)
+                if workflow_json and _is_workday_bound_workflow_json(workflow_json):
+                    refs.append({
+                        "agent": agent_slug,
+                        "topic": topic_path.name,
+                        "line": invoke_start_line,
+                        "scenarioName": None,
+                        "pattern": "invoke-flow-action",
+                        "flowId": flow_id,
+                    })
+                in_invoke_block = False
+                invoke_start_line = -1
+            # Heuristic close: a new top-level `- kind:` line ends
+            # the current InvokeFlowAction block without a flowId.
+            elif re.match(r"^-\s*kind\s*:", stripped) and i > invoke_start_line - 1:
+                in_invoke_block = False
+                invoke_start_line = -1
+    return refs
+
+
+def _discover_customer_workday_scenarios(
+    workspace_root: Path = Path("workspace/agents"),
+) -> list[dict]:
+    """Walk every agent under workspace_root and return all Workday
+    scenario references (Pattern A + Pattern B). Returns [] when the
+    workspace doesn't exist (callers should treat that as SKIPPED, not
+    PASSED — see _check_custom_workflow_inventory).
+    """
+    if not workspace_root.exists():
+        return []
+    discovered: list[dict] = []
+    for agent_dir in sorted(workspace_root.iterdir()):
+        if not agent_dir.is_dir() or agent_dir.name.startswith("."):
+            continue
+        topics_dir = agent_dir / "topics"
+        if not topics_dir.exists():
+            continue
+        workflow_index = _build_workflow_id_to_path_index(agent_dir)
+        for topic_file in sorted(topics_dir.glob("*.mcs.yml")):
+            discovered.extend(
+                _scan_topic_for_workday_refs(
+                    topic_file, agent_dir.name, workflow_index,
+                )
+            )
+    return discovered
+
+
+def _get_unknown_workday_scenarios(runner) -> list[dict]:
+    """Return the cached list of unknown Workday refs, computing and
+    caching it on first read.
+
+    Used by both _check_custom_workflow_inventory and the
+    WD-WF-CAT-LINK trailer inside _check_workflows so the topic walk
+    runs at most once per flightcheck invocation regardless of which
+    check the runner schedules first.
+
+    The OOTB catalog this diff'd against comes from
+    `_get_workday_ootb_catalog` (live Dataverse). When the catalog
+    cannot be resolved (no token / query error), this function returns
+    an empty list — the WD-WF-CAT-001 main check is the single source
+    of truth for surfacing that condition (SKIPPED / WARNING). The
+    trailer self-suppresses in that case so we don't claim "0 unknowns"
+    when the truth is "we couldn't tell."
+    """
+    cached = getattr(runner, "_workday_unknown_scenarios", None)
+    if cached is not None:
+        return cached
+    workspace_root_str = "workspace/agents"
+    discovered = _discover_customer_workday_scenarios(Path(workspace_root_str))
+    runner._workday_discovered_scenarios = discovered
+    if not discovered:
+        runner._workday_unknown_scenarios = []
+        return []
+    catalog, _status = _get_workday_ootb_catalog(runner)
+    if catalog is None:
+        runner._workday_unknown_scenarios = []
+        return []
+    unknown = [
+        ref for ref in discovered
+        if ref["pattern"] == "invoke-flow-action"
+        or (ref.get("scenarioName") and ref["scenarioName"] not in catalog)
+    ]
+    runner._workday_unknown_scenarios = unknown
+    return unknown
+
+
+def _format_unknown_scenarios(unknown: list[dict]) -> str:
+    """Format the unknown-refs list for the result field. One block per
+    reference, agent + topic + line cited verbatim per AGENTS.md
+    principle #8 (result = what the kit observed).
+    """
+    lines: list[str] = []
+    for ref in unknown:
+        if ref["pattern"] == "system-common-execution":
+            name = ref.get("scenarioName") or "(scenarioName not found in topic)"
+            lines.append(f"  • {name}")
+            lines.append(
+                f"    Topic:    topics/{ref['topic']}:{ref['line']}"
+            )
+            lines.append("    Pattern:  WorkdaySystemGetCommonExecution + scenarioName")
+        else:  # invoke-flow-action
+            lines.append(f"  • <flow-bound, no scenarioName> ({ref.get('flowId', '')})")
+            lines.append(
+                f"    Topic:    topics/{ref['topic']}:{ref['line']}"
+            )
+            lines.append("    Pattern:  InvokeFlowAction → flow bound to shared_workdaysoap")
+        lines.append(f"    Agent:    {ref['agent']}")
+        lines.append("")
+    return "\n".join(lines).rstrip()
+
+
+_WD_WF_CAT_CHECKLIST = (
+    "Manual verification required — the kit cannot validate custom "
+    "Workday scenarios end-to-end. For EACH scenario listed above:\n"
+    "\n"
+    "  1. ISU account: Confirm which ISU registered in Workday is used "
+    "by this scenario. Default is the account in environment variable "
+    "EmployeeContextRequestAccountName (see WD-ENV-001 output). Custom "
+    "scenarios may use a different ISU — verify in the template config "
+    "XML in Dataverse (Power Platform Maker → Tables → "
+    "msdyn_employeeselfservicetemplateconfigs → search ScenarioName).\n"
+    "\n"
+    "  2. Payload shape: Open the template config XML and confirm the "
+    "SOAP request body matches the Workday WSDL for the named service. "
+    "Field names, reference types, and required vs. optional elements "
+    "MUST match the Workday contract. Mismatches surface at runtime as "
+    "the 'Workflow Contract/Payload Mismatch' failure mode.\n"
+    "\n"
+    "  3. Test prompt: Add at least one evaluation test case to the "
+    "agent's evaluations/ folder that exercises the scenario end-to-end "
+    "with a known-good employee. Use /create-eval and tag the test set "
+    "with the scenario name.\n"
+    "\n"
+    "  4. Auth health: Re-check the WD-CONN-* connection token health "
+    "output for the connection reference this scenario uses. "
+    "Intermittent auth failures usually trace to a stale OAuth token "
+    "on one of the ISU refs — reauthenticate in Power Platform Maker "
+    "→ Connections.\n"
+    "\n"
+    "Note: the OOTB Workday catalog is resolved live from the "
+    "customer's own Dataverse "
+    "(msdyn_employeeselfservicetemplateconfigs, filtered by "
+    "ismanaged=true), which auto-detects every scenario the installed "
+    "Workday extension pack ships. A scenario surfacing as MANUAL "
+    "means it is NOT a managed row in the customer's tenant — either "
+    "it is genuinely custom (work through the checklist above) or the "
+    "extension pack is not installed.\n"
+    "\n"
+    "Found a new pattern? Log it back to the gap-discovery process. "
+    "File an issue at "
+    "https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/issues/new "
+    "with title 'Workday gap-discovery: <short summary>' if any of "
+    "the following apply:\n"
+    "  • This MANUAL row surfaced a scenario that you believe should "
+    "ship OOTB in the Workday extension pack (forward to Microsoft "
+    "ESS so the next pack revision can include it).\n"
+    "  • A Workday-bound topic in your agent did NOT surface here but "
+    "should have (the detection walker missed a new wiring pattern — "
+    "Pattern C or beyond; attach the topic YAML snippet so a new "
+    "detection rule can be added to _scan_topic_for_workday_refs).\n"
+    "  • The 4-item checklist above was insufficient for diagnosing "
+    "your scenario (propose the additional verification step).\n"
+    "Include the topic YAML snippet, the scenarioName / flowId, and "
+    "the ADO incident number if any. Closing the loop here is how "
+    "WD-WF-CAT-001 gets better over time."
+)
+
+
+def _check_custom_workflow_inventory(runner) -> list[CheckResult]:
+    """WD-WF-CAT-001 — Manual checklist for custom Workday workflows.
+
+    Gates (in order):
+      * `runner._workday_package_flavor == "simplified"` → SKIPPED
+        (ISU/scenario inventory doesn't apply on the simplified
+        install per AGENTS.md principle #11).
+      * Missing `workspace/agents/` → SKIPPED.
+      * Zero Workday references discovered in any topic → SKIPPED.
+      * No Dataverse token / env URL → SKIPPED (we cannot resolve the
+        live OOTB catalog and must not return PASS per principle #1).
+      * Dataverse query errored → WARNING (surface the error per
+        principle #3 rather than silently swallowing it).
+
+    Otherwise:
+      * Every discovered scenario is a managed row in Dataverse → PASSED.
+      * Any unknown / flow-bound reference → MANUAL with bucketed
+        listing in `result` and the 4-item checklist in `remediation`.
+
+    Caches discovered list on `runner._workday_discovered_scenarios`
+    and the (possibly empty) unknown list on
+    `runner._workday_unknown_scenarios` so the WD-WF-CAT-LINK trailer
+    inside _check_workflows can read them without re-walking.
+    """
+    cp_id = "WD-WF-CAT-001"
+    category = "Workday Workflows"
+    description = "Workday custom-workflow inventory checklist"
+    doc_link = f"{DOC_BASE}/workday-extensibility"
+
+    flavor = getattr(runner, "_workday_package_flavor", None)
+    if flavor == "simplified":
+        return [_simplified_install_skip(
+            checkpoint_id=cp_id,
+            description=description,
+            category=category,
+        )]
+
+    workspace_root = Path("workspace/agents")
+    if not workspace_root.exists():
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=description,
+            result="workspace/agents/ directory not found.",
+            remediation=(
+                "Run /setup to extract agent files before this check "
+                "can enumerate Workday scenario references in topics."
+            ),
+            doc_link=doc_link,
+        )]
+
+    # Discover Workday refs from topics first — no catalog needed for
+    # this step. If there are none, we can SKIP cleanly without even
+    # touching Dataverse.
+    discovered = _discover_customer_workday_scenarios(workspace_root)
+    runner._workday_discovered_scenarios = discovered
+
+    if not discovered:
+        runner._workday_unknown_scenarios = []
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=description,
+            result=(
+                "No Workday scenario references found in any agent topic. "
+                "Either Workday is not wired into the customer's agent yet, "
+                "or its topics are not yet extracted to "
+                "workspace/agents/*/topics/."
+            ),
+            remediation=(
+                "If the customer intends to use Workday, run /create to add "
+                "a Workday scenario topic, or /setup to re-extract topics "
+                "if you expected references to be present."
+            ),
+            doc_link=doc_link,
+        )]
+
+    # We have Workday refs in topics — we need the live Dataverse
+    # OOTB catalog to know which are custom. No fallback: if Dataverse
+    # is unreachable, we cannot make a PASS/FAIL claim (principle #1).
+    catalog, status_code = _get_workday_ootb_catalog(runner)
+
+    if catalog is None and status_code == "no_token":
+        # Suppress the trailer too — without the catalog we cannot
+        # legitimately list "unknowns."
+        runner._workday_unknown_scenarios = []
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=description,
+            result=(
+                f"Found {len(discovered)} Workday scenario reference(s) "
+                "in customer topics, but no Dataverse credentials are "
+                "available to resolve the live OOTB scenario catalog "
+                "(msdyn_employeeselfservicetemplateconfigs where "
+                "ismanaged=true). Cannot determine which references are "
+                "custom vs. OOTB without that lookup."
+            ),
+            remediation=(
+                "Re-run flightcheck after running /setup so Dataverse "
+                "credentials are cached on the runner, or run it in an "
+                "environment where the Dataverse MCP server is "
+                "authenticated."
+            ),
+            doc_link=doc_link,
+        )]
+
+    if catalog is None:
+        # query_error: <msg> — surface verbatim per principle #3.
+        err_msg = status_code.removeprefix("query_error: ") or "unknown error"
+        runner._workday_unknown_scenarios = []
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=description,
+            result=(
+                f"Found {len(discovered)} Workday scenario reference(s) "
+                "in customer topics, but the Dataverse query for the "
+                "live OOTB scenario catalog "
+                "(msdyn_employeeselfservicetemplateconfigs where "
+                f"ismanaged=true) failed: {err_msg}. Cannot determine "
+                "which references are custom vs. OOTB until the query "
+                "succeeds."
+            ),
+            remediation=(
+                "Investigate the Dataverse error above. Common causes: "
+                "expired Dataverse token (re-run /setup), table not "
+                "present in this environment (ESS solution not "
+                "installed), or transient service outage (retry)."
+            ),
+            doc_link=doc_link,
+        )]
+
+    # Catalog resolved cleanly — compute unknowns and cache them.
+    unknown = [
+        ref for ref in discovered
+        if ref["pattern"] == "invoke-flow-action"
+        or (ref.get("scenarioName") and ref["scenarioName"] not in catalog)
+    ]
+    runner._workday_unknown_scenarios = unknown
+
+    if not unknown:
+        return [CheckResult(
+            checkpoint_id=cp_id, category=category,
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
+            description=description,
+            result=(
+                f"Found {len(discovered)} Workday scenario reference(s) "
+                "in customer topics. All are managed rows in the "
+                "customer's Dataverse "
+                "(msdyn_employeeselfservicetemplateconfigs where "
+                "ismanaged=true) and require no manual review."
+            ),
+            doc_link=doc_link,
+        )]
+
+    body = _format_unknown_scenarios(unknown)
+    return [CheckResult(
+        checkpoint_id=cp_id, category=category,
+        priority=Priority.HIGH.value, status=Status.MANUAL.value,
+        description=description,
+        result=(
+            f"Found {len(unknown)} Workday scenario reference(s) in "
+            "customer topics that the kit cannot validate end-to-end "
+            "(not in the OOTB catalog):\n\n"
+            f"{body}"
+        ),
+        remediation=_WD_WF_CAT_CHECKLIST,
         doc_link=doc_link,
     )]
 
