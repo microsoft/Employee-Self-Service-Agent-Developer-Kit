@@ -38,8 +38,9 @@ The same Codespace environment can be used to run FlightCheck without the full m
 1. Open the `solutions/ess-maker-skills` folder (File → Open Folder → `/workspaces/Employee-Self-Service-Agent-Developer-Kit/solutions/ess-maker-skills`)
 2. Open a terminal and run:
    ```bash
-   python scripts/flightcheck/cli.py --scope full
+   python scripts/flightcheck/cli.py --scope full --no-open
    ```
+   `--no-open` skips the auto-launch of the HTML report (Codespaces can't open a local `file://` URL in your browser). Open the saved `workspace/flightcheck/report.html` manually from the file explorer instead.
 3. Follow the prompts to sign in and select your environment
 
 ## FlightCheck-Only Mode
@@ -76,7 +77,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 ### Running FlightCheck again (after initial setup)
 
-Once you've run the installer once, you can re-run FlightCheck directly without going through setup again:
+Once you've run the installer once, you can re-run FlightCheck directly without going through setup again. The HTML report opens in your default browser when the run finishes — pass `--no-open` to skip (useful for CI / headless / SSH sessions).
 
 **Windows:**
 ```powershell
