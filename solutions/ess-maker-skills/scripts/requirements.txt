@@ -4,12 +4,12 @@
 # pip ecosystem grouping in .github/dependabot.yml.
 
 # Auth + HTTP
-msal>=1.31.0,<2.0
-requests>=2.32.0,<3.0
-urllib3>=2.2.0,<3.0
+msal>=1.37.0,<2.0
+requests>=2.34.2,<3.0
+urllib3>=2.7.0,<3.0
 
 # YAML parse for pre-push schema validation
-PyYAML>=6.0.2,<7.0
+PyYAML>=6.0.3,<7.0
 
 # Safe XML parsing for Workday SOAP responses (XXE / billion-laughs hardened).
 defusedxml>=0.7.1,<0.8
