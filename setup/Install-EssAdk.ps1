@@ -521,27 +521,49 @@ if (-not $SkipClone) {
         Write-Ok "Repo already cloned at $repoPath - pulling latest"
         Push-Location $repoPath
         try {
+            # Self-heal --single-branch clones from earlier installer versions.
+            # Without this, `git fetch origin` only refreshes the originally-
+            # cloned branch and `git checkout $Branch` fails for any other
+            # branch — pinning users to whatever branch they first installed
+            # from. Idempotent: no-op if the refspec is already broad.
+            $null = Invoke-Native { & git remote set-branches origin '*' }
+
             $gitOutput = Invoke-Native { & git fetch --quiet origin }
             foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
             if ($LASTEXITCODE -ne 0) {
                 Write-Warn2 "git fetch failed (exit $LASTEXITCODE). Continuing with local copy."
             } else {
+                $currentBranch = (Invoke-Native { & git branch --show-current } | Select-Object -First 1).Trim()
                 $gitOutput = Invoke-Native { & git checkout --quiet $Branch }
                 foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
                 if ($LASTEXITCODE -ne 0) {
-                    Write-Warn2 "git checkout $Branch failed (exit $LASTEXITCODE). Continuing on current branch."
+                    # Loud, actionable: silent fallback to stale code is what
+                    # caused the "env types showing Unknown" / "browser doesn't
+                    # open" regression reports for users who first installed
+                    # from a feature branch.
+                    Write-Warn2 "git checkout $Branch failed (exit $LASTEXITCODE)."
+                    Write-Warn2 "Your local clone is on '$currentBranch' and cannot switch to '$Branch'."
+                    Write-Warn2 "You will run STALE code from '$currentBranch' instead of '$Branch'."
+                    Write-Warn2 "To recover: delete the local clone and re-run, e.g."
+                    Write-Warn2 "  Remove-Item -Recurse -Force '$repoPath'"
+                    Write-Warn2 "Then re-run the installer / bootstrap command."
                 } else {
                     $gitOutput = Invoke-Native { & git pull --quiet --ff-only }
                     foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
                     if ($LASTEXITCODE -ne 0) {
-                        Write-Warn2 "git pull failed (exit $LASTEXITCODE). Continuing with local copy."
+                        Write-Warn2 "git pull failed (exit $LASTEXITCODE). Continuing with local copy (may be behind '$Branch')."
+                        Write-Warn2 "If you see stale behavior, delete '$repoPath' and re-run."
                     }
                 }
             }
         } finally { Pop-Location }
     } else {
         Start-Spinner "cloning repository"
-        $gitOutput = Invoke-Native { & git clone --branch $Branch --single-branch $RepoUrl $repoPath }
+        # No --single-branch: the kit repo is small and a full clone lets
+        # subsequent installer runs switch branches (e.g. testing a fix on
+        # a feature branch, then back to main). The previous --single-branch
+        # behavior trapped users on whichever branch they first installed.
+        $gitOutput = Invoke-Native { & git clone --branch $Branch $RepoUrl $repoPath }
         Stop-Spinner
         foreach ($line in $gitOutput) { Write-Host "      $line" }
         if ($LASTEXITCODE -ne 0) {
