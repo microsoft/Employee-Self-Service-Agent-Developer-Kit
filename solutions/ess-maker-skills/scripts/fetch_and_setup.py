@@ -34,6 +34,7 @@ import sys
 # Add scripts/ to path so we can import auth
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import authenticate, load_config, query_all
+from http_errors import APIError
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +123,6 @@ def fetch_all(env_url, token, bot_id, components=None):
 
     Returns (components, template_configs, workflows).
     """
-    import requests as _requests  # local import to avoid top-level dep
 
     # --- Fetch components ---
     if components is None:
@@ -151,8 +151,8 @@ def fetch_all(env_url, token, bot_id, components=None):
         )
         template_configs = normalize_template_configs(raw_configs)
         print(f"  {len(template_configs)} template configs fetched.\n")
-    except _requests.exceptions.HTTPError as e:
-        if e.response is not None and e.response.status_code == 404:
+    except APIError as e:
+        if e.status_code == 404:
             print("  Table not found (ESS template configs not deployed). "
                   "Skipping.\n")
         else:
@@ -282,8 +282,12 @@ def main():
         token = authenticate(env_url)
         print("Authenticated.\n")
 
-        components, template_configs, workflows = fetch_all(
-            env_url, token, bot_id)
+        try:
+            components, template_configs, workflows = fetch_all(
+                env_url, token, bot_id)
+        except APIError as e:
+            print(e.format_for_terminal())
+            sys.exit(1)
         paths = save_temp_files(components, template_configs, workflows)
         rc = run_setup(env_url, bot_id, name, schema, managed,
                        paths, extra_flags=["--refresh"])
@@ -301,8 +305,12 @@ def main():
     token = authenticate(env_url)
     print("Authenticated.\n")
 
-    components, template_configs, workflows = fetch_all(
-        env_url, token, args.bot_id)
+    try:
+        components, template_configs, workflows = fetch_all(
+            env_url, token, args.bot_id)
+    except APIError as e:
+        print(e.format_for_terminal())
+        sys.exit(1)
     paths = save_temp_files(components, template_configs, workflows)
     rc = run_setup(env_url, args.bot_id, args.name, args.schema,
                    args.managed, paths)

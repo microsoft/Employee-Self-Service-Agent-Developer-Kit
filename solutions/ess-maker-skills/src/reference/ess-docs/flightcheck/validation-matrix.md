@@ -68,6 +68,7 @@ and extended with local file validation checks unique to the Copilot Kit.
 | WD-ENV-003 | EmployeeContextRequestReportInstanceName verified | High | Dataverse REST | [workday#step-4-environment-variables](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday#step-4-environment-variables) |
 | WD-CONN-001 | Workday connections summary | High | PP Admin API | [workday#step-3-connection-references](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday#step-3-connection-references) |
 | WD-CONN-nnn | Individual connection status | High | PP Admin API | [workday#step-3-connection-references](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday#step-3-connection-references) |
+| WD-CONN-102 | Workday SAML signing certificate health (Entra-automated, Workday-manual comparison) | High | Microsoft Graph (servicePrincipal.keyCredentials) | [workday#task-1-create-the-x509-public-key](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday#task-1-create-the-x509-public-key) |
 | WD-FLOW-nnn | Individual flow enabled/disabled | High | PP Admin API | [workday#topics](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday#topics) |
 
 ### Workday SOAP Workflow Tests (WD-WF-xxx)

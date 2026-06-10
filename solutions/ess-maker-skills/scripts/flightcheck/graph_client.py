@@ -221,9 +221,21 @@ class GraphClient:
         self,
         filter_expr: str = "",
         *,
+        select: str | None = None,
         raise_on_permission_error: bool = False,
     ) -> list:
         """List service principals (enterprise apps) with optional filter.
+
+        ``select`` controls the OData ``$select`` projection. Graph
+        ``GET /servicePrincipals`` listing responses OMIT several
+        navigation-adjacent properties unless explicitly requested,
+        most relevantly ``keyCredentials`` and
+        ``preferredTokenSigningKeyThumbprint`` — both used by
+        WD-CONN-102 (SAML signing certificate health). Without an
+        explicit ``$select`` the returned ``keyCredentials`` array is
+        empty for many tenants, which would make WD-CONN-102 falsely
+        report "no signing certificate found" when the cert exists
+        but wasn't projected.
 
         Default behavior swallows 401/403 into an empty list (matches
         ``get_all()``'s default). Pass ``raise_on_permission_error=True``
@@ -235,9 +247,70 @@ class GraphClient:
         params = {}
         if filter_expr:
             params["$filter"] = filter_expr
+        if select:
+            params["$select"] = select
         return self.get_all(
             "/servicePrincipals",
             params=params,
+            raise_on_permission_error=raise_on_permission_error,
+        )
+
+    # Property list WD-CONN-102 reads off each Workday SAML SP. Pinned
+    # as a module-level constant so the test for the request URL can
+    # assert against the same string the production code emits.
+    WORKDAY_SAML_SP_SELECT = (
+        "id,appId,displayName,servicePrincipalNames,"
+        "preferredSingleSignOnMode,preferredTokenSigningKeyThumbprint,"
+        "keyCredentials"
+    )
+
+    def get_workday_saml_service_principals(
+        self,
+        *,
+        raise_on_permission_error: bool = False,
+    ) -> list:
+        """List federated Workday SAML enterprise app service principals,
+        projecting the keyCredential fields WD-CONN-102 inspects.
+
+        SAML-only (excludes OIDC-Workday apps, which don't use the
+        SAML signing certificate that WD-CONN-102 verifies). Forces
+        ``$select`` to include ``keyCredentials`` and
+        ``preferredTokenSigningKeyThumbprint`` so the listing
+        response actually carries the certificate data — see
+        get_service_principals() for the rationale.
+
+        The filter predicate is the same one AUTH-006 / WD-CONN-010
+        use; the single source of truth lives in
+        ``checks/_saml_utils.WORKDAY_SAML_SP_FILTER`` so a drift
+        between the SAML-cert check and the federation-alignment
+        check cannot happen. Imported lazily to avoid pulling a
+        ``checks/`` module at ``graph_client`` import time.
+
+        Pass ``raise_on_permission_error=True`` to convert HTTP
+        401/403 from the listing call into a ``PermissionError``
+        instead of swallowing it into an empty list — the same
+        kwarg the underlying ``get_service_principals`` supports.
+
+        Source (validatable):
+          Schema: https://graph.microsoft.com/v1.0/$metadata
+                  EntityType Name="servicePrincipal" — fields used:
+                    keyCredentials (Collection(keyCredential))
+                    preferredTokenSigningKeyThumbprint (Edm.String, nullable)
+                  ComplexType Name="keyCredential" — fields used:
+                    keyId (Edm.Guid)
+                    customKeyIdentifier (Edm.Binary, nullable)
+                    endDateTime (Edm.DateTimeOffset, nullable)
+                    startDateTime (Edm.DateTimeOffset, nullable)
+                    usage (Edm.String, nullable)
+                    type (Edm.String, nullable)
+          Docs:   https://learn.microsoft.com/graph/api/resources/keycredential
+                  https://learn.microsoft.com/graph/api/serviceprincipal-list
+        """
+        from .checks._saml_utils import WORKDAY_SAML_SP_FILTER
+
+        return self.get_service_principals(
+            filter_expr=WORKDAY_SAML_SP_FILTER,
+            select=self.WORKDAY_SAML_SP_SELECT,
             raise_on_permission_error=raise_on_permission_error,
         )
 
