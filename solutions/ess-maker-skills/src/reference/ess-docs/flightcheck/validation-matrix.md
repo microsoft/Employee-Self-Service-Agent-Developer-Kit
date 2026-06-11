@@ -70,6 +70,7 @@ and extended with local file validation checks unique to the Copilot Kit.
 | WD-CONN-nnn | Individual connection status | High | PP Admin API | [workday#step-3-connection-references](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday#step-3-connection-references) |
 | WD-CONN-102 | Workday SAML signing certificate health (Entra-automated, Workday-manual comparison) | High | Microsoft Graph (servicePrincipal.keyCredentials) | [workday#task-1-create-the-x509-public-key](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday#task-1-create-the-x509-public-key) |
 | WD-FLOW-nnn | Individual flow enabled/disabled | High | PP Admin API | [workday#topics](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday#topics) |
+| WD-SEC-003 | Personal Data domain write permission (Employee as Self). See [remediation guide](./remediation-guide.md#wd-sec-003-personal-data-domain-write-permission-employee-as-self) for full details. | High | Workday SOAP runtime probe + MANUAL fallback | [workday](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday) |
 
 ### Workday SOAP Workflow Tests (WD-WF-xxx)
 
@@ -92,8 +93,8 @@ Tests all 17 ESS pre-configured workflows against the Workday API. Requires ISU 
 | WD-WF-013 | Base Compensation | Compensation | Read | | Compensation |
 | WD-WF-014 | Compensation Ratio | Compensation | Read | | Compensation |
 | WD-WF-015 | Emergency Contact | Human_Resources | Read | ⚠️ | Personal Data |
-| WD-WF-016 | Update Email | Human_Resources | Write | | Contact Information |
-| WD-WF-017 | Update Phone | Human_Resources | Write | | Contact Information |
+| WD-WF-016 | Update Email | Human_Resources | Write | | Contact Information (see WD-SEC-003 for the precise Personal Data + Maintain Contact Information / Edit Worker Additional Data check) |
+| WD-WF-017 | Update Phone | Human_Resources | Write | | Contact Information (see WD-SEC-003 for the precise Personal Data + Maintain Contact Information / Edit Worker Additional Data check) |
 
 ### Workday Custom-Workflow Inventory (WD-WF-CAT-xxx) — Manual
 
