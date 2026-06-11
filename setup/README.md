@@ -14,7 +14,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-mac.sh)"
 ```
 
-Once complete, VS Code opens at `solutions/ess-maker-skills/`. Run `/setup` in Copilot Chat to connect your Dataverse environment.
+Once complete, VS Code opens at `solutions/ess-maker-skills/` and `/setup` is automatically requested in Copilot Chat. You'll be prompted to trust the workspace and sign in to GitHub/Copilot — accept these prompts and `/setup` will run and connect your Dataverse environment.
 
 > **GitHub Copilot subscription is required** for the in-editor maker experience. This script installs the toolchain and extension scaffolding; it does not grant the Copilot entitlement.
 
