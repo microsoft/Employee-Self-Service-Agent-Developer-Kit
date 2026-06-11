@@ -261,6 +261,50 @@ def non_workday_connection(
     )
 
 
+def servicenow_connection(
+    *,
+    status: str = "Connected",
+    display_name: str = "ServiceNow HRSD",
+    api_name: str = "shared_service-now",
+    connection_name: str | None = None,
+) -> dict[str, Any]:
+    """Convenience: a ServiceNow connection.
+
+    Mirrors ``workday_connection`` for the SN-CONN-* checks in
+    flightcheck/checks/servicenow.py. The check filters connections by
+    matching either ``service-now`` or ``servicenow`` (case-insensitive)
+    in the apiId+displayName concatenation, so any combination of
+    those substrings is honored.
+
+    ``api_name`` defaults to ``shared_service-now`` — the canonical
+    Power Platform connector ID for the ServiceNow connector. The
+    hyphenated and unhyphenated aliases both exist in practice
+    (older docs and the connector ID itself use the hyphen; some
+    UI surfaces strip it) which is why
+    ``servicenow._check_connections`` matches both.
+
+    ``connection_name`` overrides the record's ``name`` field
+    (defaults to ``servicenow-{status}-{display_name slug}``) so
+    tests that need a specific id can pin it.
+
+    Cited consumers:
+      - flightcheck/checks/servicenow.py:81-90 (_check_connections)
+      - flightcheck/checks/connections.py:67-176 (check_connector_connections)
+
+    Reference: same response shape as workday_connection; backed by
+    tests/fixtures/cassettes/flightcheck_pp_admin.yaml.
+    """
+    return connection(
+        name=connection_name or (
+            f"servicenow-{status.lower()}-"
+            f"{display_name[:8].lower().replace(' ', '-')}"
+        ),
+        display_name=display_name,
+        api_name=api_name,
+        status=status,
+    )
+
+
 def flow(
     *,
     flow_id: str | None = None,

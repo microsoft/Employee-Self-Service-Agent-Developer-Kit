@@ -242,3 +242,61 @@ verdict.
 
 Refer to the [deployment checklist](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/deploy-overview-alm)
 for detailed guidance on each item.
+
+## Cloud Policies / Telemetry & Feedback
+
+End-user feedback (thumbs up / thumbs down, optional verbatim, optional
+screenshots/attachments) on Copilot responses is gated by two Microsoft 365
+Cloud Policies in the **Microsoft 365 Apps admin center → Policy Management**.
+When the "Allow feedback" policy is Disabled / Not Configured for the ESS
+deployment group, end users simply see no feedback control — there is no error,
+no failed request, no log entry — and the FlightCheck Trend Miner loses its
+primary customer-signal source.
+
+These two checkpoints are **manual** (`Status.Manual`): the Office Cloud Policy
+Service exposes no supported API for reading effective per-group policy state,
+so FlightCheck explains *why* each policy matters and *how* to confirm it in the
+portal, then you verify it. They don't fail readiness.
+
+### POL-FB-001: confirm "Allow feedback" is Enabled for the deployment group
+
+- **Why verify** — Thumbs up / down feedback is the primary closed-loop quality
+  signal (it feeds the Trend Miner, IcM correlation, and product-quality work).
+  The control only appears when **"Allow users to send feedback to Microsoft
+  about Microsoft 365 apps"** is Enabled for the deployment group; if it's
+  Disabled / Not Configured the control disappears silently, so the tenant can
+  opt out of the signal unnoticed.
+- **How to verify** — Open the [Microsoft 365 Apps admin center](https://config.office.com/)
+  → Policy Management → the policy configuration assigned to the security group
+  that owns the ESS deployment → search its settings for "feedback" → confirm
+  **"Allow users to send feedback to Microsoft about Microsoft 365 apps"** is
+  set to **Enabled**. If no configuration targets that group, create or assign
+  one with this policy Enabled.
+- **Scope + confidence** — IT admin scope (Cloud Policy is admin-controlled).
+  This is a manual confirmation — FlightCheck can't read OCPS state directly.
+- **Still stuck?** — If the setting looks right but users still don't see the
+  control, confirm the configuration is assigned to the correct group and isn't
+  overridden by a higher-priority configuration.
+
+### POL-FB-002: confirm "Allow attachments" is Enabled (fidelity)
+
+- **Why verify** — Screenshots and attachments give the feedback signal its
+  diagnostic fidelity. If **"Allow users to include screenshots and attachments
+  when they submit feedback to Microsoft"** is Disabled while feedback is
+  Enabled, feedback still flows but without diagnostic context — a lower-fidelity
+  Trend Miner signal. This is a fidelity consideration, not a feedback blocker.
+- **How to verify** — In the same policy configuration (where you enabled the
+  feedback policy), confirm **"Allow users to include screenshots and
+  attachments when they submit feedback to Microsoft"** is set to **Enabled**.
+
+### Data-sharing notice (emitted verbatim)
+
+Whenever feedback is (or should be) enabled, FlightCheck emits the following
+notice. It is reproduced here **verbatim** so you can lift it directly into
+your organization's privacy documentation and end-user training:
+
+> End-user feedback collected from Copilot responses in this deployment —
+> including any verbatim text, screenshots, and attachments the end user
+> chooses to include — will be shared with Microsoft for product-quality and
+> support improvement purposes. Confirm that your organization's privacy
+> notice and end-user training cover this data flow before launch.
