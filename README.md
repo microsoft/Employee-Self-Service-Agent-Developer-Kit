@@ -8,9 +8,25 @@ A monorepo of solutions, samples, and tooling for the Microsoft Employee Self-Se
 
 This repo is a **monorepo of solutions** under [`solutions/`](solutions/). Each solution is a self-contained tool with its own purpose, dependencies, and instructions.
 
+### Pick your setup path
+
+There are several ways to set up your environment depending on your needs:
+
+| Option | Best for | Guide |
+|--------|----------|-------|
+| **One-shot installer** (Windows) | Full maker kit — installs VS Code, Python, Git, and all dependencies | [Setup README](setup/README.md) |
+| **One-shot installer** (macOS) | Same as above, using Homebrew | [Setup README](setup/README.md) |
+| **GitHub Codespaces** | Browser-based development — no local install required ([free tier available](https://docs.github.com/en/billing/managing-billing-for-your-products/managing-billing-for-github-codespaces/about-billing-for-github-codespaces#monthly-included-storage-and-core-hours-for-personal-accounts)) | [Setup README](setup/README.md#github-codespaces-no-local-install) |
+| **FlightCheck only** | Pre-deployment validation without the full ADK install | [Setup README](setup/README.md#flightcheck-only-mode) |
+| **Manual setup** | Clone or download the repo and open it in VS Code yourself | [Maker Kit README](solutions/ess-maker-skills/README.md#quick-start) — see also the [step-by-step walkthrough below](#how-to-open-ess-maker-skills-as-a-workspace-no-terminal-needed) |
+
+> **GitHub Copilot subscription is required** for the in-editor maker experience.
+
 ### ⚠️ Important: open the right folder in VS Code
 
 The kit's slash-commands (`/setup`, `/flightcheck`, etc.) **only appear when you open a specific solution folder as your VS Code workspace** — not the top-level repo folder. If you open the wrong folder, Copilot Chat will not know about the kit and `/setup` will do nothing.
+
+> The **one-shot installer** and **GitHub Codespaces** paths above open the correct folder for you automatically. The walkthrough below is for the **Manual setup** path.
 
 ### How to open `ess-maker-skills` as a workspace (no terminal needed)
 
@@ -63,20 +79,6 @@ To fix it: `File` → `Open Folder...` again, this time double-click into `solut
 | `solutions/ess-flightcheck/` *(planned — see [#69](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/issues/69))* | Validate your ESS deployment readiness. Runs licensing, identity, integration, and configuration checks against your live environment. | Open the folder in VS Code and type `/flightcheck` in Copilot Chat — or run `python cli.py --scope full` standalone (no LLM needed). |
 
 Additional solutions will be added under `solutions/` over time.
-
-## Getting Started
-
-There are several ways to set up your environment depending on your needs:
-
-| Option | Best for | Guide |
-|--------|----------|-------|
-| **One-shot installer** (Windows) | Full maker kit — installs VS Code, Python, Git, and all dependencies | [Setup README](setup/README.md) |
-| **One-shot installer** (macOS) | Same as above, using Homebrew | [Setup README](setup/README.md) |
-| **GitHub Codespaces** | Browser-based development — no local install required ([free tier available](https://docs.github.com/en/billing/managing-billing-for-your-products/managing-billing-for-github-codespaces/about-billing-for-github-codespaces#monthly-included-storage-and-core-hours-for-personal-accounts)) | [Setup README](setup/README.md#github-codespaces-no-local-install) |
-| **FlightCheck only** | Pre-deployment validation without the full ADK install | [Setup README](setup/README.md#flightcheck-only-mode) |
-| **Manual setup** | Clone the repo and configure your own environment | [Maker Kit README](solutions/ess-maker-skills/README.md#quick-start) |
-
-> **GitHub Copilot subscription is required** for the in-editor maker experience.
 
 ## Samples
 
