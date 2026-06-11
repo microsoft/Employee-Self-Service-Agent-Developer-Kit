@@ -182,3 +182,13 @@ def test_attachments_checkpoint_explains_fidelity_why_and_how():
         in r.remediation
     )
     assert "config.office.com" in r.remediation
+
+
+def test_attachments_does_not_duplicate_data_sharing_notice():
+    # The verbatim MAKER_NOTICE belongs to POL-FB-001 only (POL-FB-002's
+    # "Still stuck?" points back to it). Pin the absence so a future edit that
+    # passes notice= to POL-FB-002's render_directive can't silently duplicate
+    # the compliance string across two rows.
+    r = _results_by_id()["POL-FB-002"]
+    assert "Data-sharing notice" not in r.remediation
+    assert "will be shared with Microsoft" not in r.remediation
