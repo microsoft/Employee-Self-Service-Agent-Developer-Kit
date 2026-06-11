@@ -1,5 +1,6 @@
 {
   "git.openRepositoryInParentFolders": "never",
+  "workbench.startupEditor": "none",
   "[yaml]": {
     "editor.defaultFormatter": "redhat.vscode-yaml",
     "editor.tabSize": 2

@@ -16,7 +16,8 @@
          (GitHub.copilot, GitHub.copilot-chat, ms-python.python).
       5. Clones the Employee-Self-Service-Agent-Developer-Kit repo to a known
          location (default: $env:USERPROFILE\source\Employee-Self-Service-Agent-Developer-Kit).
-      6. Opens the ess-maker-skills workspace in VS Code.
+      6. Opens the ess-maker-skills workspace in VS Code and automatically
+         requests `/setup` in Copilot Chat (requires VS Code 1.102+).
 
     The script is idempotent: re-run to repair a partial install.
 
@@ -946,17 +947,39 @@ if ($FlightCheckOnly) {
 # 7. Launch
 # ---------------------------------------------------------------------------
 if (-not $SkipLaunch) {
-    Write-Step 'Opening workspace in VS Code'
+    Write-Step 'Opening workspace in VS Code and requesting /setup in Copilot Chat'
     $code = Get-Command code -ErrorAction SilentlyContinue
     if ($code) {
-        Start-Process -FilePath $code.Source -ArgumentList @($workspace) | Out-Null
-        Write-Ok "Launched VS Code at $workspace"
+        # `code chat <prompt>` (VS Code 1.102+, June 2025) opens the chat panel
+        # in the workspace at the current working directory and submits the
+        # prompt. We Push-Location $workspace so it targets the kit folder.
+        # Note: exit 0 means "VS Code accepted the chat request," NOT that
+        # /setup actually ran. The user may still need to grant workspace trust
+        # and sign in to GitHub/Copilot before /setup executes.
+        Push-Location $workspace
+        try {
+            $chatOutput = Invoke-Native { & $code.Source chat '/setup' }
+            $chatExit = $LASTEXITCODE
+            foreach ($line in $chatOutput) { if ($line) { Write-Host "      $line" } }
+            if ($chatExit -ne 0) {
+                Write-Warn2 "'code chat' failed or is unsupported (exit $chatExit). Falling back to opening the workspace only."
+                Write-Warn2 "If you have an older VS Code (pre-1.102 / June 2025), update VS Code and re-run, or run /setup manually in Copilot Chat."
+                Start-Process -FilePath $code.Source -ArgumentList @($workspace) | Out-Null
+                Write-Ok "Launched VS Code at $workspace"
+                Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect Dataverse." -ForegroundColor Green
+            } else {
+                Write-Ok "Requested /setup in Copilot Chat at $workspace"
+                Write-Host "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts and /setup will run." -ForegroundColor Yellow
+                Write-Host "If /setup does not start after trust/sign-in, open Copilot Chat manually and run /setup." -ForegroundColor Yellow
+            }
+        } finally { Pop-Location }
     } else {
         Write-Warn2 "code CLI not on PATH. Open this folder manually: $workspace"
+        Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect Dataverse." -ForegroundColor Green
     }
 } else {
     Write-Warn2 'Skipping launch per -SkipLaunch'
+    Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect Dataverse." -ForegroundColor Green
 }
 
 Write-Host "`nDone. Workspace: $workspace" -ForegroundColor Green
-Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect Dataverse." -ForegroundColor Green
