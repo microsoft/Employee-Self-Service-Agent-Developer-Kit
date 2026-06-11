@@ -16,3 +16,11 @@ defusedxml>=0.7.1,<0.8
 
 # FlightCheck only - safe defaults; the flightcheck CLI is opt-in.
 # (msal/requests/defusedxml already covered above; no flightcheck-specific deps yet.)
+
+# Windows ARM64: force a cryptography version that ships native win_arm64
+# wheels (added in 46.0, Aug 2025). Older versions resolve to an sdist
+# that triggers a Rust + MSVC linker build, which fails on stock dev boxes.
+# msal pulls cryptography transitively; this constraint only narrows the
+# acceptable range on win_arm64 so resolution lands on a wheel-having
+# version. Other platforms keep msal's own (wider) cryptography bound.
+cryptography>=46.0.0; sys_platform == "win32" and platform_machine == "ARM64"

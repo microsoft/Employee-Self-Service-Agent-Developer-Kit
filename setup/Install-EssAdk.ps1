@@ -156,6 +156,136 @@ function Resolve-Python {
     return $null
 }
 
+# Helper: detect Windows ARM64 host. Used to add ARM64-specific guardrails to
+# pip install (cryptography only shipped win_arm64 wheels in 46.0+; older
+# resolutions fall back to a Rust source-build that needs VS Build Tools).
+function Test-IsWindowsArm64 {
+    try {
+        return ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() -eq 'Arm64')
+    } catch {
+        # Older .NET Framework without RuntimeInformation. Fall back to env var.
+        return ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64')
+    }
+}
+
+# Helper: read MSAL token cache and return unique signed-in usernames.
+# The cache is a JSON document (the .bin extension is misleading). Each
+# account entry has a `username` field. Multiple entries per user can
+# appear (one per tenant/realm); dedupe.
+#
+# Output contract: pipeline-emits zero or more username strings. Callers
+# MUST wrap the result with `@( ... )` to get a proper array — bare
+# assignment of a single-element pipeline output collapses to a string in
+# PowerShell (and `.Count` on that string then throws under
+# `Set-StrictMode -Version Latest`, which some users have in their
+# profile). Returns nothing on any parse failure — callers treat that as
+# "unknown user" and fall back to a generic prompt.
+function Get-CachedUsernames {
+    param([Parameter(Mandatory)] [string] $CachePath)
+    if (-not (Test-Path $CachePath)) { return }
+    try {
+        $raw = Get-Content -LiteralPath $CachePath -Raw -ErrorAction Stop
+        if (-not $raw -or -not $raw.Trim()) { return }
+        $cache = $raw | ConvertFrom-Json -ErrorAction Stop
+        if (-not $cache -or -not $cache.Account) { return }
+        $names = New-Object System.Collections.ArrayList
+        foreach ($prop in $cache.Account.PSObject.Properties) {
+            $u = $prop.Value.username
+            if ($u) { [void] $names.Add([string] $u) }
+        }
+        if ($names.Count -eq 0) { return }
+        # Emit each unique username into the pipeline. Caller wraps with @()
+        # to get a guaranteed array regardless of count.
+        $names | Sort-Object -Unique
+    } catch {
+        return
+    }
+}
+
+# Helper: install pip requirements with ARM64-aware guardrails.
+#   - Upgrades pip first (failures are warnings, not fatal — older pip can still install).
+#   - Uses --prefer-binary so resolution favors wheels over sdists when possible.
+#   - On Windows ARM64, adds --only-binary cryptography. cryptography source
+#     builds need Rust + the MSVC linker (link.exe), which most ARM64 dev
+#     boxes don't have. Failing fast with a wheel-missing message is better
+#     than a 60-second Rust download + cryptic linker error.
+#   - On failure, prints actionable remediation (especially for ARM64).
+# Returns the pip install exit code so callers can decide what to do.
+function Install-PipRequirements {
+    param(
+        [Parameter(Mandatory)] [string] $PythonExe,
+        [Parameter(Mandatory)] [string] $RequirementsFile
+    )
+
+    # Normalize launcher invocation. 'py -3.12' / 'py -3' come back as space-
+    # separated strings from Resolve-Python; everything else is an absolute path.
+    if ($PythonExe -eq 'py -3.12' -or $PythonExe -eq 'py -3') {
+        $pyExe = 'py'
+        $pyPrefix = @(($PythonExe -split ' ')[1])
+    } else {
+        $pyExe = $PythonExe
+        $pyPrefix = @()
+    }
+
+    # 1. Pip self-upgrade. Warn-and-continue on failure so a transient pip
+    # issue doesn't mask a requirements install failure (or block the install
+    # entirely when the existing pip would have been good enough).
+    Start-Spinner 'upgrading pip'
+    $upgradeOutput = Invoke-Native {
+        & $pyExe @pyPrefix -m pip install --upgrade --quiet --disable-pip-version-check pip
+    }
+    $upgradeExit = $LASTEXITCODE
+    Stop-Spinner
+    if ($upgradeExit -ne 0) {
+        Write-Warn2 "pip self-upgrade returned exit code $upgradeExit (non-fatal, continuing)"
+        foreach ($line in $upgradeOutput) { Write-Host "      $line" }
+    }
+
+    # 2. Build pip install arguments.
+    $pipArgs = @(
+        '-m', 'pip', 'install',
+        '--quiet',
+        '--disable-pip-version-check',
+        '--prefer-binary',
+        '-r', $RequirementsFile
+    )
+    if (Test-IsWindowsArm64) {
+        # cryptography sdists trigger a Rust toolchain bootstrap; without
+        # VS Build Tools the cl/link.exe step fails. Force a wheel-only
+        # resolution for cryptography on ARM64.
+        $pipArgs += @('--only-binary', 'cryptography')
+    }
+
+    # 3. Install requirements.
+    Start-Spinner 'installing pip dependencies'
+    $pipOutput = Invoke-Native { & $pyExe @pyPrefix @pipArgs }
+    $pipExit = $LASTEXITCODE
+    Stop-Spinner
+    foreach ($line in $pipOutput) { Write-Host "      $line" }
+
+    if ($pipExit -eq 0) {
+        Write-Ok 'pip dependencies installed'
+    } else {
+        Write-Warn2 "pip install returned exit code $pipExit (non-fatal, /setup will retry)"
+        if (Test-IsWindowsArm64) {
+            Write-Host ''
+            Write-Warn2 'Windows ARM64 detected. A common cause is a missing win_arm64 wheel for'
+            Write-Warn2 "'cryptography' (a transitive dependency of msal). Options:"
+            Write-Warn2 '  (a) Recommended: install x64 Python and re-run. Side-by-side with the'
+            Write-Warn2 '      ARM64 build, then prefer the x64 interpreter for pip:'
+            Write-Warn2 '        winget install --id Python.Python.3.12 --architecture x64'
+            Write-Warn2 '        (or download from https://www.python.org/downloads/windows/)'
+            Write-Warn2 '      Verify with: python -c "import platform; print(platform.machine())"'
+            Write-Warn2 '      AMD64 wheels run under Windows ARM64 emulation (Prism).'
+            Write-Warn2 '  (b) Install Visual Studio Build Tools to build from source:'
+            Write-Warn2 '        winget install --id Microsoft.VisualStudio.2022.BuildTools'
+            Write-Warn2 '        (~7GB; select the "Desktop development with C++" workload)'
+        }
+    }
+
+    return $pipExit
+}
+
 # ---------------------------------------------------------------------------
 # 1. Preflight
 # ---------------------------------------------------------------------------
@@ -336,21 +466,7 @@ if (-not $pythonExe) {
         Write-Warn2 'requirements.txt not yet available (pre-clone). Will install after clone.'
         $deferPip = $true
     } else {
-        # Use Invoke-Native to avoid PS 5.1 stderr termination
-        Start-Spinner "installing pip dependencies"
-        if ($pythonExe -eq 'py -3.12' -or $pythonExe -eq 'py -3') {
-            $pyArgs = ($pythonExe -split ' ')[1]
-            $pipOutput = Invoke-Native { & py $pyArgs -m pip install --quiet --disable-pip-version-check -r $requirementsFile }
-        } else {
-            $pipOutput = Invoke-Native { & $pythonExe -m pip install --quiet --disable-pip-version-check -r $requirementsFile }
-        }
-        Stop-Spinner
-        foreach ($line in $pipOutput) { Write-Host "      $line" }
-        if ($LASTEXITCODE -eq 0) {
-            Write-Ok 'pip dependencies installed'
-        } else {
-            Write-Warn2 "pip install returned exit code $LASTEXITCODE (non-fatal, /setup will retry)"
-        }
+        $null = Install-PipRequirements -PythonExe $pythonExe -RequirementsFile $requirementsFile
     }
 }
 
@@ -439,27 +555,49 @@ if (-not $SkipClone) {
         Write-Ok "Repo already cloned at $repoPath - pulling latest"
         Push-Location $repoPath
         try {
+            # Self-heal --single-branch clones from earlier installer versions.
+            # Without this, `git fetch origin` only refreshes the originally-
+            # cloned branch and `git checkout $Branch` fails for any other
+            # branch — pinning users to whatever branch they first installed
+            # from. Idempotent: no-op if the refspec is already broad.
+            $null = Invoke-Native { & git remote set-branches origin '*' }
+
             $gitOutput = Invoke-Native { & git fetch --quiet origin }
             foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
             if ($LASTEXITCODE -ne 0) {
                 Write-Warn2 "git fetch failed (exit $LASTEXITCODE). Continuing with local copy."
             } else {
+                $currentBranch = (Invoke-Native { & git branch --show-current } | Select-Object -First 1).Trim()
                 $gitOutput = Invoke-Native { & git checkout --quiet $Branch }
                 foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
                 if ($LASTEXITCODE -ne 0) {
-                    Write-Warn2 "git checkout $Branch failed (exit $LASTEXITCODE). Continuing on current branch."
+                    # Loud, actionable: silent fallback to stale code is what
+                    # caused the "env types showing Unknown" / "browser doesn't
+                    # open" regression reports for users who first installed
+                    # from a feature branch.
+                    Write-Warn2 "git checkout $Branch failed (exit $LASTEXITCODE)."
+                    Write-Warn2 "Your local clone is on '$currentBranch' and cannot switch to '$Branch'."
+                    Write-Warn2 "You will run STALE code from '$currentBranch' instead of '$Branch'."
+                    Write-Warn2 "To recover: delete the local clone and re-run, e.g."
+                    Write-Warn2 "  Remove-Item -Recurse -Force '$repoPath'"
+                    Write-Warn2 "Then re-run the installer / bootstrap command."
                 } else {
                     $gitOutput = Invoke-Native { & git pull --quiet --ff-only }
                     foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
                     if ($LASTEXITCODE -ne 0) {
-                        Write-Warn2 "git pull failed (exit $LASTEXITCODE). Continuing with local copy."
+                        Write-Warn2 "git pull failed (exit $LASTEXITCODE). Continuing with local copy (may be behind '$Branch')."
+                        Write-Warn2 "If you see stale behavior, delete '$repoPath' and re-run."
                     }
                 }
             }
         } finally { Pop-Location }
     } else {
         Start-Spinner "cloning repository"
-        $gitOutput = Invoke-Native { & git clone --branch $Branch --single-branch $RepoUrl $repoPath }
+        # No --single-branch: the kit repo is small and a full clone lets
+        # subsequent installer runs switch branches (e.g. testing a fix on
+        # a feature branch, then back to main). The previous --single-branch
+        # behavior trapped users on whichever branch they first installed.
+        $gitOutput = Invoke-Native { & git clone --branch $Branch $RepoUrl $repoPath }
         Stop-Spinner
         foreach ($line in $gitOutput) { Write-Host "      $line" }
         if ($LASTEXITCODE -ne 0) {
@@ -483,20 +621,7 @@ if ($deferPip) {
         Write-Step 'Installing Python pip dependencies (deferred)'
         $pythonExe = Resolve-Python
         if ($pythonExe) {
-            Start-Spinner "installing pip dependencies"
-            if ($pythonExe -eq 'py -3.12' -or $pythonExe -eq 'py -3') {
-                $pyArgs = ($pythonExe -split ' ')[1]
-                $pipOutput = Invoke-Native { & py $pyArgs -m pip install --quiet --disable-pip-version-check -r $requirementsFile }
-            } else {
-                $pipOutput = Invoke-Native { & $pythonExe -m pip install --quiet --disable-pip-version-check -r $requirementsFile }
-            }
-            Stop-Spinner
-            foreach ($line in $pipOutput) { Write-Host "      $line" }
-            if ($LASTEXITCODE -eq 0) {
-                Write-Ok 'pip dependencies installed'
-            } else {
-                Write-Warn2 "pip install returned exit code $LASTEXITCODE (non-fatal, /setup will retry)"
-            }
+            $null = Install-PipRequirements -PythonExe $pythonExe -RequirementsFile $requirementsFile
         } else {
             Write-Warn2 'Python still not found. Run: pip install -r solutions/ess-maker-skills/scripts/requirements.txt'
         }
@@ -545,6 +670,53 @@ if ($FlightCheckOnly) {
         } else {
             Remove-Item $configPath -Force
             Write-Ok 'Removed existing config - starting fresh'
+        }
+    }
+
+    # --- Account selection: offer to clear cached MSAL tokens ---
+    # Runs before BOTH the discover.py auth (when reconfiguring) and the
+    # FlightCheck run (which also authenticates via cli.py), so a single
+    # prompt covers every code path that hits the MSAL cache.
+    # All FlightCheck clients share .local/.token_cache.bin. The cached
+    # tokens silently sign the next run in as whichever user authenticated
+    # last — desirable most of the time, but bites users who installed
+    # under one account and now need to FlightCheck a different tenant /
+    # different user (e.g. customer-engineer scenarios). Offer an explicit
+    # switch rather than making them hunt for the cache file.
+    $tokenCacheFile = Join-Path $localDir '.token_cache.bin'
+    if (Test-Path $tokenCacheFile) {
+        # Force array context with @(...) — Get-CachedUsernames returns a
+        # [string[]] guarded by the unary comma operator, but belt-and-
+        # suspenders here in case the function output ever changes.
+        $cachedUsers = @(Get-CachedUsernames -CachePath $tokenCacheFile)
+        Write-Host ''
+        if ($cachedUsers.Count -eq 1) {
+            Write-Host "    Existing sign-in detected: $($cachedUsers[0])" -ForegroundColor White
+        } elseif ($cachedUsers.Count -gt 1) {
+            Write-Host '    Existing sign-in detected for:' -ForegroundColor White
+            foreach ($u in $cachedUsers) {
+                Write-Host "      - $u" -ForegroundColor White
+            }
+        } else {
+            # Cache present but couldn't read the username (corrupt JSON,
+            # schema change, etc.). Fall back to the generic message.
+            Write-Host '    Existing sign-in detected from a previous session.' -ForegroundColor White
+        }
+        Write-Host '    Sign in as a different account? (y/N)' -ForegroundColor Gray
+        $switchAccount = Read-Host '    Switch account'
+        if ($switchAccount -match '^[Yy]') {
+            try {
+                Remove-Item $tokenCacheFile -Force
+                Write-Ok 'Cleared sign-in cache - you will be prompted to sign in fresh'
+                Write-Host '    Tip: your browser may auto-SSO into the previous account.' -ForegroundColor DarkGray
+                Write-Host '          If so, sign out at https://login.microsoftonline.com' -ForegroundColor DarkGray
+                Write-Host '          or use an InPrivate/Incognito browser window.' -ForegroundColor DarkGray
+            } catch {
+                Write-Warn2 "Could not remove token cache at $tokenCacheFile - $($_.Exception.Message)"
+                Write-Warn2 'Continuing with cached sign-in.'
+            }
+        } else {
+            Write-Ok 'Using cached sign-in'
         }
     }
 
