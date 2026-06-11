@@ -58,7 +58,8 @@ Uses the existing `auth.py` token — no additional sign-in needed.
 
 ## 4. Workday SOAP API (optional)
 
-Used for: the 17 workflow tests (WD-WF-001 through WD-WF-017).
+Used for: the 17 workflow tests (WD-WF-001 through WD-WF-017) and the
+WD-SEC-003 Personal Data write-permission runtime probe.
 
 **Requires**: Workday ISU credentials. FlightCheck resolves these automatically:
 
