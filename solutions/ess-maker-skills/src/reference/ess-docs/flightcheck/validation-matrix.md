@@ -173,6 +173,28 @@ standalone FlightCheck tool did not have.
 | SN-LOCAL-002 | HRSD topics present | Medium | Scan `topics/` | [servicenow](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/servicenow) |
 | SN-LOCAL-003 | ITSM topics present | Medium | Scan `topics/` | [servicenow](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/servicenow) |
 
+## 6.5. Cloud Policies / Telemetry & Feedback (POL-FB-xxx)
+
+These checkpoints validate the two Microsoft 365 Cloud Policies (Office Cloud
+Policy Service, managed in the Microsoft 365 Apps admin center → Policy
+Management → Cloud policies) that gate end-user Copilot feedback — the primary
+closed-loop signal for product quality, IcM correlation, and the FlightCheck
+Trend Miner. Cloud Policy is admin-controlled, so these are IT-admin scope.
+
+| ID | Check | Priority | Method | Doc Link |
+|----|-------|----------|--------|----------|
+| POL-FB-001 | Cloud Policy "Allow users to send feedback to Microsoft about Microsoft 365 apps" Enabled for the ESS deployment group | High | Manual (no supported OCPS API) | [overview-cloud-policy](https://learn.microsoft.com/en-us/microsoft-365-apps/admin-center/overview-cloud-policy) |
+| POL-FB-002 | Cloud Policy "Allow users to include screenshots and attachments when they submit feedback to Microsoft" Enabled for the ESS deployment group | High | Manual (no supported OCPS API) | [overview-cloud-policy](https://learn.microsoft.com/en-us/microsoft-365-apps/admin-center/overview-cloud-policy) |
+
+**Why manual:** The Office Cloud Policy Service has no GA / publicly-documented
+API for reading effective per-security-group feedback policy state, and its
+admin-center backend rejects a service-acquired token. So these checkpoints are
+`Manual` (they don't fail readiness): FlightCheck names the exact policies, deep
+-links to the Microsoft 365 Apps admin center, emits the role-aware deployment
+directive, and emits the **verbatim maker-facing data-sharing notice** (see the
+[remediation guide](./remediation-guide.md#cloud-policies--telemetry--feedback)).
+The operator confirms the effective per-group state in the portal.
+
 ## 7. Publishing & QA (Manual Checklist)
 
 | ID | Check | Priority | Method |

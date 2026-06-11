@@ -19,6 +19,7 @@ Scopes:
     servicenow      — ServiceNow deep validation
     local           — Local agent file validation
     publishing      — Publishing/QA checklist
+    cloudpolicy     — Cloud Policy feedback checks (POL-FB-*)
 """
 
 import argparse
@@ -55,6 +56,7 @@ from flightcheck.checks.servicenow import run_servicenow_checks
 from flightcheck.checks.local_files import run_local_file_checks
 from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.checks.licensing import run_licensing_checks
+from flightcheck.checks.cloud_policy import run_cloud_policy_checks
 
 
 SCOPE_MAP = {
@@ -77,6 +79,7 @@ SCOPE_MAP = {
     "local": [("Local Files", run_local_file_checks)],
     "publishing": [("Publishing", run_publishing_checks)],
     "licensing": [("Licensing", run_licensing_checks)],
+    "cloudpolicy": [("Cloud Policies", run_cloud_policy_checks)],
 }
 
 FULL_SCOPE = [
@@ -90,6 +93,7 @@ FULL_SCOPE = [
     ("Local Files", run_local_file_checks),
     ("Licensing", run_licensing_checks),
     ("Publishing", run_publishing_checks),
+    ("Cloud Policies", run_cloud_policy_checks),
 ]
 
 
