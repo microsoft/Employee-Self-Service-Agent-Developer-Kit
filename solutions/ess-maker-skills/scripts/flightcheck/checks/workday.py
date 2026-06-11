@@ -22,6 +22,7 @@ import re
 import sys
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
+from typing import Any
 from xml.sax.saxutils import escape as xml_escape
 
 # Use defusedxml everywhere we parse SOAP responses. Workday talks to us over
@@ -2978,15 +2979,40 @@ WD_SEC_003_DOC_LINK = (
 
 # Faultstring substrings the probe matches against. Lowercased for
 # resilience to Workday version differences. Source: the customer
-# incident referenced by the WD-SEC-003 ADO ticket — a 400 with
+# incident referenced by the WD-SEC-003 source incident — a 400 with
 # "Processing error occurred. The task submitted is not authorized"
 # returned from Get_Change_Work_Contact_Information_Event_Request
 # when the resolved security group lacks Modify on the Personal Data
 # domain.
+#
+# Why this pattern set is intentionally narrow (single entry):
+#
+#   Earlier iterations included broader fallbacks ("not authorized",
+#   "processing error occurred") but both are substrings that
+#   legitimately appear in unrelated Workday SOAP failures:
+#
+#     * "not authorized" matches generic per-resource auth failures
+#       on other domains (e.g. "User is not authorized to view this
+#       resource") that are NOT the Personal Data + Maintain Contact
+#       Information signal WD-SEC-003 is meant to catch. Classifying
+#       those as "denied" would emit the wrong remediation (telling
+#       the operator to grant Personal Data Modify when the real
+#       problem is, say, a Compensation domain read).
+#
+#     * "processing error occurred" is the Workday prefix for many
+#       SOAP-level processing failures (validation errors, BP
+#       configuration errors, reference errors) that have nothing to
+#       do with permissions.
+#
+#   The classifier therefore matches ONLY the verbatim
+#   "task submitted is not authorized" substring — the unique phrase
+#   Workday emits for business-process authorization failures and the
+#   signature documented in the WD-SEC-003 source incident. Anything
+#   that doesn't match falls through to the "unknown" branch, which
+#   surfaces the redacted faultstring + MANUAL guidance rather than
+#   risking a wrong-domain remediation.
 _PERSONAL_DATA_DENIED_PATTERNS = (
     "task submitted is not authorized",
-    "processing error occurred",
-    "not authorized",
 )
 
 # Faultstrings indicating the write API itself is REACHABLE — the
@@ -3017,7 +3043,9 @@ _PERSONAL_DATA_AUTH_PATTERNS = (
 )
 
 
-def _classify_personal_data_write_response(soap_result: dict) -> str:
+def _classify_personal_data_write_response(
+    soap_result: dict[str, Any] | None,
+) -> str:
     """Classify a `_soap_call` return dict into one of:
     'pass', 'denied', 'auth', 'unknown'.
 
@@ -3025,7 +3053,17 @@ def _classify_personal_data_write_response(soap_result: dict) -> str:
     `_soap_call`. Order matters: auth patterns are checked first so a
     401 doesn't get misclassified as a permission denial when the
     upstream auth never succeeded in the first place.
+
+    A ``None`` (or otherwise falsy) ``soap_result`` is treated as
+    ``unknown`` rather than raising. ``_soap_call`` always returns a
+    dict on its normal paths, but a defensive guard here means an
+    unexpected upstream exception path cannot turn the classifier
+    into an ``AttributeError`` source — the downstream
+    ``unknown``-branch already surfaces MANUAL guidance, which is the
+    safe verdict when we have no signal at all.
     """
+    if not soap_result:
+        return "unknown"
     if soap_result.get("success"):
         return "pass"
     err = (soap_result.get("error") or "").lower()
@@ -3038,6 +3076,79 @@ def _classify_personal_data_write_response(soap_result: dict) -> str:
     if any(p in err for p in _PERSONAL_DATA_BENIGN_PATTERNS):
         return "pass"
     return "unknown"
+
+
+# Best-effort PII patterns applied to Workday faultstrings before they
+# land in a CheckResult.result (and therefore the HTML report). Workday
+# faultstrings can legitimately include worker IDs, employee names,
+# user emails, and internal WIDs depending on the operation and tenant
+# verbosity — `_soap_call` strips WS-Security / UsernameToken material
+# but does NOT redact business-data PII out of the faultstring text.
+# Patterns are ordered from most-specific to least-specific so a
+# field-style reference is replaced as a whole tag-value pair rather
+# than letting the bare-id rule chew off only the digits.
+_PII_REDACTION_PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
+    # "Worker_Reference: 21508", "EmployeeID=ABC123", "WID: foo-bar"
+    (
+        re.compile(
+            r"(?i)\b(Worker(?:_Reference)?|Employee(?:_Reference|_ID|ID)?"
+            r"|WID|Person_ID)\s*[:=]\s*\S+"
+        ),
+        r"\1: [REDACTED-ID]",
+    ),
+    # RFC 5322-ish email addresses
+    (
+        re.compile(r"\b[\w._%+-]+@[\w.-]+\.[A-Za-z]{2,}\b"),
+        "[REDACTED-EMAIL]",
+    ),
+    # UUID-style identifiers (Workday internal WIDs are commonly UUIDs)
+    (
+        re.compile(
+            r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+            r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b"
+        ),
+        "[REDACTED-ID]",
+    ),
+    # Bare 5+ digit runs — likely employee / worker IDs. Threshold of
+    # 5 deliberately preserves 3-digit HTTP status codes and 4-digit
+    # year/version numbers that legitimately appear in faultstrings.
+    (re.compile(r"\b\d{5,}\b"), "[REDACTED-ID]"),
+)
+
+
+def _redact_faultstring_pii(text: str) -> str:
+    """Apply best-effort PII redaction to a Workday SOAP faultstring
+    before surfacing it in a CheckResult.
+
+    The upstream `_soap_call` redacts WS-Security / UsernameToken /
+    Password material from the SOAP envelope so the ISU credential
+    cannot land in logs. It does NOT redact business-data PII inside
+    the faultstring text itself — that's this function's job.
+
+    Redacts (best-effort, not security boundary):
+      * Email addresses → ``[REDACTED-EMAIL]``
+      * UUID-style identifiers → ``[REDACTED-ID]``
+      * 5+ consecutive digits (likely employee or worker IDs) →
+        ``[REDACTED-ID]``
+      * Field-style references (``Worker_Reference: ...``,
+        ``EmployeeID=...``, ``WID: ...``, ``Person_ID: ...``) →
+        ``Field: [REDACTED-ID]``
+
+    Apply BEFORE truncation so a partial pattern at the slice boundary
+    cannot survive.
+
+    This is best-effort defense-in-depth, not a security boundary.
+    The categorical defense is the WD-SEC-003 ``unknown`` branch
+    falling back to MANUAL guidance and NOT echoing the redacted text
+    to the operator — but if a future branch starts surfacing the
+    faultstring more prominently, running it through this helper
+    first keeps the HTML report PII-free.
+    """
+    if not text:
+        return text
+    for pattern, replacement in _PII_REDACTION_PATTERNS:
+        text = pattern.sub(replacement, text)
+    return text
 
 
 # Reusable MANUAL-mode remediation. Same prose surfaces from every
@@ -3123,6 +3234,18 @@ def _check_personal_data_write_permission(runner) -> list[CheckResult]:
     `flavor == "simplified"` match; every other verdict (including
     `None` for backwards-compat with minimal test runners) falls
     through to the runtime probe.
+
+    Returns:
+        ``list[CheckResult]`` with **exactly one element**. WD-SEC-003
+        is a single-result check — every branch (MANUAL, SKIPPED,
+        FAILED, WARNING, PASSED) emits one CheckResult, never zero or
+        many. The list return type is preserved for consistency with
+        every other ``_check_*`` helper in this module so the caller
+        can use a uniform ``results.extend(...)`` pattern. If a future
+        extension needs to split WD-SEC-003 into multiple sub-checks
+        (e.g. separate Modify-permission vs business-process-initiator
+        results), the list shape accommodates that without a signature
+        change.
     """
     cp_id = "WD-SEC-003"
     category = "Workday"
@@ -3191,8 +3314,14 @@ def _check_personal_data_write_permission(runner) -> list[CheckResult]:
             doc_link=doc_link,
         )]
 
+    # Pre-flight: verify httpx is installed before attempting the SOAP
+    # call. `_soap_call` does an unguarded `import httpx` inside its
+    # body and would raise `ImportError` mid-call if httpx is missing,
+    # which would surface as an uncaught exception from this check.
+    # Catching it here emits a clean SKIPPED CheckResult with
+    # actionable remediation instead.
     try:
-        import httpx  # noqa: F401  (used inside _soap_call)
+        import httpx  # noqa: F401
     except ImportError:
         return [CheckResult(
             checkpoint_id=cp_id, category=category,
@@ -3313,7 +3442,12 @@ def _check_personal_data_write_permission(runner) -> list[CheckResult]:
     # signature for. Surface the redacted error text and fall back to
     # MANUAL guidance so the operator can verify in the Workday UI
     # rather than treat the ambiguous response as either pass or fail.
-    err = (soap_result.get("error") or "(no error text)")[:200]
+    #
+    # PII-redact BEFORE truncating so a half-cut pattern at the 200-char
+    # slice boundary cannot survive (e.g. an email truncated mid-domain
+    # would no longer match the email regex applied after the slice).
+    raw_err = soap_result.get("error") or "(no error text)"
+    err = _redact_faultstring_pii(raw_err)[:200]
     return [CheckResult(
         checkpoint_id=cp_id, category=category,
         priority=Priority.HIGH.value, status=Status.WARNING.value,

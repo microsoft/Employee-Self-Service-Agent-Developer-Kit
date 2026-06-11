@@ -219,6 +219,25 @@ class TestClassifyPersonalDataWriteResponse:
             {"success": False, "error": ""}
         ) == "unknown"
 
+    def test_none_soap_result_classifies_as_unknown(self) -> None:
+        """Defensive: if an unexpected upstream exception path causes
+        ``_soap_call`` to return ``None`` (or any falsy non-dict
+        value), the classifier must NOT raise ``AttributeError`` from
+        ``soap_result.get(...)``. The safe verdict in the absence of
+        any signal is ``unknown``, which routes to the WARNING +
+        MANUAL-fallback branch — never PASSED or FAILED on no data.
+
+        Pins the guard added in response to PR review: ``_soap_call``
+        always returns a dict on its normal paths, but the classifier
+        is load-bearing and must not crash on edge inputs."""
+        from flightcheck.checks.workday import (
+            _classify_personal_data_write_response,
+        )
+
+        assert _classify_personal_data_write_response(None) == "unknown"
+        # An empty dict is also valid input — falsy, but a dict.
+        assert _classify_personal_data_write_response({}) == "unknown"
+
     def test_case_insensitive_match(self) -> None:
         """Workday version differences sometimes capitalize the
         faultstring differently; the classifier must be resilient."""
@@ -234,6 +253,52 @@ class TestClassifyPersonalDataWriteResponse:
             ),
         }
         assert _classify_personal_data_write_response(result) == "denied"
+
+    def test_generic_not_authorized_does_not_classify_as_denied(self) -> None:
+        """Regression for the over-broad pattern catch.
+
+        An earlier iteration of ``_PERSONAL_DATA_DENIED_PATTERNS``
+        included the bare substring ``"not authorized"``, which would
+        incorrectly classify *any* Workday auth-class failure on an
+        unrelated domain as a Personal Data permission denial — and
+        emit the wrong remediation (telling the operator to grant
+        Personal Data Modify when the real problem is, say, a
+        Compensation domain read). The pattern set is now narrowed
+        to the verbatim ``"task submitted is not authorized"``
+        signature only; generic ``"not authorized"`` faults must
+        fall through to ``unknown`` so the MANUAL fallback (not the
+        FAILED branch) fires."""
+        from flightcheck.checks.workday import (
+            _classify_personal_data_write_response,
+        )
+
+        result = {
+            "success": False,
+            "error": (
+                "HTTP 403: User is not authorized to view this resource"
+            ),
+        }
+        assert _classify_personal_data_write_response(result) == "unknown"
+
+    def test_generic_processing_error_does_not_classify_as_denied(self) -> None:
+        """Regression for the over-broad pattern catch.
+
+        ``"Processing error occurred"`` is the Workday prefix for many
+        SOAP-level failures (validation errors, BP configuration
+        errors, reference errors) that have nothing to do with
+        permissions. It must NOT alone trigger the FAILED branch."""
+        from flightcheck.checks.workday import (
+            _classify_personal_data_write_response,
+        )
+
+        result = {
+            "success": False,
+            "error": (
+                "HTTP 400: Processing error occurred. Invalid element "
+                "reference in request body"
+            ),
+        }
+        assert _classify_personal_data_write_response(result) == "unknown"
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -372,8 +437,14 @@ class TestModeA_PassBranches:
         r = results[0]
         assert r.checkpoint_id == "WD-SEC-003"
         assert r.status == "Passed"
-        # AGENTS.md principle #8: PASSED has no remediation.
-        assert r.remediation == ""
+        # AGENTS.md principle #8: PASSED branches have no remediation
+        # text. Use truthiness (not == "") so the test still holds if
+        # CheckResult ever changes the default from `str = ""` to e.g.
+        # `Optional[str] = None`. The HTML renderer already tolerates
+        # both via `res.remediation or ""` (runner.py line 620) — this
+        # test should match that tolerance rather than over-pin the
+        # current default.
+        assert not r.remediation
         # Result must report the observed state — specifically that
         # the runtime permission is in place.
         assert "Personal Data" in r.result
@@ -458,6 +529,134 @@ class TestModeA_UnknownFaultBranch:
         assert "Manual verification required" in r.remediation
         assert "Personal Data" in r.remediation
         assert "Employee as Self" in r.remediation
+
+    def test_unknown_fault_redacts_pii_from_surfaced_error(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        supply_isu_creds: None,
+    ) -> None:
+        """Regression for the WD-SEC-003 PR review concern: Workday
+        faultstrings can include worker IDs, employee names, or user
+        emails. The ``unknown`` branch is the only place the check
+        surfaces raw faultstring text into ``result``, and ``result``
+        flows into the HTML report. Confirm
+        ``_redact_faultstring_pii`` is applied before that text lands
+        in the CheckResult."""
+        from flightcheck.checks import workday as wd_mod
+        from flightcheck.checks.workday import (
+            _check_personal_data_write_permission,
+        )
+
+        monkeypatch.setattr(
+            wd_mod, "_soap_call",
+            lambda *_a, **_k: {
+                "success": False,
+                "error": (
+                    "HTTP 500: Worker_Reference: 21508 for jane.doe@"
+                    "contoso.com (WID f47ac10b-58cc-4372-a567-"
+                    "0e02b2c3d479) is in an inconsistent state"
+                ),
+            },
+        )
+
+        runner = _full_install_runner_with_workday()
+        results = _check_personal_data_write_permission(runner)
+
+        assert len(results) == 1
+        r = results[0]
+        # PII must NOT appear verbatim in the surfaced result.
+        assert "21508" not in r.result
+        assert "jane.doe" not in r.result
+        assert "contoso.com" not in r.result
+        assert "f47ac10b-58cc-4372-a567-0e02b2c3d479" not in r.result
+        # Redaction markers SHOULD be present in place of each PII
+        # category so an operator reading the report still has enough
+        # context to recognize what was scrubbed.
+        assert "[REDACTED-ID]" in r.result
+        assert "[REDACTED-EMAIL]" in r.result
+        # Benign error context (HTTP status, "inconsistent state") must
+        # still pass through — redaction does not destroy debug value.
+        assert "500" in r.result
+        assert "inconsistent state" in r.result
+
+
+class TestRedactFaultstringPii:
+    """Direct unit tests for the ``_redact_faultstring_pii`` helper.
+
+    PII patterns are best-effort defense-in-depth — the categorical
+    defense is the WD-SEC-003 ``unknown`` branch falling back to
+    MANUAL guidance. These tests pin the patterns we DO catch so
+    a future refactor cannot silently weaken the redaction."""
+
+    def test_email_addresses_redacted(self) -> None:
+        from flightcheck.checks.workday import _redact_faultstring_pii
+
+        out = _redact_faultstring_pii(
+            "User jane.doe+work@contoso.co.uk not authorized"
+        )
+        assert "jane.doe" not in out
+        assert "contoso" not in out
+        assert "[REDACTED-EMAIL]" in out
+
+    def test_long_numeric_ids_redacted(self) -> None:
+        from flightcheck.checks.workday import _redact_faultstring_pii
+
+        out = _redact_faultstring_pii(
+            "Worker 21508 not found in tenant"
+        )
+        assert "21508" not in out
+        assert "[REDACTED-ID]" in out
+
+    def test_short_numbers_preserved(self) -> None:
+        """3-digit HTTP status codes and 4-digit year/version numbers
+        must NOT be redacted — they contain no PII and are essential
+        debugging context."""
+        from flightcheck.checks.workday import _redact_faultstring_pii
+
+        out = _redact_faultstring_pii(
+            "HTTP 400 from Workday v42.0 at 2026"
+        )
+        assert "400" in out
+        assert "42" in out
+        assert "2026" in out
+        assert "[REDACTED" not in out
+
+    def test_uuid_style_ids_redacted(self) -> None:
+        from flightcheck.checks.workday import _redact_faultstring_pii
+
+        out = _redact_faultstring_pii(
+            "WID f47ac10b-58cc-4372-a567-0e02b2c3d479 not found"
+        )
+        assert "f47ac10b" not in out
+        assert "[REDACTED-ID]" in out
+
+    def test_field_style_reference_redacted(self) -> None:
+        """``Worker_Reference: ABC123`` is a Workday-specific shape
+        that the bare-id rule would miss (3 letters + 3 digits).
+        The field-style pattern catches it as a whole tag-value pair."""
+        from flightcheck.checks.workday import _redact_faultstring_pii
+
+        out = _redact_faultstring_pii(
+            "Worker_Reference: ABC123 cannot be modified"
+        )
+        assert "ABC123" not in out
+        assert "[REDACTED-ID]" in out
+        assert "Worker_Reference" in out  # field name preserved
+
+    def test_empty_and_none_inputs_pass_through(self) -> None:
+        """Defensive: empty / None inputs must not raise."""
+        from flightcheck.checks.workday import _redact_faultstring_pii
+
+        assert _redact_faultstring_pii("") == ""
+        assert _redact_faultstring_pii(None) is None  # type: ignore[arg-type]
+
+    def test_clean_text_unchanged(self) -> None:
+        """A faultstring with no PII shapes must pass through verbatim
+        — the redactor never falsely flags benign content."""
+        from flightcheck.checks.workday import _redact_faultstring_pii
+
+        clean = "Processing error occurred. Invalid element reference."
+        assert _redact_faultstring_pii(clean) == clean
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -690,59 +889,80 @@ class TestSimplifiedInstallGate:
 class TestWiring:
     """Pins that the new check actually runs from the top-level
     ``run_workday_checks`` entry point. Without this, the new function
-    could exist in the module but never get invoked from the CLI."""
+    could exist in the module but never get invoked from the CLI.
+
+    Uses auto-discovery (``_auto_stub_other_workday_checks`` fixture)
+    to stub every ``_check_*`` helper in ``flightcheck.checks.workday``
+    except ``_check_personal_data_write_permission`` itself. This is
+    deliberately broader than enumerating the call sites of
+    ``run_workday_checks`` by hand: if a new ``_check_*`` helper is
+    added to the orchestrator without being added to a hand-maintained
+    stub list, the older enumeration pattern would either
+    (a) silently run the new check for real — potentially making
+    network calls, prompting for credentials, or polluting the
+    ``sec_003`` filter with cross-check CheckResults — or
+    (b) break for the wrong reason. Auto-discovery means any future
+    helper is stubbed by default; if a test ever NEEDS a particular
+    helper to run for real, it overrides the stub explicitly (as this
+    test does for ``_check_package_flavor``). Failing closed.
+    """
+
+    @pytest.fixture
+    def _auto_stub_other_workday_checks(
+        self, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Auto-stub every callable in ``flightcheck.checks.workday``
+        whose name starts with ``_check_`` EXCEPT
+        ``_check_personal_data_write_permission`` (the one this test
+        suite is exercising)."""
+        from flightcheck.checks import workday as wd_mod
+
+        keep = {"_check_personal_data_write_permission"}
+        for name in dir(wd_mod):
+            if not name.startswith("_check_") or name in keep:
+                continue
+            if not callable(getattr(wd_mod, name)):
+                continue
+            # ``*_a, **_k`` swallows both positional and keyword args
+            # since the orchestrator helpers have inconsistent
+            # signatures (some take ``wd_flows`` kwarg, some don't).
+            monkeypatch.setattr(
+                wd_mod, name, lambda *_a, **_k: [],
+            )
 
     def test_run_workday_checks_invokes_personal_data_check(
         self,
         monkeypatch: pytest.MonkeyPatch,
+        _auto_stub_other_workday_checks: None,
     ) -> None:
         """Force ``_workday_package_flavor = "simplified"`` to short
         the runtime-probe path (which would require a fully-built
         runner) and assert the WD-SEC-003 row appears in the
         aggregated output.
+
+        ``_auto_stub_other_workday_checks`` has already replaced every
+        sibling ``_check_*`` helper with a no-op returning ``[]``;
+        this test overrides ``_check_package_flavor`` on top of that
+        so it sets ``runner._workday_package_flavor = "simplified"``
+        (causing WD-SEC-003 to route through its MANUAL branch
+        instead of the no-Workday-URL SKIPPED branch).
         """
         from flightcheck.checks import workday as wd_mod
         from flightcheck.checks.workday import run_workday_checks
 
-        # No Workday flows + simplified flavor takes the simplest path:
-        # the package-flavor check produces its result, the SAML cert
-        # / federation checks SKIP without graph, and our new check
-        # emits its simplified MANUAL row.
-
-        # Stub package detection so we don't need to mock Dataverse.
+        # Override the auto-stub for _check_package_flavor with a
+        # version that populates runner state. monkeypatch stacks
+        # last-write-wins, so this overrides the fixture's no-op.
         def fake_pkg(runner: Any, *, wd_flows: list[Any]) -> list[Any]:
             runner._workday_package_flavor = "simplified"
             runner._workday_connection_refs = []
             return []
 
         monkeypatch.setattr(wd_mod, "_check_package_flavor", fake_pkg)
-        # Short-circuit the other early checks that don't matter here.
-        monkeypatch.setattr(
-            wd_mod, "_check_saml_certificate_health",
-            lambda _runner: [],
-        )
-        monkeypatch.setattr(
-            wd_mod, "_check_entra_workday_federation_alignment",
-            lambda _runner: [],
-        )
 
         runner = _MinimalRunner()
-        runner._workday_flows = [{"id": "fake-flow"}]  # so the early-return gate doesn't fire
-
-        # Short-circuit the deeper checks too — we only care about
-        # whether OUR new check made it into the pipeline.
-        for fn_name in (
-            "_check_env_vars",
-            "_check_isu_username_format",
-            "_check_connections",
-            "_check_connection_token_health",
-            "_check_flow_status",
-            "_check_workflows",
-            "_check_package_connection_completeness",
-        ):
-            monkeypatch.setattr(
-                wd_mod, fn_name, lambda *_a, **_k: [],
-            )
+        # Past the no-Workday-integration early-return gate.
+        runner._workday_flows = [{"id": "fake-flow"}]
 
         results = run_workday_checks(runner)
 
