@@ -73,12 +73,12 @@ python scripts/flightcheck/cli.py --scope {SCOPE}
 
 Wait for the script to finish.
 
-Then open the HTML report in the user's default browser. Use Python to
-handle paths with spaces correctly:
-
-```
-python -c "import webbrowser, os; webbrowser.open('file:///' + os.path.abspath('workspace/flightcheck/report.html').replace(os.sep, '/'))"
-```
+`cli.py` automatically opens the HTML report (`workspace/flightcheck/report.html`)
+in the user's default browser when it finishes. **Do not open it yourself** — a
+second `webbrowser.open` / `Start-Process` would launch a duplicate tab pointing
+at the same file. If the report does not appear (Codespaces, headless box, or
+the user passed `--no-open`), tell them to open it manually from the file
+explorer rather than spawning another tab from this skill.
 
 ---
 
@@ -209,11 +209,9 @@ After all auto-fixes complete, re-run flightcheck:
 python scripts/flightcheck/cli.py --scope {SCOPE}
 ```
 
-Open the updated report:
-
-```
-Start-Process "workspace/flightcheck/report.html"
-```
+`cli.py` reopens the updated report in the browser automatically — **do not run
+`Start-Process` or `webbrowser.open` yourself**, or the user will end up with
+two tabs of the same report.
 
 Then present the new results using the same format (3a → 3b → 3c).
 
