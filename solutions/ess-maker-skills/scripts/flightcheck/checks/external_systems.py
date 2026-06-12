@@ -8,7 +8,7 @@ Discovers installed integration solutions by scanning flows for name patterns.
 Solution-scoped: uses agent name to filter relevant flows.
 """
 
-from ..runner import CheckResult, Status, Priority
+from ..runner import CheckResult, Priority, Role, Status
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
 
@@ -55,7 +55,7 @@ def run_external_systems_checks(runner) -> list[CheckResult]:
     try:
         all_flows = pp.get_flows(env_id)
         if isinstance(all_flows, dict) and "_error" in all_flows:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
                 checkpoint_id="EXT-001", category="External Systems",
                 priority=Priority.HIGH.value, status=Status.WARNING.value,
                 description="Flow inventory",
@@ -64,7 +64,7 @@ def run_external_systems_checks(runner) -> list[CheckResult]:
             ))
             return results
     except Exception as e:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="EXT-001", category="External Systems",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="Flow inventory",
@@ -79,7 +79,7 @@ def run_external_systems_checks(runner) -> list[CheckResult]:
     wd_flows = _match_flows(all_flows, WORKDAY_PATTERNS)
     runner._workday_flows = wd_flows
     if wd_flows:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="WD-001", category="External Systems",
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="Workday solution installed",
@@ -88,7 +88,7 @@ def run_external_systems_checks(runner) -> list[CheckResult]:
             doc_link=f"{DOC_BASE}/workday",
         ))
     else:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="WD-001", category="External Systems",
             priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
             description="Workday solution installed",
@@ -111,7 +111,7 @@ def run_external_systems_checks(runner) -> list[CheckResult]:
             detail += f", {len(other)} other"
         if hrsd or itsm or other:
             detail += ")"
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="SN-001", category="External Systems",
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="ServiceNow solution installed",
@@ -120,7 +120,7 @@ def run_external_systems_checks(runner) -> list[CheckResult]:
             doc_link=f"{DOC_BASE}/servicenow",
         ))
     else:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="SN-001", category="External Systems",
             priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
             description="ServiceNow solution installed",
@@ -133,7 +133,7 @@ def run_external_systems_checks(runner) -> list[CheckResult]:
     sap_flows = _match_flows(all_flows, SAP_PATTERNS)
     runner._sap_flows = sap_flows
     if sap_flows:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="SAP-001", category="External Systems",
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="SAP SuccessFactors solution installed",
@@ -142,7 +142,7 @@ def run_external_systems_checks(runner) -> list[CheckResult]:
             doc_link=f"{DOC_BASE}/sap-successfactors",
         ))
     else:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="SAP-001", category="External Systems",
             priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
             description="SAP SuccessFactors solution installed",

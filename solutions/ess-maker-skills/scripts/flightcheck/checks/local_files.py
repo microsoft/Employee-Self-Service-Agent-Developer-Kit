@@ -14,7 +14,7 @@ from pathlib import Path
 
 import yaml
 
-from ..runner import CheckResult, Status, Priority
+from ..runner import CheckResult, Priority, Role, Status
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
 STUDIO_BASE = "https://copilotstudio.microsoft.com"
@@ -83,7 +83,7 @@ def run_local_file_checks(runner) -> list[CheckResult]:
     # Discover all agent folders under workspace/agents/
     agents_root = Path("workspace/agents")
     if not agents_root.exists():
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="LOCAL-001", category="Local Files",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="Agent files available",
@@ -95,7 +95,7 @@ def run_local_file_checks(runner) -> list[CheckResult]:
     agent_folders = [d for d in agents_root.iterdir() if d.is_dir() and not d.name.startswith(".")]
 
     if not agent_folders:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="LOCAL-001", category="Local Files",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="Agent files available",
@@ -150,7 +150,7 @@ def _check_agent_identity(agent_path: Path, label: str, runner=None, agent_name:
     studio_link = _studio_link_md(runner, agent_name, "the agent in Copilot Studio")
 
     if not agent_file.exists():
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="CONFIG-007", category=f"Configuration ({label})",
             priority=Priority.CRITICAL.value, status=Status.FAILED.value,
             description=f"{label}: Agent identity file",
@@ -178,7 +178,7 @@ def _check_agent_identity(agent_path: Path, label: str, runner=None, agent_name:
         parsed = None
 
     if parsed is None:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="CONFIG-007", category=f"Configuration ({label})",
             priority=Priority.CRITICAL.value, status=Status.FAILED.value,
             description=f"{label}: Agent instructions",
@@ -193,7 +193,7 @@ def _check_agent_identity(agent_path: Path, label: str, runner=None, agent_name:
     if instruction_text:
         word_count = len(instruction_text.split())
         if word_count >= 50:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ESS_MAKER.value],
                 checkpoint_id="CONFIG-007", category=f"Configuration ({label})",
                 priority=Priority.CRITICAL.value, status=Status.PASSED.value,
                 description=f"{label}: Agent instructions",
@@ -202,7 +202,7 @@ def _check_agent_identity(agent_path: Path, label: str, runner=None, agent_name:
                 doc_link=f"{DOC_BASE}/customize",
             ))
         else:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ESS_MAKER.value],
                 checkpoint_id="CONFIG-007", category=f"Configuration ({label})",
                 priority=Priority.CRITICAL.value, status=Status.WARNING.value,
                 description=f"{label}: Agent instructions",
@@ -211,7 +211,7 @@ def _check_agent_identity(agent_path: Path, label: str, runner=None, agent_name:
                 doc_link=f"{DOC_BASE}/customize",
             ))
     else:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="CONFIG-007", category=f"Configuration ({label})",
             priority=Priority.CRITICAL.value, status=Status.FAILED.value,
             description=f"{label}: Agent instructions",
@@ -230,7 +230,7 @@ def _check_agent_identity(agent_path: Path, label: str, runner=None, agent_name:
         starters = []
     count = sum(1 for item in starters if isinstance(item, dict) and item.get("text"))
     if count >= 3:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="CONFIG-005", category=f"Configuration ({label})",
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description=f"{label}: Starter prompts",
@@ -239,7 +239,7 @@ def _check_agent_identity(agent_path: Path, label: str, runner=None, agent_name:
             doc_link=f"{DOC_BASE}/customize#customize-starter-prompts",
         ))
     elif count > 0:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="CONFIG-005", category=f"Configuration ({label})",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=f"{label}: Starter prompts",
@@ -248,7 +248,7 @@ def _check_agent_identity(agent_path: Path, label: str, runner=None, agent_name:
             doc_link=f"{DOC_BASE}/customize#customize-starter-prompts",
         ))
     else:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="CONFIG-005", category=f"Configuration ({label})",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=f"{label}: Starter prompts",
@@ -268,7 +268,7 @@ def _check_required_topics(agent_path: Path, label: str, runner=None, agent_name
 
     if not topics_dir.exists():
         for req in REQUIRED_TOPICS:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ESS_MAKER.value],
                 checkpoint_id=req["id"], category=f"Topics ({label})",
                 priority=req["priority"], status=Status.SKIPPED.value,
                 description=f"{label}: {req['name']}",
@@ -301,7 +301,7 @@ def _check_required_topics(agent_path: Path, label: str, runner=None, agent_name
         found = any(re.search(pattern, stem) for stem in normalized_stems)
 
         if found:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ESS_MAKER.value],
                 checkpoint_id=req["id"], category=f"Topics ({label})",
                 priority=req["priority"], status=Status.PASSED.value,
                 description=f"{label}: {req['name']}",
@@ -310,7 +310,7 @@ def _check_required_topics(agent_path: Path, label: str, runner=None, agent_name
                 doc_link=f"{DOC_BASE}/customize#customize-topics",
             ))
         else:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ESS_MAKER.value],
                 checkpoint_id=req["id"], category=f"Topics ({label})",
                 priority=req["priority"], status=Status.WARNING.value,
                 description=f"{label}: {req['name']}",
@@ -332,7 +332,7 @@ def _check_topic_inventory(agent_path: Path, label: str) -> list[CheckResult]:
 
     count = len(list(topics_dir.glob("*.mcs.yml")))
 
-    results.append(CheckResult(
+    results.append(CheckResult(roles=[Role.ESS_MAKER.value],
         checkpoint_id="TOPIC-011", category=f"Topics ({label})",
         priority=Priority.MEDIUM.value,
         status=Status.PASSED.value if count >= 5 else Status.WARNING.value,
@@ -350,7 +350,7 @@ def _check_variables(agent_path: Path, label: str) -> list[CheckResult]:
     vars_dir = agent_path / "variables"
 
     if not vars_dir.exists():
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="CONFIG-012", category=f"Configuration ({label})",
             priority=Priority.CRITICAL.value, status=Status.WARNING.value,
             description=f"{label}: User Context variables",
@@ -360,7 +360,7 @@ def _check_variables(agent_path: Path, label: str) -> list[CheckResult]:
         return results
 
     var_files = list(vars_dir.glob("*.mcs.yml"))
-    results.append(CheckResult(
+    results.append(CheckResult(roles=[Role.ESS_MAKER.value],
         checkpoint_id="CONFIG-012", category=f"Configuration ({label})",
         priority=Priority.CRITICAL.value,
         status=Status.PASSED.value if var_files else Status.WARNING.value,
@@ -497,7 +497,7 @@ def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_n
     topics_dir = agent_path / "topics"
 
     if not topics_dir.exists():
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="CONFIG-014", category=f"Topics ({label})",
             priority=Priority.MEDIUM.value, status=Status.SKIPPED.value,
             description=f"{label}: Topic description quality",
@@ -604,7 +604,7 @@ def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_n
         names = ", ".join(unparseable[:10])
         overflow = f" (+{len(unparseable) - 10} more)" if len(unparseable) > 10 else ""
         studio_link_for_unparseable = _studio_link_md(runner, agent_name, "the agent in Copilot Studio")
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="CONFIG-014", category=f"Topics ({label})",
             priority=Priority.LOW.value, status=Status.SKIPPED.value,
             description=f"{label}: Topic description quality (unparseable files skipped)",
@@ -621,7 +621,7 @@ def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_n
         ))
 
     if not checked:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="CONFIG-014", category=f"Topics ({label})",
             priority=Priority.MEDIUM.value, status=Status.SKIPPED.value,
             description=f"{label}: Topic description quality",
@@ -634,7 +634,7 @@ def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_n
         topic_list = "; ".join(has_placeholder[:5])
         if len(has_placeholder) > 5:
             topic_list += "..."
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="CONFIG-014", category=f"Topics ({label})",
             priority=Priority.MEDIUM.value, status=Status.FAILED.value,
             description=f"{label}: Topic descriptions contain placeholders",
@@ -645,7 +645,7 @@ def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_n
 
     # Report too-short descriptions
     if too_short:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="CONFIG-014", category=f"Topics ({label})",
             priority=Priority.MEDIUM.value, status=Status.WARNING.value,
             description=f"{label}: Topic descriptions too short",
@@ -655,7 +655,7 @@ def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_n
         ))
 
     if not has_placeholder and not too_short:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="CONFIG-014", category=f"Topics ({label})",
             priority=Priority.MEDIUM.value, status=Status.PASSED.value,
             description=f"{label}: Topic description quality",
@@ -678,7 +678,7 @@ def _check_template_configs(agent_path: Path, label: str) -> list[CheckResult]:
     xml_files = list(tc_dir.glob("*.xml"))
     meta_files = list(tc_dir.glob("*.meta.json"))
 
-    results.append(CheckResult(
+    results.append(CheckResult(roles=[Role.ESS_MAKER.value],
         checkpoint_id="LOCAL-TC-001", category=f"Template Configs ({label})",
         priority=Priority.MEDIUM.value, status=Status.PASSED.value,
         description=f"{label}: Template configurations",
@@ -708,7 +708,7 @@ def _check_knowledge_sources(agent_path: Path, label: str, runner=None, agent_na
     knowledge_dir = agent_path / "knowledge"
 
     if not knowledge_dir.exists():
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description=f"{label}: Knowledge source readiness",
@@ -718,7 +718,7 @@ def _check_knowledge_sources(agent_path: Path, label: str, runner=None, agent_na
 
     knowledge_files = list(knowledge_dir.glob("*.mcs.yml"))
     if not knowledge_files:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description=f"{label}: Knowledge source readiness",
@@ -733,7 +733,7 @@ def _check_knowledge_sources(agent_path: Path, label: str, runner=None, agent_na
         bot_id = runner.config.get("agent", {}).get("botId")
 
     if not pva or not pva.is_configured or not bot_id:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description=f"{label}: Knowledge source readiness",
@@ -760,7 +760,7 @@ def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list
     try:
         sources = pva.get_knowledge_sources(bot_id)
     except Exception as e:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=f"{label}: Knowledge source crawl status",
@@ -773,7 +773,7 @@ def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list
     # This catches the case where a local source was never published (false PASSED
     # in the previous implementation when local>0 and remote=0 only).
     if len(knowledge_files) > len(sources):
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=f"{label}: Local/remote knowledge source count mismatch",
@@ -812,7 +812,7 @@ def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list
         source_type = _format_source_type(source_kind)
 
         if crawl_status in _READY_STATUSES:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ESS_MAKER.value],
                 checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
                 priority=Priority.HIGH.value, status=Status.PASSED.value,
                 description=f"{label}: '{name}' ({source_type})",
@@ -821,7 +821,7 @@ def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list
             ))
         elif crawl_status in _NOT_READY_STATUSES:
             all_ready = False
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ESS_MAKER.value],
                 checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
                 priority=Priority.HIGH.value, status=Status.FAILED.value,
                 description=f"{label}: '{name}' ({source_type})",
@@ -836,7 +836,7 @@ def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list
             # Unknown status string, but the API DID return a status field.
             # WARNING with the raw value so we learn the new status over time.
             all_ready = False
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ESS_MAKER.value],
                 checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
                 priority=Priority.HIGH.value, status=Status.WARNING.value,
                 description=f"{label}: '{name}' ({source_type})",
@@ -851,7 +851,7 @@ def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list
             # No `status` returned at all — we only have lifecycle `state`.
             # That is NOT proof of indexing; surface as WARNING, not PASSED.
             all_ready = False
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ESS_MAKER.value],
                 checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
                 priority=Priority.HIGH.value, status=Status.WARNING.value,
                 description=f"{label}: '{name}' ({source_type})",
@@ -866,7 +866,7 @@ def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list
             ))
 
     if all_ready and sources and len(knowledge_files) <= len(sources):
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="CONFIG-013", category=f"Knowledge Sources ({label})",
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description=f"{label}: All knowledge sources indexed",

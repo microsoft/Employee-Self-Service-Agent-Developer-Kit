@@ -84,7 +84,7 @@ from auth import (
     retrieve_shared_principals_and_access,
 )
 
-from ..runner import CheckResult, Priority, Status
+from ..runner import CheckResult, Priority, Role, Status
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
 PA_LICENSING_FAQ = (
@@ -188,7 +188,7 @@ def _check_traditional_flow_licensing(runner) -> list[CheckResult]:
     all_flow_ids = {fid for ids in refs_by_agent.values() for fid in ids}
 
     if not all_flow_ids:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="LIC-FLOW-001", category="Licensing",
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="Agent flow licensing",
@@ -198,7 +198,7 @@ def _check_traditional_flow_licensing(runner) -> list[CheckResult]:
         )]
 
     if not pp or not env_id:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="LIC-FLOW-001", category="Licensing",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="Agent flow licensing",
@@ -248,7 +248,7 @@ def _check_traditional_flow_licensing(runner) -> list[CheckResult]:
         # resolved — we can't assert anything, so SKIP (mirrors the
         # no-pp_admin branch) rather than falsely PASS.
         if auth_blocked and standard_count == 0:
-            return [CheckResult(
+            return [CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
                 checkpoint_id="LIC-FLOW-001", category="Licensing",
                 priority=Priority.HIGH.value, status=Status.SKIPPED.value,
                 description="Agent flow licensing",
@@ -271,7 +271,7 @@ def _check_traditional_flow_licensing(runner) -> list[CheckResult]:
         # premium-connector flow may be hidden among the unreadable ones, so
         # this can't be a clean PASS.
         if auth_blocked:
-            return [CheckResult(
+            return [CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
                 checkpoint_id="LIC-FLOW-001", category="Licensing",
                 priority=Priority.HIGH.value, status=Status.WARNING.value,
                 description="Agent flow licensing",
@@ -286,7 +286,7 @@ def _check_traditional_flow_licensing(runner) -> list[CheckResult]:
                 ),
                 doc_link=PA_LICENSING_FAQ,
             )]
-        return [CheckResult(
+        return [CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="LIC-FLOW-001", category="Licensing",
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="Agent flow licensing",
@@ -326,7 +326,7 @@ def _check_traditional_flow_licensing(runner) -> list[CheckResult]:
         "[Power Automate](https://make.powerautomate.com/). LIC-FLOW-002 verifies the "
         "shared-with users' licenses."
     )
-    return [CheckResult(
+    return [CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
         checkpoint_id="LIC-FLOW-001", category="Licensing",
         priority=Priority.HIGH.value, status=Status.WARNING.value,
         description="Agent flow licensing",
@@ -513,7 +513,7 @@ def _check_shared_user_licensing(runner) -> list[CheckResult]:
     bot_ids = _bot_ids(runner)
 
     if not graph or not env_url or not dv_token:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.M365_ADMIN.value],
             checkpoint_id="LIC-FLOW-002", category="Licensing",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="Shared-user flow licensing",
@@ -529,7 +529,7 @@ def _check_shared_user_licensing(runner) -> list[CheckResult]:
             doc_link=PA_LICENSING_FAQ,
         )]
     if not bot_ids:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.M365_ADMIN.value],
             checkpoint_id="LIC-FLOW-002", category="Licensing",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="Shared-user flow licensing",
@@ -574,7 +574,7 @@ def _check_shared_user_licensing(runner) -> list[CheckResult]:
         # Nobody resolvable. If enumeration itself failed, that's a SKIP;
         # otherwise the agent simply isn't shared with any user yet.
         if enumerate_failed or undetermined:
-            return [CheckResult(
+            return [CheckResult(roles=[Role.M365_ADMIN.value],
                 checkpoint_id="LIC-FLOW-002", category="Licensing",
                 priority=Priority.HIGH.value, status=Status.WARNING.value,
                 description="Shared-user flow licensing",
@@ -588,7 +588,7 @@ def _check_shared_user_licensing(runner) -> list[CheckResult]:
                 ),
                 doc_link=PA_LICENSING_FAQ,
             )]
-        return [CheckResult(
+        return [CheckResult(roles=[Role.M365_ADMIN.value],
             checkpoint_id="LIC-FLOW-002", category="Licensing",
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="Shared-user flow licensing",
@@ -631,7 +631,7 @@ def _check_shared_user_licensing(runner) -> list[CheckResult]:
     # avoids a mass false-FAIL when the kit's token simply can't read
     # licenseDetails (which would make every user look unlicensed).
     if missing and licensed:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.M365_ADMIN.value],
             checkpoint_id="LIC-FLOW-002", category="Licensing",
             priority=Priority.HIGH.value, status=Status.FAILED.value,
             description="Shared-user flow licensing",
@@ -643,7 +643,7 @@ def _check_shared_user_licensing(runner) -> list[CheckResult]:
     if missing and not licensed:
         # Everyone looks unlicensed — more likely a permission gap than a
         # tenant with zero premium licenses. Don't FAIL; flag to verify.
-        return [CheckResult(
+        return [CheckResult(roles=[Role.M365_ADMIN.value],
             checkpoint_id="LIC-FLOW-002", category="Licensing",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="Shared-user flow licensing",
@@ -656,7 +656,7 @@ def _check_shared_user_licensing(runner) -> list[CheckResult]:
             doc_link=PA_LICENSING_FAQ,
         )]
     if undetermined:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.M365_ADMIN.value],
             checkpoint_id="LIC-FLOW-002", category="Licensing",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="Shared-user flow licensing",
@@ -668,7 +668,7 @@ def _check_shared_user_licensing(runner) -> list[CheckResult]:
             ),
             doc_link=PA_LICENSING_FAQ,
         )]
-    return [CheckResult(
+    return [CheckResult(roles=[Role.M365_ADMIN.value],
         checkpoint_id="LIC-FLOW-002", category="Licensing",
         priority=Priority.HIGH.value, status=Status.PASSED.value,
         description="Shared-user flow licensing",

@@ -18,6 +18,30 @@ and extended with local file validation checks unique to the Copilot Kit.
 | Medium | Important but can be addressed post-deployment |
 | Low | Nice-to-have; optional configuration |
 
+## Roles (next-step owner)
+
+Every actionable result (Failed, Error, Warning, Manual, or
+NotConfigured) is tagged with one or more **roles** — the admin
+persona(s) who must take the next action to fix it or perform the
+manual validation. The role(s) appear as a "Role" column in the HTML
+report and `results.json`, and on the terminal action/manual rows.
+Passed and Skipped rows have no next step, so no role is shown.
+
+| Role | Acts in… |
+|------|----------|
+| Entra Admin | Entra ID: app registrations, SAML, conditional access, directory-role assignment |
+| Microsoft 365 Admin | M365 admin center: license assignment, Office Cloud Policies, Graph connectors, Integrated-apps approval |
+| Power Platform Admin | Power Platform: environments, DLP, connections, solution import, cloud-flow state, Dataverse env vars |
+| Workday Admin | The Workday tenant: ISU accounts, security groups, domain permissions, RaaS, auth policies |
+| ServiceNow Admin | The ServiceNow instance: service accounts, roles, ACLs |
+| SAP Admin | The SAP SuccessFactors tenant |
+| ESS Maker / Agent Developer | Local agent files: topics, variables, template configs, evaluations, publishing/QA gates |
+
+A check can carry more than one role when the fix spans systems (e.g.
+WD-CONN-102's SAML cert lives on the Entra app but is compared in
+Workday → Entra Admin + Workday Admin).
+
+
 ---
 
 ## 1. Prerequisites (PRE-xxx)

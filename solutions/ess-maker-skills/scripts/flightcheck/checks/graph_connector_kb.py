@@ -70,7 +70,7 @@ verified against the public CSDL at
 
 from __future__ import annotations
 
-from ..runner import CheckResult, Status, Priority
+from ..runner import CheckResult, Priority, Role, Status
 
 DOC_BASE = "https://learn.microsoft.com/graph/api"
 
@@ -135,7 +135,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
     # client. Surface as WARNING (not skipped) — the customer DID opt
     # into the at-risk path, so silence would defeat the point.
     if not graph:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.M365_ADMIN.value],
             checkpoint_id="EXT-002",
             category="Graph Connector KB",
             priority=Priority.HIGH.value,
@@ -158,7 +158,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
     try:
         connections = graph.get_external_connections()
     except Exception as e:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.M365_ADMIN.value],
             checkpoint_id="EXT-002",
             category="Graph Connector KB",
             priority=Priority.HIGH.value,
@@ -208,7 +208,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
 
         if not ref:
             failed.append(display)
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.M365_ADMIN.value],
                 checkpoint_id=cid,
                 category="Graph Connector KB",
                 priority=Priority.HIGH.value,
@@ -239,7 +239,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
                 fetched = graph.get_external_connection(ref)
             except Exception as e:
                 failed.append(display)
-                results.append(CheckResult(
+                results.append(CheckResult(roles=[Role.M365_ADMIN.value],
                     checkpoint_id=cid,
                     category="Graph Connector KB",
                     priority=Priority.HIGH.value,
@@ -250,7 +250,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
                 continue
             if isinstance(fetched, dict) and fetched.get("_status") == 404:
                 failed.append(display)
-                results.append(CheckResult(
+                results.append(CheckResult(roles=[Role.M365_ADMIN.value],
                     checkpoint_id=cid,
                     category="Graph Connector KB",
                     priority=Priority.HIGH.value,
@@ -271,7 +271,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
                 continue
             if isinstance(fetched, dict) and fetched.get("_status") in (401, 403):
                 warned.append(display)
-                results.append(CheckResult(
+                results.append(CheckResult(roles=[Role.M365_ADMIN.value],
                     checkpoint_id=cid,
                     category="Graph Connector KB",
                     priority=Priority.HIGH.value,
@@ -297,7 +297,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
 
         if state in _NON_READY_STATES:
             failed.append(display)
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.M365_ADMIN.value],
                 checkpoint_id=cid,
                 category="Graph Connector KB",
                 priority=Priority.HIGH.value,
@@ -314,7 +314,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
         if state and state != "ready":
             # Unknown state — WARNING so we learn about new states.
             warned.append(display)
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.M365_ADMIN.value],
                 checkpoint_id=cid,
                 category="Graph Connector KB",
                 priority=Priority.HIGH.value,
@@ -334,7 +334,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
         op_status = _latest_operation_status(graph, connection_id)
         if op_status == "completed":
             passed.append(display)
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.M365_ADMIN.value],
                 checkpoint_id=cid,
                 category="Graph Connector KB",
                 priority=Priority.HIGH.value,
@@ -365,7 +365,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
                 op_failed_remediation = _delete_and_recreate_remediation(
                     connection_id, connection_name
                 )
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.M365_ADMIN.value],
                 checkpoint_id=cid,
                 category="Graph Connector KB",
                 priority=Priority.HIGH.value,
@@ -383,7 +383,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
             ))
         elif op_status == "inprogress":
             warned.append(display)
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.M365_ADMIN.value],
                 checkpoint_id=cid,
                 category="Graph Connector KB",
                 priority=Priority.HIGH.value,
@@ -420,7 +420,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
 
             if is_gallery:
                 warned.append(display)
-                results.append(CheckResult(
+                results.append(CheckResult(roles=[Role.M365_ADMIN.value],
                     checkpoint_id=cid,
                     category="Graph Connector KB",
                     priority=Priority.HIGH.value,
@@ -440,7 +440,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
                 ))
             elif ingested > 0:
                 warned.append(display)
-                results.append(CheckResult(
+                results.append(CheckResult(roles=[Role.M365_ADMIN.value],
                     checkpoint_id=cid,
                     category="Graph Connector KB",
                     priority=Priority.HIGH.value,
@@ -466,7 +466,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
                 ))
             else:
                 failed.append(display)
-                results.append(CheckResult(
+                results.append(CheckResult(roles=[Role.M365_ADMIN.value],
                     checkpoint_id=cid,
                     category="Graph Connector KB",
                     priority=Priority.HIGH.value,
@@ -508,7 +508,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
         result_text = f"{total} Graph Connector knowledge source(s) ready"
         summary_remediation = f"Validated: all {total} Graph connector knowledge source(s) are in the ready state with their most recent crawl completed successfully."
 
-    results.insert(0, CheckResult(
+    results.insert(0, CheckResult(roles=[Role.M365_ADMIN.value],
         checkpoint_id="EXT-002",
         category="Graph Connector KB",
         priority=Priority.HIGH.value,
@@ -525,7 +525,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
     # NOT_CONFIGURED with concrete pointers so the operator knows what
     # to verify in the portal — silence here would let the most cited
     # silent-failure mode for Graph Connector KBs ship unchecked.
-    results.append(CheckResult(
+    results.append(CheckResult(roles=[Role.M365_ADMIN.value],
         checkpoint_id="EXT-002-ACL",
         category="Graph Connector KB",
         priority=Priority.HIGH.value,

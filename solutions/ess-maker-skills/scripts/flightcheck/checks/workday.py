@@ -37,7 +37,7 @@ from xml.sax.saxutils import escape as xml_escape
 from defusedxml import ElementTree as ET
 from defusedxml.common import DefusedXmlException
 
-from ..runner import CheckResult, Status, Priority
+from ..runner import CheckResult, Priority, Role, Status
 from ._maker_urls import maker_connections_url
 from ._saml_utils import (
     WORKDAY_SAML_SP_FILTER,
@@ -504,7 +504,7 @@ def _check_entra_workday_federation_alignment(runner) -> list[CheckResult]:
 
     graph = getattr(runner, "graph", None)
     if graph is None:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description=description,
@@ -528,7 +528,7 @@ def _check_entra_workday_federation_alignment(runner) -> list[CheckResult]:
             raise_on_permission_error=True,
         )
     except PermissionError as e:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=description,
@@ -548,7 +548,7 @@ def _check_entra_workday_federation_alignment(runner) -> list[CheckResult]:
             doc_link=doc_link,
         )]
     except Exception as e:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=description,
@@ -575,7 +575,7 @@ def _check_entra_workday_federation_alignment(runner) -> list[CheckResult]:
         # from this tenant would silently break that foreign tenant's
         # federation. Keep the manual verification advice on the
         # remediation path for the pre-install/foreign-tenant scenario.
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
             description=description,
@@ -649,7 +649,7 @@ def _check_entra_workday_federation_alignment(runner) -> list[CheckResult]:
         + "\n".join(app_entries)
     )
 
-    return [CheckResult(
+    return [CheckResult(roles=[Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value],
         checkpoint_id=cp_id, category=category,
         priority=Priority.HIGH.value, status=Status.MANUAL.value,
         description=description,
@@ -762,7 +762,7 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
 
     if not env_url or not dv_token:
         runner._workday_package_flavor = "skipped"
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="WD-PKG-001", category="Workday",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="Workday install flavor (simplified vs full / legacy)",
@@ -782,7 +782,7 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
         )
     except Exception as e:
         runner._workday_package_flavor = "skipped"
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="WD-PKG-001", category="Workday",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="Workday install flavor (simplified vs full / legacy)",
@@ -812,7 +812,7 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
     # 1. No Workday integration at all.
     if not workday_refs:
         runner._workday_package_flavor = "none"
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="WD-PKG-001", category="Workday",
             priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
             description="Workday install flavor (simplified vs full / legacy)",
@@ -839,7 +839,7 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
                 " No Workday flows are deployed yet in this environment "
                 "— the package is present but downstream flows have not run."
             )
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="WD-PKG-001", category="Workday",
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="Workday install flavor (simplified vs full / legacy)",
@@ -864,7 +864,7 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
                 " No Workday flows are deployed yet in this environment "
                 "— the package is present but downstream flows have not run."
             )
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="WD-PKG-001", category="Workday",
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="Workday install flavor (simplified vs full / legacy)",
@@ -884,7 +884,7 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
         missing = LEGACY_REF_SUFFIXES - known_suffixes
         observed_roles = ", ".join(sorted(_REF_SUFFIX_ROLES[s] for s in known_suffixes))
         missing_roles = ", ".join(sorted(_REF_SUFFIX_ROLES[s] for s in missing))
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="WD-PKG-001", category="Workday",
             priority=Priority.HIGH.value, status=Status.FAILED.value,
             description="Workday install flavor (simplified vs full / legacy)",
@@ -918,7 +918,7 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
             "rows with unexpected logical-name format: "
             + ", ".join(sorted(unknown_format_names))
         )
-    results.append(CheckResult(
+    results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
         checkpoint_id="WD-PKG-001", category="Workday",
         priority=Priority.HIGH.value, status=Status.WARNING.value,
         description="Workday install flavor (simplified vs full / legacy)",
@@ -966,7 +966,7 @@ def _check_package_connection_completeness(runner) -> list[CheckResult]:
         # Workday refs (NOT_CONFIGURED), or found an unrecognized
         # shape (WARNING). In any of those cases this check can't add
         # signal beyond what WD-PKG-001 already reported.
-        return [CheckResult(
+        return [CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="WD-CONN-012", category="Workday",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="Workday package connection-reference binding completeness",
@@ -1022,7 +1022,7 @@ def _check_package_connection_completeness(runner) -> list[CheckResult]:
     )
 
     if not problems:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="WD-CONN-012", category="Workday",
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="Workday package connection-reference binding completeness",
@@ -1035,7 +1035,7 @@ def _check_package_connection_completeness(runner) -> list[CheckResult]:
             doc_link=doc_link,
         )]
 
-    return [CheckResult(
+    return [CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
         checkpoint_id="WD-CONN-012", category="Workday",
         priority=Priority.HIGH.value, status=Status.FAILED.value,
         description="Workday package connection-reference binding completeness",
@@ -1098,7 +1098,7 @@ def _simplified_install_skip(
     (WD-PKG-001's verdict); `remediation` carries the actionable
     contingency for an operator who intended the OTHER install flavor.
     """
-    return CheckResult(
+    return CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
         checkpoint_id=checkpoint_id,
         category=category,
         priority=priority,
@@ -1150,7 +1150,7 @@ def _check_env_vars(runner) -> list[CheckResult]:
     dv_token = runner.dv_token
 
     if not env_url or not dv_token:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="WD-ENV-001", category="Workday",
             priority=Priority.CRITICAL.value, status=Status.SKIPPED.value,
             description="Workday environment variables",
@@ -1194,7 +1194,7 @@ def _check_env_vars(runner) -> list[CheckResult]:
                     break
 
             if actual_value:
-                results.append(CheckResult(
+                results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
                     checkpoint_id=meta["id"], category="Workday",
                     priority=Priority.CRITICAL.value if meta["critical"] else Priority.HIGH.value,
                     status=Status.PASSED.value,
@@ -1204,7 +1204,7 @@ def _check_env_vars(runner) -> list[CheckResult]:
                     doc_link=f"{DOC_BASE}/workday#step-4-environment-variables",
                 ))
             elif meta["critical"]:
-                results.append(CheckResult(
+                results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
                     checkpoint_id=meta["id"], category="Workday",
                     priority=Priority.CRITICAL.value, status=Status.FAILED.value,
                     description=meta["description"],
@@ -1213,7 +1213,7 @@ def _check_env_vars(runner) -> list[CheckResult]:
                     doc_link=f"{DOC_BASE}/workday#step-4-environment-variables",
                 ))
             else:
-                results.append(CheckResult(
+                results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
                     checkpoint_id=meta["id"], category="Workday",
                     priority=Priority.HIGH.value, status=Status.PASSED.value,
                     description=meta["description"],
@@ -1222,7 +1222,7 @@ def _check_env_vars(runner) -> list[CheckResult]:
                     doc_link=f"{DOC_BASE}/workday#step-4-environment-variables",
                 ))
     except Exception as e:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="WD-ENV-001", category="Workday",
             priority=Priority.CRITICAL.value, status=Status.WARNING.value,
             description="Workday environment variables",
@@ -1279,7 +1279,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
     dv_token = runner.dv_token
 
     if not env_url or not dv_token:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-ENV-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="ISU username vs Entra UPN format alignment",
@@ -1320,7 +1320,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
                 isu_value = v.get("value", "") or None
                 break
     except Exception as e:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-ENV-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="ISU username vs Entra UPN format alignment",
@@ -1331,7 +1331,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
     if not isu_value:
         # WD-ENV-001 already covers the missing-value remediation; skip
         # here to avoid double-reporting the same root cause.
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-ENV-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="ISU username vs Entra UPN format alignment",
@@ -1344,7 +1344,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
     # the most decisive failure mode and must be reported even when
     # Graph auth has failed.
     if "@" not in isu_value:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-ENV-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="ISU username vs Entra UPN format alignment",
@@ -1369,7 +1369,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
     # SKIP so the operator knows the deeper check wasn't performed.
     graph = getattr(runner, "graph", None)
     if not graph:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-ENV-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="ISU username vs Entra UPN format alignment",
@@ -1386,7 +1386,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
     try:
         org = graph.get_organization()
     except Exception as e:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-ENV-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="ISU username vs Entra UPN format alignment",
@@ -1396,7 +1396,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
         return results
 
     if not isinstance(org, dict) or not org:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-ENV-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="ISU username vs Entra UPN format alignment",
@@ -1416,7 +1416,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
 
     domain = isu_value.rsplit("@", 1)[1].lower()
     if not verified:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-ENV-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="ISU username vs Entra UPN format alignment",
@@ -1430,7 +1430,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
         return results
 
     if domain in verified:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-ENV-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="ISU username vs Entra UPN format alignment",
@@ -1439,7 +1439,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
             doc_link=f"{DOC_BASE}/workday#step-4-environment-variables",
         ))
     else:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-ENV-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="ISU username vs Entra UPN format alignment",
@@ -1696,7 +1696,7 @@ def _check_connection_token_health(runner) -> list[CheckResult]:
     try:
         all_conns = pp.get_connections(env_id)
     except Exception as e:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="WD-CONN-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="Workday connection token health",
@@ -1705,7 +1705,7 @@ def _check_connection_token_health(runner) -> list[CheckResult]:
         return results
 
     if isinstance(all_conns, dict) and "_error" in all_conns:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="WD-CONN-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="Workday connection token health",
@@ -1717,7 +1717,7 @@ def _check_connection_token_health(runner) -> list[CheckResult]:
     wd_conns = filter_connections_by_connector(all_conns, "workday")
 
     if not wd_conns:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="WD-CONN-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
             description="Workday connection token health",
@@ -1741,7 +1741,7 @@ def _check_connection_token_health(runner) -> list[CheckResult]:
         })
 
     if not unhealthy:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="WD-CONN-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="Workday connection token health",
@@ -1774,7 +1774,7 @@ def _check_connection_token_health(runner) -> list[CheckResult]:
     if failed_entries:
         details = [_format_unhealthy_detail(e) for e in failed_entries]
         remediations = [_format_unhealthy_remediation(e, env_id) for e in failed_entries]
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="WD-CONN-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.FAILED.value,
             description="Workday connection token health",
@@ -1790,7 +1790,7 @@ def _check_connection_token_health(runner) -> list[CheckResult]:
     if warning_entries:
         details = [_format_unhealthy_detail(e) for e in warning_entries]
         remediations = [_format_unhealthy_remediation(e, env_id) for e in warning_entries]
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="WD-CONN-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="Workday connection token health",
@@ -2227,7 +2227,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
 
     graph = getattr(runner, "graph", None)
     if graph is None:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description=description,
@@ -2249,7 +2249,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
             raise_on_permission_error=True,
         )
     except PermissionError as e:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=description,
@@ -2268,7 +2268,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
             doc_link=doc_link,
         )]
     except Exception as e:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=description,
@@ -2282,7 +2282,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
         )]
 
     if not workday_sps:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
             description=description,
@@ -2445,7 +2445,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
 
     if failed_entries:
         bodies = "\n".join(e["summary"] for e in failed_entries)
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.FAILED.value,
             description=description,
@@ -2494,7 +2494,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
         bodies = "\n".join(e["summary"] for e in warning_entries)
         # Hardening framing per AGENTS.md principle 9 — these aren't
         # functional blockers today, only operational risk.
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=description,
@@ -2546,7 +2546,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
                 "have a healthy active signing certificate in Entra"
             )
         )
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.MANUAL.value,
             description=description,
@@ -2680,7 +2680,7 @@ def _check_flow_status(runner, wd_flows: list) -> list[CheckResult]:
         else:
             disabled += 1
 
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id=cid, category="Workday",
             priority=Priority.HIGH.value,
             status=Status.PASSED.value if is_on else Status.FAILED.value,
@@ -2733,7 +2733,7 @@ def _check_workflows(runner) -> list[CheckResult]:
     wd_base_url, wd_tenant, test_employee = _resolve_workday_metadata(runner)
 
     if not wd_base_url or not wd_tenant:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-WF-000", category="Workday Workflows",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="Workday SOAP workflow tests",
@@ -2744,7 +2744,7 @@ def _check_workflows(runner) -> list[CheckResult]:
         return results
 
     if not test_employee:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-WF-000", category="Workday Workflows",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="Workday SOAP workflow tests",
@@ -2762,7 +2762,7 @@ def _check_workflows(runner) -> list[CheckResult]:
     try:
         import httpx  # noqa: F401  (used inside _soap_call)
     except ImportError:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-WF-000", category="Workday Workflows",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="Workday SOAP workflow tests",
@@ -2777,7 +2777,7 @@ def _check_workflows(runner) -> list[CheckResult]:
     # local variable. ---
     wd_username, wd_password = _resolve_workday_credentials(runner, wd_tenant)
     if not wd_username or not wd_password:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-WF-000", category="Workday Workflows",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="Workday SOAP workflow tests",
@@ -2806,14 +2806,14 @@ def _check_workflows(runner) -> list[CheckResult]:
                 wf["service"], body,
             )
             if result["success"] or "permission" not in result.get("error", "").lower():
-                results.append(CheckResult(
+                results.append(CheckResult(roles=[Role.WORKDAY_ADMIN.value],
                     checkpoint_id=cid, category="Workday Workflows",
                     priority=Priority.HIGH.value, status=Status.PASSED.value,
                     description=desc, result="API accessible",
                     remediation="Validated: this Workday SOAP workflow returned a successful response from the live Workday tenant — the ISU is authenticated and the operation is reachable.",
                 ))
             else:
-                results.append(CheckResult(
+                results.append(CheckResult(roles=[Role.WORKDAY_ADMIN.value],
                     checkpoint_id=cid, category="Workday Workflows",
                     priority=Priority.HIGH.value, status=Status.FAILED.value,
                     description=desc, result="Permission denied",
@@ -2838,14 +2838,14 @@ def _check_workflows(runner) -> list[CheckResult]:
                 root = ET.fromstring(result["response"])
                 found = root.findall(wf["xpath"])
                 if found:
-                    results.append(CheckResult(
+                    results.append(CheckResult(roles=[Role.WORKDAY_ADMIN.value],
                         checkpoint_id=cid, category="Workday Workflows",
                         priority=Priority.HIGH.value, status=Status.PASSED.value,
                         description=desc, result="Data retrieved",
                         remediation="Validated: this Workday SOAP workflow executed against the live tenant and returned worker data — the ISU holds the required domain access.",
                     ))
                 else:
-                    results.append(CheckResult(
+                    results.append(CheckResult(roles=[Role.WORKDAY_ADMIN.value],
                         checkpoint_id=cid, category="Workday Workflows",
                         priority=Priority.HIGH.value, status=Status.PASSED.value,
                         description=desc,
@@ -2859,7 +2859,7 @@ def _check_workflows(runner) -> list[CheckResult]:
                 # DTDForbidden, NotSupportedError). Both should fall through
                 # to the structured "unparseable XML" result instead of
                 # surfacing as an unhandled traceback to the user.
-                results.append(CheckResult(
+                results.append(CheckResult(roles=[Role.WORKDAY_ADMIN.value],
                     checkpoint_id=cid, category="Workday Workflows",
                     priority=Priority.HIGH.value, status=Status.PASSED.value,
                     description=desc, result="API responded (unparseable XML)",
@@ -2868,14 +2868,14 @@ def _check_workflows(runner) -> list[CheckResult]:
         else:
             error = result.get("error", "Unknown")
             if any(k in error.lower() for k in ("permission", "unauthorized", "not authorized")):
-                results.append(CheckResult(
+                results.append(CheckResult(roles=[Role.WORKDAY_ADMIN.value],
                     checkpoint_id=cid, category="Workday Workflows",
                     priority=Priority.HIGH.value, status=Status.FAILED.value,
                     description=desc, result="Permission denied",
                     remediation="Ask Workday Admin to grant required security domain.",
                 ))
             else:
-                results.append(CheckResult(
+                results.append(CheckResult(roles=[Role.WORKDAY_ADMIN.value],
                     checkpoint_id=cid, category="Workday Workflows",
                     priority=Priority.HIGH.value, status=Status.FAILED.value,
                     description=desc, result=f"Error: {error[:100]}",
@@ -2910,7 +2910,7 @@ def _append_wd_wf_cat_link_trailer(runner, results: list[CheckResult]) -> None:
     unknown = _get_unknown_workday_scenarios(runner)
     if not unknown:
         return
-    results.append(CheckResult(
+    results.append(CheckResult(roles=[Role.ESS_MAKER.value],
         checkpoint_id="WD-WF-CAT-LINK", category="Workday Workflows",
         priority=Priority.MEDIUM.value, status=Status.MANUAL.value,
         description="Custom Workday scenarios outside the SOAP-test catalog",
@@ -3268,7 +3268,7 @@ def _check_personal_data_write_permission(runner) -> list[CheckResult]:
 
     flavor = getattr(runner, "_workday_package_flavor", None)
     if flavor == "simplified":
-        return [CheckResult(
+        return [CheckResult(roles=[Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.MANUAL.value,
             description=description,
@@ -3294,7 +3294,7 @@ def _check_personal_data_write_permission(runner) -> list[CheckResult]:
     # at all rather than emitting a spurious MANUAL/FAIL.
     wd_base_url, wd_tenant, test_employee = _resolve_workday_metadata(runner)
     if not wd_base_url or not wd_tenant:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description=description,
@@ -3312,7 +3312,7 @@ def _check_personal_data_write_permission(runner) -> list[CheckResult]:
         )]
 
     if not test_employee:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.MANUAL.value,
             description=description,
@@ -3334,7 +3334,7 @@ def _check_personal_data_write_permission(runner) -> list[CheckResult]:
     try:
         import httpx  # noqa: F401
     except ImportError:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description=description,
@@ -3349,7 +3349,7 @@ def _check_personal_data_write_permission(runner) -> list[CheckResult]:
     # must not interpolate any local variable into a print/log.
     wd_username, wd_password = _resolve_workday_credentials(runner, wd_tenant)
     if not wd_username or not wd_password:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.MANUAL.value,
             description=description,
@@ -3370,7 +3370,7 @@ def _check_personal_data_write_permission(runner) -> list[CheckResult]:
     verdict = _classify_personal_data_write_response(soap_result)
 
     if verdict == "denied":
-        return [CheckResult(
+        return [CheckResult(roles=[Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.FAILED.value,
             description=description,
@@ -3412,7 +3412,7 @@ def _check_personal_data_write_permission(runner) -> list[CheckResult]:
         )]
 
     if verdict == "auth":
-        return [CheckResult(
+        return [CheckResult(roles=[Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=description,
@@ -3434,7 +3434,7 @@ def _check_personal_data_write_permission(runner) -> list[CheckResult]:
         )]
 
     if verdict == "pass":
-        return [CheckResult(
+        return [CheckResult(roles=[Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description=description,
@@ -3460,7 +3460,7 @@ def _check_personal_data_write_permission(runner) -> list[CheckResult]:
     # would no longer match the email regex applied after the slice).
     raw_err = soap_result.get("error") or "(no error text)"
     err = _redact_faultstring_pii(raw_err)[:200]
-    return [CheckResult(
+    return [CheckResult(roles=[Role.WORKDAY_ADMIN.value],
         checkpoint_id=cp_id, category=category,
         priority=Priority.HIGH.value, status=Status.WARNING.value,
         description=description,
@@ -3927,7 +3927,7 @@ def _check_custom_workflow_inventory(runner) -> list[CheckResult]:
 
     workspace_root = Path("workspace/agents")
     if not workspace_root.exists():
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description=description,
@@ -3947,7 +3947,7 @@ def _check_custom_workflow_inventory(runner) -> list[CheckResult]:
 
     if not discovered:
         runner._workday_unknown_scenarios = []
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description=description,
@@ -3974,7 +3974,7 @@ def _check_custom_workflow_inventory(runner) -> list[CheckResult]:
         # Suppress the trailer too — without the catalog we cannot
         # legitimately list "unknowns."
         runner._workday_unknown_scenarios = []
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description=description,
@@ -3999,7 +3999,7 @@ def _check_custom_workflow_inventory(runner) -> list[CheckResult]:
         # query_error: <msg> — surface verbatim per principle #3.
         err_msg = status_code.removeprefix("query_error: ") or "unknown error"
         runner._workday_unknown_scenarios = []
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=description,
@@ -4030,7 +4030,7 @@ def _check_custom_workflow_inventory(runner) -> list[CheckResult]:
     runner._workday_unknown_scenarios = unknown
 
     if not unknown:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description=description,
@@ -4046,7 +4046,7 @@ def _check_custom_workflow_inventory(runner) -> list[CheckResult]:
         )]
 
     body = _format_unknown_scenarios(unknown)
-    return [CheckResult(
+    return [CheckResult(roles=[Role.ESS_MAKER.value],
         checkpoint_id=cp_id, category=category,
         priority=Priority.HIGH.value, status=Status.MANUAL.value,
         description=description,

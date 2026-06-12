@@ -8,7 +8,7 @@ Checks Microsoft 365 Copilot licenses, Copilot Studio licenses, Teams
 licenses, role assignments, and capacity.
 """
 
-from ..runner import CheckResult, Status, Priority
+from ..runner import CheckResult, Priority, Role, Status
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
 
@@ -75,7 +75,7 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
             s.get("prepaidUnits", {}).get("enabled", 0) for s in copilot_skus
         )
         if copilot_skus and consumed > 0:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.M365_ADMIN.value],
                 checkpoint_id="PRE-001", category="Prerequisites",
                 priority=Priority.CRITICAL.value, status=Status.PASSED.value,
                 description="Microsoft 365 Copilot licenses",
@@ -84,7 +84,7 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
                 doc_link=f"{DOC_BASE}/prerequisites#licensing",
             ))
         else:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.M365_ADMIN.value],
                 checkpoint_id="PRE-001", category="Prerequisites",
                 priority=Priority.CRITICAL.value, status=Status.FAILED.value,
                 description="Microsoft 365 Copilot licenses",
@@ -93,7 +93,7 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
                 doc_link=f"{DOC_BASE}/prerequisites#licensing",
             ))
     except Exception as e:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.M365_ADMIN.value],
             checkpoint_id="PRE-001", category="Prerequisites",
             priority=Priority.CRITICAL.value, status=Status.WARNING.value,
             description="Microsoft 365 Copilot licenses",
@@ -108,7 +108,7 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
         cs_skus = [s for s in skus if _sku_matches(s, COPILOT_STUDIO_SKUS)]
         if cs_skus:
             names = ", ".join(s.get("skuPartNumber", "") for s in cs_skus)
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.M365_ADMIN.value],
                 checkpoint_id="PRE-002", category="Prerequisites",
                 priority=Priority.CRITICAL.value, status=Status.PASSED.value,
                 description="Copilot Studio licenses",
@@ -117,7 +117,7 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
                 doc_link=f"{DOC_BASE}/prerequisites#licensing",
             ))
         else:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.M365_ADMIN.value],
                 checkpoint_id="PRE-002", category="Prerequisites",
                 priority=Priority.CRITICAL.value, status=Status.FAILED.value,
                 description="Copilot Studio licenses",
@@ -126,7 +126,7 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
                 doc_link=f"{DOC_BASE}/prerequisites#licensing",
             ))
     except Exception as e:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.M365_ADMIN.value],
             checkpoint_id="PRE-002", category="Prerequisites",
             priority=Priority.CRITICAL.value, status=Status.WARNING.value,
             description="Copilot Studio licenses",
@@ -140,7 +140,7 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
         teams_skus = [s for s in skus if _sku_matches(s, TEAMS_BEARING_SKUS)]
         consumed = sum(s.get("consumedUnits", 0) for s in teams_skus)
         if teams_skus and consumed > 0:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.M365_ADMIN.value],
                 checkpoint_id="PRE-003", category="Prerequisites",
                 priority=Priority.CRITICAL.value, status=Status.PASSED.value,
                 description="Microsoft Teams licenses",
@@ -149,7 +149,7 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
                 doc_link=f"{DOC_BASE}/prerequisites#licensing",
             ))
         else:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.M365_ADMIN.value],
                 checkpoint_id="PRE-003", category="Prerequisites",
                 priority=Priority.CRITICAL.value, status=Status.WARNING.value,
                 description="Microsoft Teams licenses",
@@ -158,7 +158,7 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
                 doc_link=f"{DOC_BASE}/prerequisites#licensing",
             ))
     except Exception as e:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.M365_ADMIN.value],
             checkpoint_id="PRE-003", category="Prerequisites",
             priority=Priority.CRITICAL.value, status=Status.WARNING.value,
             description="Microsoft Teams licenses",
@@ -174,7 +174,7 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
         )
         if ga_role:
             members = graph.get_role_members(ga_role["id"])
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value],
                 checkpoint_id="PRE-008", category="Prerequisites",
                 priority=Priority.CRITICAL.value, status=Status.PASSED.value,
                 description="Global Admin role assigned",
@@ -183,7 +183,7 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
                 doc_link=f"{DOC_BASE}/prerequisites#required-roles",
             ))
         else:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value],
                 checkpoint_id="PRE-008", category="Prerequisites",
                 priority=Priority.CRITICAL.value, status=Status.FAILED.value,
                 description="Global Admin role assigned",
@@ -192,7 +192,7 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
                 doc_link=f"{DOC_BASE}/prerequisites#required-roles",
             ))
     except Exception as e:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value],
             checkpoint_id="PRE-008", category="Prerequisites",
             priority=Priority.CRITICAL.value, status=Status.WARNING.value,
             description="Global Admin role assigned",
@@ -208,7 +208,7 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
         )
         if pp_role:
             members = graph.get_role_members(pp_role["id"])
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value],
                 checkpoint_id="PRE-009", category="Prerequisites",
                 priority=Priority.CRITICAL.value, status=Status.PASSED.value,
                 description="Power Platform Admin role assigned",
@@ -217,7 +217,7 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
                 doc_link=f"{DOC_BASE}/prerequisites#required-roles",
             ))
         else:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value],
                 checkpoint_id="PRE-009", category="Prerequisites",
                 priority=Priority.CRITICAL.value, status=Status.WARNING.value,
                 description="Power Platform Admin role assigned",
@@ -226,7 +226,7 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
                 doc_link=f"{DOC_BASE}/prerequisites#required-roles",
             ))
     except Exception as e:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value],
             checkpoint_id="PRE-009", category="Prerequisites",
             priority=Priority.CRITICAL.value, status=Status.WARNING.value,
             description="Power Platform Admin role assigned",
