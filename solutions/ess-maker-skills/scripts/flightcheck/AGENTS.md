@@ -238,6 +238,12 @@ When a single constructor's status is conditional (e.g.
 `roles`: the report shows it only when the row actually lands on an
 actionable status.
 
+For uniformity (and because a regression test enforces it — see
+`tests/flightcheck/test_check_roles.py`), set `roles` on **every**
+`CheckResult` constructor, including pure-SKIPPED branches, even though
+the renderer blanks the Role cell on Passed/Skipped rows. Use the role
+that would own the fix if the check were actionable.
+
 The seven roles (`Role.<NAME>.value`):
 
 | Role | Owns checks whose fix happens in… |

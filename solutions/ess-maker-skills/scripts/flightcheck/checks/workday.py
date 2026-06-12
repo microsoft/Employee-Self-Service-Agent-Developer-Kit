@@ -1274,7 +1274,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
     dv_token = runner.dv_token
 
     if not env_url or not dv_token:
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-ENV-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="ISU username vs Entra UPN format alignment",
@@ -1315,7 +1315,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
                 isu_value = v.get("value", "") or None
                 break
     except Exception as e:
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-ENV-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="ISU username vs Entra UPN format alignment",
@@ -1326,7 +1326,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
     if not isu_value:
         # WD-ENV-001 already covers the missing-value remediation; skip
         # here to avoid double-reporting the same root cause.
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-ENV-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="ISU username vs Entra UPN format alignment",
@@ -1339,7 +1339,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
     # the most decisive failure mode and must be reported even when
     # Graph auth has failed.
     if "@" not in isu_value:
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-ENV-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="ISU username vs Entra UPN format alignment",
@@ -1364,7 +1364,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
     # SKIP so the operator knows the deeper check wasn't performed.
     graph = getattr(runner, "graph", None)
     if not graph:
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-ENV-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="ISU username vs Entra UPN format alignment",
@@ -1381,7 +1381,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
     try:
         org = graph.get_organization()
     except Exception as e:
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-ENV-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="ISU username vs Entra UPN format alignment",
@@ -1391,7 +1391,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
         return results
 
     if not isinstance(org, dict) or not org:
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-ENV-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="ISU username vs Entra UPN format alignment",
@@ -1411,7 +1411,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
 
     domain = isu_value.rsplit("@", 1)[1].lower()
     if not verified:
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-ENV-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="ISU username vs Entra UPN format alignment",
@@ -1425,7 +1425,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
         return results
 
     if domain in verified:
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-ENV-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="ISU username vs Entra UPN format alignment",
@@ -1433,7 +1433,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
             doc_link=f"{DOC_BASE}/workday#step-4-environment-variables",
         ))
     else:
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id="WD-ENV-101", category="Workday",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="ISU username vs Entra UPN format alignment",

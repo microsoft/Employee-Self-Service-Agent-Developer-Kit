@@ -155,3 +155,32 @@ def test_publishing_checks_all_carry_roles():
     assert results
     for r in results:
         assert r.roles, f"{r.checkpoint_id} has no roles"
+
+
+def test_all_check_modules_carry_roles_on_every_constructor():
+    """AST-scan checks/*.py — every CheckResult(...) call must pass roles=.
+
+    Structural enforcement of the repo-wide convention: a future check
+    added without roles= fails here, not just in publishing.py.
+    """
+    import ast
+
+    checks_dir = (
+        Path(__file__).resolve().parents[1]
+        / "solutions" / "ess-maker-skills" / "scripts"
+        / "flightcheck" / "checks"
+    )
+    missing = []
+    for f in sorted(checks_dir.glob("*.py")):
+        if f.name == "__init__.py":
+            continue
+        tree = ast.parse(f.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "CheckResult"
+                and not any(k.arg == "roles" for k in node.keywords)
+            ):
+                missing.append(f"{f.name}:{node.lineno}")
+    assert not missing, f"CheckResult() missing roles=: {missing}"
