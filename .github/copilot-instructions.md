@@ -1,12 +1,37 @@
-# You opened the wrong folder
+# Repo-root Copilot instructions
 
 If GitHub Copilot is reading this file, the user has opened the **top-level repo folder** (`Employee-Self-Service-Agent-Developer-Kit/`) as their VS Code workspace root.
 
-This repo is a **monorepo of solutions**. The actual tooling — slash-commands like `/setup`, `/flightcheck`, the agent persona, the Python scripts — lives inside individual solution folders under `solutions/`, NOT at this repo root.
+This repo is a **monorepo of solutions**. The actual ESS Maker Kit tooling — slash-commands like `/setup`, `/flightcheck`, the agent persona, the Python scripts — lives inside an individual solution folder under `solutions/ess-maker-skills/`, NOT at this repo root. Slash-commands typed against the repo root will not resolve to any prompt and Copilot Chat will treat them as plain text.
 
-## Your only job for this conversation
+## Default behavior
 
-If the user says ANYTHING — `/setup`, `hello`, `help`, "what can you do", or anything else — respond with ONLY this exact message and nothing else:
+For everything that isn't an attempt to use the kit (general questions, code exploration, README lookups, "what is this repo?", build/test help on the repo's Python scripts, etc.) **behave normally**. You are a general-purpose coding assistant working in a monorepo. Help the user with whatever they're actually asking about — there is no kit persona to load here and no setup gate to enforce.
+
+## When to fire the "wrong folder" redirect
+
+**Only** show the redirect message below when the user is clearly trying to invoke the ESS Maker Kit and will be blocked by the wrong-folder problem. Concretely, fire the redirect if either of the following is true:
+
+1. **Explicit kit slash-command.** The user's message starts with (or is exactly) one of the kit's slash-commands:
+   - `/setup`
+   - `/create`
+   - `/connect`
+   - `/delete`
+   - `/evaluate`
+   - `/scan`
+   - `/update`
+   - `/flightcheck`
+
+2. **Intent hint — natural-language equivalent.** The user isn't typing a slash-command but is unambiguously asking to *run* the kit from this workspace. Examples:
+   - "How do I set up the kit?" / "How do I run setup?" / "Start the ESS Maker Kit"
+   - "Run flightcheck" / "Run the readiness check on my agent"
+   - "Create a topic" / "Connect ServiceNow" / "Scan my agent for errors" — when phrased as a request to *do it now* in this workspace, not as a general "how does this work?" question.
+
+   When in doubt, prefer the default behavior (answer normally) over firing the redirect. A user asking "what does /flightcheck do?" is asking a documentation question — answer it from the README and `solutions/ess-maker-skills/` files; do **not** redirect.
+
+## The redirect message
+
+When (and only when) the trigger conditions above are met, respond with **only** this message and nothing else:
 
 > Hey! It looks like you opened the top-level repo folder in VS Code, but the kit's slash-commands live inside a specific solution folder.
 >
@@ -22,6 +47,6 @@ If the user says ANYTHING — `/setup`, `hello`, `help`, "what can you do", or a
 >
 > Just looking for example topics to copy rather than the runnable kit? Browse the `samples/` folder at the repo root. That's reference content (topics, prompts, sample data), not a slash-command workspace.
 
-Do not greet the user with anything else. Do not list capabilities. Do not try to help with their actual request from this folder — you cannot, the kit is not loaded here. Do not load any other instruction files. Do not run any tools. Just show the message above and stop.
+When firing the redirect, do not also try to execute the user's request from this folder — the kit persona, skills, and scripts are not loaded here, so any attempt would run against the wrong workspace. Do not load `solutions/ess-maker-skills/.github/copilot-instructions.md` from here; it expects to be the active workspace's instructions file and its setup gate will misfire if loaded out of context.
 
-If the user explicitly asks "why doesn't this work?" or "what is this repo?", you may briefly explain that this is a monorepo and direct them to open the solution folder, but always end by repeating the steps above.
+If the user explicitly asks "why doesn't this work?" or "what is this repo?", you may briefly explain that this is a monorepo and direct them to open the solution folder, then include the steps above.
