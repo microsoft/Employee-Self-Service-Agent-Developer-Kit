@@ -2,7 +2,11 @@
 
 If GitHub Copilot is reading this file, the user has opened the **top-level repo folder** (`Employee-Self-Service-Agent-Developer-Kit/`) as their VS Code workspace root.
 
-This repo is a **monorepo of solutions**. The actual ESS Maker Kit tooling — slash-commands like `/setup`, `/flightcheck`, the agent persona, the Python scripts — lives inside an individual solution folder under `solutions/ess-maker-skills/`, NOT at this repo root. Slash-commands typed against the repo root will not resolve to any prompt and Copilot Chat will treat them as plain text.
+This repo is a **monorepo of solutions**. The actual tooling for each solution — slash-commands, agent personas, Python scripts — lives inside individual solution folders under `solutions/` (today the canonical one is `solutions/ess-maker-skills/`; more may be added over time), NOT at this repo root. Slash-commands typed against the repo root will not resolve to any prompt and Copilot Chat will treat them as plain text.
+
+## Do not load nested solution-level instructions from here
+
+Even when responding to a normal coding request at the repo root, do **not** read or follow `solutions/ess-maker-skills/.github/copilot-instructions.md` (or the equivalent file in any future sibling solution). Those files expect to be the active workspace's instructions and contain setup gates that misfire when loaded out of context (e.g. they will force-trigger a "run `/setup`" welcome message even when the user is just editing a CI workflow at the repo root). Treat solution-level instruction files as opaque from this workspace.
 
 ## Default behavior
 
@@ -20,6 +24,9 @@ For everything that isn't an attempt to use the kit (general questions, code exp
    - `/evaluate`
    - `/scan`
    - `/update`
+   - `/push`
+   - `/menu`
+   - `/troubleshoot`
    - `/flightcheck`
 
 2. **Intent hint — natural-language equivalent.** The user isn't typing a slash-command but is unambiguously asking to *run* the kit from this workspace. Examples:
@@ -47,6 +54,6 @@ When (and only when) the trigger conditions above are met, respond with **only**
 >
 > Just looking for example topics to copy rather than the runnable kit? Browse the `samples/` folder at the repo root. That's reference content (topics, prompts, sample data), not a slash-command workspace.
 
-When firing the redirect, do not also try to execute the user's request from this folder — the kit persona, skills, and scripts are not loaded here, so any attempt would run against the wrong workspace. Do not load `solutions/ess-maker-skills/.github/copilot-instructions.md` from here; it expects to be the active workspace's instructions file and its setup gate will misfire if loaded out of context.
+When firing the redirect, do not also try to execute the user's request from this folder — the kit persona, skills, and scripts are not loaded here, so any attempt would run against the wrong workspace.
 
 If the user explicitly asks "why doesn't this work?" or "what is this repo?", you may briefly explain that this is a monorepo and direct them to open the solution folder, then include the steps above.
