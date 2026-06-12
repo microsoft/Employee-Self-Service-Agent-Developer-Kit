@@ -154,7 +154,7 @@ def _check_template_configs(runner) -> list[CheckResult]:
     dv_token = runner.dv_token
 
     if not env_url or not dv_token:
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="SN-CFG-001", category="ServiceNow",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="ServiceNow template configurations",
@@ -175,7 +175,7 @@ def _check_template_configs(runner) -> list[CheckResult]:
         )
 
         if configs:
-            results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+            results.append(CheckResult(roles=[Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
                 checkpoint_id="SN-CFG-001", category="ServiceNow",
                 priority=Priority.HIGH.value, status=Status.PASSED.value,
                 description="ServiceNow template configurations",
@@ -188,7 +188,7 @@ def _check_template_configs(runner) -> list[CheckResult]:
             _validate_expected_configs(results, config_names, "hrsd", "SN-CFG-01")
             _validate_expected_configs(results, config_names, "itsm", "SN-CFG-02")
         else:
-            results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+            results.append(CheckResult(roles=[Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
                 checkpoint_id="SN-CFG-001", category="ServiceNow",
                 priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
                 description="ServiceNow template configurations",
@@ -201,7 +201,7 @@ def _check_template_configs(runner) -> list[CheckResult]:
             ))
 
     except Exception as e:
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="SN-CFG-001", category="ServiceNow",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="ServiceNow template configurations",
