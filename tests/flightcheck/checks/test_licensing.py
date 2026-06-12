@@ -118,7 +118,8 @@ def test_passed_when_only_standard_connectors(tmp_path, monkeypatch):
     from flightcheck.runner import Status
     assert r.status == Status.PASSED.value
     assert runner._lic_flow_premium_present is False
-    assert not r.remediation
+    assert r.remediation.startswith("Validated:")
+    assert "standard-tier" in r.remediation
 
 
 # --------------------------------------------------------------- bad state
@@ -378,7 +379,8 @@ def test_lic002_passed_all_licensed(monkeypatch):
     r = _lic002(_runner002(graph))[0]
     from flightcheck.runner import Status
     assert r.status == Status.PASSED.value
-    assert not r.remediation
+    assert r.remediation.startswith("Validated:")
+    assert "qualifying" in r.remediation
 
 
 def test_lic002_fail_when_some_missing(monkeypatch):

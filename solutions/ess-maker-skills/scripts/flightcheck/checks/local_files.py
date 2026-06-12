@@ -198,6 +198,7 @@ def _check_agent_identity(agent_path: Path, label: str, runner=None, agent_name:
                 priority=Priority.CRITICAL.value, status=Status.PASSED.value,
                 description=f"{label}: Agent instructions",
                 result=f"Instructions present ({word_count} words)",
+                remediation=f"Validated: the agent identity file contains a non-empty instructions field ({word_count} words, above the minimum threshold).",
                 doc_link=f"{DOC_BASE}/customize",
             ))
         else:
@@ -234,6 +235,7 @@ def _check_agent_identity(agent_path: Path, label: str, runner=None, agent_name:
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description=f"{label}: Starter prompts",
             result=f"{count} starter prompt(s) found",
+            remediation=f"Validated: {count} conversation starter prompt(s) are defined in the local agent identity file.",
             doc_link=f"{DOC_BASE}/customize#customize-starter-prompts",
         ))
     elif count > 0:
@@ -304,6 +306,7 @@ def _check_required_topics(agent_path: Path, label: str, runner=None, agent_name
                 priority=req["priority"], status=Status.PASSED.value,
                 description=f"{label}: {req['name']}",
                 result="Topic found",
+                remediation=f"Validated: the required topic '{req['name']}' is present in the agent's local topics/ folder.",
                 doc_link=f"{DOC_BASE}/customize#customize-topics",
             ))
         else:
@@ -335,7 +338,7 @@ def _check_topic_inventory(agent_path: Path, label: str) -> list[CheckResult]:
         status=Status.PASSED.value if count >= 5 else Status.WARNING.value,
         description=f"{label}: Topic inventory",
         result=f"{count} topic(s) in agent",
-        remediation="ESS agents typically have 20+ topics." if count < 5 else "",
+        remediation="ESS agents typically have 20+ topics." if count < 5 else f"Validated: the agent has {count} local topic file(s), at least the minimum of 5 expected.",
     ))
 
     return results
@@ -363,7 +366,7 @@ def _check_variables(agent_path: Path, label: str) -> list[CheckResult]:
         status=Status.PASSED.value if var_files else Status.WARNING.value,
         description=f"{label}: User Context variables",
         result=f"{len(var_files)} variable(s) found",
-        remediation="Create User Context variables for employee data." if not var_files else "",
+        remediation="Create User Context variables for employee data." if not var_files else f"Validated: {len(var_files)} local variable definition file(s) (User Context variables) are present in the agent's variables/ folder.",
         doc_link=f"{DOC_BASE}/customize",
     ))
 
@@ -657,6 +660,7 @@ def _check_topic_descriptions(agent_path: Path, label: str, runner=None, agent_n
             priority=Priority.MEDIUM.value, status=Status.PASSED.value,
             description=f"{label}: Topic description quality",
             result=f"All {checked} AI-routed topic(s) have descriptions >= {_MIN_DESCRIPTION_WORDS} words with no placeholders",
+            remediation=f"Validated: every AI-routed topic ({checked} checked) has a modelDescription of at least {_MIN_DESCRIPTION_WORDS} words with no placeholder text.",
             doc_link=f"{DOC_BASE}/customize#customize-topics",
         ))
 
@@ -679,6 +683,7 @@ def _check_template_configs(agent_path: Path, label: str) -> list[CheckResult]:
         priority=Priority.MEDIUM.value, status=Status.PASSED.value,
         description=f"{label}: Template configurations",
         result=f"{len(xml_files)} XML template(s), {len(meta_files)} metadata file(s)",
+        remediation=f"Validated: the agent's local template-config folder contains {len(xml_files)} XML template(s) and {len(meta_files)} metadata file(s).",
     ))
 
     return results
@@ -812,6 +817,7 @@ def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list
                 priority=Priority.HIGH.value, status=Status.PASSED.value,
                 description=f"{label}: '{name}' ({source_type})",
                 result=f"Status: {crawl_status} \u2014 indexed and ready",
+                remediation=f"Validated: knowledge source '{name}' ({source_type}) reports an indexed/ready crawl status ('{crawl_status}').",
             ))
         elif crawl_status in _NOT_READY_STATUSES:
             all_ready = False
@@ -865,6 +871,7 @@ def _check_knowledge_sources_via_gateway(pva, bot_id: str, knowledge_files: list
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description=f"{label}: All knowledge sources indexed",
             result=f"{len(sources)} knowledge source(s) fully indexed and ready",
+            remediation=f"Validated: all {len(sources)} knowledge source(s) report a fully indexed/ready crawl status.",
         ))
 
     return results

@@ -850,6 +850,7 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
                 "ISU connection references (Generic User, Context Generic "
                 "User) are missing." + flow_note
             ),
+            remediation="Validated: exactly one Workday connection reference (the OAuthUser/OBO ref, logical-name suffix ff0df) is present in Dataverse — the deterministic fingerprint of the simplified install.",
             doc_link=doc_simplified,
         ))
         return results
@@ -871,6 +872,7 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
                 "Detected full / legacy SOAP+custom install shape "
                 "(3 Workday connection references: OAuthUser/OBO + 2 ISU)." + flow_note
             ),
+            remediation="Validated: all three Workday connection references (OAuthUser/OBO ff0df + the two ISU refs 0786a / d6081) are present in Dataverse — the deterministic fingerprint of the full / legacy install.",
             doc_link=doc_legacy,
         ))
         return results
@@ -1029,6 +1031,7 @@ def _check_package_connection_completeness(runner) -> list[CheckResult]:
                 f"for the {flavor} install are bound to active connections "
                 f"({', '.join(sorted(bound_roles))})."
             ),
+            remediation=f"Validated: every Workday connection reference expected for the {flavor} install ({', '.join(sorted(bound_roles))}) is bound to an active connection (connectionid set and statuscode active).",
             doc_link=doc_link,
         )]
 
@@ -1197,6 +1200,7 @@ def _check_env_vars(runner) -> list[CheckResult]:
                     status=Status.PASSED.value,
                     description=meta["description"],
                     result=f"Set to: {actual_value}",
+                    remediation=f"Validated: the Workday Dataverse environment variable '{meta['id']}' has an explicit current value ('{actual_value}').",
                     doc_link=f"{DOC_BASE}/workday#step-4-environment-variables",
                 ))
             elif meta["critical"]:
@@ -1214,6 +1218,7 @@ def _check_env_vars(runner) -> list[CheckResult]:
                     priority=Priority.HIGH.value, status=Status.PASSED.value,
                     description=meta["description"],
                     result=f"Using default: {meta['default']}",
+                    remediation=f"Validated: the Workday Dataverse environment variable '{meta['id']}' is unset and resolves to its documented default value ('{meta['default']}').",
                     doc_link=f"{DOC_BASE}/workday#step-4-environment-variables",
                 ))
     except Exception as e:
@@ -1430,6 +1435,7 @@ def _check_isu_username_format(runner) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="ISU username vs Entra UPN format alignment",
             result=f"ISU username '{isu_value}' matches verified tenant domain '{domain}'",
+            remediation=f"Validated: the ISU username env var value ('{isu_value}') uses the verified tenant domain ('{domain}'), matching the expected Entra UPN format.",
             doc_link=f"{DOC_BASE}/workday#step-4-environment-variables",
         ))
     else:
@@ -1740,6 +1746,7 @@ def _check_connection_token_health(runner) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="Workday connection token health",
             result=f"All {len(wd_conns)} Workday connection(s) report healthy auth state",
+            remediation=f"Validated: all {len(wd_conns)} Workday connection(s) report a healthy auth state (Connected with no token/credential error) via the Power Platform connections API.",
             doc_link=f"{DOC_BASE}/workday#step-3-connection-references",
         ))
         return results
@@ -2679,7 +2686,7 @@ def _check_flow_status(runner, wd_flows: list) -> list[CheckResult]:
             status=Status.PASSED.value if is_on else Status.FAILED.value,
             description=f"Flow: {name}",
             result=f"State: {'Enabled' if is_on else 'Disabled'}",
-            remediation=f"Enable '{name}' in Power Automate." if not is_on else "",
+            remediation=f"Enable '{name}' in Power Automate." if not is_on else f"Validated: Workday flow '{name}' is in an enabled/started state in Power Automate.",
             doc_link=f"{DOC_BASE}/workday#topics",
         ))
 
@@ -2803,6 +2810,7 @@ def _check_workflows(runner) -> list[CheckResult]:
                     checkpoint_id=cid, category="Workday Workflows",
                     priority=Priority.HIGH.value, status=Status.PASSED.value,
                     description=desc, result="API accessible",
+                    remediation="Validated: this Workday SOAP workflow returned a successful response from the live Workday tenant — the ISU is authenticated and the operation is reachable.",
                 ))
             else:
                 results.append(CheckResult(
@@ -2834,6 +2842,7 @@ def _check_workflows(runner) -> list[CheckResult]:
                         checkpoint_id=cid, category="Workday Workflows",
                         priority=Priority.HIGH.value, status=Status.PASSED.value,
                         description=desc, result="Data retrieved",
+                        remediation="Validated: this Workday SOAP workflow executed against the live tenant and returned worker data — the ISU holds the required domain access.",
                     ))
                 else:
                     results.append(CheckResult(
@@ -2841,6 +2850,7 @@ def _check_workflows(runner) -> list[CheckResult]:
                         priority=Priority.HIGH.value, status=Status.PASSED.value,
                         description=desc,
                         result="API accessible (no data for this employee)",
+                        remediation="Validated: this Workday SOAP workflow executed successfully against the live tenant (reachable and authorized); it simply returned no data for the test employee.",
                     ))
             except (ET.ParseError, DefusedXmlException):
                 # ET.ParseError = malformed XML.
@@ -2853,6 +2863,7 @@ def _check_workflows(runner) -> list[CheckResult]:
                     checkpoint_id=cid, category="Workday Workflows",
                     priority=Priority.HIGH.value, status=Status.PASSED.value,
                     description=desc, result="API responded (unparseable XML)",
+                    remediation="Validated: this Workday SOAP endpoint responded over the live connection — the call was reachable and authorized, though the response body was not parseable XML.",
                 ))
         else:
             error = result.get("error", "Unknown")
@@ -3435,6 +3446,7 @@ def _check_personal_data_write_permission(runner) -> list[CheckResult]:
                 "Update Email / Update Phone topics have the runtime "
                 "permission they need."
             ),
+            remediation="Validated: Workday accepted a Get_Change_Work_Contact_Information_Event_Request from the configured ISU with no Personal Data permission denial, so the ISU's security group holds Modify on the Personal Data (Self) domain.",
             doc_link=doc_link,
         )]
 
@@ -4029,6 +4041,7 @@ def _check_custom_workflow_inventory(runner) -> list[CheckResult]:
                 "(msdyn_employeeselfservicetemplateconfigs where "
                 "ismanaged=true) and require no manual review."
             ),
+            remediation=f"Validated: all {len(discovered)} Workday scenario reference(s) found in customer topics resolve to managed template-config rows in Dataverse (msdyn_employeeselfservicetemplateconfigs, ismanaged=true), so none need manual review.",
             doc_link=doc_link,
         )]
 

@@ -124,7 +124,7 @@ def _check_flow_status(runner, sn_flows: list) -> list[CheckResult]:
             status=Status.PASSED.value if is_on else Status.FAILED.value,
             description=f"Flow [{pack_label}]: {name}",
             result=f"State: {'Enabled' if is_on else 'Disabled'}",
-            remediation=f"Enable '{name}' in Power Automate." if not is_on else "",
+            remediation=f"Enable '{name}' in Power Automate." if not is_on else f"Validated: ServiceNow flow '{name}' is in an enabled/started state in Power Automate.",
             doc_link=f"{DOC_BASE}/servicenow",
         ))
 
@@ -141,7 +141,7 @@ def _check_flow_status(runner, sn_flows: list) -> list[CheckResult]:
             status=Status.PASSED.value if disabled == 0 else Status.WARNING.value,
             description="ServiceNow flow status summary",
             result=f"{len(sn_flows)} flows ({breakdown}) — {enabled} enabled, {disabled} disabled",
-            remediation=f"{disabled} flow(s) disabled — enable them in Power Automate." if disabled else "",
+            remediation=f"{disabled} flow(s) disabled — enable them in Power Automate." if disabled else f"Validated: all {len(sn_flows)} ServiceNow cloud flow(s) are in an enabled/started state in Power Automate.",
         ))
 
     return results
@@ -180,6 +180,7 @@ def _check_template_configs(runner) -> list[CheckResult]:
                 priority=Priority.HIGH.value, status=Status.PASSED.value,
                 description="ServiceNow template configurations",
                 result=f"Found {len(configs)} ServiceNow template config(s) in Dataverse",
+                remediation="Validated: at least one ServiceNow template configuration record exists in Dataverse (msdyn_employeeselfservicetemplateconfigs filtered to ServiceNow scenarios).",
                 doc_link=f"{DOC_BASE}/servicenow",
             ))
 
@@ -235,6 +236,7 @@ def _validate_expected_configs(
             priority=Priority.MEDIUM.value, status=Status.PASSED.value,
             description=f"ServiceNow {pack_label} template configs",
             result=f"All {len(expected)} expected {pack_label} configs present",
+            remediation=f"Validated: all {len(expected)} expected {pack_label} ServiceNow template config scenario(s) are present in Dataverse.",
         ))
     elif found:
         results.append(CheckResult(
@@ -296,6 +298,7 @@ def _check_agent_sn_topics(agent_path: Path, label: str) -> list[CheckResult]:
             priority=Priority.MEDIUM.value, status=Status.PASSED.value,
             description=f"{label}: ServiceNow topics present",
             result=f"Found {sn_topic_count} topic(s) referencing ServiceNow",
+            remediation=f"Validated: {sn_topic_count} local topic file(s) under the agent's topics/ folder reference ServiceNow.",
         ))
 
         # Check for HRSD topics
@@ -308,6 +311,7 @@ def _check_agent_sn_topics(agent_path: Path, label: str) -> list[CheckResult]:
                 priority=Priority.MEDIUM.value, status=Status.PASSED.value,
                 description=f"{label}: ServiceNow HRSD topics",
                 result=f"Found {hrsd_found} HRSD topic(s)",
+                remediation=f"Validated: {hrsd_found} local topic file(s) match the expected ServiceNow HRSD naming pattern.",
             ))
 
         if itsm_found:
@@ -316,6 +320,7 @@ def _check_agent_sn_topics(agent_path: Path, label: str) -> list[CheckResult]:
                 priority=Priority.MEDIUM.value, status=Status.PASSED.value,
                 description=f"{label}: ServiceNow ITSM topics",
                 result=f"Found {itsm_found} ITSM topic(s)",
+                remediation=f"Validated: {itsm_found} local topic file(s) match the expected ServiceNow ITSM naming pattern.",
             ))
 
         if not hrsd_found and not itsm_found:

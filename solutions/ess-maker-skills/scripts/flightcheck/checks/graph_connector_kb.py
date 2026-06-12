@@ -344,6 +344,12 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
                     f"Connection '{connection_id}' is ready and the most recent "
                     "crawl operation completed successfully."
                 ),
+                remediation=(
+                    f"Validated: Graph connector '{connection_id}' reports state "
+                    "'ready' and its most recent crawl operation completed "
+                    "successfully (per the connection + crawl status from "
+                    "Microsoft Graph external connectors)."
+                ),
             ))
         elif op_status == "failed":
             failed.append(display)
@@ -500,7 +506,7 @@ def run_graph_connector_kb_checks(runner) -> list[CheckResult]:
     else:
         summary_status = Status.PASSED.value
         result_text = f"{total} Graph Connector knowledge source(s) ready"
-        summary_remediation = ""
+        summary_remediation = f"Validated: all {total} Graph connector knowledge source(s) are in the ready state with their most recent crawl completed successfully."
 
     results.insert(0, CheckResult(
         checkpoint_id="EXT-002",

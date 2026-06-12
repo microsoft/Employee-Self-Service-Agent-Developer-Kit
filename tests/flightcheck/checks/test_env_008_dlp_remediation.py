@@ -191,10 +191,9 @@ def test_env_008_no_policies_remediation_acknowledges_no_dlp_is_valid(monkeypatc
 # ---------------------------------------------------------------------------
 
 
-def test_env_008_with_policies_passes_with_no_remediation(monkeypatch):
-    """When at least one DLP policy applies, ENV-008 passes and emits
-    no remediation — covering the regression risk that we accidentally
-    push remediation text on the happy path."""
+def test_env_008_with_policies_passes_with_validated_note(monkeypatch):
+    """When at least one DLP policy applies, ENV-008 passes and its
+    remediation describes what was validated."""
     from flightcheck.checks import environment as env_mod
 
     monkeypatch.setattr(env_mod, "query_all", lambda *a, **kw: [])
@@ -203,7 +202,8 @@ def test_env_008_with_policies_passes_with_no_remediation(monkeypatch):
     env008 = _get_env_008(results)
 
     assert env008.status == "Passed"
-    assert not (env008.remediation or "")
+    assert env008.remediation.startswith("Validated:")
+    assert "DLP" in env008.remediation
 
 
 # ---------------------------------------------------------------------------

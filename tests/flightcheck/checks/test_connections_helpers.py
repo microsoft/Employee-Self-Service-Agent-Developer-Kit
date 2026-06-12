@@ -440,14 +440,15 @@ class TestCheckConnectorConnectionsBucketing:
         assert "2 total" in summary.result
         assert "2 connected" in summary.result
         assert "0 errored" in summary.result
-        assert summary.remediation == ""  # no remediation when all connected
+        assert summary.remediation.startswith("Validated:")  # describes what passed
+        assert "Connected" in summary.remediation
 
         # Per-connection rows: X-CONN-002 and X-CONN-003.
         for cid in ("X-CONN-002", "X-CONN-003"):
             r = _result_by_id(results, cid)
             assert r.status == "Passed"
             assert "Status: Connected" in r.result
-            assert r.remediation == ""
+            assert r.remediation.startswith("Validated:")
 
     @responses.activate
     def test_all_errored_summary_fails_with_reauth_remediation(
