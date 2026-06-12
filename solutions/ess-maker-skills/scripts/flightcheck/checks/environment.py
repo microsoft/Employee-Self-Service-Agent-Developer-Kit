@@ -293,7 +293,20 @@ def run_environment_checks(runner) -> list[CheckResult]:
     # ---- ENV-008: DLP policies ----
     try:
         policies = pp.get_dlp_policies_for_env(env_id)
-        if policies:
+        if isinstance(policies, dict) and "_error" in policies:
+            # The apiPolicies admin endpoint returned 401/403 — we could
+            # NOT read DLP state. Report this honestly as a SKIP rather
+            # than claiming "no DLP policies" (which would falsely imply
+            # the environment is unrestricted).
+            results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+                checkpoint_id="ENV-008", category="Environment",
+                priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+                description="DLP policies configured",
+                result="DLP policy check skipped — the apiPolicies admin endpoint returned a permissions error.",
+                remediation="Re-run FlightCheck signed in with the Power Platform Administrator role so DLP policies can be read.",
+                doc_link=f"{DOC_BASE}/prepare#allow-the-external-systems-connector",
+            ))
+        elif policies:
             results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
                 checkpoint_id="ENV-008", category="Environment",
                 priority=Priority.HIGH.value, status=Status.PASSED.value,
