@@ -386,7 +386,8 @@ def _print_prioritized_summary(result):
         print("  " + "-" * 62)
         for r in action:
             tag = _status_tag(r.status)
-            print(f"  {tag} {r.checkpoint_id} [{r.priority}]: {r.result}")
+            role_text = f" | {', '.join(r.roles)}" if r.roles else ""
+            print(f"  {tag} {r.checkpoint_id} [{r.priority}{role_text}]: {r.result}")
             if r.remediation:
                 # Indent multi-line remediation under the arrow so
                 # multi-step fixes stay visually grouped with their
@@ -405,7 +406,8 @@ def _print_prioritized_summary(result):
         print("  " + "-" * 62)
         for r in manual:
             tag = _status_tag(r.status)
-            print(f"  {tag} {r.checkpoint_id} [{r.priority}]: "
+            role_text = f" | {', '.join(r.roles)}" if r.roles else ""
+            print(f"  {tag} {r.checkpoint_id} [{r.priority}{role_text}]: "
                   f"{r.description}")
         print("  (Open report.html for the full result + verification "
               "steps.)")

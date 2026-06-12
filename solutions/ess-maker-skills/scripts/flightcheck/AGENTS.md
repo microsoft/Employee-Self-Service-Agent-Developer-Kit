@@ -185,7 +185,7 @@ check function:
   guard before use (e.g. `if not runner.graph: return skipped`).
 - Returns `list[CheckResult]`.
 - Each result has `checkpoint_id`, `category`, `priority`, `status`,
-  `description`, `result`, optional `remediation` and `doc_link`.
+  `description`, `result`, `roles`, optional `remediation` and `doc_link`.
 - Maps cleanly to good-state / bad-state / partial-state branches.
 
 Runner attributes available to checks (set up by `cli.py`):
@@ -203,7 +203,7 @@ Runner attributes available to checks (set up by `cli.py`):
 Minimal example:
 
 ```python
-from ..runner import CheckResult, Status, Priority
+from ..runner import CheckResult, Status, Priority, Role
 
 def run_my_checks(runner) -> list[CheckResult]:
     results = []
@@ -216,9 +216,45 @@ def run_my_checks(runner) -> list[CheckResult]:
         description="Thing is set up correctly",
         result="Found N things",
         remediation="",  # only needed for non-pass statuses
+        roles=[Role.ESS_MAKER.value],  # who owns the fix if this can fail
     ))
     return results
 ```
+
+### Assigning `roles` (the next-step owner)
+
+`roles` is a `list[str]` of `Role` enum values naming **every admin
+persona who must take the next action** to FIX a failing/errored check
+OR PERFORM the manual validation of a MANUAL / NOT_CONFIGURED result.
+It surfaces as a "Role" column in the HTML report and `results.json`,
+and on the terminal action/manual rows.
+
+**Set `roles` on any check that can produce a Failed, Error, Warning,
+Manual, or NotConfigured result.** A row that only ever Passes or is
+Skipped has no next step, so it needs no role — the report blanks the
+Role cell for Passed/Skipped rows regardless of what the field holds.
+When a single constructor's status is conditional (e.g.
+`Status.PASSED.value if connected else Status.FAILED.value`), still set
+`roles`: the report shows it only when the row actually lands on an
+actionable status.
+
+The seven roles (`Role.<NAME>.value`):
+
+| Role | Owns checks whose fix happens in… |
+|------|-----------------------------------|
+| `Role.ENTRA_ADMIN` | Entra ID: app registrations, enterprise apps, SAML, conditional access, directory-role assignment |
+| `Role.M365_ADMIN` | Microsoft 365 admin center: license/SKU assignment, Office Cloud Policies, Graph connectors, Integrated-apps approval |
+| `Role.POWER_PLATFORM_ADMIN` | Power Platform: environments, DLP, connections, solution import, cloud-flow state, Dataverse env vars |
+| `Role.WORKDAY_ADMIN` | The Workday tenant: ISU accounts, security groups, domain permissions, RaaS, auth policies |
+| `Role.SERVICENOW_ADMIN` | The ServiceNow instance: service accounts, roles, ACLs |
+| `Role.SAP_ADMIN` | The SAP SuccessFactors tenant |
+| `Role.ESS_MAKER` | Local agent files the maker authors: topics, variables, template configs, evaluations, publishing/QA gates |
+
+A check may need more than one role (e.g. a Workday SAML signing cert
+lives on the Entra app but is compared in the Workday tenant ->
+`[Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value]`). Pick the role(s)
+from WHO performs the fix described in `remediation`, not from the
+category alone.
 
 ### 4. Write the test BEFORE you ship
 

@@ -62,7 +62,7 @@ add an OCPS client, and replace the MANUAL bodies with effective-per-group
 PASS/FAIL/WARN logic.
 """
 
-from ..runner import CheckResult, Priority, Status
+from ..runner import CheckResult, Priority, Role, Status
 
 # Checkpoint identifiers.
 POL_FB_FEEDBACK = "POL-FB-001"
@@ -208,6 +208,7 @@ def check_feedback_enabled(runner) -> CheckResult:
             notice=MAKER_NOTICE,
         ),
         doc_link=DOC_LINK,
+        roles=[Role.M365_ADMIN.value],
     )
 
 
@@ -251,6 +252,7 @@ def check_feedback_attachments(runner) -> CheckResult:
             still_stuck=still_stuck,
         ),
         doc_link=DOC_LINK,
+        roles=[Role.M365_ADMIN.value],
     )
 
 
