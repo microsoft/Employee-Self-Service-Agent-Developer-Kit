@@ -9,7 +9,7 @@ Checks Entra ID configuration, SSO, Conditional Access, user sync.
 
 import json
 
-from ..runner import CheckResult, Status, Priority
+from ..runner import CheckResult, Priority, Role, Status
 from ._saml_utils import (
     WORKDAY_SAML_SP_FILTER,
     WORKDAY_SSO_TUTORIAL_DOC,
@@ -28,7 +28,7 @@ def run_authentication_checks(runner) -> list[CheckResult]:
     try:
         org = graph.get_organization()
         if org and "displayName" in org:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value],
                 checkpoint_id="AUTH-001", category="Authentication",
                 priority=Priority.CRITICAL.value, status=Status.PASSED.value,
                 description="Microsoft Entra ID configured",
@@ -36,7 +36,7 @@ def run_authentication_checks(runner) -> list[CheckResult]:
                 doc_link=f"{DOC_BASE}/prerequisites#identity-authentication-and-single-sign-on-sso",
             ))
         else:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value],
                 checkpoint_id="AUTH-001", category="Authentication",
                 priority=Priority.CRITICAL.value, status=Status.FAILED.value,
                 description="Microsoft Entra ID configured",
@@ -45,7 +45,7 @@ def run_authentication_checks(runner) -> list[CheckResult]:
                 doc_link=f"{DOC_BASE}/prerequisites#identity-authentication-and-single-sign-on-sso",
             ))
     except Exception as e:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value],
             checkpoint_id="AUTH-001", category="Authentication",
             priority=Priority.CRITICAL.value, status=Status.WARNING.value,
             description="Microsoft Entra ID",
@@ -61,7 +61,7 @@ def run_authentication_checks(runner) -> list[CheckResult]:
                 p for p in policies
                 if p.get("state") == "enabledForReportingButNotEnforced"
             ]
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value],
                 checkpoint_id="AUTH-002", category="Authentication",
                 priority=Priority.HIGH.value, status=Status.PASSED.value,
                 description="Conditional Access policies",
@@ -73,7 +73,7 @@ def run_authentication_checks(runner) -> list[CheckResult]:
                 doc_link=f"{DOC_BASE}/prerequisites#identity-authentication-and-single-sign-on-sso",
             ))
         else:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value],
                 checkpoint_id="AUTH-002", category="Authentication",
                 priority=Priority.HIGH.value, status=Status.WARNING.value,
                 description="Conditional Access policies",
@@ -82,7 +82,7 @@ def run_authentication_checks(runner) -> list[CheckResult]:
                 doc_link=f"{DOC_BASE}/prerequisites#identity-authentication-and-single-sign-on-sso",
             ))
     except Exception as e:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value],
             checkpoint_id="AUTH-002", category="Authentication",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="Conditional Access policies",
@@ -94,7 +94,7 @@ def run_authentication_checks(runner) -> list[CheckResult]:
     try:
         users = graph.get_users_sample(top=10)
         if users:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value],
                 checkpoint_id="AUTH-004", category="Authentication",
                 priority=Priority.HIGH.value, status=Status.PASSED.value,
                 description="User identity synchronization",
@@ -102,7 +102,7 @@ def run_authentication_checks(runner) -> list[CheckResult]:
                 doc_link=f"{DOC_BASE}/prerequisites#identity-authentication-and-single-sign-on-sso",
             ))
         else:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value],
                 checkpoint_id="AUTH-004", category="Authentication",
                 priority=Priority.HIGH.value, status=Status.FAILED.value,
                 description="User identity synchronization",
@@ -111,7 +111,7 @@ def run_authentication_checks(runner) -> list[CheckResult]:
                 doc_link=f"{DOC_BASE}/prerequisites#identity-authentication-and-single-sign-on-sso",
             ))
     except Exception as e:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value],
             checkpoint_id="AUTH-004", category="Authentication",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="User identity sync",
@@ -232,7 +232,7 @@ def _check_workday_app_user_assignment(graph) -> list[CheckResult]:
     doc_link = f"{DOC_BASE}/prerequisites#identity-authentication-and-single-sign-on-sso"
 
     if not graph:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ENTRA_ADMIN.value],
             checkpoint_id=cp_id, category="Authentication",
             priority=Priority.CRITICAL.value, status=Status.SKIPPED.value,
             description=description,
@@ -242,7 +242,7 @@ def _check_workday_app_user_assignment(graph) -> list[CheckResult]:
     try:
         template_ids = _resolve_workday_template_ids(graph)
     except Exception as e:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ENTRA_ADMIN.value],
             checkpoint_id=cp_id, category="Authentication",
             priority=Priority.CRITICAL.value, status=Status.WARNING.value,
             description=description,
@@ -258,7 +258,7 @@ def _check_workday_app_user_assignment(graph) -> list[CheckResult]:
         )]
 
     if not template_ids:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ENTRA_ADMIN.value],
             checkpoint_id=cp_id, category="Authentication",
             priority=Priority.CRITICAL.value, status=Status.WARNING.value,
             description=description,
@@ -286,7 +286,7 @@ def _check_workday_app_user_assignment(graph) -> list[CheckResult]:
         filter_clause = f"({template_clause})"
         sps = graph.get_service_principals(filter_expr=filter_clause)
     except Exception as e:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ENTRA_ADMIN.value],
             checkpoint_id=cp_id, category="Authentication",
             priority=Priority.CRITICAL.value, status=Status.WARNING.value,
             description=description,
@@ -299,7 +299,7 @@ def _check_workday_app_user_assignment(graph) -> list[CheckResult]:
         )]
 
     if not sps:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ENTRA_ADMIN.value],
             checkpoint_id=cp_id, category="Authentication",
             priority=Priority.CRITICAL.value, status=Status.SKIPPED.value,
             description=description,
@@ -469,7 +469,7 @@ def _check_workday_app_user_assignment(graph) -> list[CheckResult]:
     # If you change either the renderer keying or the buckets here,
     # update both ends together.
     if failed_items:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value],
             checkpoint_id=cp_id, category="Authentication",
             priority=Priority.CRITICAL.value, status=Status.FAILED.value,
             description=description,
@@ -479,7 +479,7 @@ def _check_workday_app_user_assignment(graph) -> list[CheckResult]:
         ))
 
     if warning_items:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value],
             checkpoint_id=cp_id, category="Authentication",
             priority=Priority.CRITICAL.value, status=Status.WARNING.value,
             description=description,
@@ -489,7 +489,7 @@ def _check_workday_app_user_assignment(graph) -> list[CheckResult]:
         ))
 
     if passed_items:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value],
             checkpoint_id=cp_id, category="Authentication",
             priority=Priority.CRITICAL.value, status=Status.PASSED.value,
             description=description,
@@ -561,7 +561,7 @@ def _run_saml_nameid_check(runner) -> list[CheckResult]:
 
     graph = getattr(runner, "graph", None)
     if graph is None:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ENTRA_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description=description,
@@ -585,7 +585,7 @@ def _run_saml_nameid_check(runner) -> list[CheckResult]:
             raise_on_permission_error=True,
         )
     except PermissionError as e:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ENTRA_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=description,
@@ -603,7 +603,7 @@ def _run_saml_nameid_check(runner) -> list[CheckResult]:
             doc_link=doc_link,
         )]
     except Exception as e:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ENTRA_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=description,
@@ -616,7 +616,7 @@ def _run_saml_nameid_check(runner) -> list[CheckResult]:
         )]
 
     if not workday_sps:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ENTRA_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
             description=description,
@@ -650,7 +650,7 @@ def _run_saml_nameid_check(runner) -> list[CheckResult]:
         f"/servicePrincipals/{first_sp_id}/claimsMappingPolicies"
     )
     if cmp_probe.get("_status") in (401, 403):
-        return [CheckResult(
+        return [CheckResult(roles=[Role.ENTRA_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=description,
@@ -733,7 +733,7 @@ def _run_saml_nameid_check(runner) -> list[CheckResult]:
             + " (likely missing Policy.Read.All consent)."
         )
 
-    return [CheckResult(
+    return [CheckResult(roles=[Role.ENTRA_ADMIN.value],
         checkpoint_id=cp_id, category=category,
         priority=Priority.HIGH.value, status=Status.MANUAL.value,
         description=description,

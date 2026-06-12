@@ -12,7 +12,7 @@ environment.py, and any future connector-specific check modules.
 
 from __future__ import annotations
 
-from ..runner import CheckResult, Priority, Status
+from ..runner import CheckResult, Priority, Role, Status
 
 
 def get_connection_status(conn: dict) -> str:
@@ -104,6 +104,7 @@ def check_connector_connections(
             status=Status.SKIPPED.value,
             description=f"{category} connections",
             result="Power Platform Admin API not available — skipping connection checks",
+            roles=[Role.POWER_PLATFORM_ADMIN.value],
         ))
         return results
 
@@ -118,6 +119,7 @@ def check_connector_connections(
                 description=f"{category} connections",
                 result=f"Unable to list connections: {all_conns['_error']}",
                 remediation="Requires Power Platform Admin role.",
+                roles=[Role.POWER_PLATFORM_ADMIN.value],
             ))
             return results
 
@@ -136,6 +138,7 @@ def check_connector_connections(
                 result=f"{len(conns)} total — {len(connected)} connected, {len(errored)} errored",
                 remediation="Re-authenticate errored connections in Power Platform." if errored else "",
                 doc_link=doc_link,
+                roles=[Role.POWER_PLATFORM_ADMIN.value],
             ))
 
             for i, c in enumerate(conns):
@@ -151,6 +154,7 @@ def check_connector_connections(
                     description=f"Connection: {name}",
                     result=f"Status: {status}",
                     remediation=f"Re-authenticate '{name}' in Power Platform." if status != "Connected" else "",
+                    roles=[Role.POWER_PLATFORM_ADMIN.value],
                 ))
         else:
             results.append(CheckResult(
@@ -162,6 +166,7 @@ def check_connector_connections(
                 result=f"No {category} connections found",
                 remediation=not_found_remediation,
                 doc_link=doc_link,
+                roles=[Role.POWER_PLATFORM_ADMIN.value],
             ))
     except Exception as e:
         results.append(CheckResult(
@@ -171,6 +176,7 @@ def check_connector_connections(
             status=Status.WARNING.value,
             description=f"{category} connections",
             result=f"Unable to check: {e}",
+            roles=[Role.POWER_PLATFORM_ADMIN.value],
         ))
 
     return results
