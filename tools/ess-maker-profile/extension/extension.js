@@ -148,40 +148,46 @@ async function openChatInEditor() {
 
 async function applyChatOnlyLayout({ silent = false } = {}) {
     await applySettings(CHAT_ONLY_LAYOUT, vscode.ConfigurationTarget.Global);
-    // Force every contributed view back to its package.json-declared
-    // location. This pulls our Quick Actions view OUT of the primary
-    // sidebar (where it can drift after a user drag or a cached
-    // layout-restore) and back into the auxiliary bar container where
-    // it was meant to live. Without this, Quick Actions ends up
-    // stacked under Explorer + Outline + Timeline in the left sidebar
-    // and the action buttons get cut off below the fold.
-    await tryRun('workbench.action.resetViewLocations');
-    // Defense in depth: collapse the file explorer tree as well, so if
-    // Quick Actions ever does end up sharing a pane with Explorer the
-    // workspace folder isn't sitting expanded stealing space. Focus
-    // Explorer first and yield briefly — without the yield the
-    // collapse command fires before the view is mounted and silently
-    // no-ops. `list.collapseAll` is a complementary fallback that
-    // targets the currently-focused tree view.
+
+    // IMPORTANT: the installer launches VS Code via `code chat /setup`
+    // which opens a chat with the /setup query pre-filled. We MUST NOT
+    // close that chat as part of layout setup, otherwise the user lands
+    // in an empty chat without /setup having been sent. So this function
+    // is intentionally non-destructive:
+    //   * No closeAllEditors / closePanel / closeAuxiliaryBar / closeSidebar.
+    //   * No openChatInEditor (would create a second empty chat).
+    // We only:
+    //   1. Apply the layout settings (above) — chrome reductions on reload.
+    //   2. Collapse the explorer tree (so it doesn't crowd Quick Actions
+    //      if the user opens the primary sidebar).
+    //   3. Make sure the Quick Actions view container is open + focused
+    //      in whichever sidebar it lives in.
+
+    // Collapse the file explorer tree. Focus the explorer first and yield
+    // 150 ms so VS Code finishes mounting the view — without the yield
+    // the collapse fires before the tree exists and silently no-ops.
+    // `list.collapseAll` is a complementary fallback that targets the
+    // currently-focused tree.
     await tryRun('workbench.view.explorer');
     await new Promise((r) => setTimeout(r, 150));
     await tryRun('workbench.files.action.collapseExplorerFolders');
     await tryRun('list.collapseAll');
-    // Close every panel on every side, then re-open just what we want.
-    await tryRun('workbench.action.closeSidebar');           // left primary
-    await tryRun('workbench.action.closePanel');             // bottom
-    await tryRun('workbench.action.closeAuxiliaryBar');      // right (kills Copilot side chat)
-    await tryRun('workbench.action.closeAllEditors');
-    if (!silent) {
-        // Only try to hard-toggle the menu bar on first apply. Subsequent
-        // activations should NOT flip it — the setting handles it on reload.
-        await tryRun('workbench.action.toggleMenuBar');
-    }
-    await openChatInEditor();
-    // Reveal our button rail in the secondary side bar (right-hand).
+
+    // Open + focus the Quick Actions view container wherever it lives.
+    // Per package.json this is the auxiliary bar; if a previous session
+    // moved it to the primary sidebar, it'll appear there instead — the
+    // user can drag it back via the container header menu. We don't
+    // try to programmatically move it because there's no public API
+    // that reliably re-pins a view container across sessions, and
+    // `workbench.action.resetViewLocations` would also reset every
+    // other view the user has customized which is too aggressive.
     await tryRun('workbench.view.extension.essMakerActions');
     await tryRun('essMaker.actionsView.focus');
+
     if (!silent) {
+        // Hide the menu bar on first apply (subsequent activations
+        // pick up the hidden state from settings on next window reload).
+        await tryRun('workbench.action.toggleMenuBar');
         const sel = await vscode.window.showInformationMessage(
             'ESS Maker chat-only layout applied. Reload the window for the menu bar and title bar to disappear.',
             'Reload Window',

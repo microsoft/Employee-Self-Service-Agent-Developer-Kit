@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.3 (POC)
+
+- **Stop killing the installer's `/setup` chat.** The previous layout-apply
+  did `closeAuxiliaryBar` + `closeAllEditors` + `openChatInEditor` on
+  every activation, which destroyed the chat that the one-shot installer
+  opens via `code chat /setup` and replaced it with an empty chat. Made
+  the layout-apply non-destructive: it now only applies the settings,
+  collapses the explorer tree, and focuses the Quick Actions container
+  — no editor / panel / sidebar closing.
+- Dropped `workbench.action.resetViewLocations` from 0.4.2 — it was too
+  aggressive (would reset every customized view location, not just ours)
+  and didn't actually pull Quick Actions back to the aux bar reliably.
+  Quick Actions now opens wherever the user last had it (default per
+  package.json is the aux bar).
+
 ## 0.4.2 (POC)
 
 - Force the Quick Actions view back to the **auxiliary bar** on every
