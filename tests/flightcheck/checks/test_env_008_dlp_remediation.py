@@ -230,3 +230,24 @@ def test_env_008_permission_error_remediation_names_role_and_links(monkeypatch):
     assert _NAV_PATH in rem, rem
     for broken in ("/policies", "/dlp", "/datapolicies"):
         assert _ADMIN_URL + broken.lstrip("/") not in rem, rem
+
+
+def test_env_008_skips_when_apipolicies_returns_permission_error(monkeypatch):
+    """When the apiPolicies admin endpoint returns 401/403, the client
+    surfaces a structured ``{"_error": ...}`` dict. ENV-008 must report
+    this as a SKIP ("requires Power Platform Administrator") rather than
+    a false "No DLP policies found" — the kit must not claim the
+    environment is unrestricted when it could not actually read DLP."""
+    from flightcheck.checks import environment as env_mod
+
+    monkeypatch.setattr(env_mod, "query_all", lambda *a, **kw: [])
+    runner = _make_runner(_FakePPAdmin(
+        dlp_policies={"_error": "insufficient_permissions", "_status": 403},
+    ))
+    results = env_mod.run_environment_checks(runner)
+    env008 = _get_env_008(results)
+
+    assert env008.status == "Skipped"
+    assert "permissions error" in env008.result
+    assert "No DLP policies found" not in env008.result  # no false "all clear"
+    assert "Power Platform Administrator" in env008.remediation

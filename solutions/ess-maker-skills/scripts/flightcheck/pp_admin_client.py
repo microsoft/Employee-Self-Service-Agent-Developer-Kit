@@ -173,15 +173,23 @@ class PPAdminClient:
         resp.raise_for_status()
         return resp.json()
 
-    def _get_all(self, base: str, path: str, params: dict | None = None, *, use_flow_token: bool = False) -> list:
-        """Paginate through results."""
+    def _get_all(self, base: str, path: str, params: dict | None = None, *, use_flow_token: bool = False) -> list | dict:
+        """Paginate through results.
+
+        On 401/403 returns a structured ``{"_error": ...}`` dict (matching
+        ``_get``) so callers surface the permission failure instead of
+        mistaking a swallowed auth error for an empty collection. Every
+        consumer of the list-returning methods (get_connections,
+        get_flows, get_environments, get_dlp_policies) already guards
+        with ``isinstance(result, dict) and "_error" in result``.
+        """
         items: list = []
         url = f"{base}{path}"
         h = self.flow_headers if use_flow_token else self.headers
         while url:
             resp = _SESSION.get(url, headers=h, params=params, timeout=60)
             if resp.status_code in (401, 403):
-                return items
+                return {"_error": "insufficient_permissions", "_status": resp.status_code}
             resp.raise_for_status()
             data = resp.json()
             items.extend(data.get("value", []))
@@ -287,9 +295,15 @@ class PPAdminClient:
             params={"api-version": "2021-04-01"},
         )
 
-    def get_dlp_policies_for_env(self, env_id: str) -> list:
+    def get_dlp_policies_for_env(self, env_id: str) -> list | dict:
         """List DLP policies applied to a specific environment."""
         all_policies = self.get_dlp_policies()
+        # Surface a permission failure rather than treating it as "no
+        # DLP policies" — the caller (ENV-008) renders this as a SKIP
+        # ("requires Power Platform Administrator") instead of a false
+        # "environment is unrestricted" verdict.
+        if isinstance(all_policies, dict) and "_error" in all_policies:
+            return all_policies
         # Filter to policies that include this environment
         relevant = []
         for p in all_policies:

@@ -343,19 +343,15 @@ class TestCheckConnectorConnectionsHandlesApiErrors:
         assert "simulated transport blowup" in r.result
 
     @responses.activate
-    def test_http_403_silently_degrades_to_not_configured(
+    def test_http_403_reported_as_permissions_warning(
         self, runner: _MinimalRunner
     ) -> None:
-        """A real 401/403 on ``/connections`` is swallowed by
-        ``PPAdminClient._get_all`` into an empty list (see
-        pp_admin_client.py:183-184). The helper has no way to tell
-        "missing admin role" from "no matching connections" and emits
-        ``NotConfigured``.
-
-        This is a known silent-failure mode — the same trap AUTH-006
-        and ENV-009 added explicit probe queries to work around. Pin
-        the current behavior so a future fix (probe + WARNING split)
-        flips this assertion intentionally rather than silently.
+        """A real 401/403 on ``/connections`` is surfaced by
+        ``PPAdminClient._get_all`` as a ``{"_error": ...}`` dict, and the
+        helper renders it as a WARNING that names the missing Power
+        Platform Administrator role — distinct from "no matching
+        connections" (NotConfigured). (Fix for "bug 2": ``_get_all`` no
+        longer swallows 401/403 into an empty list.)
         """
         from flightcheck.checks.connections import check_connector_connections
         responses.add(**pp.list_connections(env_id=runner.env_id, connections=[], status=403))
@@ -368,10 +364,9 @@ class TestCheckConnectorConnectionsHandlesApiErrors:
             not_found_remediation="Run /connect workday to configure.",
         )
         r = _result_by_id(results, "X-CONN-001")
-        # TODO: when get_connections is augmented with a probe (like
-        # AUTH-006 / ENV-009), flip this to status == "Warning" with
-        # a permissions remediation.
-        assert r.status == "NotConfigured"
+        assert r.status == "Warning"
+        assert "Unable to list connections" in r.result
+        assert "Power Platform Admin" in r.remediation
 
 
 class TestCheckConnectorConnectionsBucketing:

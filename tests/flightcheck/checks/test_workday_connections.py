@@ -227,31 +227,19 @@ class TestMixedState:
 
 class TestEdgeCases:
     @responses.activate
-    def test_403_from_bap_is_misreported_as_not_configured(
+    def test_403_from_bap_reported_as_warning(
         self, runner: _MinimalRunner
     ) -> None:
-        """Regression: latent bug. PPAdminClient._get_all returns an
-        empty list on 401/403, but PPAdminClient._get (single-item
-        getter) returns {"_error": "..."} dict. The check expects the
-        dict shape from get_connections() and only reports WARNING when
-        it sees one — but get_connections() uses _get_all, so a 403
-        silently looks identical to "no Workday connections" and the
-        operator is told to configure connections rather than told
-        their account lacks PP Admin role.
+        """A 401/403 from the BAP connections endpoint is surfaced as a
+        WARNING that names the missing Power Platform Administrator role
+        — NOT a "no connections / configure connections" NotConfigured
+        (which would mislead an operator whose account simply lacks the
+        admin role).
 
-        Severity: medium. The check still surfaces a non-PASS result so
-        the operator knows something is off, but the remediation
-        message points at the wrong action.
-
-        TODO (production fix, choose one):
-          (a) Make _get_all also return {"_error": "...", "_status": ...}
-              dict on 401/403 (mirrors _get), and update _check_connections
-              to handle that shape from get_connections.
-          (b) Make _get_all raise a typed exception on 401/403 and let
-              callers decide whether to swallow it.
-
-        See solutions/ess-maker-skills/scripts/flightcheck/pp_admin_client.py:131-144.
-        Flip this test to expect WARNING when fixed.
+        This pins the fix for "bug 2": ``_get_all`` now returns a
+        ``{"_error": ...}`` dict on 401/403 (mirroring ``_get``), and
+        ``check_connector_connections`` renders it as a permissions
+        WARNING.
         """
         from flightcheck.checks.workday import _check_connections
 
@@ -259,16 +247,9 @@ class TestEdgeCases:
 
         results = _check_connections(runner)
         wd_001 = _result_by_id(results, "WD-CONN-001")
-        # Buggy behavior: 403 is indistinguishable from empty list.
-        assert wd_001.status == "NotConfigured", (
-            "PPAdminClient was fixed to surface 403 as a structured error — "
-            "flip this test to assert WARNING + 'Power Platform Admin' "
-            "in the remediation."
-        )
-        assert "No Workday connections" in wd_001.result
-        # Once fixed, this assertion should change to:
-        #   assert wd_001.status == "Warning"
-        #   assert "Power Platform Admin" in wd_001.remediation
+        assert wd_001.status == "Warning"
+        assert "Unable to list connections" in wd_001.result
+        assert "Power Platform Admin" in wd_001.remediation
 
     def test_skips_when_env_id_missing(self, pp_client) -> None:
         """No env_id (e.g. derive_environment_id failed) — check returns
