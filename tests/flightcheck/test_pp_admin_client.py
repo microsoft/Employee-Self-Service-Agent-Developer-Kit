@@ -42,23 +42,22 @@ def pp_client(fake_token: str):
 
 class TestPermissionHandling:
     @responses.activate
-    def test_get_connections_handles_403_gracefully_returns_empty_list(
+    def test_get_connections_returns_error_dict_on_403(
         self, pp_client
     ) -> None:
-        """Companion test: 401/403 ARE handled (return empty list).
-        This pins the existing behavior so we know it doesn't regress.
-
-        Note: returning an empty list here is itself bug 2 (the kit
-        also has a separate inconsistency between _get_all returning a
-        list and _get returning a dict on 401/403). When bug 2 is
-        fixed, both this test and the test_403_from_bap_is_misreported_*
-        test in test_workday_connections.py need updating in lockstep.
+        """401/403 on a paginated endpoint surfaces a structured
+        ``{"_error": ...}`` dict (matching ``_get``), so callers can
+        distinguish a permission failure from a genuinely empty
+        collection. (Previously ``_get_all`` swallowed 401/403 into an
+        empty list — "bug 2"; this is the fixed behavior.)
         """
         responses.add(**pp.insufficient_permissions(
             env_id=pp.MOCK_ENV_ID, endpoint="connections",
         ))
         result = pp_client.get_connections(pp.MOCK_ENV_ID)
-        assert result == []
+        assert isinstance(result, dict)
+        assert result["_error"] == "insufficient_permissions"
+        assert result["_status"] == 403
 
 
 class TestFindEnvironmentIdByDataverseUrl:

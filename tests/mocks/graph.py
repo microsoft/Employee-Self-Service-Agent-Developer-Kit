@@ -920,3 +920,67 @@ def list_connection_operations(
         ),
         "status": 200,
     }
+
+
+# ────────────────────────────────────────────────────────────────────────
+# subscribedSku + directoryRole members (PRE-001/002/003/008/009)
+# ────────────────────────────────────────────────────────────────────────
+
+
+def subscribed_sku(
+    *,
+    sku_part_number: str = "MICROSOFT_365_COPILOT",
+    consumed_units: int = 5,
+    enabled_units: int = 10,
+    sku_id: str = "00000000-0000-0000-0000-0000000040a1",
+) -> dict[str, Any]:
+    """Build a single Graph /subscribedSkus record.
+
+    Cited consumers:
+      - flightcheck/checks/prerequisites.py (PRE-001/002/003 — license SKUs).
+      - flightcheck/graph_client.py:194-196 (get_subscribed_skus).
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="subscribedSku" — fields used:
+                skuPartNumber (Edm.String)
+                consumedUnits (Edm.Int32)
+                prepaidUnits (ComplexType licenseUnitsDetail; enabled Edm.Int32)
+      Docs: https://learn.microsoft.com/graph/api/subscribedsku-list
+    """
+    return {
+        "skuId": sku_id,
+        "skuPartNumber": sku_part_number,
+        "consumedUnits": consumed_units,
+        "prepaidUnits": {"enabled": enabled_units, "suspended": 0, "warning": 0},
+    }
+
+
+def list_subscribed_skus(
+    *, skus: Iterable[Mapping[str, Any]] | None = None
+) -> dict[str, Any]:
+    """Mock GET /v1.0/subscribedSkus."""
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/subscribedSkus",
+        "json": collection(
+            skus if skus is not None else [subscribed_sku()],
+            odata_context="$metadata#subscribedSkus",
+        ),
+        "status": 200,
+    }
+
+
+def list_role_members(
+    *, role_id: str, members: Iterable[Mapping[str, Any]] | None = None
+) -> dict[str, Any]:
+    """Mock GET /v1.0/directoryRoles/{role_id}/members."""
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/directoryRoles/{role_id}/members",
+        "json": collection(
+            members if members is not None else [user()],
+            odata_context="$metadata#directoryObjects",
+        ),
+        "status": 200,
+    }

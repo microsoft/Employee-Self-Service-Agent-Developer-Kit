@@ -316,27 +316,17 @@ class TestEdgeCases:
     @responses.activate
     def test_403_from_bap_returns_warning(self, runner: _MinimalRunner) -> None:
         """403 from BAP — the operator's account lacks PP Admin role.
-        Per the existing pattern in WD-CONN-001 this surfaces as a
-        WARNING, not a misleading NotConfigured. Note: WD-CONN-001
-        currently mis-reports this scenario (latent bug pinned in
-        test_workday_connections.py::test_403_from_bap_is_misreported_as_not_configured);
-        WD-CONN-101 sits behind the same client method so it shares
-        the same buggy "looks like empty list" behavior. Pin the
-        current behavior here so a fix to PPAdminClient._get_all
-        will surface this test for an update at the same time."""
+        Now that ``PPAdminClient._get_all`` surfaces 401/403 as a
+        structured error dict, WD-CONN-101 reports a WARNING naming the
+        missing role instead of a misleading NotConfigured."""
         from flightcheck.checks.workday import _check_connection_token_health
 
         responses.add(**pp.insufficient_permissions(env_id=runner.env_id))
 
         results = _check_connection_token_health(runner)
         wd_101 = _result_by_id(results, "WD-CONN-101")
-        # Current buggy behavior — same root cause as WD-CONN-001's pin.
-        # When PPAdminClient._get_all is fixed to surface 401/403 as a
-        # structured error dict (see test_workday_connections.py edge
-        # test for the recommended fix), flip this assertion to:
-        #   assert wd_101.status == "Warning"
-        #   assert "Power Platform" in wd_101.remediation
-        assert wd_101.status == "NotConfigured"
+        assert wd_101.status == "Warning"
+        assert "Power Platform Admin" in wd_101.remediation
 
     def test_skips_when_env_id_missing(self, pp_client) -> None:
         """No env_id → empty list (no result), don't crash, don't make
