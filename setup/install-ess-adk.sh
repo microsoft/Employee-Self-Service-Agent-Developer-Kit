@@ -253,6 +253,7 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
             elif "$CODE_CMD" --install-extension "$MAKER_VSIX" --force 2>/dev/null; then
                 ok "ESS Maker Profile ($(basename "$MAKER_VSIX"))"
                 echo "    Tip: to revert to the stock VS Code layout, run 'ESS Maker: Restore Standard Layout' from the command palette."
+                MAKER_PROFILE_INSTALLED=true
             else
                 warn "ESS Maker Profile install failed (non-fatal, continuing with stock VS Code layout)"
             fi
@@ -474,26 +475,43 @@ fi
 # ---------------------------------------------------------------------------
 # 8. Launch VS Code and request /setup in Copilot Chat
 # ---------------------------------------------------------------------------
-step "Launching VS Code and requesting /setup in Copilot Chat"
-
 WORKSPACE_PATH="$REPO_PATH/solutions/ess-maker-skills"
 
 if [[ -n "$CODE_CMD" ]]; then
-    # `code chat <prompt>` (VS Code 1.102+, June 2025) opens the chat panel in
-    # the workspace at the current working directory and submits the prompt.
-    # We cd into $WORKSPACE_PATH so it targets the kit folder.
-    # NOTE: exit 0 means "VS Code accepted the chat request," NOT that /setup
-    # actually ran. The user may still need to grant workspace trust and sign
-    # in to GitHub/Copilot before /setup executes.
-    if (cd "$WORKSPACE_PATH" && "$CODE_CMD" chat "/setup"); then
-        ok "Requested /setup in Copilot Chat at $WORKSPACE_PATH"
-        warn "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts and /setup will run."
-        warn "If /setup does not start after trust/sign-in, open Copilot Chat manually and run /setup."
+    if [[ "${MAKER_PROFILE_INSTALLED:-false}" == "true" ]]; then
+        # The ESS Maker Profile extension takes over /setup orchestration:
+        # on activation it opens a chat editor in the editor area (full
+        # width, not the narrow aux bar) and injects /setup itself. So
+        # just launch the workspace plainly here — don't use
+        # `code chat /setup`, which would also open an aux-bar chat and
+        # leave us with two competing chat surfaces.
+        step "Launching VS Code (Maker Profile will run /setup)"
+        if (cd "$WORKSPACE_PATH" && "$CODE_CMD" .); then
+            ok "Launched VS Code at $WORKSPACE_PATH"
+            warn "The ESS Maker Profile will open Copilot Chat and run /setup automatically."
+            warn "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts."
+        else
+            warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
+            echo "Next: in VS Code, open Copilot Chat and run /setup to connect your Dataverse environment."
+        fi
     else
-        warn "'code chat' failed or is unsupported. Falling back to opening the workspace only."
-        warn "If you have an older VS Code (pre-1.102 / June 2025), update VS Code and re-run, or run /setup manually in Copilot Chat."
-        "$CODE_CMD" "$WORKSPACE_PATH" || warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
-        echo "Next: in VS Code, open Copilot Chat and run /setup to connect your Dataverse environment."
+        step "Launching VS Code and requesting /setup in Copilot Chat"
+        # `code chat <prompt>` (VS Code 1.102+, June 2025) opens the chat panel in
+        # the workspace at the current working directory and submits the prompt.
+        # We cd into $WORKSPACE_PATH so it targets the kit folder.
+        # NOTE: exit 0 means "VS Code accepted the chat request," NOT that /setup
+        # actually ran. The user may still need to grant workspace trust and sign
+        # in to GitHub/Copilot before /setup executes.
+        if (cd "$WORKSPACE_PATH" && "$CODE_CMD" chat "/setup"); then
+            ok "Requested /setup in Copilot Chat at $WORKSPACE_PATH"
+            warn "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts and /setup will run."
+            warn "If /setup does not start after trust/sign-in, open Copilot Chat manually and run /setup."
+        else
+            warn "'code chat' failed or is unsupported. Falling back to opening the workspace only."
+            warn "If you have an older VS Code (pre-1.102 / June 2025), update VS Code and re-run, or run /setup manually in Copilot Chat."
+            "$CODE_CMD" "$WORKSPACE_PATH" || warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
+            echo "Next: in VS Code, open Copilot Chat and run /setup to connect your Dataverse environment."
+        fi
     fi
 else
     warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"

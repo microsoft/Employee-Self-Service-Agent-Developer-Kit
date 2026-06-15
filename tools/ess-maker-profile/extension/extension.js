@@ -7,7 +7,7 @@
 const vscode = require('vscode');
 
 const EXT_ID = 'microsoft-ess.ess-maker-profile';
-const APPLIED_KEY = 'essMaker.chatOnlyApplied.v3';
+const APPLIED_KEY = 'essMaker.chatOnlyApplied.v4';
 
 // Settings that strip developer chrome to the bone. Applied at GLOBAL (user)
 // scope because workspace-scope leaves menu/title-bar/activity-bar visible
@@ -146,48 +146,143 @@ async function openChatInEditor() {
     return false;
 }
 
+async function openChatInEditorWithQuery(query) {
+    // Open a Copilot Chat in the EDITOR area (full-screen) with the
+    // given query pre-filled and submitted.
+    //
+    // We tried several documented chat.open shapes ({ query, location:
+    // 'editor' } etc.) and none of them reliably injected the query
+    // into the resulting editor chat — they opened the editor pane but
+    // dropped the query on the floor. So we fall back to a robust three
+    // step dance:
+    //
+    //   1. workbench.action.chat.openInEditor — opens an empty chat
+    //      editor.
+    //   2. workbench.action.chat.focusInput — puts caret in the input.
+    //   3. type the query via the built-in `type` command, then submit.
+    //
+    // The `type` command is the same low-level keystroke handler the
+    // editor itself uses for typing, so it works on any focused input
+    // including chat. This is the same trick the VS Code "Run Selection
+    // in Terminal" feature uses.
+    await tryRun('workbench.action.chat.openInEditor');
+    await new Promise((r) => setTimeout(r, 500));
+    await tryRun('workbench.action.chat.focusInput');
+    await new Promise((r) => setTimeout(r, 150));
+    try {
+        await vscode.commands.executeCommand('type', { text: query });
+    } catch (_) {
+        // `type` may be blocked if no editor is focused — last-resort
+        // path through the public chat.open with a query.
+        await tryRun('workbench.action.chat.open', { query, isPartialQuery: false });
+    }
+    await new Promise((r) => setTimeout(r, 150));
+    await tryRun('workbench.action.chat.submit');
+    return true;
+}
+
 async function applyChatOnlyLayout({ silent = false } = {}) {
     await applySettings(CHAT_ONLY_LAYOUT, vscode.ConfigurationTarget.Global);
-
-    // IMPORTANT: the installer launches VS Code via `code chat /setup`
-    // which opens a chat with the /setup query pre-filled. We MUST NOT
-    // close that chat as part of layout setup, otherwise the user lands
-    // in an empty chat without /setup having been sent. So this function
-    // is intentionally non-destructive:
-    //   * No closeAllEditors / closePanel / closeAuxiliaryBar / closeSidebar.
-    //   * No openChatInEditor (would create a second empty chat).
-    // We only:
-    //   1. Apply the layout settings (above) — chrome reductions on reload.
-    //   2. Collapse the explorer tree (so it doesn't crowd Quick Actions
-    //      if the user opens the primary sidebar).
-    //   3. Make sure the Quick Actions view container is open + focused
-    //      in whichever sidebar it lives in.
 
     // Collapse the file explorer tree. Focus the explorer first and yield
     // 150 ms so VS Code finishes mounting the view — without the yield
     // the collapse fires before the tree exists and silently no-ops.
-    // `list.collapseAll` is a complementary fallback that targets the
-    // currently-focused tree.
     await tryRun('workbench.view.explorer');
     await new Promise((r) => setTimeout(r, 150));
     await tryRun('workbench.files.action.collapseExplorerFolders');
     await tryRun('list.collapseAll');
 
+    // The installer's `code chat /setup` opens TWO chat surfaces:
+    //   * Aux-bar chat (right side) — /setup actually runs here.
+    //   * An empty chat editor tab in the center editor area.
+    //
+    // Goal: end up with ONE full-screen chat running /setup.
+    // Strategy:
+    //   1. Wait for both surfaces to materialize.
+    //   2. Close EVERY editor tab via tabGroups API.
+    //   3. Maximize the auxiliary bar so the /setup chat fills the
+    //      full editor area width (same as clicking the maximize icon
+    //      in the aux-bar title bar).
+    //
+    // This runs on EVERY activation (not just first-run) because the
+    // duplicate is re-created every time `code chat /setup` launches.
+
+    // 1. Wait for VS Code to wire up both surfaces.
+    await new Promise((r) => setTimeout(r, 2000));
+
+    // 2. Close all editor tabs (welcome page, restored files, etc).
+    //    The chat editor we open in step 3 will be the only tab.
+    try {
+        const allTabs = [];
+        for (const group of vscode.window.tabGroups.all || []) {
+            for (const tab of group.tabs || []) {
+                allTabs.push(tab);
+            }
+        }
+        if (allTabs.length) {
+            await vscode.window.tabGroups.close(allTabs, true);
+        }
+    } catch (e) {
+        console.warn('[ess-maker] tabGroups.close failed:', e && e.message);
+    }
+    await tryRun('workbench.action.closeAllEditors');
+
+    // 3. The installer no longer uses `code chat /setup` when this
+    //    extension is installed — it launches `code .` plainly and
+    //    delegates /setup orchestration to us. Open a chat editor in
+    //    the editor area (full width, NOT the narrow aux bar), inject
+    //    /setup via clipboard paste, submit, then hide the aux bar
+    //    for a clean single-chat full-screen layout.
+    //
+    //    Why clipboard paste instead of `chat.open({query})`? The
+    //    `chat.open` API silently drops the query when forced to the
+    //    editor location, and the `type` command isn't always honoured
+    //    by the chat input. Clipboard paste is the most reliable way
+    //    to populate the input across VS Code / Copilot versions.
+
+    // Open chat in editor area. Try the newer/older command IDs in
+    // order — the chat extension renames these occasionally.
+    const openCmds = [
+        'workbench.action.chat.openInEditor',
+        'workbench.action.chat.openInNewEditor',
+        'workbench.action.chat.newChat',
+    ];
+    for (const c of openCmds) {
+        if (await tryRun(c)) break;
+    }
+    await new Promise((r) => setTimeout(r, 700));
+    // Focus the chat input and paste /setup.
+    await tryRun('workbench.action.chat.focusInput');
+    await new Promise((r) => setTimeout(r, 200));
+    try {
+        const prev = await vscode.env.clipboard.readText();
+        await vscode.env.clipboard.writeText('/setup');
+        await tryRun('editor.action.clipboardPasteAction');
+        await new Promise((r) => setTimeout(r, 200));
+        await tryRun('workbench.action.chat.submit');
+        await new Promise((r) => setTimeout(r, 200));
+        // Restore the user's clipboard so we don't leave /setup lying around.
+        await vscode.env.clipboard.writeText(prev || '');
+    } catch (e) {
+        console.warn('[ess-maker] paste /setup failed:', e && e.message);
+    }
+    // Hide the aux bar if it's open (it will be empty since the
+    // installer no longer requests `code chat /setup`).
+    await tryRun('workbench.action.closeAuxiliaryBar');
+
+    if (!silent) {
+        // Hide menu bar for this session (the setting picks it up on
+        // next reload but the toggle takes effect immediately).
+        await tryRun('workbench.action.toggleMenuBar');
+    }
+
     // Open + focus the Quick Actions view container wherever it lives.
     // Per package.json this is the auxiliary bar; if a previous session
-    // moved it to the primary sidebar, it'll appear there instead — the
-    // user can drag it back via the container header menu. We don't
-    // try to programmatically move it because there's no public API
-    // that reliably re-pins a view container across sessions, and
-    // `workbench.action.resetViewLocations` would also reset every
-    // other view the user has customized which is too aggressive.
+    // moved it to the primary sidebar, it'll appear there instead.
     await tryRun('workbench.view.extension.essMakerActions');
     await tryRun('essMaker.actionsView.focus');
 
     if (!silent) {
-        // Hide the menu bar on first apply (subsequent activations
-        // pick up the hidden state from settings on next window reload).
-        await tryRun('workbench.action.toggleMenuBar');
         const sel = await vscode.window.showInformationMessage(
             'ESS Maker chat-only layout applied. Reload the window for the menu bar and title bar to disappear.',
             'Reload Window',

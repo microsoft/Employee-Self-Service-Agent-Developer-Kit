@@ -692,6 +692,7 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions -and -not $SkipMakerProfile)
             if ($vsix_exit -eq 0) {
                 Write-Ok "ESS Maker Profile installed ($($vsix.Name))"
                 Write-Host "  Tip: to revert to the stock VS Code layout, run 'ESS Maker: Restore Standard Layout' from the command palette." -ForegroundColor DarkGray
+                $script:MakerProfileInstalled = $true
             } else {
                 Write-Warn2 "ess-maker-profile vsix install returned exit $vsix_exit (non-fatal, continuing with stock VS Code layout)"
                 ($out | Out-String).TrimEnd() -split "`r?`n" | ForEach-Object { Write-Warn2 "  $_" }
@@ -1016,32 +1017,49 @@ if ($FlightCheckOnly) {
 # 7. Launch
 # ---------------------------------------------------------------------------
 if (-not $SkipLaunch) {
-    Write-Step 'Opening workspace in VS Code and requesting /setup in Copilot Chat'
     $code = Get-Command code -ErrorAction SilentlyContinue
     if ($code) {
-        # `code chat <prompt>` (VS Code 1.102+, June 2025) opens the chat panel
-        # in the workspace at the current working directory and submits the
-        # prompt. We Push-Location $workspace so it targets the kit folder.
-        # Note: exit 0 means "VS Code accepted the chat request," NOT that
-        # /setup actually ran. The user may still need to grant workspace trust
-        # and sign in to GitHub/Copilot before /setup executes.
-        Push-Location $workspace
-        try {
-            $chatOutput = Invoke-Native { & $code.Source chat '/setup' }
-            $chatExit = $LASTEXITCODE
-            foreach ($line in $chatOutput) { if ($line) { Write-Host "      $line" } }
-            if ($chatExit -ne 0) {
-                Write-Warn2 "'code chat' failed or is unsupported (exit $chatExit). Falling back to opening the workspace only."
-                Write-Warn2 "If you have an older VS Code (pre-1.102 / June 2025), update VS Code and re-run, or run /setup manually in Copilot Chat."
-                Start-Process -FilePath $code.Source -ArgumentList @($workspace) | Out-Null
+        if ($script:MakerProfileInstalled) {
+            # The ESS Maker Profile extension takes over /setup orchestration:
+            # on activation it opens a chat editor in the editor area (full
+            # width, not the narrow aux bar) and injects /setup itself. So
+            # just launch the workspace plainly here — don't use
+            # `code chat /setup`, which would also open an aux-bar chat and
+            # leave us with two competing chat surfaces.
+            Write-Step 'Opening workspace in VS Code (Maker Profile will launch /setup)'
+            Push-Location $workspace
+            try {
+                Start-Process -FilePath $code.Source -ArgumentList @('.') | Out-Null
                 Write-Ok "Launched VS Code at $workspace"
-                Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect Dataverse." -ForegroundColor Green
-            } else {
-                Write-Ok "Requested /setup in Copilot Chat at $workspace"
-                Write-Host "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts and /setup will run." -ForegroundColor Yellow
-                Write-Host "If /setup does not start after trust/sign-in, open Copilot Chat manually and run /setup." -ForegroundColor Yellow
-            }
-        } finally { Pop-Location }
+                Write-Host "The ESS Maker Profile will open Copilot Chat and run /setup automatically." -ForegroundColor Yellow
+                Write-Host "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts." -ForegroundColor Yellow
+            } finally { Pop-Location }
+        } else {
+            Write-Step 'Opening workspace in VS Code and requesting /setup in Copilot Chat'
+            # `code chat <prompt>` (VS Code 1.102+, June 2025) opens the chat panel
+            # in the workspace at the current working directory and submits the
+            # prompt. We Push-Location $workspace so it targets the kit folder.
+            # Note: exit 0 means "VS Code accepted the chat request," NOT that
+            # /setup actually ran. The user may still need to grant workspace trust
+            # and sign in to GitHub/Copilot before /setup executes.
+            Push-Location $workspace
+            try {
+                $chatOutput = Invoke-Native { & $code.Source chat '/setup' }
+                $chatExit = $LASTEXITCODE
+                foreach ($line in $chatOutput) { if ($line) { Write-Host "      $line" } }
+                if ($chatExit -ne 0) {
+                    Write-Warn2 "'code chat' failed or is unsupported (exit $chatExit). Falling back to opening the workspace only."
+                    Write-Warn2 "If you have an older VS Code (pre-1.102 / June 2025), update VS Code and re-run, or run /setup manually in Copilot Chat."
+                    Start-Process -FilePath $code.Source -ArgumentList @($workspace) | Out-Null
+                    Write-Ok "Launched VS Code at $workspace"
+                    Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect Dataverse." -ForegroundColor Green
+                } else {
+                    Write-Ok "Requested /setup in Copilot Chat at $workspace"
+                    Write-Host "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts and /setup will run." -ForegroundColor Yellow
+                    Write-Host "If /setup does not start after trust/sign-in, open Copilot Chat manually and run /setup." -ForegroundColor Yellow
+                }
+            } finally { Pop-Location }
+        }
     } else {
         Write-Warn2 "code CLI not on PATH. Open this folder manually: $workspace"
         Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect Dataverse." -ForegroundColor Green

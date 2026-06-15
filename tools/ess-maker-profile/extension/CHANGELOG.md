@@ -1,5 +1,83 @@
 # Changelog
 
+## 0.4.20 (POC)
+
+- **The fix that finally worked.** The installer now launches `code .`
+  (workspace only) instead of `code chat /setup` when this extension
+  is installed, and the extension itself opens the chat in the editor
+  area and submits /setup. This produces ONE full-width chat in the
+  center editor area — no narrow aux-bar chat, no empty side-effect
+  chat editor, no menu bar, no activity bar. Just Quick Actions on
+  the left and a full-screen `/setup` chat in the middle.
+- Implementation: after a 2s wait for VS Code to settle, the extension
+  closes all editor tabs via the `tabGroups` API (the side-effect
+  empty chat editor is a chat tab — `closeAllEditors` doesn't touch
+  it, but `tabGroups.close(tabs)` does), then opens a fresh chat in
+  the editor area, focuses its input, and injects `/setup` via
+  clipboard paste (the most reliable way — `chat.open({query,
+  location:'editor'})` silently drops the query and the `type`
+  command isn't always honoured by the chat input). Aux bar is then
+  hidden for cleanliness.
+- Bumps `APPLIED_KEY` to `v4` so existing installs re-run the layout
+  once.
+
+## 0.4.8 (POC)
+
+- Try the `type` command to inject `/setup` into a freshly-opened
+  chat-in-editor. The various `chat.open` shapes with `{ query, location }`
+  opened a chat editor but silently dropped the query — using the
+  built-in `type` keystroke handler is the same path VS Code itself
+  uses for "Run Selection in Terminal" and works on any focused input.
+- Close the aux bar TWICE — before and after the chat-in-editor opens —
+  because some VS Code builds reopen it when a new chat session is
+  created.
+
+## 0.4.7 (POC)
+
+- New strategy: let the installer's `code chat /setup` create the chat
+  session (this part has always worked — /setup gets pre-filled and
+  submitted), and have the extension MOVE that session to the editor
+  area instead of creating its own. Sequence: wait 600 ms for the chat
+  to be wired up, focus the chat view, call
+  `workbench.action.chat.openInEditor` (which moves the active chat to
+  an editor tab), then close the aux bar. End result: one full-screen
+  chat in the editor with /setup running.
+- Reverts the 0.4.5 installer takeover (extension was opening a parallel
+  empty chat) — installer keeps invoking `code chat /setup`.
+
+## 0.4.6 (POC)
+
+- Try `workbench.action.chat.open` with the documented
+  `location: 'editor'` option first when opening the /setup chat — this
+  is the public API path that reliably opens chat in the editor area
+  with a pre-filled query. Falls through to several alternative shapes
+  (mode='editor', open-then-move, clipboard paste) on older VS Code
+  builds so we don't lose /setup if the public shape changes again.
+- Reorder the layout-apply: close all editors -> open chat with /setup
+  in editor -> close aux bar (so the stock GH Copilot Chat aux-bar view
+  doesn't reappear after our chat is opened).
+
+## 0.4.5 (POC)
+
+- **Eliminate duplicate chat panels.** The one-shot installer now skips
+  its own `code chat /setup` invocation when this extension is present,
+  so the extension owns chat-opening end-to-end. Result: exactly one
+  full-screen chat in the editor area with `/setup` pre-filled and
+  submitted, instead of one chat from the CLI launch + one from the
+  extension racing each other.
+
+## 0.4.4 (POC)
+
+- **Coalesce to ONE full-screen chat with /setup auto-running.** The
+  previous build was non-destructive to avoid killing the chat from
+  `code chat /setup`, but that left the user with two chats: the one
+  from the launch (in the aux bar or chat editor depending on prefs)
+  AND any other chat surfaces that VS Code restored. Now, on first
+  apply, the extension closes the aux bar + all editors and opens
+  exactly one chat in the editor area with `/setup` pre-filled and
+  submitted. /setup just shows sign-in instructions so re-running it
+  costs nothing.
+
 ## 0.4.3 (POC)
 
 - **Stop killing the installer's `/setup` chat.** The previous layout-apply

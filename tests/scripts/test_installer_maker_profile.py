@@ -75,6 +75,23 @@ def bash_text() -> str:
     return BASH_PATH.read_text(encoding="utf-8")
 
 
+@pytest.fixture(scope="module")
+def ps1_launch_section(ps1_text: str) -> str:
+    """The PowerShell installer's '# 7. Launch' section.
+
+    Sliced to just this section so coincidental matches elsewhere
+    (e.g. the .SYNOPSIS doc block) cannot satisfy the launch-branch
+    assertions.
+    """
+    match = re.search(
+        r"# 7\. Launch.*?(?=\r?\nWrite-Host\s+\"`nDone)",
+        ps1_text,
+        flags=re.DOTALL,
+    )
+    assert match, "could not locate '# 7. Launch' section in Install-EssAdk.ps1"
+    return match.group(0)
+
+
 # ---------------------------------------------------------------------------
 # Bundled .vsix on disk
 # ---------------------------------------------------------------------------
@@ -290,4 +307,110 @@ class TestBashInstallerMakerProfile:
         ), (
             "maker-profile failure path must call "
             '`warn "ESS Maker Profile install failed ..."` on failure'
+        )
+
+
+# ---------------------------------------------------------------------------
+# Launch branch when MakerProfile is installed
+# ---------------------------------------------------------------------------
+#
+# When the ESS Maker Profile extension is installed, it takes over /setup
+# orchestration: on activation it opens a chat editor in the editor area
+# (full width) and injects /setup itself via clipboard paste. The installer
+# must therefore launch VS Code WITHOUT `code chat /setup` in that case —
+# otherwise we get two competing chat surfaces (one from CLI in the aux
+# bar, one from the extension in the editor area).
+#
+# These tests pin the branching in both installers so a future refactor
+# that "simplifies" the launch back to a single unconditional
+# `code chat /setup` is caught immediately.
+
+
+class TestPowerShellInstallerLaunchBranchesOnMakerProfile:
+    def test_sets_maker_profile_installed_flag_on_success(
+        self, ps1_text: str
+    ) -> None:
+        """The launch branch keys off `$script:MakerProfileInstalled`.
+        That flag must be set to $true in the success branch of the
+        vsix install. Without the flag, the launch always falls through
+        to `code chat /setup` and the extension's chat-in-editor never
+        wins the race for `/setup`.
+        """
+        assert re.search(
+            r"\$script:MakerProfileInstalled\s*=\s*\$true",
+            ps1_text,
+        ), (
+            "vsix install success branch must set "
+            "`$script:MakerProfileInstalled = $true` so the launch "
+            "section knows to skip `code chat /setup`"
+        )
+
+    def test_launch_branches_on_maker_profile_installed(
+        self, ps1_launch_section: str
+    ) -> None:
+        """Launch section must branch on $script:MakerProfileInstalled
+        and call `code .` (not `code chat /setup`) in the maker-profile
+        branch.
+        """
+        assert re.search(
+            r"if\s*\(\s*\$script:MakerProfileInstalled\s*\)",
+            ps1_launch_section,
+        ), (
+            "launch section must branch on `$script:MakerProfileInstalled` "
+            "so it can skip `code chat /setup` when the extension is "
+            "installed"
+        )
+        # `code .` (workspace-only) invocation in the maker-profile branch.
+        assert re.search(
+            r"Start-Process\s+-FilePath\s+\$code\.Source\s+-ArgumentList\s+@\('\.'\)",
+            ps1_launch_section,
+        ), (
+            "maker-profile launch branch must call "
+            "`Start-Process -FilePath $code.Source -ArgumentList @('.')` "
+            "(plain workspace open) instead of `code chat /setup` — the "
+            "extension injects /setup itself"
+        )
+
+
+class TestBashInstallerLaunchBranchesOnMakerProfile:
+    def test_sets_maker_profile_installed_flag_on_success(
+        self, bash_text: str
+    ) -> None:
+        """Bash equivalent: MAKER_PROFILE_INSTALLED=true in the success
+        branch of the vsix install."""
+        assert re.search(
+            r"MAKER_PROFILE_INSTALLED=true",
+            bash_text,
+        ), (
+            "vsix install success branch must set "
+            "`MAKER_PROFILE_INSTALLED=true` so the launch section knows "
+            "to skip `code chat /setup`"
+        )
+
+    def test_launch_branches_on_maker_profile_installed(
+        self, bash_text: str
+    ) -> None:
+        """Bash launch section must branch on MAKER_PROFILE_INSTALLED
+        and call `$CODE_CMD .` (workspace-only) in the maker-profile
+        branch.
+        """
+        # Find section 8 (Launch VS Code).
+        launch_start = bash_text.find("# 8. Launch VS Code")
+        assert launch_start != -1, "section 8 launch header missing"
+        launch_section = bash_text[launch_start:]
+
+        assert re.search(
+            r'\$\{MAKER_PROFILE_INSTALLED:-false\}.*==\s*"true"',
+            launch_section,
+        ), (
+            "launch section must branch on `${MAKER_PROFILE_INSTALLED:-false}` "
+            "so it can skip `code chat /setup` when the extension is installed"
+        )
+        # The plain workspace-open invocation: `"$CODE_CMD" .`
+        assert re.search(
+            r'"\$CODE_CMD"\s+\.\s*\)',
+            launch_section,
+        ), (
+            "maker-profile launch branch must call `\"$CODE_CMD\" .` "
+            "(plain workspace open) instead of `code chat /setup`"
         )
