@@ -148,6 +148,15 @@ async function openChatInEditor() {
 
 async function applyChatOnlyLayout({ silent = false } = {}) {
     await applySettings(CHAT_ONLY_LAYOUT, vscode.ConfigurationTarget.Global);
+    // Collapse the file explorer tree FIRST, so even if the user opens
+    // the primary sidebar later (or the Quick actions webview ends up
+    // there instead of the aux bar), the workspace folder isn't sitting
+    // expanded with every top-level file taking screen real-estate and
+    // pushing the action buttons below the fold. The command targets
+    // the currently-focused explorer, so we focus it first; then we
+    // close the sidebar in the cleanup that follows.
+    await tryRun('workbench.view.explorer');
+    await tryRun('workbench.files.action.collapseExplorerFolders');
     // Close every panel on every side, then re-open just what we want.
     await tryRun('workbench.action.closeSidebar');           // left primary
     await tryRun('workbench.action.closePanel');             // bottom

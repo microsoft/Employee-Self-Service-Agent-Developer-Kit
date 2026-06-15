@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.1 (POC)
+
+- Collapse the file explorer tree on layout apply so the workspace folder
+  (e.g. `ess-maker-skills`) doesn't sit expanded with every top-level file
+  taking sidebar space and pushing the Quick Actions buttons below the
+  fold. Runs on first install AND every subsequent activation, so the
+  collapse sticks across VS Code restarts even if VS Code restores the
+  sidebar to its previous expanded state.
+
 ## 0.4.0 (POC)
 
 - Quick Action buttons are now **state-aware**: only the next applicable
