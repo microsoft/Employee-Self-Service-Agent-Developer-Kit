@@ -148,15 +148,25 @@ async function openChatInEditor() {
 
 async function applyChatOnlyLayout({ silent = false } = {}) {
     await applySettings(CHAT_ONLY_LAYOUT, vscode.ConfigurationTarget.Global);
-    // Collapse the file explorer tree FIRST, so even if the user opens
-    // the primary sidebar later (or the Quick actions webview ends up
-    // there instead of the aux bar), the workspace folder isn't sitting
-    // expanded with every top-level file taking screen real-estate and
-    // pushing the action buttons below the fold. The command targets
-    // the currently-focused explorer, so we focus it first; then we
-    // close the sidebar in the cleanup that follows.
+    // Force every contributed view back to its package.json-declared
+    // location. This pulls our Quick Actions view OUT of the primary
+    // sidebar (where it can drift after a user drag or a cached
+    // layout-restore) and back into the auxiliary bar container where
+    // it was meant to live. Without this, Quick Actions ends up
+    // stacked under Explorer + Outline + Timeline in the left sidebar
+    // and the action buttons get cut off below the fold.
+    await tryRun('workbench.action.resetViewLocations');
+    // Defense in depth: collapse the file explorer tree as well, so if
+    // Quick Actions ever does end up sharing a pane with Explorer the
+    // workspace folder isn't sitting expanded stealing space. Focus
+    // Explorer first and yield briefly — without the yield the
+    // collapse command fires before the view is mounted and silently
+    // no-ops. `list.collapseAll` is a complementary fallback that
+    // targets the currently-focused tree view.
     await tryRun('workbench.view.explorer');
+    await new Promise((r) => setTimeout(r, 150));
     await tryRun('workbench.files.action.collapseExplorerFolders');
+    await tryRun('list.collapseAll');
     // Close every panel on every side, then re-open just what we want.
     await tryRun('workbench.action.closeSidebar');           // left primary
     await tryRun('workbench.action.closePanel');             // bottom

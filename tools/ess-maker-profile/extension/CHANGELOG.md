@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.4.2 (POC)
+
+- Force the Quick Actions view back to the **auxiliary bar** on every
+  layout apply via `workbench.action.resetViewLocations`. It can drift
+  into the primary sidebar (via user drag or cached layout-state
+  restore), where it ends up stacked under Explorer + Outline + Timeline
+  and the action buttons get cut off below the fold. With this fix,
+  Quick Actions lives in a dedicated pane on the right, completely
+  separate from the file explorer.
+- Hardened the explorer-collapse fallback: focus the explorer view,
+  yield 150 ms so VS Code finishes mounting it, then send both
+  `workbench.files.action.collapseExplorerFolders` and
+  `list.collapseAll`. Without the yield, the collapse command was
+  firing before the tree existed and silently no-op'd.
+
 ## 0.4.1 (POC)
 
 - Collapse the file explorer tree on layout apply so the workspace folder
