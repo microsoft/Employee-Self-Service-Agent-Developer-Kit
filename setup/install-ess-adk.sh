@@ -21,6 +21,7 @@ set -euo pipefail
 BRANCH="${ESS_ADK_BRANCH:-main}"
 INSTALL_ROOT="${ESS_ADK_INSTALL_ROOT:-$HOME/source}"
 FLIGHTCHECK_ONLY="${FLIGHTCHECK_ONLY:-false}"
+SKIP_MAKER_PROFILE="${SKIP_MAKER_PROFILE:-false}"
 REPO_URL="https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit.git"
 REPO_NAME="Employee-Self-Service-Agent-Developer-Kit"
 CODE_CMD=""
@@ -228,6 +229,34 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
         for ext in "${OPTIONAL_EXTENSIONS[@]}"; do
             "$CODE_CMD" --install-extension "$ext" --force 2>/dev/null && ok "$ext" || warn "Failed to install $ext"
         done
+
+        # ESS Maker Profile (chat-first VS Code layout).
+        # The bundled .vsix at tools/ess-maker-profile/extension/ hides
+        # developer chrome and shows a big-button "Quick actions" rail
+        # tied to the kit's slash commands. POC build — not on the
+        # marketplace — so we install from the cloned repo. The extension
+        # auto-activates on startup, including the `code chat /setup`
+        # invocation in the launch step below. Non-fatal: a failure here
+        # falls back to the stock VS Code layout.
+        if [[ "$SKIP_MAKER_PROFILE" != "true" ]]; then
+            # Glob so a version bump (0.4.0 -> 0.5.0) doesn't break the install.
+            MAKER_VSIX_DIR="$REPO_PATH/tools/ess-maker-profile/extension"
+            MAKER_VSIX=""
+            if [[ -d "$MAKER_VSIX_DIR" ]]; then
+                # shellcheck disable=SC2012 # ls -t is fine here; filenames
+                # are author-controlled and match a tight glob.
+                MAKER_VSIX="$(ls -t "$MAKER_VSIX_DIR"/ess-maker-profile-*.vsix 2>/dev/null | head -n 1 || true)"
+            fi
+
+            if [[ -z "$MAKER_VSIX" ]]; then
+                warn "No ess-maker-profile-*.vsix found under $MAKER_VSIX_DIR. Skipping chat-first profile install."
+            elif "$CODE_CMD" --install-extension "$MAKER_VSIX" --force 2>/dev/null; then
+                ok "ESS Maker Profile ($(basename "$MAKER_VSIX"))"
+                echo "    Tip: to revert to the stock VS Code layout, run 'ESS Maker: Restore Standard Layout' from the command palette."
+            else
+                warn "ESS Maker Profile install failed (non-fatal, continuing with stock VS Code layout)"
+            fi
+        fi
     else
         warn "VS Code 'code' CLI not found. Install extensions manually after launching VS Code."
     fi

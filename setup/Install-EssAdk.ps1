@@ -53,6 +53,13 @@
     Prompts for your Dataverse environment URL and creates a minimal
     .local/config.json so FlightCheck can authenticate without running /setup.
 
+.PARAMETER SkipMakerProfile
+    Skip installing the bundled "ESS Maker Profile" VS Code extension. The
+    profile hides developer chrome (file tree, tabs, status bar, etc.) and
+    drops the user into a chat-first surface tailored to the HR/IT admin
+    persona. Use this switch to keep the stock VS Code layout — typically
+    only relevant for developers iterating on the kit itself.
+
 .EXAMPLE
     # Default invocation. May fail on stock Windows due to PowerShell
     # ExecutionPolicy=Restricted. If so, use the form below instead.
@@ -76,7 +83,8 @@ param(
     [switch] $SkipClone,
     [switch] $SkipLaunch,
     [switch] $UseDsc,
-    [switch] $FlightCheckOnly
+    [switch] $FlightCheckOnly,
+    [switch] $SkipMakerProfile
 )
 
 $ErrorActionPreference = 'Stop'
@@ -628,6 +636,67 @@ if ($deferPip) {
         }
     } else {
         Write-Warn2 'requirements.txt not found in cloned repo - pip dependencies not installed'
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 5c. ESS Maker Profile (chat-first VS Code layout)
+# ---------------------------------------------------------------------------
+# The bundled extension at tools/ess-maker-profile/extension/ hides developer
+# chrome and surfaces a big-button "Quick actions" rail tied to the kit's
+# slash commands. We install it from the cloned repo (not the marketplace —
+# this is a POC build that isn't published) so it auto-activates the next
+# time `code` launches, including the `code chat /setup` invocation in
+# section 7 below.
+#
+# Skipped in FlightCheckOnly mode (no VS Code launch) and when the user
+# passes -SkipExtensions or -SkipMakerProfile, so kit developers and
+# IT-locked-down boxes can keep the stock layout.
+if (-not $FlightCheckOnly -and -not $SkipExtensions -and -not $SkipMakerProfile) {
+    Write-Step 'Installing ESS Maker Profile (chat-first VS Code layout)'
+
+    $code = Get-Command code -ErrorAction SilentlyContinue
+    if (-not $code) {
+        Write-Warn2 'code CLI not on PATH. ESS Maker Profile will not be installed.'
+        Write-Warn2 'To install it later, open a new PowerShell and run:'
+        Write-Warn2 "  code --install-extension `"$repoPath\tools\ess-maker-profile\extension\ess-maker-profile-*.vsix`""
+    } else {
+        # Glob so a version bump (0.4.0 -> 0.5.0) doesn't break the install.
+        # If multiple .vsix files are present (shouldn't happen in a clean
+        # clone), prefer the newest by LastWriteTime.
+        $vsixDir = Join-Path $repoPath 'tools\ess-maker-profile\extension'
+        $vsix = $null
+        if (Test-Path $vsixDir) {
+            $vsix = Get-ChildItem -Path $vsixDir -Filter 'ess-maker-profile-*.vsix' -ErrorAction SilentlyContinue |
+                    Sort-Object LastWriteTime -Descending |
+                    Select-Object -First 1
+        }
+
+        if (-not $vsix) {
+            Write-Warn2 "No ess-maker-profile-*.vsix found under $vsixDir. Skipping chat-first profile install."
+        } else {
+            $out = $null
+            $vsix_exit = 0
+            try {
+                $prevEAP = $ErrorActionPreference
+                $ErrorActionPreference = 'Continue'
+                $out = & code --install-extension $vsix.FullName --force 2>&1
+                $vsix_exit = $LASTEXITCODE
+            } catch {
+                $out = $_.Exception.Message
+                $vsix_exit = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }
+            } finally {
+                $ErrorActionPreference = $prevEAP
+            }
+
+            if ($vsix_exit -eq 0) {
+                Write-Ok "ESS Maker Profile installed ($($vsix.Name))"
+                Write-Host "  Tip: to revert to the stock VS Code layout, run 'ESS Maker: Restore Standard Layout' from the command palette." -ForegroundColor DarkGray
+            } else {
+                Write-Warn2 "ess-maker-profile vsix install returned exit $vsix_exit (non-fatal, continuing with stock VS Code layout)"
+                ($out | Out-String).TrimEnd() -split "`r?`n" | ForEach-Object { Write-Warn2 "  $_" }
+            }
+        }
     }
 }
 
