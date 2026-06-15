@@ -12,7 +12,7 @@ import os
 import sys
 from pathlib import Path
 
-from ..runner import CheckResult, Status, Priority
+from ..runner import CheckResult, Priority, Role, Status
 from .connections import check_connector_connections
 from .external_systems import _categorize_servicenow_flows
 
@@ -118,7 +118,7 @@ def _check_flow_status(runner, sn_flows: list) -> list[CheckResult]:
         elif f in itsm:
             pack_label = "ITSM"
 
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id=cid, category="ServiceNow",
             priority=Priority.HIGH.value,
             status=Status.PASSED.value if is_on else Status.FAILED.value,
@@ -135,7 +135,7 @@ def _check_flow_status(runner, sn_flows: list) -> list[CheckResult]:
         other_detail = f"{len(other)} other" if other else ""
         breakdown = ", ".join(filter(None, [hrsd_detail, itsm_detail, other_detail]))
 
-        results.insert(0, CheckResult(
+        results.insert(0, CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="SN-FLOW-000", category="ServiceNow",
             priority=Priority.HIGH.value,
             status=Status.PASSED.value if disabled == 0 else Status.WARNING.value,
@@ -154,7 +154,7 @@ def _check_template_configs(runner) -> list[CheckResult]:
     dv_token = runner.dv_token
 
     if not env_url or not dv_token:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="SN-CFG-001", category="ServiceNow",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="ServiceNow template configurations",
@@ -175,7 +175,7 @@ def _check_template_configs(runner) -> list[CheckResult]:
         )
 
         if configs:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
                 checkpoint_id="SN-CFG-001", category="ServiceNow",
                 priority=Priority.HIGH.value, status=Status.PASSED.value,
                 description="ServiceNow template configurations",
@@ -188,7 +188,7 @@ def _check_template_configs(runner) -> list[CheckResult]:
             _validate_expected_configs(results, config_names, "hrsd", "SN-CFG-01")
             _validate_expected_configs(results, config_names, "itsm", "SN-CFG-02")
         else:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
                 checkpoint_id="SN-CFG-001", category="ServiceNow",
                 priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
                 description="ServiceNow template configurations",
@@ -201,7 +201,7 @@ def _check_template_configs(runner) -> list[CheckResult]:
             ))
 
     except Exception as e:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="SN-CFG-001", category="ServiceNow",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="ServiceNow template configurations",
@@ -235,6 +235,7 @@ def _validate_expected_configs(
             priority=Priority.MEDIUM.value, status=Status.PASSED.value,
             description=f"ServiceNow {pack_label} template configs",
             result=f"All {len(expected)} expected {pack_label} configs present",
+            roles=[Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
         ))
     elif found:
         results.append(CheckResult(
@@ -243,6 +244,7 @@ def _validate_expected_configs(
             description=f"ServiceNow {pack_label} template configs",
             result=f"{len(found)}/{len(expected)} configs found — missing: {', '.join(missing)}",
             remediation=f"Reinstall the ServiceNow {pack_label} extension pack or create missing configs manually.",
+            roles=[Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
         ))
     # If none found, the pack likely isn't installed — don't flag as error
 
@@ -291,7 +293,7 @@ def _check_agent_sn_topics(agent_path: Path, label: str) -> list[CheckResult]:
             continue
 
     if sn_topic_count > 0:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="SN-LOCAL-001", category="ServiceNow",
             priority=Priority.MEDIUM.value, status=Status.PASSED.value,
             description=f"{label}: ServiceNow topics present",
@@ -303,7 +305,7 @@ def _check_agent_sn_topics(agent_path: Path, label: str) -> list[CheckResult]:
         itsm_found = _count_matching_topics(topic_files, "itsm")
 
         if hrsd_found:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ESS_MAKER.value],
                 checkpoint_id="SN-LOCAL-002", category="ServiceNow",
                 priority=Priority.MEDIUM.value, status=Status.PASSED.value,
                 description=f"{label}: ServiceNow HRSD topics",
@@ -311,7 +313,7 @@ def _check_agent_sn_topics(agent_path: Path, label: str) -> list[CheckResult]:
             ))
 
         if itsm_found:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ESS_MAKER.value],
                 checkpoint_id="SN-LOCAL-003", category="ServiceNow",
                 priority=Priority.MEDIUM.value, status=Status.PASSED.value,
                 description=f"{label}: ServiceNow ITSM topics",
@@ -319,7 +321,7 @@ def _check_agent_sn_topics(agent_path: Path, label: str) -> list[CheckResult]:
             ))
 
         if not hrsd_found and not itsm_found:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.ESS_MAKER.value],
                 checkpoint_id="SN-LOCAL-002", category="ServiceNow",
                 priority=Priority.MEDIUM.value, status=Status.WARNING.value,
                 description=f"{label}: ServiceNow HRSD/ITSM topics",
@@ -327,7 +329,7 @@ def _check_agent_sn_topics(agent_path: Path, label: str) -> list[CheckResult]:
                 remediation="Verify the ServiceNow extension pack installed correctly.",
             ))
     else:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.ESS_MAKER.value],
             checkpoint_id="SN-LOCAL-001", category="ServiceNow",
             priority=Priority.MEDIUM.value, status=Status.NOT_CONFIGURED.value,
             description=f"{label}: ServiceNow topics",

@@ -9,7 +9,7 @@ Checks Power Platform environment, Dataverse, DLP policies, and related config.
 
 import uuid
 
-from ..runner import CheckResult, Status, Priority
+from ..runner import CheckResult, Priority, Role, Status
 from ._maker_urls import (
     maker_connections_url,
     maker_solution_url,
@@ -210,7 +210,7 @@ def run_environment_checks(runner) -> list[CheckResult]:
     results: list[CheckResult] = []
 
     if not env_id:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="ENV-001", category="Environment",
             priority=Priority.CRITICAL.value, status=Status.FAILED.value,
             description="Power Platform environment exists",
@@ -223,7 +223,7 @@ def run_environment_checks(runner) -> list[CheckResult]:
     try:
         env = pp.get_environment(env_id)
         if "_error" in env:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
                 checkpoint_id="ENV-001", category="Environment",
                 priority=Priority.CRITICAL.value, status=Status.WARNING.value,
                 description="Power Platform environment exists",
@@ -235,7 +235,7 @@ def run_environment_checks(runner) -> list[CheckResult]:
 
         props = env.get("properties", {})
         display_name = props.get("displayName", env_id)
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="ENV-001", category="Environment",
             priority=Priority.CRITICAL.value, status=Status.PASSED.value,
             description="Power Platform environment exists",
@@ -251,7 +251,7 @@ def run_environment_checks(runner) -> list[CheckResult]:
         # Also check databaseType
         db_type = props.get("databaseType", "")
         if db_state.lower() == "succeeded" or db_type:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
                 checkpoint_id="ENV-002", category="Environment",
                 priority=Priority.CRITICAL.value, status=Status.PASSED.value,
                 description="Dataverse database provisioned",
@@ -259,7 +259,7 @@ def run_environment_checks(runner) -> list[CheckResult]:
                 doc_link=f"{DOC_BASE}/prepare#set-up-your-power-platform-environment",
             ))
         else:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
                 checkpoint_id="ENV-002", category="Environment",
                 priority=Priority.CRITICAL.value, status=Status.FAILED.value,
                 description="Dataverse database provisioned",
@@ -270,7 +270,7 @@ def run_environment_checks(runner) -> list[CheckResult]:
 
         # ---- ENV-003: Environment type ----
         env_type = props.get("environmentSku", "")
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="ENV-003", category="Environment",
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="Environment type",
@@ -279,7 +279,7 @@ def run_environment_checks(runner) -> list[CheckResult]:
         ))
 
     except Exception as e:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="ENV-001", category="Environment",
             priority=Priority.CRITICAL.value, status=Status.WARNING.value,
             description="Power Platform environment",
@@ -294,7 +294,7 @@ def run_environment_checks(runner) -> list[CheckResult]:
     try:
         policies = pp.get_dlp_policies_for_env(env_id)
         if policies:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
                 checkpoint_id="ENV-008", category="Environment",
                 priority=Priority.HIGH.value, status=Status.PASSED.value,
                 description="DLP policies configured",
@@ -313,7 +313,7 @@ def run_environment_checks(runner) -> list[CheckResult]:
             # groups cannot be combined in a single flow/agent action,
             # so "allowlisting" really means group-coexistence, not
             # just "unblock".
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
                 checkpoint_id="ENV-008", category="Environment",
                 priority=Priority.HIGH.value, status=Status.WARNING.value,
                 description="DLP policies configured",
@@ -330,7 +330,7 @@ def run_environment_checks(runner) -> list[CheckResult]:
                 doc_link=f"{DOC_BASE}/prepare#allow-the-external-systems-connector",
             ))
     except Exception as e:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="ENV-008", category="Environment",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="DLP policies",
@@ -392,7 +392,7 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
     dv_token = getattr(runner, "dv_token", None)
 
     if not pp or not env_id:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="ENV-004", category="Environment",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="Connections & connection references",
@@ -402,7 +402,7 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
         return results
 
     if not env_url or not dv_token:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="ENV-004", category="Environment",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description="Connections & connection references",
@@ -415,7 +415,7 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
     try:
         all_conns = pp.get_connections(env_id)
         if isinstance(all_conns, dict) and "_error" in all_conns:
-            results.append(CheckResult(
+            results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
                 checkpoint_id="ENV-004", category="Environment",
                 priority=Priority.HIGH.value, status=Status.WARNING.value,
                 description="Connections & connection references",
@@ -424,7 +424,7 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
             ))
             return results
     except Exception as e:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="ENV-004", category="Environment",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="Connections & connection references",
@@ -447,7 +447,7 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
             "connectorid,connectionid,connectionreferencedisplayname,statuscode",
         )
     except Exception as e:
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="ENV-004", category="Environment",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="Connections & connection references",
@@ -589,7 +589,7 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
         if overall_status == Status.FAILED.value
         else f"{DOC_BASE}/prepare#set-up-your-power-platform-environment"
     )
-    results.append(CheckResult(
+    results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
         checkpoint_id="ENV-004", category="Environment",
         priority=Priority.HIGH.value, status=overall_status,
         description="Connections & connection references",
@@ -605,7 +605,7 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
         )
         dead_conn_id = ref.get("connectionid", "?")
         sol_url, sol_label = _solution_link_parts(ref, solution_info, solutions_url)
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id=f"ENV-004-OR-{i + 1:03d}", category="Environment",
             priority=Priority.HIGH.value, status=Status.FAILED.value,
             description=f"Orphan reference: {ref_name}",
@@ -624,7 +624,7 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
             "connectionreferencelogicalname", "Unknown"
         )
         sol_url, sol_label = _solution_link_parts(ref, solution_info, solutions_url)
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id=f"ENV-004-UR-{i + 1:03d}", category="Environment",
             priority=Priority.HIGH.value, status=Status.FAILED.value,
             description=f"Unbound reference: {ref_name}",
@@ -651,7 +651,7 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
         api_id = props.get("apiId", "")
         connector_label = api_id.split("/")[-1] if api_id else "unknown"
         conn_status = get_connection_status(conn)
-        results.append(CheckResult(
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id=f"ENV-004-UC-{i + 1:03d}", category="Environment",
             priority=Priority.MEDIUM.value, status=Status.WARNING.value,
             description=f"Unbound connection: {conn_name}",
@@ -810,7 +810,7 @@ def _check_preferred_solution(runner) -> list[CheckResult]:
     token = getattr(runner, "dv_token", None)
 
     if not env_url or not token:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="ENV-009", category="Environment",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
             description=_PREFSOL_DESCRIPTION,
@@ -827,7 +827,7 @@ def _check_preferred_solution(runner) -> list[CheckResult]:
             _ELIGIBLE_SOLUTION_FILTER,
         )
         if not solutions:
-            return [CheckResult(
+            return [CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
                 checkpoint_id="ENV-009", category="Environment",
                 priority=Priority.HIGH.value, status=Status.FAILED.value,
                 description=_PREFSOL_DESCRIPTION,
@@ -901,7 +901,7 @@ def _check_preferred_solution(runner) -> list[CheckResult]:
                         publisher_prefix = publisher.get(
                             "customizationprefix"
                         ) or "<unknown>"
-                        return [CheckResult(
+                        return [CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
                             checkpoint_id="ENV-009", category="Environment",
                             priority=Priority.HIGH.value,
                             status=Status.WARNING.value,
@@ -944,7 +944,7 @@ def _check_preferred_solution(runner) -> list[CheckResult]:
                 else:
                     publisher_suffix = ""
 
-                return [CheckResult(
+                return [CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
                     checkpoint_id="ENV-009", category="Environment",
                     priority=Priority.HIGH.value, status=Status.PASSED.value,
                     description=_PREFSOL_DESCRIPTION,
@@ -961,7 +961,7 @@ def _check_preferred_solution(runner) -> list[CheckResult]:
         # solution outside the eligible set (e.g. a managed solution or
         # Default). Both collapse into the same hardening warning - the action
         # is identical.
-        return [CheckResult(
+        return [CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="ENV-009", category="Environment",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=_PREFSOL_DESCRIPTION,
@@ -984,7 +984,7 @@ def _check_preferred_solution(runner) -> list[CheckResult]:
         )]
 
     except AuthExpiredError as e:
-        return [CheckResult(
+        return [CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="ENV-009", category="Environment",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=_PREFSOL_DESCRIPTION,
@@ -999,7 +999,7 @@ def _check_preferred_solution(runner) -> list[CheckResult]:
         # distinguishable from a 5xx (transient) at a glance (PR #128 review).
         status_code = getattr(getattr(e, "response", None), "status_code", None)
         status_hint = f" [HTTP {status_code}]" if status_code is not None else ""
-        return [CheckResult(
+        return [CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="ENV-009", category="Environment",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
             description=_PREFSOL_DESCRIPTION,

@@ -40,6 +40,27 @@ class Priority(str, Enum):
     LOW = "Low"
 
 
+class Role(str, Enum):
+    """Persona who owns the next step on a check.
+
+    A check's ``roles`` list names every admin persona whose action is
+    required to FIX a failing/errored result or to PERFORM the manual
+    validation of a MANUAL/NOT_CONFIGURED result. A check may need more
+    than one role (e.g. a Workday SAML cert lives on an Entra app but is
+    compared in the Workday tenant — Entra Admin + Workday Admin).
+
+    The value is the human-readable label rendered in the report.
+    """
+
+    ENTRA_ADMIN = "Entra Admin"
+    M365_ADMIN = "Microsoft 365 Admin"
+    POWER_PLATFORM_ADMIN = "Power Platform Admin"
+    WORKDAY_ADMIN = "Workday Admin"
+    SERVICENOW_ADMIN = "ServiceNow Admin"
+    SAP_ADMIN = "SAP Admin"
+    ESS_MAKER = "ESS Maker / Agent Developer"
+
+
 @dataclass
 class CheckResult:
     checkpoint_id: str
@@ -50,6 +71,11 @@ class CheckResult:
     result: str            # Finding detail
     remediation: str = ""  # How to fix
     doc_link: str = ""     # Microsoft Learn URL
+    # roles — the persona(s) who own the next step (fix or manual
+    # validation). Every production check sets this; defaults to empty
+    # so the runner's ERROR fallback and unit-test constructions still
+    # build. Values are Role enum strings.
+    roles: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -114,6 +140,7 @@ class FlightCheckRunner:
                     description=f"{category} validation",
                     result=f"Check failed with error: {e}",
                     remediation="Review permissions and retry. See terminal output for details.",
+                    roles=[Role.ESS_MAKER.value],
                 ))
                 traceback.print_exc()
 
@@ -621,12 +648,19 @@ def _render_rows(results: list[CheckResult]) -> str:
         if res.doc_link:
             remediation += f' <a href="{res.doc_link}" target="_blank">[docs]</a>'
 
+        # The Role column names who owns the next step (fix / manual
+        # validation). It only applies to actionable rows — a Passed or
+        # Skipped check has no next step, so its Role cell is blank.
+        actionable = res.status not in (Status.PASSED.value, Status.SKIPPED.value)
+        roles_text = _html_escape(", ".join(res.roles)) if (actionable and res.roles) else "—"
+
         rows.append(
             f'                <tr class="{priority_class}">\n'
             f"                    <td>{res.checkpoint_id}</td>\n"
             f"                    <td>{res.category}</td>\n"
             f"                    <td>{res.priority}</td>\n"
             f'                    <td class="{status_class}">{res.status}</td>\n'
+            f"                    <td>{roles_text}</td>\n"
             f'                    <td class="cell-text">{_html_escape(res.result)}</td>\n'
             f'                    <td class="cell-text">{remediation}</td>\n'
             f"                </tr>"
@@ -663,6 +697,7 @@ def _render_section(
             '                    <th>Category</th>\n'
             '                    <th>Priority</th>\n'
             '                    <th>Status</th>\n'
+            '                    <th>Role</th>\n'
             '                    <th>Result</th>\n'
             '                    <th>Remediation</th>\n'
             '                </tr>\n'

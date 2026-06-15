@@ -19,7 +19,7 @@ Bucketing: MANUAL routes to the "Needs manual verification" section
 of the FlightCheck report. These checks never fail readiness.
 """
 
-from ..runner import CheckResult, Status
+from ..runner import CheckResult, Role, Status
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
 STUDIO_BASE = "https://copilotstudio.microsoft.com"
@@ -100,6 +100,7 @@ def _build_checks(runner) -> list[dict]:
         {
             "id": "QA-001",
             "p": "Critical",
+            "roles": [Role.ESS_MAKER.value],
             "desc": "Build a library of ≥50 evaluation prompts (golden queries)",
             "result": (
                 "The kit can't inspect Copilot Studio evaluation test sets — "
@@ -119,6 +120,7 @@ def _build_checks(runner) -> list[dict]:
         {
             "id": "QA-002",
             "p": "Critical",
+            "roles": [Role.ESS_MAKER.value],
             "desc": "Run the evaluation test set against the agent",
             "result": (
                 "The kit can't read evaluation runs — "
@@ -138,6 +140,7 @@ def _build_checks(runner) -> list[dict]:
         {
             "id": "QA-012",
             "p": "Critical",
+            "roles": [Role.ESS_MAKER.value],
             "desc": "Review evaluation scores against an accuracy target",
             "result": (
                 "The kit can't measure response accuracy — "
@@ -158,6 +161,7 @@ def _build_checks(runner) -> list[dict]:
         {
             "id": "PUB-001",
             "p": "Critical",
+            "roles": [Role.ESS_MAKER.value],
             "desc": "Export your customization solution as a managed solution",
             "result": (
                 "The kit can't inspect maker-portal solution exports — "
@@ -176,6 +180,7 @@ def _build_checks(runner) -> list[dict]:
         {
             "id": "PUB-002",
             "p": "Critical",
+            "roles": [Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
             "desc": "Import the managed solution into a test environment",
             "result": (
                 "The kit only sees the configured environment — "
@@ -194,6 +199,7 @@ def _build_checks(runner) -> list[dict]:
         {
             "id": "PUB-003",
             "p": "Critical",
+            "roles": [Role.ESS_MAKER.value],
             "desc": "Complete UAT and capture business sign-off",
             "result": (
                 "The kit can't track sign-off — "
@@ -212,6 +218,7 @@ def _build_checks(runner) -> list[dict]:
         {
             "id": "PUB-006",
             "p": "Critical",
+            "roles": [Role.ESS_MAKER.value, Role.M365_ADMIN.value],
             "desc": "Obtain Microsoft 365 admin approval for the agent",
             "result": (
                 "The kit can't read the Microsoft 365 admin center — "
@@ -232,6 +239,7 @@ def _build_checks(runner) -> list[dict]:
         {
             "id": "PUB-011",
             "p": "Medium",
+            "roles": [Role.M365_ADMIN.value],
             "desc": "Allow up to 48 hours for rollout to Microsoft 365 Copilot",
             "result": (
                 "Informational — after admin approval, Teams/Microsoft 365 Copilot "
@@ -268,6 +276,7 @@ def run_publishing_checks(runner) -> list[CheckResult]:
             result=c["result"],
             remediation=c["remediation"],
             doc_link=c["doc_link"],
+            roles=c["roles"],
         )
         for c in _build_checks(runner)
     ]
