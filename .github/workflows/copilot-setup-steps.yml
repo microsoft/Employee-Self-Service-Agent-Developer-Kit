@@ -8,29 +8,29 @@
 name: "Copilot Setup Steps"
 
 on:
-    workflow_dispatch:
-    push:
-        paths:
-            - .github/workflows/copilot-setup-steps.yml
-    pull_request:
-        paths:
-            - .github/workflows/copilot-setup-steps.yml
+  workflow_dispatch:
+  push:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
+  pull_request:
+    paths:
+      - .github/workflows/copilot-setup-steps.yml
 
 jobs:
-    copilot-setup-steps:
-        runs-on: ubuntu-latest
+  copilot-setup-steps:
+    runs-on: ubuntu-latest
 
-        permissions:
-            contents: read
+    permissions:
+      contents: read
 
-        steps:
-            - name: Checkout code
-              uses: actions/checkout@v5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
 
-            - name: Set up Python
-              uses: actions/setup-python@v5
-              with:
-                  python-version: "3.11"
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
 
-            - name: Install validation dependencies
-              run: pip install "PyYAML>=6,<7" "defusedxml>=0.7,<1.0"
+      - name: Install validation dependencies
+        run: pip install "pytest>=8,<9" "PyYAML>=6,<7" "defusedxml>=0.7,<1.0"
