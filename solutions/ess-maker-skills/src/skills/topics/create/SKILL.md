@@ -47,7 +47,7 @@ If the topic involves Workday, also read `src/reference/ess-docs/integrations/wo
 **Official samples**: Before generating YAML, read a relevant sample from `src/examples/ess-samples/` to use as a real-world reference:
 - **Workday employee scenarios**: `src/examples/ess-samples/Workday/EmployeeScenarios/` — contains topic.yaml + template config XML for vacation balance, time off requests, contact info, education, government IDs, job taxonomy, emergency contacts
 - **Workday manager scenarios**: `src/examples/ess-samples/Workday/ManagerScenarios/` — company code, cost center, job taxonomy, service anniversary, time in position
-- **ServiceNow HRSD scenarios**: `src/examples/ess-samples/ServiceNow/HRSDScenarios/` — create HR case, get user cases (JSON template configs)
+- **ServiceNow HRSD scenarios**: `src/examples/ess-samples/ServiceNow/HRSDScenarios/` — create HR case, get user cases, get HR case status (JSON template configs)
 - **ServiceNow ITSM scenarios**: `src/examples/ess-samples/ServiceNow/ITSMScenarios/` — create incident, get user tickets, get ticket details (JSON template configs)
 - **ServiceNow Catalog/CMDB scenarios**: `src/examples/ess-samples/ServiceNow/CatalogScenarios/` — browse service catalog, CMDB asset lookup
 - **Facilities scenarios**: `src/examples/ess-samples/Facilities/` — facilities tickets, dining, guest invitations, vehicle registration

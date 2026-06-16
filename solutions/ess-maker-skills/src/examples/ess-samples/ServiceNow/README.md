@@ -24,6 +24,7 @@ with ServiceNow HRSD, ITSM, and CMDB/Catalog integrations.
 |----------|-------------|----------------|
 | ServiceNowHRSDCreateCase | Create an HR case in ServiceNow HRSD | "I need to create an HR case" / "Open an HR service request" |
 | ServiceNowHRSDGetUserCases | List the user's HR cases | "Show me my HR cases" / "What are my open HR cases?" |
+| ServiceNowHRSDGetHRCaseStatus | Get the status of a specific HR case by case number | "What is the status of my HR case?" / "Check my HR case CS0012345" |
 
 ### ITSM (IT Service Management)
 
