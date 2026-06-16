@@ -2,7 +2,7 @@
   "name": "ess-maker-profile",
   "displayName": "ESS Maker",
   "description": "Chat-only, big-button experience for customizing your Employee Self-Service agent. POC.",
-  "version": "0.4.20",
+  "version": "0.4.21",
   "publisher": "microsoft-ess",
   "private": true,
   "engines": {

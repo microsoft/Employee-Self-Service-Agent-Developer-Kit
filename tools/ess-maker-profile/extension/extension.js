@@ -7,7 +7,7 @@
 const vscode = require('vscode');
 
 const EXT_ID = 'microsoft-ess.ess-maker-profile';
-const APPLIED_KEY = 'essMaker.chatOnlyApplied.v4';
+const APPLIED_KEY = 'essMaker.chatOnlyApplied.v5';
 
 // Settings that strip developer chrome to the bone. Applied at GLOBAL (user)
 // scope because workspace-scope leaves menu/title-bar/activity-bar visible
@@ -181,7 +181,7 @@ async function openChatInEditorWithQuery(query) {
     return true;
 }
 
-async function applyChatOnlyLayout({ silent = false } = {}) {
+async function applyChatOnlyLayout({ silent = false, showWalkthrough = false } = {}) {
     await applySettings(CHAT_ONLY_LAYOUT, vscode.ConfigurationTarget.Global);
 
     // Collapse the file explorer tree. Focus the explorer first and yield
@@ -192,26 +192,10 @@ async function applyChatOnlyLayout({ silent = false } = {}) {
     await tryRun('workbench.files.action.collapseExplorerFolders');
     await tryRun('list.collapseAll');
 
-    // The installer's `code chat /setup` opens TWO chat surfaces:
-    //   * Aux-bar chat (right side) — /setup actually runs here.
-    //   * An empty chat editor tab in the center editor area.
-    //
-    // Goal: end up with ONE full-screen chat running /setup.
-    // Strategy:
-    //   1. Wait for both surfaces to materialize.
-    //   2. Close EVERY editor tab via tabGroups API.
-    //   3. Maximize the auxiliary bar so the /setup chat fills the
-    //      full editor area width (same as clicking the maximize icon
-    //      in the aux-bar title bar).
-    //
-    // This runs on EVERY activation (not just first-run) because the
-    // duplicate is re-created every time `code chat /setup` launches.
-
-    // 1. Wait for VS Code to wire up both surfaces.
+    // Wait for VS Code to finish wiring up surfaces.
     await new Promise((r) => setTimeout(r, 2000));
 
-    // 2. Close all editor tabs (welcome page, restored files, etc).
-    //    The chat editor we open in step 3 will be the only tab.
+    // Close all editor tabs (welcome page, restored files, etc).
     try {
         const allTabs = [];
         for (const group of vscode.window.tabGroups.all || []) {
@@ -227,44 +211,44 @@ async function applyChatOnlyLayout({ silent = false } = {}) {
     }
     await tryRun('workbench.action.closeAllEditors');
 
-    // 3. The installer no longer uses `code chat /setup` when this
-    //    extension is installed — it launches `code .` plainly and
-    //    delegates /setup orchestration to us. Open a chat editor in
-    //    the editor area (full width, NOT the narrow aux bar), inject
-    //    /setup via clipboard paste, submit, then hide the aux bar
-    //    for a clean single-chat full-screen layout.
-    //
-    //    Why clipboard paste instead of `chat.open({query})`? The
-    //    `chat.open` API silently drops the query when forced to the
-    //    editor location, and the `type` command isn't always honoured
-    //    by the chat input. Clipboard paste is the most reliable way
-    //    to populate the input across VS Code / Copilot versions.
-
-    // Open chat in editor area. Try the newer/older command IDs in
-    // order — the chat extension renames these occasionally.
-    const openCmds = [
-        'workbench.action.chat.openInEditor',
-        'workbench.action.chat.openInNewEditor',
-        'workbench.action.chat.newChat',
-    ];
-    for (const c of openCmds) {
-        if (await tryRun(c)) break;
-    }
-    await new Promise((r) => setTimeout(r, 700));
-    // Focus the chat input and paste /setup.
-    await tryRun('workbench.action.chat.focusInput');
-    await new Promise((r) => setTimeout(r, 200));
-    try {
-        const prev = await vscode.env.clipboard.readText();
-        await vscode.env.clipboard.writeText('/setup');
-        await tryRun('editor.action.clipboardPasteAction');
+    if (showWalkthrough) {
+        // First-run: open the Getting Started walkthrough so new users
+        // get a guided tour before jumping into chat. The walkthrough's
+        // "Connect now" button runs /setup when they're ready.
+        await vscode.commands.executeCommand(
+            'workbench.action.openWalkthrough',
+            { category: `${EXT_ID}#essMaker.welcome`, step: `${EXT_ID}#essMaker.welcome#overview` },
+            false
+        );
+    } else {
+        // Subsequent runs: open a chat editor with /setup pre-filled.
+        //
+        // The installer launches `code .` (not `code chat /setup`) when
+        // this extension is installed, so we open the chat editor ourselves,
+        // inject /setup via clipboard paste, submit, then hide the aux bar
+        // for a clean single-chat full-screen layout.
+        const openCmds = [
+            'workbench.action.chat.openInEditor',
+            'workbench.action.chat.openInNewEditor',
+            'workbench.action.chat.newChat',
+        ];
+        for (const c of openCmds) {
+            if (await tryRun(c)) break;
+        }
+        await new Promise((r) => setTimeout(r, 700));
+        await tryRun('workbench.action.chat.focusInput');
         await new Promise((r) => setTimeout(r, 200));
-        await tryRun('workbench.action.chat.submit');
-        await new Promise((r) => setTimeout(r, 200));
-        // Restore the user's clipboard so we don't leave /setup lying around.
-        await vscode.env.clipboard.writeText(prev || '');
-    } catch (e) {
-        console.warn('[ess-maker] paste /setup failed:', e && e.message);
+        try {
+            const prev = await vscode.env.clipboard.readText();
+            await vscode.env.clipboard.writeText('/setup');
+            await tryRun('editor.action.clipboardPasteAction');
+            await new Promise((r) => setTimeout(r, 200));
+            await tryRun('workbench.action.chat.submit');
+            await new Promise((r) => setTimeout(r, 200));
+            await vscode.env.clipboard.writeText(prev || '');
+        } catch (e) {
+            console.warn('[ess-maker] paste /setup failed:', e && e.message);
+        }
     }
     // Hide the aux bar if it's open (it will be empty since the
     // installer no longer requests `code chat /setup`).
@@ -611,7 +595,11 @@ function activate(context) {
     const alreadyApplied = context.globalState.get(APPLIED_KEY, false);
     if (vscode.workspace.workspaceFolders?.length) {
         if (!alreadyApplied) {
-            applyChatOnlyLayout({ silent: false }).then(() => context.globalState.update(APPLIED_KEY, true));
+            // First install: show the Getting Started walkthrough so new
+            // users get a guided tour. They click "Connect now" to start
+            // /setup when ready.
+            applyChatOnlyLayout({ silent: false, showWalkthrough: true })
+                .then(() => context.globalState.update(APPLIED_KEY, true));
         } else {
             // Defer slightly so VS Code finishes its own layout restore first.
             setTimeout(() => { applyChatOnlyLayout({ silent: true }).catch(() => {}); }, 400);
