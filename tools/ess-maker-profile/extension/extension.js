@@ -475,21 +475,18 @@ async function applyChatOnlyLayout({ silent = false, showWalkthrough = false } =
         await tryRun('workbench.action.toggleMenuBar');
     }
 
-    // Open Quick Actions in the auxiliary bar, then close the primary sidebar
-    // (explorer). The order matters: on subsequent launches (after reload) the
-    // view is correctly routed to the aux bar. On very first launch (before
-    // reload) it may land in the primary sidebar — that's OK, the reload
-    // prompt will fix it.
+    // Open Quick Actions in the primary sidebar (replaces the explorer view).
+    // Then close the auxiliary bar to remove any duplicate Chat panel.
     await tryRun('workbench.view.extension.essMakerActions');
     await tryRun('essMaker.actionsView.focus');
     await new Promise((r) => setTimeout(r, 300));
-    await tryRun('workbench.action.closeSidebar');
+    await tryRun('workbench.action.closeAuxiliaryBar');
 
-    // VS Code may re-open the sidebar after our close (folder restore, etc).
-    // Fire additional close attempts with staggered delays to ensure it sticks.
+    // VS Code may re-open the explorer after folder restore. Re-focus Quick Actions
+    // with staggered delays to ensure it stays as the active primary sidebar view.
     for (const delay of [500, 1500, 3000]) {
         setTimeout(() => {
-            vscode.commands.executeCommand('workbench.action.closeSidebar').then(() => {}, () => {});
+            vscode.commands.executeCommand('workbench.view.extension.essMakerActions').then(() => {}, () => {});
         }, delay);
     }
 
