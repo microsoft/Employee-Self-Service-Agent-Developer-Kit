@@ -699,6 +699,25 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions -and -not $SkipMakerProfile)
             }
         }
     }
+} elseif (-not $FlightCheckOnly -and -not $SkipExtensions -and $SkipMakerProfile) {
+    # Standard mode: ensure any previously-installed Maker Profile is removed
+    # so the user gets a stock VS Code layout even if they previously ran the
+    # lite-mode installer.
+    $code = Get-Command code -ErrorAction SilentlyContinue
+    if ($code) {
+        $installed = & code --list-extensions 2>&1 | Where-Object { $_ -match 'microsoft-ess\.ess-maker-profile' }
+        if ($installed) {
+            Write-Step 'Removing ESS Maker Profile (standard mode requested)'
+            try {
+                $prevEAP = $ErrorActionPreference
+                $ErrorActionPreference = 'Continue'
+                & code --uninstall-extension microsoft-ess.ess-maker-profile 2>&1 | Out-Null
+            } catch {} finally {
+                $ErrorActionPreference = $prevEAP
+            }
+            Write-Ok 'ESS Maker Profile removed'
+        }
+    }
 }
 
 # ---------------------------------------------------------------------------

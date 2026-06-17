@@ -257,6 +257,14 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
             else
                 warn "ESS Maker Profile install failed (non-fatal, continuing with stock VS Code layout)"
             fi
+        else
+            # Standard mode: ensure any previously-installed Maker Profile is
+            # removed so the user gets a stock VS Code layout.
+            if "$CODE_CMD" --list-extensions 2>/dev/null | grep -qi 'microsoft-ess\.ess-maker-profile'; then
+                step "Removing ESS Maker Profile (standard mode requested)"
+                "$CODE_CMD" --uninstall-extension microsoft-ess.ess-maker-profile 2>/dev/null || true
+                ok "ESS Maker Profile removed"
+            fi
         fi
     else
         warn "VS Code 'code' CLI not found. Install extensions manually after launching VS Code."
