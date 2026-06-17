@@ -1,15 +1,19 @@
 <#
 .SYNOPSIS
-    Irreducible one-liner bootstrap for the ESS Agent Developer Kit.
+    One-liner bootstrap for the ESS Maker Kit in Lite Mode.
 
 .DESCRIPTION
-    Downloads the winget config + installer script into a temp folder and runs them.
-    Designed to be invoked from a single command (see README.md):
+    Downloads the installer script into a temp folder and runs it with the
+    ESS Maker Profile extension enabled. This gives users a chat-first,
+    big-button experience that hides developer chrome (file tree, tabs,
+    status bar, etc.) and surfaces a "Quick Actions" button rail.
 
-        iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap.ps1)
+    Designed to be invoked from a single command:
+
+        iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-lite.ps1)
 
     All real work happens in Install-EssAdk.ps1; this file just gets the bits
-    onto the customer's machine first.
+    onto the customer's machine and ensures the Maker Profile is installed.
 
 .PARAMETER InstallRoot
     Forwarded to Install-EssAdk.ps1. See that script for details.
@@ -19,7 +23,7 @@
 
 .PARAMETER SourceBaseUrl
     Where to fetch the installer files from. Defaults to the raw GitHub URL of
-    this folder once it lands in the upstream repo. Override for testing.
+    the setup folder. Override for testing.
 #>
 
 [CmdletBinding()]
@@ -63,7 +67,8 @@ $installer = Join-Path $tempDir 'Install-EssAdk.ps1'
 $scriptContent = Get-Content $installer -Raw
 $scriptBlock = [ScriptBlock]::Create($scriptContent)
 
-$installerArgs = @{ Branch = $Branch; SkipMakerProfile = $true }
+# Lite mode: do NOT pass -SkipMakerProfile so the chat-first profile installs.
+$installerArgs = @{ Branch = $Branch }
 if ($InstallRoot) { $installerArgs.InstallRoot = $InstallRoot }
 
 & $scriptBlock @installerArgs

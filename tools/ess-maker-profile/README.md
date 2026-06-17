@@ -29,6 +29,22 @@ The customer never sees code, a file tree, or a menu. The whole window is: **cha
 
 ## Try it
 
+### Via the one-shot installer (recommended)
+
+The easiest way to get the Maker Profile is to use the lite mode installer:
+
+**Windows** (PowerShell):
+```powershell
+iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-lite.ps1)
+```
+
+**macOS** (Terminal):
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-lite-mac.sh)"
+```
+
+### From source (development)
+
 Requires Node.js 18+ and VS Code 1.86+.
 
 ```pwsh
