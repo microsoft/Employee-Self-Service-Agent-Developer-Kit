@@ -96,7 +96,7 @@
           {
             "id": "overview",
             "title": "Welcome",
-            "description": "This kit lets you describe what your ESS agent should do, and GitHub Copilot does the rest.\n\nWork through the steps on the left in order. Each step opens a guided chat — just answer the prompts.",
+            "description": "This kit lets you describe what your ESS agent should do, and GitHub Copilot does the rest.\n\nWork through the steps on the left in order. Each step opens a guided chat — just answer the prompts.\n\n[Close this guide](command:workbench.action.closeActiveEditor)",
             "media": {
               "markdown": "walkthrough/overview.md"
             },
