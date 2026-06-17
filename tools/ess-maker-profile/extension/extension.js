@@ -400,6 +400,12 @@ class ActionsViewProvider {
                     await resetCompleted(this._context);
                     await this.refresh();
                 }
+            } else if (msg?.type === 'openWalkthrough') {
+                await vscode.commands.executeCommand(
+                    'workbench.action.openWalkthrough',
+                    { category: `${EXT_ID}#essMaker.welcome` },
+                    false
+                );
             } else if (msg?.type === 'ready') {
                 await this.refresh();
             }
@@ -532,6 +538,13 @@ class ActionsViewProvider {
         <div class="text">
             <div class="label">Reset progress</div>
             <div class="sub">Re-lock the steps</div>
+        </div>
+    </button>
+    <button class="action secondary" data-action="openWalkthrough">
+        <div class="icon">📖</div>
+        <div class="text">
+            <div class="label">View walkthrough</div>
+            <div class="sub">Step-by-step guided tour</div>
         </div>
     </button>
     <button class="action secondary" data-action="restoreLayout" id="btn-standard">
