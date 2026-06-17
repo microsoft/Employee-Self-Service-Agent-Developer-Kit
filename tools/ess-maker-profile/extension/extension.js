@@ -61,7 +61,7 @@ const ACTIONS = [
     { id: 'push',        icon: '🚀', label: 'Push to Copilot',   sub: 'Safely deploy your changes',   slash: '/push',        requires: ['setup', 'create', 'flightcheck'] },
 ];
 
-const STATE_KEY = 'essMaker.completedActions.v1';
+const STATE_KEY = 'essMaker.completedActions.v2';
 
 function getCompleted(context) {
     return new Set(context.globalState.get(STATE_KEY, []));
