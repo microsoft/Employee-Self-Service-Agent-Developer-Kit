@@ -8,6 +8,7 @@ const vscode = require('vscode');
 
 const EXT_ID = 'microsoft-ess.ess-maker-profile';
 const APPLIED_KEY = 'essMaker.chatOnlyApplied.v7';
+const LITE_MODE_KEY = 'essMaker.liteMode.v1';
 
 // Settings that strip developer chrome to the bone. Applied at GLOBAL (user)
 // scope because workspace-scope leaves menu/title-bar/activity-bar visible
@@ -176,15 +177,7 @@ async function openChatInEditorWithQuery(query) {
 async function applyChatOnlyLayout({ silent = false, showWalkthrough = false } = {}) {
     await applySettings(CHAT_ONLY_LAYOUT, vscode.ConfigurationTarget.Global);
 
-    // Collapse the file explorer tree. Focus the explorer first and yield
-    // 150 ms so VS Code finishes mounting the view — without the yield
-    // the collapse fires before the tree exists and silently no-ops.
-    await tryRun('workbench.view.explorer');
-    await new Promise((r) => setTimeout(r, 150));
-    await tryRun('workbench.files.action.collapseExplorerFolders');
-    await tryRun('list.collapseAll');
-
-    // Wait for VS Code to finish wiring up surfaces.
+    // Wait for VS Code to finish wiring up surfaces and restoring state.
     await new Promise((r) => setTimeout(r, 2000));
 
     // Close all editor tabs (welcome page, restored files, etc).
@@ -279,6 +272,13 @@ async function applyChatOnlyLayout({ silent = false, showWalkthrough = false } =
         await tryRun('workbench.action.toggleMenuBar');
     }
 
+    // Collapse the explorer tree LAST — VS Code's async tree restore and
+    // editor operations above can re-expand it if we collapse too early.
+    await tryRun('workbench.view.explorer');
+    await new Promise((r) => setTimeout(r, 300));
+    await tryRun('workbench.files.action.collapseExplorerFolders');
+    await tryRun('list.collapseAll');
+
     // Open + focus the Quick Actions view container wherever it lives.
     // Per package.json this is the auxiliary bar; if a previous session
     // moved it to the primary sidebar, it'll appear there instead.
@@ -365,6 +365,7 @@ class ActionsViewProvider {
                 await markCompleted(this._context, action.id);
                 await this.refresh();
             } else if (msg?.type === 'restoreLayout') {
+                await this._context.globalState.update(LITE_MODE_KEY, false);
                 await clearSettings(Object.keys(CHAT_ONLY_LAYOUT), vscode.ConfigurationTarget.Global);
                 await clearSettings(Object.keys(CHAT_ONLY_LAYOUT), vscode.ConfigurationTarget.Workspace);
                 await this.refresh();
@@ -376,6 +377,7 @@ class ActionsViewProvider {
                     await vscode.commands.executeCommand('workbench.action.reloadWindow');
                 }
             } else if (msg?.type === 'reapplyLayout') {
+                await this._context.globalState.update(LITE_MODE_KEY, true);
                 await applySettings(CHAT_ONLY_LAYOUT, vscode.ConfigurationTarget.Global);
                 await this.refresh();
                 const sel = await vscode.window.showInformationMessage(
@@ -640,17 +642,20 @@ function activate(context) {
     // - Subsequent activations: silently re-close the sidebar/aux bar/menu so they stay closed
     //   even after VS Code restores its previous layout from cache.
     const alreadyApplied = context.globalState.get(APPLIED_KEY, false);
+    const userWantsLite = context.globalState.get(LITE_MODE_KEY, true); // default to lite
     if (vscode.workspace.workspaceFolders?.length) {
         if (!alreadyApplied) {
             // First install: show the Getting Started walkthrough so new
             // users get a guided tour. They click "Connect now" to start
             // /setup when ready.
+            context.globalState.update(LITE_MODE_KEY, true);
             applyChatOnlyLayout({ silent: false, showWalkthrough: true })
                 .then(() => context.globalState.update(APPLIED_KEY, true));
-        } else {
+        } else if (userWantsLite) {
             // Defer slightly so VS Code finishes its own layout restore first.
             setTimeout(() => { applyChatOnlyLayout({ silent: true }).catch(() => {}); }, 400);
         }
+        // If userWantsLite is false, skip re-applying — user chose standard mode.
     }
 }
 
