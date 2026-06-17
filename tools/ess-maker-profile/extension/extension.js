@@ -368,6 +368,10 @@ class ActionsViewProvider {
                 await this._context.globalState.update(LITE_MODE_KEY, false);
                 await clearSettings(Object.keys(CHAT_ONLY_LAYOUT), vscode.ConfigurationTarget.Global);
                 await clearSettings(Object.keys(CHAT_ONLY_LAYOUT), vscode.ConfigurationTarget.Workspace);
+                // Expand the workspace folder in the explorer
+                await tryRun('workbench.view.explorer');
+                await new Promise((r) => setTimeout(r, 150));
+                await tryRun('workbench.files.action.expandRecursively');
                 await this.refresh();
                 const sel = await vscode.window.showInformationMessage(
                     'Standard layout restored. Reload the window for full effect.',
