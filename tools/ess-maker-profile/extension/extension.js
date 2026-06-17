@@ -54,11 +54,11 @@ const CHAT_ONLY_LAYOUT = {
 const ACTIONS = [
     { id: 'setup',       icon: '🔌', label: 'Connect',           sub: 'Sign in to your environment',  slash: '/setup',       requires: [] },
     { id: 'create',      icon: '✨', label: 'Create a topic',    sub: 'Describe a new conversation',  slash: '/create',      requires: ['setup'] },
-    { id: 'update',      icon: '✏️', label: 'Update a topic',    sub: 'Tweak an existing topic',      slash: '/update',      requires: ['setup', 'create'] },
-    { id: 'scan',        icon: '🔍', label: 'Scan for issues',   sub: 'Find broken bindings',         slash: '/scan',        requires: ['setup', 'create'] },
-    { id: 'flightcheck', icon: '✈️', label: 'Validate readiness',sub: '41+ readiness checks',         slash: '/flightcheck', requires: ['setup', 'create'] },
-    { id: 'evaluate',    icon: '📊', label: 'Generate tests',    sub: 'Build evaluation test sets',   slash: '/evaluate',    requires: ['setup', 'create'] },
-    { id: 'push',        icon: '🚀', label: 'Push to Copilot',   sub: 'Safely deploy your changes',   slash: '/push',        requires: ['setup', 'create', 'flightcheck'] },
+    { id: 'update',      icon: '✏️', label: 'Update a topic',    sub: 'Tweak an existing topic',      slash: '/update',      requires: ['setup'] },
+    { id: 'scan',        icon: '🔍', label: 'Scan for issues',   sub: 'Find broken bindings',         slash: '/scan',        requires: ['setup'] },
+    { id: 'flightcheck', icon: '✈️', label: 'Validate readiness',sub: '41+ readiness checks',         slash: '/flightcheck', requires: ['setup'] },
+    { id: 'evaluate',    icon: '📊', label: 'Generate tests',    sub: 'Build evaluation test sets',   slash: '/evaluate',    requires: ['setup'] },
+    { id: 'push',        icon: '🚀', label: 'Push to Copilot',   sub: 'Safely deploy your changes',   slash: '/push',        requires: ['setup'] },
 ];
 
 const STATE_KEY = 'essMaker.completedActions.v3';
