@@ -466,8 +466,8 @@ async function applyChatOnlyLayout({ silent = false, showWalkthrough = false } =
             console.warn('[ess-maker] paste /setup failed:', e && e.message);
         }
     }
-    // Note: we intentionally do NOT close the auxiliary bar — that's where
-    // the Quick Actions panel lives.
+    // Close the auxiliary bar to remove VS Code's built-in Chat panel
+    // (which would duplicate the chat editor we just opened).
 
     if (!silent) {
         // Hide menu bar for this session (the setting picks it up on

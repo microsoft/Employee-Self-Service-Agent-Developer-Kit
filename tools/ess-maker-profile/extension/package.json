@@ -89,6 +89,7 @@
     }
   },
   "scripts": {
+    "test": "node extension.test.js",
     "validate": "node -e \"JSON.parse(require('fs').readFileSync('package.json','utf8'))\""
   }
 }

@@ -663,8 +663,8 @@ if ($deferPip) {
 # chrome and surfaces a big-button "Quick actions" rail tied to the kit's
 # slash commands. We install it from the cloned repo (not the marketplace —
 # this is a POC build that isn't published) so it auto-activates the next
-# time `code` launches, including the `code chat /setup` invocation in
-# section 7 below.
+# time `code` launches. When the maker profile is installed, the extension
+# itself opens chat and injects /setup (section 7 just opens the workspace).
 #
 # Skipped in FlightCheckOnly mode (no VS Code launch) and when the user
 # passes -SkipExtensions or -SkipMakerProfile, so kit developers and
