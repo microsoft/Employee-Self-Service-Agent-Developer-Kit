@@ -116,7 +116,7 @@ jobs:
       - name: Post / update PR comment
         if: always() && steps.changed.outputs.has_samples == 'true' && steps.changed.outputs.self_edit != 'true'
         continue-on-error: true
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: samples-validation
           path: validation-comment.md
