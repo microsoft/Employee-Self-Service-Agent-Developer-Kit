@@ -489,11 +489,20 @@ if ($FlightCheckOnly) {
 
     $code = Get-Command code -ErrorAction SilentlyContinue
     if (-not $code) {
+        # Fallback: check the known VS Code install location (winget/user install)
+        $knownCodeCmd = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd'
+        if (Test-Path $knownCodeCmd) {
+            $code = Get-Item $knownCodeCmd
+        }
+    }
+    if (-not $code) {
         Write-Warn2 'code CLI not on PATH yet. Open a new PowerShell window after this script and run:'
         Write-Warn2 '  code --install-extension GitHub.copilot'
         Write-Warn2 '  code --install-extension GitHub.copilot-chat'
         Write-Warn2 '  code --install-extension ms-python.python'
     } else {
+        # Normalize to path string
+        $codeBin = if ($code.Source) { $code.Source } elseif ($code.FullName) { $code.FullName } else { 'code' }
         $extensions = @(
             'GitHub.copilot',
             'GitHub.copilot-chat',
@@ -510,7 +519,7 @@ if ($FlightCheckOnly) {
             try {
                 $prevEAP = $ErrorActionPreference
                 $ErrorActionPreference = 'Continue'
-                $out = & code --install-extension $ext --force 2>&1
+                $out = & $codeBin --install-extension $ext --force 2>&1
                 $code_exit = $LASTEXITCODE
             } catch {
                 $out = $_.Exception.Message
@@ -665,6 +674,11 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions -and -not $SkipMakerProfile)
 
     $code = Get-Command code -ErrorAction SilentlyContinue
     if (-not $code) {
+        $knownCodeCmd = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd'
+        if (Test-Path $knownCodeCmd) { $code = Get-Item $knownCodeCmd }
+    }
+    $codeBin = if ($code.Source) { $code.Source } elseif ($code.FullName) { $code.FullName } else { $null }
+    if (-not $codeBin) {
         Write-Warn2 'code CLI not on PATH. ESS Maker Profile will not be installed.'
         Write-Warn2 'To install it later, open a new PowerShell and run:'
         Write-Warn2 "  code --install-extension `"$repoPath\tools\ess-maker-profile\extension\ess-maker-profile-*.vsix`""
@@ -688,7 +702,7 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions -and -not $SkipMakerProfile)
             try {
                 $prevEAP = $ErrorActionPreference
                 $ErrorActionPreference = 'Continue'
-                $out = & code --install-extension $vsix.FullName --force 2>&1
+                $out = & $codeBin --install-extension $vsix.FullName --force 2>&1
                 $vsix_exit = $LASTEXITCODE
             } catch {
                 $out = $_.Exception.Message
@@ -712,14 +726,19 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions -and -not $SkipMakerProfile)
     # so the user gets a stock VS Code layout even if they previously ran the
     # lite-mode installer.
     $code = Get-Command code -ErrorAction SilentlyContinue
-    if ($code) {
-        $installed = & code --list-extensions 2>&1 | Where-Object { $_ -match 'microsoft-ess\.ess-maker-profile' }
+    if (-not $code) {
+        $knownCodeCmd = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd'
+        if (Test-Path $knownCodeCmd) { $code = Get-Item $knownCodeCmd }
+    }
+    $codeBin = if ($code.Source) { $code.Source } elseif ($code.FullName) { $code.FullName } else { $null }
+    if ($codeBin) {
+        $installed = & $codeBin --list-extensions 2>&1 | Where-Object { $_ -match 'microsoft-ess\.ess-maker-profile' }
         if ($installed) {
             Write-Step 'Removing ESS Maker Profile (standard mode requested)'
             try {
                 $prevEAP = $ErrorActionPreference
                 $ErrorActionPreference = 'Continue'
-                & code --uninstall-extension microsoft-ess.ess-maker-profile 2>&1 | Out-Null
+                & $codeBin --uninstall-extension microsoft-ess.ess-maker-profile 2>&1 | Out-Null
             } catch {} finally {
                 $ErrorActionPreference = $prevEAP
             }
@@ -1045,7 +1064,13 @@ if ($FlightCheckOnly) {
 # ---------------------------------------------------------------------------
 if (-not $SkipLaunch) {
     $code = Get-Command code -ErrorAction SilentlyContinue
-    if ($code) {
+    if (-not $code) {
+        $knownCodeCmd = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd'
+        if (Test-Path $knownCodeCmd) { $code = Get-Item $knownCodeCmd }
+    }
+    # Normalize to path string (CommandInfo has .Source, FileInfo has .FullName)
+    $codePath = if ($code.Source) { $code.Source } elseif ($code.FullName) { $code.FullName } else { $null }
+    if ($codePath) {
         if ($script:MakerProfileInstalled) {
             # The ESS Maker Profile extension takes over /setup orchestration:
             # on activation it opens a chat editor in the editor area (full
@@ -1056,7 +1081,7 @@ if (-not $SkipLaunch) {
             Write-Step 'Opening workspace in VS Code (Maker Profile will launch /setup)'
             Push-Location $workspace
             try {
-                Start-Process -FilePath $code.Source -ArgumentList @('.') | Out-Null
+                Start-Process -FilePath $codePath -ArgumentList @('.') | Out-Null
                 Write-Ok "Launched VS Code at $workspace"
                 Write-Host "The ESS Maker Profile will open Copilot Chat and run /setup automatically." -ForegroundColor Yellow
                 Write-Host "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts." -ForegroundColor Yellow
@@ -1071,13 +1096,13 @@ if (-not $SkipLaunch) {
             # and sign in to GitHub/Copilot before /setup executes.
             Push-Location $workspace
             try {
-                $chatOutput = Invoke-Native { & $code.Source chat '/setup' }
+                $chatOutput = Invoke-Native { & $codePath chat '/setup' }
                 $chatExit = $LASTEXITCODE
                 foreach ($line in $chatOutput) { if ($line) { Write-Host "      $line" } }
                 if ($chatExit -ne 0) {
                     Write-Warn2 "'code chat' failed or is unsupported (exit $chatExit). Falling back to opening the workspace only."
                     Write-Warn2 "If you have an older VS Code (pre-1.102 / June 2025), update VS Code and re-run, or run /setup manually in Copilot Chat."
-                    Start-Process -FilePath $code.Source -ArgumentList @($workspace) | Out-Null
+                    Start-Process -FilePath $codePath -ArgumentList @($workspace) | Out-Null
                     Write-Ok "Launched VS Code at $workspace"
                     Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect Dataverse." -ForegroundColor Green
                 } else {
