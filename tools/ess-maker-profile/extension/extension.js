@@ -7,7 +7,7 @@
 const vscode = require('vscode');
 
 const EXT_ID = 'microsoft-ess.ess-maker-profile';
-const APPLIED_KEY = 'essMaker.chatOnlyApplied.v5';
+const APPLIED_KEY = 'essMaker.chatOnlyApplied.v6';
 
 // Settings that strip developer chrome to the bone. Applied at GLOBAL (user)
 // scope because workspace-scope leaves menu/title-bar/activity-bar visible
@@ -212,14 +212,41 @@ async function applyChatOnlyLayout({ silent = false, showWalkthrough = false } =
     await tryRun('workbench.action.closeAllEditors');
 
     if (showWalkthrough) {
-        // First-run: open the Getting Started walkthrough so new users
-        // get a guided tour before jumping into chat. The walkthrough's
-        // "Connect now" button runs /setup when they're ready.
+        // First-run: open the Getting Started walkthrough on the left and
+        // a /setup chat on the right, side-by-side.
         await vscode.commands.executeCommand(
             'workbench.action.openWalkthrough',
             { category: `${EXT_ID}#essMaker.welcome`, step: `${EXT_ID}#essMaker.welcome#overview` },
             false
         );
+        await new Promise((r) => setTimeout(r, 500));
+        // Split right — the new (right) editor group gets focus.
+        await tryRun('workbench.action.splitEditorRight');
+        await new Promise((r) => setTimeout(r, 300));
+        // Open chat in the now-focused right group.
+        const chatCmds = [
+            'workbench.action.chat.openInEditor',
+            'workbench.action.chat.openInNewEditor',
+            'workbench.action.chat.newChat',
+        ];
+        for (const c of chatCmds) {
+            if (await tryRun(c)) break;
+        }
+        await new Promise((r) => setTimeout(r, 700));
+        // Paste /setup into the chat and submit.
+        await tryRun('workbench.action.chat.focusInput');
+        await new Promise((r) => setTimeout(r, 200));
+        try {
+            const prev = await vscode.env.clipboard.readText();
+            await vscode.env.clipboard.writeText('/setup');
+            await tryRun('editor.action.clipboardPasteAction');
+            await new Promise((r) => setTimeout(r, 200));
+            await tryRun('workbench.action.chat.submit');
+            await new Promise((r) => setTimeout(r, 200));
+            await vscode.env.clipboard.writeText(prev || '');
+        } catch (e) {
+            console.warn('[ess-maker] paste /setup failed:', e && e.message);
+        }
     } else {
         // Subsequent runs: open a chat editor with /setup pre-filled.
         //

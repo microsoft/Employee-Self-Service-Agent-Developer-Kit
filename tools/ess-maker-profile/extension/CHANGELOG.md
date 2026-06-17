@@ -2,15 +2,15 @@
 
 ## 0.4.21 (POC)
 
-- **Getting Started walkthrough auto-opens on first install.** New users
-  now land on a guided step-by-step walkthrough ("Customize your ESS
-  agent") instead of being dropped straight into a `/setup` chat. The
-  walkthrough explains each stage of the kit (Connect → Create → Scan →
-  FlightCheck → Push) and each step has a button that opens the
-  corresponding slash command in chat. On subsequent VS Code launches,
-  the extension skips the walkthrough and goes directly to the `/setup`
-  chat as before.
-- Bumps `APPLIED_KEY` to `v5` so existing installs see the walkthrough
+- **Getting Started walkthrough + chat side-by-side on first install.**
+  New users land on a split-editor layout: the Getting Started
+  walkthrough ("Customize your ESS agent") on the left, and a `/setup`
+  chat already running on the right. The walkthrough explains each
+  stage (Connect → Create → Scan → FlightCheck → Push) with buttons
+  that open the corresponding slash command. On subsequent VS Code
+  launches, the extension skips the walkthrough and goes directly to
+  the full-screen `/setup` chat as before.
+- Bumps `APPLIED_KEY` to `v6` so existing installs see the walkthrough
   once on upgrade.
 
 ## 0.4.20 (POC)
