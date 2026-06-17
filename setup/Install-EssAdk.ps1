@@ -560,6 +560,14 @@ if (-not $SkipClone) {
         New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
     }
 
+    # If the directory exists but isn't a git repo (leftover from a partial
+    # install/cleanup), remove it so the clone can proceed.
+    if ((Test-Path $repoPath) -and -not (Test-Path (Join-Path $repoPath '.git'))) {
+        Write-Warn2 "Directory exists but is not a git repo: $repoPath"
+        Write-Warn2 'Removing it to perform a fresh clone...'
+        Remove-Item -Recurse -Force $repoPath
+    }
+
     if (Test-Path (Join-Path $repoPath '.git')) {
         Write-Ok "Repo already cloned at $repoPath - pulling latest"
         Push-Location $repoPath

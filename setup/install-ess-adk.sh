@@ -165,6 +165,14 @@ step "Cloning repository"
 
 REPO_PATH="$INSTALL_ROOT/$REPO_NAME"
 
+# If the directory exists but isn't a git repo (leftover from partial cleanup),
+# remove it so the clone can proceed.
+if [[ -d "$REPO_PATH" && ! -d "$REPO_PATH/.git" ]]; then
+    warn "Directory exists but is not a git repo: $REPO_PATH"
+    warn "Removing it to perform a fresh clone..."
+    rm -rf "$REPO_PATH"
+fi
+
 if [[ -d "$REPO_PATH/.git" ]]; then
     ok "Repo already cloned at $REPO_PATH — pulling latest"
     git -C "$REPO_PATH" fetch --quiet origin
