@@ -86,9 +86,9 @@ def _topic_folder_for(path: str) -> str | None:
     parts = PurePosixPath(path).parts
     if len(parts) < 3 or parts[0] != SAMPLES_ROOT:
         return None
-    # samples/<Area>/<Topic>/...  (Facilities, ServiceNow — flat)
-    # samples/<Area>/<Sub>/<Topic>/...  (Workday*)
-    if parts[1] in {"WorkdayCustomEngineAgent", "WorkdayDeclarativeAgent"}:
+    # samples/<Area>/<Topic>/...  (Facilities — flat)
+    # samples/<Area>/<Sub>/<Topic>/...  (Workday*, ServiceNow)
+    if parts[1] in {"WorkdayCustomEngineAgent", "WorkdayDeclarativeAgent", "ServiceNow"}:
         # Require a file *inside* the topic folder, i.e. at least
         # samples/<Area>/<Sub>/<Topic>/<file>. Otherwise a subgroup-level
         # file such as samples/WorkdayDeclarativeAgent/Employee/README.md
@@ -167,21 +167,23 @@ def check_filename_convention(
     res = Result("Filename convention (new)", Status.NA)
     exempt_paths = set(whitelist.get("filename_exemptions") or [])
     exempt_substrings = list(whitelist.get("filename_exemption_substrings") or [])
-    new_xmls = [
+    new_connector_files = [
         c for c in changed
-        if c.is_new and c.path.endswith(".xml") and c.path.startswith(SAMPLES_ROOT + "/")
+        if c.is_new
+        and (c.path.endswith(".xml") or c.path.endswith(".json"))
+        and c.path.startswith(SAMPLES_ROOT + "/")
     ]
-    if not new_xmls:
+    if not new_connector_files:
         return res
     res.status = Status.PASS
-    for c in new_xmls:
+    for c in new_connector_files:
         if c.path in exempt_paths:
             continue
         base = PurePosixPath(c.path).name
         if any(s in base for s in exempt_substrings):
             continue
         if not base.startswith("msdyn_"):
-            res.add(f"{c.path}: new XML must start with 'msdyn_'")
+            res.add(f"{c.path}: new connector config must start with 'msdyn_'")
         if base.endswith("..xml"):
             res.add(f"{c.path}: trailing-dot filename not allowed for new files")
     return res
@@ -191,7 +193,8 @@ def check_folder_convention(
     repo_root: Path, changed: list[ChangedFile], whitelist: dict
 ) -> Result:
     """For each *new* topic folder represented in the diff, verify PascalCase
-    + presence of topic.yaml, at least one *.xml, and README.md."""
+    + presence of topic.yaml, at least one *.xml or *.json connector config,
+    and README.md."""
     res = Result("Folder convention (new, incl. README.md)", Status.NA)
     exempt_folders = set(whitelist.get("folder_exemptions") or [])
 
@@ -227,8 +230,8 @@ def check_folder_convention(
         names = {p.name for p in folder_path.iterdir() if p.is_file()}
         if "topic.yaml" not in names:
             res.add(f"{tf}: missing topic.yaml")
-        if not any(n.endswith(".xml") for n in names):
-            res.add(f"{tf}: missing at least one *.xml")
+        if not any(n.endswith(".xml") or n.endswith(".json") for n in names):
+            res.add(f"{tf}: missing at least one *.xml or *.json connector config")
         if "README.md" not in names:
             res.add(f"{tf}: missing README.md (required for new topics)")
     return res
