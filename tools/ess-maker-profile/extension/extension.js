@@ -365,11 +365,26 @@ class ActionsViewProvider {
                 await markCompleted(this._context, action.id);
                 await this.refresh();
             } else if (msg?.type === 'restoreLayout') {
-                await restoreStandardLayout();
+                await clearSettings(Object.keys(CHAT_ONLY_LAYOUT), vscode.ConfigurationTarget.Global);
+                await clearSettings(Object.keys(CHAT_ONLY_LAYOUT), vscode.ConfigurationTarget.Workspace);
                 await this.refresh();
+                const sel = await vscode.window.showInformationMessage(
+                    'Standard layout restored. Reload the window for full effect.',
+                    'Reload Window'
+                );
+                if (sel === 'Reload Window') {
+                    await vscode.commands.executeCommand('workbench.action.reloadWindow');
+                }
             } else if (msg?.type === 'reapplyLayout') {
-                await applyChatOnlyLayout();
+                await applySettings(CHAT_ONLY_LAYOUT, vscode.ConfigurationTarget.Global);
                 await this.refresh();
+                const sel = await vscode.window.showInformationMessage(
+                    'Lite mode applied. Reload the window for full effect.',
+                    'Reload Window'
+                );
+                if (sel === 'Reload Window') {
+                    await vscode.commands.executeCommand('workbench.action.reloadWindow');
+                }
             } else if (msg?.type === 'resetProgress') {
                 const sel = await vscode.window.showWarningMessage(
                     'Reset Quick Actions progress? All buttons will be re-locked except Connect.',
