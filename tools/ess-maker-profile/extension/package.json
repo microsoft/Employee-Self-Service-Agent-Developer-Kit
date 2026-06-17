@@ -91,7 +91,7 @@
       {
         "id": "essMaker.welcome",
         "title": "Welcome to the ESS Maker Kit",
-        "description": "Build, update, and publish your Employee Self-Service agent in plain English. No code required.",
+        "description": "Build, update, and publish your Employee Self-Service agent with plain English. No code required.",
         "steps": [
           {
             "id": "overview",
