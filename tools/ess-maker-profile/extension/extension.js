@@ -120,6 +120,11 @@ async function tryRun(commandId, ...args) {
     catch (err) { console.warn(`[ess-maker] ${commandId} failed:`, err.message); return false; }
 }
 
+function isLiteMode() {
+    const cfg = vscode.workspace.getConfiguration();
+    return cfg.get('workbench.activityBar.location') === 'hidden';
+}
+
 async function openChatInEditor() {
     // Try the newer chat-in-editor command first, then fall back.
     const candidates = [
@@ -361,8 +366,10 @@ class ActionsViewProvider {
                 await this.refresh();
             } else if (msg?.type === 'restoreLayout') {
                 await restoreStandardLayout();
+                await this.refresh();
             } else if (msg?.type === 'reapplyLayout') {
                 await applyChatOnlyLayout();
+                await this.refresh();
             } else if (msg?.type === 'resetProgress') {
                 const sel = await vscode.window.showWarningMessage(
                     'Reset Quick Actions progress? All buttons will be re-locked except Connect.',
@@ -387,8 +394,9 @@ class ActionsViewProvider {
         for (const a of ACTIONS) {
             states[a.id] = actionState(a, completed);
         }
+        const liteMode = isLiteMode();
         try {
-            await this._view.webview.postMessage({ type: 'state', states });
+            await this._view.webview.postMessage({ type: 'state', states, liteMode });
         } catch {}
     }
 
@@ -491,11 +499,11 @@ class ActionsViewProvider {
     <h2>Customize your ESS agent</h2>
     ${buttons}
     <hr />
-    <button class="action secondary" data-action="reapplyLayout">
+    <button class="action secondary" data-action="reapplyLayout" id="btn-lite">
         <div class="icon">🪟</div>
         <div class="text">
-            <div class="label">Re-apply chat-only layout</div>
-            <div class="sub">If something moved, put it back</div>
+            <div class="label">Switch to lite mode</div>
+            <div class="sub">Chat-only layout with big buttons</div>
         </div>
     </button>
     <button class="action secondary" data-action="resetProgress">
@@ -505,7 +513,7 @@ class ActionsViewProvider {
             <div class="sub">Re-lock the steps</div>
         </div>
     </button>
-    <button class="action secondary" data-action="restoreLayout">
+    <button class="action secondary" data-action="restoreLayout" id="btn-standard">
         <div class="icon">⚙️</div>
         <div class="text">
             <div class="label">Switch to standard VS Code</div>
@@ -551,6 +559,16 @@ class ActionsViewProvider {
                 btn.title = '';
                 sub.textContent = subs[id];
             }
+        }
+        // Show/hide mode-toggle buttons based on current layout.
+        const btnLite = document.getElementById('btn-lite');
+        const btnStandard = document.getElementById('btn-standard');
+        if (e.data.liteMode) {
+            btnLite.style.display = 'none';
+            btnStandard.style.display = '';
+        } else {
+            btnLite.style.display = '';
+            btnStandard.style.display = 'none';
         }
     });
     vscode.postMessage({ type: 'ready' });
