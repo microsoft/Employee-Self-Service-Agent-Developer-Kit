@@ -479,7 +479,7 @@ async function applyChatOnlyLayout({ silent = false, showWalkthrough = false } =
     // Collapse the explorer tree LAST — VS Code's async tree restore and
     // editor operations above can re-expand it if we collapse too early.
     await tryRun('workbench.view.explorer');
-    await new Promise((r) => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 500));
     await tryRun('workbench.files.action.collapseExplorerFolders');
     await tryRun('list.collapseAll');
 
@@ -488,6 +488,12 @@ async function applyChatOnlyLayout({ silent = false, showWalkthrough = false } =
     // moved it to the primary sidebar, it'll appear there instead.
     await tryRun('workbench.view.extension.essMakerActions');
     await tryRun('essMaker.actionsView.focus');
+
+    // Second collapse pass — focusing the Quick Actions panel sometimes
+    // triggers VS Code to re-expand the explorer tree asynchronously.
+    await new Promise((r) => setTimeout(r, 500));
+    await tryRun('workbench.files.action.collapseExplorerFolders');
+    await tryRun('list.collapseAll');
 
     if (!silent) {
         const sel = await vscode.window.showInformationMessage(
@@ -858,11 +864,10 @@ function activate(context) {
     const userWantsLite = context.globalState.get(LITE_MODE_KEY, true); // default to lite
     if (vscode.workspace.workspaceFolders?.length) {
         if (!alreadyApplied) {
-            // First install: show the Getting Started walkthrough so new
-            // users get a guided tour. They click "Connect now" to start
-            // /setup when ready.
+            // First install: apply the chat-only layout and open /setup.
+            // Users can open the tutorial from the "View tutorial" button.
             context.globalState.update(LITE_MODE_KEY, true);
-            applyChatOnlyLayout({ silent: false, showWalkthrough: true })
+            applyChatOnlyLayout({ silent: false })
                 .then(() => context.globalState.update(APPLIED_KEY, true));
         } else if (userWantsLite) {
             // Defer slightly so VS Code finishes its own layout restore first.
