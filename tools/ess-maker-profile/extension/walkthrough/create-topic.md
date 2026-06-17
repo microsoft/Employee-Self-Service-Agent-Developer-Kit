@@ -2,14 +2,14 @@
 
 A **topic** is one conversation your agent can handle — for example, "submit a time-off request" or "reset my password".
 
-Click **Create a topic** above and describe what you want in plain English. The kit will:
+When you click **Create a topic**, a chat opens where you describe what you want in plain English. The kit will:
 
 - Generate trigger phrases (the things employees might say).
 - Build the conversation flow and adaptive cards.
 - Wire up the integration to ServiceNow, Workday, or your custom system if needed.
 - Save everything to your local working copy.
 
-Nothing is pushed to production yet — that comes later, in step 5.
+Nothing is pushed to production yet — that comes later with the Push button.
 
 ### Examples
 

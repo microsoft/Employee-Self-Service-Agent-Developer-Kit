@@ -54,7 +54,7 @@
       },
       {
         "command": "essMaker.openWalkthrough",
-        "title": "ESS Maker: Open Welcome Walkthrough",
+        "title": "ESS Maker: View Tutorial",
         "category": "ESS Maker"
       },
       {
@@ -95,8 +95,8 @@
         "steps": [
           {
             "id": "overview",
-            "title": "Welcome",
-            "description": "This kit lets you describe what your ESS agent should do, and GitHub Copilot does the rest.\n\nWork through the steps on the left in order. Each step opens a guided chat — just answer the prompts.\n\n[Close this guide](command:workbench.action.closeActiveEditor)",
+            "title": "How the kit works",
+            "description": "You describe what you want in plain English. GitHub Copilot does the rest — generating topics, adaptive cards, and integration wiring.\n\nUse the Quick Actions buttons on the left to work through each step.\n\n[Close this tutorial](command:workbench.action.closeActiveEditor)",
             "media": {
               "markdown": "walkthrough/overview.md"
             },
@@ -104,58 +104,48 @@
           },
           {
             "id": "connect",
-            "title": "1. Connect to your environment",
-            "description": "Sign in to your Power Platform environment so the kit can read your ESS agent.\n[Connect now](command:essMaker.runSetup)",
+            "title": "Connect",
+            "description": "Signs you in to your Power Platform environment so the kit can discover your deployed ESS agent and create a local working copy.",
             "media": {
               "markdown": "walkthrough/connect.md"
             },
-            "completionEvents": [
-              "onCommand:essMaker.runSetup"
-            ]
+            "completionEvents": []
           },
           {
             "id": "create",
-            "title": "2. Create a topic",
-            "description": "Describe a new conversation in plain English. The kit generates the topic, adaptive cards and integration wiring.\n[Create a topic](command:essMaker.runCreate)",
+            "title": "Create a topic",
+            "description": "Generates a new conversation topic from a plain-English description — trigger phrases, conversation flow, adaptive cards, and integration wiring.",
             "media": {
               "markdown": "walkthrough/create-topic.md"
             },
-            "completionEvents": [
-              "onCommand:essMaker.runCreate"
-            ]
+            "completionEvents": []
           },
           {
             "id": "scan",
-            "title": "3. Scan for issues",
-            "description": "Find broken references, missing bindings and malformed configuration before you ship.\n[Scan now](command:essMaker.runScan)",
+            "title": "Scan for issues",
+            "description": "Checks your agent for broken references, missing bindings, malformed configuration, and dependency conflicts before you ship.",
             "media": {
               "markdown": "walkthrough/scan.md"
             },
-            "completionEvents": [
-              "onCommand:essMaker.runScan"
-            ]
+            "completionEvents": []
           },
           {
             "id": "flightcheck",
-            "title": "4. Validate readiness",
-            "description": "Run 41+ automated checks across licensing, environment, integrations and publishing readiness.\n[Run FlightCheck](command:essMaker.runFlightcheck)",
+            "title": "Validate readiness",
+            "description": "Runs 41+ automated checks across licensing, environment, integrations, and publishing readiness. Produces an HTML report you can share with stakeholders.",
             "media": {
               "markdown": "walkthrough/flightcheck.md"
             },
-            "completionEvents": [
-              "onCommand:essMaker.runFlightcheck"
-            ]
+            "completionEvents": []
           },
           {
             "id": "push",
-            "title": "5. Push to Copilot Studio",
-            "description": "Deploy your changes safely: checkpoint → dry-run diff → push → verify. Rollback is always one command away.\n[Push to Copilot Studio](command:essMaker.runPush)",
+            "title": "Push to Copilot Studio",
+            "description": "Safely deploys your changes: checkpoint → dry-run diff → push → verify. You can always roll back if something goes wrong.",
             "media": {
               "markdown": "walkthrough/push.md"
             },
-            "completionEvents": [
-              "onCommand:essMaker.runPush"
-            ]
+            "completionEvents": []
           }
         ]
       }

@@ -543,8 +543,8 @@ class ActionsViewProvider {
     <button class="action secondary" data-action="openWalkthrough">
         <div class="icon">📖</div>
         <div class="text">
-            <div class="label">View walkthrough</div>
-            <div class="sub">Step-by-step guided tour</div>
+            <div class="label">View tutorial</div>
+            <div class="sub">How each button works</div>
         </div>
     </button>
     <button class="action secondary" data-action="restoreLayout" id="btn-standard">

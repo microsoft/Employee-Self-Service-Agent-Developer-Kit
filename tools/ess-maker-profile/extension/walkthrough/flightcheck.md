@@ -1,6 +1,6 @@
 # Validate readiness — FlightCheck
 
-FlightCheck runs 41+ automated checks across eight categories before you go to production:
+The **Validate readiness** button runs FlightCheck — 41+ automated checks across eight categories before you go to production:
 
 - **Prerequisites** — licenses and admin roles.
 - **Environment** — Power Platform environment and Dataverse provisioning.
@@ -11,4 +11,4 @@ FlightCheck runs 41+ automated checks across eight categories before you go to p
 - **Configuration** — per-agent validation across all extracted agents.
 - **Publishing readiness** — golden prompts, UAT sign-off, managed solution export.
 
-Click **Run FlightCheck** above. When it finishes you'll get an HTML report you can share with stakeholders, with color-coded results and clickable remediation links for anything that needs fixing.
+When it finishes you'll get an HTML report you can share with stakeholders, with color-coded results and clickable remediation links for anything that needs fixing.
