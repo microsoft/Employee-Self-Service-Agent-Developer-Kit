@@ -2,7 +2,7 @@
   "name": "ess-maker-profile",
   "displayName": "ESS Maker",
   "description": "Chat-only, big-button experience for customizing your Employee Self-Service agent. POC.",
-  "version": "0.4.21",
+  "version": "0.4.22",
   "publisher": "microsoft-ess",
   "private": true,
   "engines": {
@@ -86,70 +86,7 @@
           "contextualTitle": "ESS Maker"
         }
       ]
-    },
-    "walkthroughs": [
-      {
-        "id": "essMaker.welcome",
-        "title": "Welcome to the ESS Maker Kit",
-        "description": "Build, update, and publish your Employee Self-Service agent with plain English. No code required.",
-        "steps": [
-          {
-            "id": "overview",
-            "title": "How the kit works",
-            "description": "You describe what you want in plain English. GitHub Copilot does the rest — generating topics, adaptive cards, and integration wiring.\n\nUse the Quick Actions buttons on the left to work through each step.\n\n[Close this tutorial](command:workbench.action.closeActiveEditor)",
-            "media": {
-              "markdown": "walkthrough/overview.md"
-            },
-            "completionEvents": []
-          },
-          {
-            "id": "connect",
-            "title": "Connect",
-            "description": "Signs you in to your Power Platform environment so the kit can discover your deployed ESS agent and create a local working copy.",
-            "media": {
-              "markdown": "walkthrough/connect.md"
-            },
-            "completionEvents": []
-          },
-          {
-            "id": "create",
-            "title": "Create a topic",
-            "description": "Generates a new conversation topic from a plain-English description — trigger phrases, conversation flow, adaptive cards, and integration wiring.",
-            "media": {
-              "markdown": "walkthrough/create-topic.md"
-            },
-            "completionEvents": []
-          },
-          {
-            "id": "scan",
-            "title": "Scan for issues",
-            "description": "Checks your agent for broken references, missing bindings, malformed configuration, and dependency conflicts before you ship.",
-            "media": {
-              "markdown": "walkthrough/scan.md"
-            },
-            "completionEvents": []
-          },
-          {
-            "id": "flightcheck",
-            "title": "Validate readiness",
-            "description": "Runs 41+ automated checks across licensing, environment, integrations, and publishing readiness. Produces an HTML report you can share with stakeholders.",
-            "media": {
-              "markdown": "walkthrough/flightcheck.md"
-            },
-            "completionEvents": []
-          },
-          {
-            "id": "push",
-            "title": "Push to Copilot Studio",
-            "description": "Safely deploys your changes: checkpoint → dry-run diff → push → verify. You can always roll back if something goes wrong.",
-            "media": {
-              "markdown": "walkthrough/push.md"
-            },
-            "completionEvents": []
-          }
-        ]
-      }
-    ]
+    }
   },
   "scripts": {
     "validate": "node -e \"JSON.parse(require('fs').readFileSync('package.json','utf8'))\""

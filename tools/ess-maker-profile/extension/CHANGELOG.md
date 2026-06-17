@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.22 (POC)
+
+- **Tutorial is now a custom webview panel** — no checkboxes, no step
+  indicators. All tutorial content renders as a single scrollable page
+  with a table-of-contents nav bar.
+- **Tutorial opens beside the chat** instead of replacing it. On first
+  install the tutorial appears on the left with `/setup` chat on the
+  right. The "View tutorial" button opens it next to whatever is
+  currently focused.
+- Removed VS Code walkthrough registration from `package.json`.
+
 ## 0.4.21 (POC)
 
 - **Getting Started walkthrough + chat side-by-side on first install.**

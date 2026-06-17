@@ -64,6 +64,8 @@ const ACTIONS = [
 
 const STATE_KEY = 'essMaker.completedActions.v3';
 
+let _tutorialPanel = null;
+
 function getCompleted(context) {
     return new Set(context.globalState.get(STATE_KEY, []));
 }
@@ -124,6 +126,185 @@ async function tryRun(commandId, ...args) {
 function isLiteMode() {
     const cfg = vscode.workspace.getConfiguration();
     return cfg.get('workbench.activityBar.location') === 'hidden';
+}
+
+function openTutorialPanel(column = vscode.ViewColumn.Beside) {
+    if (_tutorialPanel) {
+        _tutorialPanel.reveal(column);
+        return;
+    }
+    _tutorialPanel = vscode.window.createWebviewPanel(
+        'essMaker.tutorial',
+        'ESS Maker Tutorial',
+        column,
+        { enableScripts: false }
+    );
+    _tutorialPanel.webview.html = getTutorialHtml();
+    _tutorialPanel.onDidDispose(() => { _tutorialPanel = null; });
+}
+
+function getTutorialHtml() {
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<style>
+    body {
+        font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, sans-serif);
+        color: var(--vscode-foreground);
+        background: var(--vscode-editor-background);
+        padding: 24px 32px 48px;
+        max-width: 680px;
+        margin: 0 auto;
+        line-height: 1.65;
+        font-size: 13px;
+    }
+    h1 { font-size: 20px; margin: 0 0 4px; font-weight: 600; }
+    .subtitle {
+        color: var(--vscode-descriptionForeground);
+        margin: 0 0 20px;
+        font-size: 13px;
+    }
+    nav {
+        background: var(--vscode-sideBar-background, var(--vscode-editor-background));
+        border: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
+        border-radius: 6px;
+        padding: 12px 16px;
+        margin-bottom: 24px;
+        line-height: 2;
+    }
+    nav a {
+        color: var(--vscode-textLink-foreground);
+        text-decoration: none;
+        white-space: nowrap;
+    }
+    nav a:hover { text-decoration: underline; }
+    .sep { opacity: 0.4; margin: 0 6px; }
+    h2 {
+        font-size: 16px;
+        margin: 32px 0 8px;
+        padding-bottom: 6px;
+        border-bottom: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
+        font-weight: 600;
+    }
+    h3 { font-size: 14px; margin: 18px 0 6px; font-weight: 600; }
+    ul, ol { padding-left: 20px; margin: 8px 0; }
+    li { margin: 4px 0; }
+    blockquote {
+        border-left: 3px solid var(--vscode-textLink-foreground, #007acc);
+        margin: 12px 0;
+        padding: 8px 16px;
+        background: var(--vscode-textBlockQuote-background, rgba(128,128,128,0.05));
+        border-radius: 0 4px 4px 0;
+    }
+    blockquote p { margin: 4px 0; }
+    strong { font-weight: 600; }
+    code {
+        background: var(--vscode-textCodeBlock-background, rgba(128,128,128,0.1));
+        padding: 1px 5px;
+        border-radius: 3px;
+        font-size: 12px;
+    }
+</style>
+</head>
+<body>
+    <h1>Welcome to the ESS Maker Kit</h1>
+    <p class="subtitle">Build, update, and publish your Employee Self-Service agent with plain English. No code required.</p>
+
+    <nav>
+        <a href="#how">How it works</a><span class="sep">·</span>
+        <a href="#connect">Connect</a><span class="sep">·</span>
+        <a href="#create">Create</a><span class="sep">·</span>
+        <a href="#scan">Scan</a><span class="sep">·</span>
+        <a href="#flightcheck">FlightCheck</a><span class="sep">·</span>
+        <a href="#push">Push</a>
+    </nav>
+
+    <section id="how">
+        <h2>\u{1f527} How the kit works</h2>
+        <p>You\u2019re about to customize your Employee Self-Service agent \u2014 the assistant your employees use for HR, IT and facilities requests.</p>
+        <h3>The workflow</h3>
+        <ol>
+            <li><strong>Connect</strong> \u2014 Sign in to your Power Platform environment.</li>
+            <li><strong>Create a topic</strong> \u2014 Describe what you want in plain English. The kit generates everything.</li>
+            <li><strong>Scan</strong> \u2014 Check for broken references and configuration issues.</li>
+            <li><strong>FlightCheck</strong> \u2014 Run 41+ automated readiness checks.</li>
+            <li><strong>Push</strong> \u2014 Safely deploy your changes to Copilot Studio.</li>
+        </ol>
+        <p>Each step is available as a button in the <strong>Quick Actions</strong> panel on the left. Click any button to open a guided chat \u2014 just answer the prompts.</p>
+        <p>You don\u2019t need to know YAML, JSON or any code.</p>
+    </section>
+
+    <section id="connect">
+        <h2>\u{1f50c} Connect</h2>
+        <p>The <strong>Connect</strong> button signs you in to your Power Platform environment so the kit can:</p>
+        <ul>
+            <li>Discover your deployed ESS agent and its components.</li>
+            <li>Create a local working copy for safe editing.</li>
+            <li>Validate connectivity before any changes are pushed.</li>
+        </ul>
+        <p>When you click Connect, a chat opens with the <code>/setup</code> command \u2014 just answer the prompts (environment URL, then sign-in).</p>
+        <blockquote><p>First time? You\u2019ll see a browser pop-up asking you to sign in with your work account. That\u2019s expected.</p></blockquote>
+    </section>
+
+    <section id="create">
+        <h2>\u2728 Create a topic</h2>
+        <p>A <strong>topic</strong> is one conversation your agent can handle \u2014 for example, \u201csubmit a time-off request\u201d or \u201creset my password\u201d.</p>
+        <p>When you click <strong>Create a topic</strong>, a chat opens where you describe what you want in plain English. The kit will:</p>
+        <ul>
+            <li>Generate trigger phrases (the things employees might say).</li>
+            <li>Build the conversation flow and adaptive cards.</li>
+            <li>Wire up the integration to ServiceNow, Workday, or your custom system if needed.</li>
+            <li>Save everything to your local working copy.</li>
+        </ul>
+        <p>Nothing is pushed to production yet \u2014 that comes later with the Push button.</p>
+        <h3>Examples</h3>
+        <blockquote><p>\u201cWhen someone asks about their PTO balance, look it up in Workday and show how many days they have left this year.\u201d</p></blockquote>
+        <blockquote><p>\u201cLet employees submit IT tickets for laptop issues. Ask for the make/model, what\u2019s wrong, and urgency, then file the ticket in ServiceNow.\u201d</p></blockquote>
+    </section>
+
+    <section id="scan">
+        <h2>\u{1f50d} Scan for issues</h2>
+        <p>The <strong>Scan</strong> button checks your agent for common problems before you push to Copilot Studio:</p>
+        <ul>
+            <li>Broken references between topics and variables.</li>
+            <li>Missing workflow bindings.</li>
+            <li>Malformed configuration.</li>
+            <li>Dependency conflicts.</li>
+        </ul>
+        <p>The kit lists any issues grouped by severity and offers to fix them for you. You confirm each fix before it\u2019s applied.</p>
+    </section>
+
+    <section id="flightcheck">
+        <h2>\u2708\ufe0f Validate readiness \u2014 FlightCheck</h2>
+        <p>The <strong>Validate readiness</strong> button runs FlightCheck \u2014 41+ automated checks across eight categories before you go to production:</p>
+        <ul>
+            <li><strong>Prerequisites</strong> \u2014 licenses and admin roles.</li>
+            <li><strong>Environment</strong> \u2014 Power Platform environment and Dataverse provisioning.</li>
+            <li><strong>Authentication</strong> \u2014 Entra ID configuration and Conditional Access.</li>
+            <li><strong>External systems</strong> \u2014 Workday, ServiceNow, SAP integrations.</li>
+            <li><strong>Workday deep checks</strong> \u2014 17 SOAP workflow tests against the live API.</li>
+            <li><strong>Agent files</strong> \u2014 instructions, prompts, required topics.</li>
+            <li><strong>Configuration</strong> \u2014 per-agent validation across all extracted agents.</li>
+            <li><strong>Publishing readiness</strong> \u2014 golden prompts, UAT sign-off, managed solution export.</li>
+        </ul>
+        <p>When it finishes you\u2019ll get an HTML report you can share with stakeholders, with color-coded results and clickable remediation links for anything that needs fixing.</p>
+    </section>
+
+    <section id="push">
+        <h2>\u{1f680} Push to Copilot Studio</h2>
+        <p>The <strong>Push to Copilot</strong> button safely deploys your changes:</p>
+        <ol>
+            <li><strong>Checkpoint</strong> \u2014 back up the current state so you can roll back.</li>
+            <li><strong>Dry-run diff</strong> \u2014 preview exactly what will change.</li>
+            <li><strong>Push</strong> \u2014 apply the changes to your Copilot Studio environment.</li>
+            <li><strong>Verify</strong> \u2014 confirm the deployment succeeded.</li>
+        </ol>
+        <p>You\u2019ll see a preview of every change before anything is committed, and you can cancel at any point.</p>
+        <blockquote><p>Rollback is always one command away \u2014 just ask the chat to \u201croll back the last push\u201d if something goes wrong.</p></blockquote>
+    </section>
+</body>
+</html>`;
 }
 
 async function openChatInEditor() {
@@ -197,13 +378,8 @@ async function applyChatOnlyLayout({ silent = false, showWalkthrough = false } =
     await tryRun('workbench.action.closeAllEditors');
 
     if (showWalkthrough) {
-        // First-run: open the Getting Started walkthrough on the left and
-        // a /setup chat on the right, side-by-side.
-        await vscode.commands.executeCommand(
-            'workbench.action.openWalkthrough',
-            { category: `${EXT_ID}#essMaker.welcome`, step: `${EXT_ID}#essMaker.welcome#overview` },
-            false
-        );
+        // First-run: open the tutorial on the left and a /setup chat on the right.
+        openTutorialPanel(vscode.ViewColumn.One);
         await new Promise((r) => setTimeout(r, 500));
         // Split right — the new (right) editor group gets focus.
         await tryRun('workbench.action.splitEditorRight');
@@ -401,11 +577,7 @@ class ActionsViewProvider {
                     await this.refresh();
                 }
             } else if (msg?.type === 'openWalkthrough') {
-                await vscode.commands.executeCommand(
-                    'workbench.action.openWalkthrough',
-                    { category: `${EXT_ID}#essMaker.welcome` },
-                    false
-                );
+                openTutorialPanel(vscode.ViewColumn.Beside);
             } else if (msg?.type === 'ready') {
                 await this.refresh();
             }
@@ -641,11 +813,7 @@ function activate(context) {
             tryRun('workbench.view.extension.essMakerActions').then(() => tryRun('essMaker.actionsView.focus'))
         ),
         vscode.commands.registerCommand('essMaker.openWalkthrough', () =>
-            vscode.commands.executeCommand(
-                'workbench.action.openWalkthrough',
-                { category: `${EXT_ID}#essMaker.welcome` },
-                false
-            )
+            openTutorialPanel(vscode.ViewColumn.Beside)
         ),
         vscode.window.registerWebviewViewProvider(
             'essMaker.actionsView',
