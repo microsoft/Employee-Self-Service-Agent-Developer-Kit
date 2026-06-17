@@ -90,8 +90,8 @@
     "walkthroughs": [
       {
         "id": "essMaker.welcome",
-        "title": "Customize your ESS agent",
-        "description": "Build and update your Employee Self-Service agent in plain English. No code required.",
+        "title": "Welcome to the ESS Maker Kit",
+        "description": "Build, update, and publish your Employee Self-Service agent in plain English. No code required.",
         "steps": [
           {
             "id": "overview",
