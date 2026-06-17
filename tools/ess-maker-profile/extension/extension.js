@@ -466,9 +466,8 @@ async function applyChatOnlyLayout({ silent = false, showWalkthrough = false } =
             console.warn('[ess-maker] paste /setup failed:', e && e.message);
         }
     }
-    // Hide the aux bar if it's open (it will be empty since the
-    // installer no longer requests `code chat /setup`).
-    await tryRun('workbench.action.closeAuxiliaryBar');
+    // Note: we intentionally do NOT close the auxiliary bar — that's where
+    // the Quick Actions panel lives.
 
     if (!silent) {
         // Hide menu bar for this session (the setting picks it up on
@@ -476,24 +475,15 @@ async function applyChatOnlyLayout({ silent = false, showWalkthrough = false } =
         await tryRun('workbench.action.toggleMenuBar');
     }
 
-    // Collapse the explorer tree LAST — VS Code's async tree restore and
-    // editor operations above can re-expand it if we collapse too early.
-    await tryRun('workbench.view.explorer');
-    await new Promise((r) => setTimeout(r, 500));
-    await tryRun('workbench.files.action.collapseExplorerFolders');
-    await tryRun('list.collapseAll');
-
-    // Open + focus the Quick Actions view container wherever it lives.
-    // Per package.json this is the auxiliary bar; if a previous session
-    // moved it to the primary sidebar, it'll appear there instead.
+    // Open Quick Actions in the auxiliary bar, then close the primary sidebar
+    // (explorer). The order matters: on subsequent launches (after reload) the
+    // view is correctly routed to the aux bar. On very first launch (before
+    // reload) it may land in the primary sidebar — that's OK, the reload
+    // prompt will fix it.
     await tryRun('workbench.view.extension.essMakerActions');
     await tryRun('essMaker.actionsView.focus');
-
-    // Second collapse pass — focusing the Quick Actions panel sometimes
-    // triggers VS Code to re-expand the explorer tree asynchronously.
-    await new Promise((r) => setTimeout(r, 500));
-    await tryRun('workbench.files.action.collapseExplorerFolders');
-    await tryRun('list.collapseAll');
+    await new Promise((r) => setTimeout(r, 300));
+    await tryRun('workbench.action.closeSidebar');
 
     if (!silent) {
         const sel = await vscode.window.showInformationMessage(
