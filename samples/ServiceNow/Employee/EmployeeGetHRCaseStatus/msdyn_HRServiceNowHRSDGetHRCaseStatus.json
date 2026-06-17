@@ -1,0 +1,18 @@
+{
+  "Scenario": "msdyn_HRServiceNowHRSDGetHRCaseStatus",
+  "Table": "sn_hr_core_case",
+  "Operation": "READ",
+  "FilterCriteria": [
+    { "FieldName": "number", "Operator": "=", "VariableName": "CaseNumber" },
+    { "FieldName": "opened_for", "Operator": "=", "VariableName": "Opened_By" }
+  ],
+  "Limit": 1,
+  "Offset": 0,
+  "DisplaySystemReferences": true,
+  "ExcludeReferenceLinks": true,
+  "OutputFieldMapping": [
+    { "FieldName": "number", "OutputName": "CaseNumber" },
+    { "FieldName": "state", "OutputName": "State" },
+    { "FieldName": "short_description", "OutputName": "ShortDescription" }
+  ]
+}
