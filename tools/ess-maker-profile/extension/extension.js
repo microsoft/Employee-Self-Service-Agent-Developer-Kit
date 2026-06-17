@@ -485,6 +485,14 @@ async function applyChatOnlyLayout({ silent = false, showWalkthrough = false } =
     await new Promise((r) => setTimeout(r, 300));
     await tryRun('workbench.action.closeSidebar');
 
+    // VS Code may re-open the sidebar after our close (folder restore, etc).
+    // Fire additional close attempts with staggered delays to ensure it sticks.
+    for (const delay of [500, 1500, 3000]) {
+        setTimeout(() => {
+            vscode.commands.executeCommand('workbench.action.closeSidebar').then(() => {}, () => {});
+        }, delay);
+    }
+
     if (!silent) {
         const sel = await vscode.window.showInformationMessage(
             'ESS Maker chat-only layout applied. Reload the window for the menu bar and title bar to disappear.',
@@ -860,8 +868,8 @@ function activate(context) {
             applyChatOnlyLayout({ silent: false })
                 .then(() => context.globalState.update(APPLIED_KEY, true));
         } else if (userWantsLite) {
-            // Defer slightly so VS Code finishes its own layout restore first.
-            setTimeout(() => { applyChatOnlyLayout({ silent: true }).catch(() => {}); }, 400);
+            // Defer so VS Code finishes its own layout restore first.
+            setTimeout(() => { applyChatOnlyLayout({ silent: true }).catch(() => {}); }, 1500);
         }
         // If userWantsLite is false, skip re-applying — user chose standard mode.
     }
