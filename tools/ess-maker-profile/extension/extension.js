@@ -82,23 +82,10 @@ async function resetCompleted(context) {
 // already has topics from a previous session).
 async function inferFromWorkspace(context) {
     const completed = getCompleted(context);
-    try {
-        const topicFiles = await vscode.workspace.findFiles(
-            '**/{topics,solutions}/**/*.{yaml,yml}', '**/node_modules/**', 1
-        );
-        if (topicFiles.length > 0) {
-            completed.add('setup');
-            completed.add('create');
-        }
-        // Connection markers — any of these implies setup happened.
-        const cfgFiles = await vscode.workspace.findFiles(
-            '**/{.env,dataverse-mcp.json,.copilot-studio,*.pp-config}', '**/node_modules/**', 1
-        );
-        if (cfgFiles.length > 0) {
-            completed.add('setup');
-        }
-    } catch {}
-    await context.globalState.update(STATE_KEY, Array.from(completed));
+    // Auto-inference removed: the workspace (ess-maker-skills) always
+    // contains YAML files under solutions/, which caused setup + create
+    // to appear completed on every fresh install. Buttons now start
+    // unchecked and are only marked done when the user actually clicks them.
     return completed;
 }
 
