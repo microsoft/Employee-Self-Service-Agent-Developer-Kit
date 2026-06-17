@@ -53,13 +53,13 @@ const CHAT_ONLY_LAYOUT = {
 // becomes clickable. The state is tracked in globalState and is also
 // inferred from workspace contents (e.g. presence of topic yaml files).
 const ACTIONS = [
-    { id: 'setup',       icon: '🔌', label: 'Connect',           sub: 'Sign in to your environment',  slash: '/setup',       requires: [] },
-    { id: 'create',      icon: '✨', label: 'Create a topic',    sub: 'Describe a new conversation',  slash: '/create',      requires: ['setup'] },
-    { id: 'update',      icon: '✏️', label: 'Update a topic',    sub: 'Tweak an existing topic',      slash: '/update',      requires: ['setup'] },
-    { id: 'scan',        icon: '🔍', label: 'Scan for issues',   sub: 'Find broken bindings',         slash: '/scan',        requires: ['setup'] },
-    { id: 'flightcheck', icon: '✈️', label: 'Validate readiness',sub: '41+ readiness checks',         slash: '/flightcheck', requires: ['setup'] },
-    { id: 'evaluate',    icon: '📊', label: 'Generate tests',    sub: 'Build evaluation test sets',   slash: '/evaluate',    requires: ['setup'] },
-    { id: 'push',        icon: '🚀', label: 'Push to Copilot',   sub: 'Safely deploy your changes',   slash: '/push',        requires: ['setup'] },
+    { id: 'setup',       icon: '🔌', label: 'Connect',              sub: 'Sign in to your environment',  slash: '/setup',       requires: [] },
+    { id: 'create',      icon: '✨', label: 'Create a topic',       sub: 'Describe a new conversation',  slash: '/create',      requires: ['setup'] },
+    { id: 'update',      icon: '✏️', label: 'Update a topic',       sub: 'Tweak an existing topic',      slash: '/update',      requires: ['setup'] },
+    { id: 'scan',        icon: '🔍', label: 'Scan for issues',      sub: 'Find broken bindings',         slash: '/scan',        requires: ['setup'] },
+    { id: 'flightcheck', icon: '✈️', label: 'Run a flightcheck',    sub: '41+ readiness checks',         slash: '/flightcheck', requires: ['setup'] },
+    { id: 'evaluate',    icon: '📊', label: 'Generate tests',       sub: 'Build evaluation test sets',   slash: '/evaluate',    requires: ['setup', 'flightcheck'] },
+    { id: 'push',        icon: '🚀', label: 'Push to Copilot Studio', sub: 'Safely deploy your changes', slash: '/push',        requires: ['setup', 'flightcheck'] },
 ];
 
 const STATE_KEY = 'essMaker.completedActions.v3';
@@ -215,8 +215,10 @@ function getTutorialHtml() {
         <a href="#how">How it works</a><span class="sep">·</span>
         <a href="#connect">Connect</a><span class="sep">·</span>
         <a href="#create">Create</a><span class="sep">·</span>
+        <a href="#update">Update</a><span class="sep">·</span>
         <a href="#scan">Scan</a><span class="sep">·</span>
         <a href="#flightcheck">FlightCheck</a><span class="sep">·</span>
+        <a href="#tests">Generate tests</a><span class="sep">·</span>
         <a href="#push">Push</a>
     </nav>
 
@@ -227,8 +229,10 @@ function getTutorialHtml() {
         <ol>
             <li><strong>Connect</strong> \u2014 Sign in to your Power Platform environment.</li>
             <li><strong>Create a topic</strong> \u2014 Describe what you want in plain English. The kit generates everything.</li>
+            <li><strong>Update a topic</strong> \u2014 Modify an existing topic by describing the change.</li>
             <li><strong>Scan</strong> \u2014 Check for broken references and configuration issues.</li>
-            <li><strong>FlightCheck</strong> \u2014 Run 41+ automated readiness checks.</li>
+            <li><strong>Run a flightcheck</strong> \u2014 Run 41+ automated readiness checks.</li>
+            <li><strong>Generate tests</strong> \u2014 Create evaluation test sets for regression testing.</li>
             <li><strong>Push</strong> \u2014 Safely deploy your changes to Copilot Studio.</li>
         </ol>
         <p>Each step is available as a button in the <strong>Quick Actions</strong> panel on the left. Click any button to open a guided chat \u2014 just answer the prompts.</p>
@@ -263,6 +267,19 @@ function getTutorialHtml() {
         <blockquote><p>\u201cLet employees submit IT tickets for laptop issues. Ask for the make/model, what\u2019s wrong, and urgency, then file the ticket in ServiceNow.\u201d</p></blockquote>
     </section>
 
+    <section id="update">
+        <h2>\u270f\ufe0f Update a topic</h2>
+        <p>The <strong>Update a topic</strong> button lets you modify an existing conversation topic. Describe the change you want in plain English and the kit will:</p>
+        <ul>
+            <li>Find the matching topic in your local working copy.</li>
+            <li>Apply the change \u2014 add new branches, update card layouts, rewire integrations.</li>
+            <li>Preserve everything else in the topic untouched.</li>
+        </ul>
+        <h3>Examples</h3>
+        <blockquote><p>\u201cAdd a follow-up question to the PTO topic that asks whether they want to notify their manager.\u201d</p></blockquote>
+        <blockquote><p>\u201cChange the IT ticket topic to also ask for the employee\u2019s office location.\u201d</p></blockquote>
+    </section>
+
     <section id="scan">
         <h2>\u{1f50d} Scan for issues</h2>
         <p>The <strong>Scan</strong> button checks your agent for common problems before you push to Copilot Studio:</p>
@@ -276,8 +293,8 @@ function getTutorialHtml() {
     </section>
 
     <section id="flightcheck">
-        <h2>\u2708\ufe0f Validate readiness \u2014 FlightCheck</h2>
-        <p>The <strong>Validate readiness</strong> button runs FlightCheck \u2014 41+ automated checks across eight categories before you go to production:</p>
+        <h2>\u2708\ufe0f Run a flightcheck</h2>
+        <p>The <strong>Run a flightcheck</strong> button runs FlightCheck \u2014 41+ automated checks across eight categories before you go to production:</p>
         <ul>
             <li><strong>Prerequisites</strong> \u2014 licenses and admin roles.</li>
             <li><strong>Environment</strong> \u2014 Power Platform environment and Dataverse provisioning.</li>
@@ -291,9 +308,20 @@ function getTutorialHtml() {
         <p>When it finishes you\u2019ll get an HTML report you can share with stakeholders, with color-coded results and clickable remediation links for anything that needs fixing.</p>
     </section>
 
+    <section id="tests">
+        <h2>\u{1f4ca} Generate tests</h2>
+        <p>The <strong>Generate tests</strong> button creates evaluation test sets for your agent. It will:</p>
+        <ul>
+            <li>Analyze your topics and generate representative user utterances.</li>
+            <li>Create expected-response pairs for automated regression testing.</li>
+            <li>Cover edge cases and variations the agent should handle.</li>
+        </ul>
+        <p>The generated tests help you validate that future changes don\u2019t break existing conversations. This button is available after a flightcheck has passed.</p>
+    </section>
+
     <section id="push">
         <h2>\u{1f680} Push to Copilot Studio</h2>
-        <p>The <strong>Push to Copilot</strong> button safely deploys your changes:</p>
+        <p>The <strong>Push to Copilot Studio</strong> button safely deploys your changes:</p>
         <ol>
             <li><strong>Checkpoint</strong> \u2014 back up the current state so you can roll back.</li>
             <li><strong>Dry-run diff</strong> \u2014 preview exactly what will change.</li>
