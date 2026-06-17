@@ -7,7 +7,7 @@
 const vscode = require('vscode');
 
 const EXT_ID = 'microsoft-ess.ess-maker-profile';
-const APPLIED_KEY = 'essMaker.chatOnlyApplied.v6';
+const APPLIED_KEY = 'essMaker.chatOnlyApplied.v7';
 
 // Settings that strip developer chrome to the bone. Applied at GLOBAL (user)
 // scope because workspace-scope leaves menu/title-bar/activity-bar visible
@@ -61,7 +61,7 @@ const ACTIONS = [
     { id: 'push',        icon: '🚀', label: 'Push to Copilot',   sub: 'Safely deploy your changes',   slash: '/push',        requires: ['setup', 'create', 'flightcheck'] },
 ];
 
-const STATE_KEY = 'essMaker.completedActions.v2';
+const STATE_KEY = 'essMaker.completedActions.v3';
 
 function getCompleted(context) {
     return new Set(context.globalState.get(STATE_KEY, []));
