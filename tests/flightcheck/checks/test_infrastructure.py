@@ -159,7 +159,7 @@ class TestProbeEndpointDualStackFallback:
         assert result.resolved_ip == "93.184.216.34"
 
 
-    """probe_endpoint: DNS resolution fails."""
+        # probe_endpoint: DNS resolution fails.
 
     @patch(
         "flightcheck.checks.infrastructure.socket.getaddrinfo",
