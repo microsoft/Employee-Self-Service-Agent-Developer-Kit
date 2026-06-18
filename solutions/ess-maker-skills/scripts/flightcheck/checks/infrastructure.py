@@ -106,10 +106,11 @@ def probe_endpoint(host: str, port: int = 443, timeout: float = 10.0) -> ProbeRe
     for family, socktype, proto, _canonname, sockaddr in addr_info:
         s = socket.socket(family, socktype, proto)
         s.settimeout(timeout)
+        # Track the address being attempted so failure messages report the correct IP.
+        result.resolved_ip = sockaddr[0]
         try:
             s.connect(sockaddr)
             sock = s
-            result.resolved_ip = sockaddr[0]
             break
         except OSError as exc:
             last_err = exc
