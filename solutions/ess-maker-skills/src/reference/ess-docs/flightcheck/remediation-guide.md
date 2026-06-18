@@ -337,10 +337,11 @@ the ESS agent runtime.
 **Targets probed:**
 - `login.microsoftonline.com` (Entra ID authentication)
 - `api.powerplatform.com` (Power Platform API)
-- `api.bap.microsoft.com` (Business Application Platform)
-- `copilotstudio.microsoft.com` (Copilot Studio)
+- `api.powerapps.com` (Power Apps API)
+- `powerva.microsoft.com` (Power Virtual Agents)
+- `api.flow.microsoft.com` (Power Automate API)
 - `graph.microsoft.com` (Microsoft Graph)
-- Your Dataverse environment URL (e.g. `org.crm.dynamics.com`)
+- Your Dataverse environment URL (e.g. `org.crm.dynamics.com`) when configured
 
 **Probe accuracy:** HIGH — the maker's machine is behind the same corporate
 firewall that governs employee access to Microsoft 365 services.
