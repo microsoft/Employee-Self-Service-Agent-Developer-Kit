@@ -323,6 +323,48 @@ can confirm it manually. These don't affect the automated pass/fail
 verdict.
 
 Refer to the [deployment checklist](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/deploy-overview-alm)
+
+---
+
+## Infrastructure & Security
+
+### INFRA-001: Inbound connectivity to Microsoft services
+
+**What it checks:** TCP probe (DNS → TCP → TLS) from the maker's machine to
+the Microsoft cloud endpoints required by Power Platform, Copilot Studio, and
+the ESS agent runtime.
+
+**Targets probed:**
+- `login.microsoftonline.com` (Entra ID authentication)
+- `api.powerplatform.com` (Power Platform API)
+- `api.bap.microsoft.com` (Business Application Platform)
+- `copilotstudio.microsoft.com` (Copilot Studio)
+- `graph.microsoft.com` (Microsoft Graph)
+- Your Dataverse environment URL (e.g. `org.crm.dynamics.com`)
+
+**Probe accuracy:** HIGH — the maker's machine is behind the same corporate
+firewall that governs employee access to Microsoft 365 services.
+
+**Root cause (FAILED):** Corporate egress firewall is blocking outbound HTTPS
+to one or more Microsoft endpoints, or DNS cannot resolve the hostname.
+
+**Fix:**
+1. Identify which endpoint(s) failed from the FlightCheck output.
+2. Share the failed endpoints with your network / InfoSec team.
+3. Request allowlisting of HTTPS (port 443) traffic to the listed hostnames.
+4. Reference: [Power Platform online requirements](https://learn.microsoft.com/en-us/power-platform/admin/online-requirements)
+5. Re-run `/flightcheck --scope infrastructure`
+
+**Root cause (WARNING — TLS failure):** TCP connectivity exists but TLS
+handshake failed. Likely a corporate proxy intercepting HTTPS traffic or a
+certificate mismatch.
+
+**Fix:**
+1. Check if a proxy or WAF is intercepting HTTPS to the affected endpoint.
+2. Add the endpoint to proxy bypass / SSL inspection exclusion list.
+3. Re-run `/flightcheck --scope infrastructure`
+
+**Responsible role:** ESS Maker / Agent Developer → escalate to Network Admin
 for detailed guidance on each item.
 
 ## Cloud Policies / Telemetry & Feedback

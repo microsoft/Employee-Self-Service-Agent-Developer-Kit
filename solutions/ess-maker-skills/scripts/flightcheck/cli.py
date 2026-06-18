@@ -12,6 +12,7 @@ Usage:
 Scopes:
     full            — Run all checks (default)
     prerequisites   — Licenses, roles only
+    infrastructure  — Network connectivity probes
     environment     — PP environment, Dataverse, DLP
     authentication  — Entra ID, SSO, CA policies
     external        — Integration discovery (flows)
@@ -57,10 +58,12 @@ from flightcheck.checks.local_files import run_local_file_checks
 from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.checks.licensing import run_licensing_checks
 from flightcheck.checks.cloud_policy import run_cloud_policy_checks
+from flightcheck.checks.infrastructure import run_infrastructure_checks
 
 
 SCOPE_MAP = {
     "prerequisites": [("Prerequisites", run_prerequisites_checks)],
+    "infrastructure": [("Infrastructure", run_infrastructure_checks)],
     "environment": [("Environment", run_environment_checks)],
     "authentication": [("Authentication", run_authentication_checks)],
     "external": [("External Systems", run_external_systems_checks)],
@@ -84,6 +87,7 @@ SCOPE_MAP = {
 
 FULL_SCOPE = [
     ("Prerequisites", run_prerequisites_checks),
+    ("Infrastructure", run_infrastructure_checks),
     ("Environment", run_environment_checks),
     ("Authentication", run_authentication_checks),
     ("External Systems", run_external_systems_checks),
