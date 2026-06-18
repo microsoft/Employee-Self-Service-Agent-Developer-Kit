@@ -326,11 +326,9 @@ def _discover_microsoft_service_targets(runner: Any) -> dict[str, tuple[str, int
 
     # Add the tenant-specific Dataverse URL from runner.env_url
     env_url = getattr(runner, "env_url", "") or ""
-    if env_url:
-        parsed = urlparse(env_url)
-        host = parsed.hostname
-        if host:
-            targets["Dataverse"] = (host, 443)
+    host = _host_from_url(env_url)
+    if host:
+        targets["Dataverse"] = (host, 443)
 
     return targets
 
