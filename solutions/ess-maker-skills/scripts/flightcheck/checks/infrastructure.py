@@ -356,7 +356,7 @@ def check_microsoft_service_reachability(runner: Any) -> list[CheckResult]:
         results.append(result)
 
     env_url = getattr(runner, "env_url", "") or ""
-    if not env_url:
+    if not _host_from_url(env_url):
         results.append(
             CheckResult(
                 checkpoint_id="INFRA-001",
