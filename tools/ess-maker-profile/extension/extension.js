@@ -137,10 +137,43 @@ function openTutorialPanel(column = vscode.ViewColumn.Beside) {
         'essMaker.tutorial',
         'ESS Maker Tutorial',
         column,
-        { enableScripts: false }
+        { enableScripts: true }
     );
     _tutorialPanel.webview.html = getTutorialHtml();
-    _tutorialPanel.onDidDispose(() => { _tutorialPanel = null; });
+    _tutorialPanel.onDidDispose(() => {
+        _tutorialPanel = null;
+        _notifyTutorialState(false);
+    });
+    _tutorialPanel.webview.onDidReceiveMessage((msg) => {
+        if (msg?.type === 'closeTutorial') {
+            _tutorialPanel?.dispose();
+        }
+    });
+    _notifyTutorialState(true);
+}
+
+function closeTutorialPanel() {
+    if (_tutorialPanel) {
+        _tutorialPanel.dispose();
+    }
+}
+
+function toggleTutorialPanel() {
+    if (_tutorialPanel) {
+        closeTutorialPanel();
+    } else {
+        openTutorialPanel(vscode.ViewColumn.Beside);
+    }
+}
+
+// Notify the Quick Actions webview about tutorial open/close state.
+let _actionsViewProvider = null;
+function _notifyTutorialState(open) {
+    if (_actionsViewProvider?._view) {
+        try {
+            _actionsViewProvider._view.webview.postMessage({ type: 'tutorialState', open });
+        } catch {}
+    }
 }
 
 function getTutorialHtml() {
@@ -205,9 +238,28 @@ function getTutorialHtml() {
         border-radius: 3px;
         font-size: 12px;
     }
+    .close-bar {
+        display: flex;
+        justify-content: flex-end;
+        margin-bottom: 8px;
+    }
+    .close-btn {
+        background: var(--vscode-button-secondaryBackground, rgba(128,128,128,0.2));
+        color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+        border: none;
+        border-radius: 4px;
+        padding: 4px 12px;
+        cursor: pointer;
+        font-size: 12px;
+        font-family: inherit;
+    }
+    .close-btn:hover {
+        background: var(--vscode-button-secondaryHoverBackground, rgba(128,128,128,0.3));
+    }
 </style>
 </head>
 <body>
+    <div class="close-bar"><button class="close-btn" id="close-tutorial">✕ Close tutorial</button></div>
     <h1>Welcome to the ESS Maker Kit</h1>
     <p class="subtitle">Build, update, and publish your Employee Self-Service agent with plain English. No code required.</p>
 
@@ -331,6 +383,12 @@ function getTutorialHtml() {
         <p>You\u2019ll see a preview of every change before anything is committed, and you can cancel at any point.</p>
         <blockquote><p>Rollback is always one command away \u2014 just ask the chat to \u201croll back the last push\u201d if something goes wrong.</p></blockquote>
     </section>
+<script>
+    const vscode = acquireVsCodeApi();
+    document.getElementById('close-tutorial').addEventListener('click', () => {
+        vscode.postMessage({ type: 'closeTutorial' });
+    });
+</script>
 </body>
 </html>`;
 }
@@ -606,7 +664,7 @@ class ActionsViewProvider {
                     await this.refresh();
                 }
             } else if (msg?.type === 'openWalkthrough') {
-                openTutorialPanel(vscode.ViewColumn.Beside);
+                toggleTutorialPanel();
             } else if (msg?.type === 'ready') {
                 await this.refresh();
             }
@@ -741,10 +799,10 @@ class ActionsViewProvider {
             <div class="sub">Re-lock the steps</div>
         </div>
     </button>
-    <button class="action secondary" data-action="openWalkthrough">
+    <button class="action secondary" data-action="openWalkthrough" id="btn-tutorial">
         <div class="icon">📖</div>
         <div class="text">
-            <div class="label">View tutorial</div>
+            <div class="label" id="btn-tutorial-label">View tutorial</div>
             <div class="sub">How each button works</div>
         </div>
     </button>
@@ -769,6 +827,11 @@ class ActionsViewProvider {
         btn.addEventListener('click', () => vscode.postMessage({ type: btn.dataset.action }));
     });
     window.addEventListener('message', (e) => {
+        if (e.data?.type === 'tutorialState') {
+            const label = document.getElementById('btn-tutorial-label');
+            if (label) label.textContent = e.data.open ? 'Hide tutorial' : 'View tutorial';
+            return;
+        }
         if (e.data?.type !== 'state') return;
         for (const [id, s] of Object.entries(e.data.states)) {
             const btn = document.querySelector('button[data-id="' + id + '"]');
@@ -842,11 +905,11 @@ function activate(context) {
             tryRun('workbench.view.extension.essMakerActions').then(() => tryRun('essMaker.actionsView.focus'))
         ),
         vscode.commands.registerCommand('essMaker.openWalkthrough', () =>
-            openTutorialPanel(vscode.ViewColumn.Beside)
+            toggleTutorialPanel()
         ),
         vscode.window.registerWebviewViewProvider(
             'essMaker.actionsView',
-            new ActionsViewProvider(context.extensionUri, context),
+            _actionsViewProvider = new ActionsViewProvider(context.extensionUri, context),
             { webviewOptions: { retainContextWhenHidden: true } }
         )
     );
