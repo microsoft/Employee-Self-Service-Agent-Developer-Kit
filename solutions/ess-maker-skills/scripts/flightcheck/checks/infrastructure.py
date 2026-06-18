@@ -89,7 +89,8 @@ def probe_endpoint(host: str, port: int = 443, timeout: float = 10.0) -> ProbeRe
             result.error_layer = "dns"
             result.error_message = f"No address records returned for {host}"
             return result
-        result.resolved_ip = addr_info[0][4][0]
+        family, socktype, proto, _canonname, sockaddr = addr_info[0]
+        result.resolved_ip = sockaddr[0]
         result.dns_ok = True
         result.dns_ms = round((time.perf_counter() - t0) * 1000, 1)
     except socket.gaierror as exc:
@@ -100,10 +101,10 @@ def probe_endpoint(host: str, port: int = 443, timeout: float = 10.0) -> ProbeRe
 
     # Layer 2: TCP connect
     t0 = time.perf_counter()
-    sock = socket.socket(addr_info[0][0], socket.SOCK_STREAM)
+    sock = socket.socket(family, socktype, proto)
     sock.settimeout(timeout)
     try:
-        sock.connect((result.resolved_ip, port))
+        sock.connect(sockaddr)
         result.tcp_ok = True
         result.tcp_ms = round((time.perf_counter() - t0) * 1000, 1)
     except socket.timeout:
@@ -308,8 +309,9 @@ def _host_from_url(url: str | None) -> str | None:
 _MICROSOFT_ENDPOINTS: dict[str, tuple[str, int]] = {
     "Entra ID": ("login.microsoftonline.com", 443),
     "Power Platform API": ("api.powerplatform.com", 443),
-    "BAP (Business Application Platform)": ("api.bap.microsoft.com", 443),
-    "Copilot Studio": ("copilotstudio.microsoft.com", 443),
+    "Power Apps API": ("api.powerapps.com", 443),
+    "Power Virtual Agents": ("powerva.microsoft.com", 443),
+    "Power Automate API": ("api.flow.microsoft.com", 443),
     "Microsoft Graph": ("graph.microsoft.com", 443),
 }
 
@@ -354,6 +356,25 @@ def check_microsoft_service_reachability(runner: Any) -> list[CheckResult]:
             roles=[Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
         )
         results.append(result)
+
+    env_url = getattr(runner, "env_url", "") or ""
+    if not env_url:
+        results.append(
+            CheckResult(
+                checkpoint_id="INFRA-001",
+                category="Infrastructure",
+                priority=Priority.CRITICAL.value,
+                status=Status.SKIPPED.value,
+                description="Network connectivity to Dataverse",
+                result="Dataverse target skipped: no Dataverse environment URL configured.",
+                remediation=(
+                    "Set dataverseEndpoint in .local/config.json or pass "
+                    "--environment-url to include Dataverse in INFRA-001."
+                ),
+                doc_link=_DOC_LINK_INFRA_001,
+                roles=[Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
+            )
+        )
 
     return results
 

@@ -98,6 +98,29 @@ class TestProbeEndpointDnsSuccess:
         assert result.error_layer is None
         assert result.error_message is None
 
+    @patch("flightcheck.checks.infrastructure.ssl.create_default_context")
+    @patch("flightcheck.checks.infrastructure.socket.socket")
+    @patch("flightcheck.checks.infrastructure.socket.getaddrinfo")
+    def test_ipv6_uses_sockaddr_tuple(self, mock_dns, mock_socket_cls, mock_ssl_ctx):
+        mock_dns.return_value = [
+            (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("2001:db8::1", 443, 0, 0))
+        ]
+        mock_sock = MagicMock()
+        mock_socket_cls.return_value = mock_sock
+
+        mock_ssock = MagicMock()
+        mock_ssock.version.return_value = "TLSv1.3"
+        mock_ctx = MagicMock()
+        mock_ctx.wrap_socket.return_value.__enter__ = lambda s: mock_ssock
+        mock_ctx.wrap_socket.return_value.__exit__ = lambda s, *a: None
+        mock_ssl_ctx.return_value = mock_ctx
+
+        result = probe_endpoint("example.com", 443)
+
+        mock_sock.connect.assert_called_once_with(("2001:db8::1", 443, 0, 0))
+        assert result.resolved_ip == "2001:db8::1"
+        assert result.tcp_ok is True
+
 
 class TestProbeEndpointDnsFailure:
     """probe_endpoint: DNS resolution fails."""
@@ -343,6 +366,21 @@ class TestInfra001MultipleFailures:
         assert len(failed) == 2
         assert len(passed) >= 3
 
+    def test_dataverse_missing_is_skipped(self):
+        runner = _MinimalRunner(env_url="")
+        all_pass = ProbeResult(
+            host="any", port=443,
+            dns_ok=True, tcp_ok=True, tls_ok=True,
+            resolved_ip="10.0.0.1", dns_ms=1.0, tcp_ms=10.0, tls_ms=5.0,
+            tls_version="TLSv1.3",
+        )
+        with _patch_probe({"": all_pass}):
+            results = check_microsoft_service_reachability(runner)
+
+        dataverse = [r for r in results if "Dataverse" in r.description]
+        assert len(dataverse) == 1
+        assert dataverse[0].status == Status.SKIPPED.value
+
 
 # ───────────────────────────────────────────────────────────────────────
 # Shared utility tests
@@ -377,7 +415,9 @@ class TestDiscoverMicrosoftServiceTargets:
         targets = _discover_microsoft_service_targets(runner)
         assert "Entra ID" in targets
         assert "Power Platform API" in targets
-        assert "Copilot Studio" in targets
+        assert "Power Apps API" in targets
+        assert "Power Virtual Agents" in targets
+        assert "Power Automate API" in targets
         assert "Microsoft Graph" in targets
         assert "Dataverse" in targets
         assert targets["Dataverse"] == ("orgmocktenant.crm.dynamics.com", 443)
@@ -387,7 +427,7 @@ class TestDiscoverMicrosoftServiceTargets:
         targets = _discover_microsoft_service_targets(runner)
         assert "Dataverse" not in targets
         # Still has the hardcoded ones
-        assert len(targets) >= 5
+        assert len(targets) >= 6
 
 
 # ───────────────────────────────────────────────────────────────────────
