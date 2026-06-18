@@ -275,3 +275,55 @@ def test_add_readme_to_existing_topic_not_treated_as_new(tmp_path: Path) -> None
     changed = [ChangedFile(f"{topic}/README.md", "A")]
     results = run_all_checks(tmp_path, changed, whitelist={})
     assert _by_name(results)["Folder convention (new, incl. README.md)"].status is Status.NA
+
+
+def test_servicenow_subgroup_topic_folder_resolves(tmp_path: Path) -> None:
+    # ServiceNow uses a sub-grouping folder (Employee/) above the topic folder,
+    # like Workday. A topic.yaml at samples/ServiceNow/Employee/TopicX/ must map
+    # to that 4-part topic folder, not to samples/ServiceNow/Employee/.
+    rel = "samples/ServiceNow/Employee/EmployeeGetHRCaseStatus/topic.yaml"
+    _write(tmp_path, rel, VALID_TOPIC_YAML)
+    results = run_all_checks(tmp_path, [ChangedFile(rel, "M")], whitelist={})
+    assert _by_name(results)["Diff scope (samples/ only)"].status is Status.PASS
+
+
+def test_servicenow_subgroup_readme_not_treated_as_topic(tmp_path: Path) -> None:
+    # A ServiceNow sub-group README plus a real topic edit must not be flagged
+    # as touching multiple topic folders.
+    sub_readme = "samples/ServiceNow/Employee/README.md"
+    topic_yaml = "samples/ServiceNow/Employee/EmployeeGetHRCaseStatus/topic.yaml"
+    _write(tmp_path, sub_readme, VALID_README)
+    _write(tmp_path, topic_yaml, VALID_TOPIC_YAML)
+    changed = [
+        ChangedFile(sub_readme, "M"),
+        ChangedFile(topic_yaml, "M"),
+    ]
+    results = run_all_checks(tmp_path, changed, whitelist={})
+    assert _by_name(results)["Diff scope (samples/ only)"].status is Status.PASS
+
+
+def test_new_servicenow_topic_with_json_connector_passes(tmp_path: Path) -> None:
+    # ServiceNow connector configs are JSON, not XML. A new topic with a
+    # .json connector file must pass the Folder convention check.
+    topic = "samples/ServiceNow/Employee/EmployeeGetHRCaseStatus"
+    _write(tmp_path, f"{topic}/topic.yaml", VALID_TOPIC_YAML)
+    _write(tmp_path, f"{topic}/msdyn_HRServiceNowHRSDGetHRCaseStatus.json", '{"Scenario": "x"}')
+    _write(tmp_path, f"{topic}/README.md", VALID_README)
+    changed = [
+        ChangedFile(f"{topic}/topic.yaml", "A"),
+        ChangedFile(f"{topic}/msdyn_HRServiceNowHRSDGetHRCaseStatus.json", "A"),
+        ChangedFile(f"{topic}/README.md", "A"),
+    ]
+    results = run_all_checks(tmp_path, changed, whitelist={})
+    by = _by_name(results)
+    assert by["Folder convention (new, incl. README.md)"].status is Status.PASS
+    assert by["Filename convention (new)"].status is Status.PASS
+    assert by["Diff scope (samples/ only)"].status is Status.PASS
+
+
+def test_new_json_connector_bad_filename_fails(tmp_path: Path) -> None:
+    # A new JSON connector config must also start with 'msdyn_'.
+    rel = "samples/ServiceNow/Employee/EmployeeGetHRCaseStatus/getCase.json"
+    _write(tmp_path, rel, '{"Scenario": "x"}')
+    results = run_all_checks(tmp_path, [ChangedFile(rel, "A")], whitelist={})
+    assert _by_name(results)["Filename convention (new)"].status is Status.FAIL

@@ -16,7 +16,7 @@ Reference samples for the Microsoft Employee Self-Service (ESS) agent built on M
 | Folder | Description |
 |--------|-------------|
 | [Facilities/](./Facilities/) | Facilities management topics — facilities ticket creation, dining menu lookup, dining station search, guest invitations, and vehicle registration. |
-| [ServiceNow/](./ServiceNow/) | ServiceNow integration samples covering Catalog, HRSD, and ITSM scenarios. *(Coming soon.)* |
+| [ServiceNow/](./ServiceNow/) | ServiceNow integration samples — employee HRSD scenarios such as HR case status lookup. |
 | [WorkdayCustomEngineAgent/](./WorkdayCustomEngineAgent/) | Workday HR integration topics for a Custom Engine Agent (CEA) — employee and manager scenarios such as vacation balance, time-off requests, job taxonomy, contact info, education, government IDs, and direct-report views. |
 | [WorkdayDeclarativeAgent/](./WorkdayDeclarativeAgent/) | Workday HR integration scenarios packaged for a Declarative Agent (DA) — employee and manager scenarios authored declaratively for Copilot Studio. |
 
