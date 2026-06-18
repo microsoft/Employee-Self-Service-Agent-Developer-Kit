@@ -84,7 +84,7 @@ class TestProbeEndpointDnsSuccess:
         mock_ssock = MagicMock()
         mock_ssock.version.return_value = "TLSv1.3"
         mock_ctx = MagicMock()
-        mock_ctx.wrap_socket.return_value.__enter__ = lambda: mock_ssock
+        mock_ctx.wrap_socket.return_value.__enter__ = lambda self: mock_ssock
         mock_ctx.wrap_socket.return_value.__exit__ = lambda *_args: None
         mock_ssl_ctx.return_value = mock_ctx
 
@@ -111,7 +111,7 @@ class TestProbeEndpointDnsSuccess:
         mock_ssock = MagicMock()
         mock_ssock.version.return_value = "TLSv1.3"
         mock_ctx = MagicMock()
-        mock_ctx.wrap_socket.return_value.__enter__ = lambda: mock_ssock
+        mock_ctx.wrap_socket.return_value.__enter__ = lambda self: mock_ssock
         mock_ctx.wrap_socket.return_value.__exit__ = lambda *_args: None
         mock_ssl_ctx.return_value = mock_ctx
 
@@ -122,7 +122,43 @@ class TestProbeEndpointDnsSuccess:
         assert result.tcp_ok is True
 
 
-class TestProbeEndpointDnsFailure:
+class TestProbeEndpointDualStackFallback:
+    """probe_endpoint: Falls back to IPv4 when IPv6 connect fails."""
+
+    @patch("flightcheck.checks.infrastructure.ssl.create_default_context")
+    @patch("flightcheck.checks.infrastructure.socket.socket")
+    @patch("flightcheck.checks.infrastructure.socket.getaddrinfo")
+    def test_ipv6_unreachable_falls_back_to_ipv4(self, mock_dns, mock_socket_cls, mock_ssl_ctx):
+        # DNS returns IPv6 first, then IPv4
+        mock_dns.return_value = [
+            (socket.AF_INET6, socket.SOCK_STREAM, 0, "", ("2001:db8::1", 443, 0, 0)),
+            (socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 443)),
+        ]
+
+        # First socket (IPv6) fails with ENETUNREACH, second (IPv4) succeeds
+        ipv6_sock = MagicMock()
+        ipv6_sock.connect.side_effect = OSError(101, "Network is unreachable")
+        ipv4_sock = MagicMock()
+        mock_socket_cls.side_effect = [ipv6_sock, ipv4_sock]
+
+        mock_ssock = MagicMock()
+        mock_ssock.version.return_value = "TLSv1.3"
+        mock_ctx = MagicMock()
+        mock_ctx.wrap_socket.return_value.__enter__ = lambda self: mock_ssock
+        mock_ctx.wrap_socket.return_value.__exit__ = lambda *_args: None
+        mock_ssl_ctx.return_value = mock_ctx
+
+        result = probe_endpoint("example.com", 443)
+
+        # IPv6 socket was closed after failure
+        ipv6_sock.close.assert_called_once()
+        # IPv4 socket was used for successful connection
+        ipv4_sock.connect.assert_called_once_with(("93.184.216.34", 443))
+        assert result.tcp_ok is True
+        assert result.tls_ok is True
+        assert result.resolved_ip == "93.184.216.34"
+
+
     """probe_endpoint: DNS resolution fails."""
 
     @patch(
@@ -230,7 +266,7 @@ class TestProbeEndpointNoSideEffects:
         mock_ctx = MagicMock()
         mock_ssock = MagicMock()
         mock_ssock.version.return_value = "TLSv1.3"
-        mock_ctx.wrap_socket.return_value.__enter__ = lambda: mock_ssock
+        mock_ctx.wrap_socket.return_value.__enter__ = lambda self: mock_ssock
         mock_ctx.wrap_socket.return_value.__exit__ = lambda *_args: None
         mock_ssl_ctx.return_value = mock_ctx
 

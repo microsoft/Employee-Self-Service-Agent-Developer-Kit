@@ -89,8 +89,7 @@ def probe_endpoint(host: str, port: int = 443, timeout: float = 10.0) -> ProbeRe
             result.error_layer = "dns"
             result.error_message = f"No address records returned for {host}"
             return result
-        family, socktype, proto, _canonname, sockaddr = addr_info[0]
-        result.resolved_ip = sockaddr[0]
+        result.resolved_ip = addr_info[0][4][0]
         result.dns_ok = True
         result.dns_ms = round((time.perf_counter() - t0) * 1000, 1)
     except socket.gaierror as exc:
@@ -99,38 +98,45 @@ def probe_endpoint(host: str, port: int = 443, timeout: float = 10.0) -> ProbeRe
         result.dns_ms = round((time.perf_counter() - t0) * 1000, 1)
         return result
 
-    # Layer 2: TCP connect
+    # Layer 2: TCP connect — try each resolved address (handles dual-stack /
+    # broken IPv6 by falling through to IPv4 on ENETUNREACH or similar).
     t0 = time.perf_counter()
-    sock = socket.socket(family, socktype, proto)
-    sock.settimeout(timeout)
-    try:
-        sock.connect(sockaddr)
-        result.tcp_ok = True
+    sock = None
+    last_err: OSError | None = None
+    for family, socktype, proto, _canonname, sockaddr in addr_info:
+        s = socket.socket(family, socktype, proto)
+        s.settimeout(timeout)
+        try:
+            s.connect(sockaddr)
+            sock = s
+            result.resolved_ip = sockaddr[0]
+            break
+        except OSError as exc:
+            last_err = exc
+            s.close()
+
+    if sock is None:
+        # All addresses failed — report the last error
         result.tcp_ms = round((time.perf_counter() - t0) * 1000, 1)
-    except socket.timeout:
-        result.error_layer = "tcp"
-        result.error_message = (
-            f"TCP connection to {host}:{port} ({result.resolved_ip}) "
-            f"timed out after {timeout}s — firewall may be silently dropping packets"
-        )
-        result.tcp_ms = round((time.perf_counter() - t0) * 1000, 1)
-        sock.close()
+        if isinstance(last_err, socket.timeout):
+            result.error_layer = "tcp"
+            result.error_message = (
+                f"TCP connection to {host}:{port} ({result.resolved_ip}) "
+                f"timed out after {timeout}s — firewall may be silently dropping packets"
+            )
+        elif isinstance(last_err, ConnectionRefusedError):
+            result.error_layer = "tcp"
+            result.error_message = (
+                f"TCP connection to {host}:{port} ({result.resolved_ip}) refused — "
+                f"port closed or firewall sending RST"
+            )
+        else:
+            result.error_layer = "tcp"
+            result.error_message = f"TCP connection to {host}:{port} failed: {last_err}"
         return result
-    except ConnectionRefusedError:
-        result.error_layer = "tcp"
-        result.error_message = (
-            f"TCP connection to {host}:{port} ({result.resolved_ip}) refused — "
-            f"port closed or firewall sending RST"
-        )
-        result.tcp_ms = round((time.perf_counter() - t0) * 1000, 1)
-        sock.close()
-        return result
-    except OSError as exc:
-        result.error_layer = "tcp"
-        result.error_message = f"TCP connection to {host}:{port} failed: {exc}"
-        result.tcp_ms = round((time.perf_counter() - t0) * 1000, 1)
-        sock.close()
-        return result
+
+    result.tcp_ok = True
+    result.tcp_ms = round((time.perf_counter() - t0) * 1000, 1)
 
     # Layer 3: TLS handshake
     t0 = time.perf_counter()
