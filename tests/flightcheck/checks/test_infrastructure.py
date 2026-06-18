@@ -230,8 +230,8 @@ class TestProbeEndpointNoSideEffects:
         mock_ctx = MagicMock()
         mock_ssock = MagicMock()
         mock_ssock.version.return_value = "TLSv1.3"
-        mock_ctx.wrap_socket.return_value.__enter__ = lambda s: mock_ssock
-        mock_ctx.wrap_socket.return_value.__exit__ = lambda s, *a: None
+        mock_ctx.wrap_socket.return_value.__enter__ = lambda: mock_ssock
+        mock_ctx.wrap_socket.return_value.__exit__ = lambda *_args: None
         mock_ssl_ctx.return_value = mock_ctx
 
         probe_endpoint("example.com", 443)
