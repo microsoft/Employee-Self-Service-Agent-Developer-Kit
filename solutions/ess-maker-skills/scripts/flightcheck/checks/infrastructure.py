@@ -134,6 +134,7 @@ def probe_endpoint(host: str, port: int = 443, timeout: float = 10.0) -> ProbeRe
     # Layer 3: TLS handshake
     t0 = time.perf_counter()
     ctx = ssl.create_default_context()
+    ctx.minimum_version = ssl.TLSVersion.TLSv1_2
     try:
         with ctx.wrap_socket(sock, server_hostname=host) as ssock:
             result.tls_ok = True
