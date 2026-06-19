@@ -33,4 +33,4 @@ if [[ ! -s "$TEMP_DIR/install-ess-adk.sh" ]] || ! head -1 "$TEMP_DIR/install-ess
 fi
 
 # Run in-memory (source) to avoid any permission issues
-source "$TEMP_DIR/install-ess-adk.sh"
+bash "$TEMP_DIR/install-ess-adk.sh"

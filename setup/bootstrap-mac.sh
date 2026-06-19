@@ -32,5 +32,5 @@ if [[ ! -s "$TEMP_DIR/install-ess-adk.sh" ]] || ! head -1 "$TEMP_DIR/install-ess
     exit 1
 fi
 
-# Run in-memory (source) to avoid any permission issues
-source "$TEMP_DIR/install-ess-adk.sh"
+# Run the downloaded installer in a subshell to avoid issues if it calls exit
+bash "$TEMP_DIR/install-ess-adk.sh"

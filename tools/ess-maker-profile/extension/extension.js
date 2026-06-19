@@ -167,10 +167,32 @@ function startPrereqWatcher(context) {
     const configWatcher = vscode.workspace.createFileSystemWatcher(configPattern);
     const flightcheckWatcher = vscode.workspace.createFileSystemWatcher(flightcheckPattern);
 
+    // Poll every 10s as a fallback (file watchers can miss events from
+    // external processes like the MCP server). Stops once all prerequisites
+    // are met; file watchers keep running so deletions restart polling.
+    let pollInterval = null;
+    const startPolling = () => {
+        if (!pollInterval) {
+            pollInterval = setInterval(refresh, 10000);
+        }
+    };
+    const stopPolling = () => {
+        if (pollInterval) {
+            clearInterval(pollInterval);
+            pollInterval = null;
+        }
+    };
+
     const refresh = async () => {
         const changed = await syncPrerequisites(context);
         if (changed && _actionsViewProvider) {
             _actionsViewProvider.refresh();
+        }
+        const completed = getCompleted(context);
+        if (completed.has('setup') && completed.has('flightcheck')) {
+            stopPolling();
+        } else {
+            startPolling();
         }
     };
 
@@ -184,16 +206,12 @@ function startPrereqWatcher(context) {
 
     _prereqWatcher = { configWatcher, flightcheckWatcher };
 
-    // Also poll every 10s as a fallback (file watchers can miss events
-    // when files are written by external processes like the MCP server).
-    const interval = setInterval(refresh, 10000);
-
     // Register disposables
     context.subscriptions.push(configWatcher, flightcheckWatcher, {
-        dispose: () => clearInterval(interval)
+        dispose: () => stopPolling()
     });
 
-    // Initial sync
+    // Initial sync — also starts polling if needed
     refresh();
 }
 
@@ -235,24 +253,23 @@ function isLiteMode() {
 
 
 // Wait for the VS Code welcome wizard to be dismissed or completed.
-// Polls the global state.vscdb SQLite database for the `welcomeOnboarding.state`
-// key which VS Code writes when the wizard is closed (either completed or dismissed).
-// Returns a promise that resolves when the wizard is done, or rejects on timeout.
+// Reads the global state.vscdb file (SQLite) as raw bytes and searches for
+// the `welcomeOnboarding.state` key which VS Code writes when the wizard
+// is closed (either completed or dismissed). Pure Node.js — no external
+// processes. The key does not exist in the DB before the wizard finishes.
 function waitForWelcomeWizard(timeoutMs = 300000) {
-    const path = require('path');
-    const fs = require('fs');
-
     // Resolve state.vscdb path per platform
     let resolvedDbPath;
     if (process.platform === 'win32') {
-        resolvedDbPath = path.join(process.env.APPDATA, 'Code', 'User', 'globalStorage', 'state.vscdb');
+        resolvedDbPath = _path.join(process.env.APPDATA, 'Code', 'User', 'globalStorage', 'state.vscdb');
     } else if (process.platform === 'darwin') {
-        resolvedDbPath = path.join(require('os').homedir(), 'Library', 'Application Support', 'Code', 'User', 'globalStorage', 'state.vscdb');
+        resolvedDbPath = _path.join(require('os').homedir(), 'Library', 'Application Support', 'Code', 'User', 'globalStorage', 'state.vscdb');
     } else {
-        resolvedDbPath = path.join(process.env.XDG_CONFIG_HOME || path.join(require('os').homedir(), '.config'), 'Code', 'User', 'globalStorage', 'state.vscdb');
+        resolvedDbPath = _path.join(process.env.XDG_CONFIG_HOME || _path.join(require('os').homedir(), '.config'), 'Code', 'User', 'globalStorage', 'state.vscdb');
     }
 
-    _log(`waitForWelcomeWizard: polling ${resolvedDbPath}`);
+    const needle = Buffer.from('welcomeOnboarding.state');
+    _log(`waitForWelcomeWizard: watching ${resolvedDbPath}`);
 
     return new Promise((resolve, reject) => {
         const startTime = Date.now();
@@ -269,41 +286,25 @@ function waitForWelcomeWizard(timeoutMs = 300000) {
             }
 
             try {
-                if (!fs.existsSync(resolvedDbPath)) {
+                if (!_fs.existsSync(resolvedDbPath)) {
                     if (pollCount <= 3) _log(`waitForWelcomeWizard: DB not found yet (poll #${pollCount})`);
                     return;
                 }
 
-                const { execFileSync } = require('child_process');
-                const script = [
-                    'import sqlite3',
-                    'conn = sqlite3.connect(r"""' + resolvedDbPath + '""")',
-                    'cur = conn.cursor()',
-                    "cur.execute(\"SELECT value FROM ItemTable WHERE key='welcomeOnboarding.state'\")",
-                    'r = cur.fetchone()',
-                    "print(r[0] if r else '')",
-                    'conn.close()',
-                ].join('\n');
-                // Use 'python' on Windows, 'python3' on macOS/Linux
-                const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
-                const result = execFileSync(pythonCmd, ['-c', script], {
-                    timeout: 5000,
-                    encoding: 'utf8',
-                    stdio: ['pipe', 'pipe', 'pipe']
-                }).trim();
+                const data = _fs.readFileSync(resolvedDbPath);
+                const found = data.indexOf(needle) !== -1;
 
                 if (pollCount <= 5 || pollCount % 10 === 0) {
-                    _log(`waitForWelcomeWizard: poll #${pollCount}, result="${result}"`);
+                    _log(`waitForWelcomeWizard: poll #${pollCount}, found=${found}`);
                 }
 
-                if (result === 'true') {
+                if (found) {
                     _log('waitForWelcomeWizard: RESOLVED - wizard done');
                     clearInterval(interval);
                     resolve();
                 }
             } catch (e) {
                 _log(`waitForWelcomeWizard: ERROR on poll #${pollCount}: ${e && e.message}`);
-                console.warn('[ess-maker] welcomeWizard poll error:', e && e.message);
             }
         }
 
@@ -315,7 +316,21 @@ function waitForWelcomeWizard(timeoutMs = 300000) {
 
 // Inject /setup into the Copilot Chat panel (for standard mode — no layout changes).
 async function injectSetup() {
-    // Open chat in the panel (not editor) — this is the standard Copilot Chat experience.
+    _log('injectSetup: starting');
+    // Use the chat open command with query parameter (VS Code 1.102+).
+    // isPartialQuery: false makes it submit immediately.
+    try {
+        await vscode.commands.executeCommand('workbench.action.chat.open', {
+            query: '/setup',
+            isPartialQuery: false,
+        });
+        _log('injectSetup: submitted via chat.open query');
+        return;
+    } catch (e) {
+        _log(`injectSetup: chat.open with query failed: ${e && e.message}, falling back to clipboard`);
+    }
+
+    // Fallback: open chat, paste /setup via clipboard, and submit.
     const chatCmds = [
         'workbench.action.chat.open',
         'workbench.action.chat.newChat',
@@ -335,7 +350,7 @@ async function injectSetup() {
         await new Promise((r) => setTimeout(r, 200));
         await vscode.env.clipboard.writeText(prev || '');
     } catch (e) {
-        console.warn('[ess-maker] injectSetup paste failed:', e && e.message);
+        _log(`injectSetup: clipboard fallback failed: ${e && e.message}`);
     }
 }
 
