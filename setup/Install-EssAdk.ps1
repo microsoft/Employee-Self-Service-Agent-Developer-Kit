@@ -720,9 +720,8 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions) {
             }
         }
 
-        # Write settings so the extension knows the mode, the welcome
-        # wizard is suppressed on subsequent launches, and workspace trust
-        # doesn't block the setup flow.
+        # Write the mode setting so the extension knows whether to apply
+        # the lite layout or inject /setup (standard mode).
         $settingsDir = Join-Path $env:APPDATA 'Code\User'
         if (-not (Test-Path $settingsDir)) { New-Item -ItemType Directory -Path $settingsDir -Force | Out-Null }
         $settingsFile = Join-Path $settingsDir 'settings.json'
@@ -731,8 +730,6 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions) {
             try { $settings = Get-Content $settingsFile -Raw | ConvertFrom-Json -AsHashtable } catch { $settings = @{} }
         }
         $settings['essMaker.mode'] = $modeLabel
-        $settings['workbench.startupEditor'] = 'none'
-        $settings['security.workspace.trust.enabled'] = $false
         $settings | ConvertTo-Json -Depth 10 | Set-Content -Path $settingsFile -Encoding UTF8
     }
 }

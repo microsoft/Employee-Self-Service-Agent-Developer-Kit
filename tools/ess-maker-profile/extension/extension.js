@@ -128,75 +128,6 @@ function isLiteMode() {
     return cfg.get('workbench.activityBar.location') === 'hidden';
 }
 
-// Wait for VS Code's welcome/walkthrough tab to close before injecting /setup.
-// On first-ever launch, VS Code ignores workbench.startupEditor and shows the
-// welcome page regardless. This watches for it to be dismissed.
-// If no welcome tab appears within a grace period, resolves immediately.
-function waitForWelcomeClose(timeoutMs = 120000) {
-    return new Promise((resolve) => {
-        function hasWelcomeTab() {
-            for (const group of vscode.window.tabGroups?.all || []) {
-                for (const tab of group.tabs || []) {
-                    const uri = tab.input?.uri?.toString?.() || '';
-                    const viewType = tab.input?.viewType || '';
-                    if (uri.includes('walkthrough') || uri.includes('welcome') ||
-                        viewType.includes('walkthrough') || viewType.includes('welcome') ||
-                        tab.label?.toLowerCase?.().includes('welcome') ||
-                        tab.label?.toLowerCase?.().includes('get started')) {
-                        return true;
-                    }
-                }
-            }
-            return false;
-        }
-
-        // Check immediately — welcome tab may already be open.
-        if (hasWelcomeTab()) {
-            console.log('[ess-maker] Welcome tab detected, waiting for it to close...');
-            watchForClose();
-            return;
-        }
-
-        // The welcome tab might not yet be created (race with extension activation).
-        // Wait a grace period for it to appear; if it doesn't, proceed.
-        console.log('[ess-maker] No welcome tab yet, waiting up to 5s for it to appear...');
-        let resolved = false;
-        const graceSubscription = vscode.window.tabGroups.onDidChangeTabs(() => {
-            if (!resolved && hasWelcomeTab()) {
-                console.log('[ess-maker] Welcome tab appeared, now watching for close...');
-                clearTimeout(graceTimeout);
-                graceSubscription.dispose();
-                watchForClose();
-            }
-        });
-        const graceTimeout = setTimeout(() => {
-            if (!resolved) {
-                resolved = true;
-                graceSubscription.dispose();
-                console.log('[ess-maker] No welcome tab appeared within grace period, proceeding');
-                resolve();
-            }
-        }, 5000);
-
-        function watchForClose() {
-            const subscription = vscode.window.tabGroups.onDidChangeTabs(() => {
-                if (!hasWelcomeTab()) {
-                    resolved = true;
-                    clearTimeout(timeout);
-                    subscription.dispose();
-                    // Brief delay for VS Code to settle after tab close.
-                    setTimeout(resolve, 1000);
-                }
-            });
-            const timeout = setTimeout(() => {
-                resolved = true;
-                subscription.dispose();
-                console.log('[ess-maker] Welcome tab timeout reached, proceeding with /setup');
-                resolve();
-            }, timeoutMs);
-        }
-    });
-}
 
 // Inject /setup into the Copilot Chat panel (for standard mode — no layout changes).
 async function injectSetup() {
@@ -560,13 +491,11 @@ async function applyChatOnlyLayout({ silent = false, showWalkthrough = false } =
     await tryRun('workbench.action.closeAllEditors');
 
     if (showWalkthrough) {
-        // First-run: open the tutorial on the left and a /setup chat on the right.
+        // First-run: open the tutorial on the left and an empty chat on the right.
         openTutorialPanel(vscode.ViewColumn.One);
         await new Promise((r) => setTimeout(r, 500));
-        // Split right — the new (right) editor group gets focus.
         await tryRun('workbench.action.splitEditorRight');
         await new Promise((r) => setTimeout(r, 300));
-        // Open chat in the now-focused right group.
         const chatCmds = [
             'workbench.action.chat.openInEditor',
             'workbench.action.chat.openInNewEditor',
@@ -575,28 +504,8 @@ async function applyChatOnlyLayout({ silent = false, showWalkthrough = false } =
         for (const c of chatCmds) {
             if (await tryRun(c)) break;
         }
-        await new Promise((r) => setTimeout(r, 700));
-        // Paste /setup into the chat and submit.
-        await tryRun('workbench.action.chat.focusInput');
-        await new Promise((r) => setTimeout(r, 200));
-        try {
-            const prev = await vscode.env.clipboard.readText();
-            await vscode.env.clipboard.writeText('/setup');
-            await tryRun('editor.action.clipboardPasteAction');
-            await new Promise((r) => setTimeout(r, 200));
-            await tryRun('workbench.action.chat.submit');
-            await new Promise((r) => setTimeout(r, 200));
-            await vscode.env.clipboard.writeText(prev || '');
-        } catch (e) {
-            console.warn('[ess-maker] paste /setup failed:', e && e.message);
-        }
     } else {
-        // Subsequent runs: open a chat editor with /setup pre-filled.
-        //
-        // The installer launches `code .` (not `code chat /setup`) when
-        // this extension is installed, so we open the chat editor ourselves,
-        // inject /setup via clipboard paste, submit, then hide the aux bar
-        // for a clean single-chat full-screen layout.
+        // Open a chat editor (no /setup — the user clicks the Connect button).
         const openCmds = [
             'workbench.action.chat.openInEditor',
             'workbench.action.chat.openInNewEditor',
@@ -604,20 +513,6 @@ async function applyChatOnlyLayout({ silent = false, showWalkthrough = false } =
         ];
         for (const c of openCmds) {
             if (await tryRun(c)) break;
-        }
-        await new Promise((r) => setTimeout(r, 700));
-        await tryRun('workbench.action.chat.focusInput');
-        await new Promise((r) => setTimeout(r, 200));
-        try {
-            const prev = await vscode.env.clipboard.readText();
-            await vscode.env.clipboard.writeText('/setup');
-            await tryRun('editor.action.clipboardPasteAction');
-            await new Promise((r) => setTimeout(r, 200));
-            await tryRun('workbench.action.chat.submit');
-            await new Promise((r) => setTimeout(r, 200));
-            await vscode.env.clipboard.writeText(prev || '');
-        } catch (e) {
-            console.warn('[ess-maker] paste /setup failed:', e && e.message);
         }
     }
     // Close the auxiliary bar to remove VS Code's built-in Chat panel
@@ -1012,9 +907,9 @@ function activate(context) {
 
     // First-run vs subsequent runs:
     // - First run: determine mode (lite vs standard) from VS Code setting
-    //   written by the installer. Lite mode applies layout; standard does not.
-    //   On first-ever VS Code launch, the welcome wizard appears regardless of
-    //   settings — waitForWelcomeClose() defers /setup until after it's dismissed.
+    //   written by the installer.
+    //   Lite mode: applies chat-only layout; user clicks Connect to run /setup.
+    //   Standard mode: injects /setup into Copilot Chat automatically.
     // - Subsequent lite activations: silently re-apply layout.
     const alreadyApplied = context.globalState.get(APPLIED_KEY, false);
     const userWantsLite = context.globalState.get(LITE_MODE_KEY, true); // default to lite
@@ -1027,21 +922,14 @@ function activate(context) {
             context.globalState.update(LITE_MODE_KEY, !isStandardMode);
 
             if (isStandardMode) {
-                // Standard mode: no layout changes, wait for welcome then inject /setup.
+                // Standard mode: no layout changes, inject /setup.
                 context.globalState.update(APPLIED_KEY, true);
-                waitForWelcomeClose().then(async () => {
-                    await injectSetup();
-                    await markCompleted(context, 'setup');
-                    if (_actionsViewProvider) _actionsViewProvider.refresh();
-                }).catch(() => {});
+                injectSetup().catch(() => {});
             } else {
-                // Lite mode: wait for welcome, then apply layout (includes /setup).
-                waitForWelcomeClose().then(async () => {
-                    await applyChatOnlyLayout({ silent: false });
-                    await context.globalState.update(APPLIED_KEY, true);
-                    await markCompleted(context, 'setup');
-                    if (_actionsViewProvider) _actionsViewProvider.refresh();
-                }).catch(() => {});
+                // Lite mode: apply layout. User clicks Connect button for /setup.
+                applyChatOnlyLayout({ silent: false })
+                    .then(() => context.globalState.update(APPLIED_KEY, true))
+                    .catch(() => {});
             }
         } else if (userWantsLite) {
             // Subsequent lite mode launch: silently re-apply layout.
