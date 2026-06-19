@@ -65,6 +65,7 @@ const ACTIONS = [
 const STATE_KEY = 'essMaker.completedActions.v3';
 
 let _tutorialPanel = null;
+let _prereqWatcher = null;
 
 function getCompleted(context) {
     return new Set(context.globalState.get(STATE_KEY, []));
@@ -76,20 +77,115 @@ async function markCompleted(context, id) {
     await context.globalState.update(STATE_KEY, Array.from(set));
 }
 
+async function unmarkCompleted(context, id) {
+    const set = getCompleted(context);
+    set.delete(id);
+    await context.globalState.update(STATE_KEY, Array.from(set));
+}
+
 async function resetCompleted(context) {
     await context.globalState.update(STATE_KEY, []);
 }
 
-// Look in the workspace for signals that prerequisites are met without the
-// user having to click through every button in order (e.g. a returning user
-// already has topics from a previous session).
-async function inferFromWorkspace(context) {
-    const completed = getCompleted(context);
-    // Auto-inference removed: the workspace (ess-maker-skills) always
-    // contains YAML files under solutions/, which caused setup + create
-    // to appear completed on every fresh install. Buttons now start
-    // unchecked and are only marked done when the user actually clicks them.
-    return completed;
+// Check workspace files to determine which prerequisites are actually met.
+// Returns the set of action IDs whose artifacts exist on disk.
+async function checkPrerequisites() {
+    const met = new Set();
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || !folders.length) return met;
+    const root = folders[0].uri;
+
+    // /setup is complete when .local/config.json exists with "setup": "complete"
+    try {
+        const configUri = vscode.Uri.joinPath(root, '.local', 'config.json');
+        const content = await vscode.workspace.fs.readFile(configUri);
+        const json = JSON.parse(Buffer.from(content).toString('utf8'));
+        if (json.setup === 'complete') {
+            met.add('setup');
+        }
+    } catch (_) { /* file doesn't exist or invalid */ }
+
+    // /flightcheck is complete when workspace/flightcheck/results.json exists
+    try {
+        const resultsUri = vscode.Uri.joinPath(root, 'workspace', 'flightcheck', 'results.json');
+        await vscode.workspace.fs.stat(resultsUri);
+        met.add('flightcheck');
+    } catch (_) { /* file doesn't exist */ }
+
+    return met;
+}
+
+// Sync the completed state with actual file artifacts on disk.
+// Adds IDs whose files now exist, removes IDs whose files are gone.
+async function syncPrerequisites(context) {
+    const onDisk = await checkPrerequisites();
+    const stored = getCompleted(context);
+    let changed = false;
+
+    // Mark as complete if artifact appeared
+    for (const id of onDisk) {
+        if (!stored.has(id)) {
+            stored.add(id);
+            changed = true;
+        }
+    }
+    // Un-mark if artifact was deleted (e.g. user re-ran setup and it failed)
+    for (const id of ['setup', 'flightcheck']) {
+        if (stored.has(id) && !onDisk.has(id)) {
+            stored.delete(id);
+            changed = true;
+        }
+    }
+
+    if (changed) {
+        await context.globalState.update(STATE_KEY, Array.from(stored));
+    }
+    return changed;
+}
+
+// Start a FileSystemWatcher that monitors prerequisite artifacts and
+// updates button states when they appear or disappear.
+function startPrereqWatcher(context) {
+    if (_prereqWatcher) return;
+
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || !folders.length) return;
+
+    // Watch for .local/config.json and workspace/flightcheck/results.json
+    const configPattern = new vscode.RelativePattern(folders[0], '.local/config.json');
+    const flightcheckPattern = new vscode.RelativePattern(folders[0], 'workspace/flightcheck/results.json');
+
+    const configWatcher = vscode.workspace.createFileSystemWatcher(configPattern);
+    const flightcheckWatcher = vscode.workspace.createFileSystemWatcher(flightcheckPattern);
+
+    const refresh = async () => {
+        const changed = await syncPrerequisites(context);
+        if (changed && _actionsViewProvider) {
+            _actionsViewProvider.refresh();
+        }
+    };
+
+    // Trigger on create, change, or delete
+    configWatcher.onDidCreate(refresh);
+    configWatcher.onDidChange(refresh);
+    configWatcher.onDidDelete(refresh);
+    flightcheckWatcher.onDidCreate(refresh);
+    flightcheckWatcher.onDidChange(refresh);
+    flightcheckWatcher.onDidDelete(refresh);
+
+    _prereqWatcher = { configWatcher, flightcheckWatcher };
+
+    // Also poll every 10s as a fallback (file watchers can miss events
+    // when files are written by external processes like the MCP server).
+    const interval = setInterval(refresh, 10000);
+
+    // Register disposables
+    context.subscriptions.push(configWatcher, flightcheckWatcher, {
+        dispose: () => clearInterval(interval)
+    });
+
+    // Initial sync
+    refresh();
 }
 
 function actionState(action, completed) {
@@ -611,13 +707,13 @@ class ActionsViewProvider {
             if (msg?.type === 'action') {
                 const action = ACTIONS.find(a => a.id === msg.id);
                 if (!action) return;
-                const completed = await inferFromWorkspace(this._context);
+                const completed = getCompleted(this._context);
                 const { enabled } = actionState(action, completed);
                 if (!enabled) return;
                 await openChatWithQuery(action.slash);
-                // Optimistically mark as completed so downstream actions unlock.
-                await markCompleted(this._context, action.id);
-                await this.refresh();
+                // Don't optimistically mark as completed — the file watcher
+                // will detect when the actual artifact appears on disk and
+                // enable dependent buttons at that point.
             } else if (msg?.type === 'restoreLayout') {
                 await this._context.globalState.update(LITE_MODE_KEY, false);
                 await clearSettings(Object.keys(CHAT_ONLY_LAYOUT), vscode.ConfigurationTarget.Global);
@@ -666,7 +762,7 @@ class ActionsViewProvider {
 
     async refresh() {
         if (!this._view) return;
-        const completed = await inferFromWorkspace(this._context);
+        const completed = getCompleted(this._context);
         const states = {};
         for (const a of ACTIONS) {
             states[a.id] = actionState(a, completed);
@@ -904,6 +1000,11 @@ function activate(context) {
             { webviewOptions: { retainContextWhenHidden: true } }
         )
     );
+
+    // Start watching workspace files for prerequisite artifacts.
+    // This enables/disables buttons based on actual file existence
+    // (e.g. .local/config.json for setup, workspace/flightcheck/results.json).
+    startPrereqWatcher(context);
 
     // First-run vs subsequent runs:
     // - First run: determine mode (lite vs standard) from VS Code setting
