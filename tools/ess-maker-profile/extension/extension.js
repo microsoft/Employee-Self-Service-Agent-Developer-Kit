@@ -167,32 +167,10 @@ function startPrereqWatcher(context) {
     const configWatcher = vscode.workspace.createFileSystemWatcher(configPattern);
     const flightcheckWatcher = vscode.workspace.createFileSystemWatcher(flightcheckPattern);
 
-    // Poll every 10s as a fallback (file watchers can miss events from
-    // external processes like the MCP server). Stops once all prerequisites
-    // are met; file watchers keep running so deletions restart polling.
-    let pollInterval = null;
-    const startPolling = () => {
-        if (!pollInterval) {
-            pollInterval = setInterval(refresh, 10000);
-        }
-    };
-    const stopPolling = () => {
-        if (pollInterval) {
-            clearInterval(pollInterval);
-            pollInterval = null;
-        }
-    };
-
     const refresh = async () => {
         const changed = await syncPrerequisites(context);
         if (changed && _actionsViewProvider) {
             _actionsViewProvider.refresh();
-        }
-        const completed = getCompleted(context);
-        if (completed.has('setup') && completed.has('flightcheck')) {
-            stopPolling();
-        } else {
-            startPolling();
         }
     };
 
@@ -206,12 +184,16 @@ function startPrereqWatcher(context) {
 
     _prereqWatcher = { configWatcher, flightcheckWatcher };
 
+    // Also poll every 10s as a fallback (file watchers can miss events
+    // when files are written by external processes like the MCP server).
+    const interval = setInterval(refresh, 10000);
+
     // Register disposables
     context.subscriptions.push(configWatcher, flightcheckWatcher, {
-        dispose: () => stopPolling()
+        dispose: () => clearInterval(interval)
     });
 
-    // Initial sync — also starts polling if needed
+    // Initial sync
     refresh();
 }
 
