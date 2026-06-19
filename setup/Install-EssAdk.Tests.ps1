@@ -74,9 +74,9 @@ Test 'non-git directory detection exists' {
     }
 }
 
-Test 'maker profile uninstall logic exists for standard mode' {
-    if ($src -notmatch 'uninstall-extension.*microsoft-ess\.ess-maker-profile') {
-        throw 'Maker profile uninstall logic not found'
+Test 'extension installs in both modes (writes essMaker.mode setting)' {
+    if ($src -notmatch "essMaker\.mode.*\`$modeLabel") {
+        throw 'Mode setting write logic not found'
     }
 }
 

@@ -667,10 +667,13 @@ if ($deferPip) {
 # itself opens chat and injects /setup (section 7 just opens the workspace).
 #
 # Skipped in FlightCheckOnly mode (no VS Code launch) and when the user
-# passes -SkipExtensions or -SkipMakerProfile, so kit developers and
-# IT-locked-down boxes can keep the stock layout.
-if (-not $FlightCheckOnly -and -not $SkipExtensions -and -not $SkipMakerProfile) {
-    Write-Step 'Installing ESS Maker Profile (chat-first VS Code layout)'
+# passes -SkipExtensions (IT-locked-down boxes that block VSIX installs).
+if (-not $FlightCheckOnly -and -not $SkipExtensions) {
+    # Install the ESS Maker Profile extension in both modes. In lite mode it
+    # applies the chat-first layout; in standard mode it only handles /setup
+    # injection after the welcome wizard closes (no visual changes).
+    $modeLabel = if ($SkipMakerProfile) { 'standard' } else { 'lite' }
+    Write-Step "Installing ESS Maker Profile ($modeLabel mode)"
 
     $code = Get-Command code -ErrorAction SilentlyContinue
     if (-not $code) {
@@ -684,8 +687,6 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions -and -not $SkipMakerProfile)
         Write-Warn2 "  code --install-extension `"$repoPath\tools\ess-maker-profile\extension\ess-maker-profile-*.vsix`""
     } else {
         # Glob so a version bump (0.4.0 -> 0.5.0) doesn't break the install.
-        # If multiple .vsix files are present (shouldn't happen in a clean
-        # clone), prefer the newest by LastWriteTime.
         $vsixDir = Join-Path $repoPath 'tools\ess-maker-profile\extension'
         $vsix = $null
         if (Test-Path $vsixDir) {
@@ -695,7 +696,7 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions -and -not $SkipMakerProfile)
         }
 
         if (-not $vsix) {
-            Write-Warn2 "No ess-maker-profile-*.vsix found under $vsixDir. Skipping chat-first profile install."
+            Write-Warn2 "No ess-maker-profile-*.vsix found under $vsixDir. Skipping extension install."
         } else {
             $out = $null
             $vsix_exit = 0
@@ -712,38 +713,24 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions -and -not $SkipMakerProfile)
             }
 
             if ($vsix_exit -eq 0) {
-                Write-Ok "ESS Maker Profile installed ($($vsix.Name))"
-                Write-Host "  Tip: to revert to the stock VS Code layout, run 'ESS Maker: Restore Standard Layout' from the command palette." -ForegroundColor DarkGray
-                $script:MakerProfileInstalled = $true
+                Write-Ok "ESS Maker Profile installed ($($vsix.Name)) — $modeLabel mode"
             } else {
-                Write-Warn2 "ess-maker-profile vsix install returned exit $vsix_exit (non-fatal, continuing with stock VS Code layout)"
+                Write-Warn2 "ess-maker-profile vsix install returned exit $vsix_exit (non-fatal)"
                 ($out | Out-String).TrimEnd() -split "`r?`n" | ForEach-Object { Write-Warn2 "  $_" }
             }
         }
-    }
-} elseif (-not $FlightCheckOnly -and -not $SkipExtensions -and $SkipMakerProfile) {
-    # Standard mode: ensure any previously-installed Maker Profile is removed
-    # so the user gets a stock VS Code layout even if they previously ran the
-    # lite-mode installer.
-    $code = Get-Command code -ErrorAction SilentlyContinue
-    if (-not $code) {
-        $knownCodeCmd = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd'
-        if (Test-Path $knownCodeCmd) { $code = Get-Item $knownCodeCmd }
-    }
-    $codeBin = if ($code.Source) { $code.Source } elseif ($code.FullName) { $code.FullName } else { $null }
-    if ($codeBin) {
-        $installed = & $codeBin --list-extensions 2>&1 | Where-Object { $_ -match 'microsoft-ess\.ess-maker-profile' }
-        if ($installed) {
-            Write-Step 'Removing ESS Maker Profile (standard mode requested)'
-            try {
-                $prevEAP = $ErrorActionPreference
-                $ErrorActionPreference = 'Continue'
-                & $codeBin --uninstall-extension microsoft-ess.ess-maker-profile 2>&1 | Out-Null
-            } catch {} finally {
-                $ErrorActionPreference = $prevEAP
-            }
-            Write-Ok 'ESS Maker Profile removed'
+
+        # Write the mode setting so the extension knows whether to apply
+        # the lite layout or just handle /setup injection.
+        $settingsDir = Join-Path $env:APPDATA 'Code\User'
+        if (-not (Test-Path $settingsDir)) { New-Item -ItemType Directory -Path $settingsDir -Force | Out-Null }
+        $settingsFile = Join-Path $settingsDir 'settings.json'
+        $settings = @{}
+        if (Test-Path $settingsFile) {
+            try { $settings = Get-Content $settingsFile -Raw | ConvertFrom-Json -AsHashtable } catch { $settings = @{} }
         }
+        $settings['essMaker.mode'] = $modeLabel
+        $settings | ConvertTo-Json -Depth 10 | Set-Content -Path $settingsFile -Encoding UTF8
     }
 }
 
@@ -1068,50 +1055,19 @@ if (-not $SkipLaunch) {
         $knownCodeCmd = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd'
         if (Test-Path $knownCodeCmd) { $code = Get-Item $knownCodeCmd }
     }
-    # Normalize to path string (CommandInfo has .Source, FileInfo has .FullName)
     $codePath = if ($code.Source) { $code.Source } elseif ($code.FullName) { $code.FullName } else { $null }
     if ($codePath) {
-        if ($script:MakerProfileInstalled) {
-            # The ESS Maker Profile extension takes over /setup orchestration:
-            # on activation it opens a chat editor in the editor area (full
-            # width, not the narrow aux bar) and injects /setup itself. So
-            # just launch the workspace plainly here — don't use
-            # `code chat /setup`, which would also open an aux-bar chat and
-            # leave us with two competing chat surfaces.
-            Write-Step 'Opening workspace in VS Code (Maker Profile will launch /setup)'
-            Push-Location $workspace
-            try {
-                Start-Process -FilePath $codePath -ArgumentList @('.') | Out-Null
-                Write-Ok "Launched VS Code at $workspace"
-                Write-Host "The ESS Maker Profile will open Copilot Chat and run /setup automatically." -ForegroundColor Yellow
-                Write-Host "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts." -ForegroundColor Yellow
-            } finally { Pop-Location }
-        } else {
-            Write-Step 'Opening workspace in VS Code and requesting /setup in Copilot Chat'
-            # `code chat <prompt>` (VS Code 1.102+, June 2025) opens the chat panel
-            # in the workspace at the current working directory and submits the
-            # prompt. We Push-Location $workspace so it targets the kit folder.
-            # Note: exit 0 means "VS Code accepted the chat request," NOT that
-            # /setup actually ran. The user may still need to grant workspace trust
-            # and sign in to GitHub/Copilot before /setup executes.
-            Push-Location $workspace
-            try {
-                $chatOutput = Invoke-Native { & $codePath chat '/setup' }
-                $chatExit = $LASTEXITCODE
-                foreach ($line in $chatOutput) { if ($line) { Write-Host "      $line" } }
-                if ($chatExit -ne 0) {
-                    Write-Warn2 "'code chat' failed or is unsupported (exit $chatExit). Falling back to opening the workspace only."
-                    Write-Warn2 "If you have an older VS Code (pre-1.102 / June 2025), update VS Code and re-run, or run /setup manually in Copilot Chat."
-                    Start-Process -FilePath $codePath -ArgumentList @($workspace) | Out-Null
-                    Write-Ok "Launched VS Code at $workspace"
-                    Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect Dataverse." -ForegroundColor Green
-                } else {
-                    Write-Ok "Requested /setup in Copilot Chat at $workspace"
-                    Write-Host "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts and /setup will run." -ForegroundColor Yellow
-                    Write-Host "If /setup does not start after trust/sign-in, open Copilot Chat manually and run /setup." -ForegroundColor Yellow
-                }
-            } finally { Pop-Location }
-        }
+        # The ESS Maker Profile extension handles /setup orchestration in
+        # both modes: it waits for the welcome wizard to close, then opens
+        # Copilot Chat and injects /setup. Just launch the workspace here.
+        Write-Step 'Opening workspace in VS Code'
+        Push-Location $workspace
+        try {
+            Start-Process -FilePath $codePath -ArgumentList @('.') | Out-Null
+            Write-Ok "Launched VS Code at $workspace"
+            Write-Host "The ESS Maker Profile will run /setup in Copilot Chat after the welcome screen closes." -ForegroundColor Yellow
+            Write-Host "If VS Code prompts you to trust the workspace, accept the prompt." -ForegroundColor Yellow
+        } finally { Pop-Location }
     } else {
         Write-Warn2 "code CLI not on PATH. Open this folder manually: $workspace"
         Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect Dataverse." -ForegroundColor Green
