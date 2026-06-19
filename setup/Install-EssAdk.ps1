@@ -720,8 +720,8 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions) {
             }
         }
 
-        # Write the mode setting so the extension knows whether to apply
-        # the lite layout or just handle /setup injection.
+        # Write settings so the extension knows the mode and the welcome
+        # wizard is suppressed (prevents double GitHub login prompt).
         $settingsDir = Join-Path $env:APPDATA 'Code\User'
         if (-not (Test-Path $settingsDir)) { New-Item -ItemType Directory -Path $settingsDir -Force | Out-Null }
         $settingsFile = Join-Path $settingsDir 'settings.json'
@@ -730,6 +730,7 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions) {
             try { $settings = Get-Content $settingsFile -Raw | ConvertFrom-Json -AsHashtable } catch { $settings = @{} }
         }
         $settings['essMaker.mode'] = $modeLabel
+        $settings['workbench.startupEditor'] = 'none'
         $settings | ConvertTo-Json -Depth 10 | Set-Content -Path $settingsFile -Encoding UTF8
     }
 }

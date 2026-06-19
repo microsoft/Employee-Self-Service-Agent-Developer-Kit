@@ -128,46 +128,6 @@ function isLiteMode() {
     return cfg.get('workbench.activityBar.location') === 'hidden';
 }
 
-// Wait for VS Code's welcome/walkthrough tab to close before injecting /setup.
-// On fresh installs, the welcome page appears before the extension activates.
-// Resolves immediately if no welcome tab is detected.
-function waitForWelcomeClose(timeoutMs = 120000) {
-    return new Promise((resolve) => {
-        function hasWelcomeTab() {
-            for (const group of vscode.window.tabGroups?.all || []) {
-                for (const tab of group.tabs || []) {
-                    const uri = tab.input?.uri?.toString?.() || '';
-                    const viewType = tab.input?.viewType || '';
-                    if (uri.includes('walkthrough') || uri.includes('welcome') ||
-                        viewType.includes('walkthrough') || viewType.includes('welcome') ||
-                        tab.label?.toLowerCase?.().includes('welcome') ||
-                        tab.label?.toLowerCase?.().includes('get started')) {
-                        return true;
-                    }
-                }
-            }
-            return false;
-        }
-
-        if (!hasWelcomeTab()) {
-            resolve();
-            return;
-        }
-
-        console.log('[ess-maker] Welcome tab detected, waiting for it to close before /setup...');
-        const subscription = vscode.window.tabGroups.onDidChangeTabs(() => {
-            if (!hasWelcomeTab()) {
-                clearTimeout(timeout);
-                subscription.dispose();
-                setTimeout(resolve, 500);
-            }
-        });
-        const timeout = setTimeout(() => {
-            subscription.dispose();
-            resolve();
-        }, timeoutMs);
-    });
-}
 
 // Inject /setup into the Copilot Chat panel (for standard mode — no layout changes).
 async function injectSetup() {
@@ -984,7 +944,8 @@ function activate(context) {
     // First-run vs subsequent runs:
     // - First run: determine mode (lite vs standard) from VS Code setting
     //   written by the installer. Lite mode applies layout; standard does not.
-    //   In both modes, wait for the welcome page to close then inject /setup.
+    //   The installer also sets workbench.startupEditor to "none" so the
+    //   welcome wizard never appears, allowing /setup to inject immediately.
     // - Subsequent lite activations: silently re-apply layout.
     const alreadyApplied = context.globalState.get(APPLIED_KEY, false);
     const userWantsLite = context.globalState.get(LITE_MODE_KEY, true); // default to lite
@@ -997,17 +958,14 @@ function activate(context) {
             context.globalState.update(LITE_MODE_KEY, !isStandardMode);
 
             if (isStandardMode) {
-                // Standard mode: no layout changes, just wait for welcome
-                // page to close then inject /setup into Copilot Chat panel.
+                // Standard mode: no layout changes, just inject /setup.
                 context.globalState.update(APPLIED_KEY, true);
-                waitForWelcomeClose().then(() => injectSetup()).catch(() => {});
+                injectSetup().catch(() => {});
             } else {
-                // Lite mode: apply layout (which includes /setup injection),
-                // but wait for the welcome page to close first.
-                waitForWelcomeClose().then(() =>
-                    applyChatOnlyLayout({ silent: false })
-                        .then(() => context.globalState.update(APPLIED_KEY, true))
-                ).catch(() => {});
+                // Lite mode: apply layout (which includes /setup injection).
+                applyChatOnlyLayout({ silent: false })
+                    .then(() => context.globalState.update(APPLIED_KEY, true))
+                    .catch(() => {});
             }
         } else if (userWantsLite) {
             // Subsequent lite mode launch: silently re-apply layout.
