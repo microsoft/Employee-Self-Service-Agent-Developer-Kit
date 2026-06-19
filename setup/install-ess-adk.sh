@@ -218,24 +218,34 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
     fi
 
     if [[ -n "$CODE_CMD" ]]; then
-        # Required extensions — fail if these can't be installed
+        # Required extensions — skip if already present or built-in.
+        # Recent VS Code (>=1.99) ships Copilot as a built-in extension.
+        # `--install-extension` may exit non-zero if the marketplace version
+        # is older than the bundled one. Check --list-extensions first.
         REQUIRED_EXTENSIONS=("GitHub.copilot" "GitHub.copilot-chat")
+        INSTALLED_EXTENSIONS=$("$CODE_CMD" --list-extensions 2>/dev/null || true)
         for ext in "${REQUIRED_EXTENSIONS[@]}"; do
-            if ! "$CODE_CMD" --install-extension "$ext" --force 2>/dev/null; then
-                err "Failed to install required extension: $ext"
-                err "Possible causes:"
-                err "  - VS Code marketplace is unreachable (corporate proxy/firewall)"
-                err "  - No GitHub account with Copilot access signed in to VS Code"
-                err "Re-run this script after resolving the issue."
-                exit 1
+            if echo "$INSTALLED_EXTENSIONS" | grep -qi "^${ext}$"; then
+                ok "extension $ext (already present / built-in)"
+            elif "$CODE_CMD" --install-extension "$ext" --force 2>&1 | grep -qi "built-in\|already installed\|cannot be downgraded"; then
+                ok "extension $ext (already present / built-in)"
+            elif "$CODE_CMD" --install-extension "$ext" --force 2>/dev/null; then
+                ok "extension $ext"
+            else
+                warn "Could not install extension $ext (non-fatal — may already be built-in)"
             fi
-            ok "$ext"
         done
 
         # Optional extensions — warn on failure
         OPTIONAL_EXTENSIONS=("ms-python.python")
         for ext in "${OPTIONAL_EXTENSIONS[@]}"; do
-            "$CODE_CMD" --install-extension "$ext" --force 2>/dev/null && ok "$ext" || warn "Failed to install $ext"
+            if echo "$INSTALLED_EXTENSIONS" | grep -qi "^${ext}$"; then
+                ok "extension $ext (already present)"
+            elif "$CODE_CMD" --install-extension "$ext" --force 2>/dev/null; then
+                ok "extension $ext"
+            else
+                warn "Failed to install $ext (non-fatal)"
+            fi
         done
 
         # ESS Maker Profile — installs in both modes. In lite mode it
