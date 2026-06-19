@@ -284,7 +284,9 @@ function waitForWelcomeWizard(timeoutMs = 300000) {
                     "print(r[0] if r else '')",
                     'conn.close()',
                 ].join('\n');
-                const result = execFileSync('python', ['-c', script], {
+                // Use 'python' on Windows, 'python3' on macOS/Linux
+                const pythonCmd = process.platform === 'win32' ? 'python' : 'python3';
+                const result = execFileSync(pythonCmd, ['-c', script], {
                     timeout: 5000,
                     encoding: 'utf8',
                     stdio: ['pipe', 'pipe', 'pipe']
