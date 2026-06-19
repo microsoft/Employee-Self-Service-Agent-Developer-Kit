@@ -131,7 +131,7 @@ function isLiteMode() {
 // Wait for VS Code's welcome/walkthrough tab to close before injecting /setup.
 // On first-ever launch, VS Code ignores workbench.startupEditor and shows the
 // welcome page regardless. This watches for it to be dismissed.
-// Resolves immediately if no welcome tab is detected.
+// If no welcome tab appears within a grace period, resolves immediately.
 function waitForWelcomeClose(timeoutMs = 120000) {
     return new Promise((resolve) => {
         function hasWelcomeTab() {
@@ -150,25 +150,51 @@ function waitForWelcomeClose(timeoutMs = 120000) {
             return false;
         }
 
-        if (!hasWelcomeTab()) {
-            resolve();
+        // Check immediately — welcome tab may already be open.
+        if (hasWelcomeTab()) {
+            console.log('[ess-maker] Welcome tab detected, waiting for it to close...');
+            watchForClose();
             return;
         }
 
-        console.log('[ess-maker] Welcome tab detected, waiting for it to close before /setup...');
-        const subscription = vscode.window.tabGroups.onDidChangeTabs(() => {
-            if (!hasWelcomeTab()) {
-                clearTimeout(timeout);
-                subscription.dispose();
-                // Brief delay for VS Code to settle after tab close.
-                setTimeout(resolve, 1000);
+        // The welcome tab might not yet be created (race with extension activation).
+        // Wait a grace period for it to appear; if it doesn't, proceed.
+        console.log('[ess-maker] No welcome tab yet, waiting up to 5s for it to appear...');
+        let resolved = false;
+        const graceSubscription = vscode.window.tabGroups.onDidChangeTabs(() => {
+            if (!resolved && hasWelcomeTab()) {
+                console.log('[ess-maker] Welcome tab appeared, now watching for close...');
+                clearTimeout(graceTimeout);
+                graceSubscription.dispose();
+                watchForClose();
             }
         });
-        const timeout = setTimeout(() => {
-            console.log('[ess-maker] Welcome tab timeout reached, proceeding with /setup');
-            subscription.dispose();
-            resolve();
-        }, timeoutMs);
+        const graceTimeout = setTimeout(() => {
+            if (!resolved) {
+                resolved = true;
+                graceSubscription.dispose();
+                console.log('[ess-maker] No welcome tab appeared within grace period, proceeding');
+                resolve();
+            }
+        }, 5000);
+
+        function watchForClose() {
+            const subscription = vscode.window.tabGroups.onDidChangeTabs(() => {
+                if (!hasWelcomeTab()) {
+                    resolved = true;
+                    clearTimeout(timeout);
+                    subscription.dispose();
+                    // Brief delay for VS Code to settle after tab close.
+                    setTimeout(resolve, 1000);
+                }
+            });
+            const timeout = setTimeout(() => {
+                resolved = true;
+                subscription.dispose();
+                console.log('[ess-maker] Welcome tab timeout reached, proceeding with /setup');
+                resolve();
+            }, timeoutMs);
+        }
     });
 }
 
