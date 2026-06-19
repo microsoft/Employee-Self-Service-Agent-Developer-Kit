@@ -18,6 +18,7 @@ function _log(msg) {
 const EXT_ID = 'microsoft-ess.ess-maker-profile';
 const APPLIED_KEY = 'essMaker.chatOnlyApplied.v7';
 const LITE_MODE_KEY = 'essMaker.liteMode.v1';
+const SETTINGS_BACKUP_KEY = 'essMaker.settingsBackup.v1';
 
 // Settings that strip developer chrome to the bone. Applied at GLOBAL (user)
 // scope because workspace-scope leaves menu/title-bar/activity-bar visible
@@ -75,6 +76,7 @@ const STATE_KEY = 'essMaker.completedActions.v3';
 
 let _tutorialPanel = null;
 let _prereqWatcher = null;
+let _extensionContext = null;
 
 function getCompleted(context) {
     return new Set(context.globalState.get(STATE_KEY, []));
@@ -650,6 +652,20 @@ async function openChatInEditorWithQuery(query) {
 }
 
 async function applyChatOnlyLayout({ silent = false, showWalkthrough = false } = {}) {
+    // Save original values before overwriting (only on first apply).
+    if (_extensionContext && !_extensionContext.globalState.get(SETTINGS_BACKUP_KEY)) {
+        const cfg = vscode.workspace.getConfiguration();
+        const backup = {};
+        for (const key of Object.keys(CHAT_ONLY_LAYOUT)) {
+            const inspect = cfg.inspect(key);
+            // Save the user's global value (if any) so we can restore it later
+            if (inspect && inspect.globalValue !== undefined) {
+                backup[key] = inspect.globalValue;
+            }
+        }
+        await _extensionContext.globalState.update(SETTINGS_BACKUP_KEY, backup);
+    }
+
     await applySettings(CHAT_ONLY_LAYOUT, vscode.ConfigurationTarget.Global);
 
     // Wait for VS Code to finish wiring up surfaces and restoring state.
@@ -733,8 +749,28 @@ async function applyChatOnlyLayout({ silent = false, showWalkthrough = false } =
 }
 
 async function restoreStandardLayout() {
-    await clearSettings(Object.keys(CHAT_ONLY_LAYOUT), vscode.ConfigurationTarget.Global);
-    await clearSettings(Object.keys(CHAT_ONLY_LAYOUT), vscode.ConfigurationTarget.Workspace);
+    // Restore original user settings from backup (if available)
+    const backup = _extensionContext?.globalState.get(SETTINGS_BACKUP_KEY, {}) || {};
+    const cfg = vscode.workspace.getConfiguration();
+    for (const key of Object.keys(CHAT_ONLY_LAYOUT)) {
+        try {
+            if (key in backup) {
+                // Restore the user's original value
+                await cfg.update(key, backup[key], vscode.ConfigurationTarget.Global);
+            } else {
+                // No original value — remove our override
+                await cfg.update(key, undefined, vscode.ConfigurationTarget.Global);
+            }
+            await cfg.update(key, undefined, vscode.ConfigurationTarget.Workspace);
+        } catch (err) {
+            console.warn(`[ess-maker] could not restore ${key}:`, err.message);
+        }
+    }
+    // Clear the backup
+    if (_extensionContext) {
+        await _extensionContext.globalState.update(SETTINGS_BACKUP_KEY, undefined);
+    }
+
     const sel = await vscode.window.showInformationMessage(
         'ESS Maker: standard layout restored. Reload the window to see all changes.',
         'Reload Window'
@@ -1049,6 +1085,7 @@ class ActionsViewProvider {
 }
 
 function activate(context) {
+    _extensionContext = context;
     _log(`activate: ENTRY. workspaceFolders=${JSON.stringify(vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath))}`);
     // Register slash-command bridges (also available from the command palette).
     for (const a of ACTIONS) {

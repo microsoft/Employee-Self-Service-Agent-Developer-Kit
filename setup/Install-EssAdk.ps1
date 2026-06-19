@@ -573,7 +573,10 @@ if (-not $SkipClone) {
     # install/cleanup), remove it so the clone can proceed.
     if ((Test-Path $repoPath) -and -not (Test-Path (Join-Path $repoPath '.git'))) {
         Write-Warn2 "Directory exists but is not a git repo: $repoPath"
-        Write-Warn2 'Removing it to perform a fresh clone...'
+        Write-Warn2 'This appears to be a leftover from a partial install.'
+        Write-Warn2 "Contents will be deleted to perform a fresh clone."
+        Write-Warn2 "Press Ctrl+C within 5 seconds to abort..."
+        Start-Sleep -Seconds 5
         Remove-Item -Recurse -Force $repoPath
     }
 
@@ -722,15 +725,27 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions) {
 
         # Write the mode setting so the extension knows whether to apply
         # the lite layout or inject /setup (standard mode).
+        # Uses string manipulation to preserve JSONC comments in settings.json.
         $settingsDir = Join-Path $env:APPDATA 'Code\User'
         if (-not (Test-Path $settingsDir)) { New-Item -ItemType Directory -Path $settingsDir -Force | Out-Null }
         $settingsFile = Join-Path $settingsDir 'settings.json'
-        $settings = @{}
+        $modeEntry = "`"essMaker.mode`": `"$modeLabel`""
         if (Test-Path $settingsFile) {
-            try { $settings = Get-Content $settingsFile -Raw | ConvertFrom-Json -AsHashtable } catch { $settings = @{} }
+            $raw = Get-Content $settingsFile -Raw
+            if ($raw -match '"essMaker\.mode"\s*:') {
+                # Update existing key in place
+                $raw = $raw -replace '"essMaker\.mode"\s*:\s*"[^"]*"', $modeEntry
+            } elseif ($raw -match '^\s*\{') {
+                # Insert after opening brace
+                $raw = $raw -replace '^\s*\{', "{ $modeEntry,"
+            } else {
+                # Malformed — create fresh
+                $raw = "{ $modeEntry }"
+            }
+            Set-Content -Path $settingsFile -Value $raw -Encoding UTF8 -NoNewline
+        } else {
+            Set-Content -Path $settingsFile -Value "{ $modeEntry }" -Encoding UTF8 -NoNewline
         }
-        $settings['essMaker.mode'] = $modeLabel
-        $settings | ConvertTo-Json -Depth 10 | Set-Content -Path $settingsFile -Encoding UTF8
     }
 }
 

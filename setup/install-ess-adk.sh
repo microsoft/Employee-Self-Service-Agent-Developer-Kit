@@ -169,7 +169,10 @@ REPO_PATH="$INSTALL_ROOT/$REPO_NAME"
 # remove it so the clone can proceed.
 if [[ -d "$REPO_PATH" && ! -d "$REPO_PATH/.git" ]]; then
     warn "Directory exists but is not a git repo: $REPO_PATH"
-    warn "Removing it to perform a fresh clone..."
+    warn "This appears to be a leftover from a partial install."
+    warn "Contents will be deleted to perform a fresh clone."
+    warn "Press Ctrl+C within 5 seconds to abort..."
+    sleep 5
     rm -rf "$REPO_PATH"
 fi
 
