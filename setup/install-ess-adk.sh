@@ -238,41 +238,55 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
             "$CODE_CMD" --install-extension "$ext" --force 2>/dev/null && ok "$ext" || warn "Failed to install $ext"
         done
 
-        # ESS Maker Profile (chat-first VS Code layout).
-        # The bundled .vsix at tools/ess-maker-profile/extension/ hides
-        # developer chrome and shows a big-button "Quick actions" rail
-        # tied to the kit's slash commands. POC build — not on the
-        # marketplace — so we install from the cloned repo. The extension
-        # auto-activates on startup, including the `code chat /setup`
-        # invocation in the launch step below. Non-fatal: a failure here
-        # falls back to the stock VS Code layout.
-        if [[ "$SKIP_MAKER_PROFILE" != "true" ]]; then
-            # Glob so a version bump (0.4.0 -> 0.5.0) doesn't break the install.
-            MAKER_VSIX_DIR="$REPO_PATH/tools/ess-maker-profile/extension"
-            MAKER_VSIX=""
-            if [[ -d "$MAKER_VSIX_DIR" ]]; then
-                # shellcheck disable=SC2012 # ls -t is fine here; filenames
-                # are author-controlled and match a tight glob.
-                MAKER_VSIX="$(ls -t "$MAKER_VSIX_DIR"/ess-maker-profile-*.vsix 2>/dev/null | head -n 1 || true)"
-            fi
-
-            if [[ -z "$MAKER_VSIX" ]]; then
-                warn "No ess-maker-profile-*.vsix found under $MAKER_VSIX_DIR. Skipping chat-first profile install."
-            elif "$CODE_CMD" --install-extension "$MAKER_VSIX" --force 2>/dev/null; then
-                ok "ESS Maker Profile ($(basename "$MAKER_VSIX"))"
-                echo "    Tip: to revert to the stock VS Code layout, run 'ESS Maker: Restore Standard Layout' from the command palette."
-                MAKER_PROFILE_INSTALLED=true
-            else
-                warn "ESS Maker Profile install failed (non-fatal, continuing with stock VS Code layout)"
-            fi
+        # ESS Maker Profile — installs in both modes. In lite mode it
+        # applies the chat-first layout; in standard mode it only handles
+        # /setup injection (no visual changes). The mode is communicated
+        # via essMaker.mode in VS Code's user settings.json.
+        if [[ "$SKIP_MAKER_PROFILE" == "true" ]]; then
+            MODE_LABEL="standard"
         else
-            # Standard mode: ensure any previously-installed Maker Profile is
-            # removed so the user gets a stock VS Code layout.
-            if "$CODE_CMD" --list-extensions 2>/dev/null | grep -qi 'microsoft-ess\.ess-maker-profile'; then
-                step "Removing ESS Maker Profile (standard mode requested)"
-                "$CODE_CMD" --uninstall-extension microsoft-ess.ess-maker-profile 2>/dev/null || true
-                ok "ESS Maker Profile removed"
-            fi
+            MODE_LABEL="lite"
+        fi
+        step "Installing ESS Maker Profile ($MODE_LABEL mode)"
+
+        MAKER_VSIX_DIR="$REPO_PATH/tools/ess-maker-profile/extension"
+        MAKER_VSIX=""
+        if [[ -d "$MAKER_VSIX_DIR" ]]; then
+            # shellcheck disable=SC2012
+            MAKER_VSIX="$(ls -t "$MAKER_VSIX_DIR"/ess-maker-profile-*.vsix 2>/dev/null | head -n 1 || true)"
+        fi
+
+        if [[ -z "$MAKER_VSIX" ]]; then
+            warn "No ess-maker-profile-*.vsix found under $MAKER_VSIX_DIR. Skipping extension install."
+        elif "$CODE_CMD" --install-extension "$MAKER_VSIX" --force 2>/dev/null; then
+            ok "ESS Maker Profile ($(basename "$MAKER_VSIX")) — $MODE_LABEL mode"
+        else
+            warn "ESS Maker Profile install failed (non-fatal)"
+        fi
+
+        # Write the mode setting so the extension knows whether to apply
+        # the lite layout or inject /setup (standard mode).
+        SETTINGS_DIR="$HOME/Library/Application Support/Code/User"
+        if [[ "$(uname)" != "Darwin" ]]; then
+            SETTINGS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/Code/User"
+        fi
+        mkdir -p "$SETTINGS_DIR"
+        SETTINGS_FILE="$SETTINGS_DIR/settings.json"
+        if [[ -f "$SETTINGS_FILE" ]]; then
+            # Merge into existing settings using Python (available from step 2)
+            python3 -c "
+import json, sys
+try:
+    with open('$SETTINGS_FILE', 'r') as f:
+        settings = json.load(f)
+except:
+    settings = {}
+settings['essMaker.mode'] = '$MODE_LABEL'
+with open('$SETTINGS_FILE', 'w') as f:
+    json.dump(settings, f, indent=2)
+" 2>/dev/null || true
+        else
+            echo "{\"essMaker.mode\": \"$MODE_LABEL\"}" > "$SETTINGS_FILE"
         fi
     else
         warn "VS Code 'code' CLI not found. Install extensions manually after launching VS Code."
@@ -489,45 +503,21 @@ with open(sys.argv[6], 'w', encoding='utf-8') as f:
 fi
 
 # ---------------------------------------------------------------------------
-# 8. Launch VS Code and request /setup in Copilot Chat
+# 8. Launch VS Code
 # ---------------------------------------------------------------------------
 WORKSPACE_PATH="$REPO_PATH/solutions/ess-maker-skills"
 
 if [[ -n "$CODE_CMD" ]]; then
-    if [[ "${MAKER_PROFILE_INSTALLED:-false}" == "true" ]]; then
-        # The ESS Maker Profile extension takes over /setup orchestration:
-        # on activation it opens a chat editor in the editor area (full
-        # width, not the narrow aux bar) and injects /setup itself. So
-        # just launch the workspace plainly here — don't use
-        # `code chat /setup`, which would also open an aux-bar chat and
-        # leave us with two competing chat surfaces.
-        step "Launching VS Code (Maker Profile will run /setup)"
-        if (cd "$WORKSPACE_PATH" && "$CODE_CMD" .); then
-            ok "Launched VS Code at $WORKSPACE_PATH"
-            warn "The ESS Maker Profile will open Copilot Chat and run /setup automatically."
-            warn "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts."
-        else
-            warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
-            echo "Next: in VS Code, open Copilot Chat and run /setup to connect your Dataverse environment."
-        fi
+    # The ESS Maker Profile extension handles /setup orchestration in
+    # both modes. Just launch the workspace here.
+    step "Opening workspace in VS Code"
+    if (cd "$WORKSPACE_PATH" && "$CODE_CMD" .); then
+        ok "Launched VS Code at $WORKSPACE_PATH"
+        echo -e "    ${YELLOW}The ESS Maker Profile will run /setup in Copilot Chat (standard mode) or show the Connect button (lite mode).${NC}"
+        echo -e "    ${YELLOW}If VS Code prompts you to trust the workspace, accept the prompt.${NC}"
     else
-        step "Launching VS Code and requesting /setup in Copilot Chat"
-        # `code chat <prompt>` (VS Code 1.102+, June 2025) opens the chat panel in
-        # the workspace at the current working directory and submits the prompt.
-        # We cd into $WORKSPACE_PATH so it targets the kit folder.
-        # NOTE: exit 0 means "VS Code accepted the chat request," NOT that /setup
-        # actually ran. The user may still need to grant workspace trust and sign
-        # in to GitHub/Copilot before /setup executes.
-        if (cd "$WORKSPACE_PATH" && "$CODE_CMD" chat "/setup"); then
-            ok "Requested /setup in Copilot Chat at $WORKSPACE_PATH"
-            warn "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts and /setup will run."
-            warn "If /setup does not start after trust/sign-in, open Copilot Chat manually and run /setup."
-        else
-            warn "'code chat' failed or is unsupported. Falling back to opening the workspace only."
-            warn "If you have an older VS Code (pre-1.102 / June 2025), update VS Code and re-run, or run /setup manually in Copilot Chat."
-            "$CODE_CMD" "$WORKSPACE_PATH" || warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
-            echo "Next: in VS Code, open Copilot Chat and run /setup to connect your Dataverse environment."
-        fi
+        warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
+        echo "Next: in VS Code, open Copilot Chat and run /setup to connect your Dataverse environment."
     fi
 else
     warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
