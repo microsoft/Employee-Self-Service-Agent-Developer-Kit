@@ -128,6 +128,49 @@ function isLiteMode() {
     return cfg.get('workbench.activityBar.location') === 'hidden';
 }
 
+// Wait for VS Code's welcome/walkthrough tab to close before injecting /setup.
+// On first-ever launch, VS Code ignores workbench.startupEditor and shows the
+// welcome page regardless. This watches for it to be dismissed.
+// Resolves immediately if no welcome tab is detected.
+function waitForWelcomeClose(timeoutMs = 120000) {
+    return new Promise((resolve) => {
+        function hasWelcomeTab() {
+            for (const group of vscode.window.tabGroups?.all || []) {
+                for (const tab of group.tabs || []) {
+                    const uri = tab.input?.uri?.toString?.() || '';
+                    const viewType = tab.input?.viewType || '';
+                    if (uri.includes('walkthrough') || uri.includes('welcome') ||
+                        viewType.includes('walkthrough') || viewType.includes('welcome') ||
+                        tab.label?.toLowerCase?.().includes('welcome') ||
+                        tab.label?.toLowerCase?.().includes('get started')) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        if (!hasWelcomeTab()) {
+            resolve();
+            return;
+        }
+
+        console.log('[ess-maker] Welcome tab detected, waiting for it to close before /setup...');
+        const subscription = vscode.window.tabGroups.onDidChangeTabs(() => {
+            if (!hasWelcomeTab()) {
+                clearTimeout(timeout);
+                subscription.dispose();
+                // Brief delay for VS Code to settle after tab close.
+                setTimeout(resolve, 1000);
+            }
+        });
+        const timeout = setTimeout(() => {
+            console.log('[ess-maker] Welcome tab timeout reached, proceeding with /setup');
+            subscription.dispose();
+            resolve();
+        }, timeoutMs);
+    });
+}
 
 // Inject /setup into the Copilot Chat panel (for standard mode — no layout changes).
 async function injectSetup() {
@@ -944,8 +987,8 @@ function activate(context) {
     // First-run vs subsequent runs:
     // - First run: determine mode (lite vs standard) from VS Code setting
     //   written by the installer. Lite mode applies layout; standard does not.
-    //   The installer also sets workbench.startupEditor to "none" so the
-    //   welcome wizard never appears, allowing /setup to inject immediately.
+    //   On first-ever VS Code launch, the welcome wizard appears regardless of
+    //   settings — waitForWelcomeClose() defers /setup until after it's dismissed.
     // - Subsequent lite activations: silently re-apply layout.
     const alreadyApplied = context.globalState.get(APPLIED_KEY, false);
     const userWantsLite = context.globalState.get(LITE_MODE_KEY, true); // default to lite
@@ -958,14 +1001,21 @@ function activate(context) {
             context.globalState.update(LITE_MODE_KEY, !isStandardMode);
 
             if (isStandardMode) {
-                // Standard mode: no layout changes, just inject /setup.
+                // Standard mode: no layout changes, wait for welcome then inject /setup.
                 context.globalState.update(APPLIED_KEY, true);
-                injectSetup().catch(() => {});
+                waitForWelcomeClose().then(async () => {
+                    await injectSetup();
+                    await markCompleted(context, 'setup');
+                    if (_actionsViewProvider) _actionsViewProvider.refresh();
+                }).catch(() => {});
             } else {
-                // Lite mode: apply layout (which includes /setup injection).
-                applyChatOnlyLayout({ silent: false })
-                    .then(() => context.globalState.update(APPLIED_KEY, true))
-                    .catch(() => {});
+                // Lite mode: wait for welcome, then apply layout (includes /setup).
+                waitForWelcomeClose().then(async () => {
+                    await applyChatOnlyLayout({ silent: false });
+                    await context.globalState.update(APPLIED_KEY, true);
+                    await markCompleted(context, 'setup');
+                    if (_actionsViewProvider) _actionsViewProvider.refresh();
+                }).catch(() => {});
             }
         } else if (userWantsLite) {
             // Subsequent lite mode launch: silently re-apply layout.
