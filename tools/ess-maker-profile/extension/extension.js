@@ -5,6 +5,15 @@
 // tabs, no menu bar, no status bar.
 
 const vscode = require('vscode');
+const _fs = require('fs');
+const _path = require('path');
+
+// Debug log file for troubleshooting activation/wizard detection
+const _logFile = _path.join(process.env.APPDATA || process.env.HOME || '/tmp', 'ess-maker-debug.log');
+function _log(msg) {
+    const line = `[${new Date().toISOString()}] ${msg}\n`;
+    try { _fs.appendFileSync(_logFile, line); } catch (_) {}
+}
 
 const EXT_ID = 'microsoft-ess.ess-maker-profile';
 const APPLIED_KEY = 'essMaker.chatOnlyApplied.v7';
@@ -224,6 +233,83 @@ function isLiteMode() {
     return cfg.get('workbench.activityBar.location') === 'hidden';
 }
 
+
+// Wait for the VS Code welcome wizard to be dismissed or completed.
+// Polls the global state.vscdb SQLite database for the `welcomeOnboarding.state`
+// key which VS Code writes when the wizard is closed (either completed or dismissed).
+// Returns a promise that resolves when the wizard is done, or rejects on timeout.
+function waitForWelcomeWizard(timeoutMs = 300000) {
+    const path = require('path');
+    const fs = require('fs');
+
+    // Resolve state.vscdb path per platform
+    let resolvedDbPath;
+    if (process.platform === 'win32') {
+        resolvedDbPath = path.join(process.env.APPDATA, 'Code', 'User', 'globalStorage', 'state.vscdb');
+    } else if (process.platform === 'darwin') {
+        resolvedDbPath = path.join(require('os').homedir(), 'Library', 'Application Support', 'Code', 'User', 'globalStorage', 'state.vscdb');
+    } else {
+        resolvedDbPath = path.join(process.env.XDG_CONFIG_HOME || path.join(require('os').homedir(), '.config'), 'Code', 'User', 'globalStorage', 'state.vscdb');
+    }
+
+    _log(`waitForWelcomeWizard: polling ${resolvedDbPath}`);
+
+    return new Promise((resolve, reject) => {
+        const startTime = Date.now();
+        let interval;
+        let pollCount = 0;
+
+        function checkDb() {
+            pollCount++;
+            if (Date.now() - startTime > timeoutMs) {
+                _log('waitForWelcomeWizard: TIMEOUT');
+                clearInterval(interval);
+                reject(new Error('Timed out waiting for welcome wizard'));
+                return;
+            }
+
+            try {
+                if (!fs.existsSync(resolvedDbPath)) {
+                    if (pollCount <= 3) _log(`waitForWelcomeWizard: DB not found yet (poll #${pollCount})`);
+                    return;
+                }
+
+                const { execFileSync } = require('child_process');
+                const script = [
+                    'import sqlite3',
+                    'conn = sqlite3.connect(r"""' + resolvedDbPath + '""")',
+                    'cur = conn.cursor()',
+                    "cur.execute(\"SELECT value FROM ItemTable WHERE key='welcomeOnboarding.state'\")",
+                    'r = cur.fetchone()',
+                    "print(r[0] if r else '')",
+                    'conn.close()',
+                ].join('\n');
+                const result = execFileSync('python', ['-c', script], {
+                    timeout: 5000,
+                    encoding: 'utf8',
+                    stdio: ['pipe', 'pipe', 'pipe']
+                }).trim();
+
+                if (pollCount <= 5 || pollCount % 10 === 0) {
+                    _log(`waitForWelcomeWizard: poll #${pollCount}, result="${result}"`);
+                }
+
+                if (result === 'true') {
+                    _log('waitForWelcomeWizard: RESOLVED - wizard done');
+                    clearInterval(interval);
+                    resolve();
+                }
+            } catch (e) {
+                _log(`waitForWelcomeWizard: ERROR on poll #${pollCount}: ${e && e.message}`);
+                console.warn('[ess-maker] welcomeWizard poll error:', e && e.message);
+            }
+        }
+
+        // Check immediately, then poll every 2 seconds
+        checkDb();
+        interval = setInterval(checkDb, 2000);
+    });
+}
 
 // Inject /setup into the Copilot Chat panel (for standard mode — no layout changes).
 async function injectSetup() {
@@ -1016,21 +1102,41 @@ function activate(context) {
     const userWantsLite = context.globalState.get(LITE_MODE_KEY, true); // default to lite
     const installerMode = vscode.workspace.getConfiguration().get('essMaker.mode', '');
 
+    _log(`activate: alreadyApplied=${alreadyApplied}, userWantsLite=${userWantsLite}, installerMode="${installerMode}", workspaceFolders=${vscode.workspace.workspaceFolders?.length || 0}`);
+
     if (vscode.workspace.workspaceFolders?.length) {
         if (!alreadyApplied) {
             // First install. Check installer-provided mode setting.
             const isStandardMode = installerMode === 'standard';
+            _log(`activate: first install, isStandardMode=${isStandardMode}`);
             context.globalState.update(LITE_MODE_KEY, !isStandardMode);
 
             if (isStandardMode) {
-                // Standard mode: no layout changes, inject /setup.
+                // Standard mode: no layout changes.
+                // Wait for welcome wizard to finish, then inject /setup.
                 context.globalState.update(APPLIED_KEY, true);
-                injectSetup().catch(() => {});
+                waitForWelcomeWizard()
+                    .then(() => { _log('activate: wizard done (standard), waiting 3s...'); return new Promise(r => setTimeout(r, 3000)); })
+                    .then(() => { _log('activate: calling injectSetup (standard)'); return injectSetup(); })
+                    .then(() => _log('activate: injectSetup completed (standard)'))
+                    .catch((err) => {
+                        _log(`activate: ERROR in standard wizard chain: ${err && err.message}`);
+                        console.warn('[ess-maker] Welcome wizard wait timed out, skipping auto /setup');
+                    });
             } else {
-                // Lite mode: apply layout. User clicks Connect button for /setup.
+                // Lite mode: apply layout, then wait for welcome wizard
+                // to finish before injecting /setup.
                 applyChatOnlyLayout({ silent: false })
                     .then(() => context.globalState.update(APPLIED_KEY, true))
                     .catch(() => {});
+                waitForWelcomeWizard()
+                    .then(() => { _log('activate: wizard done (lite), waiting 3s...'); return new Promise(r => setTimeout(r, 3000)); })
+                    .then(() => { _log('activate: calling injectSetup (lite)'); return injectSetup(); })
+                    .then(() => _log('activate: injectSetup completed (lite)'))
+                    .catch((err) => {
+                        _log(`activate: ERROR in lite wizard chain: ${err && err.message}`);
+                        console.warn('[ess-maker] Welcome wizard wait timed out, skipping auto /setup');
+                    });
             }
         } else if (userWantsLite) {
             // Subsequent lite mode launch: silently re-apply layout.
