@@ -1084,7 +1084,7 @@ class ActionsViewProvider {
     }
 }
 
-function activate(context) {
+async function activate(context) {
     _extensionContext = context;
     _log(`activate: ENTRY. workspaceFolders=${JSON.stringify(vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath))}`);
     // Register slash-command bridges (also available from the command palette).
