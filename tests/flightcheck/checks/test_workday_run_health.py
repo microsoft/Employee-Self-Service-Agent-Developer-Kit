@@ -191,6 +191,61 @@ class TestEdgeCases:
         assert "No recent Workday flow runs found" in r.result
 
     @responses.activate
+    def test_cancelled_only_window_is_not_a_misleading_pass(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """Pins the review fix: a window of only Cancelled runs must NOT count
+        as success (which would PASS and hide the manual conn/sec checks).
+        Cancelled is inconclusive → non-scoring → NotConfigured."""
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID,
+            runs=[
+                pp.flow_run(run_id="c1", flow_id=_FLOW_ID, status="Cancelled"),
+                pp.flow_run(run_id="c2", flow_id=_FLOW_ID, status="Cancelled"),
+            ],
+        ))
+
+        r = _only(_check_workday_run_health(runner))
+        assert r.status == "NotConfigured"
+        assert r.status != "Passed"
+
+    @responses.activate
+    def test_cancelled_runs_excluded_recent_success_still_passes(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """Cancelled runs are non-scoring, so genuine recent successes alongside
+        them still PASS (a cancellation is not a Workday failure)."""
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID,
+            runs=[
+                pp.flow_run(run_id="c1", flow_id=_FLOW_ID, status="Cancelled"),
+                pp.flow_run(run_id="s1", flow_id=_FLOW_ID, status="Succeeded"),
+            ],
+        ))
+
+        r = _only(_check_workday_run_health(runner))
+        assert r.status == "Passed"
+        assert "1 most recent Workday flow run(s) succeeded" in r.result
+
+    @responses.activate
+    def test_timedout_run_counts_as_failure(self, runner: _MinimalRunner) -> None:
+        """A run-level TimedOut is a genuine run failure (not a success)."""
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID,
+            runs=[pp.flow_run(run_id="t1", flow_id=_FLOW_ID, status="TimedOut")],
+        ))
+
+        r = _only(_check_workday_run_health(runner))
+        assert r.status == "Failed"
+        assert "All 1 most recent Workday flow run(s) FAILED" in r.result
+
+    @responses.activate
     def test_403_is_skipped_with_permission_note(self, runner: _MinimalRunner) -> None:
         from flightcheck.checks.workday import _check_workday_run_health
 

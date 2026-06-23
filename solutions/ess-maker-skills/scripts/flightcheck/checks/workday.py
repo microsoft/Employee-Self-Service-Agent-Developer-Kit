@@ -2764,6 +2764,12 @@ def _check_flow_status(runner, wd_flows: list) -> list[CheckResult]:
 # The single success Response action. Anything else is a failure branch.
 _WD_SUCCESS_RESPONSE_ACTION = "Respond_to_Copilot_with_Success"
 
+# Terminal run statuses that are definite failures of the run itself. A run in
+# any of these did not complete successfully, regardless of response branch.
+# (Cancelled / Skipped and unknown states are intentionally NOT here — they are
+# inconclusive and treated as non-scoring 'pending' in _classify_run.)
+_RUN_FAILURE_STATUSES = {"Failed", "TimedOut", "Faulted", "Aborted"}
+
 # WD-RUN-001 evaluates only the most recent N terminal runs (newest first,
 # across all Workday flows). The check is a litmus test for a *deterministic*
 # break: it FAILs only when NONE of the recent runs succeeded. A couple of
@@ -2775,20 +2781,30 @@ _WD_RECENT_WINDOW = 10
 
 def _classify_run(run: dict) -> str:
     """Classify one flow run as 'success', 'caught_failure', 'hard_failure',
-    or 'pending' (still running / not a terminal state we score).
+    or 'pending' (non-scoring).
 
-    See module-level WD-RUN-001 comment for the empirical basis.
+    Only a ``"Succeeded"`` run can be a success/caught_failure — that is the
+    single status whose Response-action name distinguishes the success branch
+    from a caught Workday fault. Definite run-level failures
+    (``"Failed"``/``"TimedOut"``/``"Faulted"``/``"Aborted"``) are hard_failure.
+    Everything else is 'pending' (non-scoring): in-flight states
+    (``"Running"``/``"Waiting"``/``"Paused"``/``"Suspended"``) AND inconclusive
+    terminal states that are not a Workday-health signal
+    (``"Cancelled"``/``"Skipped"``/unknown). Critically, a non-``"Succeeded"``
+    run is NEVER counted as a success — an all-``"Cancelled"`` window must not
+    yield a misleading PASS (which would hide the manual conn/sec checks). See
+    the WD-RUN-001 module comment.
     """
     props = run.get("properties", {}) or {}
     status = props.get("status")
     resp_name = ((props.get("response") or {}).get("name")) or ""
-    if status in (None, "Running", "Waiting", "Paused"):
-        return "pending"
-    if status == "Failed":
+    if status == "Succeeded":
+        if resp_name and resp_name != _WD_SUCCESS_RESPONSE_ACTION:
+            return "caught_failure"
+        return "success"
+    if status in _RUN_FAILURE_STATUSES:
         return "hard_failure"
-    if status == "Succeeded" and resp_name and resp_name != _WD_SUCCESS_RESPONSE_ACTION:
-        return "caught_failure"
-    return "success"
+    return "pending"
 
 
 def _check_workday_run_health(runner) -> list[CheckResult]:
