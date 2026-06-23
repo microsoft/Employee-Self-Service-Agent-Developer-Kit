@@ -11,8 +11,8 @@ its template configuration and topic definition and wiring tenant-specific refer
 
 ## Approach
 
-- Workday-specialized refactor of the existing `topics/create` skill using the **Template
-  Config + Shared Flow** pattern (reuse, not reinvention).
+- Workday-specialized refactor of the existing **`src/skills/topics/create`** skill using the
+  **Template Config + Shared Flow** pattern (reuse, not reinvention).
 - A new scenario may need **additional API-client functional areas** → loops back to
   [`skill-4-configure-workday-tenant`](./skill-4-configure-workday-tenant.md) (Register API
   Client) when scopes are missing.
@@ -26,7 +26,12 @@ its template configuration and topic definition and wiring tenant-specific refer
 
 ## Verification
 
-- Flightcheck `TOPIC-*` checkpoints, run individually. Updates master checklist rows.
+- Emit two per-topic checkpoint families, run individually via `--checkpoint`:
+  **`TOPIC-TRIGGER-*`** — the new topic exists and its trigger phrases/recognition are wired; and
+  **`TOPIC-INTEGRATION-*`** — the topic's Workday system-action wiring resolves (e.g. `dialog:`
+  references to `msdyn_copilotforemployeeselfservice*.topic.WorkdaySystem…Execution` exist in the
+  deployed solution namespace, and tenant reference IDs are populated). Updates master checklist
+  rows.
 
 ## Acceptance criteria
 

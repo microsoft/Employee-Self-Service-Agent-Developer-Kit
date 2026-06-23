@@ -20,8 +20,9 @@ and connection references.
   (documented silent-failure gotcha). **SOAP + REST base URLs and the OAuth client come from
   skill-4's captured config** — don't re-derive them here.
 - **Two connections**, each with its own account:
-  - `OAuthUser` (`new_sharedworkdaysoap_ff0df`)
-  - Dataverse (`msviess_sharedcommondataserviceforapps_92b66`)
+  - `OAuthUser` (`new_sharedworkdaysoap_ff0df`) — the **Workday** connection.
+  - Dataverse (`msviess_sharedcommondataserviceforapps_92b66`) — **not** a Workday ref; it's
+    the Common Data Service connector and is verified under a separate (non-`WD`) checkpoint.
 - Confirm both cloud flows are **on**; non-UPN identity resolution (usually no action).
 - **Auto-push** the user-context topic redirect — but **create a checkpoint/rollback first**
   (preserve the existing `step3.md` checkpoint-before-push pattern), since this mutates the
@@ -40,22 +41,43 @@ and connection references.
 
 ## Verification
 
-- **Use simplified-only checkpoints — not the legacy `WD-ENV-*` / `WD-WF-*` ISU/RaaS checks,
-  which are skipped on simplified installs.** Run individually:
-  - `WD-PKG-*` — extension pack present, package flavor = simplified.
-  - `WD-CONN-*` — exactly the two connection refs (`ff0df` + `92b66`) bound, each its own account.
-  - `WD-CONN-AUTH-*` — connection auth type = **Entra ID Integrated**.
-  - `WD-REST-*` — REST base URL present and **ends at `/api`** (guard the silent failure).
-  - `WD-FLOW-*` — both cloud flows on.
-  - `WD-NET-*` — Workday REST + SOAP endpoints reachable; on failure report **"network
-    unreachable (firewall)"** distinctly from **"config invalid"** so the firewall gate is
-    diagnosable.
+- **Reuse existing simplified-aware checkpoints — do NOT re-mint them.** `WD-PKG-001` already
+  detects the **simplified** flavor (exact `ff0df` match), `WD-CONN-012` already checks
+  simplified connection-reference **binding completeness**, and `WD-FLOW-*` is already emitted by
+  `checks/workday.py`'s `_check_flow_status` (one `WD-FLOW-{n}` per cloud flow, **not** flavor-gated);
+  reuse all three. Only mint the genuinely-new IDs below. Also **do not** reuse the legacy
+  `WD-ENV-*` / `WD-WF-*` ISU/RaaS checks (skipped on simplified). Run each individually:
+  - `WD-PKG-001` *(existing)* — extension pack present, package flavor = **simplified**.
+  - `WD-CONN-012` *(existing)* — the **Workday** connection ref (`ff0df`) bound, own account.
+    **Note:** the simplified Workday family fingerprints a **single** `ff0df` ref — `92b66` is
+    the **Dataverse** connector, verified separately (see below), **not** a `WD-CONN` ref.
+  - `WD-FLOW-*` *(existing — reuse `checks/workday.py`'s `_check_flow_status`)* — both cloud flows on
+    (one emitted `WD-FLOW-{n}` per flow; do **not** add a second emitter).
+  - `WD-CONN-AUTH-001` *(new)* — Workday connection auth type = **Entra ID Integrated**.
+  - `DV-CONN-001` *(new, **non-`WD`-family**)* — Dataverse connection (`92b66`) bound, own account.
+  - `WD-REST-001` *(new)* — REST base URL present and **ends at `/api`** (guard silent failure).
+  - `WD-REST-002` *(new)* — **user-context redirect pushed** so REST resolves **`/workers/me`**;
+    skip if already present; take the rollback checkpoint first. Distinct concern from
+    `WD-REST-001` (base-URL shape) — verified by its own `--checkpoint` so a failure is
+    unambiguous.
+  - `WD-NET-001` *(new)* — Workday REST + SOAP reachability **from the Power Platform connector
+    runtime**; on failure report **"network unreachable (firewall)"** distinctly from **"config
+    invalid"**.
+- **`WD-NET-001` default = MANUAL / InfoSec attestation (build this first).** A local HTTP probe
+  only proves the developer's machine can reach Workday — not that the managed-connector outbound
+  IPs (the ones InfoSec allowlists) can — so a local-only probe must **never** be presented as a
+  gate. The deterministic, junior-safe v1 is an **attestation checkpoint** tied to InfoSec
+  evidence (allowlist confirmation). **Optional enhancement (only if explicitly scoped later):** a
+  minimal connector/cloud-flow test triggered **in the target environment** that classifies the
+  connector response — treat this as a follow-up, not part of the initial skill.
 - Updates master checklist rows.
 
 ## Acceptance criteria
 
-- Extension pack present (simplified flavor); both connections created (own accounts); both
-  flows on; user-context redirect pushed (with a rollback checkpoint) when required — each
-  independently verifiable by a single checkpoint.
+- Extension pack present (simplified flavor, via existing `WD-PKG-001`); the Workday connection
+  (`ff0df`, via existing `WD-CONN-012`) and the Dataverse connection (`92b66`, separate ID) are
+  each bound with their own account; both flows on; user-context redirect pushed (with a
+  rollback checkpoint) when required — each independently verifiable by a single checkpoint.
 - REST base URL stored trimmed to `/api` (guard against the silent failure).
-- Functional auth failures distinguish network-unreachable (firewall) from config-invalid.
+- `WD-NET-001` reflects **Power-Platform-runtime** reachability (or is a MANUAL/InfoSec
+  attestation), distinguishing network-unreachable (firewall) from config-invalid.

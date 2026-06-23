@@ -19,7 +19,7 @@ focused **sub-plans** beside it in this folder, each reviewable and shippable on
 | [`flightcheck-single-checkpoint`](./flightcheck-single-checkpoint.md) | Add `--checkpoint <ID>` single-checkpoint invocation to flightcheck, via a **checkpoint registry + prerequisite hydration**. **Integration-agnostic.** | — |
 | [`shared-building-blocks`](./shared-building-blocks.md) | Parameterized Entra-app helper (de-dups connector authorization across Workday + ServiceNow), role-gate (programmatic + attestation), connection-field helper, config schema, checklist updater. | — |
 
-### The 6 atomic skills (build in order 1→6)
+### The 6 atomic skills (numbered in dependency order — the **Depends on** column is authoritative)
 
 | Sub-plan | Role | Depends on |
 | --- | --- | --- |
@@ -64,7 +64,7 @@ focused **sub-plans** beside it in this folder, each reviewable and shippable on
 | --- | --- | --- |
 | Deploy env + Dataverse + Copilot Studio capacity | Power Platform Admin | **1. provision-power-platform-environment** |
 | Deploy base ESS agent (AppSource) | Environment Maker | **2. install-ess** |
-| SSO gallery app (SAML, cert) — **fully Graph-automated** | App / Cloud App Admin | **3. provision-workday-entra-app** (prereq) |
+| SSO gallery app (SAML, cert) — **Graph-first + portal fallback** | App / Cloud App Admin | **3. provision-workday-entra-app** (prereq) |
 | Workday connector in Entra (scope, authorize `4e4707ca`, Graph, consent, enterprise-app assignment) | App / Cloud App Admin (consent-capable) | **3. provision-workday-entra-app** (core) |
 | Configure Workday tenant (X.509, security, auth policies, API client) | Workday Administrator | **4. configure-workday-tenant** |
 | Install extension pack + connections + flows | Environment Maker | **5. install-workday-extension-pack** |
@@ -80,14 +80,19 @@ focused **sub-plans** beside it in this folder, each reviewable and shippable on
 5. **command-wiring** (retire monolith once the skills exist)
 6. **evals** (after extension-pack + create-topic skills exist)
 
-## Review hardening (applied — multi-model rubber-duck)
+## Review hardening (applied — multi-model rubber-duck, rounds 1–2)
 
-Folded in after critique by Claude Opus 4.8, GPT-5.5, and GPT-5.3-Codex:
+Folded in after critique by Claude Opus 4.8, GPT-5.5, and GPT-5.3-Codex (round 1) and a
+round-2 re-review (Opus 4.8 + GPT-5.5) that pressure-tested the Graph-automation claim against
+the repo source of truth:
 
 - **Flightcheck needs a checkpoint registry + prerequisite hydration**, not naive per-check
   isolation — checks share state within category functions, and `cli.py` must stop requiring
   Dataverse for Entra-only checkpoints. *(highest-priority change)*
-- **skill-5 uses new simplified-only checkpoints** (`WD-PKG/CONN/CONN-AUTH/REST/FLOW/NET-*`);
+- **skill-5 reuses existing simplified-aware checkpoints** `WD-PKG-001` + `WD-CONN-012` +
+  `WD-FLOW-*` (`checks/workday.py`'s `_check_flow_status` already emits one `WD-FLOW-{n}` per cloud flow —
+  don't re-mint) and mints only `WD-CONN-AUTH-001`, `DV-CONN-001`, `WD-REST-001`, `WD-REST-002`,
+  `WD-NET-001`;
   **never reuse legacy `WD-ENV-*`/`WD-WF-*`** (ISU/RaaS, skipped on simplified).
 - **Admin consent is not GA-only** — any consent-capable role (App Admin / Cloud App Admin /
   Priv Role Admin / GA); attempt programmatically, escalate to manual if blocked.
@@ -101,12 +106,64 @@ Folded in after critique by Claude Opus 4.8, GPT-5.5, and GPT-5.3-Codex:
   network-unreachable vs config-invalid distinctly.
 - **`MANUAL` ≠ done** — manual/attestation rows need explicit acknowledgement; the orchestrator
   won't advance on a flightcheck pass alone.
-- **skill-3 is fully Graph-automated end-to-end** (gallery app + SAML + cert + connector +
-  Graph perms + admin consent + enterprise-app assignment) — no Entra portal step; the only
-  escalation is admin consent when the caller lacks a consent-capable role.
+- **skill-3 is Graph-first with a mandatory per-step portal fallback.** This *extends* the
+  existing mixed pattern in `connect/workday/step2.md` (which uses `az rest` Graph calls and
+  already falls back to the portal for the not-authorized / portal-only cases) to a fallback on
+  **every** step. \~9 of 11 Entra sub-steps are Graph-GA (instantiate, SAML mode,
+  identifier/reply/sign-on/logout URLs, cert add **and activate** via
+  `preferredTokenSigningKeyThumbprint`, scope, pre-authorize `4e4707ca`, Graph perms, admin
+  consent, enterprise-app assignment). **Two are not one-liners and are explicit gates:** the
+  **"Sign SAML response and assertion" signing option is portal-only** (no Graph property), and
+  **NameID requires a `claimsMappingPolicy` create+assign** (GA but finicky, no repo precedent).
+- **Reuse existing simplified-aware checkpoints; don't re-mint.** `WD-PKG-001`, `WD-CONN-012`,
+  `WD-CONN-102`, `WD-CONN-010` already exist and are simplified-aware — skills 3/4/5 reuse them
+  and mint new IDs only for genuinely-uncovered outputs (see [`master-checklist`](./master-checklist.md)).
+- **`92b66` is the Dataverse connector, not a Workday ref** — simplified fingerprints a single
+  `ff0df` Workday ref; verify `92b66` under a separate non-`WD` checkpoint.
+- **skill-4 captures REST and SOAP base URLs from different sources** — REST from "View API
+  Client", SOAP derived from the Workday **web host** pattern (per `step1.md`, user-prompt
+  fallback) — and runs a single-tenant SAML IdP pre-gate (a second Entra tenant silently breaks
+  the first federation).
+- **`WD-NET-001` defaults to a MANUAL/InfoSec attestation** (allowlist evidence) because a local
+  CLI probe only proves the dev machine — not the managed-connector outbound IPs — can reach
+  Workday; an in-environment connector probe is an optional later enhancement, never a local
+  probe presented as a gate.
+- \*\*The flightcheck registry resolves prerequisites transitively, validates an acyclic DAG, and
+  has a **setup-scoped** drift test\*\* (it asserts the registry covers every *setup-owned* emitted
+  checkpoint ID; other integrations' checkpoints stay out of scope, validated via `--scope`).
 - **Added:** enterprise-app user/group assignment gate (skill-3), live-agent rollback before
   the redirect push (skill-5), attestation-based gating for Workday/InfoSec roles, and evals
   derived from the installed topic inventory (not a hand list).
+
+## Implementation conventions (read before executing any sub-plan)
+
+- **Base directory:** every repo-relative path in these plans (e.g. `scripts/flightcheck/cli.py`,
+  `src/skills/setup/workday/…`, `src/reference/ess-docs/…`) is relative to
+  **`solutions/ess-maker-skills/`** unless it explicitly says "repo root". The `plans/` folder
+  and `.gitignore` are the only repo-root paths referenced.
+- **Skills are markdown playbooks**, not application code — each new skill is authored under
+  `src/skills/setup/workday/` (the canonical home introduced by command-wiring) and invoked by
+  the orchestrator (see
+  [`command-wiring`](./command-wiring.md)); the only Python touched is `scripts/flightcheck/`
+  and the shared helpers in [`shared-building-blocks`](./shared-building-blocks.md).
+- **Definition of done for a sub-plan** = its own *Acceptance criteria* section is fully met and
+  every checkpoint it owns is registered in [`master-checklist`](./master-checklist.md) and runs
+  in isolation via `--checkpoint <ID>`.
+
+## Resolved judgment calls (no open questions)
+
+These were the four items flagged during review; all are now decided in-plan:
+
+1. **skill-4 task ordering** — register API client **before** scoping auth policies. \*Confirmed
+   correct by both models\* (the policy must reference the OAuth client identity).
+2. **User-context redirect push under simplified (skill-5)** — **keep it**, but first confirm
+   it's still required (V2 REST `/workers/me`) and **skip if already present**; always create a
+   rollback checkpoint before mutating the live agent.
+3. **Workday Admin / InfoSec role gating** — **attestation + captured evidence** (no queryable
+   directory), never a silent pass.
+4. **Evals data-correctness** — OOTB integration tests are **shape checks by default**; true
+   data-correctness requires a **sanitized golden test user** the operator supplies (see
+   [`evals`](./evals.md)). Absent that fixture, the eval stays shape-only — not a blocker.
 
 ## Out of scope
 
@@ -115,4 +172,4 @@ Folded in after critique by Claude Opus 4.8, GPT-5.5, and GPT-5.3-Codex:
 
 ## Housekeeping
 
-- Pending uncommitted change: `.gitignore` (`!plans/` allowlist) + the `plans/` folder — commit alongside this work.
+- The `plans/` folder is tracked via a repo-root `.gitignore` `!plans/` allowlist (committed).

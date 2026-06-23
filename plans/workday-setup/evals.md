@@ -10,9 +10,15 @@ and [`skill-6-create-new-topic`](./skill-6-create-new-topic.md) (topics/extensio
 - **OOTB baseline eval set** for the Workday topics shipped by the extension pack.
 - **`create-new-topic` auto-generates a matching eval set** for each new topic it creates,
   so coverage grows with customization.
-- Reuse the existing `evaluations/create` pipeline (checkpoint → write `.mcs.yml` → scan →
-  dry run → push → verify) and the starter patterns in
+- Reuse the existing **`src/skills/evaluations/create`** pipeline (checkpoint → write `.mcs.yml`
+  → scan → dry run → push → verify) and the starter patterns in
   `src/examples/ess-samples/ESSEvaluationSamples/StarterTestSets/`.
+- **Output location:** generated test sets are written as `.mcs.yml` files under
+  **`my/agents/{slug}/evaluations/`** (the working-copy path the create/update/delete skills
+  already use), following the existing naming convention **`{set-name}-{short-slug}.mcs.yml`**.
+- **Topic-inventory discovery** uses the same onboarding/discover logic skill-2 relies on
+  (`src/skills/onboarding` + `scripts/discover.py`) to enumerate the installed solution's topics
+  — never a hardcoded list.
 
 ## OOTB Workday coverage (derived, not hand-listed)
 

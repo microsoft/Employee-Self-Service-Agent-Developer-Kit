@@ -10,22 +10,33 @@ required to grant admin consent) · Part of [Workday Setup](./README.md).
 ## Purpose
 
 Configure the Microsoft Entra app registration for the Workday SSO integration so the agent
-can call Workday on behalf of the signed-in user. **Fully automatable via Microsoft Graph —
-no Entra portal clicks.** The only possible escalation is admin consent when the caller lacks
-a consent-capable role.
+can call Workday on behalf of the signed-in user. **Graph-first** — almost every step is
+Microsoft Graph (GA), so this skill drives it programmatically — **with a mandatory per-step
+portal fallback**. This *extends* the mixed pattern already in `connect/workday/step2.md` (which
+uses `az rest` Graph calls and already falls back to the portal for the not-authorized /
+portal-only cases) so that **every** step has a fallback — because permission/tenant-policy and
+quoting failures are common. Two sub-steps are **not** cleanly Graph-settable and are explicit
+gates: the **SAML signing option** (portal-required) and the **NameID claim** (needs a
+`claimsMappingPolicy` create+assign, not a one-liner).
 
 ## Phases
 
-### Entra SSO gallery app *(fully automated via Graph)*
+### Entra SSO gallery app *(Graph-first + portal fallback)*
 - Per the [Workday SSO tutorial](https://learn.microsoft.com/en-us/entra/identity/saas-apps/workday-tutorial):
-  instantiate the Workday gallery app (`applicationTemplates/{id}/instantiate`), then via Graph
-  set `preferredSingleSignOnMode = saml`, the **Identifier/Entity ID + reply/sign-on/logout
-  URLs**, the **NameID claim** (`user.mail`/UPN), "sign SAML response and assertion", and add
-  the **token-signing certificate** (`addTokenSigningCertificate`).
-- **No Entra portal step is required** — it's all Graph. (The Workday-side consumption of the
-  signing cert / SP-ID match is handled in [`skill-4`](./skill-4-configure-workday-tenant.md).)
+  - **Graph (GA):** instantiate the Workday gallery app (`applicationTemplates/{id}/instantiate`);
+    set `preferredSingleSignOnMode = saml`; set **Identifier/Entity ID + reply/sign-on/logout
+    URLs**; add the **token-signing certificate** (`addTokenSigningCertificate`) **and activate
+    it** by setting `preferredTokenSigningKeyThumbprint` (capture thumbprint + expiry).
+  - **NameID claim (`user.mail`/UPN):** Graph-doable but only via a **`claimsMappingPolicy`
+    create + assign to the service principal** — scope this as its own verified sub-step (no
+    in-repo precedent; mark portal/manual if the policy route proves brittle in testing).
+  - **"Sign SAML response and assertion" signing option:** **portal-required** — no documented
+    Graph property (beta `samlSingleSignOnSettings` exposes only `relayState`). Explicit manual
+    gate + verify. A Workday SP that validates signatures will reject the assertion if this is
+    wrong, so it must not be silently skipped.
+- Every Graph step carries a **portal fallback** for permission/tenant-policy failures.
 
-### Core — connector configuration *(fully automated via Graph; consent-capable role)*
+### Core — connector configuration *(Graph GA; consent-capable role)*
 - Expose the `user_impersonation` API scope (`api.oauth2PermissionScopes`).
 - Pre-authorize the **Workday** connector **`4e4707ca-5f53-46a6-a819-f7765446e6ff`**
   (`api.preAuthorizedApplications`) via the parameterized shared helper — **never** the
@@ -49,21 +60,34 @@ a consent-capable role.
 
 ## Validity fix (called out for challenge)
 
-- Corrects the hardcoded wrong connector in `app-registration.md` by using the
-  parameterized helper from [`shared-building-blocks`](./shared-building-blocks.md).
+- `app-registration.md` today calls a connector-authorization step with the connector ID
+  effectively hardcoded and carries a **misleading comment** that conflates the generic
+  `c26b24aa` connector with Workday. This skill does **not** treat that as a ServiceNow bug
+  (`c26b24aa` is the *correct* ServiceNow connector). Instead it: (a) **parameterizes connector
+  selection** through the shared helper from
+  [`shared-building-blocks`](./shared-building-blocks.md) so Workday passes `4e4707ca` and
+  ServiceNow passes `c26b24aa`, and (b) **corrects the misleading comment**. Net effect: de-dup
+  + accuracy, no behavior change for the ServiceNow path.
 
 ## Verification
 
-- Flightcheck `AUTH-*` / new `WD-AUTH-*` checkpoints (scope exposed, connector authorized,
-  Graph perms present, admin consent granted) + `WD-ASSIGN-*` (enterprise-app user/group
-  assignment, or "not required"), run individually. Updates master checklist rows.
+- **Reuse existing simplified-aware checkpoints** where they already cover skill-3's outputs:
+  `WD-CONN-102` (Workday SAML **signing-certificate health**) and `WD-CONN-010` (Entra↔Workday
+  **federation alignment**) — both run Graph-only pre-deploy. Only mint genuinely-new IDs:
+  `WD-ENTRA-SCOPE-001` (scope exposed + `4e4707ca` pre-authorized + Graph perms),
+  `WD-ENTRA-CONSENT-001` (admin consent granted), `WD-ASSIGN-001` (enterprise-app assignment or
+  "not required"), `WD-ENTRA-NAMEID-001` and `WD-ENTRA-SIGNOPT-001` (the two at-risk SAML
+  sub-steps).
+  Run each individually; updates master checklist rows.
 
 ## Acceptance criteria
 
 - App exposes `user_impersonation`, authorizes `4e4707ca`, has the three Graph perms, admin
   consent is granted, and enterprise-app assignment is satisfied (or marked not-required) —
   each independently verifiable by a single checkpoint.
-- The entire Entra app (SSO gallery app + connector + Graph perms + assignment) is created
-  **end-to-end via Graph**; the only possible escalation is admin consent when the caller
-  lacks a consent-capable role.
+- SSO gallery app is **Graph-first with a portal fallback per step**; the **signing option** is
+  a portal-required gate and **NameID** is a verified `claimsMappingPolicy` create+assign — both
+  explicitly tracked, never silently skipped.
+- Token-signing cert is added **and activated** (`preferredTokenSigningKeyThumbprint`); skill-4
+  verifies Workday's uploaded cert matches that thumbprint.
 - App ID URI persisted for downstream skills (4 and 5).

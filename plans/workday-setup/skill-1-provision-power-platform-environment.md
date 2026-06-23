@@ -14,10 +14,16 @@ later installed into.
 
 ## Phases
 
-- **Automatable:** discover existing environments (reuse `discover.py`); verify Dataverse
-  is enabled and Copilot Studio capacity is available.
+- **Automatable:** discover existing environments via **`scripts/discover.py`** + the existing
+  **`scripts/flightcheck/pp_admin_client.py`** (`get_environments()` / `get_environment(env_id)`,
+  BAP admin API). Verify Dataverse is enabled by reading the environment's
+  `properties.linkedEnvironmentMetadata` (a Dataverse-linked environment exposes it). Check
+  Copilot Studio capacity from the environment's capacity/licensing properties where the
+  pp_admin API exposes them.
 - **Manual (gated):** environment creation + capacity allocation in the Power Platform
-  admin portal (guided, with explicit user action and a verification gate afterward).
+  admin portal (guided, with explicit user action and a verification gate afterward). If Copilot
+  Studio capacity is **not** queryable via pp_admin, this is an **attestation** row, not a silent
+  pass.
 
 ## Permission gating
 
@@ -26,7 +32,13 @@ later installed into.
 
 ## Verification
 
-- Flightcheck `ENV-*` checkpoints, run individually via `--checkpoint <ID>` right after the
+- **Reuse the two existing fixed checkpoint IDs** already emitted by
+  `checks/environment.py`'s `run_environment_checks` — **`ENV-001`** (Power Platform environment
+  exists) and **`ENV-002`** (Dataverse database provisioned). Do **not** re-mint them or redefine
+  their meaning; this skill drives both to green from `pp_admin_client`
+  `linkedEnvironmentMetadata`. Then emit **one** new fixed ID, **`ENV-CAPACITY-001`** — Copilot
+  Studio / Copilot capacity available (pp_admin capacity property, else `MANUAL` attestation),
+  added to `checks/environment.py`. Run each individually via `--checkpoint <ID>` right after the
   step. Updates its own rows in the master checklist.
 
 ## Acceptance criteria

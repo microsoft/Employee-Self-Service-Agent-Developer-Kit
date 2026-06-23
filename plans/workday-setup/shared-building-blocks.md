@@ -37,9 +37,13 @@ connector ID inline), so it has value independent of the Workday work.
   path/`/v1`/tenant suffix).
 
 ### 4. Config persistence schema
-- `.local/connect/workday/config.json` canonical shape:
+- **`my/connect/workday/config.json`** canonical shape (the working-copy path the connect skill
+  already uses — *not* `.local/...`):
   `installPath` (=`simplified`), `entraApp*`, `appIdUri`, `oauthClientId`,
   `tokenEndpoint`, `restBaseUrl`, `soapBaseUrl`, plus per-skill status fields.
+- **Do not confuse this with `.local/config.json`** — that is a *separate* file that
+  `scripts/flightcheck/cli.py` reads for `dataverseEndpoint`. The skills' setup state lives under
+  `my/`; the flightcheck Dataverse endpoint lives in `.local/config.json`. Keep them distinct.
 
 ### 5. Master-checklist updater
 - Shared routine each skill calls to update **its own rows** in the single master checklist
@@ -48,6 +52,30 @@ connector ID inline), so it has value independent of the Workday work.
 - A row backed by a `MANUAL`/attestation checkpoint is **never auto-completed** by a
   flightcheck pass; it requires an explicit user acknowledgement (+ captured artifact) to
   reach *done*. A `MANUAL` result means "needs manual confirmation," **not** "done."
+
+## Where each block lives + invocation convention
+
+These blocks are **markdown playbook fragments** (the agent reads the fragment and executes its
+steps), consistent with the existing `src/skills/connect/azure/app-registration.md`. Each fragment
+documents its **Inputs** (read from context/config) and **Outputs** (written to
+`my/connect/workday/config.json` and/or the master checklist) in a header block. A skill "invokes"
+a fragment by including a numbered step: *"Apply `<relative path>` with `<inputs>`."* There is no
+function-call runtime — the contract is the documented Inputs/Outputs.
+
+| Block | Target file | New/Edit | Invoked by |
+|-------|-------------|----------|------------|
+| 1. Entra-app helper | `src/skills/connect/azure/app-registration.md` | **Edit** (parameterize connector ID/scope/target) | skill-3 (passes `4e4707ca`); ServiceNow connect path (passes `c26b24aa`) |
+| 2. Permission-gate | `src/skills/setup/shared/permission-gate.md` | **New** | all 6 skills (each passes its required role) |
+| 3. Connection-fields | `src/skills/setup/shared/connection-fields.md` | **New** | skill-4 (capture), skill-5 (consume) |
+| 4. Config schema | schema doc `src/skills/setup/shared/config-schema.md`; data file `my/connect/workday/config.json` | **New** (doc) | all skills read/write the data file |
+| 5. Checklist-updater | `src/skills/setup/shared/checklist-updater.md` | **New** | all 6 skills (update own rows in `my/setup/workday/tasks.md`) |
+
+> The `src/skills/setup/` orchestrator folder is introduced by
+> [`command-wiring`](./command-wiring.md); these shared fragments live under it so all 6 skills
+> share one home. This is the **canonical** location — `src/skills/setup/shared/` for the
+> fragments and `src/skills/setup/workday/` for the six skill playbooks; do **not** nest them
+> under the legacy `connect/` tree. (Block 1 is the one exception: it **edits** the existing
+> `connect/azure/app-registration.md` in place rather than creating a new file.)
 
 ## Acceptance criteria
 
