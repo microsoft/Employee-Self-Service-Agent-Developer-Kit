@@ -1148,32 +1148,48 @@ function activate(context) {
             _log(`activate: first install, isStandardMode=${isStandardMode}`);
             context.globalState.update(LITE_MODE_KEY, !isStandardMode);
 
+            // Check if the user already has a config file (returning user
+            // who re-ran the installer). Skip /setup if already configured.
+            const alreadyConfigured = (await checkPrerequisites()).has('setup');
+            _log(`activate: alreadyConfigured=${alreadyConfigured}`);
+
             if (isStandardMode) {
                 // Standard mode: no layout changes.
-                // Wait for welcome wizard to finish, then inject /setup.
                 context.globalState.update(APPLIED_KEY, true);
-                waitForWelcomeWizard()
-                    .then(() => { _log('activate: wizard done (standard), waiting 3s...'); return new Promise(r => setTimeout(r, 3000)); })
-                    .then(() => { _log('activate: calling injectSetup (standard)'); return injectSetup(); })
-                    .then(() => _log('activate: injectSetup completed (standard)'))
-                    .catch((err) => {
-                        _log(`activate: ERROR in standard wizard chain: ${err && err.message}`);
-                        console.warn('[ess-maker] Welcome wizard wait timed out, skipping auto /setup');
-                    });
+                if (alreadyConfigured) {
+                    _log('activate: skipping /setup (already configured)');
+                } else {
+                    // Wait for welcome wizard to finish, then inject /setup.
+                    waitForWelcomeWizard()
+                        .then(() => { _log('activate: wizard done (standard), waiting 3s...'); return new Promise(r => setTimeout(r, 3000)); })
+                        .then(() => { _log('activate: calling injectSetup (standard)'); return injectSetup(); })
+                        .then(() => _log('activate: injectSetup completed (standard)'))
+                        .catch((err) => {
+                            _log(`activate: ERROR in standard wizard chain: ${err && err.message}`);
+                            console.warn('[ess-maker] Welcome wizard wait timed out, skipping auto /setup');
+                        });
+                }
             } else {
-                // Lite mode: apply layout, then wait for welcome wizard
-                // to finish before injecting /setup.
+                // Lite mode: apply layout.
                 applyChatOnlyLayout({ silent: false })
                     .then(() => context.globalState.update(APPLIED_KEY, true))
                     .catch(() => {});
-                waitForWelcomeWizard()
-                    .then(() => { _log('activate: wizard done (lite), waiting 3s...'); return new Promise(r => setTimeout(r, 3000)); })
-                    .then(() => { _log('activate: calling injectSetup (lite)'); return injectSetup(); })
-                    .then(() => _log('activate: injectSetup completed (lite)'))
-                    .catch((err) => {
-                        _log(`activate: ERROR in lite wizard chain: ${err && err.message}`);
-                        console.warn('[ess-maker] Welcome wizard wait timed out, skipping auto /setup');
-                    });
+                if (alreadyConfigured) {
+                    _log('activate: skipping /setup (already configured), opening chat');
+                    // Returning user in lite mode — just open the chat panel
+                    // so they can start working right away.
+                    setTimeout(() => tryRun('workbench.action.chat.open').catch(() => {}), 3000);
+                } else {
+                    // Wait for welcome wizard to finish, then inject /setup.
+                    waitForWelcomeWizard()
+                        .then(() => { _log('activate: wizard done (lite), waiting 3s...'); return new Promise(r => setTimeout(r, 3000)); })
+                        .then(() => { _log('activate: calling injectSetup (lite)'); return injectSetup(); })
+                        .then(() => _log('activate: injectSetup completed (lite)'))
+                        .catch((err) => {
+                            _log(`activate: ERROR in lite wizard chain: ${err && err.message}`);
+                            console.warn('[ess-maker] Welcome wizard wait timed out, skipping auto /setup');
+                        });
+                }
             }
         } else if (userWantsLite) {
             // Subsequent lite mode launch: silently re-apply layout.
