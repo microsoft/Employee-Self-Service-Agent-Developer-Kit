@@ -11,9 +11,13 @@ Same pattern (and same runtime runs endpoint) as test_workday_run_health.py.
 The detection model — run status alone is insufficient; the ESS shared flow
 catches faults and still reports status=Succeeded, so the Response action name
 is the real signal — was confirmed live against the ESS Workday shared flow
-(see WD-RUN-001) and ported here: the ServiceNow shared flow uses the same
-single success Response action (``Respond_to_Copilot_with_Success``). See the
-SN-RUN-001 comment in checks/servicenow.py.
+(see WD-RUN-001) and ported here. ServiceNow uses a MULTI-FLOW orchestration
+(orchestrator + child/utility flows; confirmed live on prod1-ess 2026-06), so
+only runs that actually responded to Copilot Studio (response.name starting
+with ``Respond_to_Copilot``) are scored — child-flow runs are non-scoring. The
+ServiceNow orchestrator's single success Response action is assumed to be
+``Respond_to_Copilot_with_Success`` (pending confirmation from live run
+history). See the SN-RUN-001 comment in checks/servicenow.py.
 """
 
 from __future__ import annotations
@@ -246,6 +250,54 @@ class TestEdgeCases:
         r = _only(_check_servicenow_run_health(runner))
         assert r.status == "Failed"
         assert "All 1 most recent ServiceNow flow run(s) FAILED" in r.result
+
+    @responses.activate
+    def test_child_flow_succeeded_runs_are_non_scoring(self, runner: _MinimalRunner) -> None:
+        """ServiceNow is a multi-flow orchestration: child/utility flow runs
+        respond to their PARENT, not to Copilot (response.name does NOT start
+        with 'Respond_to_Copilot'), so a window of only child-flow successes
+        must NOT score as success — it is inconclusive (NotConfigured), not a
+        misleading PASS. Pins the prod1-ess topology finding (2026-06)."""
+        from flightcheck.checks.servicenow import _check_servicenow_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID,
+            runs=[
+                pp.flow_run(run_id="child1", flow_id=_FLOW_ID, status="Succeeded",
+                            response_name="Response"),          # child-flow response
+                pp.flow_run(run_id="child2", flow_id=_FLOW_ID, status="Succeeded",
+                            response_name="Respond_to_a_child_flow"),
+            ],
+        ))
+
+        r = _only(_check_servicenow_run_health(runner))
+        assert r.status == "NotConfigured"
+        assert r.status != "Passed"
+        assert "No recent ServiceNow flow runs found" in r.result
+
+    @responses.activate
+    def test_orchestrator_success_with_child_runs_passes(self, runner: _MinimalRunner) -> None:
+        """A real user scenario produces one user-facing orchestrator run
+        (responds to Copilot) plus several child-flow runs. Only the
+        orchestrator run is scored, so the verdict is PASS counting just it —
+        the child runs neither inflate nor deflate the result."""
+        from flightcheck.checks.servicenow import _check_servicenow_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID,
+            runs=[
+                pp.flow_run(run_id="orch", flow_id=_FLOW_ID, status="Succeeded"),  # Respond_to_Copilot_with_Success
+                pp.flow_run(run_id="child1", flow_id=_FLOW_ID, status="Succeeded",
+                            response_name="Response"),
+                pp.flow_run(run_id="child2", flow_id=_FLOW_ID, status="Succeeded",
+                            response_name="Respond_to_a_child_flow"),
+            ],
+        ))
+
+        r = _only(_check_servicenow_run_health(runner))
+        assert r.status == "Passed"
+        assert "All 1 most recent ServiceNow flow run(s) succeeded" in r.result
+
 
     @responses.activate
     def test_403_is_skipped_with_permission_note(self, runner: _MinimalRunner) -> None:

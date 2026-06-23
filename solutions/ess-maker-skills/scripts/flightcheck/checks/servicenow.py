@@ -200,21 +200,45 @@ def _check_flow_status(runner, sn_flows: list) -> list[CheckResult]:
 # ESS shared flow CATCHES external faults and responds gracefully, so a failed
 # ServiceNow call can leave the run ``status == "Succeeded"`` — the real signal
 # is the flow's Response action name. The flow has exactly ONE success Response
-# (``Respond_to_Copilot_with_Success``); every other Response branch is a
-# failure. Some failures ALSO surface as ``status == "Failed"`` with a run-level
-# error. So per-run detection uses BOTH signals, anchored on the single success
-# action so every failure branch is caught:
+# (``Respond_to_Copilot_with_Success``); every other Copilot Response branch is
+# a failure. Some failures ALSO surface as ``status == "Failed"`` with a run-
+# level error. So per-run detection uses BOTH signals, anchored on the single
+# success action so every failure branch is caught:
 #
 #   a run FAILED  if  status == "Failed"
-#                 OR (status == "Succeeded" AND response.name != the success action)
+#                 OR (status == "Succeeded" AND it responded to Copilot with an
+#                     action != the success action)
+#
+# ServiceNow topology vs. Workday (confirmed live 2026-06, tenant prod1-ess via
+# tests/captures/record_flightcheck_servicenow_runs.py): unlike Workday's SINGLE
+# shared flow, ServiceNow ships a MULTI-FLOW orchestration — per pack an entry
+# "Common Orchestrator" plus child/utility flows ("Common Get/Create/Update/List
+# Record", "Request Body Generator", "Live Agent Save Summary", ...). Only the
+# orchestrator responds to Copilot Studio; child flows respond to their PARENT
+# (a "Respond to a child flow" action, NOT a ``Respond_to_Copilot_*`` action),
+# so a single user scenario produces several flow runs but only ONE user-facing
+# (Copilot-responding) run. We therefore SCORE only runs that actually responded
+# to Copilot (``response.name`` starts with ``Respond_to_Copilot``); a succeeded
+# child/utility run is non-scoring 'pending'. (For Workday every run is the one
+# shared flow and always carries a ``Respond_to_Copilot_*`` response, so this
+# scoping is a no-op there and the two checks stay behaviourally identical on
+# their respective topologies.)
 #
 # The check's VERDICT, however, is a litmus test for a *deterministic* break,
-# not a per-run pass/fail: it looks only at the most recent window of runs
-# (``_SN_RECENT_WINDOW``, newest first across all ServiceNow flows) and FAILs
-# only when NONE of them succeeded. Scattered failures among recent successes
-# (e.g. a user requesting a case their ServiceNow ACL doesn't allow) do NOT fail
-# readiness — recent successes prove the integration is wired up. A single run
-# that failed (no successes in the window) IS a failure.
+# not a per-run pass/fail: it looks only at the most recent window of scored
+# runs (``_SN_RECENT_WINDOW``, newest first across all ServiceNow flows) and
+# FAILs only when NONE of them succeeded. Scattered failures among recent
+# successes (e.g. a user requesting a case their ServiceNow ACL doesn't allow)
+# do NOT fail readiness — recent successes prove the integration is wired up. A
+# single run that failed (no successes in the window) IS a failure.
+#
+# GROUNDING STATUS: the runtime-runs endpoint shape is validated (same endpoint
+# as WD-RUN-001's cassette). The ServiceNow success-action name
+# (``Respond_to_Copilot_with_Success``) and the orchestrator-vs-child response
+# behaviour are NOT yet confirmed from live ServiceNow run history — prod1-ess
+# had ZERO ServiceNow runs at capture time. Exercise a ServiceNow scenario (1
+# success + ideally 1 failure) and re-run the recorder to confirm; if the
+# success-action name differs, update ``_SN_SUCCESS_RESPONSE_ACTION`` below.
 #
 # Known limitations (documented, not silently swallowed):
 #   * A fully-broken/unconfigured connection makes Copilot Studio prompt
@@ -223,8 +247,15 @@ def _check_flow_status(runner, sn_flows: list) -> list[CheckResult]:
 #   * Agent-side timeouts (``flowActionTimedOut``) leave the run "Succeeded"
 #     and are not detectable from run history.
 
-# The single success Response action. Anything else is a failure branch.
+# The single success Response action. Anything else (that responds to Copilot)
+# is a failure branch.
 _SN_SUCCESS_RESPONSE_ACTION = "Respond_to_Copilot_with_Success"
+
+# Prefix identifying a run that responded to Copilot Studio (the user-facing
+# orchestrator run). Child/utility flow runs lack this and are non-scoring.
+# Confirmed prefix from the Workday capture's response actions
+# (Respond_to_Copilot_with_Success / _with_failure_errorMessage / ...).
+_SN_COPILOT_RESPONSE_PREFIX = "Respond_to_Copilot"
 
 # Terminal run statuses that are definite failures of the run itself. A run in
 # any of these did not complete successfully, regardless of response branch.
@@ -245,27 +276,34 @@ def _classify_run(run: dict) -> str:
     """Classify one flow run as 'success', 'caught_failure', 'hard_failure',
     or 'pending' (non-scoring).
 
-    Only a ``"Succeeded"`` run can be a success/caught_failure — that is the
-    single status whose Response-action name distinguishes the success branch
-    from a caught ServiceNow fault. Definite run-level failures
-    (``"Failed"``/``"TimedOut"``/``"Faulted"``/``"Aborted"``) are hard_failure.
-    Everything else is 'pending' (non-scoring): in-flight states
-    (``"Running"``/``"Waiting"``/``"Paused"``/``"Suspended"``) AND inconclusive
-    terminal states that are not a ServiceNow-health signal
-    (``"Cancelled"``/``"Skipped"``/unknown). Critically, a non-``"Succeeded"``
-    run is NEVER counted as a success — an all-``"Cancelled"`` window must not
-    yield a misleading PASS (which would hide the manual conn/sec checks). See
-    the SN-RUN-001 module comment.
+    Definite run-level failures (``"Failed"``/``"TimedOut"``/``"Faulted"``/
+    ``"Aborted"``) are hard_failure. A ``"Succeeded"`` run is scored ONLY when it
+    actually responded to Copilot Studio (``response.name`` starts with
+    ``Respond_to_Copilot``) — that is the user-facing orchestrator run whose
+    Response-action name distinguishes the success branch from a caught
+    ServiceNow fault. ServiceNow's child/utility flow runs respond to their
+    parent, not to Copilot, so a succeeded child run is non-scoring 'pending'
+    (see the SN-RUN-001 module comment on the multi-flow topology). Everything
+    else is 'pending' too: in-flight states (``"Running"``/``"Waiting"``/
+    ``"Paused"``/``"Suspended"``) AND inconclusive terminal states that are not
+    a ServiceNow-health signal (``"Cancelled"``/``"Skipped"``/unknown).
+    Critically, a non-``"Succeeded"`` run is NEVER counted as a success — an
+    all-``"Cancelled"`` window must not yield a misleading PASS (which would
+    hide the manual conn/sec checks).
     """
     props = run.get("properties", {}) or {}
     status = props.get("status")
     resp_name = ((props.get("response") or {}).get("name")) or ""
-    if status == "Succeeded":
-        if resp_name and resp_name != _SN_SUCCESS_RESPONSE_ACTION:
-            return "caught_failure"
-        return "success"
     if status in _RUN_FAILURE_STATUSES:
         return "hard_failure"
+    if status == "Succeeded":
+        # Only orchestrator (Copilot-responding) runs are user-facing and
+        # scoreable; child/utility flow runs are non-scoring.
+        if not resp_name.startswith(_SN_COPILOT_RESPONSE_PREFIX):
+            return "pending"
+        if resp_name != _SN_SUCCESS_RESPONSE_ACTION:
+            return "caught_failure"
+        return "success"
     return "pending"
 
 
