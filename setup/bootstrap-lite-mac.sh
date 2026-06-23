@@ -12,7 +12,17 @@ set -euo pipefail
 
 # Lite mode: do NOT set SKIP_MAKER_PROFILE so the chat-first profile installs.
 
-SOURCE_BASE_URL="${ESS_ADK_SOURCE_URL:-https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup}"
+# Parse optional --branch / --source-base-url arguments
+BRANCH="main"
+SOURCE_BASE_URL=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --branch)       BRANCH="$2"; shift 2 ;;
+        --source-base-url) SOURCE_BASE_URL="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+SOURCE_BASE_URL="${SOURCE_BASE_URL:-${ESS_ADK_SOURCE_URL:-https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/$BRANCH/setup}}"
 
 TEMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEMP_DIR"' EXIT
@@ -36,4 +46,5 @@ if [[ ! -s "$TEMP_DIR/install-ess-adk.sh" ]] || ! head -1 "$TEMP_DIR/install-ess
 fi
 
 # Run the downloaded installer in a subshell to avoid issues if it calls exit
+export ESS_ADK_BRANCH="$BRANCH"
 bash "$TEMP_DIR/install-ess-adk.sh"
