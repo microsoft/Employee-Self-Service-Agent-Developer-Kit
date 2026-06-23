@@ -118,6 +118,47 @@ def test_topic_requesting_unsupported_key_fails(monkeypatch):
     assert "](" in r.remediation  # markdown link
 
 
+def test_failure_remediation_contains_resolved_studio_deeplink(monkeypatch):
+    # A runner whose parsed config carries env_id + agents[] (the real shape
+    # produced by setup.py / cli.py) must yield a *resolved* deep link to the
+    # agent's overview page — not the generic homepage fallback.
+    _stub(monkeypatch, [_GETREF, _PHONE, _BAD])
+    from flightcheck.checks.workday import _check_workday_reference_data
+
+    runner = SimpleNamespace(
+        env_url="https://org.crm.dynamics.com",
+        dv_token="t",
+        env_id="ENV-123",
+        config={
+            "activeAgent": "esshrwdayonlyoauth",
+            "agents": [{"slug": "esshrwdayonlyoauth", "botId": "BOT-456"}],
+        },
+    )
+    r = _check_workday_reference_data(runner)[0]
+    assert r.status == "Failed"
+    assert (
+        "/environments/ENV-123/bots/BOT-456/overview" in r.remediation
+    ), r.remediation
+
+
+def test_deeplink_resolves_from_agents_when_activeagent_absent(monkeypatch):
+    # Defensive fallback: even without activeAgent/agent.slug, the first
+    # agents[] entry resolves the deep link (covers the silent-homepage path
+    # raised in review).
+    _stub(monkeypatch, [_GETREF, _PHONE, _BAD])
+    from flightcheck.checks.workday import _check_workday_reference_data
+
+    runner = SimpleNamespace(
+        env_url="https://org.crm.dynamics.com",
+        dv_token="t",
+        env_id="ENV-123",
+        config={"agents": [{"slug": "esshrwdayonlyoauth", "botId": "BOT-456"}]},
+    )
+    r = _check_workday_reference_data(runner)[0]
+    assert r.status == "Failed"
+    assert "/environments/ENV-123/bots/BOT-456/overview" in r.remediation
+
+
 def test_getreferencedata_missing_fails(monkeypatch):
     _stub(monkeypatch, [_PHONE, _DEPENDENT])  # no GetReferenceData topic
     r = _run()

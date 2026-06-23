@@ -399,11 +399,23 @@ def _wd_studio_link(runner) -> str:
     """Markdown deep-link to the active agent in Copilot Studio (its **Topics**
     page is where the GetReferenceData call is edited). Falls back to the
     Copilot Studio homepage when the env/bot id can't be resolved. Reuses the
-    verified URL helper from local_files."""
+    verified URL helper from local_files.
+
+    Resolves the active-agent slug the same way ``cli.py`` does
+    (``config['activeAgent']`` — written by ``setup.py``), then the
+    backward-compat ``config['agent'].slug``, then the first entry of
+    ``config['agents']`` as a defensive last resort.
+    """
     try:
         from .local_files import _studio_link_md
         config = getattr(runner, "config", {}) or {}
-        slug = config.get("activeAgent") or (config.get("agent") or {}).get("slug") or ""
+        agents = config.get("agents") or []
+        slug = (
+            config.get("activeAgent")
+            or (config.get("agent") or {}).get("slug")
+            or (agents[0].get("slug") if agents else "")
+            or ""
+        )
         return _studio_link_md(runner, slug, "the agent in Copilot Studio")
     except Exception:  # noqa: BLE001 — never let link-building break the check
         return "[Copilot Studio](https://copilotstudio.microsoft.com/)"
