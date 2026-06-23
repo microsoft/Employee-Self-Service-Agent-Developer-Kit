@@ -35,14 +35,19 @@ an invalid table, or whose ACL/role was revoked for the signed-in user) — see
 the SN-RUN-001 comment in checks/servicenow.py for the expected shapes.
 
 The summary printed at the end groups every run by ``status/response.name`` so
-you can confirm, at a glance, that:
-  * the success runs use ``Succeeded/Respond_to_Copilot_with_Success``; and
-  * any caught failures show ``Succeeded/<some other Response action>`` (NOT a
-    plain ``Succeeded`` with no/Null response) and/or ``Failed/...`` — matching
-    the Workday model SN-RUN-001 is built on.
-If the ServiceNow success action name turns out to be something OTHER than
-``Respond_to_Copilot_with_Success``, update ``_SN_SUCCESS_RESPONSE_ACTION`` in
-checks/servicenow.py accordingly.
+you can confirm, at a glance, the CONFIRMED ServiceNow model (verified live
+2026-06 across ESS_MODEL_UPGRADE_PREVIEW_FRE_2, test_CA, and SunbreakDev
+Workday+Snow):
+  * orchestrator SUCCESS -> ``Succeeded/Respond_to_Copilot``
+  * orchestrator FAILURE -> ``Failed/Respond_to_Copilot_-_Failure``
+  * child/utility flows   -> non-Copilot actions
+    (``Respond_back_to_Orchestrator_-_Success``,
+    ``Respond_to_a_Power_App_or_flow[_-_Success]``, ...) — NON-scoring.
+The check (``_classify_run`` in checks/servicenow.py) scores ONLY runs whose
+``response.name`` starts with ``Respond_to_Copilot``; the success action is
+``Respond_to_Copilot`` (NOT ``Respond_to_Copilot_with_Success`` — that is the
+Workday name). If a future tenant shows a different success action, update
+``_SN_SUCCESS_RESPONSE_ACTION`` in checks/servicenow.py.
 
 Pre-reqs:
     pip install -e .[test]
@@ -140,9 +145,11 @@ def main() -> None:
     for key, count in sorted(overall.items()):
         print(f"    {key}: {count}")
     print()
-    print("VERIFY vs the Workday model that SN-RUN-001 assumes:")
-    print("  * success runs should be 'Succeeded/Respond_to_Copilot_with_Success'")
-    print("  * caught failures should be 'Succeeded/<other Response action>' and/or 'Failed/...'")
+    print("VERIFY vs the CONFIRMED ServiceNow model:")
+    print("  * success runs should be 'Succeeded/Respond_to_Copilot'")
+    print("  * orchestrator failures should be 'Failed/Respond_to_Copilot_-_Failure'")
+    print("  * child flows ('Respond_back_to_Orchestrator', 'Respond_to_a_Power_App_or_flow')")
+    print("    are non-scoring.")
     print("If the success action name differs, update _SN_SUCCESS_RESPONSE_ACTION")
     print("in solutions/ess-maker-skills/scripts/flightcheck/checks/servicenow.py.")
     print("Eyeball the cassette for BotSchemaName / customer identifiers before committing.")

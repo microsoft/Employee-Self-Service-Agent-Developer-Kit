@@ -1,23 +1,25 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Integration tests for SN-RUN-001 (ServiceNow shared-flow run health).
+"""Tests for SN-RUN-001 (ServiceNow shared-flow run health).
 
 Mocks the Power Automate runtime runs endpoint with ``responses``,
 instantiates a real PPAdminClient with a pre-populated token, and runs
 the production ``_check_servicenow_run_health`` against the mocked state.
 
-Same pattern (and same runtime runs endpoint) as test_workday_run_health.py.
-The detection model — run status alone is insufficient; the ESS shared flow
-catches faults and still reports status=Succeeded, so the Response action name
-is the real signal — was confirmed live against the ESS Workday shared flow
-(see WD-RUN-001) and ported here. ServiceNow uses a MULTI-FLOW orchestration
-(orchestrator + child/utility flows; confirmed live on prod1-ess 2026-06), so
-only runs that actually responded to Copilot Studio (response.name starting
-with ``Respond_to_Copilot``) are scored — child-flow runs are non-scoring. The
-ServiceNow orchestrator's single success Response action is assumed to be
-``Respond_to_Copilot_with_Success`` (pending confirmation from live run
-history). See the SN-RUN-001 comment in checks/servicenow.py.
+Same pattern (and same runtime runs endpoint) as test_workday_run_health.py,
+but the response-action names are the CONFIRMED ServiceNow ones (captured live
+2026-06 from 3 environments with real ServiceNow run history —
+ESS_MODEL_UPGRADE_PREVIEW_FRE_2, test_CA, SunbreakDev Workday+Snow — via
+tests/captures/record_flightcheck_servicenow_runs.py):
+
+  * orchestrator SUCCESS -> status=Succeeded, response.name="Respond_to_Copilot"
+  * orchestrator FAILURE -> status=Failed,    response.name="Respond_to_Copilot_-_Failure"
+  * child/utility flows   -> NON-Copilot actions ("Respond_to_a_Power_App_or_flow_-_Success",
+                             "Respond_back_to_Orchestrator_-_Success", ...) -> non-scoring
+
+This differs from Workday (single shared flow; caught faults stay Succeeded).
+See the SN-RUN-001 comment in checks/servicenow.py.
 """
 
 from __future__ import annotations
@@ -34,6 +36,31 @@ from tests.mocks import pp_admin as pp
 require_validated_mock(pp)
 
 _FLOW_ID = "00000000-0000-0000-0000-000000007201"
+
+# Confirmed-live ServiceNow orchestrator response actions.
+_SUCCESS = "Respond_to_Copilot"
+_FAILURE = "Respond_to_Copilot_-_Failure"
+# A child/utility flow response action (non-Copilot -> non-scoring).
+_CHILD = "Respond_to_a_Power_App_or_flow_-_Success"
+
+
+def _ok(run_id: str):
+    """A user-facing orchestrator SUCCESS run."""
+    return pp.flow_run(run_id=run_id, flow_id=_FLOW_ID, status="Succeeded",
+                       response_name=_SUCCESS)
+
+
+def _fail(run_id: str):
+    """A user-facing orchestrator FAILURE run (status=Failed, as observed)."""
+    return pp.flow_run(run_id=run_id, flow_id=_FLOW_ID, status="Failed",
+                       response_name=_FAILURE,
+                       error={"code": "ActionFailed", "message": "An action failed."})
+
+
+def _child(run_id: str, response_name: str = _CHILD):
+    """A succeeded child/utility flow run (responds to parent, not Copilot)."""
+    return pp.flow_run(run_id=run_id, flow_id=_FLOW_ID, status="Succeeded",
+                       response_name=response_name)
 
 
 @dataclass
@@ -74,10 +101,7 @@ class TestGoodState:
 
         responses.add(**pp.list_flow_runs(
             env_id=runner.env_id, flow_id=_FLOW_ID,
-            runs=[
-                pp.flow_run(run_id="r1", flow_id=_FLOW_ID, status="Succeeded"),
-                pp.flow_run(run_id="r2", flow_id=_FLOW_ID, status="Succeeded"),
-            ],
+            runs=[_ok("r1"), _ok("r2")],
         ))
 
         r = _only(_check_servicenow_run_health(runner))
@@ -96,15 +120,7 @@ class TestGoodState:
         specific)."""
         from flightcheck.checks.servicenow import _check_servicenow_run_health
 
-        runs = [pp.flow_run(run_id=f"ok{i}", flow_id=_FLOW_ID, status="Succeeded")
-                for i in range(8)]
-        runs += [
-            pp.flow_run(run_id="bad1", flow_id=_FLOW_ID, status="Succeeded",
-                        response_name="Respond_to_Copilot_with_failure_errorMessage"),
-            pp.flow_run(run_id="bad2", flow_id=_FLOW_ID, status="Failed",
-                        response_name="Respond_to_Copilot_with_failure_errorMessage",
-                        error={"code": "ActionFailed", "message": "An action failed."}),
-        ]
+        runs = [_ok(f"ok{i}") for i in range(8)] + [_fail("bad1"), _fail("bad2")]
         responses.add(**pp.list_flow_runs(env_id=runner.env_id, flow_id=_FLOW_ID, runs=runs))
 
         r = _only(_check_servicenow_run_health(runner))
@@ -120,18 +136,17 @@ class TestBadState:
         self, runner: _MinimalRunner
     ) -> None:
         """No success in the recent window → deterministically broken → FAIL.
-        Includes a caught failure (status=Succeeded but failure branch) to pin
-        that run status alone is not the signal."""
+        Includes a Succeeded-but-non-success-Copilot-response run (the defensive
+        'caught_failure' branch) alongside the observed status=Failed shape."""
         from flightcheck.checks.servicenow import _check_servicenow_run_health
 
         responses.add(**pp.list_flow_runs(
             env_id=runner.env_id, flow_id=_FLOW_ID,
             runs=[
+                # Defensive branch: Succeeded but the failure Copilot response.
                 pp.flow_run(run_id="f1", flow_id=_FLOW_ID, status="Succeeded",
-                            response_name="Respond_to_Copilot_with_failure_errorMessage"),
-                pp.flow_run(run_id="f2", flow_id=_FLOW_ID, status="Failed",
-                            response_name="Respond_to_Copilot_with_failure_errorMessage",
-                            error={"code": "ActionFailed", "message": "An action failed."}),
+                            response_name=_FAILURE),
+                _fail("f2"),  # the observed shape: status=Failed
             ],
         ))
 
@@ -149,14 +164,7 @@ class TestBadState:
         from flightcheck.checks.servicenow import _check_servicenow_run_health
 
         responses.add(**pp.list_flow_runs(
-            env_id=runner.env_id, flow_id=_FLOW_ID,
-            runs=[
-                pp.flow_run(
-                    run_id="hard", flow_id=_FLOW_ID, status="Failed",
-                    response_name="Respond_to_Copilot_with_failure_errorMessage",
-                    error={"code": "ActionFailed", "message": "An action failed."},
-                ),
-            ],
+            env_id=runner.env_id, flow_id=_FLOW_ID, runs=[_fail("hard")],
         ))
 
         r = _only(_check_servicenow_run_health(runner))
@@ -189,7 +197,8 @@ class TestEdgeCases:
 
         responses.add(**pp.list_flow_runs(
             env_id=runner.env_id, flow_id=_FLOW_ID,
-            runs=[pp.flow_run(run_id="live", flow_id=_FLOW_ID, status="Running")],
+            runs=[pp.flow_run(run_id="live", flow_id=_FLOW_ID, status="Running",
+                              response_name=_SUCCESS)],
         ))
 
         r = _only(_check_servicenow_run_health(runner))
@@ -229,7 +238,7 @@ class TestEdgeCases:
             env_id=runner.env_id, flow_id=_FLOW_ID,
             runs=[
                 pp.flow_run(run_id="c1", flow_id=_FLOW_ID, status="Cancelled"),
-                pp.flow_run(run_id="s1", flow_id=_FLOW_ID, status="Succeeded"),
+                _ok("s1"),
             ],
         ))
 
@@ -257,16 +266,14 @@ class TestEdgeCases:
         respond to their PARENT, not to Copilot (response.name does NOT start
         with 'Respond_to_Copilot'), so a window of only child-flow successes
         must NOT score as success — it is inconclusive (NotConfigured), not a
-        misleading PASS. Pins the prod1-ess topology finding (2026-06)."""
+        misleading PASS. Pins the live topology finding (2026-06)."""
         from flightcheck.checks.servicenow import _check_servicenow_run_health
 
         responses.add(**pp.list_flow_runs(
             env_id=runner.env_id, flow_id=_FLOW_ID,
             runs=[
-                pp.flow_run(run_id="child1", flow_id=_FLOW_ID, status="Succeeded",
-                            response_name="Response"),          # child-flow response
-                pp.flow_run(run_id="child2", flow_id=_FLOW_ID, status="Succeeded",
-                            response_name="Respond_to_a_child_flow"),
+                _child("child1", response_name="Respond_to_a_Power_App_or_flow_-_Success"),
+                _child("child2", response_name="Respond_back_to_Orchestrator_-_Success"),
             ],
         ))
 
@@ -286,18 +293,15 @@ class TestEdgeCases:
         responses.add(**pp.list_flow_runs(
             env_id=runner.env_id, flow_id=_FLOW_ID,
             runs=[
-                pp.flow_run(run_id="orch", flow_id=_FLOW_ID, status="Succeeded"),  # Respond_to_Copilot_with_Success
-                pp.flow_run(run_id="child1", flow_id=_FLOW_ID, status="Succeeded",
-                            response_name="Response"),
-                pp.flow_run(run_id="child2", flow_id=_FLOW_ID, status="Succeeded",
-                            response_name="Respond_to_a_child_flow"),
+                _ok("orch"),
+                _child("child1", response_name="Respond_to_a_Power_App_or_flow_-_Success"),
+                _child("child2", response_name="Respond_back_to_Orchestrator_-_Success"),
             ],
         ))
 
         r = _only(_check_servicenow_run_health(runner))
         assert r.status == "Passed"
         assert "All 1 most recent ServiceNow flow run(s) succeeded" in r.result
-
 
     @responses.activate
     def test_403_is_skipped_with_permission_note(self, runner: _MinimalRunner) -> None:
@@ -327,6 +331,32 @@ class TestEdgeCases:
         r = _only(_check_servicenow_run_health(runner))
         assert r.status == "Skipped"
         assert "Power Platform Admin API not available" in r.result
+
+
+class TestClassifyRun:
+    """Unit tests for _classify_run pinned to the CONFIRMED live shapes."""
+
+    def test_orchestrator_success(self):
+        from flightcheck.checks.servicenow import _classify_run
+        assert _classify_run({"properties": {"status": "Succeeded",
+                                              "response": {"name": _SUCCESS}}}) == "success"
+
+    def test_orchestrator_failure_status_failed(self):
+        from flightcheck.checks.servicenow import _classify_run
+        assert _classify_run({"properties": {"status": "Failed",
+                                              "response": {"name": _FAILURE}}}) == "hard_failure"
+
+    def test_succeeded_failure_branch_is_caught_failure(self):
+        from flightcheck.checks.servicenow import _classify_run
+        assert _classify_run({"properties": {"status": "Succeeded",
+                                              "response": {"name": _FAILURE}}}) == "caught_failure"
+
+    def test_child_flow_success_is_pending(self):
+        from flightcheck.checks.servicenow import _classify_run
+        assert _classify_run({"properties": {"status": "Succeeded",
+                                              "response": {"name": _CHILD}}}) == "pending"
+        assert _classify_run({"properties": {"status": "Succeeded",
+                                              "response": {"name": "Respond_back_to_Orchestrator_-_Success"}}}) == "pending"
 
 
 class TestManualConnSecSuppression:
