@@ -409,6 +409,9 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # --- Flow Status ---
     results.extend(_check_flow_status(runner, wd_flows))
 
+    # --- Run health (runtime failures connection-status can't see) ---
+    results.extend(_check_workday_run_health(runner))
+
     # --- SOAP Workflow Tests (only if Workday MCP creds available) ---
     results.extend(_check_workflows(runner))
 
@@ -433,7 +436,38 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # SOAP tests run (e.g. credentials unavailable).
     results.extend(_check_custom_workflow_inventory(runner))
 
-    return results
+    return _suppress_manual_conn_sec_when_runs_healthy(results)
+
+
+def _suppress_manual_conn_sec_when_runs_healthy(
+    results: list[CheckResult],
+) -> list[CheckResult]:
+    """Hide the MANUAL Workday connection/security checks when the run-health
+    litmus test (WD-RUN-001) proves Workday is actually working.
+
+    WD-CONN-010 (Entra↔Workday federation), WD-CONN-102 (SAML signing cert),
+    and WD-SEC-003 (personal-data write permission) emit MANUAL rows asking the
+    operator to hand-verify config in the Workday/Entra tenant. When WD-RUN-001
+    PASSES, runtime traffic already demonstrates that chain works end to end, so
+    those manual asks are redundant noise — drop them.
+
+    They are KEPT whenever WD-RUN-001 does NOT pass — i.e. it FAILED (they help
+    diagnose the break), or it could not confirm health (NOT_CONFIGURED = no
+    traffic yet, SKIPPED = run history unavailable), where hand-verification is
+    still the operator's best signal (e.g. a fresh pre-deployment env).
+    """
+    run_health = next(
+        (r.status for r in results if r.checkpoint_id == "WD-RUN-001"), None
+    )
+    if run_health != Status.PASSED.value:
+        return results
+    return [
+        r for r in results
+        if not (
+            r.status == Status.MANUAL.value
+            and (r.checkpoint_id.startswith("WD-CONN") or r.checkpoint_id.startswith("WD-SEC"))
+        )
+    ]
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -2684,6 +2718,239 @@ def _check_flow_status(runner, wd_flows: list) -> list[CheckResult]:
         ))
 
     return results
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# WD-RUN-001 — Workday shared-flow run health (run-history analysis)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Complements the connection-status checks (WD-CONN-001+): those confirm the
+# Power Platform connection is *Connected*, but a connection can be Connected
+# while Workday calls still FAIL at runtime — e.g. a revoked Workday security
+# domain/permission for the signed-in user, a broken scenario template config,
+# or a Workday-side outage. Connection status cannot see any of that; the only
+# evidence is in the shared flow's *run history*.
+#
+# Empirically grounded (live tenant, 2026-06): the ESS Workday shared flow
+# CATCHES Workday faults and responds gracefully, so a failed Workday call
+# leaves the run ``status == "Succeeded"`` — the real signal is the flow's
+# Response action name. The flow has exactly ONE success Response
+# (``Respond_to_Copilot_with_Success``) and several failure Responses
+# (``Respond_to_Copilot_with_failure_errorMessage`` for Workday/API faults,
+# ``Respond_to_Copilot_with_XmlTemplate_To_Json_Failed`` for template errors,
+# ``Respond_to_Copilot_with_TemplateRetrievalFailure`` for missing config).
+# Some failures (e.g. template transform) ALSO surface as ``status == "Failed"``
+# with a run-level error. So per-run detection uses BOTH signals, anchored on the
+# single success action so every failure branch is caught:
+#
+#   a run FAILED  if  status == "Failed"
+#                 OR (status == "Succeeded" AND response.name != the success action)
+#
+# The check's VERDICT, however, is a litmus test for a *deterministic* break, not
+# a per-run pass/fail: it looks only at the most recent window of runs
+# (``_WD_RECENT_WINDOW``, newest first across all Workday flows) and FAILs only
+# when NONE of them succeeded. Scattered failures among recent successes (e.g. a
+# user requesting a scenario their Workday security doesn't allow) do NOT fail
+# readiness — recent successes prove the integration is wired up. A single run
+# that failed (no successes in the window) IS a failure.
+#
+# Known limitations (documented, not silently swallowed):
+#   * A fully-broken/unconfigured connection makes Copilot Studio prompt
+#     "connect to continue" and never invokes the flow, so NO run is created.
+#     That case is covered by WD-CONN-001+ (connection status), NOT here.
+#   * Agent-side timeouts (``flowActionTimedOut``) leave the run "Succeeded"
+#     and are not detectable from run history.
+
+# The single success Response action. Anything else is a failure branch.
+_WD_SUCCESS_RESPONSE_ACTION = "Respond_to_Copilot_with_Success"
+
+# Terminal run statuses that are definite failures of the run itself. A run in
+# any of these did not complete successfully, regardless of response branch.
+# (Cancelled / Skipped and unknown states are intentionally NOT here — they are
+# inconclusive and treated as non-scoring 'pending' in _classify_run.)
+_RUN_FAILURE_STATUSES = {"Failed", "TimedOut", "Faulted", "Aborted"}
+
+# WD-RUN-001 evaluates only the most recent N terminal runs (newest first,
+# across all Workday flows). The check is a litmus test for a *deterministic*
+# break: it FAILs only when NONE of the recent runs succeeded. A couple of
+# scattered failures among recent successes is expected (e.g. a user asks for a
+# scenario their Workday security doesn't permit) and must NOT fail readiness —
+# the presence of recent successes proves the integration is wired up.
+_WD_RECENT_WINDOW = 10
+
+
+def _classify_run(run: dict) -> str:
+    """Classify one flow run as 'success', 'caught_failure', 'hard_failure',
+    or 'pending' (non-scoring).
+
+    Only a ``"Succeeded"`` run can be a success/caught_failure — that is the
+    single status whose Response-action name distinguishes the success branch
+    from a caught Workday fault. Definite run-level failures
+    (``"Failed"``/``"TimedOut"``/``"Faulted"``/``"Aborted"``) are hard_failure.
+    Everything else is 'pending' (non-scoring): in-flight states
+    (``"Running"``/``"Waiting"``/``"Paused"``/``"Suspended"``) AND inconclusive
+    terminal states that are not a Workday-health signal
+    (``"Cancelled"``/``"Skipped"``/unknown). Critically, a non-``"Succeeded"``
+    run is NEVER counted as a success — an all-``"Cancelled"`` window must not
+    yield a misleading PASS (which would hide the manual conn/sec checks). See
+    the WD-RUN-001 module comment.
+    """
+    props = run.get("properties", {}) or {}
+    status = props.get("status")
+    resp_name = ((props.get("response") or {}).get("name")) or ""
+    if status == "Succeeded":
+        if resp_name and resp_name != _WD_SUCCESS_RESPONSE_ACTION:
+            return "caught_failure"
+        return "success"
+    if status in _RUN_FAILURE_STATUSES:
+        return "hard_failure"
+    return "pending"
+
+
+def _check_workday_run_health(runner) -> list[CheckResult]:
+    """WD-RUN-001 — litmus test for a *deterministic* Workday runtime break.
+
+    Reads run history for each discovered Workday flow via
+    ``runner.pp_admin.get_flow_runs``, looks at the most recent window of runs
+    (``_WD_RECENT_WINDOW``, newest first across all flows), and FAILs only when
+    NONE of them succeeded. Recent successes prove the integration is wired up,
+    so scattered failures alongside them do not fail readiness. Catches runtime
+    Workday failures that connection status (WD-CONN-001+) cannot see.
+    """
+    roles = [Role.WORKDAY_ADMIN.value, Role.ESS_MAKER.value]
+    pp = runner.pp_admin
+    env_id = runner.env_id
+    wd_flows = getattr(runner, "_workday_flows", [])
+
+    if pp is None or not env_id:
+        return [CheckResult(
+            checkpoint_id="WD-RUN-001", category="Workday",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description="Workday flow run health",
+            result="Power Platform Admin API not available — cannot read flow run history.",
+            remediation="Re-run /flightcheck with Power Platform Admin access to evaluate Workday run health.",
+            roles=[Role.POWER_PLATFORM_ADMIN.value],
+        )]
+
+    if not wd_flows:
+        return [CheckResult(
+            checkpoint_id="WD-RUN-001", category="Workday",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description="Workday flow run health",
+            result="No Workday flows discovered — no run history to evaluate.",
+            remediation="",
+            roles=roles,
+        )]
+
+    terminal: list[dict] = []
+    api_error: str | None = None
+
+    for f in wd_flows:
+        flow_id = f.get("name")
+        fname = f.get("properties", {}).get("displayName", f.get("displayName", flow_id))
+        if not flow_id:
+            continue
+        runs = pp.get_flow_runs(env_id, flow_id)
+        if isinstance(runs, dict) and "_error" in runs:
+            api_error = runs["_error"]
+            continue
+        for run in runs:
+            kind = _classify_run(run)
+            if kind == "pending":
+                continue
+            props = run.get("properties", {}) or {}
+            terminal.append({
+                "start": props.get("startTime") or "",
+                "kind": kind,
+                "flow": fname,
+                "run": run.get("name"),
+                "resp": ((props.get("response") or {}).get("name")) or "?",
+            })
+
+    if not terminal:
+        if api_error:
+            return [CheckResult(
+                checkpoint_id="WD-RUN-001", category="Workday",
+                priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+                description="Workday flow run health",
+                result=f"Unable to read Workday flow run history: {api_error}.",
+                remediation="Run history requires owner/maker access to the Workday flows. "
+                            "Re-run as a user who owns the flows, or check it manually in "
+                            "Power Automate (make.powerautomate.com).",
+                roles=[Role.POWER_PLATFORM_ADMIN.value],
+            )]
+        return [CheckResult(
+            checkpoint_id="WD-RUN-001", category="Workday",
+            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            description="Workday flow run health",
+            result="No recent Workday flow runs found — no runtime traffic to evaluate.",
+            remediation="Exercise a Workday scenario in the agent Test pane, then re-run /flightcheck. "
+                        "Note: a fully-broken connection produces NO runs (the flow is never invoked) — "
+                        "if Workday isn't responding, check connection status first (WD-CONN-001).",
+            doc_link=f"{DOC_BASE}/workday",
+            roles=roles,
+        )]
+
+    # Evaluate only the most recent window (newest first). A deterministic
+    # break = NO success among the recent runs. Scattered failures alongside
+    # recent successes do NOT fail readiness.
+    terminal.sort(key=lambda r: r["start"], reverse=True)
+    window = terminal[:_WD_RECENT_WINDOW]
+    n = len(window)
+    win_fail = [r for r in window if r["kind"] in ("caught_failure", "hard_failure")]
+    win_success = n - len(win_fail)
+
+    def _sample_lines(rows: list[dict]) -> str:
+        lines = []
+        for r in rows[:5]:
+            if r["kind"] == "hard_failure":
+                lines.append(f"'{r['flow']}' run {r['run']}: flow run Failed")
+            else:
+                lines.append(f"'{r['flow']}' run {r['run']}: Workday call failed ({r['resp']})")
+        return "\n".join(lines)
+
+    if win_success > 0:
+        # At least one recent success → the integration is working. Not a
+        # readiness blocker even if some recent runs failed.
+        if win_fail:
+            result = (
+                f"{win_success} of the {n} most recent Workday flow run(s) succeeded — the "
+                f"integration is working. {len(win_fail)} recent run(s) failed, likely "
+                f"scenario- or permission-specific rather than a broken connection."
+            )
+        else:
+            result = f"All {n} most recent Workday flow run(s) succeeded."
+        return [CheckResult(
+            checkpoint_id="WD-RUN-001", category="Workday",
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
+            description="Workday flow run health",
+            result=result,
+            remediation="",
+            doc_link=f"{DOC_BASE}/workday",
+            roles=roles,
+        )]
+
+    # No recent success → deterministically broken.
+    return [CheckResult(
+        checkpoint_id="WD-RUN-001", category="Workday",
+        priority=Priority.HIGH.value, status=Status.FAILED.value,
+        description="Workday flow run health",
+        result=(
+            f"All {n} most recent Workday flow run(s) FAILED — the Workday integration "
+            f"appears deterministically broken. Note: run status alone shows 'Succeeded' "
+            f"for caught Workday failures, so this is based on the flow's response branch.\n"
+            f"{_sample_lines(win_fail)}"
+        ),
+        remediation=(
+            "Every recent Workday call is failing — users cannot use Workday scenarios. "
+            "Open the failed run(s) in Power Automate (make.powerautomate.com) to read the "
+            "Workday error. Common causes: a revoked Workday security domain/permission, a "
+            "misconfigured scenario template config, an expired OAuth token, or a Workday-side "
+            "outage. If the connection itself shows Error, fix that first (see WD-CONN-001)."
+        ),
+        doc_link=f"{DOC_BASE}/workday",
+        roles=roles,
+    )]
 
 
 def _check_workflows(runner) -> list[CheckResult]:
