@@ -73,7 +73,7 @@ For **new** files, follow the PascalCase + `msdyn_<Area><Action>.xml` convention
 1. **Read a sibling topic first.** Pick the nearest topic in the same area and sub-grouping. Mirror its top-level YAML keys, its XML root element, and its file layout.
 2. Confirm the target area, sub-grouping (Employee/Manager/Extended), and topic folder from the issue. If any of these is ambiguous, **stop and ask**.
 3. Run issue triage before editing files. Do not create or modify topic files until the issue is classified as actionable.
-4. Keep all changes inside `samples/`. For topic-related issues, do not edit `solutions/`, repo-root files, or `.github/`. Changes to `.github/agents/skills/` are allowed only when the task is explicitly about agent workflow guidance (not when fulfilling a topic request).
+4. Keep ALL changes inside `samples/`. Do not edit `solutions/`, repo-root files, `.github/`, or any other path outside `samples/` — even for "supporting" or "mirroring" purposes. Note any desired out-of-scope changes in the PR description as follow-up items.
 
 ## Safety boundaries (hard rules)
 
@@ -83,6 +83,7 @@ For **new** files, follow the PascalCase + `msdyn_<Area><Action>.xml` convention
 - No external network calls. No secrets in files.
 - One issue → one PR. No auto-merge. Human review required.
 - Diff must be confined to a single topic folder (or a single new topic folder) unless the issue explicitly requires more.
+- No edits to `solutions/`, `.github/`, or any path outside `samples/` — even if you believe the change is complementary or helpful. If a related change is needed elsewhere, note it in the PR description as a follow-up.
 
 ## When to stop and ask for clarification
 
