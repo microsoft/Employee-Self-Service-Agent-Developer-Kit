@@ -377,7 +377,12 @@ and do the per-tier verification.
      — so identical fixes across multiple resources collapse to a
      single de-duplicated line instead of repeating verbatim per
      resource. Resource names live in `result`.
-   - `PASSED` results have no `remediation`. There is nothing to fix.
+   - `PASSED` results carry no fix, but DO set `remediation` to a
+     short "Validated: …" note describing the exact success criterion
+     the check confirmed (which API/field/value made it pass). This
+     lets an operator read the passing row and understand what was
+     actually verified. The report blanks the Role column for
+     Passed/Skipped rows, but the "Validated: …" remediation IS shown.
    - This is the general form of the rule MANUAL spelled out in
      principle 2 — apply it everywhere.
 

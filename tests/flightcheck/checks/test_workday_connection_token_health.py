@@ -84,7 +84,8 @@ class TestGoodConfig:
         assert wd_101.priority == "High"
         assert "All 2 Workday connection(s)" in wd_101.result
         assert "healthy" in wd_101.result.lower()
-        assert wd_101.remediation == ""
+        assert wd_101.remediation.startswith("Validated:")
+        assert "healthy" in wd_101.remediation.lower()
 
 
 class TestBadConfig:
