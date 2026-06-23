@@ -1084,7 +1084,7 @@ class ActionsViewProvider {
     }
 }
 
-async function activate(context) {
+function activate(context) {
     _extensionContext = context;
     _log(`activate: ENTRY. workspaceFolders=${JSON.stringify(vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath))}`);
     // Register slash-command bridges (also available from the command palette).
@@ -1150,47 +1150,49 @@ async function activate(context) {
 
             // Check if the user already has a config file (returning user
             // who re-ran the installer). Skip /setup if already configured.
-            const alreadyConfigured = (await checkPrerequisites()).has('setup');
-            _log(`activate: alreadyConfigured=${alreadyConfigured}`);
+            checkPrerequisites().then(met => {
+                const alreadyConfigured = met.has('setup');
+                _log(`activate: alreadyConfigured=${alreadyConfigured}`);
 
-            if (isStandardMode) {
-                // Standard mode: no layout changes.
-                context.globalState.update(APPLIED_KEY, true);
-                if (alreadyConfigured) {
-                    _log('activate: skipping /setup (already configured)');
+                if (isStandardMode) {
+                    // Standard mode: no layout changes.
+                    context.globalState.update(APPLIED_KEY, true);
+                    if (alreadyConfigured) {
+                        _log('activate: skipping /setup (already configured)');
+                    } else {
+                        // Wait for welcome wizard to finish, then inject /setup.
+                        waitForWelcomeWizard()
+                            .then(() => { _log('activate: wizard done (standard), waiting 3s...'); return new Promise(r => setTimeout(r, 3000)); })
+                            .then(() => { _log('activate: calling injectSetup (standard)'); return injectSetup(); })
+                            .then(() => _log('activate: injectSetup completed (standard)'))
+                            .catch((err) => {
+                                _log(`activate: ERROR in standard wizard chain: ${err && err.message}`);
+                                console.warn('[ess-maker] Welcome wizard wait timed out, skipping auto /setup');
+                            });
+                    }
                 } else {
-                    // Wait for welcome wizard to finish, then inject /setup.
-                    waitForWelcomeWizard()
-                        .then(() => { _log('activate: wizard done (standard), waiting 3s...'); return new Promise(r => setTimeout(r, 3000)); })
-                        .then(() => { _log('activate: calling injectSetup (standard)'); return injectSetup(); })
-                        .then(() => _log('activate: injectSetup completed (standard)'))
-                        .catch((err) => {
-                            _log(`activate: ERROR in standard wizard chain: ${err && err.message}`);
-                            console.warn('[ess-maker] Welcome wizard wait timed out, skipping auto /setup');
-                        });
+                    // Lite mode: apply layout.
+                    applyChatOnlyLayout({ silent: false })
+                        .then(() => context.globalState.update(APPLIED_KEY, true))
+                        .catch(() => {});
+                    if (alreadyConfigured) {
+                        _log('activate: skipping /setup (already configured), opening chat');
+                        // Returning user in lite mode — just open the chat panel
+                        // so they can start working right away.
+                        setTimeout(() => tryRun('workbench.action.chat.open').catch(() => {}), 3000);
+                    } else {
+                        // Wait for welcome wizard to finish, then inject /setup.
+                        waitForWelcomeWizard()
+                            .then(() => { _log('activate: wizard done (lite), waiting 3s...'); return new Promise(r => setTimeout(r, 3000)); })
+                            .then(() => { _log('activate: calling injectSetup (lite)'); return injectSetup(); })
+                            .then(() => _log('activate: injectSetup completed (lite)'))
+                            .catch((err) => {
+                                _log(`activate: ERROR in lite wizard chain: ${err && err.message}`);
+                                console.warn('[ess-maker] Welcome wizard wait timed out, skipping auto /setup');
+                            });
+                    }
                 }
-            } else {
-                // Lite mode: apply layout.
-                applyChatOnlyLayout({ silent: false })
-                    .then(() => context.globalState.update(APPLIED_KEY, true))
-                    .catch(() => {});
-                if (alreadyConfigured) {
-                    _log('activate: skipping /setup (already configured), opening chat');
-                    // Returning user in lite mode — just open the chat panel
-                    // so they can start working right away.
-                    setTimeout(() => tryRun('workbench.action.chat.open').catch(() => {}), 3000);
-                } else {
-                    // Wait for welcome wizard to finish, then inject /setup.
-                    waitForWelcomeWizard()
-                        .then(() => { _log('activate: wizard done (lite), waiting 3s...'); return new Promise(r => setTimeout(r, 3000)); })
-                        .then(() => { _log('activate: calling injectSetup (lite)'); return injectSetup(); })
-                        .then(() => _log('activate: injectSetup completed (lite)'))
-                        .catch((err) => {
-                            _log(`activate: ERROR in lite wizard chain: ${err && err.message}`);
-                            console.warn('[ess-maker] Welcome wizard wait timed out, skipping auto /setup');
-                        });
-                }
-            }
+            }).catch(err => _log(`activate: checkPrerequisites error: ${err && err.message}`));
         } else if (userWantsLite) {
             // Subsequent lite mode launch: silently re-apply layout.
             setTimeout(() => { applyChatOnlyLayout({ silent: true }).catch(() => {}); }, 1500);
