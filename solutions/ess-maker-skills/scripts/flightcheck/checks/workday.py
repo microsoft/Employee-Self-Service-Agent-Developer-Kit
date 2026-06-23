@@ -322,6 +322,252 @@ WORKFLOWS = [
 ]
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# WD-REF-001 — Workday write-scenario reference-data availability
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Many Workday write scenarios (Add/Update phone, email, emergency contact,
+# dependent, address, government IDs, ...) require the agent to validate
+# user-supplied values against Workday reference data — ISO country codes,
+# phone device types, relationship types, government-ID types, etc. If the
+# reference set for a consumed field cannot be loaded, the agent rejects valid
+# inputs, accepts invalid ones (causing a downstream SOAP fault), or
+# hallucinates allowed values.
+#
+# How ESS loads reference data (confirmed on a live tenant 2026-06):
+#   * A write scenario declares each reference field in its request template as
+#     ``<wd:ID wd:type="Phone_Device_Type_ID">{Phone_Device_Type_ID}</wd:ID>`` —
+#     the ``type`` attribute is the Workday reference key.
+#   * The scenario's topic lazily calls the shared ``GetReferenceData`` system
+#     topic with that ``referenceDataKey`` to populate a ``Global.*LookupTable``
+#     that backs the adaptive-card picklist.
+#   * ``GetReferenceData`` fetches at runtime (via the
+#     ``msdyn_HRWorkdayHCMEmployeeGetReferenceData`` read scenario) and supports
+#     a FIXED set of keys (a switch on ``referenceDataKey``).
+#
+# So the check is a pure Dataverse reconciliation: every reference key a TOPIC
+# actually REQUESTS from GetReferenceData must be in GetReferenceData's
+# supported-key switch (and GetReferenceData must be installed). A requested key
+# that isn't supported = a picklist that can never populate = the failure mode
+# above. (We reconcile the topics' real ``referenceDataKey`` *requests*, NOT the
+# write request-template ID types: a topic loads e.g. countries via
+# ``ISO_3166-1_Alpha-2_Code`` and the request template pulls the alpha-3 / region
+# value from that same table, and some fields like gender are static — so
+# request-template ID types do NOT map 1:1 to GetReferenceData keys and would
+# false-positive on OOTB scenarios. Confirmed on a live tenant 2026-06.)
+
+# Friendly labels for the result text (best-effort; unknown keys print raw).
+_WD_REF_KEY_LABELS = {
+    "ISO_3166-1_Alpha-2_Code": "Countries (ISO alpha-2)",
+    "ISO_3166-1_Alpha-3_Code": "Countries (ISO alpha-3)",
+    "Country_Phone_Code_ID": "Country phone codes",
+    "Phone_Device_Type_ID": "Phone device types",
+    "Communication_Usage_Type_ID": "Communication usage types",
+    "Related_Person_Relationship_ID": "Relationship types",
+    "Government_ID_Type_ID": "Government ID types",
+    "National_ID_Type_Code": "National ID types",
+    "Passport_ID_Type_ID": "Passport ID types",
+    "Visa_ID_Type_ID": "Visa ID types",
+    "Marital_Status_ID": "Marital status",
+    "Gender_ID": "Gender",
+    "Ethnicity_ID": "Ethnicity",
+    "Language_ID": "Languages",
+}
+
+# In the GetReferenceData topic's switch: referenceDataKey = "KEY" -> a SUPPORTED key.
+_WD_REF_SUPPORTED_RE = re.compile(r'referenceDataKey\s*=\s*["\']([^"\']+)["\']')
+# In a calling topic: referenceDataKey: KEY -> a REQUESTED key (literal, same line).
+# A Power Fx expression value (starts with '=') is intentionally not matched (the
+# key isn't statically known), and the GetReferenceData input declaration (no
+# value on the line) is likewise not matched.
+_WD_REF_REQUESTED_RE = re.compile(r'referenceDataKey:[ \t]*([A-Za-z0-9_]+)')
+
+
+def _ref_key_label(key: str) -> str:
+    return _WD_REF_KEY_LABELS.get(key, key)
+
+
+def _extract_requested_reference_keys(topic_data: str) -> set[str]:
+    """Reference keys a topic actually REQUESTS from GetReferenceData — the
+    literal ``referenceDataKey: KEY`` input it passes on each call."""
+    if not topic_data:
+        return set()
+    return set(_WD_REF_REQUESTED_RE.findall(topic_data))
+
+
+def _wd_studio_link(runner) -> str:
+    """Markdown deep-link to the active agent in Copilot Studio (its **Topics**
+    page is where the GetReferenceData call is edited). Falls back to the
+    Copilot Studio homepage when the env/bot id can't be resolved. Reuses the
+    verified URL helper from local_files.
+
+    Resolves the active-agent slug the same way ``cli.py`` does
+    (``config['activeAgent']`` — written by ``setup.py``), then the
+    backward-compat ``config['agent'].slug``, then the first entry of
+    ``config['agents']`` as a defensive last resort.
+    """
+    try:
+        from .local_files import _studio_link_md
+        config = getattr(runner, "config", {}) or {}
+        agents = config.get("agents") or []
+        slug = (
+            config.get("activeAgent")
+            or (config.get("agent") or {}).get("slug")
+            or (agents[0].get("slug") if agents else "")
+            or ""
+        )
+        return _studio_link_md(runner, slug, "the agent in Copilot Studio")
+    except Exception:  # noqa: BLE001 — never let link-building break the check
+        return "[Copilot Studio](https://copilotstudio.microsoft.com/)"
+
+
+def _extract_supported_reference_keys(topic_data: str) -> set[str]:
+    """Reference keys the GetReferenceData topic supports (its switch)."""
+    if not topic_data:
+        return set()
+    return set(_WD_REF_SUPPORTED_RE.findall(topic_data))
+
+
+def _check_workday_reference_data(runner) -> list[CheckResult]:
+    """WD-REF-001 — verify every reference picklist a Workday topic requests is
+    supported by the shared GetReferenceData topic.
+
+    Pure Dataverse reconciliation (``documented`` tier — no external API):
+      * read all topic ``botcomponents`` -> per topic, the reference keys it
+        REQUESTS from GetReferenceData, plus GetReferenceData's SUPPORTED keys;
+      * FAIL on any requested key not supported (or GetReferenceData missing).
+    """
+    roles = [Role.ESS_MAKER.value, Role.WORKDAY_ADMIN.value]
+    cid = "WD-REF-001"
+    cat = "Workday"
+    doc = f"{DOC_BASE}/workday"
+    env_url = getattr(runner, "env_url", None)
+    dv_token = getattr(runner, "dv_token", None)
+
+    if not env_url or not dv_token:
+        return [CheckResult(
+            checkpoint_id=cid, category=cat, priority=Priority.HIGH.value,
+            status=Status.SKIPPED.value,
+            description="Workday write-scenario reference-data availability",
+            result="Dataverse token not available — cannot read topic configuration.",
+            remediation="Re-run /flightcheck with Dataverse access.",
+            roles=roles,
+        )]
+
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+        from auth import query_all
+        topics = query_all(
+            env_url, dv_token,
+            "botcomponents",
+            "name,schemaname,data",
+            filter_expr="componenttype eq 9",
+        )
+    except Exception as exc:  # noqa: BLE001 — surface verbatim
+        return [CheckResult(
+            checkpoint_id=cid, category=cat, priority=Priority.HIGH.value,
+            status=Status.SKIPPED.value,
+            description="Workday write-scenario reference-data availability",
+            result=f"Unable to read Dataverse topic configuration: {exc}.",
+            remediation="Retry with Dataverse access, or review the topics manually in the maker portal.",
+            roles=roles,
+        )]
+
+    supported: set[str] = set()
+    getref_installed = False
+    requested_by_topic: dict[str, set[str]] = {}
+    for t in topics or []:
+        schema = t.get("schemaname") or ""
+        data = t.get("data") or ""
+        if "GetReferenceData" in schema:
+            getref_installed = True
+            supported |= _extract_supported_reference_keys(data)
+            continue
+        keys = _extract_requested_reference_keys(data)
+        if keys:
+            requested_by_topic[t.get("name") or schema or "(unnamed topic)"] = keys
+
+    if not requested_by_topic:
+        return [CheckResult(
+            checkpoint_id=cid, category=cat, priority=Priority.MEDIUM.value,
+            status=Status.NOT_CONFIGURED.value,
+            description="Workday write-scenario reference-data availability",
+            result="No Workday topic requests a reference-data picklist — nothing to validate.",
+            remediation="",
+            doc_link=doc, roles=roles,
+        )]
+
+    all_requested = sorted({k for ks in requested_by_topic.values() for k in ks})
+    studio = _wd_studio_link(runner)
+
+    if not getref_installed:
+        return [CheckResult(
+            checkpoint_id=cid, category=cat, priority=Priority.HIGH.value,
+            status=Status.FAILED.value,
+            description="Workday write-scenario reference-data availability",
+            result=(
+                f"{len(requested_by_topic)} Workday topic(s) request reference-data picklists "
+                f"({', '.join(_ref_key_label(k) for k in all_requested)}), but the shared "
+                f"'GetReferenceData' topic is not installed — none of these picklists can be "
+                f"populated, so the agent cannot validate user input for these fields."
+            ),
+            remediation=(
+                "Install/repair the Workday extension so the 'GetReferenceData' system topic and "
+                "the msdyn_HRWorkdayHCMEmployeeGetReferenceData read scenario are present (they load "
+                "the reference picklists at runtime via a Workday report). "
+                f"Open {studio} \u2192 Topics to review the agent's Workday topics. See the Workday "
+                "topics + report-template configuration docs."
+            ),
+            doc_link=doc, roles=roles,
+        )]
+
+    gaps: dict[str, set[str]] = {}
+    for name, keys in requested_by_topic.items():
+        missing = keys - supported
+        if missing:
+            gaps[name] = missing
+
+    if not gaps:
+        return [CheckResult(
+            checkpoint_id=cid, category=cat, priority=Priority.HIGH.value,
+            status=Status.PASSED.value,
+            description="Workday write-scenario reference-data availability",
+            result=(
+                f"All {len(requested_by_topic)} Workday topic(s) that request reference-data "
+                f"picklists request only keys GetReferenceData supports "
+                f"({len(supported)} reference key(s) supported)."
+            ),
+            remediation="",
+            doc_link=doc, roles=roles,
+        )]
+
+    lines = [
+        f"'{name}': requests unsupported reference set(s) "
+        + ", ".join(f"{_ref_key_label(k)} [{k}]" for k in sorted(missing))
+        for name, missing in sorted(gaps.items())
+    ]
+    return [CheckResult(
+        checkpoint_id=cid, category=cat, priority=Priority.HIGH.value,
+        status=Status.FAILED.value,
+        description="Workday write-scenario reference-data availability",
+        result=(
+            f"{len(gaps)} of {len(requested_by_topic)} Workday topic(s) request a reference-data "
+            f"picklist that GetReferenceData does not support, so that picklist cannot populate — "
+            f"the agent will reject valid inputs, accept invalid ones (downstream SOAP fault), or "
+            f"hallucinate allowed values:\n" + "\n".join(lines)
+        ),
+        remediation=(
+            f"Open {studio} \u2192 Topics to fix the topic(s) above: either point each at a "
+            "reference key GetReferenceData supports, OR add the missing key to the "
+            "'GetReferenceData' topic and bind it to the Workday report that returns those "
+            "reference IDs (e.g. Get_Reference_IDs / Get_Countries). Until then the field has no "
+            "validated allowed-value list. See the Workday report-template + prompts-support "
+            "configuration docs."
+        ),
+        doc_link=doc, roles=roles,
+    )]
+
+
 def run_workday_checks(runner) -> list[CheckResult]:
     """Execute Workday-specific deep validation.
 
@@ -414,6 +660,12 @@ def run_workday_checks(runner) -> list[CheckResult]:
 
     # --- SOAP Workflow Tests (only if Workday MCP creds available) ---
     results.extend(_check_workflows(runner))
+
+    # WD-REF-001 — write-scenario reference-data availability. Reconciles the
+    # reference picklists each installed Workday write scenario consumes against
+    # the shared GetReferenceData topic's supported keys (Dataverse-only; no
+    # external API). Config-level, so it runs regardless of SOAP credentials.
+    results.extend(_check_workday_reference_data(runner))
 
     # WD-SEC-003 — Personal Data domain write-permission probe.
     # Runs right after _check_workflows so it can reuse the same
