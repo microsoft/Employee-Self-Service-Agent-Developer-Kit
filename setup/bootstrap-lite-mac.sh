@@ -1,13 +1,16 @@
 #!/usr/bin/env bash
 # ---------------------------------------------------------------------------
-# ESS ADK — macOS Bootstrap (Full Maker Kit)
+# ESS ADK — macOS Bootstrap (Lite Mode)
 #
 # One-liner entry point:
-#   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-mac.sh)"
+#   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-lite-mac.sh)"
+#
+# Installs the full maker kit with the ESS Maker Profile extension enabled,
+# giving users a chat-first, big-button experience.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-export SKIP_MAKER_PROFILE="true"
+# Lite mode: do NOT set SKIP_MAKER_PROFILE so the chat-first profile installs.
 
 # Parse optional --branch / --source-base-url arguments
 BRANCH="main"
