@@ -521,16 +521,33 @@ fi
 WORKSPACE_PATH="$REPO_PATH/solutions/ess-maker-skills"
 
 if [[ -n "$CODE_CMD" ]]; then
-    # The ESS Maker Profile extension handles /setup orchestration in
-    # both modes. Just launch the workspace here.
-    step "Opening workspace in VS Code"
-    if (cd "$WORKSPACE_PATH" && "$CODE_CMD" .); then
-        ok "Launched VS Code at $WORKSPACE_PATH"
-        echo -e "    ${YELLOW}The ESS Maker Profile will run /setup in Copilot Chat (standard mode) or show the Connect button (lite mode).${NC}"
-        echo -e "    ${YELLOW}If VS Code prompts you to trust the workspace, accept the prompt.${NC}"
+    # Launch strategy depends on mode:
+    # - Standard mode (SKIP_MAKER_PROFILE=true): use `code chat` to open
+    #   /setup in the sidebar panel (the standard chat experience).
+    # - Lite mode: just open the workspace. The ESS Maker Profile extension
+    #   handles layout + /setup injection after the welcome wizard closes.
+    if [[ "$SKIP_MAKER_PROFILE" == "true" ]]; then
+        step "Opening workspace in VS Code and requesting /setup in Copilot Chat"
+        if (cd "$WORKSPACE_PATH" && "$CODE_CMD" chat "/setup"); then
+            ok "Requested /setup in Copilot Chat at $WORKSPACE_PATH"
+            echo -e "    ${YELLOW}If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts and /setup will run.${NC}"
+            echo -e "    ${YELLOW}If /setup does not start after trust/sign-in, open Copilot Chat manually and run /setup.${NC}"
+        else
+            warn "'code chat' failed or is unsupported. Falling back to opening the workspace only."
+            warn "If you have an older VS Code (pre-1.102 / June 2025), update VS Code and re-run, or run /setup manually in Copilot Chat."
+            "$CODE_CMD" "$WORKSPACE_PATH" || warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
+            echo "Next: in VS Code, open Copilot Chat and run /setup to connect your Dataverse environment."
+        fi
     else
-        warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
-        echo "Next: in VS Code, open Copilot Chat and run /setup to connect your Dataverse environment."
+        step "Opening workspace in VS Code"
+        if (cd "$WORKSPACE_PATH" && "$CODE_CMD" .); then
+            ok "Launched VS Code at $WORKSPACE_PATH"
+            echo -e "    ${YELLOW}The ESS Maker Profile will run /setup in Copilot Chat after the welcome screen closes.${NC}"
+            echo -e "    ${YELLOW}If VS Code prompts you to trust the workspace, accept the prompt.${NC}"
+        else
+            warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
+            echo "Next: in VS Code, open Copilot Chat and run /setup to connect your Dataverse environment."
+        fi
     fi
 else
     warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"

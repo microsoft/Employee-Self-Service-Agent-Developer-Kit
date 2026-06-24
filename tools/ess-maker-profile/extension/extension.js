@@ -63,13 +63,13 @@ const CHAT_ONLY_LAYOUT = {
 // becomes clickable. The state is tracked in globalState and is also
 // inferred from workspace contents (e.g. presence of topic yaml files).
 const ACTIONS = [
-    { id: 'setup',       icon: '🔌', label: 'Connect',              sub: 'Sign in to your environment',  slash: '/setup',       requires: [] },
+    { id: 'setup',       icon: '🔌', label: 'Setup',                sub: 'Sign in to your environment',  slash: '/setup',       requires: [] },
     { id: 'create',      icon: '✨', label: 'Create a topic',       sub: 'Describe a new conversation',  slash: '/create',      requires: ['setup'] },
     { id: 'update',      icon: '✏️', label: 'Update a topic',       sub: 'Tweak an existing topic',      slash: '/update',      requires: ['setup'] },
     { id: 'scan',        icon: '🔍', label: 'Scan for issues',      sub: 'Find broken bindings',         slash: '/scan',        requires: ['setup'] },
     { id: 'flightcheck', icon: '✈️', label: 'Run a flightcheck',    sub: '41+ readiness checks',         slash: '/flightcheck', requires: ['setup'] },
-    { id: 'evaluate',    icon: '📊', label: 'Generate tests',       sub: 'Build evaluation test sets',   slash: '/evaluate',    requires: ['setup', 'flightcheck'] },
-    { id: 'push',        icon: '🚀', label: 'Push to Copilot Studio', sub: 'Safely deploy your changes', slash: '/push',        requires: ['setup', 'flightcheck'] },
+    { id: 'evaluate',    icon: '📊', label: 'Generate tests',       sub: 'Build evaluation test sets',   slash: '/evaluate',    requires: ['setup'] },
+    { id: 'push',        icon: '🚀', label: 'Push to Copilot Studio', sub: 'Safely deploy your changes', slash: '/push',        requires: ['setup'] },
 ];
 
 const STATE_KEY = 'essMaker.completedActions.v3';
@@ -298,11 +298,28 @@ function waitForWelcomeWizard(timeoutMs = 300000) {
     });
 }
 
-// Inject /setup into the Copilot Chat panel (for standard mode — no layout changes).
+// Inject /setup into the Copilot Chat panel.
+// Opens chat in the sidebar panel (not as an editor tab) and submits /setup.
 async function injectSetup() {
     _log('injectSetup: starting');
-    // Use the chat open command with query parameter (VS Code 1.102+).
-    // isPartialQuery: false makes it submit immediately.
+
+    // First, ensure the chat panel is visible in the sidebar (right side).
+    // Try the panel focus command first so chat opens in the side panel,
+    // not as an editor tab.
+    const panelCmds = [
+        'workbench.panel.chat.view.copilot.focus',
+        'workbench.action.chat.openInSidebar',
+    ];
+    for (const cmd of panelCmds) {
+        try {
+            await vscode.commands.executeCommand(cmd);
+            _log(`injectSetup: panel opened via ${cmd}`);
+            break;
+        } catch (_) { /* try next */ }
+    }
+    await new Promise((r) => setTimeout(r, 500));
+
+    // Now submit /setup via the chat open command with query parameter.
     try {
         await vscode.commands.executeCommand('workbench.action.chat.open', {
             query: '/setup',
@@ -314,14 +331,7 @@ async function injectSetup() {
         _log(`injectSetup: chat.open with query failed: ${e && e.message}, falling back to clipboard`);
     }
 
-    // Fallback: open chat, paste /setup via clipboard, and submit.
-    const chatCmds = [
-        'workbench.action.chat.open',
-        'workbench.action.chat.newChat',
-    ];
-    for (const c of chatCmds) {
-        if (await tryRun(c)) break;
-    }
+    // Fallback: paste /setup via clipboard and submit.
     await new Promise((r) => setTimeout(r, 700));
     await tryRun('workbench.action.chat.focusInput');
     await new Promise((r) => setTimeout(r, 200));
@@ -475,7 +485,7 @@ function getTutorialHtml() {
 
     <nav>
         <a href="#how">How it works</a><span class="sep">·</span>
-        <a href="#connect">Connect</a><span class="sep">·</span>
+        <a href="#connect">Setup</a><span class="sep">·</span>
         <a href="#create">Create</a><span class="sep">·</span>
         <a href="#update">Update</a><span class="sep">·</span>
         <a href="#scan">Scan</a><span class="sep">·</span>
@@ -489,7 +499,7 @@ function getTutorialHtml() {
         <p>You\u2019re about to customize your Employee Self-Service agent \u2014 the assistant your employees use for HR, IT and facilities requests.</p>
         <h3>The workflow</h3>
         <ol>
-            <li><strong>Connect</strong> \u2014 Sign in to your Power Platform environment.</li>
+            <li><strong>Setup</strong> \u2014 Sign in to your Power Platform environment.</li>
             <li><strong>Create a topic</strong> \u2014 Describe what you want in plain English. The kit generates everything.</li>
             <li><strong>Update a topic</strong> \u2014 Modify an existing topic by describing the change.</li>
             <li><strong>Scan</strong> \u2014 Check for broken references and configuration issues.</li>
@@ -502,14 +512,14 @@ function getTutorialHtml() {
     </section>
 
     <section id="connect">
-        <h2>\u{1f50c} Connect</h2>
-        <p>The <strong>Connect</strong> button signs you in to your Power Platform environment so the kit can:</p>
+        <h2>\u{1f50c} Setup</h2>
+        <p>The <strong>Setup</strong> button signs you in to your Power Platform environment so the kit can:</p>
         <ul>
             <li>Discover your deployed ESS agent and its components.</li>
             <li>Create a local working copy for safe editing.</li>
             <li>Validate connectivity before any changes are pushed.</li>
         </ul>
-        <p>When you click Connect, a chat opens with the <code>/setup</code> command \u2014 just answer the prompts (environment URL, then sign-in).</p>
+        <p>When you click Setup, a chat opens with the <code>/setup</code> command \u2014 just answer the prompts (environment URL, then sign-in).</p>
         <blockquote><p>First time? You\u2019ll see a browser pop-up asking you to sign in with your work account. That\u2019s expected.</p></blockquote>
     </section>
 
@@ -702,7 +712,7 @@ async function applyChatOnlyLayout({ silent = false, showWalkthrough = false } =
             if (await tryRun(c)) break;
         }
     } else {
-        // Open a chat editor (no /setup — the user clicks the Connect button).
+        // Open a chat editor (no /setup — the user clicks the Setup button).
         const openCmds = [
             'workbench.action.chat.openInEditor',
             'workbench.action.chat.openInNewEditor',
@@ -864,7 +874,7 @@ class ActionsViewProvider {
                 }
             } else if (msg?.type === 'resetProgress') {
                 const sel = await vscode.window.showWarningMessage(
-                    'Reset Quick Actions progress? All buttons will be re-locked except Connect.',
+                    'Reset Quick Actions progress? All buttons will be re-locked except Setup.',
                     'Reset', 'Cancel'
                 );
                 if (sel === 'Reset') {
@@ -1132,7 +1142,7 @@ function activate(context) {
     // First-run vs subsequent runs:
     // - First run: determine mode (lite vs standard) from VS Code setting
     //   written by the installer.
-    //   Lite mode: applies chat-only layout; user clicks Connect to run /setup.
+    //   Lite mode: applies chat-only layout; user clicks Setup to run /setup.
     //   Standard mode: injects /setup into Copilot Chat automatically.
     // - Subsequent lite activations: silently re-apply layout.
     const alreadyApplied = context.globalState.get(APPLIED_KEY, false);
@@ -1155,21 +1165,11 @@ function activate(context) {
                 _log(`activate: alreadyConfigured=${alreadyConfigured}`);
 
                 if (isStandardMode) {
-                    // Standard mode: no layout changes.
+                    // Standard mode: no layout changes. The installer handles
+                    // /setup injection via `code chat` which opens in the
+                    // sidebar panel. Nothing to do here.
                     context.globalState.update(APPLIED_KEY, true);
-                    if (alreadyConfigured) {
-                        _log('activate: skipping /setup (already configured)');
-                    } else {
-                        // Wait for welcome wizard to finish, then inject /setup.
-                        waitForWelcomeWizard()
-                            .then(() => { _log('activate: wizard done (standard), waiting 3s...'); return new Promise(r => setTimeout(r, 3000)); })
-                            .then(() => { _log('activate: calling injectSetup (standard)'); return injectSetup(); })
-                            .then(() => _log('activate: injectSetup completed (standard)'))
-                            .catch((err) => {
-                                _log(`activate: ERROR in standard wizard chain: ${err && err.message}`);
-                                console.warn('[ess-maker] Welcome wizard wait timed out, skipping auto /setup');
-                            });
-                    }
+                    _log('activate: standard mode — installer handles /setup via code chat');
                 } else {
                     // Lite mode: apply layout.
                     applyChatOnlyLayout({ silent: false })
