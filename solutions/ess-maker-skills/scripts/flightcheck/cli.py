@@ -328,15 +328,22 @@ def main():
                 (a for a in agents if a.get("slug") == active),
                 agents[0] if agents else {},
             )
-            telemetry.emit_flightcheck_telemetry(
+            _tele = telemetry.emit_flightcheck_telemetry(
                 result,
                 tenant_id=tenant_id,
                 agent_id=active_agent.get("botId", ""),
                 scope=args.scope,
                 agent_count=len(agents),
             )
-        except Exception:
-            pass  # Telemetry is best-effort; never break the run.
+            print(
+                f"[telemetry] env={_tele.get('env')} sent={_tele.get('sent')} "
+                f"events={_tele.get('events')} status={_tele.get('status')} "
+                f"reason={_tele.get('reason')}"
+            )
+        except Exception as _tele_err:  # never break the run
+            print(f"[telemetry] skipped — {type(_tele_err).__name__}: {_tele_err}")
+    else:
+        print("[telemetry] disabled via --no-telemetry")
 
     # Open HTML report in browser (skip with --no-open for CI / headless runs)
     if not args.no_open:
