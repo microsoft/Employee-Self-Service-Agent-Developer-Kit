@@ -322,6 +322,252 @@ WORKFLOWS = [
 ]
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# WD-REF-001 — Workday write-scenario reference-data availability
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Many Workday write scenarios (Add/Update phone, email, emergency contact,
+# dependent, address, government IDs, ...) require the agent to validate
+# user-supplied values against Workday reference data — ISO country codes,
+# phone device types, relationship types, government-ID types, etc. If the
+# reference set for a consumed field cannot be loaded, the agent rejects valid
+# inputs, accepts invalid ones (causing a downstream SOAP fault), or
+# hallucinates allowed values.
+#
+# How ESS loads reference data (confirmed on a live tenant 2026-06):
+#   * A write scenario declares each reference field in its request template as
+#     ``<wd:ID wd:type="Phone_Device_Type_ID">{Phone_Device_Type_ID}</wd:ID>`` —
+#     the ``type`` attribute is the Workday reference key.
+#   * The scenario's topic lazily calls the shared ``GetReferenceData`` system
+#     topic with that ``referenceDataKey`` to populate a ``Global.*LookupTable``
+#     that backs the adaptive-card picklist.
+#   * ``GetReferenceData`` fetches at runtime (via the
+#     ``msdyn_HRWorkdayHCMEmployeeGetReferenceData`` read scenario) and supports
+#     a FIXED set of keys (a switch on ``referenceDataKey``).
+#
+# So the check is a pure Dataverse reconciliation: every reference key a TOPIC
+# actually REQUESTS from GetReferenceData must be in GetReferenceData's
+# supported-key switch (and GetReferenceData must be installed). A requested key
+# that isn't supported = a picklist that can never populate = the failure mode
+# above. (We reconcile the topics' real ``referenceDataKey`` *requests*, NOT the
+# write request-template ID types: a topic loads e.g. countries via
+# ``ISO_3166-1_Alpha-2_Code`` and the request template pulls the alpha-3 / region
+# value from that same table, and some fields like gender are static — so
+# request-template ID types do NOT map 1:1 to GetReferenceData keys and would
+# false-positive on OOTB scenarios. Confirmed on a live tenant 2026-06.)
+
+# Friendly labels for the result text (best-effort; unknown keys print raw).
+_WD_REF_KEY_LABELS = {
+    "ISO_3166-1_Alpha-2_Code": "Countries (ISO alpha-2)",
+    "ISO_3166-1_Alpha-3_Code": "Countries (ISO alpha-3)",
+    "Country_Phone_Code_ID": "Country phone codes",
+    "Phone_Device_Type_ID": "Phone device types",
+    "Communication_Usage_Type_ID": "Communication usage types",
+    "Related_Person_Relationship_ID": "Relationship types",
+    "Government_ID_Type_ID": "Government ID types",
+    "National_ID_Type_Code": "National ID types",
+    "Passport_ID_Type_ID": "Passport ID types",
+    "Visa_ID_Type_ID": "Visa ID types",
+    "Marital_Status_ID": "Marital status",
+    "Gender_ID": "Gender",
+    "Ethnicity_ID": "Ethnicity",
+    "Language_ID": "Languages",
+}
+
+# In the GetReferenceData topic's switch: referenceDataKey = "KEY" -> a SUPPORTED key.
+_WD_REF_SUPPORTED_RE = re.compile(r'referenceDataKey\s*=\s*["\']([^"\']+)["\']')
+# In a calling topic: referenceDataKey: KEY -> a REQUESTED key (literal, same line).
+# A Power Fx expression value (starts with '=') is intentionally not matched (the
+# key isn't statically known), and the GetReferenceData input declaration (no
+# value on the line) is likewise not matched.
+_WD_REF_REQUESTED_RE = re.compile(r'referenceDataKey:[ \t]*([A-Za-z0-9_]+)')
+
+
+def _ref_key_label(key: str) -> str:
+    return _WD_REF_KEY_LABELS.get(key, key)
+
+
+def _extract_requested_reference_keys(topic_data: str) -> set[str]:
+    """Reference keys a topic actually REQUESTS from GetReferenceData — the
+    literal ``referenceDataKey: KEY`` input it passes on each call."""
+    if not topic_data:
+        return set()
+    return set(_WD_REF_REQUESTED_RE.findall(topic_data))
+
+
+def _wd_studio_link(runner) -> str:
+    """Markdown deep-link to the active agent in Copilot Studio (its **Topics**
+    page is where the GetReferenceData call is edited). Falls back to the
+    Copilot Studio homepage when the env/bot id can't be resolved. Reuses the
+    verified URL helper from local_files.
+
+    Resolves the active-agent slug the same way ``cli.py`` does
+    (``config['activeAgent']`` — written by ``setup.py``), then the
+    backward-compat ``config['agent'].slug``, then the first entry of
+    ``config['agents']`` as a defensive last resort.
+    """
+    try:
+        from .local_files import _studio_link_md
+        config = getattr(runner, "config", {}) or {}
+        agents = config.get("agents") or []
+        slug = (
+            config.get("activeAgent")
+            or (config.get("agent") or {}).get("slug")
+            or (agents[0].get("slug") if agents else "")
+            or ""
+        )
+        return _studio_link_md(runner, slug, "the agent in Copilot Studio")
+    except Exception:  # noqa: BLE001 — never let link-building break the check
+        return "[Copilot Studio](https://copilotstudio.microsoft.com/)"
+
+
+def _extract_supported_reference_keys(topic_data: str) -> set[str]:
+    """Reference keys the GetReferenceData topic supports (its switch)."""
+    if not topic_data:
+        return set()
+    return set(_WD_REF_SUPPORTED_RE.findall(topic_data))
+
+
+def _check_workday_reference_data(runner) -> list[CheckResult]:
+    """WD-REF-001 — verify every reference picklist a Workday topic requests is
+    supported by the shared GetReferenceData topic.
+
+    Pure Dataverse reconciliation (``documented`` tier — no external API):
+      * read all topic ``botcomponents`` -> per topic, the reference keys it
+        REQUESTS from GetReferenceData, plus GetReferenceData's SUPPORTED keys;
+      * FAIL on any requested key not supported (or GetReferenceData missing).
+    """
+    roles = [Role.ESS_MAKER.value, Role.WORKDAY_ADMIN.value]
+    cid = "WD-REF-001"
+    cat = "Workday"
+    doc = f"{DOC_BASE}/workday"
+    env_url = getattr(runner, "env_url", None)
+    dv_token = getattr(runner, "dv_token", None)
+
+    if not env_url or not dv_token:
+        return [CheckResult(
+            checkpoint_id=cid, category=cat, priority=Priority.HIGH.value,
+            status=Status.SKIPPED.value,
+            description="Workday write-scenario reference-data availability",
+            result="Dataverse token not available — cannot read topic configuration.",
+            remediation="Re-run /flightcheck with Dataverse access.",
+            roles=roles,
+        )]
+
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+        from auth import query_all
+        topics = query_all(
+            env_url, dv_token,
+            "botcomponents",
+            "name,schemaname,data",
+            filter_expr="componenttype eq 9",
+        )
+    except Exception as exc:  # noqa: BLE001 — surface verbatim
+        return [CheckResult(
+            checkpoint_id=cid, category=cat, priority=Priority.HIGH.value,
+            status=Status.SKIPPED.value,
+            description="Workday write-scenario reference-data availability",
+            result=f"Unable to read Dataverse topic configuration: {exc}.",
+            remediation="Retry with Dataverse access, or review the topics manually in the maker portal.",
+            roles=roles,
+        )]
+
+    supported: set[str] = set()
+    getref_installed = False
+    requested_by_topic: dict[str, set[str]] = {}
+    for t in topics or []:
+        schema = t.get("schemaname") or ""
+        data = t.get("data") or ""
+        if "GetReferenceData" in schema:
+            getref_installed = True
+            supported |= _extract_supported_reference_keys(data)
+            continue
+        keys = _extract_requested_reference_keys(data)
+        if keys:
+            requested_by_topic[t.get("name") or schema or "(unnamed topic)"] = keys
+
+    if not requested_by_topic:
+        return [CheckResult(
+            checkpoint_id=cid, category=cat, priority=Priority.MEDIUM.value,
+            status=Status.NOT_CONFIGURED.value,
+            description="Workday write-scenario reference-data availability",
+            result="No Workday topic requests a reference-data picklist — nothing to validate.",
+            remediation="",
+            doc_link=doc, roles=roles,
+        )]
+
+    all_requested = sorted({k for ks in requested_by_topic.values() for k in ks})
+    studio = _wd_studio_link(runner)
+
+    if not getref_installed:
+        return [CheckResult(
+            checkpoint_id=cid, category=cat, priority=Priority.HIGH.value,
+            status=Status.FAILED.value,
+            description="Workday write-scenario reference-data availability",
+            result=(
+                f"{len(requested_by_topic)} Workday topic(s) request reference-data picklists "
+                f"({', '.join(_ref_key_label(k) for k in all_requested)}), but the shared "
+                f"'GetReferenceData' topic is not installed — none of these picklists can be "
+                f"populated, so the agent cannot validate user input for these fields."
+            ),
+            remediation=(
+                "Install/repair the Workday extension so the 'GetReferenceData' system topic and "
+                "the msdyn_HRWorkdayHCMEmployeeGetReferenceData read scenario are present (they load "
+                "the reference picklists at runtime via a Workday report). "
+                f"Open {studio} \u2192 Topics to review the agent's Workday topics. See the Workday "
+                "topics + report-template configuration docs."
+            ),
+            doc_link=doc, roles=roles,
+        )]
+
+    gaps: dict[str, set[str]] = {}
+    for name, keys in requested_by_topic.items():
+        missing = keys - supported
+        if missing:
+            gaps[name] = missing
+
+    if not gaps:
+        return [CheckResult(
+            checkpoint_id=cid, category=cat, priority=Priority.HIGH.value,
+            status=Status.PASSED.value,
+            description="Workday write-scenario reference-data availability",
+            result=(
+                f"All {len(requested_by_topic)} Workday topic(s) that request reference-data "
+                f"picklists request only keys GetReferenceData supports "
+                f"({len(supported)} reference key(s) supported)."
+            ),
+            remediation="",
+            doc_link=doc, roles=roles,
+        )]
+
+    lines = [
+        f"'{name}': requests unsupported reference set(s) "
+        + ", ".join(f"{_ref_key_label(k)} [{k}]" for k in sorted(missing))
+        for name, missing in sorted(gaps.items())
+    ]
+    return [CheckResult(
+        checkpoint_id=cid, category=cat, priority=Priority.HIGH.value,
+        status=Status.FAILED.value,
+        description="Workday write-scenario reference-data availability",
+        result=(
+            f"{len(gaps)} of {len(requested_by_topic)} Workday topic(s) request a reference-data "
+            f"picklist that GetReferenceData does not support, so that picklist cannot populate — "
+            f"the agent will reject valid inputs, accept invalid ones (downstream SOAP fault), or "
+            f"hallucinate allowed values:\n" + "\n".join(lines)
+        ),
+        remediation=(
+            f"Open {studio} \u2192 Topics to fix the topic(s) above: either point each at a "
+            "reference key GetReferenceData supports, OR add the missing key to the "
+            "'GetReferenceData' topic and bind it to the Workday report that returns those "
+            "reference IDs (e.g. Get_Reference_IDs / Get_Countries). Until then the field has no "
+            "validated allowed-value list. See the Workday report-template + prompts-support "
+            "configuration docs."
+        ),
+        doc_link=doc, roles=roles,
+    )]
+
+
 def run_workday_checks(runner) -> list[CheckResult]:
     """Execute Workday-specific deep validation.
 
@@ -409,8 +655,17 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # --- Flow Status ---
     results.extend(_check_flow_status(runner, wd_flows))
 
+    # --- Run health (runtime failures connection-status can't see) ---
+    results.extend(_check_workday_run_health(runner))
+
     # --- SOAP Workflow Tests (only if Workday MCP creds available) ---
     results.extend(_check_workflows(runner))
+
+    # WD-REF-001 — write-scenario reference-data availability. Reconciles the
+    # reference picklists each installed Workday write scenario consumes against
+    # the shared GetReferenceData topic's supported keys (Dataverse-only; no
+    # external API). Config-level, so it runs regardless of SOAP credentials.
+    results.extend(_check_workday_reference_data(runner))
 
     # WD-SEC-003 — Personal Data domain write-permission probe.
     # Runs right after _check_workflows so it can reuse the same
@@ -433,7 +688,38 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # SOAP tests run (e.g. credentials unavailable).
     results.extend(_check_custom_workflow_inventory(runner))
 
-    return results
+    return _suppress_manual_conn_sec_when_runs_healthy(results)
+
+
+def _suppress_manual_conn_sec_when_runs_healthy(
+    results: list[CheckResult],
+) -> list[CheckResult]:
+    """Hide the MANUAL Workday connection/security checks when the run-health
+    litmus test (WD-RUN-001) proves Workday is actually working.
+
+    WD-CONN-010 (Entra↔Workday federation), WD-CONN-102 (SAML signing cert),
+    and WD-SEC-003 (personal-data write permission) emit MANUAL rows asking the
+    operator to hand-verify config in the Workday/Entra tenant. When WD-RUN-001
+    PASSES, runtime traffic already demonstrates that chain works end to end, so
+    those manual asks are redundant noise — drop them.
+
+    They are KEPT whenever WD-RUN-001 does NOT pass — i.e. it FAILED (they help
+    diagnose the break), or it could not confirm health (NOT_CONFIGURED = no
+    traffic yet, SKIPPED = run history unavailable), where hand-verification is
+    still the operator's best signal (e.g. a fresh pre-deployment env).
+    """
+    run_health = next(
+        (r.status for r in results if r.checkpoint_id == "WD-RUN-001"), None
+    )
+    if run_health != Status.PASSED.value:
+        return results
+    return [
+        r for r in results
+        if not (
+            r.status == Status.MANUAL.value
+            and (r.checkpoint_id.startswith("WD-CONN") or r.checkpoint_id.startswith("WD-SEC"))
+        )
+    ]
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -2684,6 +2970,239 @@ def _check_flow_status(runner, wd_flows: list) -> list[CheckResult]:
         ))
 
     return results
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# WD-RUN-001 — Workday shared-flow run health (run-history analysis)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Complements the connection-status checks (WD-CONN-001+): those confirm the
+# Power Platform connection is *Connected*, but a connection can be Connected
+# while Workday calls still FAIL at runtime — e.g. a revoked Workday security
+# domain/permission for the signed-in user, a broken scenario template config,
+# or a Workday-side outage. Connection status cannot see any of that; the only
+# evidence is in the shared flow's *run history*.
+#
+# Empirically grounded (live tenant, 2026-06): the ESS Workday shared flow
+# CATCHES Workday faults and responds gracefully, so a failed Workday call
+# leaves the run ``status == "Succeeded"`` — the real signal is the flow's
+# Response action name. The flow has exactly ONE success Response
+# (``Respond_to_Copilot_with_Success``) and several failure Responses
+# (``Respond_to_Copilot_with_failure_errorMessage`` for Workday/API faults,
+# ``Respond_to_Copilot_with_XmlTemplate_To_Json_Failed`` for template errors,
+# ``Respond_to_Copilot_with_TemplateRetrievalFailure`` for missing config).
+# Some failures (e.g. template transform) ALSO surface as ``status == "Failed"``
+# with a run-level error. So per-run detection uses BOTH signals, anchored on the
+# single success action so every failure branch is caught:
+#
+#   a run FAILED  if  status == "Failed"
+#                 OR (status == "Succeeded" AND response.name != the success action)
+#
+# The check's VERDICT, however, is a litmus test for a *deterministic* break, not
+# a per-run pass/fail: it looks only at the most recent window of runs
+# (``_WD_RECENT_WINDOW``, newest first across all Workday flows) and FAILs only
+# when NONE of them succeeded. Scattered failures among recent successes (e.g. a
+# user requesting a scenario their Workday security doesn't allow) do NOT fail
+# readiness — recent successes prove the integration is wired up. A single run
+# that failed (no successes in the window) IS a failure.
+#
+# Known limitations (documented, not silently swallowed):
+#   * A fully-broken/unconfigured connection makes Copilot Studio prompt
+#     "connect to continue" and never invokes the flow, so NO run is created.
+#     That case is covered by WD-CONN-001+ (connection status), NOT here.
+#   * Agent-side timeouts (``flowActionTimedOut``) leave the run "Succeeded"
+#     and are not detectable from run history.
+
+# The single success Response action. Anything else is a failure branch.
+_WD_SUCCESS_RESPONSE_ACTION = "Respond_to_Copilot_with_Success"
+
+# Terminal run statuses that are definite failures of the run itself. A run in
+# any of these did not complete successfully, regardless of response branch.
+# (Cancelled / Skipped and unknown states are intentionally NOT here — they are
+# inconclusive and treated as non-scoring 'pending' in _classify_run.)
+_RUN_FAILURE_STATUSES = {"Failed", "TimedOut", "Faulted", "Aborted"}
+
+# WD-RUN-001 evaluates only the most recent N terminal runs (newest first,
+# across all Workday flows). The check is a litmus test for a *deterministic*
+# break: it FAILs only when NONE of the recent runs succeeded. A couple of
+# scattered failures among recent successes is expected (e.g. a user asks for a
+# scenario their Workday security doesn't permit) and must NOT fail readiness —
+# the presence of recent successes proves the integration is wired up.
+_WD_RECENT_WINDOW = 10
+
+
+def _classify_run(run: dict) -> str:
+    """Classify one flow run as 'success', 'caught_failure', 'hard_failure',
+    or 'pending' (non-scoring).
+
+    Only a ``"Succeeded"`` run can be a success/caught_failure — that is the
+    single status whose Response-action name distinguishes the success branch
+    from a caught Workday fault. Definite run-level failures
+    (``"Failed"``/``"TimedOut"``/``"Faulted"``/``"Aborted"``) are hard_failure.
+    Everything else is 'pending' (non-scoring): in-flight states
+    (``"Running"``/``"Waiting"``/``"Paused"``/``"Suspended"``) AND inconclusive
+    terminal states that are not a Workday-health signal
+    (``"Cancelled"``/``"Skipped"``/unknown). Critically, a non-``"Succeeded"``
+    run is NEVER counted as a success — an all-``"Cancelled"`` window must not
+    yield a misleading PASS (which would hide the manual conn/sec checks). See
+    the WD-RUN-001 module comment.
+    """
+    props = run.get("properties", {}) or {}
+    status = props.get("status")
+    resp_name = ((props.get("response") or {}).get("name")) or ""
+    if status == "Succeeded":
+        if resp_name and resp_name != _WD_SUCCESS_RESPONSE_ACTION:
+            return "caught_failure"
+        return "success"
+    if status in _RUN_FAILURE_STATUSES:
+        return "hard_failure"
+    return "pending"
+
+
+def _check_workday_run_health(runner) -> list[CheckResult]:
+    """WD-RUN-001 — litmus test for a *deterministic* Workday runtime break.
+
+    Reads run history for each discovered Workday flow via
+    ``runner.pp_admin.get_flow_runs``, looks at the most recent window of runs
+    (``_WD_RECENT_WINDOW``, newest first across all flows), and FAILs only when
+    NONE of them succeeded. Recent successes prove the integration is wired up,
+    so scattered failures alongside them do not fail readiness. Catches runtime
+    Workday failures that connection status (WD-CONN-001+) cannot see.
+    """
+    roles = [Role.WORKDAY_ADMIN.value, Role.ESS_MAKER.value]
+    pp = runner.pp_admin
+    env_id = runner.env_id
+    wd_flows = getattr(runner, "_workday_flows", [])
+
+    if pp is None or not env_id:
+        return [CheckResult(
+            checkpoint_id="WD-RUN-001", category="Workday",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description="Workday flow run health",
+            result="Power Platform Admin API not available — cannot read flow run history.",
+            remediation="Re-run /flightcheck with Power Platform Admin access to evaluate Workday run health.",
+            roles=[Role.POWER_PLATFORM_ADMIN.value],
+        )]
+
+    if not wd_flows:
+        return [CheckResult(
+            checkpoint_id="WD-RUN-001", category="Workday",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description="Workday flow run health",
+            result="No Workday flows discovered — no run history to evaluate.",
+            remediation="",
+            roles=roles,
+        )]
+
+    terminal: list[dict] = []
+    api_error: str | None = None
+
+    for f in wd_flows:
+        flow_id = f.get("name")
+        fname = f.get("properties", {}).get("displayName", f.get("displayName", flow_id))
+        if not flow_id:
+            continue
+        runs = pp.get_flow_runs(env_id, flow_id)
+        if isinstance(runs, dict) and "_error" in runs:
+            api_error = runs["_error"]
+            continue
+        for run in runs:
+            kind = _classify_run(run)
+            if kind == "pending":
+                continue
+            props = run.get("properties", {}) or {}
+            terminal.append({
+                "start": props.get("startTime") or "",
+                "kind": kind,
+                "flow": fname,
+                "run": run.get("name"),
+                "resp": ((props.get("response") or {}).get("name")) or "?",
+            })
+
+    if not terminal:
+        if api_error:
+            return [CheckResult(
+                checkpoint_id="WD-RUN-001", category="Workday",
+                priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+                description="Workday flow run health",
+                result=f"Unable to read Workday flow run history: {api_error}.",
+                remediation="Run history requires owner/maker access to the Workday flows. "
+                            "Re-run as a user who owns the flows, or check it manually in "
+                            "Power Automate (make.powerautomate.com).",
+                roles=[Role.POWER_PLATFORM_ADMIN.value],
+            )]
+        return [CheckResult(
+            checkpoint_id="WD-RUN-001", category="Workday",
+            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            description="Workday flow run health",
+            result="No recent Workday flow runs found — no runtime traffic to evaluate.",
+            remediation="Exercise a Workday scenario in the agent Test pane, then re-run /flightcheck. "
+                        "Note: a fully-broken connection produces NO runs (the flow is never invoked) — "
+                        "if Workday isn't responding, check connection status first (WD-CONN-001).",
+            doc_link=f"{DOC_BASE}/workday",
+            roles=roles,
+        )]
+
+    # Evaluate only the most recent window (newest first). A deterministic
+    # break = NO success among the recent runs. Scattered failures alongside
+    # recent successes do NOT fail readiness.
+    terminal.sort(key=lambda r: r["start"], reverse=True)
+    window = terminal[:_WD_RECENT_WINDOW]
+    n = len(window)
+    win_fail = [r for r in window if r["kind"] in ("caught_failure", "hard_failure")]
+    win_success = n - len(win_fail)
+
+    def _sample_lines(rows: list[dict]) -> str:
+        lines = []
+        for r in rows[:5]:
+            if r["kind"] == "hard_failure":
+                lines.append(f"'{r['flow']}' run {r['run']}: flow run Failed")
+            else:
+                lines.append(f"'{r['flow']}' run {r['run']}: Workday call failed ({r['resp']})")
+        return "\n".join(lines)
+
+    if win_success > 0:
+        # At least one recent success → the integration is working. Not a
+        # readiness blocker even if some recent runs failed.
+        if win_fail:
+            result = (
+                f"{win_success} of the {n} most recent Workday flow run(s) succeeded — the "
+                f"integration is working. {len(win_fail)} recent run(s) failed, likely "
+                f"scenario- or permission-specific rather than a broken connection."
+            )
+        else:
+            result = f"All {n} most recent Workday flow run(s) succeeded."
+        return [CheckResult(
+            checkpoint_id="WD-RUN-001", category="Workday",
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
+            description="Workday flow run health",
+            result=result,
+            remediation="",
+            doc_link=f"{DOC_BASE}/workday",
+            roles=roles,
+        )]
+
+    # No recent success → deterministically broken.
+    return [CheckResult(
+        checkpoint_id="WD-RUN-001", category="Workday",
+        priority=Priority.HIGH.value, status=Status.FAILED.value,
+        description="Workday flow run health",
+        result=(
+            f"All {n} most recent Workday flow run(s) FAILED — the Workday integration "
+            f"appears deterministically broken. Note: run status alone shows 'Succeeded' "
+            f"for caught Workday failures, so this is based on the flow's response branch.\n"
+            f"{_sample_lines(win_fail)}"
+        ),
+        remediation=(
+            "Every recent Workday call is failing — users cannot use Workday scenarios. "
+            "Open the failed run(s) in Power Automate (make.powerautomate.com) to read the "
+            "Workday error. Common causes: a revoked Workday security domain/permission, a "
+            "misconfigured scenario template config, an expired OAuth token, or a Workday-side "
+            "outage. If the connection itself shows Error, fix that first (see WD-CONN-001)."
+        ),
+        doc_link=f"{DOC_BASE}/workday",
+        roles=roles,
+    )]
 
 
 def _check_workflows(runner) -> list[CheckResult]:

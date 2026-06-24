@@ -1,0 +1,106 @@
+{
+  "name": "ess-maker-profile",
+  "displayName": "ESS Maker",
+  "description": "Chat-only, big-button experience for customizing your Employee Self-Service agent. POC.",
+  "version": "0.4.23",
+  "publisher": "microsoft-ess",
+  "private": true,
+  "engines": {
+    "vscode": "^1.86.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "essMaker.runSetup",
+        "title": "ESS Maker: Connect to environment",
+        "category": "ESS Maker"
+      },
+      {
+        "command": "essMaker.runCreate",
+        "title": "ESS Maker: Create a topic",
+        "category": "ESS Maker"
+      },
+      {
+        "command": "essMaker.runFlightcheck",
+        "title": "ESS Maker: Validate readiness (FlightCheck)",
+        "category": "ESS Maker"
+      },
+      {
+        "command": "essMaker.runScan",
+        "title": "ESS Maker: Scan for issues",
+        "category": "ESS Maker"
+      },
+      {
+        "command": "essMaker.runPush",
+        "title": "ESS Maker: Push to Copilot Studio",
+        "category": "ESS Maker"
+      },
+      {
+        "command": "essMaker.applyMakerLayout",
+        "title": "ESS Maker: Apply Maker Layout",
+        "category": "ESS Maker"
+      },
+      {
+        "command": "essMaker.restoreStandardLayout",
+        "title": "ESS Maker: Restore Standard Layout",
+        "category": "ESS Maker"
+      },
+      {
+        "command": "essMaker.openWalkthrough",
+        "title": "ESS Maker: View Tutorial",
+        "category": "ESS Maker"
+      },
+      {
+        "command": "essMaker.focusActions",
+        "title": "ESS Maker: Show Action Buttons",
+        "category": "ESS Maker"
+      },
+      {
+        "command": "essMaker.startChatOnly",
+        "title": "ESS Maker: Start Chat-Only Layout",
+        "category": "ESS Maker"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "essMakerActions",
+          "title": "ESS Maker",
+          "icon": "$(rocket)"
+        }
+      ]
+    },
+    "views": {
+      "essMakerActions": [
+        {
+          "type": "webview",
+          "id": "essMaker.actionsView",
+          "name": "Quick actions",
+          "contextualTitle": "ESS Maker"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "ESS Maker",
+      "properties": {
+        "essMaker.mode": {
+          "type": "string",
+          "enum": ["lite", "standard", ""],
+          "default": "",
+          "description": "Install mode set by the ESS installer. 'lite' applies chat-first layout; 'standard' uses default VS Code layout with /setup injection only."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "test": "node extension.test.js",
+    "validate": "node -e \"JSON.parse(require('fs').readFileSync('package.json','utf8'))\""
+  }
+}
