@@ -117,6 +117,15 @@ def open_report_in_browser(output_dir):
 
 
 def main():
+    # Force UTF-8 console output so summary glyphs (→, •) don't crash on
+    # Windows cp1252 terminals. Without this, _print_prioritized_summary
+    # raises UnicodeEncodeError before save_results/telemetry are reached.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
     parser = argparse.ArgumentParser(description="ESS FlightCheck — Pre-deployment Validator")
     parser.add_argument(
         "--scope", default="full",
