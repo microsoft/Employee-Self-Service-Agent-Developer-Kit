@@ -223,6 +223,57 @@ class TestPrintEnvironmentTable:
         assert "(no Dataverse linked)" in output
 
 
+class TestWriteEnvironmentMarkdown:
+    """Tests for list_environments.write_environment_markdown()."""
+
+    def test_writes_numbered_markdown_table(self, tmp_path):
+        import list_environments
+
+        envs = [
+            {"displayName": "Env A", "type": "Production", "region": "US",
+             "instanceUrl": "https://a.crm.dynamics.com"},
+            {"displayName": "Env B", "type": "Sandbox", "region": "EU",
+             "instanceUrl": "https://b.crm.dynamics.com"},
+        ]
+        path = tmp_path / "sub" / "environments.md"
+
+        returned = list_environments.write_environment_markdown(envs, str(path))
+
+        assert returned == str(path)
+        content = path.read_text(encoding="utf-8")
+        lines = content.strip().splitlines()
+        # Header + separator + one row per environment.
+        assert lines[0].startswith("| # | Environment Name")
+        assert lines[1].startswith("| --- |")
+        assert lines[2].startswith("| 1 | Env A |")
+        assert lines[3].startswith("| 2 | Env B |")
+        assert "https://a.crm.dynamics.com" in content
+        assert "https://b.crm.dynamics.com" in content
+
+    def test_empty_url_shows_placeholder(self, tmp_path):
+        import list_environments
+
+        envs = [{"displayName": "Empty", "type": "Dev", "region": "",
+                 "instanceUrl": ""}]
+        path = tmp_path / "environments.md"
+
+        list_environments.write_environment_markdown(envs, str(path))
+
+        assert "(no Dataverse linked)" in path.read_text(encoding="utf-8")
+
+    def test_escapes_pipe_in_display_name(self, tmp_path):
+        import list_environments
+
+        envs = [{"displayName": "A | B", "type": "Prod", "region": "US",
+                 "instanceUrl": "https://x.crm.dynamics.com"}]
+        path = tmp_path / "environments.md"
+
+        list_environments.write_environment_markdown(envs, str(path))
+        content = path.read_text(encoding="utf-8")
+        # The literal pipe in the name must be escaped so the table isn't broken.
+        assert "A \\| B" in content
+
+
 class TestDiscoverListEnvironmentsMode:
     """Tests for discover.py --list-environments integration with list_environments."""
 
