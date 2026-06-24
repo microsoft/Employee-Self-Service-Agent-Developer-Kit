@@ -139,6 +139,10 @@ def main():
         "--no-open", action="store_true",
         help="Don't open the HTML report in a browser after running",
     )
+    parser.add_argument(
+        "--no-telemetry", action="store_true",
+        help="Don't emit anonymous FlightCheck outcome telemetry",
+    )
     args = parser.parse_args()
 
     # Load config
@@ -314,6 +318,25 @@ def main():
 
     # Save results
     save_results(result, args.output)
+
+    # Emit anonymous outcome telemetry (best-effort; never affects exit code).
+    if not args.no_telemetry:
+        try:
+            from flightcheck import telemetry
+
+            active_agent = next(
+                (a for a in agents if a.get("slug") == active),
+                agents[0] if agents else {},
+            )
+            telemetry.emit_flightcheck_telemetry(
+                result,
+                tenant_id=tenant_id,
+                agent_id=active_agent.get("botId", ""),
+                scope=args.scope,
+                agent_count=len(agents),
+            )
+        except Exception:
+            pass  # Telemetry is best-effort; never break the run.
 
     # Open HTML report in browser (skip with --no-open for CI / headless runs)
     if not args.no_open:
