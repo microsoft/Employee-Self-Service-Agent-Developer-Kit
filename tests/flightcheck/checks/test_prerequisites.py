@@ -630,3 +630,350 @@ def test_pre005_result_schema_and_owning_role(setup, expected_status):
     assert r.roles == [Role.POWER_PLATFORM_ADMIN.value]
     assert r.doc_link
 
+
+# ---------------------------------------------------------------------------
+# PRE-004 — Copilot Studio capacity for the shared/published user population
+#
+# Per-environment sufficiency: compares the Copilot Studio message credits
+# allocated to the target environment against the number of distinct users the
+# agent is shared with / published to (resolved via the shared
+# resolve_shared_with_users helper — the same Dataverse sharing enumeration
+# LIC-FLOW-002 uses). No MAU estimate. Cross-checks PRE-005 via
+# runner._payg_configured. Floor: >= 1 credit per shared user.
+#
+# Most tests drive _check_copilot_studio_capacity(runner) directly with a fake
+# Power Platform client (get_currency_allocations) + monkeypatched Dataverse
+# sharing; the final integration test runs the full run_prerequisites_checks to
+# prove PRE-005's _payg_configured flag flows into PRE-004 within one run.
+# ---------------------------------------------------------------------------
+
+
+def _principal(ptype: str, pid: str) -> dict:
+    return {
+        "AccessMask": "ReadAccess",
+        "Principal": {"@odata.type": f"#Microsoft.Dynamics.CRM.{ptype}", "ownerid": pid},
+    }
+
+
+def _sysuser(uid, aad, upn, *, disabled=False, app=None):
+    return {
+        "systemuserid": uid, "azureactivedirectoryobjectid": aad,
+        "domainname": upn, "isdisabled": disabled, "applicationid": app,
+    }
+
+
+class _FakeGraphSharing:
+    """Graph stub for PRE-004: group expansion + tenant prepaid-SKU lookup."""
+
+    def __init__(self, groups=None, skus=None):
+        self.groups = groups or {}      # aad_group_id -> [member, ...]
+        self.skus = skus or []          # subscribedSkus rows (tenant-level capacity)
+
+    def get_group_transitive_members(self, gid):
+        return self.groups.get(gid, [])
+
+    def get_subscribed_skus(self):
+        return self.skus
+
+
+class _FakePP:
+    """Power Platform stub: PRE-004 only reads get_currency_allocations."""
+
+    def __init__(self, allocations):
+        self._alloc = allocations       # list | {"_error": ...} | Exception
+
+    def get_currency_allocations(self, env_id):
+        if isinstance(self._alloc, Exception):
+            raise self._alloc
+        return self._alloc
+
+
+def _mcs(allocated: int) -> list[dict]:
+    """One MCSMessages allocation row at the given credit count."""
+    return [pp.currency_allocation(currency_type="MCSMessages", allocated=allocated)]
+
+
+def _install_sharing(monkeypatch, *, shares, systemusers=None, teams=None, teammemberships=None):
+    """Patch the Dataverse sharing/query fns the shared resolver calls.
+
+    The resolver lives in flightcheck.checks.licensing, so patch the names
+    bound there (mirrors test_licensing.py's _install_dataverse).
+    """
+    from flightcheck.checks import licensing as lic
+    systemusers = systemusers or {}
+    teams = teams or {}
+    teammemberships = teammemberships or {}
+
+    def fake_retrieve(env_url, token, bot_id):
+        val = shares.get(bot_id)
+        if isinstance(val, Exception):
+            raise val
+        return {"PrincipalAccesses": val or []}
+
+    def fake_query_all(env_url, token, entity_set, select, filter_expr=None):
+        rid = filter_expr.split("eq", 1)[1].strip() if filter_expr else None
+        if entity_set == "systemusers":
+            row = systemusers.get(rid)
+            return [row] if row else []
+        if entity_set == "teams":
+            row = teams.get(rid)
+            return [row] if row else []
+        if entity_set == "teammemberships":
+            return teammemberships.get(rid, [])
+        return []
+
+    monkeypatch.setattr(lic, "retrieve_shared_principals_and_access", fake_retrieve)
+    monkeypatch.setattr(lic, "query_all", fake_query_all)
+
+
+def _cap_runner(*, graph, powerplatform, payg=None, config=None, env_id="env-1"):
+    runner = SimpleNamespace(
+        graph=graph, env_url="https://org.crm.dynamics.com", dv_token="t",
+        env_id=env_id, powerplatform=powerplatform,
+        config={"agents": [{"botId": "bot-1"}]} if config is None else config,
+    )
+    if payg is not None:
+        runner._payg_configured = payg
+    return runner
+
+
+def _pre004(runner):
+    from flightcheck.checks.prerequisites import _check_copilot_studio_capacity
+    return _check_copilot_studio_capacity(runner)
+
+
+def test_pre004_skipped_without_graph_or_dataverse():
+    # No Graph/Dataverse -> can't size the shared population -> SKIPPED.
+    r = _pre004(_cap_runner(graph=None, powerplatform=_FakePP(_mcs(25000))))
+    assert r.checkpoint_id == "PRE-004"
+    assert r.status == "Skipped"
+    assert "Graph" in r.result and "Dataverse" in r.result
+
+
+def test_pre004_skipped_without_botid():
+    # Graph present but no configured botId -> SKIPPED with /setup guidance.
+    runner = _cap_runner(graph=_FakeGraphSharing(), powerplatform=_FakePP(_mcs(1)), config={})
+    r = _pre004(runner)
+    assert r.status == "Skipped"
+    assert "botId" in r.result
+
+
+def test_pre004_passed_when_not_shared(monkeypatch):
+    # Agent shared with nobody yet -> no capacity required -> PASSED.
+    _install_sharing(monkeypatch, shares={"bot-1": []})
+    r = _pre004(_cap_runner(graph=_FakeGraphSharing(), powerplatform=_FakePP(_mcs(0))))
+    assert r.status == "Passed"
+    assert "not yet shared" in r.result
+    assert r.remediation == ""
+
+
+def test_pre004_passed_capacity_covers_population(monkeypatch):
+    # 2 shared users, 25000 credits allocated -> PASSED, reports per-user ratio.
+    _install_sharing(
+        monkeypatch,
+        shares={"bot-1": [_principal("systemuser", "u1"), _principal("systemuser", "u2")]},
+        systemusers={
+            "u1": _sysuser("u1", "aad-1", "alice@contoso.com"),
+            "u2": _sysuser("u2", "aad-2", "bob@contoso.com"),
+        },
+    )
+    r = _pre004(_cap_runner(graph=_FakeGraphSharing(), powerplatform=_FakePP(_mcs(25000))))
+    assert r.status == "Passed"
+    assert "25000" in r.result
+    assert "2 user" in r.result
+    assert "per user" in r.result
+    assert r.priority == "Critical"
+
+
+def test_pre004_at_minimum_boundary(monkeypatch):
+    # Exactly one credit per shared user (A == M) -> PASSED at the floor boundary.
+    _install_sharing(
+        monkeypatch,
+        shares={"bot-1": [_principal("systemuser", "u1"), _principal("systemuser", "u2")]},
+        systemusers={
+            "u1": _sysuser("u1", "aad-1", "alice@contoso.com"),
+            "u2": _sysuser("u2", "aad-2", "bob@contoso.com"),
+        },
+    )
+    r = _pre004(_cap_runner(graph=_FakeGraphSharing(), powerplatform=_FakePP(_mcs(2))))
+    assert r.status == "Passed"
+    assert "2 user" in r.result
+    assert "~1 per user" in r.result   # exact floor ratio at the boundary
+
+
+def test_pre004_warns_under_provisioned(monkeypatch):
+    # Fewer credits than shared users -> breaches >=1/user floor -> WARNING.
+    _install_sharing(
+        monkeypatch,
+        shares={"bot-1": [_principal("systemuser", "u1"), _principal("systemuser", "u2")]},
+        systemusers={
+            "u1": _sysuser("u1", "aad-1", "alice@contoso.com"),
+            "u2": _sysuser("u2", "aad-2", "bob@contoso.com"),
+        },
+    )
+    r = _pre004(_cap_runner(graph=_FakeGraphSharing(), powerplatform=_FakePP(_mcs(1))))
+    assert r.status == "Warning"
+    assert "fewer than one credit per user" in r.result
+    assert "surprise-billing" in r.result.lower()
+
+
+def test_pre004_warns_zero_capacity_with_payg(monkeypatch):
+    # Zero allocation but PayG configured (PRE-005 flag True) -> WARNING, not FAIL.
+    _install_sharing(
+        monkeypatch,
+        shares={"bot-1": [_principal("systemuser", "u1")]},
+        systemusers={"u1": _sysuser("u1", "aad-1", "alice@contoso.com")},
+    )
+    runner = _cap_runner(graph=_FakeGraphSharing(), powerplatform=_FakePP([]), payg=True)
+    r = _pre004(runner)
+    assert r.status == "Warning"
+    assert "Pay-as-you-go billing is configured" in r.result
+    assert "surprise-billing" in r.result.lower()
+
+
+def test_pre004_fails_zero_capacity_no_payg(monkeypatch):
+    # Strict AC2: zero allocation AND no PayG -> FAIL.
+    _install_sharing(
+        monkeypatch,
+        shares={"bot-1": [_principal("systemuser", "u1")]},
+        systemusers={"u1": _sysuser("u1", "aad-1", "alice@contoso.com")},
+    )
+    runner = _cap_runner(graph=_FakeGraphSharing(), powerplatform=_FakePP([]), payg=False)
+    r = _pre004(runner)
+    assert r.status == "Failed"
+    assert "no message capacity" in r.result.lower()
+    assert "fail at runtime" in r.result.lower()
+    # Remediation offers both capacity allocation and the PayG alternative.
+    assert "Manage capacity" in r.remediation
+    assert "Pay-as-you-go" in r.remediation
+
+
+def test_pre004_fail_notes_tenant_pool_overage(monkeypatch):
+    # Zero env allocation + no PayG, but the TENANT holds Copilot Studio capacity:
+    # still FAIL (the overage toggle is unreadable), but the message surfaces the
+    # tenant pool + overage path — the tenant-level dimension of the check.
+    _install_sharing(
+        monkeypatch,
+        shares={"bot-1": [_principal("systemuser", "u1")]},
+        systemusers={"u1": _sysuser("u1", "aad-1", "alice@contoso.com")},
+    )
+    graph = _FakeGraphSharing(skus=[{"skuPartNumber": PREPAID_SKU}])
+    runner = _cap_runner(graph=graph, powerplatform=_FakePP([]), payg=False)
+    r = _pre004(runner)
+    assert r.status == "Failed"
+    assert "Draw from the available capacity in my tenant" in r.result
+
+
+def test_pre004_warns_when_allocation_unreadable(monkeypatch):
+    # Allocation read denied (permission sentinel) -> WARNING, not FAIL.
+    _install_sharing(
+        monkeypatch,
+        shares={"bot-1": [_principal("systemuser", "u1")]},
+        systemusers={"u1": _sysuser("u1", "aad-1", "alice@contoso.com")},
+    )
+    pp_denied = _FakePP({"_error": "insufficient_permissions", "_status": 403})
+    runner = _cap_runner(graph=_FakeGraphSharing(), powerplatform=pp_denied, payg=False)
+    r = _pre004(runner)
+    assert r.status == "Warning"
+    assert "could not be read" in r.result
+
+
+def test_pre004_published_group_population_expanded(monkeypatch):
+    # Agent published to a security-group-backed team -> members expand via Graph
+    # and feed the population count (proves the "published to" path is counted).
+    members = [
+        {"id": "aad-1", "userPrincipalName": "alice@contoso.com"},
+        {"id": "aad-2", "userPrincipalName": "bob@contoso.com"},
+        {"id": "grp-nested", "displayName": "Nested"},  # no UPN -> ignored
+    ]
+    graph = _FakeGraphSharing(groups={"grp-aad": members})
+    _install_sharing(
+        monkeypatch,
+        shares={"bot-1": [_principal("team", "team-1")]},
+        teams={"team-1": {"teamid": "team-1", "name": "ESS Users",
+                          "azureactivedirectoryobjectid": "grp-aad"}},
+    )
+    r = _pre004(_cap_runner(graph=graph, powerplatform=_FakePP(_mcs(10))))
+    assert r.status == "Passed"
+    assert "2 user" in r.result   # two licensable members, nested group ignored
+
+
+def test_pre004_shared_group_unreadable_membership_warns(monkeypatch):
+    # Regression: an agent shared with a security group whose membership can't be
+    # read (Graph returns [] on 401/403 — it does NOT raise) must not collapse
+    # into "not shared with anyone" -> WARN, never a false PASS.
+    graph = _FakeGraphSharing(groups={"grp-aad": []})  # empty / permission-denied
+    _install_sharing(
+        monkeypatch,
+        shares={"bot-1": [_principal("team", "team-1")]},
+        teams={"team-1": {"teamid": "team-1", "name": "ESS Users",
+                          "azureactivedirectoryobjectid": "grp-aad"}},
+    )
+    r = _pre004(_cap_runner(graph=graph, powerplatform=_FakePP(_mcs(0))))
+    assert r.status == "Warning"
+    assert "resolved to 0 members" in r.result
+
+
+def test_pre004_zero_capacity_unknown_payg_warns(monkeypatch):
+    # PRE-005 did not run (no _payg_configured on the runner): zero allocation must
+    # NOT hard-FAIL on an undetermined PayG state -> WARN.
+    _install_sharing(
+        monkeypatch,
+        shares={"bot-1": [_principal("systemuser", "u1")]},
+        systemusers={"u1": _sysuser("u1", "aad-1", "alice@contoso.com")},
+    )
+    runner = _cap_runner(graph=_FakeGraphSharing(), powerplatform=_FakePP([]))  # payg unset
+    assert not hasattr(runner, "_payg_configured")
+    r = _pre004(runner)
+    assert r.status == "Warning"
+    assert "could not be determined" in r.result
+
+
+def test_pre004_auth_expired_surfaces_reauth(monkeypatch):
+    # An expired Dataverse session surfaces as an actionable re-auth message, not
+    # the generic "unable to check" bucket.
+    from auth import AuthExpiredError
+    _install_sharing(monkeypatch, shares={"bot-1": AuthExpiredError("expired")})
+    r = _pre004(_cap_runner(graph=_FakeGraphSharing(), powerplatform=_FakePP(_mcs(0))))
+    assert r.status == "Warning"
+    assert "session expired" in r.result.lower()
+
+
+@responses.activate
+def test_pre004_reads_payg_flag_from_pre005(monkeypatch):
+    # Integration: PRE-005 establishes PayG (sets _payg_configured=True), then
+    # PRE-004 with zero allocation must WARN (surprise billing), not FAIL —
+    # proving the cross-check flag flows from PRE-005 to PRE-004 in one run.
+    from flightcheck.checks.prerequisites import run_prerequisites_checks
+
+    graph = _graph_with_skus(PREPAID_SKU)
+    responses.add(**pp.list_billing_policies(policies=[
+        pp.billing_policy(status="Enabled", subscription_id=pp.MOCK_SUBSCRIPTION_ID),
+    ]))
+    responses.add(**pp.list_policy_environments(
+        policy_id=pp.MOCK_POLICY_ID, environments=[pp.billing_policy_environment()]))
+    responses.add(**arm.get_subscription(state="Enabled"))
+    responses.add(**arm.list_budgets(budgets=[arm.budget()]))
+    responses.add(**pp.get_currency_allocations(allocations=[
+        pp.currency_allocation(currency_type="MCSMessages", allocated=0),
+    ]))
+    _install_sharing(
+        monkeypatch,
+        shares={"bot-1": [_principal("systemuser", "u1")]},
+        systemusers={"u1": _sysuser("u1", "aad-1", "alice@contoso.com")},
+    )
+
+    runner = SimpleNamespace(
+        graph=graph, env_id=pp.MOCK_ENV_ID,
+        powerplatform=_pp_client(), azure_arm=_arm_client(),
+        env_url="https://org.crm.dynamics.com", dv_token="t",
+        config={"agents": [{"botId": "bot-1"}]},
+    )
+    results = run_prerequisites_checks(runner)
+
+    assert runner._payg_configured is True
+    assert _by_id(results, "PRE-005").status == "Passed"
+    pre004 = _by_id(results, "PRE-004")
+    assert pre004.status == "Warning"
+    assert "Pay-as-you-go billing is configured" in pre004.result
+
