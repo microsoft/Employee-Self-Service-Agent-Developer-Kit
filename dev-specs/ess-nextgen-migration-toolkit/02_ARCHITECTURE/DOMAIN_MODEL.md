@@ -136,7 +136,11 @@ Destroyed when execution completes.
 
 ## Mutable
 
-No
+Yes
+
+`SessionId`, `StartTime`, and `ExecutionMode` are set once and never change.
+`EndTime` and `Status` are updated by the Migration Orchestrator as the session
+progresses and completes.
 
 ---
 
@@ -421,7 +425,7 @@ Built throughout execution.
 
 | Model | Created By | Modified By | Read By |
 |----------|------------|-------------|---------|
-| MigrationSession | Orchestrator | None | All |
+| MigrationSession | Orchestrator | Orchestrator | All |
 | MigrationContext | Orchestrator | All Pipelines | All |
 | MigrationEnvironment | SDK | None | All |
 | Agent | Discovery Service | Migration Steps | All |
@@ -487,7 +491,7 @@ Translation occurs only inside the SDK layer.
 
 | Model | Mutable |
 |---------|----------|
-| MigrationSession | No |
+| MigrationSession | Yes |
 | MigrationEnvironment | No |
 | ComponentLayer | No |
 | Transformation | No |
@@ -534,36 +538,3 @@ Existing models should rarely require structural changes.
 
 The Domain Model is the canonical language of the ESS NextGen Migration Toolkit.
 
-All business logic, services, migration pipelines, and diagnostics operate exclusively on these models.
-
-
-One improvement I'd make
-
-Looking at your intended implementation, I think Component should become polymorphic instead of a single generic model.
-
-For example:
-
-```
-Component (abstract)
-├── AgentComponent
-├── TopicComponent
-├── FlowComponent
-├── KnowledgeComponent
-├── VariableComponent
-├── EntityComponent
-└── FutureComponent
-```
-
-Every MigrationStep would then declare:
-
-```
-supports() -> TopicComponent
-```
-
-instead of checking:
-
-```
-if component.type == "Topic":
-```
-
-That keeps the framework open for extension and closed for modification (Open/Closed Principle). When Cascade introduces a new component type, you add a new subclass and corresponding migration steps rather than modifying existing pipeline logic. I think that will make the framework significantly cleaner and more maintainable over time.

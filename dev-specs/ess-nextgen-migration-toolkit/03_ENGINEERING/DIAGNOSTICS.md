@@ -215,9 +215,9 @@ INFO
 
 Migration
 
-UpdateRuntimeProviderStep
+OverrideAgentMetadataStep
 
-Updated runtime provider.
+Overrode agent metadata.
 ```
 
 ---

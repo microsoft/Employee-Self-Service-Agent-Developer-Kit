@@ -1,7 +1,7 @@
 # PROJECT.md
 
 # ESS NextGen Migration Toolkit
-**Status:** Draft v1.0
+**Version:** Draft v1.0
 **Owner:** Anil Kumar Adepu
 
 **Project:** ESS Customer Agent (CA) → Declarative Agent (DA) Migration Toolkit
