@@ -442,6 +442,7 @@ def _resolve_team(runner, team_id, entra, undetermined, notes):
                 f"first {MAX_MEMBERS_PER_GROUP} were checked"
             )
         added = 0
+        licensable = 0
         for m in members[:MAX_MEMBERS_PER_GROUP]:
             upn = m.get("userPrincipalName")
             mid = m.get("id")
@@ -449,22 +450,31 @@ def _resolve_team(runner, team_id, entra, undetermined, notes):
             # disabled accounts — they can't trigger the flow, mirroring the
             # isdisabled skip in _resolve_systemuser.
             if upn and mid and m.get("accountEnabled") is not False:
+                # Count every licensable member the Graph response returned,
+                # independent of dedup, so we can distinguish "group empty /
+                # access denied" from "members already counted via an
+                # overlapping group".
+                licensable += 1
                 if mid not in entra:
                     added += 1
                 entra.setdefault(mid, upn)
-        if added == 0:
-            # Zero licensable members from an Entra group-backed share is
+        if added == 0 and licensable == 0:
+            # No licensable members at all from an Entra group-backed share is
             # ambiguous: the group may be genuinely empty, OR
             # get_group_transitive_members returned [] on a 401/403 (it does not
             # raise on permission denial). Either way the audience is UNVERIFIED,
             # so record it as undetermined — otherwise a caller sharing ONLY with
             # this group sees an empty population and a false "not shared with
             # anyone" all-clear.
+            #
+            # When added == 0 but licensable > 0, every member was already
+            # counted via an earlier overlapping group; that is expected in
+            # enterprise setups and must NOT be flagged.
             undetermined.append(
                 f"shared group '{name}' resolved to 0 members "
                 f"(verify GroupMember.Read.All / that the group is non-empty)"
             )
-        else:
+        elif added > 0:
             # Acknowledge that licensing for these users was verified through
             # their membership in the shared group (their licenseDetails reflects
             # any group-based SKU assignment transitively).

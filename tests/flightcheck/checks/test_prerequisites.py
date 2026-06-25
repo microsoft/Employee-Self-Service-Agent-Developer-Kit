@@ -914,6 +914,32 @@ def test_pre004_shared_group_unreadable_membership_warns(monkeypatch):
     assert "resolved to 0 members" in r.result
 
 
+def test_pre004_overlapping_groups_no_false_undetermined(monkeypatch):
+    # Regression: an agent shared with two Entra groups that contain the SAME
+    # users. The second group dedups to added=0 but its members ARE licensable,
+    # so it must NOT emit the spurious "resolved to 0 members" warning. The
+    # population is still sized correctly (two distinct users) -> PASS.
+    members = [
+        {"id": "aad-1", "userPrincipalName": "alice@contoso.com"},
+        {"id": "aad-2", "userPrincipalName": "bob@contoso.com"},
+    ]
+    graph = _FakeGraphSharing(groups={"grp-a": members, "grp-b": members})
+    _install_sharing(
+        monkeypatch,
+        shares={"bot-1": [_principal("team", "team-a"), _principal("team", "team-b")]},
+        teams={
+            "team-a": {"teamid": "team-a", "name": "ESS Users A",
+                       "azureactivedirectoryobjectid": "grp-a"},
+            "team-b": {"teamid": "team-b", "name": "ESS Users B",
+                       "azureactivedirectoryobjectid": "grp-b"},
+        },
+    )
+    r = _pre004(_cap_runner(graph=graph, powerplatform=_FakePP(_mcs(10))))
+    assert r.status == "Passed"
+    assert "2 user" in r.result            # two distinct users, no double count
+    assert "resolved to 0 members" not in r.result
+
+
 def test_pre004_zero_capacity_unknown_payg_warns(monkeypatch):
     # PRE-005 did not run (no _payg_configured on the runner): zero allocation must
     # NOT hard-FAIL on an undetermined PayG state -> WARN.
