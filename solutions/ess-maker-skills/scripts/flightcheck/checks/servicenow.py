@@ -9,8 +9,10 @@ in Dataverse, and local agent topic files for ServiceNow HRSD/ITSM scenarios.
 """
 
 import os
+import re
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 from ..runner import CheckResult, Priority, Role, Status
 from .connections import check_connector_connections
@@ -71,6 +73,9 @@ def run_servicenow_checks(runner) -> list[CheckResult]:
 
     # --- Template Configurations (Dataverse) ---
     results.extend(_check_template_configs(runner))
+
+    # --- Template Config portal base URL value populated (SN-CFG-002) ---
+    results.extend(_check_template_config_base_urls(runner))
 
     # --- Local Topic Files ---
     results.extend(_check_local_topics(runner))
@@ -247,6 +252,168 @@ def _validate_expected_configs(
             roles=[Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
         ))
     # If none found, the pack likely isn't installed — don't flag as error
+
+
+# Unsubstituted base-URL placeholder tokens that indicate the portal base
+# URL was never filled in when the extension-pack template config was
+# installed (the value still carries the template's placeholder).
+_PLACEHOLDER_BASEURL_RE = re.compile(
+    r"\{\{[^}]*\}\}|\{[^}]*\}|<[^>]*base[^>]*url[^>]*>",
+    re.IGNORECASE,
+)
+
+# Absolute http(s) URL with a non-empty host.
+_ABSOLUTE_URL_RE = re.compile(r"https?://[^\s\"'<>}\\)]+", re.IGNORECASE)
+
+
+def _is_absolute_http_url(candidate: str) -> bool:
+    """Return True if ``candidate`` is a non-empty absolute http(s) URL."""
+    try:
+        parsed = urlparse(candidate.strip())
+    except (ValueError, AttributeError):
+        return False
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+
+def _value_has_valid_base_url(value: str | None) -> bool:
+    """Decide whether a ServiceNow template config value carries a
+    populated, well-formed portal base URL.
+
+    The ServiceNow HRSD/ITSM extension-pack template configs embed the
+    ServiceNow instance/portal base URL inside their value (it is the
+    host the request templates point at, and the host used to render
+    ticket/case hyperlinks). A config is considered good when its value
+    contains at least one absolute http(s) URL.
+
+    Returns False when the value is blank, when it still carries an
+    unsubstituted base-URL placeholder token (e.g. ``{{baseUrl}}`` /
+    ``<ServiceNow Base URL>``) and no real URL alongside it, or when it
+    contains no absolute http(s) URL at all.
+    """
+    if not value or not value.strip():
+        return False
+
+    candidates = _ABSOLUTE_URL_RE.findall(value)
+    has_real_url = any(_is_absolute_http_url(c) for c in candidates)
+    if has_real_url:
+        return True
+
+    # No real absolute URL. If an unsubstituted placeholder is present,
+    # the base URL was never filled in; otherwise the value simply lacks
+    # an absolute URL. Either way it's not a valid populated base URL.
+    return False
+
+
+def _check_template_config_base_urls(runner) -> list[CheckResult]:
+    """SN-CFG-002 — verify the portal base URL value inside each ServiceNow
+    template config is populated and well-formed.
+
+    Extends SN-CFG-001 (which only validates that the expected config
+    records exist by scenario name) from *presence* to *value populated*.
+    When the base URL value is blank or malformed, "read all tickets" /
+    "read all cases" responses silently omit hyperlinks — no runtime
+    error is surfaced, so a pre-flight WARN catches it before rollout.
+
+    Reads the Dataverse ``msdyn_value`` column of
+    ``msdyn_employeeselfservicetemplateconfigs`` (Dataverse Web API is the
+    ``documented`` tier; field names confirmed in the production
+    ``backup_template_configs.py`` selector). Gated the same way as the
+    rest of the ServiceNow deep validation (``run_servicenow_checks``
+    early-returns when no ServiceNow flows are detected).
+    """
+    results: list[CheckResult] = []
+    env_url = runner.env_url
+    dv_token = runner.dv_token
+
+    roles = [Role.ESS_MAKER.value, Role.SERVICENOW_ADMIN.value, Role.POWER_PLATFORM_ADMIN.value]
+
+    if not env_url or not dv_token:
+        results.append(CheckResult(roles=roles,
+            checkpoint_id="SN-CFG-002", category="ServiceNow",
+            priority=Priority.MEDIUM.value, status=Status.SKIPPED.value,
+            description="ServiceNow portal base URL populated",
+            result="Dataverse token not available — skipping base URL value check",
+        ))
+        return results
+
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+        from auth import query_all
+
+        configs = query_all(
+            env_url, dv_token,
+            "msdyn_employeeselfservicetemplateconfigs",
+            "msdyn_name,msdyn_value",
+            filter_expr="contains(msdyn_name,'ServiceNow')",
+        )
+    except Exception as e:
+        results.append(CheckResult(roles=roles,
+            checkpoint_id="SN-CFG-002", category="ServiceNow",
+            priority=Priority.MEDIUM.value, status=Status.WARNING.value,
+            description="ServiceNow portal base URL populated",
+            result=f"Unable to query template config values: {e}",
+            remediation=(
+                "Re-run /flightcheck once Dataverse is reachable to verify the "
+                "ServiceNow portal base URL is populated in the HRSD/ITSM "
+                "extension-pack template config."
+            ),
+            doc_link=f"{DOC_BASE}/servicenow",
+        ))
+        return results
+
+    if not configs:
+        # SN-CFG-001 already reports the missing-config (NotConfigured)
+        # state; nothing to validate the base URL against here.
+        results.append(CheckResult(roles=roles,
+            checkpoint_id="SN-CFG-002", category="ServiceNow",
+            priority=Priority.MEDIUM.value, status=Status.NOT_CONFIGURED.value,
+            description="ServiceNow portal base URL populated",
+            result="No ServiceNow template configs found to validate base URL value",
+            remediation=(
+                "Install the ServiceNow extension pack (HRSD/ITSM) in Copilot "
+                "Studio — see SN-CFG-001."
+            ),
+            doc_link=f"{DOC_BASE}/servicenow",
+        ))
+        return results
+
+    missing = []
+    for c in configs:
+        name = c.get("msdyn_name", "(unnamed)")
+        if not _value_has_valid_base_url(c.get("msdyn_value")):
+            missing.append(name)
+
+    if not missing:
+        results.append(CheckResult(roles=roles,
+            checkpoint_id="SN-CFG-002", category="ServiceNow",
+            priority=Priority.MEDIUM.value, status=Status.PASSED.value,
+            description="ServiceNow portal base URL populated",
+            result=(
+                f"All {len(configs)} ServiceNow template config(s) carry a "
+                "populated, well-formed http(s) portal base URL"
+            ),
+            doc_link=f"{DOC_BASE}/servicenow",
+        ))
+    else:
+        results.append(CheckResult(roles=roles,
+            checkpoint_id="SN-CFG-002", category="ServiceNow",
+            priority=Priority.MEDIUM.value, status=Status.WARNING.value,
+            description="ServiceNow portal base URL populated",
+            result=(
+                f"{len(missing)} of {len(configs)} ServiceNow template config(s) "
+                f"have a missing or malformed portal base URL: {', '.join(sorted(missing))}"
+            ),
+            remediation=(
+                "Set the ServiceNow portal base URL to your instance URL "
+                "(e.g. https://<instance>.service-now.com) in the HRSD/ITSM "
+                "extension-pack template config. When the base URL is blank, "
+                "'read all tickets' / 'read all cases' responses omit "
+                "hyperlinks without surfacing any error."
+            ),
+            doc_link=f"{DOC_BASE}/servicenow",
+        ))
+
+    return results
 
 
 def _check_local_topics(runner) -> list[CheckResult]:

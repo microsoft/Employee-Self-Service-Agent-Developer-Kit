@@ -240,6 +240,45 @@ def workday_connection_refs_full() -> list[dict[str, Any]]:
     ]
 
 
+def template_config(
+    *,
+    config_id: str | None = None,
+    name: str = "ServiceNowHRSDGetCasesList",
+    unique_name: str | None = None,
+    value: str | None = "https://contoso.service-now.com/api/now/table/sn_hr_core_case",
+) -> dict[str, Any]:
+    """Build a single msdyn_employeeselfservicetemplateconfigs record.
+
+    Cited consumers:
+      - solutions/ess-maker-skills/scripts/flightcheck/checks/servicenow.py
+        — SN-CFG-001 reads msdyn_name; SN-CFG-002 reads msdyn_value to
+        verify the ServiceNow portal base URL inside the value is a
+        populated, well-formed absolute http(s) URL.
+
+    Source (documented):
+      Dataverse Web API v9.2 (tier: documented per
+      tests/fixtures/cassettes/INDEX.md "API tier registry").
+      Field names confirmed against the production selector in
+      solutions/ess-maker-skills/scripts/backup_template_configs.py
+      (msdyn_employeeselfservicetemplateconfigid, msdyn_uniquename,
+      msdyn_name, msdyn_value) and the MS Learn Dataverse Web API
+      query docs:
+      https://learn.microsoft.com/power-apps/developer/data-platform/webapi/query-data-web-api
+
+    ``value`` defaults to a populated ServiceNow instance URL (the
+    GOOD state). Pass value="" / None to model the blank-base-URL state
+    SN-CFG-002 warns on.
+    """
+    return {
+        "@odata.etag": 'W/"1"',
+        "msdyn_employeeselfservicetemplateconfigid": config_id
+        or "00000000-0000-0000-0000-000000009001",
+        "msdyn_uniquename": unique_name or f"msdyn_{name}",
+        "msdyn_name": name,
+        "msdyn_value": value,
+    }
+
+
 def collection(
     records: Iterable[Mapping[str, Any]],
     *,

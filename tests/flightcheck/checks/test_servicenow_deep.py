@@ -20,7 +20,11 @@ from types import SimpleNamespace
 
 import pytest
 
+from tests.mocks import dataverse as dv
 from tests.mocks import pp_admin as pp
+from tests.conftest import require_validated_mock
+
+require_validated_mock(dv)
 
 
 @pytest.fixture(autouse=True)
@@ -129,6 +133,123 @@ def test_template_configs_skipped_without_token():
     cfg = _by_id(_check_template_configs(runner), "SN-CFG-001")
     assert cfg.status == "Skipped"
     assert "Dataverse token not available" in cfg.result
+
+
+# --------------------------------------------------------------------------
+# _check_template_config_base_urls — SN-CFG-002 (portal base URL populated)
+# --------------------------------------------------------------------------
+
+def test_base_url_all_populated_passes(monkeypatch):
+    import auth
+    monkeypatch.setattr(
+        auth, "query_all",
+        lambda *a, **kw: [
+            dv.template_config(name="ServiceNowHRSDGetCasesList"),
+            dv.template_config(
+                name="ServiceNowITSMGetUserTickets",
+                value="https://contoso.service-now.com/api/now/table/incident",
+            ),
+        ],
+    )
+    from flightcheck.checks.servicenow import _check_template_config_base_urls
+    runner = SimpleNamespace(env_url="https://org.crm.dynamics.com", dv_token="t")
+    cfg = _by_id(_check_template_config_base_urls(runner), "SN-CFG-002")
+
+    assert cfg.status == "Passed"
+    assert "All 2 ServiceNow template config(s)" in cfg.result
+    assert "well-formed http(s) portal base URL" in cfg.result
+    assert cfg.priority == "Medium"
+
+
+def test_base_url_blank_value_warns(monkeypatch):
+    import auth
+    monkeypatch.setattr(
+        auth, "query_all",
+        lambda *a, **kw: [
+            dv.template_config(name="ServiceNowHRSDGetCasesList"),
+            dv.template_config(name="ServiceNowITSMGetUserTickets", value=""),
+        ],
+    )
+    from flightcheck.checks.servicenow import _check_template_config_base_urls
+    runner = SimpleNamespace(env_url="https://org.crm.dynamics.com", dv_token="t")
+    cfg = _by_id(_check_template_config_base_urls(runner), "SN-CFG-002")
+
+    assert cfg.status == "Warning"
+    assert "1 of 2 ServiceNow template config(s)" in cfg.result
+    assert "ServiceNowITSMGetUserTickets" in cfg.result
+    assert "https://<instance>.service-now.com" in cfg.remediation
+    assert "omit" in cfg.remediation and "hyperlinks" in cfg.remediation
+
+
+def test_base_url_unsubstituted_placeholder_warns(monkeypatch):
+    import auth
+    monkeypatch.setattr(
+        auth, "query_all",
+        lambda *a, **kw: [
+            dv.template_config(
+                name="ServiceNowHRSDGetCasesList",
+                value="{{ServiceNowBaseUrl}}/api/now/table/sn_hr_core_case",
+            ),
+        ],
+    )
+    from flightcheck.checks.servicenow import _check_template_config_base_urls
+    runner = SimpleNamespace(env_url="https://org.crm.dynamics.com", dv_token="t")
+    cfg = _by_id(_check_template_config_base_urls(runner), "SN-CFG-002")
+
+    assert cfg.status == "Warning"
+    assert "missing or malformed portal base URL" in cfg.result
+    assert "ServiceNowHRSDGetCasesList" in cfg.result
+
+
+def test_base_url_relative_path_only_warns(monkeypatch):
+    import auth
+    monkeypatch.setattr(
+        auth, "query_all",
+        lambda *a, **kw: [
+            dv.template_config(
+                name="ServiceNowITSMGetUserTickets",
+                value="/api/now/table/incident",
+            ),
+        ],
+    )
+    from flightcheck.checks.servicenow import _check_template_config_base_urls
+    runner = SimpleNamespace(env_url="https://org.crm.dynamics.com", dv_token="t")
+    cfg = _by_id(_check_template_config_base_urls(runner), "SN-CFG-002")
+
+    assert cfg.status == "Warning"
+    assert "ServiceNowITSMGetUserTickets" in cfg.result
+
+
+def test_base_url_skipped_without_token():
+    from flightcheck.checks.servicenow import _check_template_config_base_urls
+    runner = SimpleNamespace(env_url="", dv_token="")
+    cfg = _by_id(_check_template_config_base_urls(runner), "SN-CFG-002")
+    assert cfg.status == "Skipped"
+    assert "Dataverse token not available" in cfg.result
+
+
+def test_base_url_none_found_not_configured(monkeypatch):
+    import auth
+    monkeypatch.setattr(auth, "query_all", lambda *a, **kw: [])
+    from flightcheck.checks.servicenow import _check_template_config_base_urls
+    runner = SimpleNamespace(env_url="https://org.crm.dynamics.com", dv_token="t")
+    cfg = _by_id(_check_template_config_base_urls(runner), "SN-CFG-002")
+    assert cfg.status == "NotConfigured"
+    assert "No ServiceNow template configs found" in cfg.result
+
+
+def test_base_url_query_error_warns(monkeypatch):
+    import auth
+
+    def _boom(*a, **kw):
+        raise RuntimeError("dataverse unreachable")
+
+    monkeypatch.setattr(auth, "query_all", _boom)
+    from flightcheck.checks.servicenow import _check_template_config_base_urls
+    runner = SimpleNamespace(env_url="https://org.crm.dynamics.com", dv_token="t")
+    cfg = _by_id(_check_template_config_base_urls(runner), "SN-CFG-002")
+    assert cfg.status == "Warning"
+    assert "Unable to query template config values" in cfg.result
 
 
 # --------------------------------------------------------------------------
