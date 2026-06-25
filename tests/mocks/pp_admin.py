@@ -352,6 +352,67 @@ def flow(
     }
 
 
+def flow_run(
+    *,
+    run_id: str = "08580000000000000000000000000001CU01",
+    env_id: str = MOCK_ENV_ID,
+    flow_id: str = "00000000-0000-0000-0000-000000007101",
+    status: str = "Succeeded",
+    response_name: str = "Respond_to_Copilot_with_Success",
+    response_code: str = "OK",
+    error: Mapping[str, Any] | None = None,
+    bot_schema: str = "msdyn_copilotforemployeeselfservicehr",
+) -> dict[str, Any]:
+    """Build a single Power Automate flow-run record (run history).
+
+    Models the runtime runs endpoint response consumed by WD-RUN-001 via
+    ``pp_admin_client.get_flow_runs``. The two fields the check reads are
+    ``properties.status`` and ``properties.response.name``; ``correlation.
+    clientKeywords`` (BotSchemaName / CdsBotId) is included for fidelity.
+
+    Cited consumers:
+      - solutions/ess-maker-skills/scripts/flightcheck/checks/workday.py
+        (_classify_run / _check_workday_run_health)
+
+    Source (validated):
+      Captured live (2026-06) from a real ESS Workday tenant via the runtime
+      runs endpoint
+      ``GET https://api.flow.microsoft.com/providers/Microsoft.ProcessSimple/
+      environments/{env}/flows/{flow}/runs?api-version=2016-11-01``.
+      Recorder: tests/captures/record_flightcheck_workday_runs.py
+      Cassette: tests/fixtures/cassettes/flightcheck_workday_runs.yaml
+      Observed shapes:
+        - success: status=Succeeded, response.name=Respond_to_Copilot_with_Success
+        - caught Workday fault: status=Succeeded,
+          response.name=Respond_to_Copilot_with_failure_errorMessage
+        - template error: status=Failed,
+          response.name=Respond_to_Copilot_with_XmlTemplate_To_Json_Failed,
+          error={code:ActionFailed,message:"An action failed..."}
+    """
+    props: dict[str, Any] = {
+        "startTime": "2026-06-01T00:00:00.0000000Z",
+        "endTime": "2026-06-01T00:00:03.0000000Z",
+        "status": status,
+        "correlation": {
+            "clientKeywords": [f"BotSchemaName:{bot_schema},ChannelId:pva-studio"],
+        },
+        "trigger": {"name": "manual", "status": "Succeeded"},
+        "response": {"name": response_name, "code": response_code, "status": status},
+        "isAborted": False,
+    }
+    if error is not None:
+        props["error"] = dict(error)
+    return {
+        "name": run_id,
+        "id": (
+            f"/providers/Microsoft.ProcessSimple/environments/{env_id}"
+            f"/flows/{flow_id}/runs/{run_id}"
+        ),
+        "type": "Microsoft.ProcessSimple/environments/flows/runs",
+        "properties": props,
+    }
+
+
 def workday_connection_reference(
     *,
     connection_name: str,
@@ -533,10 +594,35 @@ def list_flows(
     }
 
 
+def list_flow_runs(
+    *,
+    env_id: str = MOCK_ENV_ID,
+    flow_id: str = "00000000-0000-0000-0000-000000007101",
+    runs: Iterable[Mapping[str, Any]] | None = None,
+    status: int = 200,
+) -> dict[str, Any]:
+    """Mock GET /providers/Microsoft.ProcessSimple/environments/{env}/flows/{flow}/runs.
+
+    The *runtime* runs endpoint (maker/owner scope, NOT ``/scopes/admin``) on
+    ``api.flow.microsoft.com`` (``service.flow.microsoft.com//.default`` token).
+    Backs WD-RUN-001 via ``pp_admin_client.get_flow_runs``.
+    """
+    return {
+        "method": "GET",
+        "url": (
+            f"{FLOW_BASE}/providers/Microsoft.ProcessSimple/environments/"
+            f"{env_id}/flows/{flow_id}/runs"
+        ),
+        "json": collection(runs or []),
+        "status": status,
+    }
+
+
 def insufficient_permissions(
     *,
     env_id: str = MOCK_ENV_ID,
     endpoint: str = "connections",
+    flow_id: str = "00000000-0000-0000-0000-000000007101",
 ) -> dict[str, Any]:
     """Mock a 403 from BAP/PowerApps — the production code maps
     401/403 to {"_error": "insufficient_permissions"} dict.
@@ -552,6 +638,11 @@ def insufficient_permissions(
         url = (
             f"{FLOW_BASE}/providers/Microsoft.ProcessSimple/scopes/admin/environments/"
             f"{env_id}/v2/flows"
+        )
+    elif endpoint == "flow_runs":
+        url = (
+            f"{FLOW_BASE}/providers/Microsoft.ProcessSimple/environments/"
+            f"{env_id}/flows/{flow_id}/runs"
         )
     elif endpoint == "environments":
         url = (

@@ -125,21 +125,44 @@ class TestPowerShellInstallerAutoLaunch:
         installer was launched from — typically the user's home dir or a
         bootstrap temp dir — and /setup either fails or runs against the
         wrong workspace.
+
+        The launch section may have multiple Push-Location / Pop-Location
+        blocks (e.g. one for the stock-VS Code path and one for the
+        maker-profile path). The chat invocation must be sandwiched
+        between SOME Push-Location $workspace and a following Pop-Location.
         """
-        push_match = re.search(
-            r"^\s*Push-Location\s+\$workspace", ps1_launch_section, flags=re.MULTILINE
-        )
         chat_match = re.search(
             r"\$code\.Source\s+chat\s+['\"]/setup['\"]", ps1_launch_section
         )
-        pop_match = re.search(r"^\s*\}?\s*finally\s*\{\s*Pop-Location", ps1_launch_section, flags=re.MULTILINE) or re.search(r"^\s*Pop-Location", ps1_launch_section, flags=re.MULTILINE)
-        assert push_match and chat_match and pop_match, (
-            "launch section must Push-Location into $workspace, then call "
-            "`code chat /setup`, then Pop-Location (none may be inside a comment)"
+        assert chat_match, "no `code chat /setup` invocation found in launch section"
+
+        # Find the nearest preceding Push-Location $workspace.
+        push_positions = [
+            m.start()
+            for m in re.finditer(
+                r"^\s*Push-Location\s+\$workspace",
+                ps1_launch_section,
+                flags=re.MULTILINE,
+            )
+            if m.start() < chat_match.start()
+        ]
+        assert push_positions, (
+            "`code chat /setup` is not preceded by a `Push-Location $workspace` "
+            "in its branch — the chat will open in the wrong directory"
         )
-        assert push_match.start() < chat_match.start() < pop_match.start(), (
-            "Push-Location $workspace must precede the chat invocation, and "
-            "Pop-Location must follow it"
+
+        # Find the nearest following Pop-Location.
+        pop_positions = [
+            m.start()
+            for m in re.finditer(
+                r"^\s*\}?\s*finally\s*\{\s*Pop-Location|^\s*Pop-Location",
+                ps1_launch_section,
+                flags=re.MULTILINE,
+            )
+            if m.start() > chat_match.start()
+        ]
+        assert pop_positions, (
+            "`code chat /setup` is not followed by a `Pop-Location` in its branch"
         )
 
     def test_launch_section_falls_back_when_code_chat_fails(

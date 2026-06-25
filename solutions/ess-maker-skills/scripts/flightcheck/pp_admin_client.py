@@ -275,6 +275,35 @@ class PPAdminClient:
             use_flow_token=True,
         )
 
+    def get_flow_runs(self, env_id: str, flow_id: str) -> list | dict:
+        """List recent runs (run history) for a cloud flow.
+
+        Uses the Power Automate *runtime* runs endpoint (maker/owner scope) —
+        run history is NOT exposed on the ``/scopes/admin`` governance surface,
+        so this path omits ``scopes/admin``. Same host + audience as
+        ``get_flows`` (``api.flow.microsoft.com`` / ``service.flow.microsoft.com``
+        token).
+
+        Returns the first page of runs (newest first). We deliberately do NOT
+        paginate the whole history — a health check only needs recent runs.
+        On 401/403 returns the structured ``{"_error": ...}`` dict (matching
+        ``_get``) so callers surface a permission failure instead of mistaking
+        it for "no runs".
+
+        Each run record carries (see WD-RUN-001 + the cassette for the shape):
+          - ``properties.status``        — "Succeeded" / "Failed" / "Cancelled" / "Running"
+          - ``properties.response.name`` — the flow's success-vs-failure Response action
+        """
+        resp = self._get(
+            FLOW_BASE,
+            f"/providers/Microsoft.ProcessSimple/environments/{env_id}/flows/{flow_id}/runs",
+            params={"api-version": "2016-11-01"},
+            use_flow_token=True,
+        )
+        if isinstance(resp, dict) and "_error" in resp:
+            return resp
+        return resp.get("value", [])
+
     # ----- Connection APIs -----
 
     def get_connections(self, env_id: str) -> list:

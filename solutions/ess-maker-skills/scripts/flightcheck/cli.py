@@ -45,6 +45,8 @@ from flightcheck.runner import (
 from flightcheck.graph_client import GraphClient
 from flightcheck.pp_admin_client import PPAdminClient, derive_environment_id
 from flightcheck.pva_client import PVAClient
+from flightcheck.powerplatform_client import PowerPlatformClient
+from flightcheck.azure_arm_client import AzureArmClient
 
 # Check modules
 from flightcheck.checks.prerequisites import run_prerequisites_checks
@@ -211,6 +213,11 @@ def main():
         except Exception as e:
             print(f"  Graph: WARNING — {e}")
             print("  (Some checks will be skipped)")
+            # Discard the unauthenticated client so Graph-dependent checks see a
+            # clean None and emit SKIPPED, rather than each call raising
+            # "Call authenticate() first". Mirrors the pp_admin / powerplatform /
+            # azure_arm failure handling below.
+            graph = None
 
         print("Authenticating to Power Platform Admin API...")
         pp_admin = PPAdminClient(tenant_id)
@@ -301,6 +308,33 @@ def main():
     else:
         print("Skipping Copilot Studio auth (not required for this scope).")
 
+    # Gate the PayG billing clients (PRE-005) on scope. Only the
+    # prerequisites checks read them, and each is a separate interactive
+    # sign-in (Power Platform API + Azure ARM are distinct audiences), so
+    # don't prompt on scopes that won't run PRE-005. Mirrors the PVA gating.
+    powerplatform = None
+    azure_arm = None
+    if args.scope in ("full", "prerequisites"):
+        print("Authenticating to Power Platform API (billing policies)...")
+        powerplatform = PowerPlatformClient(tenant_id)
+        try:
+            powerplatform.authenticate()
+            print("  Power Platform API: OK")
+        except Exception as e:
+            print(f"  Power Platform API: WARNING — {e}")
+            print("  (PRE-005 PayG check will be skipped)")
+            powerplatform = None
+
+        print("Authenticating to Azure (subscription health)...")
+        azure_arm = AzureArmClient(tenant_id)
+        try:
+            azure_arm.authenticate()
+            print("  Azure: OK")
+        except Exception as e:
+            print(f"  Azure: WARNING — {e}")
+            print("  (PRE-005 will report PayG subscription health as unverifiable)")
+            azure_arm = None
+
     # --- Build runner ---
     runner = FlightCheckRunner(scope=args.scope)
     runner.config = config
@@ -310,6 +344,8 @@ def main():
     runner.graph = graph
     runner.pp_admin = pp_admin
     runner.pva = pva
+    runner.powerplatform = powerplatform
+    runner.azure_arm = azure_arm
 
     # Register checks based on scope
     if args.scope == "full":
