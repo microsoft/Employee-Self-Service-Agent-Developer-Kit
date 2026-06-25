@@ -31,20 +31,32 @@ The physical repository mirrors the logical architecture defined in `ARCHITECTUR
 
 # 2. Repository Layout
 
+Specifications and the buildable toolkit live in two separate trees at the repository root.
+
+Specifications (the source of truth) live under `dev-specs/`:
+
+```text
+dev-specs/
+
+└── ess-nextgen-migration-toolkit/
+
+    AGENTS.md
+
+    00_META/
+    01_PRODUCT/
+    02_ARCHITECTURE/
+    03_ENGINEERING/
+    04_EXECUTION/
+```
+
+The buildable toolkit lives under `tools/`:
+
 ```text
 tools/
 
 └── ess-nextgen-migration-toolkit/
 
     AGENTS.md
-
-    specs/
-
-        00_META/
-        01_PRODUCT/
-        02_ARCHITECTURE/
-        03_ENGINEERING/
-        04_EXECUTION/
 
     src/
 
@@ -79,6 +91,7 @@ tools/
         unit/
         integration/
         golden/
+        e2e/
 
     logs/
 
@@ -386,6 +399,8 @@ tests/
     integration/
 
     golden/
+
+    e2e/
 ```
 
 Unit tests mirror the `src/` directory.
@@ -393,6 +408,8 @@ Unit tests mirror the `src/` directory.
 Golden tests validate deterministic migration outputs.
 
 Integration tests validate Dataverse interactions.
+
+End-to-end tests validate complete migration workflows through the Orchestrator.
 
 ---
 

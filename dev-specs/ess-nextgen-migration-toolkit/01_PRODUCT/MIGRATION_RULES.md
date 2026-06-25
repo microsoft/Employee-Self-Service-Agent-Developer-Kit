@@ -339,13 +339,17 @@ Customer implementations may contain arbitrary business logic which cannot be mi
 ### Preconditions
 
 * Topic trigger type is OnActivity.
+* The topic is not already migrated. A topic that is already disabled **and**
+  whose title is already prefixed with `[Deprecated]` is considered already
+  migrated and shall be skipped (idempotency — INVARIANT MIG-005).
 
 ### Transformation
 
 The migration pipeline shall:
 
 * Disable the topic.
-* Prefix the topic title with:
+* Prefix the topic title with the following marker, **only if the title is not
+  already prefixed** (the prefix shall never be applied more than once):
 
 ```text
 [Deprecated]
@@ -423,13 +427,17 @@ Instead, preserve the implementation while preventing execution.
 ### Preconditions
 
 * Topic trigger type is OnGeneratedResponse.
+* The topic is not already migrated. A topic that is already disabled **and**
+  whose title is already prefixed with `[Deprecated]` is considered already
+  migrated and shall be skipped (idempotency — INVARIANT MIG-005).
 
 ### Transformation
 
 The migration pipeline shall:
 
 * Disable the topic.
-* Prefix the topic title with:
+* Prefix the topic title with the following marker, **only if the title is not
+  already prefixed** (the prefix shall never be applied more than once):
 
 ```text
 [Deprecated]
@@ -548,7 +556,7 @@ This provides complete traceability from business requirement through implementa
 
 ---
 
-# 9. Traceability
+# 9. Specification Dependencies
 
 **Consumes**
 

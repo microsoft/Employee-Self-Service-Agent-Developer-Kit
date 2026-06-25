@@ -496,6 +496,27 @@ Diagnostics must clearly identify:
 
 ---
 
+# 9a. Rollback Strategy
+
+Automated rollback is **out of scope** for the current toolkit version.
+
+When MIGRATE fails partway through:
+
+* Successful writebacks already persisted to the customer environment **remain
+  persisted**. The toolkit does not automatically revert them.
+* Recovery is achieved by resolving the root cause reported in diagnostics and
+  **re-running migration**. Migration is idempotent (INVARIANT MIG-005), so a
+  successful re-run reconciles the environment to the fully migrated state
+  without introducing duplicate changes.
+* Customers who require a restore point should rely on their existing Dataverse
+  solution/ALM backup mechanisms before executing MIGRATE.
+
+Automated rollback may be introduced in a future version. Until then, the
+idempotent re-run path above is the documented rollback strategy referenced by
+the roadmap.
+
+---
+
 # 10. Future Evolution
 
 Execution Modes are expected to remain stable.

@@ -66,123 +66,95 @@ Never implement code without understanding the specifications that define it.
 
 ---
 
-# 3. Reading Order
+# 3. Specification Classification
 
-Before implementing any task, read the specifications in the following order.
+Specifications are classified into levels by how often they are needed and how
+stable they are. This classification drives the dependency-based loading model
+in Section 3a — agents resolve only the documents a task actually requires
+rather than reading every specification on every task.
 
-## Repository Constitution
+| Level | Category      | Documents |
+| ----- | ------------- | --------- |
+| 0     | Orchestrator  | `AGENTS.md` |
+| 1     | Execution     | `04_EXECUTION/TASKS.md` |
+| 2     | Business Rules| `01_PRODUCT/MIGRATION_RULES.md` |
+| 3     | Constitution  | `00_META/PROJECT.md`, `00_META/INVARIANTS.md`, `00_META/VOCABULARY.md` |
+| 4     | Architecture  | `02_ARCHITECTURE/ARCHITECTURE.md`, `DOMAIN_MODEL.md`, `SERVICES.md`, `PIPELINES.md`, `DATAVERSE_SDK.md` |
+| 5     | Engineering   | `03_ENGINEERING/REPOSITORY_STRUCTURE.md`, `CODING_STANDARDS.md`, `IMPLEMENTATION_GUIDE.md`, `DIAGNOSTICS.md`, `TESTING.md` |
+| 6     | Context       | `01_PRODUCT/CUSTOMER_JOURNEY.md`, `01_PRODUCT/MIGRATION_MODES.md`, `00_META/ROADMAP.md` |
 
-```
-PROJECT.md
-
-INVARIANTS.md
-
-GLOSSARY.md
-```
-
----
-
-## Product
-
-```
-CUSTOMER_JOURNEY.md
-
-MIGRATION_MODES.md
-
-MIGRATION_RULES.md
-
-ROADMAP.md
-```
+Level 6 (Context) documents are read **only when a task references them**.
 
 ---
 
-## Architecture
+# 3a. Dependency-Based Loading Model
 
+Do not read every specification on every task. Resolve the dependency graph
+for the specific task, like a compiler resolving only the modules it needs.
+
+```text
+Receive Prompt
+        ↓
+Phase 0 — Boot
+    Always read AGENTS.md (this file). It is the orchestrator.
+        ↓
+Phase 1 — Resolve Task
+    Open 04_EXECUTION/TASKS.md and locate TASK-XXX.
+        ↓
+Phase 2 — Resolve Migration Rule
+    If the task references RULE-XXX, open 01_PRODUCT/MIGRATION_RULES.md
+    and read only that rule.
+        ↓
+Phase 3 — Constitution (always; these are small)
+    00_META/PROJECT.md
+    00_META/INVARIANTS.md
+    00_META/VOCABULARY.md
+        ↓
+Phase 4 — Architecture (read once per work session)
+    02_ARCHITECTURE/ARCHITECTURE.md
+    DOMAIN_MODEL.md
+    SERVICES.md
+    PIPELINES.md
+    DATAVERSE_SDK.md
+        ↓
+Phase 5 — Engineering (read once per work session)
+    03_ENGINEERING/REPOSITORY_STRUCTURE.md
+    CODING_STANDARDS.md
+    IMPLEMENTATION_GUIDE.md
+    DIAGNOSTICS.md
+    TESTING.md
+        ↓
+Phase 6 — Product Context (only if referenced by the task or its rule)
+    01_PRODUCT/CUSTOMER_JOURNEY.md
+    01_PRODUCT/MIGRATION_MODES.md
+    00_META/ROADMAP.md
+        ↓
+Implement → Run Tests → Update TASKS.md → Update CHANGELOG.md → Stop
 ```
-ARCHITECTURE.md
 
-DOMAIN_MODEL.md
-
-SERVICES.md
-
-PIPELINES.md
-
-DATAVERSE_SDK.md
-```
+Each task in `TASKS.md` declares a `Consumes` section (the governing Migration
+Rule) and a `References` section (the exact specifications required to
+implement it). Prefer resolving a task's required documents from its
+`References` section over reading broadly.
 
 ---
 
-## Engineering
+# 4. Specification Hierarchy (Conflict Resolution)
 
-```
-REPOSITORY_STRUCTURE.md
+The classification in Section 3 governs **what to read**. This section governs
+**which document wins** when two specifications conflict.
 
-CODING_STANDARDS.md
+* `00_META/INVARIANTS.md` is supreme. An invariant always takes precedence over
+  any other specification or implementation convenience.
+* For all other conflicts, a **lower Level number takes precedence over a higher
+  one** (Level 0 → Level 6).
+* Within the same level, the document that **owns the concern** wins
+  (for example, `MIGRATION_RULES.md` owns business behavior; `DOMAIN_MODEL.md`
+  owns canonical models).
 
-DIAGNOSTICS.md
-
-TESTING.md
-
-IMPLEMENTATION_GUIDE.md
-```
-
----
-
-## Execution
-
-```
-TASKS.md
-```
-
-Only after understanding the above specifications should implementation begin.
-
----
-
-# 4. Specification Hierarchy
-
-When conflicts exist between specifications, resolve them in the following order.
-
-```
-INVARIANTS
-
-↓
-
-PROJECT
-
-↓
-
-CUSTOMER JOURNEY
-
-↓
-
-ARCHITECTURE
-
-↓
-
-DOMAIN MODEL
-
-↓
-
-SERVICES
-
-↓
-
-PIPELINES
-
-↓
-
-SDK
-
-↓
-
-ENGINEERING
-
-↓
-
-TASKS
-```
-
-Lower-level documents must never contradict higher-level specifications.
+Lower-precedence documents must never contradict higher-precedence
+specifications. If a conflict is discovered, stop and update the specifications
+before implementing.
 
 ---
 
