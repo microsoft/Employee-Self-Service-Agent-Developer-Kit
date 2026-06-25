@@ -8,7 +8,10 @@ Checks Microsoft 365 Copilot licenses, Copilot Studio licenses, Teams
 licenses, role assignments, and capacity.
 """
 
+from auth import AuthExpiredError
+
 from ..runner import CheckResult, Priority, Role, Status
+from .licensing import resolve_shared_with_users
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
 
@@ -360,6 +363,156 @@ def _run_graph_prereq_checks(graph) -> list[CheckResult]:
     return results
 
 
+# PRE-004 — Copilot Studio capacity. The prepaid-capacity / message-credit
+# model is documented on the Copilot Studio "messages management" page; the ESS
+# prerequisites doc links there for "Set up Copilot Studio capacity".
+_CAPACITY_DOC = (
+    "https://learn.microsoft.com/en-us/microsoft-copilot-studio/"
+    "requirements-messages-management?tabs=new#prepaid-capacity"
+)
+_CAPACITY_PORTAL = (
+    "[Power Platform Admin Center > Licensing > Copilot Studio > Manage capacity]"
+    "(https://admin.powerplatform.microsoft.com/licensing)"
+)
+_M365_ADMIN_CENTER = "[Microsoft 365 admin center](https://admin.microsoft.com)"
+
+
+def _pre004(status: str, result: str, remediation: str = "") -> CheckResult:
+    """Build a PRE-004 row (every branch shares id / category / priority / role)."""
+    return CheckResult(
+        roles=[Role.POWER_PLATFORM_ADMIN.value],
+        checkpoint_id="PRE-004", category="Prerequisites",
+        priority=Priority.CRITICAL.value, status=status,
+        description="Copilot Studio capacity configured",
+        result=result, remediation=remediation, doc_link=_CAPACITY_DOC,
+    )
+
+
+def _check_copilot_studio_capacity(runner) -> CheckResult:
+    """PRE-004 — Copilot Studio message capacity provisioned for the
+    environment's shared/published user population.
+
+    Heritage check (ESS Pre-flight Validator): ensure the target environment
+    has Copilot Studio message capacity so ESS agent invocations have credits to
+    consume. Ported with a per-environment *sufficiency* model rather than a
+    bare non-zero check — it compares the message credits allocated to THIS
+    environment against the number of users the agent is shared with / published
+    to (resolved via the same Dataverse sharing enumeration LIC-FLOW-002 uses,
+    expanding security groups to distinct Entra users).
+
+    No Monthly-Active-User estimate is involved: the comparison is purely the
+    per-environment allocation vs. the shared/published population. The repo
+    carries no per-user message-consumption model, so the sufficiency floor is
+    deliberately conservative — at least one Copilot Studio message credit per
+    shared user. Real sufficiency depends on each user's message volume, which
+    FlightCheck cannot predict, so a passing row reports the per-user ratio
+    instead of asserting the allocation is enough for production traffic.
+
+    Cross-checks PRE-005 via ``runner._payg_configured`` (set earlier in this
+    same run): when Pay-as-you-go is configured, a zero/low allocation is a
+    surprise-billing WARNING rather than a hard failure, because PayG still
+    bills the usage. When neither prepaid capacity nor PayG covers the
+    population, the row is a FAIL.
+
+    Deliberate divergence from PRE-005: PRE-005 treats a zero per-env allocation
+    with no PayG as a WARNING because a tenant-level "Draw from the available
+    capacity in my tenant" overage *might* cover it (a toggle no API exposes).
+    PRE-004 is stricter by design — it asserts capacity is actually provisioned
+    *for the shared population*, so zero allocation with no PayG is a FAIL (the
+    agent has users but no dedicated billing path).
+    """
+    try:
+        # 1) Who is the agent shared with / published to in this environment?
+        resolution = resolve_shared_with_users(runner)
+        if not resolution.available:
+            if resolution.reason == "no_bot_id":
+                return _pre004(Status.SKIPPED.value,
+                    "No agent botId is recorded in config, so FlightCheck can't determine who the agent is shared with — capacity sufficiency can't be assessed.",
+                    "Run /setup so the agent's botId is recorded, then re-run FlightCheck.")
+            return _pre004(Status.SKIPPED.value,
+                "Determining the agent's shared/published user population needs Microsoft Graph + Dataverse access, which is unavailable.",
+                "Re-run FlightCheck signed in with Microsoft Graph (Directory.Read.All) and Dataverse access so the shared user count can be read.")
+
+        m = len(resolution.users)
+        if m == 0:
+            if resolution.enumerate_failed or resolution.undetermined:
+                return _pre004(Status.WARNING.value,
+                    "Could not determine the agent's shared/published user population: "
+                    + "; ".join(resolution.undetermined[:6]) + ".",
+                    "Verify FlightCheck has Dataverse + Graph read access, then re-run so Copilot Studio capacity sufficiency can be confirmed.")
+            return _pre004(Status.PASSED.value,
+                "The agent is not yet shared with or published to any users, so no Copilot Studio message capacity is required for this environment yet. (Counts users the agent is explicitly shared with; broad channel publishing may not be reflected — allocate capacity before a wide rollout.)")
+
+        # 2) How much Copilot Studio message capacity is allocated to THIS env?
+        allocated = _env_mcs_allocation(
+            getattr(runner, "powerplatform", None), getattr(runner, "env_id", None))
+        if allocated is None:
+            return _pre004(Status.WARNING.value,
+                f"The agent is shared/published to {m} user(s), but this environment's Copilot Studio message capacity allocation could not be read (Power Platform API unavailable or permission denied).",
+                f"Grant the Power Platform Admin role (or sign in to the Power Platform API when prompted) so FlightCheck can read this environment's capacity allocation, then re-run. Review capacity in {_CAPACITY_PORTAL}.")
+
+        # PRE-005 cross-check is read per-branch below (tri-state).
+
+        if allocated > 0:
+            if allocated >= m:
+                return _pre004(Status.PASSED.value,
+                    f"{allocated} Copilot Studio message credits are allocated to this environment for the {m} user(s) the agent is shared/published to (~{allocated // m} per user). Every shared user is backed by allocated capacity; actual sufficiency depends on per-user message volume.")
+            # 0 < allocated < m: fewer credits than users breaches the one-per-user floor.
+            return _pre004(Status.WARNING.value,
+                f"Only {allocated} Copilot Studio message credit(s) are allocated to this environment for the {m} user(s) the agent is shared/published to — fewer than one credit per user, so the environment is under-provisioned and overflow will draw on overage or Pay-as-you-go (surprise-billing risk).",
+                f"Allocate more Copilot Studio message capacity to this environment in {_CAPACITY_PORTAL}, or purchase additional prepaid message packs in the {_M365_ADMIN_CENTER}.")
+
+        # allocated == 0: read succeeded; this environment has no dedicated credits.
+        # PRE-005 cross-check is tri-state: True (PayG bills) / False (provably no
+        # PayG) / None (PRE-005 did not run this pass — unknown, never assume).
+        payg_flag = getattr(runner, "_payg_configured", None)
+        if payg_flag is True:
+            return _pre004(Status.WARNING.value,
+                f"No prepaid Copilot Studio message capacity is allocated to this environment, but Pay-as-you-go billing is configured, so messages from all {m} shared/published user(s) bill directly to Azure (surprise-billing risk).",
+                f"To cap spend, allocate prepaid Copilot Studio message capacity to this environment in {_CAPACITY_PORTAL}, or confirm a spending budget is in place for the Pay-as-you-go subscription (see PRE-005).")
+        if payg_flag is None:
+            # PRE-005 sets _payg_configured earlier in the run; None means it did
+            # not run (PRE-004 invoked in isolation or reordered). An undetermined
+            # PayG state must not become a hard FAIL -> WARN and point at the gap.
+            return _pre004(Status.WARNING.value,
+                f"No Copilot Studio message capacity is allocated to this environment for the {m} shared/published user(s), and Pay-as-you-go status could not be determined in this pass.",
+                f"Run the full prerequisites scope so PRE-005 evaluates Pay-as-you-go, or allocate Copilot Studio message capacity to this environment in {_CAPACITY_PORTAL}.")
+        # payg_flag is False: provably no PayG. Strict AC2 -> FAIL.
+        # Surface the tenant-level pool too (the heritage check enumerates tenant
+        # AND environment capacity): when the tenant owns capacity, the only way
+        # this env runs is the "Draw from tenant capacity" overage — a toggle no
+        # API exposes — so the FAIL stands (relying on an unreadable toggle for
+        # production billing is the risk) but says so. This is the one state where
+        # PRE-004 (FAIL) is intentionally stricter than PRE-005 (WARN).
+        tenant_pool = _has_prepaid_messages(getattr(runner, "graph", None))
+        tenant_note = (
+            " The tenant holds Copilot Studio capacity, so the agent will run only if "
+            "'Draw from the available capacity in my tenant' (Capacity overages) is "
+            "enabled, which FlightCheck cannot read."
+            if tenant_pool is True else ""
+        )
+        return _pre004(Status.FAILED.value,
+            f"No Copilot Studio message capacity is allocated to this environment and Pay-as-you-go billing is not configured, so the {m} user(s) the agent is shared/published to have no message capacity to consume — agent invocations will fail at runtime.{tenant_note}",
+            f"Allocate Copilot Studio message capacity to this environment in {_CAPACITY_PORTAL}, or purchase prepaid message packs in the {_M365_ADMIN_CENTER}; alternatively configure Pay-as-you-go billing (see PRE-005).")
+    except AuthExpiredError:
+        # Distinct, actionable failure — don't fold an expired session into the
+        # generic "couldn't check" bucket. Kept non-fatal to PRE-004's siblings
+        # (PRE-001..005); LIC-FLOW-002 re-raises the same error to hard-stop the
+        # run when a blocking surface needs it.
+        return _pre004(Status.WARNING.value,
+            "The Dataverse session expired before Copilot Studio capacity could be checked.",
+            "Re-run FlightCheck and sign in when prompted to refresh the session, then retry.")
+    except Exception as e:
+        # Mirror the PRE-001..003 per-check convention: a check that raises
+        # degrades to its own WARNING row rather than bubbling up and turning the
+        # whole Prerequisites category into a single ERROR (which would discard
+        # PRE-001..005). Include the exception type so a genuine code bug isn't
+        # hidden behind an environmental-looking warning during triage.
+        return _pre004(Status.WARNING.value,
+            f"Unable to check Copilot Studio capacity: {type(e).__name__}: {e}",
+            "Ensure Power Platform Admin and Dataverse/Graph access, then re-run.")
+
+
 def run_prerequisites_checks(runner) -> list[CheckResult]:
     """Execute all prerequisites checks using the Graph client."""
     graph = runner.graph
@@ -665,11 +818,17 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
     if payg_result is not None:
         # Forward-compat flag for the PayG/prepaid/capacity cross-checks.
         # True only when PayG is genuinely linked + healthy (NOT when the
-        # check passed on the prepaid arm), so a future PRE-004 (capacity) /
-        # PRE-006 (prepaid) can read it via getattr(runner, "_payg_configured",
-        # None) and treat True as "PayG covers billing" (AGENTS.md principle
-        # #11). TODO: no consumer yet — PRE-004 / PRE-006 are not implemented.
+        # check passed on the prepaid arm), so the capacity/prepaid checks can
+        # read it via getattr(runner, "_payg_configured", None) and treat True
+        # as "PayG covers billing" (AGENTS.md principle #11). PRE-004 (capacity)
+        # consumes it immediately below; PRE-006 (prepaid) will too.
         runner._payg_configured = payg_configured
         results.append(payg_result)
+
+    # ---- PRE-004: Copilot Studio capacity for the shared/published population ----
+    # Runs after PRE-005 so it can read runner._payg_configured (the PayG
+    # cross-check). The report sorts by priority then id, so append order is
+    # cosmetic — PRE-004 still renders in numeric order.
+    results.append(_check_copilot_studio_capacity(runner))
 
     return results
