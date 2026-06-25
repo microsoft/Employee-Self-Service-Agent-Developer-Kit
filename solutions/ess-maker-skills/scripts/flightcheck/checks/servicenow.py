@@ -254,25 +254,38 @@ def _validate_expected_configs(
     # If none found, the pack likely isn't installed — don't flag as error
 
 
-# Unsubstituted base-URL placeholder tokens that indicate the portal base
-# URL was never filled in when the extension-pack template config was
-# installed (the value still carries the template's placeholder).
-_PLACEHOLDER_BASEURL_RE = re.compile(
-    r"\{\{[^}]*\}\}|\{[^}]*\}|<[^>]*base[^>]*url[^>]*>",
-    re.IGNORECASE,
-)
+# Characters that must never appear in a real URL host — their presence
+# means an unsubstituted placeholder token (e.g. ``{{ServiceNowBaseUrl}}``)
+# leaked into the host of an otherwise absolute-looking URL.
+_PLACEHOLDER_HOST_CHARS = set("{}<>%$ ")
 
-# Absolute http(s) URL with a non-empty host.
-_ABSOLUTE_URL_RE = re.compile(r"https?://[^\s\"'<>}\\)]+", re.IGNORECASE)
+# Absolute http(s) URL. The host may temporarily include placeholder
+# braces here; ``_is_absolute_http_url`` rejects those after parsing so a
+# scheme-prefixed placeholder (``https://{{baseUrl}}``) does NOT count as
+# a populated base URL.
+_ABSOLUTE_URL_RE = re.compile(r"https?://[^\s\"'<>)\\]+", re.IGNORECASE)
 
 
 def _is_absolute_http_url(candidate: str) -> bool:
-    """Return True if ``candidate`` is a non-empty absolute http(s) URL."""
+    """Return True if ``candidate`` is a non-empty absolute http(s) URL
+    with a real host.
+
+    A URL whose host still carries an unsubstituted placeholder token
+    (e.g. ``https://{{ServiceNowBaseUrl}}/api/...``) is rejected — its
+    netloc is non-empty but is not a real ServiceNow instance host, so it
+    must not be treated as a populated base URL.
+    """
     try:
         parsed = urlparse(candidate.strip())
     except (ValueError, AttributeError):
         return False
-    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+        return False
+    host = parsed.hostname or parsed.netloc
+    if any(ch in _PLACEHOLDER_HOST_CHARS for ch in parsed.netloc):
+        return False
+    # Reject hosts that are empty or carry no domain/label at all.
+    return bool(host) and host not in (".", "")
 
 
 def _value_has_valid_base_url(value: str | None) -> bool:

@@ -186,6 +186,30 @@ def test_base_url_unsubstituted_placeholder_warns(monkeypatch):
     monkeypatch.setattr(
         auth, "query_all",
         lambda *a, **kw: [
+            # Scheme-prefixed placeholder: the host is still a template
+            # token, so this must NOT pass as a populated base URL.
+            dv.template_config(
+                name="ServiceNowHRSDGetCasesList",
+                value="https://{{ServiceNowBaseUrl}}/api/now/table/sn_hr_core_case",
+            ),
+        ],
+    )
+    from flightcheck.checks.servicenow import _check_template_config_base_urls
+    runner = SimpleNamespace(env_url="https://org.crm.dynamics.com", dv_token="t")
+    cfg = _by_id(_check_template_config_base_urls(runner), "SN-CFG-002")
+
+    assert cfg.status == "Warning"
+    assert "missing or malformed portal base URL" in cfg.result
+    assert "ServiceNowHRSDGetCasesList" in cfg.result
+    assert "https://<instance>.service-now.com" in cfg.remediation
+    assert "omit" in cfg.remediation and "hyperlinks" in cfg.remediation
+
+
+def test_base_url_bare_placeholder_token_warns(monkeypatch):
+    import auth
+    monkeypatch.setattr(
+        auth, "query_all",
+        lambda *a, **kw: [
             dv.template_config(
                 name="ServiceNowHRSDGetCasesList",
                 value="{{ServiceNowBaseUrl}}/api/now/table/sn_hr_core_case",
@@ -197,8 +221,8 @@ def test_base_url_unsubstituted_placeholder_warns(monkeypatch):
     cfg = _by_id(_check_template_config_base_urls(runner), "SN-CFG-002")
 
     assert cfg.status == "Warning"
-    assert "missing or malformed portal base URL" in cfg.result
     assert "ServiceNowHRSDGetCasesList" in cfg.result
+    assert "https://<instance>.service-now.com" in cfg.remediation
 
 
 def test_base_url_relative_path_only_warns(monkeypatch):
@@ -218,6 +242,8 @@ def test_base_url_relative_path_only_warns(monkeypatch):
 
     assert cfg.status == "Warning"
     assert "ServiceNowITSMGetUserTickets" in cfg.result
+    assert "https://<instance>.service-now.com" in cfg.remediation
+    assert "omit" in cfg.remediation and "hyperlinks" in cfg.remediation
 
 
 def test_base_url_skipped_without_token():

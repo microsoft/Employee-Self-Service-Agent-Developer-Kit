@@ -257,13 +257,40 @@ def template_config(
 
     Source (documented):
       Dataverse Web API v9.2 (tier: documented per
-      tests/fixtures/cassettes/INDEX.md "API tier registry").
-      Field names confirmed against the production selector in
+      tests/fixtures/cassettes/INDEX.md "API tier registry"). The
+      `msdyn_employeeselfservicetemplateconfig` is a managed-solution
+      custom entity, so there is no MS Learn entity-reference page for
+      it; the field contract is taken verbatim from the production
+      code that reads this entity.
+
+      Field contract — copied verbatim from the production `$select`
+      list and record mapping in
       solutions/ess-maker-skills/scripts/backup_template_configs.py
-      (msdyn_employeeselfservicetemplateconfigid, msdyn_uniquename,
-      msdyn_name, msdyn_value) and the MS Learn Dataverse Web API
-      query docs:
-      https://learn.microsoft.com/power-apps/developer/data-platform/webapi/query-data-web-api
+      (lines 72-77 select, 112-116 mapping):
+        msdyn_employeeselfservicetemplateconfigid   (Edm.Guid, PK)
+        msdyn_uniquename                             (Edm.String)
+        msdyn_name                                   (Edm.String)
+        msdyn_value                                  (Edm.String)
+
+      OData v4 collection envelope shape (the wrapper auth.query_all
+      unwraps) per the MS Learn Dataverse Web API query docs:
+        https://learn.microsoft.com/power-apps/developer/data-platform/webapi/query-data-web-api#example
+      Example response row (composed from the verbatim field contract
+      above inside the documented OData envelope):
+        {
+          "@odata.context": ".../$metadata#msdyn_employeeselfservicetemplateconfigs",
+          "value": [
+            {
+              "@odata.etag": "W/\\"1\\"",
+              "msdyn_employeeselfservicetemplateconfigid":
+                  "00000000-0000-0000-0000-000000009001",
+              "msdyn_uniquename": "msdyn_ServiceNowHRSDGetCasesList",
+              "msdyn_name": "ServiceNowHRSDGetCasesList",
+              "msdyn_value":
+                  "https://contoso.service-now.com/api/now/table/sn_hr_core_case"
+            }
+          ]
+        }
 
     ``value`` defaults to a populated ServiceNow instance URL (the
     GOOD state). Pass value="" / None to model the blank-base-URL state
