@@ -95,8 +95,12 @@ def load_backup(path):
     Exits non-zero on schema mismatch with a clear message - the alternative
     is a misleading KeyError deep in the restore loop.
     """
-    with open(path, "r", encoding="utf-8") as f:
-        backup = json.load(f)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            backup = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"ERROR: Could not read backup file {path!r}: {e}")
+        sys.exit(1)
     schema = backup.get("schemaVersion")
     if schema != SCHEMA_VERSION:
         print(
