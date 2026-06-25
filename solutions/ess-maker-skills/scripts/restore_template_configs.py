@@ -18,8 +18,7 @@ Usage::
 
     python scripts/restore_template_configs.py \
         --url https://orgX.crm10.dynamics.com \
-        --input workspace/template-config-backups/orgX-20260624T1530Z.json
-
+        --input workspace/template-config-backups/orgX-20260624T153000Z.json
     # Skip cross-env confirmation when porting backups between envs:
     python scripts/restore_template_configs.py --url ... --input ... --force
 
