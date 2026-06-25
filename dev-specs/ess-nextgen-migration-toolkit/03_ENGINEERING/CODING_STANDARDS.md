@@ -97,13 +97,13 @@ Every migration transformation shall be implemented as a dedicated Pipeline Step
 Example:
 
 ```
-UpdateRuntimeProviderStep
-
-UpdateTemplateStep
-
-UpdateModelKindStep
+OverrideAgentMetadataStep
 
 ReplaceEndConversationStep
+
+HandleOnActivityTopicStep
+
+HandleGeneratedResponseTopicStep
 ```
 
 Each Pipeline Step shall perform exactly one logical transformation.

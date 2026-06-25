@@ -74,6 +74,38 @@ Completed tasks shall remain in this document for traceability.
 
 ---
 
+# 2a. Task Anatomy
+
+Every task declares the documents required to implement it, so that agents and
+contributors resolve only the specifications a task actually needs (see the
+Dependency-Based Loading Model in `AGENTS.md`).
+
+Each task may declare:
+
+* **Consumes** — the governing Migration Rule(s) the task implements
+  (e.g. `RULE-003`). Foundation tasks that implement no business rule omit this.
+* **References** — the exact specifications required to implement the task,
+  given as paths relative to the specification root
+  (e.g. `02_ARCHITECTURE/PIPELINES.md`).
+
+Example:
+
+```text
+TASK-012
+Consumes
+- RULE-003
+References
+- 02_ARCHITECTURE/PIPELINES.md
+- 02_ARCHITECTURE/DOMAIN_MODEL.md
+- 03_ENGINEERING/CODING_STANDARDS.md
+- 03_ENGINEERING/TESTING.md
+```
+
+Resolving a task's `References` replaces reading every specification on every
+task.
+
+---
+
 # 3. Workstream 0 — Repository Foundation
 
 ## Goal
@@ -109,6 +141,10 @@ Create the repository structure defined in `REPOSITORY_STRUCTURE.md`.
 * README
 * pyproject.toml
 
+**References**
+
+* 03_ENGINEERING/REPOSITORY_STRUCTURE.md
+
 ---
 
 ### TASK-002
@@ -133,6 +169,11 @@ Implement the Pipeline Framework.
 
 All registered Pipeline Steps may initially be no-op implementations.
 
+**References**
+
+* 02_ARCHITECTURE/ARCHITECTURE.md
+* 02_ARCHITECTURE/PIPELINES.md
+
 ---
 
 ### TASK-003
@@ -155,6 +196,11 @@ Responsibilities include:
 * Pipeline execution
 
 No migration logic.
+
+**References**
+
+* 02_ARCHITECTURE/ARCHITECTURE.md
+* 02_ARCHITECTURE/DOMAIN_MODEL.md
 
 ---
 
@@ -182,6 +228,10 @@ Initial implementation includes:
 
 Business logic is out of scope.
 
+**References**
+
+* 02_ARCHITECTURE/DATAVERSE_SDK.md
+
 ---
 
 ### TASK-005
@@ -205,6 +255,10 @@ Deliverables:
 * Log Files
 
 All output shall use the framework Logger.
+
+**References**
+
+* 03_ENGINEERING/DIAGNOSTICS.md
 
 ---
 
@@ -230,6 +284,12 @@ Responsibilities:
 
 No migration transformations.
 
+**References**
+
+* 02_ARCHITECTURE/SERVICES.md
+* 02_ARCHITECTURE/DATAVERSE_SDK.md
+* 02_ARCHITECTURE/DOMAIN_MODEL.md
+
 ---
 
 ### TASK-007
@@ -252,6 +312,11 @@ Responsibilities:
 
 Migration logic is out of scope.
 
+**References**
+
+* 02_ARCHITECTURE/SERVICES.md
+* 03_ENGINEERING/DIAGNOSTICS.md
+
 ---
 
 ### TASK-008
@@ -273,6 +338,12 @@ Support:
 * Preferred Solution selection
 * Execution mode
 * Progress reporting
+
+**References**
+
+* 01_PRODUCT/CUSTOMER_JOURNEY.md
+* 01_PRODUCT/MIGRATION_MODES.md
+* 03_ENGINEERING/REPOSITORY_STRUCTURE.md
 
 ---
 
@@ -298,6 +369,11 @@ Deliverables:
 * Logging
 * Reports
 * Empty writeback implementation
+
+**References**
+
+* 02_ARCHITECTURE/ARCHITECTURE.md
+* 03_ENGINEERING/TESTING.md
 
 ---
 
@@ -358,6 +434,13 @@ Deliverables:
 * Golden Tests
 * End-to-End validation
 
+**References**
+
+* 02_ARCHITECTURE/PIPELINES.md
+* 02_ARCHITECTURE/DOMAIN_MODEL.md
+* 03_ENGINEERING/CODING_STANDARDS.md
+* 03_ENGINEERING/TESTING.md
+
 ---
 
 # Workstream 2 — Incremental Migration Rules
@@ -370,37 +453,64 @@ The framework architecture should remain unchanged.
 
 ### TASK-011
 
-Implement RULE-002
+## Implement RULE-002 — Replace EndConversation Node
 
-Replace EndConversation Node
-
-Status
+**Status**
 
 TODO
+
+**Consumes**
+
+RULE-002
+
+**References**
+
+* 02_ARCHITECTURE/PIPELINES.md
+* 02_ARCHITECTURE/DOMAIN_MODEL.md
+* 03_ENGINEERING/CODING_STANDARDS.md
+* 03_ENGINEERING/TESTING.md
 
 ---
 
 ### TASK-012
 
-Implement RULE-003
+## Implement RULE-003 — Handle OnActivity Topic
 
-Handle OnActivity Topic
-
-Status
+**Status**
 
 TODO
+
+**Consumes**
+
+RULE-003
+
+**References**
+
+* 02_ARCHITECTURE/PIPELINES.md
+* 02_ARCHITECTURE/DOMAIN_MODEL.md
+* 03_ENGINEERING/CODING_STANDARDS.md
+* 03_ENGINEERING/TESTING.md
 
 ---
 
 ### TASK-013
 
-Implement RULE-004
+## Implement RULE-004 — Handle OnGeneratedResponse Topic
 
-Handle OnGeneratedResponse Topic
-
-Status
+**Status**
 
 TODO
+
+**Consumes**
+
+RULE-004
+
+**References**
+
+* 02_ARCHITECTURE/PIPELINES.md
+* 02_ARCHITECTURE/DOMAIN_MODEL.md
+* 03_ENGINEERING/CODING_STANDARDS.md
+* 03_ENGINEERING/TESTING.md
 
 ---
 
@@ -421,7 +531,8 @@ Whenever:
 the following updates shall occur:
 
 1. Add or update the corresponding rule in `MIGRATION_RULES.md`.
-2. Add the implementation task to this document.
+2. Add the implementation task to this document, declaring its `Consumes`
+   (governing Rule) and `References` (required specifications) sections.
 3. Implement the Pipeline Step.
 4. Add tests.
 5. Mark the task as complete.
@@ -461,7 +572,7 @@ This ensures complete traceability from business requirement through implementat
 
 ---
 
-# 7. Traceability
+# 7. Specification Dependencies
 
 **Consumes**
 

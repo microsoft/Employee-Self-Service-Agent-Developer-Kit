@@ -96,75 +96,25 @@ No step may be skipped.
 
 # 3. Required Reading Order
 
-Before implementing any task, contributors shall read specifications in the following order.
+Reading is **dependency-based, not sequential**. Do not read every
+specification on every task. Follow the Specification Classification and the
+Dependency-Based Loading Model defined in `AGENTS.md` (Sections 3, 3a, and 4),
+which resolve only the documents a given task requires:
 
-## Repository Rules
-
-```
-AGENTS.md
-```
-
----
-
-## Project Context
-
-```
-PROJECT.md
-
-INVARIANTS.md
-
-VOCABULARY.md
+```text
+Phase 0  Boot          AGENTS.md (always)
+Phase 1  Resolve Task  04_EXECUTION/TASKS.md → locate TASK-XXX
+Phase 2  Resolve Rule  01_PRODUCT/MIGRATION_RULES.md → only RULE-XXX (if referenced)
+Phase 3  Constitution  00_META/PROJECT.md, INVARIANTS.md, VOCABULARY.md (always)
+Phase 4  Architecture  02_ARCHITECTURE/* (read once per work session)
+Phase 5  Engineering   03_ENGINEERING/* (read once per work session)
+Phase 6  Context       01_PRODUCT/CUSTOMER_JOURNEY.md, MIGRATION_MODES.md,
+                       00_META/ROADMAP.md (only if referenced by the task)
 ```
 
----
-
-## Product
-
-```
-MIGRATION_MODES.md
-
-CUSTOMER_JOURNEY.md
-
-MIGRATION_RULES.md
-```
-
-(Read only the rules relevant to the task.)
-
----
-
-## Architecture
-
-```
-ARCHITECTURE.md
-
-DOMAIN_MODEL.md
-
-SERVICES.md
-
-PIPELINES.md
-
-DATAVERSE_SDK.md
-```
-
----
-
-## Engineering
-
-```
-REPOSITORY_STRUCTURE.md
-
-CODING_STANDARDS.md
-```
-
----
-
-## Execution
-
-```
-TASKS.md
-```
-
-Only after reading the relevant specifications may implementation begin.
+Resolve a task's exact required documents from its `References` section in
+`TASKS.md`. Only after reading the resolved specifications may implementation
+begin.
 
 ---
 
@@ -225,13 +175,13 @@ Every new migration capability should normally be implemented as a new Pipeline 
 Example:
 
 ```
-UpdateRuntimeProviderStep
-
-UpdateTemplateStep
-
-UpdateModelKindStep
+OverrideAgentMetadataStep
 
 ReplaceEndConversationStep
+
+HandleOnActivityTopicStep
+
+HandleGeneratedResponseTopicStep
 ```
 
 Pipeline Steps should remain:
@@ -422,33 +372,18 @@ AI agents shall not:
 
 # 18. Specification Precedence
 
-When conflicts occur:
+Conflict resolution follows the rules defined in `AGENTS.md` Section 4
+(Specification Hierarchy):
 
-```
-AGENTS.md
+* `INVARIANTS.md` is supreme and always wins.
+* Otherwise a lower Level number (see `AGENTS.md` Section 3) takes precedence
+  over a higher one: Orchestrator (0) → Execution (1) → Business Rules (2) →
+  Constitution (3) → Architecture (4) → Engineering (5) → Context (6) →
+  Implementation.
+* Within the same level, the document that owns the concern wins.
 
-↓
-
-INVARIANTS.md
-
-↓
-
-Architecture Specifications
-
-↓
-
-Engineering Specifications
-
-↓
-
-Execution Specifications
-
-↓
-
-Implementation
-```
-
-Higher-level specifications always take precedence.
+Higher-precedence specifications always take precedence. If a conflict is
+discovered, stop and update the specifications before implementing.
 
 ---
 

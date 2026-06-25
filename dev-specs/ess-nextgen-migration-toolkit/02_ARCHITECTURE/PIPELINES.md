@@ -199,13 +199,9 @@ pipeline = (
 
         .use(LoadComponents())
 
-        .use(UpdateRuntimeProvider())
+        .use(OverrideAgentMetadataStep())
 
-        .use(UpdateTemplate())
-
-        .use(UpdateModelKind())
-
-        .use(UpdateConversationNodes())
+        .use(ReplaceEndConversationStep())
 
         .use(ValidateMigration())
 
@@ -268,6 +264,46 @@ class PipelineStep:
 
 ---
 
+## Component Selection
+
+A Pipeline Step targets components by inspecting the canonical `Component`
+model rather than by type-specialized classes.
+
+Each Step declares the component types it applies to and selects matching
+components by filtering on `Component.ComponentType` (and, where relevant, on
+trigger type — e.g. `OnActivity`, `OnGeneratedResponse`). This selection is
+performed inside `can_execute(context)`:
+
+```python
+class HandleOnActivityTopicStep(PipelineStep):
+
+    supported_modes = [PREVIEW, MIGRATE]
+
+    def can_execute(self, context):
+        return any(
+            c.ComponentType == ComponentType.TOPIC
+            and c.Metadata.TriggerType == TriggerType.ON_ACTIVITY
+            for c in context.Components
+        )
+
+    def execute(self, context):
+        for component in context.Components:
+            if (
+                component.ComponentType == ComponentType.TOPIC
+                and component.Metadata.TriggerType == TriggerType.ON_ACTIVITY
+            ):
+                ...  # transform the canonical model only
+```
+
+If `can_execute(context)` returns `False`, the Pipeline Engine skips the Step.
+
+This keeps the framework open for extension (new Steps filter on existing
+canonical models) and closed for modification (the `Component` model and
+Pipeline Engine remain unchanged when new Steps are added). Component type and
+trigger type constants are defined under `constants/`.
+
+---
+
 # 8. Pipeline Registry
 
 ## Purpose
@@ -288,11 +324,11 @@ Maintain registered Pipeline Steps.
 ## Registration Example
 
 ```python
-registry.register(UpdateRuntimeProvider())
+registry.register(OverrideAgentMetadataStep())
 
-registry.register(UpdateTemplate())
+registry.register(ReplaceEndConversationStep())
 
-registry.register(UpdateModelKind())
+registry.register(HandleOnActivityTopicStep())
 ```
 
 The Pipeline Engine executes registered steps.
@@ -593,41 +629,3 @@ The framework is intentionally Open for Extension and Closed for Modification.
 The Pipeline Framework is the execution engine of the ESS NextGen Migration Toolkit.
 
 It provides the reusable infrastructure upon which all migration behavior is implemented.
-
-One thing I'd improve even further. I would actually introduce PipelineStage as a first-class concept.
-
-Instead of registering all steps into one flat list:
-
-```
-pipeline.use(...)
-        .use(...)
-        .use(...)
-```
-
-I'd internally group them:
-
-```
-Pipeline.builder()
-
-    .stage("Discovery")
-        .use(DiscoverAgents())
-        .use(DiscoverComponents())
-        .use(AnalyzeOwnership())
-
-    .stage("Load")
-        .use(LoadTopics())
-        .use(LoadFlows())
-
-    .stage("Migration")
-        .use(UpdateRuntimeProvider())
-        .use(UpdateTemplate())
-        .use(UpdateModelKind())
-
-    .stage("Validation")
-        .use(ValidateMigration())
-
-    .stage("Persistence")
-        .use(Writeback())
-
-    .build()
-```
