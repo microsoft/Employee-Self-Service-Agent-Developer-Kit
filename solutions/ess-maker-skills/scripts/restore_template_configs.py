@@ -184,6 +184,11 @@ def main():
         print("ERROR: Backup file contains no records.")
         sys.exit(1)
 
+    invalid = [r for r in records if r.get("uniqueName") and "value" not in r]
+    if invalid:
+        print("ERROR: Backup file is missing the 'value' field for one or more records.")
+        print(f"  Example uniqueName: {invalid[0].get('uniqueName')}")
+        sys.exit(1)
     meta = backup.get("metadata", {})
     backup_env = meta.get("envUrl", "")
     captured_at = meta.get("capturedAt", "?")
