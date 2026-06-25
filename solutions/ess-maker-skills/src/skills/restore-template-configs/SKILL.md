@@ -202,7 +202,7 @@ Stop here. Do not add commentary after this block.
 The script prints the first failure's full diagnostic at the end of its
 output (status code, tip, URL, request id). Show:
 
-```
+~~~~
 Restore partially failed.
 
 | | Count |
@@ -212,15 +212,15 @@ Restore partially failed.
 | Failed | {K} |
 
 First failure detail:
-```
+~~~
 {paste the "First failure detail" block from the script's stdout verbatim}
-```
+~~~
 
 Follow the tip in the failure message. After fixing the underlying issue
 (usually a permission gap, expired session, or transient throttling),
 re-run `/restore-template-configs` — already-restored records will simply
 overwrite with the same value, so re-running is safe.
-```
+~~~~
 
 Stop here.
 
