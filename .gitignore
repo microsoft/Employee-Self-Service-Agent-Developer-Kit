@@ -27,6 +27,7 @@
 !no-commit/
 !pyproject.toml
 !requirements-dev.txt
+!dev-specs/
 
 # Internal planning docs (not for distribution)
 no-commit/
