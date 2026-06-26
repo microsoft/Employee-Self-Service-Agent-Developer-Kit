@@ -23,18 +23,24 @@ from typing import Any
 import pytest
 
 SCHEMA = "msdyn_copilotforemployeeselfservicehr"
-_WD_CONNECTOR = "/providers/Microsoft.PowerApps/apis/shared_workdaysoap"
 _SHARED_CFG = '{"name":"oauth","values":{}}'
 
+# Real GUID-format middle segments — the agent connection-ref detector requires
+# a ``.{guid}.`` segment.
+G1 = "9f1b2c3d-4e5f-6789-abcd-1234567890ab"
+G2 = "aab52569-483a-f111-8e38-0022480875be"
+G3 = "11111111-2222-3333-4444-555555555555"
 
-def _agent_ref(guid: str, *, shared: bool = True, display: str = "ESS HR Workday",
+
+def _agent_ref(guid: str, *, connector: str = "shared_workdaysoap",
+               shared: bool = True, display: str = "ESS HR Workday",
                via_params_config: bool = False):
     setcfg = None if (via_params_config or not shared) else _SHARED_CFG
     paramscfg = _SHARED_CFG if (via_params_config and shared) else None
     return {
-        "connectionreferencelogicalname": f"{SCHEMA}.{guid}.shared_workdaysoap",
+        "connectionreferencelogicalname": f"{SCHEMA}.{guid}.{connector}",
         "connectionreferencedisplayname": display,
-        "connectorid": _WD_CONNECTOR,
+        "connectorid": f"/providers/Microsoft.PowerApps/apis/{connector}",
         "connectionid": f"conn-{guid}",
         "connectionparametersetconfig": setcfg,
         "connectionparametersconfig": paramscfg,
@@ -42,11 +48,11 @@ def _agent_ref(guid: str, *, shared: bool = True, display: str = "ESS HR Workday
 
 
 def _solution_ref(name: str = "new_sharedworkdaysoap_ff0df"):
-    # A bound Workday SOAP ref that is NOT the agent's (no schema prefix), unshared.
+    # A bound ref that is NOT the agent's (no ``.{guid}.`` segment), unshared.
     return {
         "connectionreferencelogicalname": name,
         "connectionreferencedisplayname": "OAuthUser",
-        "connectorid": _WD_CONNECTOR,
+        "connectorid": "/providers/Microsoft.PowerApps/apis/shared_workdaysoap",
         "connectionid": "conn-ff0df",
         "connectionparametersetconfig": None,
         "connectionparametersconfig": None,
@@ -75,37 +81,50 @@ def _run(runner) -> Any:
     return results[0]
 
 
-# ── PASS / FAIL on the agent's Workday connections ─────────────────────────
+# ── PASS / FAIL on the agent's connections ─────────────────────────────────
 
 def test_all_agent_connections_shared_passes(monkeypatch):
     _stub(monkeypatch, [
-        _agent_ref("g1", shared=True, display="ESS HR Workday"),
-        _agent_ref("g2", shared=True, display="ESS HR Workday Get User Context V2"),
+        _agent_ref(G1, shared=True, display="ESS HR Workday"),
+        _agent_ref(G2, shared=True, display="ESS HR Workday Get User Context V2"),
         _solution_ref(),  # excluded
     ])
     r = _run(_runner())
     assert r.status == "Passed"
-    assert "All 2 Workday connection(s)" in r.result
+    assert "All 2 connection(s) the agent uses" in r.result
 
 
 def test_one_unshared_connection_fails(monkeypatch):
     _stub(monkeypatch, [
-        _agent_ref("g1", shared=True, display="ESS HR Workday"),
-        _agent_ref("g2", shared=False, display="ESS HR Workday Get User Context V2"),
+        _agent_ref(G1, shared=True, display="ESS HR Workday"),
+        _agent_ref(G2, shared=False, display="ESS HR Workday Get User Context V2"),
     ])
     r = _run(_runner())
     assert r.status == "Failed"
     assert "1 of 2" in r.result
     assert "ESS HR Workday Get User Context V2" in r.result
-    # The shared one is not listed as a problem.
     assert "Allow permission to share parameters" in r.remediation
 
 
-def test_solution_refs_are_excluded(monkeypatch):
-    # Only one agent connection (shared) + an unshared solution ref. The solution
-    # ref must NOT drag the verdict to FAIL.
+def test_covers_every_connector_the_agent_references(monkeypatch):
+    # Not just Workday SOAP — a non-Workday agent connection that is unshared
+    # must also fail the check.
     _stub(monkeypatch, [
-        _agent_ref("g1", shared=True),
+        _agent_ref(G1, connector="shared_workdaysoap", shared=True),
+        _agent_ref(G3, connector="shared_commondataserviceforapps",
+                   shared=False, display="Microsoft Dataverse"),
+    ])
+    r = _run(_runner())
+    assert r.status == "Failed"
+    assert "1 of 2" in r.result
+    assert "Microsoft Dataverse" in r.result
+
+
+def test_solution_refs_are_excluded(monkeypatch):
+    # One agent connection (shared) + unshared solution refs (no .{guid}. segment).
+    # The solution refs must NOT drag the verdict to FAIL.
+    _stub(monkeypatch, [
+        _agent_ref(G1, shared=True),
         _solution_ref(),
         {"connectionreferencelogicalname": "msdyn_sharedcommondataserviceforapps_92b66",
          "connectorid": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
@@ -114,23 +133,23 @@ def test_solution_refs_are_excluded(monkeypatch):
     ])
     r = _run(_runner())
     assert r.status == "Passed"
-    assert "All 1 Workday connection(s)" in r.result
+    assert "All 1 connection(s) the agent uses" in r.result
 
 
 def test_sharing_via_parameters_config_column_also_counts(monkeypatch):
-    _stub(monkeypatch, [_agent_ref("g1", shared=True, via_params_config=True)])
+    _stub(monkeypatch, [_agent_ref(G1, shared=True, via_params_config=True)])
     r = _run(_runner())
     assert r.status == "Passed"
 
 
 # ── NOT_CONFIGURED / SKIPPED branches ──────────────────────────────────────
 
-def test_no_agent_workday_refs_is_not_configured(monkeypatch):
-    # Only solution refs (no schema-prefixed agent refs).
+def test_no_agent_refs_is_not_configured(monkeypatch):
+    # Only solution refs (no .{guid}. agent-connection segment).
     _stub(monkeypatch, [_solution_ref()])
     r = _run(_runner())
     assert r.status == "NotConfigured"
-    assert "No Workday connections found for this agent" in r.result
+    assert "No agent connection references found" in r.result
 
 
 def test_no_dataverse_token_is_skipped():
