@@ -747,6 +747,12 @@ def _suppress_manual_conn_sec_when_runs_healthy(
 
     if run_health == Status.PASSED.value:
         # Clean litmus pass — hide every MANUAL Workday connection/security row.
+        # NOTE: deliberately BROAD (prefix match) — a clean pass should silence
+        # ALL manual conn/sec asks, including any added later. The not-passed
+        # branch below is intentionally NARROW (exact ids in _RUNHEALTH_*),
+        # because failure suppression must be evidence-based. Do not "align"
+        # the two: broadening the failure branch would hide manual checks the
+        # error signal hasn't actually ruled out.
         return [
             r for r in results
             if not (
@@ -777,9 +783,11 @@ def _suppress_manual_conn_sec_when_runs_healthy(
 
     if not suppress:
         return results
-    if suppress >= _RUNHEALTH_ALL_SUPPRESSIBLE:
+    if suppress == _RUNHEALTH_ALL_SUPPRESSIBLE:
         # Ruled out every manual check while runs are unhealthy → the break is
         # outside the model's domains (or we misclassified). Fail safe: show all.
+        # (suppress is only ever drawn from _RUNHEALTH_ALL_SUPPRESSIBLE, so this
+        # equality means "every suppressible domain was ruled out".)
         return results
     return [
         r for r in results
@@ -3144,7 +3152,7 @@ def _classify_run(run: dict) -> str:
     return "pending"
 
 
-def _compute_run_failure_signal(window: list[dict]) -> dict:
+def _compute_run_failure_signal(window: list[dict]) -> dict[str, bool]:
     """Summarise which failure-branch categories appear in the recent run window
     so run-health can suppress only the MANUAL Workday verification checks whose
     failure DOMAIN the observed errors positively rule out (see
