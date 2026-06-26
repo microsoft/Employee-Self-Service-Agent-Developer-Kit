@@ -1,15 +1,16 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Tests for WD-CONN-013 (Workday connection OBO parameter sharing).
+"""Tests for WD-CONN-013 (Agent connection OBO parameter sharing).
 
-The check verifies that every Workday connection the *agent* uses has
+The check verifies that every connection the *agent* uses has
 "Allow permission to share parameters" enabled. That setting is persisted on the
 agent's own ``connectionreference`` rows (logical name
 ``{agentSchemaName}.{guid}.{connector}``) in column ``connectionparametersetconfig``
 (populated = shared, null = not shared) — confirmed empirically by toggling it
 live. Solution-template refs (``new_sharedworkdaysoap_ff0df`` etc.) are bound but
-are NOT the agent's connections, so they're excluded by the schema-name prefix.
+are NOT the agent's connections, so they're excluded because their underscore-only
+logical names carry no ``.{guid}.`` segment (the agent-connection structural format).
 
 The Dataverse ``connectionreferences`` query is documented tier — stubbed here
 via ``auth.query_all`` (no cassette).
