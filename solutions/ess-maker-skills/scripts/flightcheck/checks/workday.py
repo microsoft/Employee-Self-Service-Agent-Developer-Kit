@@ -652,6 +652,12 @@ def run_workday_checks(runner) -> list[CheckResult]:
     results.extend(_check_connections(runner))
     results.extend(_check_connection_token_health(runner))
 
+    # WD-CONN-013 — Agent connection OBO parameter sharing. Verifies every
+    # connection the agent uses has "Allow permission to share parameters"
+    # enabled (read from the connectionreference config columns) so end users
+    # invoke the backing services without a first-use connection prompt.
+    results.extend(_check_workday_connection_obo_sharing(runner))
+
     # --- Flow Status ---
     results.extend(_check_flow_status(runner, wd_flows))
 
@@ -1408,6 +1414,157 @@ def _check_package_connection_completeness(runner) -> list[CheckResult]:
         doc_link=doc_link,
     )]
 
+
+# ─────────────────────────────────────────────────────────────────────────
+# WD-CONN-013 — Workday connection OBO parameter sharing
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Microsoft Learn → Copilot Studio → Create and manage connections →
+# "Share connection parameters for On-Behalf-Of (OBO) authentication": the agent
+# maker turns on "Allow permission to share parameters" on each Workday
+# connection (Agent → Settings → Connection Settings → the connection → See
+# details → Connection parameters) so end users invoke Workday without being
+# prompted to establish their own connection at first use.
+#
+# Where the setting is stored (confirmed empirically by toggling it live):
+#   The flag is persisted on the AGENT's own connection reference rows in the
+#   Dataverse ``connectionreference`` table — column
+#   ``connectionparametersetconfig`` (Memo / JSON): populated = shared, null =
+#   not shared. (``promptingbehavior`` is unrelated — it is the solution-import
+#   "Prompt on import / Skip" choice. The connection ``/permissions`` role
+#   assignments are a different, unrelated sharing surface.)
+#
+# Which references count as "the agent's connections":
+#   Copilot Studio creates the agent's own connection references with a logical
+#   name of the form ``{schema}.{guid}.{connectorName}`` — e.g.
+#   ``msdyn_copilotforemployeeselfservicehr.<guid>.shared_workdaysoap`` — i.e. a
+#   GUID delimited by dots (the connector is the final segment). Those are the
+#   rows the toggle writes to, for EVERY connector the agent uses (Workday SOAP,
+#   Dataverse, etc.). The solution-template references shipped by the install
+#   (``new_sharedworkdaysoap_ff0df``, ``msdyn_sharedcommondataserviceforapps_92b66``)
+#   are bound but are NOT the agent's Connection-Settings connections; their
+#   underscore-only logical names carry no ``.{guid}.`` segment, so they're
+#   excluded. (We match on this structural format rather than the agent schema
+#   name from config: the reference prefix is the *product* bot schema, which
+#   does not necessarily equal the published agent's ``config.agent.schemaName``.)
+#
+# Data source: the same documented-tier Dataverse ``connectionreferences`` query
+# WD-PKG-001 already makes, with two extra columns
+# (``connectionparametersetconfig`` / ``connectionparametersconfig``). No new
+# endpoint, no cassette.
+
+
+# An agent's own connection reference logical name embeds a GUID between dots:
+# ``{schema}.{guid}.{connector}``. Solution-template refs (``new_x_y``) don't.
+_AGENT_CONNECTION_REF_RE = re.compile(
+    r"\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.", re.I
+)
+
+
+def _connection_label(ref: dict) -> str:
+    return (
+        ref.get("connectionreferencedisplayname")
+        or ref.get("connectionreferencelogicalname")
+        or "(unnamed connection)"
+    )
+
+
+def _check_workday_connection_obo_sharing(runner) -> list[CheckResult]:
+    """WD-CONN-013 — every connection the agent uses has OBO parameter sharing
+    ("Allow permission to share parameters") enabled, so end users invoke the
+    backing services without a first-use connection prompt.
+
+    Scopes to the agent's own connection references (logical name of the form
+    ``{schema}.{guid}.{connector}``, any connector) and requires
+    ``connectionparametersetconfig`` to be populated on each. See the module
+    comment for why this column / scoping is correct.
+    """
+    cp_id = "WD-CONN-013"
+    desc = "Agent connection OBO parameter sharing"
+    doc_link = f"{DOC_BASE}/workday#step-3-connection-references"
+    roles = [Role.POWER_PLATFORM_ADMIN.value]
+
+    env_url = getattr(runner, "env_url", None)
+    dv_token = getattr(runner, "dv_token", None)
+    if not env_url or not dv_token:
+        return [CheckResult(roles=roles, checkpoint_id=cp_id, category="Workday",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=desc,
+            result="Dataverse token not available — cannot read connection-reference sharing config.",
+        )]
+
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+        from auth import query_all
+
+        refs = query_all(
+            env_url, dv_token, "connectionreferences",
+            "connectionreferencelogicalname,connectionreferencedisplayname,"
+            "connectorid,connectionid,connectionparametersetconfig,"
+            "connectionparametersconfig",
+        )
+    except Exception as e:
+        return [CheckResult(roles=roles, checkpoint_id=cp_id, category="Workday",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=desc,
+            result=f"Unable to read Dataverse connection references: {e}.",
+            remediation="Confirm the FlightCheck identity has Dataverse read access on connectionreferences.",
+        )]
+
+    agent_refs = [
+        r for r in refs
+        if r.get("connectionid")
+        and _AGENT_CONNECTION_REF_RE.search(
+            r.get("connectionreferencelogicalname") or ""
+        )
+    ]
+
+    if not agent_refs:
+        return [CheckResult(roles=roles, checkpoint_id=cp_id, category="Workday",
+            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            description=desc,
+            result=(
+                "No agent connection references found — nothing to evaluate for "
+                "OBO parameter sharing."
+            ),
+            doc_link=doc_link,
+        )]
+
+    unshared = [
+        r for r in agent_refs
+        if not (r.get("connectionparametersetconfig") or r.get("connectionparametersconfig"))
+    ]
+
+    if not unshared:
+        return [CheckResult(roles=roles, checkpoint_id=cp_id, category="Workday",
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
+            description=desc,
+            result=(
+                f"All {len(agent_refs)} connection(s) the agent uses have OBO "
+                "parameter sharing enabled — end users invoke the backing "
+                "services without a first-use connection prompt."
+            ),
+            doc_link=doc_link,
+        )]
+
+    names = ", ".join(sorted(_connection_label(r) for r in unshared))
+    studio = _wd_studio_link(runner)
+    return [CheckResult(roles=roles, checkpoint_id=cp_id, category="Workday",
+        priority=Priority.HIGH.value, status=Status.FAILED.value,
+        description=desc,
+        result=(
+            f"{len(unshared)} of {len(agent_refs)} connection(s) the agent uses "
+            f"do NOT have OBO parameter sharing enabled: {names}. End users will "
+            "be prompted to establish their own connection the first time the "
+            "agent uses the backing service."
+        ),
+        remediation=(
+            f"In Copilot Studio, open {studio} → Settings → Connection Settings → "
+            "the connection → See details → Connection parameters → turn on "
+            "'Allow permission to share parameters' and select the parameters."
+        ),
+        doc_link=doc_link,
+    )]
 
 # ─────────────────────────────────────────────────────────────────────────
 # Install-flavor gating helper (see AGENTS.md design principle #11)
