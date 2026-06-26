@@ -48,6 +48,20 @@ COPILOT_STUDIO_SKUS: tuple[str, ...] = (
     "MICROSOFT_365_COPILOT",           # M365 Copilot bundle includes Studio messages
 )
 
+# Prepaid Copilot Studio message-capacity SKUs for PRE-006. Deliberately a
+# NARROWER list than COPILOT_STUDIO_SKUS: it EXCLUDES the MICROSOFT_365_COPILOT
+# bundle. Owning end-user Microsoft 365 Copilot licenses is NOT the same as
+# having *purchased prepaid message capacity* — prepaid capacity exists
+# specifically for users WITHOUT a Copilot license. Counting the bundle here
+# would make PRE-006 pass on virtually every ESS tenant (they all hold
+# MICROSOFT_365_COPILOT for PRE-001) and never catch a missing prepaid purchase.
+PREPAID_CAPACITY_SKUS: tuple[str, ...] = (
+    "COPILOT_STUDIO",                  # Copilot Studio plan (monthly message allotment)
+    "MICROSOFT_COPILOT_STUDIO",        # alternate naming convention
+    "POWER_VIRTUAL_AGENTS",            # legacy PVA / prepaid capacity SKUs
+    "CCIBOTS_PRIVPREV_VIRAL",          # original PVA preview SKU
+)
+
 # SKUs that carry Microsoft Teams entitlement, including bundles
 # whose part numbers do not literally contain "TEAMS".
 TEAMS_BEARING_SKUS: tuple[str, ...] = (
@@ -102,6 +116,29 @@ def _has_prepaid_messages(graph) -> bool | None:
     except Exception:
         return None
     return any(_sku_matches(s, COPILOT_STUDIO_SKUS) for s in skus)
+
+
+def _has_prepaid_capacity(graph) -> bool | None:
+    """Whether the tenant owns a prepaid Copilot Studio message-capacity SKU.
+
+    PRE-006-specific signal. Unlike ``_has_prepaid_messages`` (PRE-005), this
+    matches ``PREPAID_CAPACITY_SKUS``, which EXCLUDES the Microsoft 365 Copilot
+    bundle: end-user Copilot licenses are not prepaid message capacity, and
+    counting them would make PRE-006 pass on essentially every ESS tenant.
+
+    Returns:
+      - ``True``  — a prepaid Copilot Studio message-capacity SKU is present.
+      - ``False`` — Graph is reachable and no such SKU exists.
+      - ``None``  — could not determine (no Graph client, or the call failed);
+        the caller must not treat this as either present or absent.
+    """
+    if graph is None:
+        return None
+    try:
+        skus = graph.get_subscribed_skus()
+    except Exception:
+        return None
+    return any(_sku_matches(s, PREPAID_CAPACITY_SKUS) for s in skus)
 
 
 # Copilot Studio message capacity in the Power Platform Licensing
@@ -513,6 +550,119 @@ def _check_copilot_studio_capacity(runner) -> CheckResult:
             "Ensure Power Platform Admin and Dataverse/Graph access, then re-run.")
 
 
+# PRE-006 — prepaid Copilot Studio message capacity purchased. The ESS
+# prerequisites doc's "Set up prepaid messages" section is the heritage anchor;
+# the purchase itself happens in the Microsoft 365 admin center catalog.
+_PREPAID_DOC = f"{DOC_BASE}/prerequisites#set-up-prepaid-messages"
+_PREPAID_CATALOG = (
+    "[Microsoft 365 admin center > Billing > Purchase services]"
+    "(https://admin.microsoft.com/Adminportal/Home#/catalog)"
+)
+
+
+def _pre006(status: str, result: str, remediation: str = "") -> CheckResult:
+    """Build a PRE-006 row (every branch shares id / category / priority / role)."""
+    return CheckResult(
+        roles=[Role.POWER_PLATFORM_ADMIN.value],
+        checkpoint_id="PRE-006", category="Prerequisites",
+        priority=Priority.HIGH.value, status=status,
+        description="Prepaid message capacity purchased",
+        result=result, remediation=remediation, doc_link=_PREPAID_DOC,
+    )
+
+
+def _check_prepaid_message_capacity(runner) -> CheckResult:
+    """PRE-006 — prepaid Copilot Studio message capacity purchased.
+
+    Heritage check (ESS Pre-flight Validator, PRE-006): "Prepaid message
+    capacity purchased | Power Platform API | Message capacity > 0". Confirms
+    the tenant has actually *purchased* prepaid Copilot Studio message
+    capacity — the non-Pay-as-you-go billing model ESS uses for users without
+    a Microsoft 365 Copilot license.
+
+    Scope vs the sibling capacity checks (deliberately non-overlapping):
+      - PRE-005 answers "is *a* billing model configured for this environment"
+        (PayG health OR per-env capacity).
+      - PRE-004 answers "is the allocated capacity *sufficient* for the
+        shared/published user population" (one-credit-per-user floor).
+      - PRE-006 answers the narrower heritage question "has prepaid message
+        capacity been *purchased* at all (> 0)". It is the prepaid-billing
+        gate, and is skipped when Pay-as-you-go already covers billing.
+
+    Determinism / safety: idempotent and read-only (no tenant writes). Two
+    documented, read-only signals are consulted:
+      - Power Platform Licensing currency-allocation API (per-environment
+        ``MCSMessages``) via ``_env_mcs_allocation`` — the heritage
+        "Power Platform API, message capacity > 0" signal.
+      - Microsoft Graph ``subscribedSkus`` (tenant-wide prepaid Copilot Studio
+        SKU) via ``_has_prepaid_capacity`` — confirms the capacity was
+        purchased even when it is not yet allocated to this environment. Uses
+        the narrowed ``PREPAID_CAPACITY_SKUS`` (the Microsoft 365 Copilot bundle
+        does NOT count: end-user licenses are not prepaid capacity).
+
+    Outcomes (admin-focused):
+      - SKIPPED — Pay-as-you-go is configured (``runner._payg_configured`` is
+        True); prepaid capacity is not required. PRE-005 owns that path.
+      - PASS    — message capacity > 0 (env allocation > 0, or the tenant owns
+        prepaid Copilot Studio capacity).
+      - FAIL    — prepaid-only (no PayG) AND no prepaid capacity purchased
+        (capacity == 0).
+      - WARNING — could not determine the capacity state (permission denied /
+        API unavailable), or an unexpected error occurred while checking.
+        Surfaced (never a silent pass) so the operator resolves the gap and
+        re-runs. Mirrors PRE-005's "could not be determined" handling.
+    """
+    try:
+        # PayG covers billing -> prepaid capacity is optional. PRE-005 already
+        # evaluated the PayG path; don't double-report it as a prepaid gap.
+        if getattr(runner, "_payg_configured", None) is True:
+            return _pre006(Status.SKIPPED.value,
+                "Pay-as-you-go billing is configured for this environment (see PRE-005), so prepaid Copilot Studio message capacity is not required. Skipping the prepaid-capacity purchase check.")
+
+        env_alloc = _env_mcs_allocation(
+            getattr(runner, "powerplatform", None), getattr(runner, "env_id", None))
+        purchased = _has_prepaid_capacity(getattr(runner, "graph", None))
+
+        # Power Platform API confirms message capacity > 0 on this environment.
+        if env_alloc is not None and env_alloc > 0:
+            return _pre006(Status.PASSED.value,
+                f"Prepaid Copilot Studio message capacity is purchased and provisioned: {env_alloc} message credit(s) are allocated to this environment (Power Platform Licensing API).")
+        # Tenant owns prepaid capacity even if this environment's allocation is
+        # zero/unreadable. Purchase is confirmed; PRE-004 judges sufficiency.
+        if purchased is True:
+            return _pre006(Status.PASSED.value,
+                "The tenant has purchased prepaid Copilot Studio message capacity (a Copilot Studio message-bearing SKU is present). PRE-004 evaluates whether the allocation to this environment is sufficient for the shared/published user population.")
+        # Tenant has no prepaid SKU at all and PayG is not configured -> the
+        # heritage FAIL: prepaid-only with capacity == 0.
+        if purchased is False:
+            return _pre006(Status.FAILED.value,
+                "No prepaid Copilot Studio message capacity has been purchased for this tenant, and Pay-as-you-go billing is not configured, so users without a Microsoft 365 Copilot license have no message capacity to consume — ESS agent invocations will fail at runtime.",
+                f"Purchase Microsoft Copilot Studio prepaid message capacity in the {_PREPAID_CATALOG}, then allocate it to this environment in {_CAPACITY_PORTAL}; alternatively, configure Pay-as-you-go billing (see PRE-005).")
+        # purchased is None and env allocation not > 0: the tenant-wide signal
+        # could not confirm or deny a purchase -> WARNING (surface it; never a
+        # false FAIL/PASS). Mirrors PRE-005's "could not be determined"
+        # handling. Describe the env allocation accurately: it was either
+        # unreadable (None) or read successfully as zero, which are different
+        # operator stories.
+        if env_alloc is None:
+            env_signal = "this environment's Power Platform allocation could not be read"
+        else:
+            env_signal = "this environment has no dedicated Power Platform allocation (read as 0)"
+        return _pre006(Status.WARNING.value,
+            "Could not determine whether prepaid Copilot Studio message capacity has been purchased: "
+            f"Microsoft Graph was unavailable or directory read was denied, and {env_signal}.",
+            f"Sign in to Microsoft Graph when prompted (or grant Directory.Read.All) and ensure Power Platform Admin access so FlightCheck can read prepaid capacity, then re-run. Review or purchase prepaid capacity in the {_PREPAID_CATALOG}.")
+    except Exception as e:
+        # Per-check convention (mirrors PRE-004/005): a check that raises
+        # degrades to its own WARNING row rather than bubbling up and turning
+        # the whole Prerequisites category into a single ERROR. Include the
+        # exception type so a genuine code bug isn't hidden behind an
+        # environmental-looking warning during triage.
+        return _pre006(Status.WARNING.value,
+            f"Unable to determine prepaid Copilot Studio message capacity: {type(e).__name__}: {e}",
+            f"Ensure Power Platform Admin and Microsoft Graph directory read access, then re-run. Review prepaid capacity in the {_PREPAID_CATALOG}.")
+
+
 def run_prerequisites_checks(runner) -> list[CheckResult]:
     """Execute all prerequisites checks using the Graph client."""
     graph = runner.graph
@@ -821,7 +971,7 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
         # check passed on the prepaid arm), so the capacity/prepaid checks can
         # read it via getattr(runner, "_payg_configured", None) and treat True
         # as "PayG covers billing" (AGENTS.md principle #11). PRE-004 (capacity)
-        # consumes it immediately below; PRE-006 (prepaid) will too.
+        # consumes it immediately below; PRE-006 (prepaid) does too.
         runner._payg_configured = payg_configured
         results.append(payg_result)
 
@@ -830,5 +980,11 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
     # cross-check). The report sorts by priority then id, so append order is
     # cosmetic — PRE-004 still renders in numeric order.
     results.append(_check_copilot_studio_capacity(runner))
+
+    # ---- PRE-006: prepaid Copilot Studio message capacity purchased ----
+    # Runs after PRE-005 so it can read runner._payg_configured (skip when PayG
+    # already covers billing). Append order is cosmetic — the report sorts by
+    # priority then checkpoint id.
+    results.append(_check_prepaid_message_capacity(runner))
 
     return results
