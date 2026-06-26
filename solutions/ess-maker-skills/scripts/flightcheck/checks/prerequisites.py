@@ -638,11 +638,19 @@ def _check_prepaid_message_capacity(runner) -> CheckResult:
             return _pre006(Status.FAILED.value,
                 "No prepaid Copilot Studio message capacity has been purchased for this tenant, and Pay-as-you-go billing is not configured, so users without a Microsoft 365 Copilot license have no message capacity to consume — ESS agent invocations will fail at runtime.",
                 f"Purchase Microsoft Copilot Studio prepaid message capacity in the {_PREPAID_CATALOG}, then allocate it to this environment in {_CAPACITY_PORTAL}; alternatively, configure Pay-as-you-go billing (see PRE-005).")
-        # purchased is None and env allocation not > 0: neither signal could
-        # confirm or deny a purchase -> WARNING (surface it; never a false
-        # FAIL/PASS). Mirrors PRE-005's "could not be determined" handling.
+        # purchased is None and env allocation not > 0: the tenant-wide signal
+        # could not confirm or deny a purchase -> WARNING (surface it; never a
+        # false FAIL/PASS). Mirrors PRE-005's "could not be determined"
+        # handling. Describe the env allocation accurately: it was either
+        # unreadable (None) or read successfully as zero, which are different
+        # operator stories.
+        if env_alloc is None:
+            env_signal = "this environment's Power Platform allocation could not be read"
+        else:
+            env_signal = "this environment has no dedicated Power Platform allocation (read as 0)"
         return _pre006(Status.WARNING.value,
-            "Could not determine whether prepaid Copilot Studio message capacity has been purchased: Microsoft Graph was unavailable or directory read was denied, and this environment's Power Platform allocation could not be read.",
+            "Could not determine whether prepaid Copilot Studio message capacity has been purchased: "
+            f"Microsoft Graph was unavailable or directory read was denied, and {env_signal}.",
             f"Sign in to Microsoft Graph when prompted (or grant Directory.Read.All) and ensure Power Platform Admin access so FlightCheck can read prepaid capacity, then re-run. Review or purchase prepaid capacity in the {_PREPAID_CATALOG}.")
     except Exception as e:
         # Per-check convention (mirrors PRE-004/005): a check that raises
