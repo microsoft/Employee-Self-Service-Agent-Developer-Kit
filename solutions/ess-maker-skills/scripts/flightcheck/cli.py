@@ -123,6 +123,15 @@ def open_report_in_browser(output_dir):
 
 
 def main():
+    # Force UTF-8 console output so summary glyphs (→, •) don't crash on
+    # Windows cp1252 terminals. Without this, _print_prioritized_summary
+    # raises UnicodeEncodeError before save_results/telemetry are reached.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
     parser = argparse.ArgumentParser(description="ESS FlightCheck — Pre-deployment Validator")
     parser.add_argument(
         "--scope", default="full",
@@ -144,6 +153,15 @@ def main():
     parser.add_argument(
         "--no-open", action="store_true",
         help="Don't open the HTML report in a browser after running",
+    )
+    parser.add_argument(
+        "--no-telemetry", action="store_true",
+        help="Don't emit anonymous FlightCheck outcome telemetry",
+    )
+    parser.add_argument(
+        "--invocation-source", default="cli",
+        choices=["adk", "installer", "cli"],
+        help="How FlightCheck was invoked (adk=slash-command, installer=standalone installer, cli=direct Python CLI)",
     )
     args = parser.parse_args()
 
@@ -365,6 +383,33 @@ def main():
 
     # Save results
     save_results(result, args.output)
+
+    # Emit anonymous outcome telemetry (best-effort; never affects exit code).
+    if not args.no_telemetry:
+        try:
+            from flightcheck import telemetry
+
+            active_agent = next(
+                (a for a in agents if a.get("slug") == active),
+                agents[0] if agents else {},
+            )
+            _tele = telemetry.emit_flightcheck_telemetry(
+                result,
+                tenant_id=tenant_id,
+                agent_id=active_agent.get("botId", ""),
+                scope=args.scope,
+                agent_count=len(agents),
+                invocation_source=args.invocation_source,
+            )
+            print(
+                f"[telemetry] env={_tele.get('env')} sent={_tele.get('sent')} "
+                f"events={_tele.get('events')} status={_tele.get('status')} "
+                f"reason={_tele.get('reason')}"
+            )
+        except Exception as _tele_err:  # never break the run
+            print(f"[telemetry] skipped — {type(_tele_err).__name__}: {_tele_err}")
+    else:
+        print("[telemetry] disabled via --no-telemetry")
 
     # Open HTML report in browser (skip with --no-open for CI / headless runs)
     if not args.no_open:
