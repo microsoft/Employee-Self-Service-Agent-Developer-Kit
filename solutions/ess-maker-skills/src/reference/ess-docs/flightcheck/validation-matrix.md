@@ -236,6 +236,14 @@ The operator confirms the effective per-group state in the portal.
 
 ---
 
+## 8. Infrastructure & Security
+
+| ID | Check | Priority | Method | PASS | FAIL | WARN |
+|----|-------|----------|--------|------|------|------|
+| INFRA-001 | Inbound connectivity to Microsoft services | Critical | TCP probe (DNS → TCP → TLS) to required Microsoft endpoints (Entra ID, Power Platform, Dataverse, Copilot Studio, Graph) | All endpoints reachable with valid TLS | Any Microsoft endpoint unreachable (DNS failure, TCP timeout, connection refused) | TLS handshake failure (proxy interception, certificate issue) |
+
+---
+
 ## Running FlightCheck
 
 ```bash
