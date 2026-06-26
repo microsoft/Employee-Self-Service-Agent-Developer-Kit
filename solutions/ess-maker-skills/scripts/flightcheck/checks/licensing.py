@@ -73,6 +73,7 @@ shared_commondataserviceforapps=Premium, shared_conversionservice=Standard.
 
 from __future__ import annotations
 
+from dataclasses import dataclass, field
 import re
 from pathlib import Path
 
@@ -441,6 +442,7 @@ def _resolve_team(runner, team_id, entra, undetermined, notes):
                 f"first {MAX_MEMBERS_PER_GROUP} were checked"
             )
         added = 0
+        licensable = 0
         for m in members[:MAX_MEMBERS_PER_GROUP]:
             upn = m.get("userPrincipalName")
             mid = m.get("id")
@@ -448,15 +450,37 @@ def _resolve_team(runner, team_id, entra, undetermined, notes):
             # disabled accounts — they can't trigger the flow, mirroring the
             # isdisabled skip in _resolve_systemuser.
             if upn and mid and m.get("accountEnabled") is not False:
+                # Count every licensable member the Graph response returned,
+                # independent of dedup, so we can distinguish "group empty /
+                # access denied" from "members already counted via an
+                # overlapping group".
+                licensable += 1
                 if mid not in entra:
                     added += 1
                 entra.setdefault(mid, upn)
-        # Acknowledge that licensing for these users was verified through their
-        # membership in the shared group (their licenseDetails reflects any
-        # group-based SKU assignment transitively).
-        notes.append(
-            f"resolved {added} licensable user(s) via shared group '{name}'"
-        )
+        if added == 0 and licensable == 0:
+            # No licensable members at all from an Entra group-backed share is
+            # ambiguous: the group may be genuinely empty, OR
+            # get_group_transitive_members returned [] on a 401/403 (it does not
+            # raise on permission denial). Either way the audience is UNVERIFIED,
+            # so record it as undetermined — otherwise a caller sharing ONLY with
+            # this group sees an empty population and a false "not shared with
+            # anyone" all-clear.
+            #
+            # When added == 0 but licensable > 0, every member was already
+            # counted via an earlier overlapping group; that is expected in
+            # enterprise setups and must NOT be flagged.
+            undetermined.append(
+                f"shared group '{name}' resolved to 0 members "
+                f"(verify GroupMember.Read.All / that the group is non-empty)"
+            )
+        elif added > 0:
+            # Acknowledge that licensing for these users was verified through
+            # their membership in the shared group (their licenseDetails reflects
+            # any group-based SKU assignment transitively).
+            notes.append(
+                f"resolved {added} licensable user(s) via shared group '{name}'"
+            )
         return
     # Owner / access team — resolve members via Dataverse teammembership.
     tm = query_all(
@@ -491,6 +515,83 @@ def _summarize_users(names: list[str]) -> str:
     return f"{shown} (+{len(names) - _MAX_NAMED_USERS} more)"
 
 
+@dataclass
+class SharedPrincipalResolution:
+    """The distinct population an agent is shared with / published to.
+
+    Produced by :func:`resolve_shared_with_users`; consumed by LIC-FLOW-002
+    (per-user license verification) and PRE-004 (Copilot Studio capacity
+    sufficiency). Centralizing the enumeration keeps both checks counting the
+    same population the same way.
+
+    ``users`` maps Entra object id -> display (UPN / Dataverse domainname).
+    ``available`` is False when the enumeration could not even start (missing
+    Graph/Dataverse access or no configured botId); ``reason`` then carries
+    ``"graph_dataverse"`` or ``"no_bot_id"`` so each caller can word its own
+    skip/guidance.
+    """
+    users: dict[str, str] = field(default_factory=dict)
+    undetermined: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
+    enumerate_failed: bool = False
+    available: bool = True
+    reason: str = ""
+
+
+def resolve_shared_with_users(runner) -> SharedPrincipalResolution:
+    """Enumerate the distinct Entra users an agent is shared with / published to.
+
+    Reads each configured agent bot's sharing via the Dataverse
+    ``RetrieveSharedPrincipalsAndAccess`` function, then resolves every
+    principal to Entra users: system users directly, and teams / security
+    groups by expansion (Entra group-backed teams via Graph transitive
+    membership capped at ``MAX_MEMBERS_PER_GROUP``; owner/access teams via
+    Dataverse ``teammemberships``). Application and disabled users are skipped
+    — they don't consume an interactive seat or invoke flows as an end user.
+
+    Requires a Graph client, a Dataverse env URL + token, and at least one
+    configured ``botId``; when any is missing the result is marked
+    ``available=False`` with a ``reason`` the caller maps to its own skip
+    message. ``AuthExpiredError`` propagates (an expired Dataverse token is a
+    blocking condition, not a soft note).
+    """
+    graph = getattr(runner, "graph", None)
+    env_url = getattr(runner, "env_url", None)
+    dv_token = getattr(runner, "dv_token", None)
+    bot_ids = _bot_ids(runner)
+
+    if not graph or not env_url or not dv_token:
+        return SharedPrincipalResolution(available=False, reason="graph_dataverse")
+    if not bot_ids:
+        return SharedPrincipalResolution(available=False, reason="no_bot_id")
+
+    res = SharedPrincipalResolution()
+    for bot_id in bot_ids:
+        try:
+            resp = retrieve_shared_principals_and_access(env_url, dv_token, bot_id)
+        except AuthExpiredError:
+            # An expired/invalid Dataverse token must surface as a blocking
+            # ERROR (via the runner), not a benign per-bot WARNING — and it
+            # must behave the same whichever Dataverse call hits it first
+            # (_resolve_systemuser/_resolve_team let it propagate too).
+            raise
+        except Exception as e:
+            res.undetermined.append(f"could not read sharing for agent {bot_id}: {e}")
+            res.enumerate_failed = True
+            continue
+        for pa in (resp.get("PrincipalAccesses") or []):
+            ptype, pid = _principal_type_and_id(pa.get("Principal") or {})
+            if not pid:
+                continue
+            if ptype == "systemuser":
+                _resolve_systemuser(env_url, dv_token, pid, res.users, res.undetermined)
+            elif ptype == "team":
+                _resolve_team(runner, pid, res.users, res.undetermined, res.notes)
+            else:
+                res.undetermined.append(f"unsupported principal type '{ptype or 'unknown'}'")
+    return res
+
+
 def _check_shared_user_licensing(runner) -> list[CheckResult]:
     """LIC-FLOW-002 — verify the agent's shared-with users hold the license
     required to run its premium-connector flows.
@@ -505,12 +606,17 @@ def _check_shared_user_licensing(runner) -> list[CheckResult]:
     if not getattr(runner, "_lic_flow_premium_present", False):
         return []  # no premium-connector flow ⇒ no licensing exposure to verify
 
-    graph = getattr(runner, "graph", None)
-    env_url = getattr(runner, "env_url", None)
-    dv_token = getattr(runner, "dv_token", None)
-    bot_ids = _bot_ids(runner)
-
-    if not graph or not env_url or not dv_token:
+    resolution = resolve_shared_with_users(runner)
+    if not resolution.available:
+        if resolution.reason == "no_bot_id":
+            return [CheckResult(roles=[Role.M365_ADMIN.value],
+                checkpoint_id="LIC-FLOW-002", category="Licensing",
+                priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+                description="Shared-user flow licensing",
+                result="No agent botId in config; can't resolve who the agent is shared with.",
+                remediation="Run /setup so the agent's botId is recorded in .local/config.json.",
+                doc_link=PA_LICENSING_FAQ,
+            )]
         return [CheckResult(roles=[Role.M365_ADMIN.value],
             checkpoint_id="LIC-FLOW-002", category="Licensing",
             priority=Priority.HIGH.value, status=Status.SKIPPED.value,
@@ -526,47 +632,16 @@ def _check_shared_user_licensing(runner) -> list[CheckResult]:
             ),
             doc_link=PA_LICENSING_FAQ,
         )]
-    if not bot_ids:
-        return [CheckResult(roles=[Role.M365_ADMIN.value],
-            checkpoint_id="LIC-FLOW-002", category="Licensing",
-            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
-            description="Shared-user flow licensing",
-            result="No agent botId in config; can't resolve who the agent is shared with.",
-            remediation="Run /setup so the agent's botId is recorded in .local/config.json.",
-            doc_link=PA_LICENSING_FAQ,
-        )]
 
+    graph = getattr(runner, "graph", None)  # used for the per-user license lookups below
     table = _load_sku_table()
     required_skus, required_plans = table["skus"], table["plans"]
 
-    # ---- Enumerate + resolve shared principals across all agents ----
-    entra: dict[str, str] = {}      # entra_id -> display (UPN / domainname)
-    undetermined: list[str] = []
-    notes: list[str] = []
-    enumerate_failed = False
-    for bot_id in bot_ids:
-        try:
-            resp = retrieve_shared_principals_and_access(env_url, dv_token, bot_id)
-        except AuthExpiredError:
-            # An expired/invalid Dataverse token must surface as a blocking
-            # ERROR (via the runner), not a benign per-bot WARNING — and it
-            # must behave the same whichever Dataverse call hits it first
-            # (_resolve_systemuser/_resolve_team let it propagate too).
-            raise
-        except Exception as e:
-            undetermined.append(f"could not read sharing for agent {bot_id}: {e}")
-            enumerate_failed = True
-            continue
-        for pa in (resp.get("PrincipalAccesses") or []):
-            ptype, pid = _principal_type_and_id(pa.get("Principal") or {})
-            if not pid:
-                continue
-            if ptype == "systemuser":
-                _resolve_systemuser(env_url, dv_token, pid, entra, undetermined)
-            elif ptype == "team":
-                _resolve_team(runner, pid, entra, undetermined, notes)
-            else:
-                undetermined.append(f"unsupported principal type '{ptype or 'unknown'}'")
+    # Shared population resolved once (shared helper, also used by PRE-004).
+    entra = resolution.users        # entra_id -> display (UPN / domainname)
+    undetermined = resolution.undetermined
+    notes = resolution.notes
+    enumerate_failed = resolution.enumerate_failed
 
     if not entra:
         # Nobody resolvable. If enumeration itself failed, that's a SKIP;
