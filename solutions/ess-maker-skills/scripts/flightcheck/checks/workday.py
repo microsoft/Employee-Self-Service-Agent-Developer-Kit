@@ -694,37 +694,110 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # SOAP tests run (e.g. credentials unavailable).
     results.extend(_check_custom_workflow_inventory(runner))
 
-    return _suppress_manual_conn_sec_when_runs_healthy(results)
+    return _suppress_manual_conn_sec_when_runs_healthy(results, runner)
+
+
+# The MANUAL Workday verification checks run-health can suppress, grouped by the
+# failure DOMAIN each diagnoses. Run history can narrow to a domain but cannot
+# split the two SSO-path checks from each other — it never distinguishes "signing
+# cert expired" from "Entra federation misconfigured", so an SSO-family break
+# surfaces both. Permission (WD-SEC-003) is independently isolable.
+_RUNHEALTH_SSO_MANUAL = ("WD-CONN-010", "WD-CONN-102")
+_RUNHEALTH_PERMISSION_MANUAL = ("WD-SEC-003",)
+_RUNHEALTH_ALL_SUPPRESSIBLE = frozenset(_RUNHEALTH_SSO_MANUAL + _RUNHEALTH_PERMISSION_MANUAL)
 
 
 def _suppress_manual_conn_sec_when_runs_healthy(
     results: list[CheckResult],
+    runner=None,
 ) -> list[CheckResult]:
-    """Hide the MANUAL Workday connection/security checks when the run-health
-    litmus test (WD-RUN-001) proves Workday is actually working.
+    """Show only the MANUAL Workday verification checks the run-health signal
+    cannot rule out.
 
     WD-CONN-010 (Entra↔Workday federation), WD-CONN-102 (SAML signing cert),
     and WD-SEC-003 (personal-data write permission) emit MANUAL rows asking the
-    operator to hand-verify config in the Workday/Entra tenant. When WD-RUN-001
-    PASSES, runtime traffic already demonstrates that chain works end to end, so
-    those manual asks are redundant noise — drop them.
+    operator to hand-verify config in the Workday/Entra tenant. They are noise
+    when the relevant chain demonstrably works, and signal when it is broken.
 
-    They are KEPT whenever WD-RUN-001 does NOT pass — i.e. it FAILED (they help
-    diagnose the break), or it could not confirm health (NOT_CONFIGURED = no
-    traffic yet, SKIPPED = run history unavailable), where hand-verification is
-    still the operator's best signal (e.g. a fresh pre-deployment env).
+    Two layers:
+
+    1. **WD-RUN-001 PASSED** — recent runtime traffic proves the whole chain
+       works end to end → drop *every* MANUAL Workday connection/security ask.
+
+    2. **WD-RUN-001 not passed** — use the classified failure signal
+       (``runner._workday_run_failure_signal``, from
+       ``_compute_run_failure_signal``) to hide only the checks whose failure
+       DOMAIN the observed errors positively exclude, leaving the verification(s)
+       plausibly responsible:
+         * ``auth_proven`` (Workday answered in any form) ⟹ the SSO / signing-cert
+           path works ⟹ suppress WD-CONN-010 / WD-CONN-102.
+         * ``auth_proven`` AND no caught Workday fault ⟹ Workday answered with no
+           permission denial on the exercised scenarios ⟹ also suppress
+           WD-SEC-003.
+       A check is removed ONLY on such positive evidence. Anything not excluded
+       stays visible — including *every* check when the signal is absent
+       (SKIPPED / NOT_CONFIGURED, or no runner) or uninformative (e.g. only a
+       no-response hard failure, or a pre-call template-retrieval error), since
+       those rule nothing out.
+
+       Safety net: if the rule-outs would suppress *every* manual check while
+       run-health is NOT passing, that is contradictory — we have classified a
+       real, unhealthy break as excluding all of our manual verifications, which
+       means the actual cause is something this model didn't anticipate (e.g. a
+       pure template/config break). Rather than leave the operator with zero
+       guidance, fail safe and show *all* of them.
     """
     run_health = next(
         (r.status for r in results if r.checkpoint_id == "WD-RUN-001"), None
     )
-    if run_health != Status.PASSED.value:
+
+    if run_health == Status.PASSED.value:
+        # Clean litmus pass — hide every MANUAL Workday connection/security row.
+        # NOTE: deliberately BROAD (prefix match) — a clean pass should silence
+        # ALL manual conn/sec asks, including any added later. The not-passed
+        # branch below is intentionally NARROW (exact ids in _RUNHEALTH_*),
+        # because failure suppression must be evidence-based. Do not "align"
+        # the two: broadening the failure branch would hide manual checks the
+        # error signal hasn't actually ruled out.
+        return [
+            r for r in results
+            if not (
+                r.status == Status.MANUAL.value
+                and (r.checkpoint_id.startswith("WD-CONN")
+                     or r.checkpoint_id.startswith("WD-SEC"))
+            )
+        ]
+
+    signal = getattr(runner, "_workday_run_failure_signal", None) if runner else None
+    if not signal:
+        # Inconclusive (no run window) or called without a runner — keep all.
+        return results
+
+    # Suppress a manual check ONLY on positive evidence that its failure domain
+    # is not the culprit. Absence of evidence is never a rule-out, so anything
+    # not positively excluded stays visible.
+    suppress: set[str] = set()
+    if signal.get("auth_proven"):
+        # Workday accepted the OAuthUser SSO token and answered in some form →
+        # the SSO / Entra-federation / signing-cert path demonstrably works.
+        suppress.update(_RUNHEALTH_SSO_MANUAL)
+        if not signal.get("workday_fault"):
+            # Workday answered AND none of the answers was a fault → no
+            # permission denial occurred on the exercised scenarios → the
+            # personal-data write-permission check is not implicated either.
+            suppress.update(_RUNHEALTH_PERMISSION_MANUAL)
+
+    if not suppress:
+        return results
+    if suppress == _RUNHEALTH_ALL_SUPPRESSIBLE:
+        # Ruled out every manual check while runs are unhealthy → the break is
+        # outside the model's domains (or we misclassified). Fail safe: show all.
+        # (suppress is only ever drawn from _RUNHEALTH_ALL_SUPPRESSIBLE, so this
+        # equality means "every suppressible domain was ruled out".)
         return results
     return [
         r for r in results
-        if not (
-            r.status == Status.MANUAL.value
-            and (r.checkpoint_id.startswith("WD-CONN") or r.checkpoint_id.startswith("WD-SEC"))
-        )
+        if not (r.status == Status.MANUAL.value and r.checkpoint_id in suppress)
     ]
 
 
@@ -3173,6 +3246,26 @@ def _check_flow_status(runner, wd_flows: list) -> list[CheckResult]:
 # The single success Response action. Anything else is a failure branch.
 _WD_SUCCESS_RESPONSE_ACTION = "Respond_to_Copilot_with_Success"
 
+# The distinct FAILURE Response-action branches the ESS Workday shared flow
+# routes to (verified live + in the flightcheck_workday_runs.yaml cassette).
+# The Response-action name is the only run-history-visible signal of *what kind*
+# of failure occurred (the actual Workday faultstring lives behind a separate,
+# SAS-signed outputsLink we deliberately do NOT fetch — see the WD-RUN-001
+# module comment and _compute_run_failure_signal):
+#   * errorMessage          — a Workday SOAP/API fault was CAUGHT: the call
+#                             reached Workday and it answered with a fault, so
+#                             the OAuthUser SSO token was accepted. This is the
+#                             permission/credential signal.
+#   * XmlTemplate→Json fail  — Workday returned a response the flow could not
+#                             transform. Also proves the call SUCCEEDED (SSO/auth
+#                             OK); the problem is the response template/config.
+#   * TemplateRetrievalFail  — the scenario's request template could not be
+#                             retrieved from Dataverse config. A pre-call config
+#                             error that proves nothing about auth or permission.
+_WD_WORKDAY_FAULT_RESPONSE = "Respond_to_Copilot_with_failure_errorMessage"
+_WD_TEMPLATE_TRANSFORM_RESPONSE = "Respond_to_Copilot_with_XmlTemplate_To_Json_Failed"
+_WD_TEMPLATE_RETRIEVAL_RESPONSE = "Respond_to_Copilot_with_TemplateRetrievalFailure"
+
 # Terminal run statuses that are definite failures of the run itself. A run in
 # any of these did not complete successfully, regardless of response branch.
 # (Cancelled / Skipped and unknown states are intentionally NOT here — they are
@@ -3214,6 +3307,48 @@ def _classify_run(run: dict) -> str:
     if status in _RUN_FAILURE_STATUSES:
         return "hard_failure"
     return "pending"
+
+
+def _compute_run_failure_signal(window: list[dict]) -> dict[str, bool]:
+    """Summarise which failure-branch categories appear in the recent run window
+    so run-health can suppress only the MANUAL Workday verification checks whose
+    failure DOMAIN the observed errors positively rule out (see
+    ``_suppress_manual_conn_sec_when_runs_healthy``).
+
+    ``window`` rows are the dicts built in ``_check_workday_run_health`` — each
+    carries ``kind`` (from ``_classify_run``) and ``resp`` (the Response-action
+    name, or ``"?"`` for a no-response hard failure).
+
+    Returns a dict of bools:
+      auth_proven   — Workday accepted the OAuthUser SSO token and returned a
+                      response in SOME form: a success, a CAUGHT SOAP fault, or a
+                      response that failed XML→JSON transform. Any of these proves
+                      the SSO / Entra-federation / signing-cert path works, so the
+                      SAML manual checks (WD-CONN-010 / WD-CONN-102) cannot be the
+                      culprit.
+      workday_fault — a run routed to the caught-Workday-fault branch (Workday
+                      processed the request and rejected it). The permission /
+                      credential signal (keeps WD-SEC-003 visible).
+      hard_failure  — a run terminated Failed/TimedOut/etc with NO Response
+                      action — the signature of a token/connection that never
+                      completed the call. Recorded for diagnosis; it is NOT a
+                      rule-out basis on its own (a no-response failure positively
+                      excludes nothing), so it leaves every manual check visible.
+
+    A window whose failures match none of these (e.g. only TemplateRetrievalFail,
+    or an unrecognised branch) yields all-False — an *uninformative* signal, on
+    which the caller deliberately keeps every manual check visible.
+    """
+    resps = {r.get("resp") for r in window}
+    success = any(r.get("kind") == "success" for r in window)
+    workday_fault = _WD_WORKDAY_FAULT_RESPONSE in resps
+    template_transform = _WD_TEMPLATE_TRANSFORM_RESPONSE in resps
+    hard_failure = any(r.get("kind") == "hard_failure" for r in window)
+    return {
+        "auth_proven": success or workday_fault or template_transform,
+        "workday_fault": workday_fault,
+        "hard_failure": hard_failure,
+    }
 
 
 def _check_workday_run_health(runner) -> list[CheckResult]:
@@ -3308,6 +3443,11 @@ def _check_workday_run_health(runner) -> list[CheckResult]:
     n = len(window)
     win_fail = [r for r in window if r["kind"] in ("caught_failure", "hard_failure")]
     win_success = n - len(win_fail)
+
+    # Stash the classified failure signal so _suppress_manual_conn_sec_when_runs_healthy
+    # can show only the MANUAL verification checks the observed error category
+    # cannot rule out (error-aware suppression).
+    runner._workday_run_failure_signal = _compute_run_failure_signal(window)
 
     def _sample_lines(rows: list[dict]) -> str:
         lines = []
