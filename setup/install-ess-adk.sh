@@ -511,7 +511,7 @@ with open(sys.argv[6], 'w', encoding='utf-8') as f:
 
     # --- Run FlightCheck ---
     step "Running FlightCheck"
-    "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope full
+    "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope full --invocation-source installer
     exit $?
 fi
 

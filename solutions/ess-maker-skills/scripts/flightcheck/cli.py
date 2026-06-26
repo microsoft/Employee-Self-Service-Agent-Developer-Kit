@@ -152,6 +152,11 @@ def main():
         "--no-telemetry", action="store_true",
         help="Don't emit anonymous FlightCheck outcome telemetry",
     )
+    parser.add_argument(
+        "--invocation-source", default="cli",
+        choices=["adk", "installer", "cli"],
+        help="How FlightCheck was invoked (adk=slash-command, installer=standalone installer, cli=direct Python CLI)",
+    )
     args = parser.parse_args()
 
     # Load config
@@ -343,6 +348,7 @@ def main():
                 agent_id=active_agent.get("botId", ""),
                 scope=args.scope,
                 agent_count=len(agents),
+                invocation_source=args.invocation_source,
             )
             print(
                 f"[telemetry] env={_tele.get('env')} sent={_tele.get('sent')} "

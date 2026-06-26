@@ -100,6 +100,7 @@ def test_build_events_shape_and_required_fields():
         agent_id="bot-xyz",
         agent_count=1,
         scope="full",
+        invocation_source="cli",
         ikey_envelope=f"o:{DEV_TOKEN}",
         run_id="run-1",
     )
@@ -122,6 +123,7 @@ def test_build_events_shape_and_required_fields():
     assert run_data["tenantId"] == "tenant-abc"
     assert run_data["agentId"] == "bot-xyz"
     assert run_data["instanceId"] == "inst-123"
+    assert run_data["invocationSource"] == "cli"
 
 
 def test_check_events_never_leak_free_text():
@@ -133,6 +135,7 @@ def test_check_events_never_leak_free_text():
         agent_id="a",
         agent_count=1,
         scope="full",
+        invocation_source="cli",
         ikey_envelope=f"o:{DEV_TOKEN}",
     )
     blob = json.dumps(events)

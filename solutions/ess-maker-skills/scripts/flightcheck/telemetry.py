@@ -244,6 +244,7 @@ def _run_data(
     agent_id: str,
     agent_count: int,
     scope: str,
+    invocation_source: str,
 ) -> dict[str, Any]:
     return {
         "schemaVersion": TELEMETRY_SCHEMA_VERSION,
@@ -255,6 +256,7 @@ def _run_data(
         "agentCount": agent_count,
         "adkVersion": get_adk_version(),
         "scope": scope,
+        "invocationSource": invocation_source,
         "overall": getattr(run_result, "overall", ""),
         "durationSecs": getattr(run_result, "duration_secs", 0),
         "total": getattr(run_result, "total", 0),
@@ -302,6 +304,7 @@ def build_events(
     agent_id: str,
     agent_count: int,
     scope: str,
+    invocation_source: str,
     ikey_envelope: str,
     run_id: str | None = None,
 ) -> list[dict[str, Any]]:
@@ -320,6 +323,7 @@ def build_events(
                 agent_id=agent_id,
                 agent_count=agent_count,
                 scope=scope,
+                invocation_source=invocation_source,
             ),
         )
     ]
@@ -347,6 +351,7 @@ def emit_flightcheck_telemetry(
     agent_id: str = "",
     scope: str = "",
     agent_count: int = 0,
+    invocation_source: str = "cli",
     instance_id: str | None = None,
     local_dir: str = ".local",
 ) -> dict[str, Any]:
@@ -371,6 +376,7 @@ def emit_flightcheck_telemetry(
             agent_id=agent_id,
             agent_count=agent_count,
             scope=scope,
+            invocation_source=invocation_source,
             ikey_envelope=envelope_ikey(ikey),
         )
         status = _post(ikey, events)
