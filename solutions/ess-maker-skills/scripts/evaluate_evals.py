@@ -477,6 +477,13 @@ def main():
     )
     args = parser.parse_args()
 
+    try:
+        import adk_telemetry
+
+        adk_telemetry.emit_capability_use("evaluations")
+    except Exception:  # noqa: BLE001 — telemetry must never break evaluation
+        pass
+
     # ── Locate agent folder ──────────────────────────────────────────────────
     repo_root = Path(__file__).parent.parent
     agents_dir = repo_root / "workspace" / "agents"

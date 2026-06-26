@@ -13,6 +13,7 @@ import os
 import re
 import sys
 import stat
+import time
 from urllib.parse import quote
 
 try:
@@ -105,6 +106,39 @@ _RETRY = Retry(
 )
 _SESSION = requests.Session()
 _SESSION.mount("https://", HTTPAdapter(max_retries=_RETRY))
+
+
+def _emit_api_call(endpoint, operation, start, *, status=None, error=None):
+    """Best-effort ``adk.api.call`` telemetry for a Dataverse call.
+
+    Fail-open: any problem importing or emitting telemetry is swallowed so a
+    telemetry issue can never break a Dataverse operation.
+    """
+    try:
+        import adk_telemetry
+
+        latency_ms = int((time.perf_counter() - start) * 1000)
+        outcome = "success"
+        error_code = ""
+        error_category = ""
+        if error is not None:
+            outcome = "timeout" if "timeout" in type(error).__name__.lower() else "client_error"
+            error_code = type(error).__name__
+            error_category = "infra"
+        elif status is not None and status >= 400:
+            outcome = "server_error" if status >= 500 else "client_error"
+            error_code = f"HTTP_{status}"
+            error_category = "infra"
+        adk_telemetry.emit_api_call(
+            api_endpoint=f"{operation} {endpoint}",
+            outcome=outcome,
+            latency_ms=latency_ms,
+            error_code=error_code,
+            error_category=error_category,
+            error_message=str(error) if error else "",
+        )
+    except Exception:  # noqa: BLE001 — telemetry must never break a Dataverse call
+        pass
 
 
 def _validate_https_url(env_url):
@@ -202,6 +236,21 @@ def authenticate(env_url):
             except OSError:
                 pass
 
+    # Record the (hashed) maker identity and start a telemetry session.
+    # Best-effort: never let telemetry affect authentication.
+    try:
+        import adk_telemetry
+
+        claims = result.get("id_token_claims", {}) or {}
+        adk_telemetry.maybe_print_notice()
+        adk_telemetry.start_session(
+            developer_oid=claims.get("oid", ""),
+            tenant_id=claims.get("tid", "") or tenant,
+            adk_capability="connect",
+        )
+    except Exception:  # noqa: BLE001 — telemetry must never break auth
+        pass
+
     return result["access_token"]
 
 
@@ -218,10 +267,12 @@ def query_all(env_url, token, entity_set, select, filter_expr=None):
 
     all_records = []
     page = 0
+    _start = time.perf_counter()
     while url:
         page += 1
         resp = _SESSION.get(url, headers=headers, timeout=120, verify=True)
         if resp.status_code == 401:
+            _emit_api_call(entity_set, "read", _start, status=401)
             raise AuthExpiredError(response=resp)
         raise_api_error(resp, resource_name=entity_set, operation="read")
         data = resp.json()
@@ -234,6 +285,7 @@ def query_all(env_url, token, entity_set, select, filter_expr=None):
             print(f" -> Page {page}: {len(records)}", end="")
 
     print(f" -> Total: {len(all_records)}")
+    _emit_api_call(entity_set, "read", _start, status=200)
     return all_records
 
 
@@ -319,7 +371,9 @@ def dataverse_get(env_url, token, path, params=None):
     )
     headers = {**HEADERS_BASE, "Authorization": f"Bearer {token}"}
     url = f"{env_url}/api/data/v9.2/{path.lstrip('/')}"
+    _start = time.perf_counter()
     resp = _SESSION.get(url, headers=headers, params=params, timeout=60, verify=True)
+    _emit_api_call(path.split("(")[0], "read", _start, status=resp.status_code)
     if resp.status_code == 401:
         raise AuthExpiredError(response=resp)
     resp.raise_for_status()
@@ -341,7 +395,9 @@ def update_record(env_url, token, entity_set, record_id, data):
         "Content-Type": "application/json",
     }
     url = f"{env_url}/api/data/v9.2/{entity_set}({record_id})"
+    _start = time.perf_counter()
     resp = _SESSION.patch(url, headers=headers, json=data, timeout=60, verify=True)
+    _emit_api_call(entity_set, "update", _start, status=resp.status_code)
     if resp.status_code == 401:
         raise AuthExpiredError(response=resp)
     raise_api_error(resp, resource_name=entity_set, operation="update")
@@ -358,7 +414,9 @@ def create_record(env_url, token, entity_set, data):
         "Prefer": "return=representation",
     }
     url = f"{env_url}/api/data/v9.2/{entity_set}"
+    _start = time.perf_counter()
     resp = _SESSION.post(url, headers=headers, json=data, timeout=60, verify=True)
+    _emit_api_call(entity_set, "create", _start, status=resp.status_code)
     if resp.status_code == 401:
         raise AuthExpiredError(response=resp)
     raise_api_error(resp, resource_name=entity_set, operation="create")
@@ -374,7 +432,9 @@ def delete_record(env_url, token, entity_set, record_id):
         "Authorization": f"Bearer {token}",
     }
     url = f"{env_url}/api/data/v9.2/{entity_set}({record_id})"
+    _start = time.perf_counter()
     resp = _SESSION.delete(url, headers=headers, timeout=60, verify=True)
+    _emit_api_call(entity_set, "delete", _start, status=resp.status_code)
     if resp.status_code == 401:
         raise AuthExpiredError(response=resp)
     raise_api_error(resp, resource_name=entity_set, operation="delete")

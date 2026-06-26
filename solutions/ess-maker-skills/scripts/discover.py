@@ -82,6 +82,13 @@ def main():
                         help="Select agent by number and output JSON")
     args = parser.parse_args()
 
+    try:
+        import adk_telemetry
+
+        adk_telemetry.emit_capability_use("onboarding")
+    except Exception:  # noqa: BLE001 — telemetry must never break discovery
+        pass
+
     # --- Environment listing mode ---
     if args.list_environments:
         from list_environments import (

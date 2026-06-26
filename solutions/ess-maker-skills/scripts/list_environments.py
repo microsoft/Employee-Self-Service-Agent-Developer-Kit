@@ -126,6 +126,13 @@ def main():
                         help="Select environment by number and output JSON")
     args = parser.parse_args()
 
+    try:
+        import adk_telemetry
+
+        adk_telemetry.emit_capability_use("onboarding")
+    except Exception:  # noqa: BLE001 — telemetry must never break listing
+        pass
+
     dv_environments, excluded = get_dataverse_environments()
 
     print(f"Found {len(dv_environments)} Dataverse-linked environment(s).")

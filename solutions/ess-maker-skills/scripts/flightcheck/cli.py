@@ -357,6 +357,31 @@ def main():
             )
         except Exception as _tele_err:  # never break the run
             print(f"[telemetry] skipped — {type(_tele_err).__name__}: {_tele_err}")
+
+        # Additive adk.* event family (spec Feature #7403772). Emitted alongside
+        # the legacy ESSMakerKit.FlightCheck.* events; never affects the run.
+        try:
+            import adk_telemetry as _adk
+
+            _agent_id = active_agent.get("botId", "")
+            if tenant_id:
+                _adk.set_identity("", tenant_id)
+            _ridx = _adk.next_run_index(_agent_id)
+            _adk.emit_flightcheck_run(agent_id=_agent_id, run_index=_ridx)
+            _result_map = {
+                "READY": "pass",
+                "READY_WITH_WARNINGS": "partial",
+                "NOT_READY": "fail",
+            }
+            _adk.emit_flightcheck_result(
+                agent_id=_agent_id,
+                run_index=_ridx,
+                result=_result_map.get(result.overall, "fail"),
+                duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
+            )
+            _adk.flush(timeout=3)
+        except Exception:  # noqa: BLE001 — adk telemetry must never break the run
+            pass
     else:
         print("[telemetry] disabled via --no-telemetry")
 
