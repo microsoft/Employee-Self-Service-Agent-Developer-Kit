@@ -240,6 +240,72 @@ def workday_connection_refs_full() -> list[dict[str, Any]]:
     ]
 
 
+def template_config(
+    *,
+    config_id: str | None = None,
+    name: str = "ServiceNowHRSDGetCasesList",
+    unique_name: str | None = None,
+    value: str | None = "https://contoso.service-now.com/api/now/table/sn_hr_core_case",
+) -> dict[str, Any]:
+    """Build a single msdyn_employeeselfservicetemplateconfigs record.
+
+    Cited consumers:
+      - solutions/ess-maker-skills/scripts/flightcheck/checks/servicenow.py
+        — SN-CFG-001 reads msdyn_name; SN-CFG-002 reads msdyn_value to
+        verify the ServiceNow portal base URL inside the value is a
+        populated, well-formed absolute http(s) URL.
+
+    Source (documented):
+      Dataverse Web API v9.2 (tier: documented per
+      tests/fixtures/cassettes/INDEX.md "API tier registry"). The
+      `msdyn_employeeselfservicetemplateconfig` is a managed-solution
+      custom entity, so there is no MS Learn entity-reference page for
+      it; the field contract is taken verbatim from the production
+      code that reads this entity.
+
+      Field contract — copied verbatim from the production `$select`
+      list and record mapping in
+      solutions/ess-maker-skills/scripts/backup_template_configs.py
+      (lines 72-77 select, 112-116 mapping):
+        msdyn_employeeselfservicetemplateconfigid   (Edm.Guid, PK)
+        msdyn_uniquename                             (Edm.String)
+        msdyn_name                                   (Edm.String)
+        msdyn_value                                  (Edm.String)
+
+      OData v4 collection envelope shape (the wrapper auth.query_all
+      unwraps) per the MS Learn Dataverse Web API query docs:
+        https://learn.microsoft.com/power-apps/developer/data-platform/webapi/query-data-web-api#example
+      Example response row (composed from the verbatim field contract
+      above inside the documented OData envelope):
+        {
+          "@odata.context": ".../$metadata#msdyn_employeeselfservicetemplateconfigs",
+          "value": [
+            {
+              "@odata.etag": "W/\\"1\\"",
+              "msdyn_employeeselfservicetemplateconfigid":
+                  "00000000-0000-0000-0000-000000009001",
+              "msdyn_uniquename": "msdyn_ServiceNowHRSDGetCasesList",
+              "msdyn_name": "ServiceNowHRSDGetCasesList",
+              "msdyn_value":
+                  "https://contoso.service-now.com/api/now/table/sn_hr_core_case"
+            }
+          ]
+        }
+
+    ``value`` defaults to a populated ServiceNow instance URL (the
+    GOOD state). Pass value="" / None to model the blank-base-URL state
+    SN-CFG-002 warns on.
+    """
+    return {
+        "@odata.etag": 'W/"1"',
+        "msdyn_employeeselfservicetemplateconfigid": config_id
+        or "00000000-0000-0000-0000-000000009001",
+        "msdyn_uniquename": unique_name or f"msdyn_{name}",
+        "msdyn_name": name,
+        "msdyn_value": value,
+    }
+
+
 def collection(
     records: Iterable[Mapping[str, Any]],
     *,
