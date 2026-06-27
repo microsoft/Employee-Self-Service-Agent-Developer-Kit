@@ -83,9 +83,9 @@ forgot-to-activate case the attestation prompt guards.
 ## Step 2.3 — Register the API Client for Integrations
 
 **The gap**
-- *Skill side (GAP debug + RECONCILE):* `step2.md` covers registration, but the golden set specifies
-  **JWT Bearer Grant** while the ADK uses **SAML Bearer Grant**, and the ADK functional areas are a
-  **superset** of the golden set.
+- *Skill side (GAP debug):* `step2.md` covers registration with **SAML Bearer Grant** (the ADK and the
+  golden set are aligned on SAML), but the ADK functional areas are a **superset** of the golden set, so
+  the simplified path must enumerate the full superset.
 - *Flightcheck side (GAP, simplified):* missing functional areas were caught by the **legacy live SOAP
   probes `WD-WF-001…017`** — but those are **legacy-only and skipped on simplified**, so the simplified
   path can **silently miss** required functional areas.
@@ -105,8 +105,8 @@ forgot-to-activate case the attestation prompt guards.
 **Status:** skill gap closed (Task 3 enumerates the superset functional areas + Workday Owned Scope).
 Flightcheck = attestation; **automated functional-area detection is not available on simplified** (a
 deliberate coverage reduction vs. legacy). The "Access Denied / blank cards" alternative traces to a
-missing functional area — exactly what the attestation prompt enumerates. **Open reconciliation
-remains** (see below) on JWT vs SAML Bearer Grant.
+missing functional area — exactly what the attestation prompt enumerates. Grant type is settled:
+**SAML Bearer Grant** (the ADK and the golden set are aligned).
 
 ---
 
@@ -174,17 +174,13 @@ what `WD-REST-001` catches.
 
 ## Open items & reduced coverage (Step 2)
 
-1. **API client grant type — UNRESOLVED reconciliation (2.3).** The gap source specifies **JWT Bearer
-   Grant** (golden set) while the ADK uses **SAML Bearer Grant**. The plan does **not** settle this;
-   it must be decided before skill-4 Task 3 hardcodes a grant type. *(Action: confirm the correct
-   grant type for the simplified V2 path.)*
-2. **Functional-area completeness is not auto-detectable on simplified (2.3).** The legacy live SOAP
+1. **Functional-area completeness is not auto-detectable on simplified (2.3).** The legacy live SOAP
    probes (`WD-WF-001…017`) that caught a missing functional area are **skipped on simplified**;
    `WD-API-CLIENT-001` replaces them with **attestation**. A missing functional area will not fail a
    flightcheck — it surfaces only as runtime "Access Denied / blank cards." This is a deliberate
    coverage reduction vs. legacy.
-3. **X.509 has no Workday API (2.1).** Workday-side validation is limited to the **MANUAL thumbprint
+2. **X.509 has no Workday API (2.1).** Workday-side validation is limited to the **MANUAL thumbprint
    parity** in `WD-CONN-102`; there is no direct Workday API to validate the uploaded public key.
-4. **Pending-policy activation is not auto-detectable (2.2).** No Workday API exposes "pending vs
+3. **Pending-policy activation is not auto-detectable (2.2).** No Workday API exposes "pending vs
    activated" auth-policy state, so `WD-TENANT-001` relies on the operator attesting they ran
    **Activate All Pending Authentication Policy Changes**.

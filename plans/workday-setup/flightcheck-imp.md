@@ -131,11 +131,11 @@ conventions in `scripts/flightcheck/AGENTS.md`, and the existing check code.
 - **Implementation:** Confirm the API client exists and that Client ID / Token Endpoint / REST base
   URL were captured, and **Include Workday Owned Scope = Yes**. **Functional-area completeness is
   not auto-detectable on simplified** (legacy SOAP probes `WD-WF-001…017` are skipped) → the
-  required areas (Core Payroll, Organizations and Roles, Staffing, Time Off and Leave) are
-  enumerated for operator attestation.
+  required areas (Core Payroll, Organizations and Roles, Staffing, Time Off and Leave) plus
+  **Client Grant Type = SAML Bearer Grant** are enumerated for operator attestation.
 - **Status:** `MANUAL` / attest. **Role:** `WORKDAY_ADMIN`.
-- **🔴 Blocker:** the grant type — **JWT Bearer Grant** (golden set) vs **SAML Bearer Grant** (ADK)
-  — must be decided before this check asserts a grant type.
+- **Grant type:** **SAML Bearer Grant** — the ADK and the golden set are aligned, so the check
+  asserts SAML Bearer Grant (no JWT path).
 
 ---
 
@@ -268,10 +268,8 @@ the **`--checkpoint` registry** infra. `WD-ASSIGN-001` is **excluded** (reuse `A
 
 ## Open decisions (resolve before coding)
 
-1. **`WD-API-CLIENT-001` grant type** — JWT Bearer Grant (golden set) vs SAML Bearer Grant (ADK).
-   The plan does not settle this; decide before the check asserts a grant type.
-2. **InfoSec `Role` enum** for `WD-NET-001` — add a value or document the attestation owner.
-3. **`WD-ENTRA-SCOPE-001` composite vs split** — keep as one composite ID, or split into
+1. **InfoSec `Role` enum** for `WD-NET-001` — add a value or document the attestation owner.
+2. **`WD-ENTRA-SCOPE-001` composite vs split** — keep as one composite ID, or split into
    `-SCOPE` / `-PREAUTH` / `-PERMS` so 1.3 / 1.4 / 1.5-perms fail independently.
-4. **Master-checklist correction** — relabel the `WD-ASSIGN-001` row from "mint" to **reuse**
+3. **Master-checklist correction** — relabel the `WD-ASSIGN-001` row from "mint" to **reuse**
    (`AUTH-005`) and register `AUTH-005` accordingly.

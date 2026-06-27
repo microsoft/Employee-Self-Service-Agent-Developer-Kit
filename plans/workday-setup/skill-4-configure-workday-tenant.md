@@ -33,7 +33,8 @@ a check of any single upstream step.
 2. **Edit Tenant Setup – Security:** set the redirection URL; enable **OAuth 2.0 Clients**
    and **SAML**; verify SAML IdP fields. The **Service Provider ID must match the Entra
    Identifier / Entity ID**.
-3. **Register API Client:** functional areas **Core Payroll, Organizations and Roles,
+3. **Register API Client** with **Client Grant Type = SAML Bearer Grant** (the ADK and the golden
+   set are aligned on SAML): functional areas **Core Payroll, Organizations and Roles,
    Staffing, Time Off and Leave** + **Include Workday Owned Scope = Yes** (required for REST
    `/workers/me`). Capture **Client ID**, **Token Endpoint**, and the **REST base URL** from
    the registered client's **"View API Client"** page.
