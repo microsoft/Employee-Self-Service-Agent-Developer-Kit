@@ -240,6 +240,7 @@ def run_environment_checks(runner) -> list[CheckResult]:
             priority=Priority.CRITICAL.value, status=Status.PASSED.value,
             description="Power Platform environment exists",
             result=f"Environment: {display_name}",
+            remediation="Validated: a Power Platform environment with the configured environment ID exists and is readable via the BAP Admin API (GET /providers/Microsoft.BusinessAppPlatform/scopes/admin/environments/{env_id}).",
             doc_link=f"{DOC_BASE}/prepare#set-up-your-power-platform-environment",
         ))
 
@@ -256,6 +257,7 @@ def run_environment_checks(runner) -> list[CheckResult]:
                 priority=Priority.CRITICAL.value, status=Status.PASSED.value,
                 description="Dataverse database provisioned",
                 result=f"State: {db_state or 'Available'}, Type: {db_type or 'N/A'}",
+                remediation="Validated: the environment's BAP record reports a provisioned Dataverse database (linkedEnvironmentMetadata is present with a non-error state).",
                 doc_link=f"{DOC_BASE}/prepare#set-up-your-power-platform-environment",
             ))
         else:
@@ -275,6 +277,7 @@ def run_environment_checks(runner) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="Environment type",
             result=f"Type: {env_type}",
+            remediation=f"Validated: the environment's BAP record exposes an environment type ('{env_type}') readable via the BAP Admin API.",
             doc_link=f"{DOC_BASE}/prepare#set-up-your-power-platform-environment",
         ))
 
@@ -312,6 +315,7 @@ def run_environment_checks(runner) -> list[CheckResult]:
                 priority=Priority.HIGH.value, status=Status.PASSED.value,
                 description="DLP policies configured",
                 result=f"{len(policies)} policy/policies apply to this environment",
+                remediation="Validated: at least one DLP (data loss prevention) policy from the BAP apiPolicies endpoint applies to this environment.",
                 doc_link=f"{DOC_BASE}/prepare#allow-the-external-systems-connector",
             ))
         else:
@@ -967,6 +971,7 @@ def _check_preferred_solution(runner) -> list[CheckResult]:
                         f"is one of {len(solutions)} eligible unmanaged "
                         f"solution(s) in this environment ({eligible_summary})."
                     ),
+                    remediation="Validated: the current maker has a preferred unmanaged solution selected (Dataverse usersettings preferredsolutionid) and it resolves to one of the eligible unmanaged solutions in this environment.",
                     doc_link=_PREFSOL_DOC_LINK,
                 )]
 
