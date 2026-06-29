@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Generated execution artifacts (keep folders, ignore contents)
+debug/logs/*
+debug/reports/*
+!debug/logs/.gitkeep
+!debug/reports/.gitkeep

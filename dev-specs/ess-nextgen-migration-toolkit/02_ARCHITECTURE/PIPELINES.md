@@ -622,7 +622,7 @@ The framework is intentionally Open for Extension and Closed for Modification.
 **Referenced By**
 
 - MIGRATION_RULES.md
-- DATAVERSE_SDK.md
+- DATAVERSE_CLIENT.md
 - TASKS.md
 - TESTING.md
 

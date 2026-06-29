@@ -22,7 +22,7 @@ you which documents to read for a given task.
 | ---------------- | ----------------- | --------- |
 | Meta             | `00_META/`        | `PROJECT.md`, `INVARIANTS.md`, `VOCABULARY.md`, `ROADMAP.md` |
 | Product          | `01_PRODUCT/`     | `CUSTOMER_JOURNEY.md`, `MIGRATION_MODES.md`, `MIGRATION_RULES.md` |
-| Architecture     | `02_ARCHITECTURE/`| `ARCHITECTURE.md`, `DOMAIN_MODEL.md`, `SERVICES.md`, `PIPELINES.md`, `DATAVERSE_SDK.md` |
+| Architecture     | `02_ARCHITECTURE/`| `ARCHITECTURE.md`, `DOMAIN_MODEL.md`, `SERVICES.md`, `PIPELINES.md`, `DATAVERSE_CLIENT.md` |
 | Engineering      | `03_ENGINEERING/` | `REPOSITORY_STRUCTURE.md`, `CODING_STANDARDS.md`, `DIAGNOSTICS.md`, `TESTING.md`, `IMPLEMENTATION_GUIDE.md` |
 | Execution        | `04_EXECUTION/`   | `TASKS.md`, `CHANGELOG.md` |
 

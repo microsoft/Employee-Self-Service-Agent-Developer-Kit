@@ -8,7 +8,7 @@
 >
 > This document defines the canonical business migration rules implemented by the ESS NextGen Migration Toolkit.
 >
-> A Migration Rule specifies how a Customer Agent (CA) construct is transformed, overridden, preserved, validated, or deprecated during migration to Declarative Agents (DA).
+> A Migration Rule specifies how a Custom Engine Agent (CA) construct is transformed, overridden, preserved, validated, or deprecated during migration to Declarative Agents (DA).
 >
 > Every Migration Rule maps directly to exactly one Pipeline Step.
 >
@@ -197,7 +197,7 @@ P0
 
 ### Motivation
 
-Declarative Agents require updated metadata and configuration compared to Customer Agents.
+Declarative Agents require updated metadata and configuration compared to Custom Engine Agents.
 
 These updates are deterministic and can safely overwrite package metadata.
 
@@ -280,7 +280,7 @@ ESS has validated that replacing EndConversation with CancelAllDialogs preserves
 
 For every EndConversation node:
 
-* Replace the node type with CancelAllDialogs.
+* Replace the node type with CancelAllDialogs (End All Topics).
 * Preserve node connectivity.
 * Preserve node metadata where applicable.
 
@@ -340,7 +340,7 @@ Customer implementations may contain arbitrary business logic which cannot be mi
 
 * Topic trigger type is OnActivity.
 * The topic is not already migrated. A topic that is already disabled **and**
-  whose title is already prefixed with `[Deprecated]` is considered already
+  whose title is already prefixed with `[DEPRECATED]` is considered already
   migrated and shall be skipped (idempotency — INVARIANT MIG-005).
 
 ### Transformation
@@ -352,7 +352,7 @@ The migration pipeline shall:
   already prefixed** (the prefix shall never be applied more than once):
 
 ```text
-[Deprecated]
+[DEPRECATED]
 ```
 
 * Preserve all existing topic logic.
@@ -363,7 +363,7 @@ The migration pipeline shall:
 ### Validation
 
 * Topic is disabled.
-* Topic title begins with `[Deprecated]`.
+* Topic title begins with `[DEPRECATED]`.
 * Business logic remains unchanged.
 
 ### Failure Handling
@@ -428,7 +428,7 @@ Instead, preserve the implementation while preventing execution.
 
 * Topic trigger type is OnGeneratedResponse.
 * The topic is not already migrated. A topic that is already disabled **and**
-  whose title is already prefixed with `[Deprecated]` is considered already
+  whose title is already prefixed with `[DEPRECATED]` is considered already
   migrated and shall be skipped (idempotency — INVARIANT MIG-005).
 
 ### Transformation
@@ -440,7 +440,7 @@ The migration pipeline shall:
   already prefixed** (the prefix shall never be applied more than once):
 
 ```text
-[Deprecated]
+[DEPRECATED]
 ```
 
 * Preserve all topic logic.

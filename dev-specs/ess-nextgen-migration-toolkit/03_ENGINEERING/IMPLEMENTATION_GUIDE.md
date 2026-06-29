@@ -157,7 +157,7 @@ Implementation shall:
 * Preserve deterministic execution.
 * Operate on Domain Models.
 * Use Services for reusable capabilities.
-* Use the SDK for all Dataverse communication.
+* Use the Dataverse client for all Dataverse communication.
 
 Implementation shall not:
 
@@ -204,19 +204,21 @@ Services should remain:
 * Reusable
 * Independently testable
 
-Services shall not contain migration rules.
+Migration rules live exclusively in `src/modules/migration/steps/`.
+Reusable service capabilities outside `modules/` shall not contain
+migration rules.
 
 ---
 
-# 9. SDK Development
+# 9. Dataverse Client Development
 
-SDK changes are required only when:
+Dataverse Client changes are required only when:
 
 * A new Dataverse REST API is consumed.
 * Existing API behavior changes.
 * Additional serialization is required.
 
-Business logic never belongs inside the SDK.
+Business logic never belongs inside the Dataverse client.
 
 ---
 
@@ -228,7 +230,7 @@ Minimum expectation:
 
 * Unit Tests
 * Golden Tests (where deterministic transformations exist)
-* Integration Tests (for SDK functionality where applicable)
+* Integration Tests (for Dataverse Client functionality where applicable)
 
 No implementation is complete without tests.
 
@@ -249,13 +251,13 @@ is prohibited.
 Execution logs must be written to:
 
 ```
-logs/
+debug/logs/
 ```
 
 Migration reports must be written to:
 
 ```
-reports/
+debug/reports/
 ```
 
 ---
@@ -269,8 +271,8 @@ Before submitting changes, verify:
 * No dependency violations.
 * Uses Domain Models.
 * Uses Services appropriately.
-* Uses SDK appropriately.
-* No direct Dataverse calls outside the SDK.
+* Uses Dataverse Client appropriately.
+* No direct Dataverse calls outside the Dataverse client.
 * No direct console output.
 * Tests added.
 * Changelog updated.
@@ -407,7 +409,7 @@ The framework is expected to grow primarily by:
 * Adding Pipeline Steps.
 * Extending Services.
 * Extending Domain Models.
-* Extending Dataverse API wrappers.
+* Extending the Dataverse client.
 
 The framework architecture itself should remain stable for the lifetime of the project.
 

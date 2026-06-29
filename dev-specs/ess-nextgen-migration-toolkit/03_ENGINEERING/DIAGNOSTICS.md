@@ -68,6 +68,8 @@ All output flows through the Diagnostics framework.
 
 # 3. Diagnostics Architecture
 
+Diagnostics code lives in `src/core/logging/`.
+
 ```
 Pipeline Step
 
@@ -132,22 +134,26 @@ Close Session
 
 # 5. Session Folder Structure
 
-Each execution creates a timestamped folder.
+Each execution creates timestamped output under the generated debug tree.
 
 ```
-logs/
+debug/logs/
 
     2026-07-18_14-32-05/
 
         session.log
+
+        diagnostics_summary.txt
+
+debug/reports/
+
+    2026-07-18_14-32-05/
 
         readiness_report.txt
 
         preview_report.txt
 
         migration_report.txt
-
-        diagnostics_summary.txt
 ```
 
 The timestamp format shall be:
@@ -234,6 +240,8 @@ Reports include:
 * Diagnostics Summary
 
 Reports are generated from the MigrationContext.
+
+Generated report output is written to `debug/reports/`.
 
 ---
 
