@@ -1003,3 +1003,217 @@ def test_pre004_reads_payg_flag_from_pre005(monkeypatch):
     assert pre004.status == "Warning"
     assert "Pay-as-you-go billing is configured" in pre004.result
 
+
+# ---------------------------------------------------------------------------
+# PRE-006 — prepaid Copilot Studio message capacity purchased
+#
+# Heritage rule (ESS Pre-flight Validator, PRE-006): "Prepaid message capacity
+# purchased | Power Platform API | Message capacity > 0". PRE-006 is the
+# prepaid-billing gate — distinct from PRE-005 (is *a* billing model
+# configured) and PRE-004 (is the allocation *sufficient* for the population).
+#
+# Outcomes: SKIPPED (PayG covers billing), PASS (capacity > 0), FAIL
+# (prepaid-only AND capacity == 0), WARNING (could not determine, or an
+# unexpected error -- mirrors PRE-004/005's "could not be determined"). There
+# is no runway/balance WARN band: the Power Platform Licensing API exposes
+# allocated capacity but not remaining balance or consumption rate, so an
+# estimated "30-day runway" is not computable and was intentionally dropped
+# (the WARN state the heritage enhancement asked for cannot be evaluated
+# without consumption telemetry). Deep link for the purchase action is the
+# Microsoft 365 admin center catalog.
+#
+# Unit tests drive _check_prepaid_message_capacity(runner) directly with the
+# shared _FakePP / _FakeGraphSharing stubs; the integration tests run the full
+# run_prerequisites_checks to prove PRE-006 reads PRE-005's _payg_configured.
+# ---------------------------------------------------------------------------
+
+_CATALOG_DEEP_LINK = "https://admin.microsoft.com/Adminportal/Home#/catalog"
+
+
+def _run_pre006(runner):
+    from flightcheck.checks.prerequisites import _check_prepaid_message_capacity
+    return _check_prepaid_message_capacity(runner)
+
+
+def _pre006_runner(*, graph, powerplatform, payg=None, env_id="env-1"):
+    runner = SimpleNamespace(graph=graph, powerplatform=powerplatform, env_id=env_id)
+    if payg is not None:
+        runner._payg_configured = payg
+    return runner
+
+
+def _purchased_graph():
+    """Graph stub whose tenant owns a Copilot Studio message-bearing SKU."""
+    return _FakeGraphSharing(skus=[
+        gr.subscribed_sku(sku_part_number=PREPAID_SKU, consumed_units=1, enabled_units=1),
+    ])
+
+
+def test_pre006_env_allocation_present_passes():
+    # Power Platform API confirms message capacity > 0 on the environment ->
+    # PASS, even without a tenant-wide SKU signal.
+    r = _run_pre006(_pre006_runner(
+        graph=_FakeGraphSharing(skus=[]), powerplatform=_FakePP(_mcs(25000)), payg=False))
+    assert r.checkpoint_id == "PRE-006"
+    assert r.status == "Passed"
+    assert "purchased and provisioned" in r.result
+    assert "25000" in r.result
+    assert r.remediation == ""
+
+
+def test_pre006_tenant_purchased_but_env_zero_passes():
+    # Env allocation is 0 but the tenant has purchased prepaid capacity ->
+    # PASS (purchase confirmed; PRE-004 judges allocation sufficiency).
+    r = _run_pre006(_pre006_runner(
+        graph=_purchased_graph(), powerplatform=_FakePP([]), payg=False))
+    assert r.status == "Passed"
+    assert "tenant has purchased" in r.result
+    assert "PRE-004" in r.result
+    assert r.remediation == ""
+
+
+def test_pre006_nothing_purchased_fails():
+    # Prepaid-only (no PayG) AND capacity == 0 -> the heritage FAIL. The
+    # admin-focused remediation deep-links the M365 admin center catalog.
+    r = _run_pre006(_pre006_runner(
+        graph=_FakeGraphSharing(skus=[]), powerplatform=_FakePP([]), payg=False))
+    assert r.status == "Failed"
+    assert "No prepaid Copilot Studio message capacity has been purchased" in r.result
+    assert _CATALOG_DEEP_LINK in r.remediation
+
+
+def test_pre006_m365_copilot_bundle_alone_is_not_prepaid_capacity():
+    # Regression guard for the false-PASS bug: owning Microsoft 365 Copilot
+    # licenses is NOT the same as purchasing prepaid Copilot Studio message
+    # capacity (which exists for users WITHOUT a Copilot license). The bundle
+    # SKU must NOT satisfy PRE-006 -- otherwise the check passes on virtually
+    # every ESS tenant and never catches a missing prepaid purchase.
+    graph = _FakeGraphSharing(skus=[
+        gr.subscribed_sku(sku_part_number="MICROSOFT_365_COPILOT",
+                          consumed_units=5, enabled_units=10),
+    ])
+    r = _run_pre006(_pre006_runner(
+        graph=graph, powerplatform=_FakePP([]), payg=False))
+    assert r.status == "Failed"
+    assert "No prepaid Copilot Studio message capacity has been purchased" in r.result
+
+
+def test_pre006_payg_configured_skips():
+    # PayG covers billing -> prepaid capacity is optional -> SKIPPED (PRE-005
+    # owns the PayG path). Short-circuits before reading any capacity signal.
+    r = _run_pre006(_pre006_runner(
+        graph=_FakeGraphSharing(skus=[]), powerplatform=_FakePP([]), payg=True))
+    assert r.status == "Skipped"
+    assert "Pay-as-you-go billing is configured" in r.result
+    assert r.remediation == ""
+
+
+def test_pre006_permission_denied_warns():
+    # Per-env allocation read denied (_error sentinel -> None) AND Graph
+    # unavailable (purchased None) -> cannot determine -> WARNING (surface it),
+    # never a false FAIL/PASS. Mirrors PRE-005's could-not-determine handling.
+    r = _run_pre006(_pre006_runner(
+        graph=None,
+        powerplatform=_FakePP({"_error": "insufficient_permissions", "_status": 403}),
+        payg=False))
+    assert r.status == "Warning"
+    assert "Could not determine" in r.result
+    assert _CATALOG_DEEP_LINK in r.remediation
+
+
+def test_pre006_graph_unavailable_with_zero_env_alloc_warns():
+    # Env read succeeded with 0 allocation, but tenant purchase can't be
+    # confirmed (Graph None) -> WARNING, not FAIL (incomplete info must not
+    # produce a false hard failure).
+    r = _run_pre006(_pre006_runner(
+        graph=None, powerplatform=_FakePP([]), payg=False))
+    assert r.status == "Warning"
+    assert "Could not determine" in r.result
+
+
+def test_pre006_unexpected_error_degrades_to_warning():
+    # An UNEXPECTED error (a code defect) degrades to PRE-006's own WARNING row
+    # -- matching PRE-004/005 -- rather than bubbling up and turning the whole
+    # Prerequisites category into a single ERROR. A non-iterable allocations
+    # payload makes _env_mcs_allocation raise past its own guard.
+    r = _run_pre006(_pre006_runner(
+        graph=_FakeGraphSharing(skus=[]), powerplatform=_FakePP(5), payg=False))
+    assert r.status == "Warning"
+    assert "Unable to determine" in r.result
+
+
+def _setup_pre006_pass():
+    return _pre006_runner(
+        graph=_FakeGraphSharing(skus=[]), powerplatform=_FakePP(_mcs(25000)), payg=False)
+
+
+def _setup_pre006_fail():
+    return _pre006_runner(
+        graph=_FakeGraphSharing(skus=[]), powerplatform=_FakePP([]), payg=False)
+
+
+def _setup_pre006_could_not_determine():
+    return _pre006_runner(graph=None, powerplatform=_FakePP([]), payg=False)
+
+
+def _setup_pre006_skipped():
+    return _pre006_runner(
+        graph=_FakeGraphSharing(skus=[]), powerplatform=_FakePP([]), payg=True)
+
+
+@pytest.mark.parametrize("setup, expected_status", [
+    (_setup_pre006_pass, "Passed"),
+    (_setup_pre006_fail, "Failed"),
+    (_setup_pre006_could_not_determine, "Warning"),
+    (_setup_pre006_skipped, "Skipped"),
+])
+def test_pre006_result_schema_and_owning_role(setup, expected_status):
+    # Shared-step schema contract: every PRE-006 row carries
+    # status / description / result / remediation, is owned by the Power
+    # Platform admin, and links docs. remediation is empty exactly on the
+    # no-action rows (Passed / Skipped) and populated on FAIL / WARNING.
+    from flightcheck.runner import Role
+
+    r = _run_pre006(setup())
+
+    assert r.checkpoint_id == "PRE-006"
+    assert r.priority == "High"
+    assert r.category == "Prerequisites"
+    assert r.status == expected_status
+    assert isinstance(r.description, str) and r.description
+    assert isinstance(r.result, str) and r.result
+    assert isinstance(r.remediation, str)
+    assert (r.remediation == "") is (expected_status in ("Passed", "Skipped"))
+    assert r.roles == [Role.POWER_PLATFORM_ADMIN.value]
+    assert r.doc_link
+
+
+@responses.activate
+def test_pre006_integration_skipped_when_payg_configured():
+    # Full run: PayG healthy -> PRE-005 sets _payg_configured True ->
+    # PRE-006 skips (no double-reporting of the billing gap).
+    from flightcheck.checks.prerequisites import run_prerequisites_checks
+
+    runner = _setup_pre005_pass()
+    results = run_prerequisites_checks(runner)
+
+    assert runner._payg_configured is True
+    assert _by_id(results, "PRE-005").status == "Passed"
+    assert _by_id(results, "PRE-006").status == "Skipped"
+
+
+@responses.activate
+def test_pre006_integration_fails_when_no_billing_or_prepaid():
+    # Full run: no billing policy, no prepaid SKU, zero env allocation ->
+    # PRE-005 FAILs and PRE-006 FAILs (prepaid-only AND capacity == 0).
+    from flightcheck.checks.prerequisites import run_prerequisites_checks
+
+    runner = _setup_pre005_fail()
+    results = run_prerequisites_checks(runner)
+
+    assert runner._payg_configured is False
+    pre006 = _by_id(results, "PRE-006")
+    assert pre006.status == "Failed"
+    assert "No prepaid Copilot Studio message capacity has been purchased" in pre006.result
+    assert _CATALOG_DEEP_LINK in pre006.remediation
+
