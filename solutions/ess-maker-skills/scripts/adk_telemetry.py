@@ -689,6 +689,10 @@ def _emit_synthetic(n: int = 1) -> int:
                 agent_id=agent_id, run_index=random.randint(1, 4),
                 result=random.choice(["pass", "fail", "partial"]),
                 duration_ms=random.randint(3000, 45000)),
+            lambda: emit_flightcheck_error(
+                agent_id=agent_id, error_code="FC_TIMEOUT",
+                error_category=random.choice(["runtime", "auth", "infra", "timeout"]),
+                error_message="synthetic flightcheck error"),
             lambda: emit_session_end(duration_ms=random.randint(60000, 1800000)),
         ]
         for fn in emitters:
