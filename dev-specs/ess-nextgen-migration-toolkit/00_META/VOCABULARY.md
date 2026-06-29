@@ -70,11 +70,11 @@ An Employee Self-Service (ESS) Copilot deployed within a Dataverse environment.
 
 ---
 
-## Customer Agent (CA)
+## Custom Engine Agent (CA)
 
 ### Definition
 
-The legacy Copilot runtime model based on Customer Agent architecture.
+The legacy Copilot runtime model based on Custom Engine Agent architecture.
 
 CA is the source migration platform.
 
@@ -354,13 +354,16 @@ Contains:
 
 ### Definition
 
-A reusable application component responsible for coordinating data retrieval or persistence.
+The application orchestration layer (`service/mtk_orchestrator.py`), responsible
+for coordinating a migration session — composing the lower layers and driving
+the pipeline.
 
-Services do not implement migration rules.
+Migration rules live exclusively in `src/modules/migration/steps/`.
+The service layer never contains migration rules.
 
 ---
 
-## SDK
+## Dataverse Client
 
 ### Definition
 
@@ -373,7 +376,7 @@ Responsibilities include:
 * Serialization
 * Deserialization
 
-SDKs never contain business logic.
+The Dataverse client never contains business logic.
 
 ---
 

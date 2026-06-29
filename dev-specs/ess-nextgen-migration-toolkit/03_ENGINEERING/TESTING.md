@@ -127,7 +127,7 @@ Validate infrastructure integration.
 
 Examples:
 
-* Dataverse SDK
+* Dataverse client
 * Authentication
 * HTTP
 * Serialization
@@ -178,7 +178,7 @@ End-to-End Tests verify complete workflows.
 | Pipeline Engine | Unit              |
 | Pipeline Step   | Unit + Golden     |
 | Services        | Unit              |
-| Dataverse SDK   | Integration       |
+| Dataverse Client | Integration       |
 | Logger          | Unit              |
 | Reporter        | Golden            |
 | Orchestrator    | End-to-End        |
@@ -202,15 +202,15 @@ Pipeline composition should also be tested.
 
 # 10. Service Testing
 
-Services shall be tested using mocked SDK interactions.
+Services shall be tested using mocked Dataverse client interactions.
 
 Services should never require live Dataverse environments.
 
 ---
 
-# 11. SDK Testing
+# 11. Dataverse Client Testing
 
-SDK Tests validate:
+Dataverse Client Tests validate:
 
 * REST requests
 * Serialization
@@ -246,7 +246,7 @@ tests/golden/
 
     expected/
 
-    reports/
+    debug/reports/
 ```
 
 Every Golden Test consists of:
@@ -298,7 +298,7 @@ All tests must be repeatable.
 
 Mock:
 
-* Dataverse SDK
+* Dataverse client
 * Authentication
 * HTTP
 * File System (where appropriate)
@@ -319,7 +319,7 @@ Minimum expectations:
 | -------------- | ------------- |
 | Pipeline Steps | High          |
 | Services       | High          |
-| SDK            | Moderate      |
+| Dataverse Client        | Moderate      |
 | Orchestrator   | Moderate      |
 | Utilities      | High          |
 
@@ -361,7 +361,7 @@ A task is considered tested when:
 
 * Required Unit Tests exist.
 * Required Golden Tests exist.
-* Integration Tests updated (if SDK changed).
+* Integration Tests updated (if Dataverse client changed).
 * End-to-End Tests updated (if workflow changed).
 
 ---
@@ -385,7 +385,7 @@ Golden Tests are expected to become the primary regression safety net throughout
 * DOMAIN_MODEL.md
 * SERVICES.md
 * PIPELINES.md
-* DATAVERSE_SDK.md
+* DATAVERSE_CLIENT.md
 * CODING_STANDARDS.md
 * IMPLEMENTATION_GUIDE.md
 

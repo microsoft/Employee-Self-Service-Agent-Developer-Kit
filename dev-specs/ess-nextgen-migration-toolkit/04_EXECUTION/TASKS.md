@@ -76,29 +76,36 @@ Completed tasks shall remain in this document for traceability.
 
 # 2a. Task Anatomy
 
-Every task declares the documents required to implement it, so that agents and
-contributors resolve only the specifications a task actually needs (see the
-Dependency-Based Loading Model in `AGENTS.md`).
+Every task is defined in its own file under `04_EXECUTION/tasks/`, named
+`TASK-XXX-<slug>.md`. This document is the **index**; the per-task files are the
+authoritative task definitions. Each task declares the documents required to
+implement it, so that agents and contributors resolve only the specifications a
+task actually needs (see the Dependency-Based Loading Model in `AGENTS.md`).
 
-Each task may declare:
+Each task file follows a fixed structure:
 
-* **Consumes** — the governing Migration Rule(s) the task implements
-  (e.g. `RULE-003`). Foundation tasks that implement no business rule omit this.
+* **Header table** — `ID`, `Workstream`, `Status`, and `Consumes`.
+* **Description** — what the task delivers and its scope.
+* **Acceptance Criteria** — the checkbox conditions that must all hold for the
+  task to be considered DONE (derived from the Deliverables and the global
+  Definition of Done in section 5).
+* **Deliverables** — the concrete artifacts the task produces.
 * **References** — the exact specifications required to implement the task,
   given as paths relative to the specification root
   (e.g. `02_ARCHITECTURE/PIPELINES.md`).
 
-Example:
+The header table also declares:
+
+* **Consumes** — the governing Migration Rule(s) the task implements
+  (e.g. `RULE-003`). Foundation tasks that implement no business rule use `—`.
+
+Example header:
 
 ```text
-TASK-012
-Consumes
-- RULE-003
-References
-- 02_ARCHITECTURE/PIPELINES.md
-- 02_ARCHITECTURE/DOMAIN_MODEL.md
-- 03_ENGINEERING/CODING_STANDARDS.md
-- 03_ENGINEERING/TESTING.md
+| Field    | Value    |
+| ID       | TASK-012 |
+| Status   | TODO     |
+| Consumes | RULE-003 |
 ```
 
 Resolving a task's `References` replaces reading every specification on every
@@ -116,264 +123,16 @@ The objective of this workstream is **not** to perform migrations.
 
 Instead, it establishes the complete framework, wiring, and developer experience so that future migration rules can be implemented with minimal effort.
 
----
-
-### TASK-001
-
-## Repository Scaffold
-
-**Status**
-
-TODO
-
-**Description**
-
-Create the repository structure defined in `REPOSITORY_STRUCTURE.md`.
-
-**Deliverables**
-
-* Folder scaffold
-* Source layout
-* Test layout
-* Logs folder
-* Reports folder
-* Scripts folder
-* README
-* pyproject.toml
-
-**References**
-
-* 03_ENGINEERING/REPOSITORY_STRUCTURE.md
-
----
-
-### TASK-002
-
-## Pipeline Framework
-
-**Status**
-
-TODO
-
-**Description**
-
-Implement the Pipeline Framework.
-
-**Deliverables**
-
-* Pipeline Builder
-* Pipeline Registry
-* Pipeline Context
-* Pipeline Step abstraction
-* Fluent API
-
-All registered Pipeline Steps may initially be no-op implementations.
-
-**References**
-
-* 02_ARCHITECTURE/ARCHITECTURE.md
-* 02_ARCHITECTURE/PIPELINES.md
-
----
-
-### TASK-003
-
-## Migration Orchestrator
-
-**Status**
-
-TODO
-
-**Description**
-
-Implement the Migration Orchestrator.
-
-Responsibilities include:
-
-* User interaction
-* Pipeline initialization
-* Session lifecycle
-* Pipeline execution
-
-No migration logic.
-
-**References**
-
-* 02_ARCHITECTURE/ARCHITECTURE.md
-* 02_ARCHITECTURE/DOMAIN_MODEL.md
-
----
-
-### TASK-004
-
-## Dataverse SDK
-
-**Status**
-
-TODO
-
-**Description**
-
-Implement the Dataverse REST wrapper.
-
-Initial implementation includes:
-
-* Authentication
-* REST helpers
-* Dependency APIs
-* Component APIs
-* Layer APIs
-* Solution APIs
-* Writeback APIs
-
-Business logic is out of scope.
-
-**References**
-
-* 02_ARCHITECTURE/DATAVERSE_SDK.md
-
----
-
-### TASK-005
-
-## Diagnostics Framework
-
-**Status**
-
-TODO
-
-**Description**
-
-Implement diagnostics infrastructure.
-
-Deliverables:
-
-* Logger
-* Session Manager
-* Report Writer
-* Console Output
-* Log Files
-
-All output shall use the framework Logger.
-
-**References**
-
-* 03_ENGINEERING/DIAGNOSTICS.md
-
----
-
-### TASK-006
-
-## Preprocessing Pipeline
-
-**Status**
-
-TODO
-
-**Description**
-
-Implement discovery and preprocessing.
-
-Responsibilities:
-
-* Discover ESS Agent
-* Retrieve DependenciesForUninstall
-* Retrieve Solution Component Layers
-* Determine migration candidates
-* Load canonical components
-
-No migration transformations.
-
-**References**
-
-* 02_ARCHITECTURE/SERVICES.md
-* 02_ARCHITECTURE/DATAVERSE_SDK.md
-* 02_ARCHITECTURE/DOMAIN_MODEL.md
-
----
-
-### TASK-007
-
-## Postprocessing Pipeline
-
-**Status**
-
-TODO
-
-**Description**
-
-Implement post-processing.
-
-Responsibilities:
-
-* Validation
-* Writeback
-* Report generation
-
-Migration logic is out of scope.
-
-**References**
-
-* 02_ARCHITECTURE/SERVICES.md
-* 03_ENGINEERING/DIAGNOSTICS.md
-
----
-
-### TASK-008
-
-## Command Line Interface
-
-**Status**
-
-TODO
-
-**Description**
-
-Implement the CLI experience.
-
-Support:
-
-* Environment selection
-* Agent selection
-* Preferred Solution selection
-* Execution mode
-* Progress reporting
-
-**References**
-
-* 01_PRODUCT/CUSTOMER_JOURNEY.md
-* 01_PRODUCT/MIGRATION_MODES.md
-* 03_ENGINEERING/REPOSITORY_STRUCTURE.md
-
----
-
-### TASK-009
-
-## End-to-End Framework Validation
-
-**Status**
-
-TODO
-
-**Description**
-
-Validate that the toolkit executes end-to-end.
-
-The pipeline shall execute successfully even though all Pipeline Steps are currently no-op implementations.
-
-Deliverables:
-
-* Working CLI
-* Discovery
-* Pipeline
-* Logging
-* Reports
-* Empty writeback implementation
-
-**References**
-
-* 02_ARCHITECTURE/ARCHITECTURE.md
-* 03_ENGINEERING/TESTING.md
+| Task                                                     | Title                          | Status | Consumes |
+| -------------------------------------------------------- | ------------------------------ | ------ | -------- |
+| [TASK-001](tasks/TASK-001-repository-scaffold.md)        | Repository Scaffold            | DONE   | —        |
+| [TASK-002](tasks/TASK-002-pipeline-framework.md)         | Pipeline Framework             | TODO   | —        |
+| [TASK-003](tasks/TASK-003-migration-orchestrator.md)     | Migration Orchestrator         | TODO   | —        |
+| [TASK-004](tasks/TASK-004-dataverse-client.md)           | Dataverse Client               | TODO   | —        |
+| [TASK-005](tasks/TASK-005-diagnostics-framework.md)      | Diagnostics Framework          | TODO   | —        |
+| [TASK-006](tasks/TASK-006-preprocessing-pipeline.md)     | Preprocessing Pipeline         | TODO   | —        |
+| [TASK-007](tasks/TASK-007-postprocessing-pipeline.md)    | Postprocessing Pipeline        | TODO   | —        |
+| [TASK-009](tasks/TASK-009-end-to-end-framework-validation.md) | End-to-End Framework Validation | TODO | —      |
 
 ---
 
@@ -385,61 +144,9 @@ Deliver the first fully functional migration capability.
 
 The toolkit should now perform one real migration end-to-end.
 
----
-
-### TASK-010
-
-## Implement RULE-001 — Override Agent Metadata
-
-**Status**
-
-TODO
-
-**Consumes**
-
-RULE-001
-
-**Description**
-
-Implement the first production migration rule.
-
-Scope includes:
-
-* Override Agent Instructions
-* Override Runtime Provider
-* Override Template
-* Override Model Kind
-
-Support both:
-
-* Preview mode
-* Writeback mode
-
-CLI should expose:
-
-```text
---preview
-
---writeback
-```
-
-Preview shall produce reports without modifying Dataverse.
-
-Writeback shall persist the migrated component.
-
-Deliverables:
-
-* OverrideAgentMetadataStep
-* Unit Tests
-* Golden Tests
-* End-to-End validation
-
-**References**
-
-* 02_ARCHITECTURE/PIPELINES.md
-* 02_ARCHITECTURE/DOMAIN_MODEL.md
-* 03_ENGINEERING/CODING_STANDARDS.md
-* 03_ENGINEERING/TESTING.md
+| Task                                                              | Title                                  | Status | Consumes |
+| ----------------------------------------------------------------- | -------------------------------------- | ------ | -------- |
+| [TASK-010](tasks/TASK-010-rule-001-override-agent-metadata.md)    | Implement RULE-001 — Override Agent Metadata | TODO | RULE-001 |
 
 ---
 
@@ -449,72 +156,32 @@ Every subsequent workstream adds one or more Migration Rules.
 
 The framework architecture should remain unchanged.
 
----
-
-### TASK-011
-
-## Implement RULE-002 — Replace EndConversation Node
-
-**Status**
-
-TODO
-
-**Consumes**
-
-RULE-002
-
-**References**
-
-* 02_ARCHITECTURE/PIPELINES.md
-* 02_ARCHITECTURE/DOMAIN_MODEL.md
-* 03_ENGINEERING/CODING_STANDARDS.md
-* 03_ENGINEERING/TESTING.md
+| Task                                                                   | Title                                       | Status | Consumes |
+| ---------------------------------------------------------------------- | ------------------------------------------- | ------ | -------- |
+| [TASK-011](tasks/TASK-011-rule-002-replace-endconversation-node.md)    | Implement RULE-002 — Replace EndConversation Node | TODO | RULE-002 |
+| [TASK-012](tasks/TASK-012-rule-003-handle-onactivity-topic.md)         | Implement RULE-003 — Handle OnActivity Topic | TODO  | RULE-003 |
+| [TASK-013](tasks/TASK-013-rule-004-handle-ongeneratedresponse-topic.md) | Implement RULE-004 — Handle OnGeneratedResponse Topic | TODO | RULE-004 |
 
 ---
 
-### TASK-012
-
-## Implement RULE-003 — Handle OnActivity Topic
-
-**Status**
-
-TODO
-
-**Consumes**
-
-RULE-003
-
-**References**
-
-* 02_ARCHITECTURE/PIPELINES.md
-* 02_ARCHITECTURE/DOMAIN_MODEL.md
-* 03_ENGINEERING/CODING_STANDARDS.md
-* 03_ENGINEERING/TESTING.md
+Future Migration Rules shall be appended as new task files under
+`04_EXECUTION/tasks/` and listed above as they are specified in
+`MIGRATION_RULES.md`.
 
 ---
 
-### TASK-013
+# Workstream 3 — Final Validation
 
-## Implement RULE-004 — Handle OnGeneratedResponse Topic
+## Goal
 
-**Status**
+Sign off the toolkit against a real migration. This workstream runs **last**,
+after all Migration Rules are implemented. `TASK-999` is a sentinel ID: it
+always sorts to the end of the backlog and is the final manual gate before a
+release.
 
-TODO
-
-**Consumes**
-
-RULE-004
-
-**References**
-
-* 02_ARCHITECTURE/PIPELINES.md
-* 02_ARCHITECTURE/DOMAIN_MODEL.md
-* 03_ENGINEERING/CODING_STANDARDS.md
-* 03_ENGINEERING/TESTING.md
-
----
-
-Future Migration Rules shall be appended below as they are specified in `MIGRATION_RULES.md`.
+| Task                                                     | Title                          | Status | Consumes |
+| -------------------------------------------------------- | ------------------------------ | ------ | -------- |
+| [TASK-999](tasks/TASK-999-manual-e2e-validation.md)      | Manual End-to-End Validation   | TODO   | —        |
 
 ---
 
@@ -549,6 +216,9 @@ A task is considered complete only when:
 * Tests pass.
 * Logging is implemented.
 * Reports are updated.
+* Documentation is updated wherever applicable — README, any affected
+  dev-specs, and CHANGELOG.md — so specifications and implementation stay
+  synchronized.
 * No specification violations exist.
 * Corresponding Migration Rule is implemented.
 * Task status is updated to **DONE**.

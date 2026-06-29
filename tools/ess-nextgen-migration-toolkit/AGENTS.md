@@ -25,15 +25,27 @@
   ```text
   00_META/        PROJECT.md, INVARIANTS.md, VOCABULARY.md, ROADMAP.md, AGENTS.md
   01_PRODUCT/     CUSTOMER_JOURNEY.md, MIGRATION_MODES.md, MIGRATION_RULES.md
-  02_ARCHITECTURE/ ARCHITECTURE.md, DOMAIN_MODEL.md, SERVICES.md, PIPELINES.md, DATAVERSE_SDK.md
+  02_ARCHITECTURE/ ARCHITECTURE.md, DOMAIN_MODEL.md, SERVICES.md, PIPELINES.md, DATAVERSE_CLIENT.md
   03_ENGINEERING/ REPOSITORY_STRUCTURE.md, CODING_STANDARDS.md, DIAGNOSTICS.md, TESTING.md, IMPLEMENTATION_GUIDE.md
   04_EXECUTION/   TASKS.md, CHANGELOG.md
   ```
 
 * **The buildable toolkit (implementation)** lives here under
-  `tools/ess-nextgen-migration-toolkit/` (`src/`, `tests/`, `logs/`,
-  `reports/`, `scripts/`, etc.), as defined by
+  `tools/ess-nextgen-migration-toolkit/` (`src/`, `tests/`, `scripts/`, etc.),
+  with generated output under `debug/logs/` and `debug/reports/`, as defined by
   [`REPOSITORY_STRUCTURE.md`](../../dev-specs/ess-nextgen-migration-toolkit/03_ENGINEERING/REPOSITORY_STRUCTURE.md).
+
+## Implementation navigation
+
+| Concern               | Implementation location                         |
+| --------------------- | ----------------------------------------------- |
+| Dataverse APIs        | `src/core/outbound/`                            |
+| Domain Models         | `src/core/models/`                              |
+| Migration Rules       | `src/service/modules/migration/steps/`          |
+| Pipeline Registration | `src/service/modules/migration/`                |
+| Utilities             | `src/service/utils/`                            |
+| Diagnostics code      | `src/core/logging/`                             |
+| Generated output      | `debug/logs/`, `debug/reports/`         |
 
 ---
 

@@ -1,0 +1,45 @@
+# Quality gates for the ESS NextGen Migration Toolkit ONLY.
+#
+# Scope (hard rule): this config governs nothing outside
+# tools/ess-nextgen-migration-toolkit/. The top-level `files` filter plus a
+# per-hook one restricts every hook to the toolkit, and each hook runs the tool
+# from inside the toolkit (`uv run --project tools/ess-nextgen-migration-toolkit
+# ...`), so it can never touch solutions/, tests/, or other tools/.
+#
+# Run MANUALLY from the toolkit directory — do NOT install it as a global git
+# hook (the .git/hooks dir is shared across the whole monorepo, so a global
+# install would fire these toolkit gates on every unrelated commit):
+#     cd tools/ess-nextgen-migration-toolkit
+#     uv run pre-commit run --all-files
+#
+# Hooks use the SAME locked tool versions as `uv run` and CI (uv.lock — the
+# single source of truth), so there is no version drift. We deliberately avoid
+# the external ruff-pre-commit / mirrors-mypy repos, which resolve their own
+# versions in isolated envs and would drift from uv.lock.
+#
+# See dev-specs/ess-nextgen-migration-toolkit/03_ENGINEERING/REPOSITORY_STRUCTURE.md
+# (sections 11 and 11a) and the CODING_STANDARDS.md in that same folder.
+files: ^tools/ess-nextgen-migration-toolkit/
+repos:
+  - repo: local
+    hooks:
+      - id: ruff
+        name: ruff (lint, autofix) — toolkit only
+        entry: uv run --project tools/ess-nextgen-migration-toolkit ruff check --fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: ruff-format
+        name: ruff (format) — toolkit only
+        entry: uv run --project tools/ess-nextgen-migration-toolkit ruff format
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+
+      - id: mypy
+        name: mypy (strict) — toolkit only
+        entry: uv run --project tools/ess-nextgen-migration-toolkit mypy tools/ess-nextgen-migration-toolkit/src
+        language: system
+        files: ^tools/ess-nextgen-migration-toolkit/.*\.py$
+        pass_filenames: false

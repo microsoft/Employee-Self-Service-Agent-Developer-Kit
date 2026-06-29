@@ -6,32 +6,35 @@
 
 > **Purpose**
 >
-> This document defines the application service layer of the ESS NextGen Migration Toolkit.
+> This document defines the **Service (Orchestration) layer** of the ESS NextGen
+> Migration Toolkit — the application's entry point and the top of the
+> dependency graph, implemented as `service/mtk_orchestrator.py`.
 >
-> Services encapsulate reusable application capabilities used throughout the migration framework.
+> The Service layer coordinates a migration session: it composes the lower
+> layers, drives the Pipeline Engine over the pipeline-stage `modules/`, and
+> performs Dataverse I/O through the Dataverse client — while remaining
+> independent of migration rules.
 >
-> Services coordinate interactions between the Pipeline Engine and the Dataverse SDK while remaining independent of migration rules.
->
-> Services never contain business transformation logic.
+> The Service layer never contains business transformation logic; transformation
+> belongs exclusively to Migration Steps.
 
 ---
 
 # 1. Purpose
 
-The Service Layer provides reusable capabilities shared across multiple pipeline steps.
+The Service layer provides application **orchestration** — it decides **when**
+capabilities run and in what order, and it owns the session lifecycle.
 
-Examples include:
+The reusable capabilities it coordinates are realized in the lower layers:
 
-- Discovering components
-- Loading component metadata
-- Analyzing ownership
-- Persisting changes
-- Validating migrated artifacts
-- Producing reports
+- Discovery and component loading → `modules/preprocessing/`
+- Validation, writeback, and reporting → `modules/postprocessing/`
+- Authentication, configuration, diagnostics, and generic helpers →
+  cross-cutting `core/` primitives (`core/outbound`, `constants`,
+  `core/logging`, `core/utils`)
 
-Services expose **what** can be done.
-
-Pipeline Steps decide **when** those capabilities are used.
+The Service layer exposes **what** a migration session does end to end.
+Pipeline Steps decide the individual transformations.
 
 ---
 
@@ -39,65 +42,68 @@ Pipeline Steps decide **when** those capabilities are used.
 
 ## SERVICE-001
 
-Services are stateless.
+Orchestration owns the session and execution lifecycle.
 
 ---
 
 ## SERVICE-002
 
-Services expose reusable application capabilities.
+The Service layer never performs business transformations.
+
+Transformation belongs exclusively to Migration Steps.
 
 ---
 
 ## SERVICE-003
 
-Services never contain migration rules.
+Migration rules live exclusively in `src/modules/migration/steps/`.
+The Service layer never contains migration rules.
 
 ---
 
 ## SERVICE-004
 
-Services communicate only through Domain Models.
+Layers communicate only through Domain Models and the MigrationContext.
 
 ---
 
 ## SERVICE-005
 
-Services never communicate directly with other Services.
+The Service layer may call the Dataverse client.
 
-Communication occurs through:
-
-- MigrationContext
-- Pipeline
-- Orchestrator
+Migration Steps may not.
 
 ---
 
 ## SERVICE-006
 
-Services may depend on SDK Clients.
+The Service layer depends only on the layers beneath it.
 
-SDK Clients never depend on Services.
-
----
-
-# 3. Service Layer
-
-```
-Pipeline Engine
-        │
-        ▼
-Application Services
-        │
-        ▼
-Dataverse SDK
-```
-
-Services isolate business workflows from infrastructure.
+Lower layers never depend on the Service layer.
 
 ---
 
-# 4. Service Catalogue
+# 3. Layer Position
+
+```
+Orchestration (service/mtk_orchestrator.py)
+        │
+        ▼
+Pipeline Engine  ──►  Modules  ──►  Dataverse client
+```
+
+Orchestration isolates session coordination from business transformation and
+infrastructure.
+
+---
+
+# 4. Coordinated Capabilities
+
+> The catalogue below enumerates the capability **responsibilities** an
+> end-to-end migration session coordinates. These are realized within the
+> pipeline-stage `modules/` (preprocessing and postprocessing) and cross-cutting
+> `core/` primitives — not as a separate physical `services/` folder — and are
+> driven by the orchestrator.
 
 ```
 DiscoveryService
@@ -284,7 +290,7 @@ Component[]
 
 ## Depends On
 
-SDK Clients
+Dataverse API Clients
 
 ---
 
@@ -335,7 +341,7 @@ Persist migrated artifacts.
 
 Serialize canonical models.
 
-Call Dataverse SDK.
+Call Dataverse client.
 
 Verify persistence.
 
@@ -426,8 +432,8 @@ Load runtime configuration.
 
 Read:
 
-- CLI arguments
-- UI selections
+- Invocation arguments
+- User selections
 - Configuration files
 - Environment settings
 
@@ -451,7 +457,7 @@ Provide authenticated Dataverse access.
 
 - Accept bearer token
 - Validate authentication
-- Build SDK context
+- Build Dataverse Client context
 
 ---
 
@@ -476,13 +482,13 @@ Pipeline Step
 Application Service
       │
       ▼
-SDK Client
+Dataverse API Client
       │
       ▼
 Dataverse
 ```
 
-Services never bypass the SDK.
+Services never bypass the Dataverse client.
 
 ---
 
@@ -545,8 +551,8 @@ Framework orchestration should not change when new services are introduced.
 **Referenced By**
 
 - PIPELINES.md
-- DATAVERSE_SDK.md
+- DATAVERSE_CLIENT.md
 - MIGRATION_RULES.md
 - TASKS.md
 
-The Service Layer provides the reusable application capabilities upon which the migration framework is built. Business transformations remain the responsibility of Migration Steps, while Services provide reusable operations that support those transformations.
+The Service (Orchestration) layer coordinates the end-to-end migration session upon which the framework is built. Business transformations remain the responsibility of Migration Steps, while the capability responsibilities above are realized within the pipeline-stage `modules/` and cross-cutting `core/` primitives.

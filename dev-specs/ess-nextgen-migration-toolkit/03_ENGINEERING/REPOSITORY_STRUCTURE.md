@@ -59,32 +59,26 @@ tools/
     AGENTS.md
 
     src/
-
+        constants/
         core/
             pipeline/
-            orchestrator/
             logging/
+            models/
+            outbound/
+                dataverse_api.py
+            utils/
+        modules/
+            preprocessing/
+            migration/
+                migration_pipeline.py
+                steps/
+            postprocessing/
+        service/
+            mtk_orchestrator.py
 
-        models/
-
-        constants/
-
-        services/
-
-        sdk/
-            dataverse_api.py
-
-        migration/
-            migration_pipeline.py
-            steps/
-
-        preprocessing/
-
-        postprocessing/
-
-        ui/
-
-        utils/
+    debug/
+        logs/
+        reports/
 
     tests/
 
@@ -93,15 +87,17 @@ tools/
         golden/
         e2e/
 
-    logs/
-
-    reports/
-
     scripts/
+        mtk.sh
+        mtk.ps1
 
     .pre-commit-config.yaml
 
+    .python-version
+
     pyproject.toml
+
+    uv.lock
 
     README.md
 ```
@@ -124,7 +120,6 @@ Contains:
 * Pipeline Builder
 * Pipeline Registry
 * Execution Context
-* Migration Orchestrator
 * Logging Framework
 
 Never contains:
@@ -135,7 +130,7 @@ Never contains:
 
 ---
 
-## models/
+## core/models/
 
 Owns canonical domain models.
 
@@ -173,28 +168,9 @@ Contains no executable logic.
 
 ---
 
-## services/
+## core/outbound/
 
-Owns reusable application capabilities.
-
-Examples:
-
-* Discovery
-* Ownership Analysis
-* Component Loading
-* Validation
-* Reporting
-* Writeback Coordination
-
-Services expose reusable operations.
-
-They never implement migration rules.
-
----
-
-## sdk/
-
-Owns Dataverse communication.
+Owns Dataverse communication through the generic Dataverse client.
 
 Contains:
 
@@ -214,7 +190,56 @@ Business logic never belongs here.
 
 ---
 
-## migration/
+## service/
+
+Owns application orchestration — the top of the dependency graph and the
+toolkit's entry point.
+
+Contains:
+
+* `mtk_orchestrator.py`
+
+Responsibilities include:
+
+* Initialize and coordinate a migration session
+* Build the MigrationContext and select the Execution Mode
+* Drive the Pipeline Engine over the pipeline-stage modules
+* Coordinate progress, failures, and final results
+
+The service layer never performs business transformations (those belong to
+Migration Steps) and never contains migration rules.
+
+---
+
+## core/utils/
+
+Owns framework-independent helpers.
+
+Examples:
+
+* Utility methods
+* Generic exceptions
+* Shared helper functions
+
+Utilities remain generic and reusable.
+
+---
+
+## modules/
+
+Owns pipeline-stage business logic grouped by execution phase.
+
+Contains:
+
+* `preprocessing/`
+* `migration/`
+* `postprocessing/`
+
+Reusable service helpers outside this grouping must not contain migration rules.
+
+---
+
+## modules/migration/
 
 Owns business transformations.
 
@@ -232,11 +257,13 @@ Examples:
 * Model Kind transformation
 * Conversation Node transformation
 
-Migration Steps never call Dataverse directly.
+Migration rules live exclusively in
+`src/modules/migration/steps/`. Migration Steps never call Dataverse
+directly.
 
 ---
 
-## preprocessing/
+## modules/preprocessing/
 
 Owns discovery and preparation.
 
@@ -252,7 +279,7 @@ No transformations occur here.
 
 ---
 
-## postprocessing/
+## modules/postprocessing/
 
 Owns execution after transformation.
 
@@ -266,32 +293,34 @@ No migration rules belong here.
 
 ---
 
-## ui/
+## service/mtk_orchestrator.py
 
-Owns customer interaction.
+The orchestration entry point and top of the dependency graph. Owns application
+composition and session coordination.
 
 Responsibilities include:
 
-* CLI
-* Browser UI
-* User prompts
-* Progress reporting
+* Compose the lower layers (Pipeline Engine, modules, Dataverse client)
+* Coordinate the migration session lifecycle
+* Report progress and final results
 
-UI never performs migration logic.
+The orchestrator never performs migration logic (transformations belong to
+Migration Steps). For now `mtk_orchestrator.py` is a hello-world placeholder;
+orchestration logic and any command surface are added later.
 
 ---
 
-## utils/
+## debug/
 
-Owns framework-independent helpers.
+Owns generated, gitignored execution output. It sits at the toolkit root as a
+sibling of `src/` (not a Python package).
 
-Examples:
+Contains:
 
-* Utility methods
-* Generic exceptions
-* Shared helper functions
+* `logs/`
+* `reports/`
 
-Utilities remain generic and reusable.
+The subfolders are retained in version control only through `.gitkeep` files.
 
 ---
 
@@ -300,7 +329,7 @@ Utilities remain generic and reusable.
 Dependencies shall flow only in the following direction.
 
 ```text
-UI
+Service
 
 ↓
 
@@ -308,15 +337,7 @@ Core
 
 ↓
 
-Migration
-
-↓
-
-Services
-
-↓
-
-SDK
+Dataverse Client
 
 ↓
 
@@ -331,18 +352,20 @@ No layer may bypass another layer.
 
 # 5. Folder Ownership Matrix
 
-| Folder         | Responsibility                |
-| -------------- | ----------------------------- |
-| core           | Framework execution           |
-| models         | Canonical domain models       |
-| constants      | Shared constants              |
-| services       | Reusable application services |
-| sdk            | Dataverse communication       |
-| migration      | Business transformations      |
-| preprocessing  | Discovery pipeline            |
-| postprocessing | Validation and persistence    |
-| ui             | Customer interaction          |
-| utils          | Generic helper functionality  |
+| Folder                             | Responsibility                         |
+| ---------------------------------- | -------------------------------------- |
+| core                               | Framework execution                    |
+| core/models                        | Canonical domain models                |
+| core/outbound                      | Dataverse communication — the Dataverse client  |
+| core/utils                         | Generic helper functionality           |
+| constants                          | Shared constants                       |
+| service                            | Application orchestration and entry point |
+| service/mtk_orchestrator.py        | Orchestration entry point              |
+| modules                    | Pipeline-stage business logic          |
+| modules/preprocessing      | Discovery pipeline                     |
+| modules/migration          | Business transformations               |
+| modules/postprocessing     | Validation and persistence             |
+| debug                              | Generated logs and reports             |
 
 ---
 
@@ -351,12 +374,12 @@ No layer may bypass another layer.
 | Specification           | Primary Implementation Folder |
 | ----------------------- | ----------------------------- |
 | ARCHITECTURE.md         | core                          |
-| DOMAIN_MODEL.md         | models                        |
-| SERVICES.md             | services                      |
-| DATAVERSE_SDK.md        | sdk                           |
-| PIPELINES.md            | core + migration              |
-| MIGRATION_RULES.md      | migration                     |
-| DIAGNOSTICS.md          | core/logging                  |
+| DOMAIN_MODEL.md         | core/models                   |
+| SERVICES.md             | service                       |
+| DATAVERSE_CLIENT.md    | core/outbound                 |
+| PIPELINES.md            | core + modules        |
+| MIGRATION_RULES.md      | modules/migration     |
+| DIAGNOSTICS.md          | core/logging + debug          |
 | IMPLEMENTATION_GUIDE.md | Entire repository             |
 
 ---
@@ -418,7 +441,7 @@ End-to-end tests validate complete migration workflows through the Orchestrator.
 Execution artifacts are written to:
 
 ```text
-logs/
+debug/logs/
 ```
 
 Session logs are timestamped and written using the framework logging abstraction.
@@ -426,7 +449,7 @@ Session logs are timestamped and written using the framework logging abstraction
 Customer-facing reports are written to:
 
 ```text
-reports/
+debug/reports/
 ```
 
 Business logic must never write files directly.
@@ -447,6 +470,108 @@ Examples include:
 * Prevention of accidental debug artifacts
 
 Logging must always use the framework logging abstraction.
+
+---
+
+# 11a. Dependency Management and Reproducibility
+
+Determinism extends to the build and runtime environment: every contributor and
+every customer shall be able to install and run the toolkit with identical,
+pinned dependency versions.
+
+The toolkit shall use:
+
+* **`pyproject.toml`** — PEP 621 project metadata with the `hatchling` build
+  backend. The canonical source-layout packages under `src/` are mapped
+  explicitly in `[tool.hatch.build.targets.wheel]`. Developer tooling (ruff,
+  mypy, pytest, pre-commit) is declared as a **PEP 735 dependency-group**
+  (`[dependency-groups] dev`), **not** an optional-dependency extra. `uv`
+  includes the `dev` group by default for both `uv sync` and `uv run`, so
+  contributor commands such as `uv run ruff check .` work without the tool being
+  pruned; customers exclude it with `--no-dev`. (An optional *extra* would be
+  pruned by `uv run`'s implicit sync — a deliberate avoidance.)
+* **`uv.lock`** — the locked, hashed dependency graph. This is the source of
+  truth for dependency resolution and shall be committed to version control.
+* **`.python-version`** — the pinned interpreter version used to resolve and run
+  the toolkit.
+* **`scripts/mtk.{sh,ps1}`** — the single `mtk` command dispatcher. It is
+  self-sufficient and **pip-free**: `mtk start` installs `uv` if missing (its
+  standalone installer requires no Python), has `uv` provision the pinned Python
+  (a managed, standalone CPython — no system Python or admin rights), runs
+  `uv sync` (which creates `.venv` automatically), then runs the toolkit. `pip`
+  is never used. `mtk refresh` fast-forwards the current branch from its remote,
+  then runs `start` (re-provision runtime — it is the customer update path, so it
+  does not accept `--dev` — and launch). New operational commands are added as
+  **new `mtk` subcommands**, never as new top-level scripts.
+* **`mtk.sh` / `mtk.ps1`** (at the **monorepo root**, not the toolkit root) —
+  the single logic-free forwarders that `exec`/invoke
+  `tools/ess-nextgen-migration-toolkit/scripts/mtk.*`. They exist only so the
+  command can be invoked ergonomically from the top of the monorepo
+  (`./mtk.sh start`), mirroring the `./gradlew` / `./mvnw` Dataverse client convention.
+  The dispatcher changes into the toolkit directory itself, so these forwarders
+  need no logic. There is intentionally no second forwarder at the toolkit root.
+
+The minimum supported Python version is declared by `requires-python` in
+`pyproject.toml` and shall match `.python-version`'s major/minor floor.
+
+Whenever dependencies change, `pyproject.toml` and `uv.lock` shall be updated and
+committed together.
+
+---
+
+# 11b. Command Entrypoint Convention
+
+The toolkit exposes operational commands through a **single dispatcher**, not a
+proliferation of per-task scripts. This is a deliberate low-level-design (LLD)
+constraint that every contributor shall follow.
+
+The convention has two layers:
+
+1. **One dispatcher** — `scripts/mtk.{sh,ps1}` (`mtk` = *migration tool kit*).
+   It parses a subcommand (`start`, `refresh`, `help`, …) plus shared options
+   (e.g. position-independent `--dev`) and routes to the matching handler. All
+   real logic lives here. It also **changes the working directory into the
+   toolkit root** (`cd "$(dirname "$0")/.."`) before doing anything, so every
+   command operates on the toolkit regardless of where it was invoked from.
+2. **A single monorepo-root forwarder** — `mtk.{sh,ps1}` at the **repository
+   root** `exec`/invoke `tools/ess-nextgen-migration-toolkit/scripts/mtk.*`,
+   forwarding all arguments. They contain no logic and exist only for ergonomics
+   (mirroring the `./gradlew` / `./mvnw` Dataverse client pattern), letting the toolkit be
+   driven from the top of the monorepo (`./mtk.sh start`). Because the dispatcher
+   changes into the toolkit directory implicitly, invocation is cwd-independent.
+   These two files are the **only sanctioned toolkit artifacts outside
+   `tools/ess-nextgen-migration-toolkit/`** — a deliberate, documented exception
+   to the otherwise strict scope boundary, justified purely as an entrypoint
+   convenience. There is intentionally **no second forwarder at the toolkit
+   root**: one entrypoint, one place to look.
+
+`mtk` covers the everyday command (`start` = provision + run) and the customer
+update path (`refresh` = `git pull` then `start`).
+Ad-hoc developer tasks — managing dependencies (`uv add`/`uv remove`/`uv lock`),
+running linters, etc. — are **not** wrapped by `mtk`: contributors `cd` into
+`tools/ess-nextgen-migration-toolkit/` and run `uv …` directly there. This keeps
+`uv add` editing the toolkit's own `pyproject.toml` / `uv.lock` (a bare `uv add`
+from the monorepo root would target the wrong project) without growing the
+dispatcher into a thin proxy over uv.
+
+Rules:
+
+* **New operational behavior is a new subcommand**, never a new top-level
+  script. Adding `mtk scan`, `mtk doctor`, etc. keeps the surface discoverable
+  (`mtk help` lists everything) and avoids the script sprawl that erodes
+  determinism and onboarding clarity.
+* The dispatcher and forwarder shall remain **OS-paired** (`.sh` for
+  POSIX shells, `.ps1` for PowerShell) and behaviorally identical.
+* The forwarder shall stay **logic-free**; if you are tempted to add logic to it,
+  it belongs in `scripts/mtk.*` as a subcommand or shared helper.
+* The dispatcher **always operates on the toolkit** by changing into its root
+  first; commands must never depend on the caller's current directory.
+
+> **Rationale (for any dev reasoning about this design):** a single, self-
+> describing entrypoint is easier to document, test, and evolve than a folder of
+> ad-hoc scripts. It gives customers one command to learn and contributors one
+> place to extend, while the root forwarder removes path friction without
+> duplicating logic.
 
 ---
 
@@ -472,7 +597,7 @@ Framework infrastructure should remain stable throughout the lifetime of the mig
 * DOMAIN_MODEL.md
 * SERVICES.md
 * PIPELINES.md
-* DATAVERSE_SDK.md
+* DATAVERSE_CLIENT.md
 
 **Referenced By**
 

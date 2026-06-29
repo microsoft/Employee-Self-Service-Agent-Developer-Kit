@@ -4,7 +4,7 @@
 **Version:** Draft v1.0
 **Owner:** Anil Kumar Adepu
 
-**Project:** ESS Customer Agent (CA) → Declarative Agent (DA) Migration Toolkit
+**Project:** ESS Custom Engine Agent (CA) → Declarative Agent (DA) Migration Toolkit
 
 **Repository Type:** Specification-Driven Development (SDD)
 
@@ -14,7 +14,7 @@
 
 # 1. Purpose
 
-The ESS NextGen Migration Toolkit is a pro-code migration framework that enables existing Employee Self-Service (ESS) Customer Agents (CA) to transition to Declarative Agents (DA) while preserving supported customer customizations.
+The ESS NextGen Migration Toolkit is a pro-code migration framework that enables existing Employee Self-Service (ESS) Custom Engine Agents (CA) to transition to Declarative Agents (DA) while preserving supported customer customizations.
 
 The toolkit serves as a temporary migration bridge during the CA → DA platform transition until feature parity is achieved.
 
@@ -34,7 +34,7 @@ It is the engineering framework responsible for migrating customer-owned ESS cus
 
 # 2. Problem Statement
 
-Microsoft-managed ESS packages will transition from Customer Agent (CA) to Declarative Agent (DA).
+Microsoft-managed ESS packages will transition from Custom Engine Agent (CA) to Declarative Agent (DA).
 
 While Microsoft-owned package artifacts are upgraded through package updates, customer-owned customizations require additional migration to remain compatible with the DA runtime.
 
@@ -319,7 +319,7 @@ Detailed behavior is defined by the following specifications.
 * DOMAIN_MODEL.md
 * SERVICES.md
 * PIPELINES.md
-* DATAVERSE_SDK.md
+* DATAVERSE_CLIENT.md
 
 ## Engineering
 

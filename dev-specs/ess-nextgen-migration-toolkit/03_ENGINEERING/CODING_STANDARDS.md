@@ -77,14 +77,13 @@ If architectural changes are required, update the specifications before implemen
 
 Each layer owns one responsibility.
 
-| Layer     | Responsibility                    |
-| --------- | --------------------------------- |
-| UI        | Customer interaction              |
-| Core      | Framework execution               |
-| Migration | Business transformations          |
-| Services  | Reusable application capabilities |
-| SDK       | Dataverse communication           |
-| Models    | Canonical domain models           |
+| Layer           | Responsibility                    |
+| --------------- | --------------------------------- |
+| Service         | Application orchestration and entry point |
+| Core            | Framework execution               |
+| Core Models     | Canonical domain models           |
+| Modules         | Pipeline-stage business logic     |
+| Dataverse Client         | Dataverse communication           |
 
 Responsibilities shall not overlap.
 
@@ -119,27 +118,27 @@ Pipeline Steps shall never:
 
 # 6. Service Rules
 
-Services expose reusable application capabilities.
+The service layer provides application orchestration.
 
-Services shall:
+The service layer shall:
 
-* Be stateless
-* Operate on Domain Models
-* Call the SDK when required
+* Own the migration session and execution lifecycle
+* Operate on Domain Models and the MigrationContext
+* Drive the Pipeline Engine over the pipeline-stage modules
+* Call the Dataverse client when required
 
-Services shall never:
+The service layer shall never:
 
 * Contain migration rules
-* Coordinate pipeline execution
-* Call UI components
+* Perform business transformations
 
 ---
 
-# 7. SDK Rules
+# 7. Dataverse Client Rules
 
-The SDK owns all Dataverse communication.
+Dataverse communication exists only within the Dataverse client (`src/core/outbound/`).
 
-SDK responsibilities include:
+Dataverse Client responsibilities include:
 
 * Authentication
 * HTTP requests
@@ -147,7 +146,7 @@ SDK responsibilities include:
 * Deserialization
 * Retry policies
 
-The SDK shall never:
+The Dataverse client shall never:
 
 * Implement business rules
 * Determine ownership
@@ -159,13 +158,13 @@ The SDK shall never:
 
 Business logic shall operate exclusively on canonical Domain Models.
 
-Raw Dataverse payloads shall never leave the SDK layer.
+Raw Dataverse payloads shall never leave the Dataverse client layer.
 
 Examples of prohibited behavior:
 
 * Passing JSON between Services
 * Manipulating REST payloads inside Pipeline Steps
-* Exposing HTTP response objects outside the SDK
+* Exposing HTTP response objects outside the Dataverse client
 
 ---
 
@@ -225,7 +224,7 @@ Lower layers shall not suppress failures.
 Dependencies shall follow this direction only.
 
 ```
-UI
+Service
 
 ↓
 
@@ -237,11 +236,7 @@ Migration
 
 ↓
 
-Services
-
-↓
-
-SDK
+Dataverse Client
 
 ↓
 
@@ -297,6 +292,24 @@ Hardcoded values are prohibited except for true constants.
 
 ---
 
+# 15a. Dependency Management
+
+Dependencies shall be **pinned and reproducible**. `uv.lock` is the source of
+truth and is committed; `pyproject.toml` declares dependencies and the supported
+Python floor. The environment is **pip-free**: `uv` provisions both the pinned
+Python and the locked dependencies (`uv sync`). Any dependency change shall
+update `pyproject.toml` and `uv.lock` together. See
+`dev-specs/ess-nextgen-migration-toolkit/03_ENGINEERING/REPOSITORY_STRUCTURE.md`
+section 11a.
+
+Operational commands are exposed through the single `mtk` dispatcher
+(`./mtk.sh <subcommand>`, e.g. `mtk start --dev`, `mtk refresh`); new commands
+are added as subcommands, never as new top-level scripts. See
+`dev-specs/ess-nextgen-migration-toolkit/03_ENGINEERING/REPOSITORY_STRUCTURE.md`
+section 11b.
+
+---
+
 # 16. Type Safety
 
 All public functions shall include type hints.
@@ -313,7 +326,7 @@ Minimum expectation:
 
 * Unit Tests for business logic.
 * Golden Tests for deterministic transformations.
-* Integration Tests for SDK interactions.
+* Integration Tests for Dataverse Client interactions.
 
 No production code shall be introduced without tests.
 
@@ -358,7 +371,7 @@ Before marking a task complete, verify:
 * Repository structure unchanged.
 * Architecture preserved.
 * Domain Models used.
-* No Dataverse calls outside the SDK.
+* No Dataverse calls outside the Dataverse client.
 * No business logic outside Migration Steps.
 * Logger used instead of `print()`.
 * Tests added.
@@ -387,7 +400,7 @@ New functionality should primarily be introduced by:
 
 * Adding a new Pipeline Step.
 * Extending an existing Service.
-* Extending the Dataverse SDK.
+* Extending the Dataverse client.
 * Adding or extending Domain Models.
 
 Framework architecture should remain stable throughout the project lifecycle.
@@ -402,7 +415,7 @@ Framework architecture should remain stable throughout the project lifecycle.
 * DOMAIN_MODEL.md
 * SERVICES.md
 * PIPELINES.md
-* DATAVERSE_SDK.md
+* DATAVERSE_CLIENT.md
 * REPOSITORY_STRUCTURE.md
 * INVARIANTS.md
 

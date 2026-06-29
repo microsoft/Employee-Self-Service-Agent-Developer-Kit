@@ -12,7 +12,7 @@
 >
 > It establishes the reusable framework upon which migration capabilities are implemented.
 >
-> Migration rules, Dataverse APIs, and UI behavior are documented separately.
+> Migration rules, Dataverse APIs, and orchestration behavior are documented separately.
 
 ---
 
@@ -76,7 +76,7 @@ Migration rules never perform persistence.
 
 Infrastructure remains replaceable.
 
-SDKs, UI, and persistence mechanisms can evolve independently without affecting migration rules.
+The Dataverse client, orchestrator, and persistence mechanisms can evolve independently without affecting migration rules.
 
 ---
 
@@ -99,7 +99,7 @@ Preprocessing   Migration Pipeline   Postprocessing
                 Diagnostics
                       │
                       ▼
-               Dataverse SDK
+               Dataverse client
                       │
                       ▼
                   Dataverse
@@ -110,11 +110,7 @@ Preprocessing   Migration Pipeline   Postprocessing
 # 4. Architectural Layers
 
 ```text
-Presentation
-
-↓
-
-Application
+Orchestration
 
 ↓
 
@@ -122,18 +118,21 @@ Pipeline
 
 ↓
 
-Services
+Modules
 
 ↓
 
-SDK
+Dataverse Client
 
 ↓
 
 Platform
 ```
 
-Each layer depends only on the layer directly beneath it.
+Each layer depends only on the layer directly beneath it. Orchestration is the
+application entry point (`service/mtk_orchestrator.py`). Logging, canonical
+models, and generic utilities are cross-cutting `core` primitives available to
+every layer.
 
 ---
 
@@ -142,6 +141,9 @@ Each layer depends only on the layer directly beneath it.
 ---
 
 ## 5.1 Migration Orchestrator
+
+Implemented as `service/mtk_orchestrator.py` — the application entry point and
+top of the dependency graph.
 
 ### Purpose
 
@@ -165,7 +167,8 @@ Coordinates an entire migration session.
 ### Consumes
 
 * Pipeline Engine
-* Services
+* Modules
+* Dataverse client
 * Diagnostics
 
 ### Produces
@@ -270,7 +273,7 @@ Persist transformed artifacts.
 ### Responsibilities
 
 * Serialize canonical models
-* Call Dataverse SDK
+* Call Dataverse client
 * Validate persistence
 * Produce writeback summary
 
@@ -300,7 +303,7 @@ Influence migration behavior.
 
 ---
 
-## 5.7 Dataverse SDK
+## 5.7 Dataverse client
 
 ### Purpose
 
@@ -358,11 +361,7 @@ Execution Modes determine how far the lifecycle progresses.
 Allowed dependency graph:
 
 ```text
-UI
-
-↓
-
-Migration Orchestrator
+Orchestration (service/mtk_orchestrator.py)
 
 ↓
 
@@ -370,11 +369,11 @@ Pipeline Engine
 
 ↓
 
-Services
+Modules
 
 ↓
 
-SDK
+Dataverse Client
 
 ↓
 
@@ -383,10 +382,10 @@ Dataverse
 
 Forbidden examples:
 
-* SDK → Pipeline
-* SDK → Services
-* Services → UI
-* Migration Step → SDK
+* Dataverse Client → Pipeline
+* Dataverse Client → Modules
+* Modules → Orchestration
+* Migration Step → Dataverse Client
 * Migration Step → Dataverse
 
 ---
@@ -409,7 +408,7 @@ Add reusable application services.
 
 ---
 
-## SDK Clients
+## Dataverse API Clients
 
 Add new Dataverse APIs.
 
@@ -448,7 +447,7 @@ The MigrationContext is the shared contract between all modules.
 Errors propagate upward.
 
 ```text
-SDK
+Dataverse Client
 
 ↓
 
@@ -496,7 +495,7 @@ Each architectural layer is tested independently.
 | --------------- | ----------------- |
 | Migration Steps | Unit Tests        |
 | Services        | Unit Tests        |
-| SDK             | Integration Tests |
+| Dataverse Client             | Integration Tests |
 | Pipeline        | Golden Tests      |
 | Orchestrator    | End-to-End Tests  |
 
@@ -510,7 +509,7 @@ Future migration scenarios should require only:
 
 * New Canonical Models
 * New Migration Steps
-* New SDK Clients
+* New Dataverse API Clients
 
 Existing framework components should remain unchanged.
 
@@ -530,7 +529,7 @@ Referenced By:
 * DOMAIN_MODEL.md
 * SERVICES.md
 * PIPELINES.md
-* DATAVERSE_SDK.md
+* DATAVERSE_CLIENT.md
 * MIGRATION_RULES.md
 
 This specification defines the architectural foundation of the ESS NextGen Migration Toolkit. All implementations, services, pipelines, and migration rules must conform to the architecture described herein.
