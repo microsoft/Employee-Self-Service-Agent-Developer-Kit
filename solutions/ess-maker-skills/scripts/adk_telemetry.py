@@ -657,6 +657,13 @@ def _emit_synthetic(n: int = 1) -> int:
     for _ in range(max(1, n)):
         # Seed a fresh synthetic identity so DAU/instance counts vary.
         set_identity(str(uuid.uuid4()), str(uuid.uuid4()))
+        # Force a brand-new session each iteration; otherwise start_session
+        # short-circuits as "existing-session" (30-min window) and only the
+        # first loop emits adk.session.start, starving the Sessions cube.
+        try:
+            os.remove(SESSION_PATH)
+        except OSError:
+            pass
         cap = random.choice(capabilities)
         agent_id = str(uuid.uuid4())
         emitters = [
