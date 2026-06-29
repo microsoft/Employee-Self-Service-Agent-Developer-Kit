@@ -79,7 +79,7 @@ rather than reading every specification on every task.
 | 1     | Execution     | `04_EXECUTION/TASKS.md` |
 | 2     | Business Rules| `01_PRODUCT/MIGRATION_RULES.md` |
 | 3     | Constitution  | `00_META/PROJECT.md`, `00_META/INVARIANTS.md`, `00_META/VOCABULARY.md` |
-| 4     | Architecture  | `02_ARCHITECTURE/ARCHITECTURE.md`, `DOMAIN_MODEL.md`, `SERVICES.md`, `PIPELINES.md`, `DATAVERSE_SDK.md` |
+| 4     | Architecture  | `02_ARCHITECTURE/ARCHITECTURE.md`, `DOMAIN_MODEL.md`, `SERVICES.md`, `PIPELINES.md`, `DATAVERSE_CLIENT.md` |
 | 5     | Engineering   | `03_ENGINEERING/REPOSITORY_STRUCTURE.md`, `CODING_STANDARDS.md`, `IMPLEMENTATION_GUIDE.md`, `DIAGNOSTICS.md`, `TESTING.md` |
 | 6     | Context       | `01_PRODUCT/CUSTOMER_JOURNEY.md`, `01_PRODUCT/MIGRATION_MODES.md`, `00_META/ROADMAP.md` |
 
@@ -99,7 +99,8 @@ Phase 0 — Boot
     Always read AGENTS.md (this file). It is the orchestrator.
         ↓
 Phase 1 — Resolve Task
-    Open 04_EXECUTION/TASKS.md and locate TASK-XXX.
+    Open 04_EXECUTION/TASKS.md (the task index) and locate TASK-XXX, then
+    open its task file 04_EXECUTION/tasks/TASK-XXX-<slug>.md.
         ↓
 Phase 2 — Resolve Migration Rule
     If the task references RULE-XXX, open 01_PRODUCT/MIGRATION_RULES.md
@@ -115,7 +116,7 @@ Phase 4 — Architecture (read once per work session)
     DOMAIN_MODEL.md
     SERVICES.md
     PIPELINES.md
-    DATAVERSE_SDK.md
+    DATAVERSE_CLIENT.md
         ↓
 Phase 5 — Engineering (read once per work session)
     03_ENGINEERING/REPOSITORY_STRUCTURE.md
@@ -129,12 +130,12 @@ Phase 6 — Product Context (only if referenced by the task or its rule)
     01_PRODUCT/MIGRATION_MODES.md
     00_META/ROADMAP.md
         ↓
-Implement → Run Tests → Update TASKS.md → Update CHANGELOG.md → Stop
+Implement → Run Tests → Update task file Status (and TASKS.md index) → Update CHANGELOG.md → Stop
 ```
 
-Each task in `TASKS.md` declares a `Consumes` section (the governing Migration
-Rule) and a `References` section (the exact specifications required to
-implement it). Prefer resolving a task's required documents from its
+Each task file under `04_EXECUTION/tasks/` declares a `Consumes` field (the
+governing Migration Rule) and a `References` section (the exact specifications
+required to implement it). Prefer resolving a task's required documents from its
 `References` section over reading broadly.
 
 ---
@@ -238,12 +239,25 @@ Always respect module ownership.
 
 | Module          | Owns                     | Must Never         |
 | --------------- | ------------------------ | ------------------ |
-| SDK             | Dataverse communication  | Business logic     |
-| Services        | Data coordination        | Migration rules    |
+| Dataverse Client         | Dataverse communication  | Business logic     |
+| Service helpers | Reusable capabilities    | Migration rules    |
 | Pipelines       | Workflow orchestration   | REST communication |
-| Migration Steps | Business transformations | SDK calls          |
+| Migration Steps | Business transformations | Dataverse Client calls      |
 | Diagnostics     | Logging and reporting    | Business decisions |
-| UI              | User interaction         | Migration logic    |
+| Service         | Session coordination     | Business transformations |
+
+## Repository Navigation
+
+| Concern               | Implementation location                         |
+| --------------------- | ----------------------------------------------- |
+| Dataverse APIs        | `src/core/outbound/`                            |
+| Domain Models         | `src/core/models/`                              |
+| Migration Rules       | `src/modules/migration/steps/`          |
+| Pipeline Registration | `src/modules/migration/`                |
+| Orchestration entry   | `src/service/mtk_orchestrator.py`               |
+| Utilities             | `src/core/utils/`                               |
+| Diagnostics code      | `src/core/logging/`                             |
+| Generated output      | `debug/logs/`, `debug/reports/`         |
 
 ---
 
@@ -330,11 +344,11 @@ Business logic operates only on canonical domain models.
 Never implement migration directly against:
 
 * REST payloads
-* SDK DTOs
+* Dataverse client DTOs
 * Raw JSON
 * YAML dictionaries
 
-Conversion between external formats and canonical models occurs only within the SDK and loader layers.
+Conversion between external formats and canonical models occurs only within the Dataverse client and loader layers.
 
 ---
 
@@ -343,23 +357,19 @@ Conversion between external formats and canonical models occurs only within the 
 Always depend downward.
 
 ```
-UI
+Service
 
 ↓
 
-Application
+Core
 
 ↓
 
-Pipelines
+Dataverse Client
 
 ↓
 
-Services
-
-↓
-
-SDK
+Dataverse
 ```
 
 Never introduce reverse dependencies.

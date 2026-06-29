@@ -21,7 +21,7 @@
 
 # 1. Purpose
 
-The ESS NextGen Migration Toolkit is a temporary engineering bridge that enables existing Employee Self-Service (ESS) Customer Agent (CA) customers to transition safely to Declarative Agents (DA).
+The ESS NextGen Migration Toolkit is a temporary engineering bridge that enables existing Employee Self-Service (ESS) Custom Engine Agent (CA) customers to transition safely to Declarative Agents (DA).
 
 The roadmap describes how the toolkit evolves from initial validation through production rollout and eventually becomes unnecessary once CA and DA achieve feature parity.
 
@@ -457,7 +457,7 @@ Repository Scaffolding
 Canonical Domain Models
         │
         ▼
-Dataverse SDK
+Dataverse Client
         │
         ▼
 Discovery Services
@@ -505,7 +505,7 @@ Production Hardening
 
 The migration toolkit is intentionally temporary.
 
-As Customer Agent and Declarative Agent converge toward complete feature parity:
+As Custom Engine Agent and Declarative Agent converge toward complete feature parity:
 
 * Migration rules reduce.
 * Platform handles compatibility natively.
@@ -543,7 +543,7 @@ Repository specifications are authored in the following order.
 * DOMAIN_MODEL.md
 * SERVICES.md
 * PIPELINES.md
-* DATAVERSE_SDK.md
+* DATAVERSE_CLIENT.md
 
 ---
 

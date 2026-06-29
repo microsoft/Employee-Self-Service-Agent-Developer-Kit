@@ -10,7 +10,7 @@
 >
 > Every module within the toolkit communicates exclusively through these models.
 >
-> External representations (Dataverse REST payloads, XML, JSON, SDK DTOs, etc.) are translated into these models at the system boundary.
+> External representations (Dataverse REST payloads, XML, JSON, Dataverse client DTOs, etc.) are translated into these models at the system boundary.
 >
 > Business logic must never operate directly on external representations.
 
@@ -427,10 +427,10 @@ Built throughout execution.
 |----------|------------|-------------|---------|
 | MigrationSession | Orchestrator | Orchestrator | All |
 | MigrationContext | Orchestrator | All Pipelines | All |
-| MigrationEnvironment | SDK | None | All |
+| MigrationEnvironment | Dataverse Client | None | All |
 | Agent | Discovery Service | Migration Steps | All |
 | Component | Discovery Service | Migration Steps | All |
-| ComponentLayer | SDK | None | Analysis |
+| ComponentLayer | Dataverse Client | None | Analysis |
 | MigrationCandidate | Analysis Service | Pipeline | All |
 | Transformation | Migration Step | None | Reports |
 | ValidationResult | Validation Pipeline | None | Reports |
@@ -483,7 +483,7 @@ Infrastructure owns:
 - JSON
 - HTTP Responses
 
-Translation occurs only inside the SDK layer.
+Translation occurs only inside the Dataverse client layer.
 
 ---
 
@@ -532,7 +532,7 @@ Existing models should rarely require structural changes.
 
 - SERVICES.md
 - PIPELINES.md
-- DATAVERSE_SDK.md
+- DATAVERSE_CLIENT.md
 - MIGRATION_RULES.md
 - TASKS.md
 

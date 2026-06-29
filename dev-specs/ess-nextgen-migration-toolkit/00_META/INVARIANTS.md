@@ -56,21 +56,18 @@ Business behavior is documented separately in:
 Allowed
 
 ```text
-UI
-↓
-
-Application
+Orchestration
 ↓
 
 Pipeline
 
 ↓
 
-Services
+Modules
 
 ↓
 
-SDK
+Dataverse Client
 
 ↓
 
@@ -80,7 +77,7 @@ Dataverse
 Forbidden
 
 ```text
-SDK
+Dataverse Client
 
 ↓
 
@@ -90,11 +87,11 @@ Pipeline
 or
 
 ```text
-Services
+Modules
 
 ↓
 
-UI
+Orchestration
 ```
 
 ---
@@ -111,15 +108,15 @@ Responsibilities must never overlap.
 
 Business logic must remain independent of infrastructure.
 
-Replacing the Dataverse SDK should not require changes to migration rules.
+Replacing the Dataverse client should not require changes to migration rules.
 
 ---
 
 ## ARCH-004
 
-All external systems are accessed only through the SDK layer.
+All external systems are accessed only through the Dataverse client layer.
 
-No module outside the SDK may communicate directly with Dataverse.
+No module outside the Dataverse client may communicate directly with Dataverse.
 
 ---
 
@@ -134,7 +131,7 @@ Migration logic operates only on canonical domain models.
 Never perform business transformations directly against:
 
 * REST payloads
-* SDK DTOs
+* Dataverse client DTOs
 * JSON dictionaries
 * YAML dictionaries
 
@@ -214,9 +211,10 @@ Diagnostics are emitted through the Diagnostics framework.
 
 ## SERVICE-001
 
-Services coordinate application behavior.
+The service layer coordinates application behavior (orchestration).
 
-They do not implement migration rules.
+Migration rules live exclusively in `src/modules/migration/steps/`.
+The service layer never contains migration rules.
 
 ---
 
@@ -230,41 +228,41 @@ Transformation belongs exclusively to Migration Steps.
 
 ## SERVICE-003
 
-Services may call the SDK.
+Services may call the Dataverse client.
 
 Pipeline Steps may not.
 
 ---
 
-# 7. SDK Invariants
+# 7. Dataverse Client Invariants
 
 ---
 
-## SDK-001
+## Dataverse Client-001
 
-The SDK owns all Dataverse communication.
+Dataverse communication exists only within the Dataverse client (`src/core/outbound/`).
 
 No other module performs HTTP requests.
 
 ---
 
-## SDK-002
+## Dataverse Client-002
 
-The SDK never contains migration logic.
-
----
-
-## SDK-003
-
-The SDK never performs business validation.
+The Dataverse client never contains migration logic.
 
 ---
 
-## SDK-004
+## Dataverse Client-003
 
-SDK methods return strongly typed models.
+The Dataverse client never performs business validation.
 
-Never expose raw REST payloads outside the SDK.
+---
+
+## Dataverse Client-004
+
+Dataverse Client methods return strongly typed models.
+
+Never expose raw REST payloads outside the Dataverse client.
 
 ---
 
@@ -380,7 +378,7 @@ Framework changes should not be required.
 Adding support for a new component type should require:
 
 * Domain Model
-* SDK support
+* Dataverse Client support
 * Service
 * Pipeline
 * Tests

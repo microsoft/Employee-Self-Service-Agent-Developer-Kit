@@ -6,7 +6,7 @@
 
 > **Purpose**
 >
-> This specification defines the end-to-end customer experience for migrating Employee Self-Service (ESS) Customer Agents (CA) to Declarative Agents (DA).
+> This specification defines the end-to-end customer experience for migrating Employee Self-Service (ESS) Custom Engine Agents (CA) to Declarative Agents (DA).
 >
 > It describes **what the customer experiences**, independent of implementation details.
 >
@@ -16,7 +16,7 @@
 
 # 1. Purpose
 
-The migration toolkit enables existing ESS customers to safely transition customer-owned customizations from Customer Agents (CA) to Declarative Agents (DA).
+The migration toolkit enables existing ESS customers to safely transition customer-owned customizations from Custom Engine Agents (CA) to Declarative Agents (DA).
 
 The customer experience follows a progressive confidence model:
 
@@ -301,7 +301,7 @@ The toolkit produces:
 
 # 12. Future Evolution
 
-As Customer Agent and Declarative Agent achieve feature parity:
+As Custom Engine Agent and Declarative Agent achieve feature parity:
 
 * Migration complexity decreases.
 * Fewer transformation rules are required.

@@ -1,22 +1,22 @@
-# DATAVERSE_SDK.md
+# DATAVERSE_CLIENT.md
 
-# ESS NextGen Migration Toolkit — Dataverse SDK Specification
+# ESS NextGen Migration Toolkit — Dataverse Client Specification
 **Status:** Draft v1.0
 **Owner:** Anil Kumar Adepu
 
 > **Purpose**
 >
-> This document defines the Dataverse SDK layer used by the ESS NextGen Migration Toolkit.
+> This document defines the Dataverse Client layer used by the ESS NextGen Migration Toolkit.
 >
-> The SDK provides strongly typed wrappers around Dataverse REST APIs and is the only layer permitted to communicate directly with Dataverse.
+> The Dataverse client provides strongly typed wrappers around Dataverse REST APIs and is the only layer permitted to communicate directly with Dataverse.
 >
-> The SDK contains **no business logic**. Its responsibility is limited to authentication, request execution, serialization, deserialization, retry handling, and conversion between Dataverse payloads and the framework's canonical domain models.
+> The Dataverse client contains **no business logic**. Its responsibility is limited to authentication, request execution, serialization, deserialization, retry handling, and conversion between Dataverse payloads and the framework's canonical domain models.
 
 ---
 
 # 1. Purpose
 
-The Dataverse SDK abstracts all communication with Microsoft Dataverse.
+The Dataverse client abstracts all communication with Microsoft Dataverse.
 
 Its responsibilities include:
 
@@ -27,7 +27,7 @@ Its responsibilities include:
 * Retry handling
 * Error translation
 
-The SDK is intentionally unaware of:
+The Dataverse client is intentionally unaware of:
 
 * Migration rules
 * Customer ownership
@@ -39,43 +39,43 @@ The SDK is intentionally unaware of:
 
 # 2. Design Principles
 
-## SDK-001
+## Dataverse Client-001
 
-The SDK is the only layer allowed to communicate with Dataverse.
-
----
-
-## SDK-002
-
-The SDK never contains migration logic.
+The Dataverse client is the only layer allowed to communicate with Dataverse.
 
 ---
 
-## SDK-003
+## Dataverse Client-002
 
-The SDK exposes strongly typed methods.
-
-Raw REST payloads never leave the SDK.
+The Dataverse client never contains migration logic.
 
 ---
 
-## SDK-004
+## Dataverse Client-003
 
-Every SDK Client owns exactly one Dataverse API family.
+The Dataverse client exposes strongly typed methods.
+
+Raw REST payloads never leave the Dataverse client.
 
 ---
 
-## SDK-005
+## Dataverse Client-004
+
+Every Dataverse API Client owns exactly one Dataverse API family.
+
+---
+
+## Dataverse Client-005
 
 Authentication is provided externally.
 
-The SDK accepts a valid Bearer Token.
+The Dataverse client accepts a valid Bearer Token.
 
 ---
 
-## SDK-006
+## Dataverse Client-006
 
-SDK methods are deterministic and side-effect free except for explicit write operations.
+Dataverse Client methods are deterministic and side-effect free except for explicit write operations.
 
 ---
 
@@ -88,19 +88,19 @@ Pipeline Steps
 Application Services
         │
         ▼
-Dataverse SDK
+Dataverse Client
         │
         ▼
 Dataverse REST APIs
 ```
 
-Pipeline Steps never call the SDK directly.
+Pipeline Steps never call the Dataverse client directly.
 
 ---
 
-# 4. SDK Clients
+# 4. Dataverse API Clients
 
-The SDK is organized into independent API clients.
+The Dataverse client is organized into independent API clients.
 
 ```
 AuthenticationClient
@@ -336,7 +336,7 @@ Transform artifacts.
 
 # 12. Discovery Flow
 
-The SDK supports the following discovery sequence.
+The Dataverse client supports the following discovery sequence.
 
 ```
 Retrieve ESS Agent
@@ -366,13 +366,13 @@ Retrieve Solution Component Layers
 Retrieve Full Component Payloads
 ```
 
-Ownership analysis occurs outside the SDK.
+Ownership analysis occurs outside the Dataverse client.
 
 ---
 
 # 13. Serialization Boundary
 
-Everything below the SDK uses Dataverse representations.
+Everything below the Dataverse client uses Dataverse representations.
 
 Examples:
 
@@ -380,15 +380,15 @@ Examples:
 * XML
 * HTTP Payloads
 
-Everything above the SDK uses Canonical Domain Models.
+Everything above the Dataverse client uses Canonical Domain Models.
 
-Translation occurs only within the SDK.
+Translation occurs only within the Dataverse client.
 
 ---
 
 # 14. Error Handling
 
-The SDK translates infrastructure failures into typed exceptions.
+The Dataverse client translates infrastructure failures into typed exceptions.
 
 Examples include:
 
@@ -406,7 +406,7 @@ Business logic never interprets raw HTTP status codes.
 
 # 15. Retry Policy
 
-The SDK owns retry behavior.
+The Dataverse client owns retry behavior.
 
 Suggested policy:
 
@@ -426,7 +426,7 @@ Retry behavior is invisible to callers.
 
 # 16. Ownership Matrix
 
-| SDK Client           | Owns                     |
+| Dataverse API Client           | Owns                     |
 | -------------------- | ------------------------ |
 | AuthenticationClient | Authentication           |
 | AgentClient          | ESS Agent APIs           |
@@ -440,26 +440,26 @@ Retry behavior is invisible to callers.
 
 # 17. Testing Strategy
 
-Every SDK Client requires:
+Every Dataverse API Client requires:
 
 * Unit Tests
 * Integration Tests (where applicable)
 * Mockable interfaces
 * Deterministic responses
 
-Business logic tests should mock SDK Clients rather than calling Dataverse.
+Business logic tests should mock Dataverse API Clients rather than calling Dataverse.
 
 ---
 
 # 18. Future Evolution
 
-The SDK is expected to evolve only when:
+The Dataverse client is expected to evolve only when:
 
 * New Dataverse APIs are required
 * Existing APIs change
 * New ESS component types are introduced
 
-Adding a new migration rule should rarely require SDK modifications.
+Adding a new migration rule should rarely require Dataverse Client modifications.
 
 ---
 
@@ -479,4 +479,4 @@ Adding a new migration rule should rarely require SDK modifications.
 * TASKS.md
 * TESTING.md
 
-The Dataverse SDK provides the infrastructure boundary between the ESS NextGen Migration Toolkit and Microsoft Dataverse. It is responsible solely for data access and transport concerns, allowing the remainder of the framework to remain focused on business behavior and migration logic.
+The Dataverse client provides the infrastructure boundary between the ESS NextGen Migration Toolkit and Microsoft Dataverse. It is responsible solely for data access and transport concerns, allowing the remainder of the framework to remain focused on business behavior and migration logic.

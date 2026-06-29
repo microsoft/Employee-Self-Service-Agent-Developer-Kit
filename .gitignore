@@ -29,6 +29,13 @@
 !requirements-dev.txt
 !dev-specs/
 
+# Migration toolkit convenience forwarders (forward into
+# tools/ess-nextgen-migration-toolkit/scripts/mtk.*) — see
+# dev-specs/ess-nextgen-migration-toolkit/03_ENGINEERING/REPOSITORY_STRUCTURE.md
+# (Command Entrypoint Convention). Allowlisted exceptions to the root /* ignore.
+!mtk.sh
+!mtk.ps1
+
 # Internal planning docs (not for distribution)
 no-commit/
 
