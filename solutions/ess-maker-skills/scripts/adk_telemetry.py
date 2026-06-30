@@ -27,10 +27,17 @@ Design rules (deliberate — read before changing):
   ``~/.adk/config``) or the ``ESS_ADK_TELEMETRY=off`` env var. A one-time
   notice is printed on first use (``maybe_print_notice``).
 
-* **Privacy: identifiers are hashed, never raw; enums only, no free
-  text.** ``developer_id`` and ``tenant_id`` are SHA-256 hashes with a
-  per-tenant salt (the spec Identity Model). Error fields are scrubbed of
-  paths / URLs and truncated. We never emit user content.
+* **Privacy: no developer identity collected; tenant_id raw OII; enums only,
+  no free text.** We do NOT collect or emit any developer/user identifier
+  (not even hashed). Active-user / DAU-WAU-MAU counts dedupe on
+  ``instance_id`` — a random GUID generated per ADK install (persisted to
+  ``.local/.instance_id``) that is not linkable to any AAD user. ``tenant_id``
+  is emitted as the RAW Microsoft Entra tenant GUID: the approved Data Profile
+  (Data Scout, privacy review COMPLETED) classifies it Organizational
+  Identifiable Information (OII) with "No Data Transformation" (it identifies
+  the enterprise tenant, not an individual user), retained <= 30 days. Error
+  fields are scrubbed of paths / URLs and truncated. We never emit user
+  content.
 
 * **Reliability.** On send failure events are buffered to
   ``~/.adk/telemetry-buffer.ndjson`` (capped at 1000 events / 5 MB) and
@@ -43,7 +50,6 @@ in the same tenant the dashboards read from).
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -103,11 +109,6 @@ NOTICE_TEXT = (
     "Learn more: https://aka.ms/adk-telemetry\n"
 )
 
-# Not a secret — raises the bar on trivial reversal of the hashed ids. The
-# spec calls for a per-tenant salt that rotates annually; that rotation /
-# secret-management is a pipeline concern. Override via env for prod.
-_DEFAULT_SALT = "ess-adk-telemetry-v1"
-
 # When true (env or block=True), emit on the calling thread for determinism.
 _SYNC = os.environ.get("ESS_ADK_TELEMETRY_SYNC", "").strip().lower() in (
     "1", "on", "true", "yes",
@@ -115,43 +116,29 @@ _SYNC = os.environ.get("ESS_ADK_TELEMETRY_SYNC", "").strip().lower() in (
 
 # Process-wide identity, set once after authentication (set_identity). All
 # subsequent events inherit it so api.call / build / deploy don't each need
-# to re-derive it.
-_IDENTITY: dict[str, str] = {"developer_id": "", "tenant_id": ""}
+# to re-derive it. We deliberately do NOT keep any developer/user identifier
+# here — only a random install ``instance_id`` and the raw tenant GUID.
+_IDENTITY: dict[str, str] = {"instance_id": "", "tenant_id": ""}
 
 # Track dispatched daemon threads so flush() can join them (tests / session end).
 _THREADS: list[threading.Thread] = []
 
 
 # --- Identity model (spec) ------------------------------------------------
-def _salt() -> str:
-    return os.environ.get("ESS_ADK_TELEMETRY_SALT", "").strip() or _DEFAULT_SALT
+def set_identity(tenant_id: str = "", instance_id: str | None = None) -> dict[str, str]:
+    """Record the install + tenant identity for all subsequent events.
 
-
-def hash_developer_id(aad_oid: str, tenant_id: str) -> str:
-    """SHA-256, per-tenant-salted hash of the AAD Object ID.
-
-    Tenant-scoped: the same maker in a different tenant hashes differently
-    (the raw tenant id is folded into the digest input). Returns ``""`` for
-    an empty oid so events from un-authenticated paths carry no fake id.
+    ``instance_id`` is a random GUID identifying the ADK installation (not a
+    user): it lets us compute active-install / DAU-WAU-MAU counts without any
+    developer identifier. When omitted it defaults to the persisted per-install
+    GUID (``flightcheck.telemetry.get_instance_id``). ``tenant_id`` is stored
+    RAW (approved Data Profile: OII, no transformation) so dashboards can
+    filter by the literal Entra tenant GUID. No developer/user id is collected.
     """
-    if not aad_oid:
-        return ""
-    raw = f"{_salt()}|developer|{tenant_id or ''}|{aad_oid}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def hash_tenant_id(tenant_id: str) -> str:
-    """SHA-256, salted hash of the AAD tenant id (spec: hashed tenant_id)."""
-    if not tenant_id:
-        return ""
-    raw = f"{_salt()}|tenant|{tenant_id}"
-    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
-
-
-def set_identity(aad_oid: str = "", tenant_id: str = "") -> dict[str, str]:
-    """Record the hashed maker identity for all subsequent events."""
-    _IDENTITY["developer_id"] = hash_developer_id(aad_oid, tenant_id)
-    _IDENTITY["tenant_id"] = hash_tenant_id(tenant_id)
+    _IDENTITY["instance_id"] = (
+        _fc.get_instance_id() if instance_id is None else (instance_id or "")
+    )
+    _IDENTITY["tenant_id"] = tenant_id or ""
     return dict(_IDENTITY)
 
 
@@ -294,13 +281,15 @@ def common_dimensions(
     surface: str,
     *,
     session_id: str = "",
-    developer_id: str | None = None,
+    instance_id: str | None = None,
     tenant_id: str | None = None,
 ) -> dict[str, Any]:
     """Build the dimensions present on every event (spec Common Dimensions)."""
     return {
         "schema_version": SCHEMA_VERSION,
-        "developer_id": _IDENTITY["developer_id"] if developer_id is None else developer_id,
+        "instance_id": (
+            _IDENTITY["instance_id"] or _fc.get_instance_id()
+        ) if instance_id is None else instance_id,
         "tenant_id": _IDENTITY["tenant_id"] if tenant_id is None else tenant_id,
         "session_id": session_id,
         "surface": surface,
@@ -445,8 +434,8 @@ def flush(timeout: float = 5.0) -> None:
 def start_session(
     surface: str = SURFACE_CLI,
     *,
-    developer_oid: str = "",
     tenant_id: str = "",
+    instance_id: str | None = None,
     adk_capability: str = "",
     block: bool = False,
 ) -> dict[str, Any]:
@@ -455,8 +444,8 @@ def start_session(
     Safe to call at the top of every skill: if the current session is still
     active (within the 30-min window) no duplicate start is emitted.
     """
-    if developer_oid or tenant_id:
-        set_identity(developer_oid, tenant_id)
+    if tenant_id or instance_id is not None or not _IDENTITY["instance_id"]:
+        set_identity(tenant_id=tenant_id, instance_id=instance_id)
     sid, is_new = get_session(surface)
     if not is_new:
         return {"sent": False, "reason": "existing-session", "session_id": sid}
@@ -647,16 +636,32 @@ def _emit_synthetic(n: int = 1) -> int:
     """
     import random
 
+    # Only emit capabilities that have real telemetry wiring in the ADK
+    # (session start -> connect; discover/list_environments -> onboarding;
+    # evaluate_evals -> evaluations; push -> publishing; flightcheck/cli ->
+    # flightcheck). Other real SKILL.md skills (topic_create/topic_update,
+    # troubleshoot, workflows, cleanup) have no emit_* hook yet, so seeding
+    # them here would paint the dashboards with capabilities that never appear
+    # in production. Keep this list in sync with the capability donut value-lists.
     capabilities = [
-        "onboarding", "connect", "topics", "evaluations",
-        "publishing", "flightcheck", "troubleshoot", "workflows",
+        "onboarding", "connect", "evaluations", "publishing", "flightcheck",
     ]
     deploy_targets = ["test", "staging", "production"]
     api_endpoints = ["dataverse/bots", "dataverse/botcomponents", "bap/environments"]
+    # Fixed, recognizable demo tenant GUIDs so dashboards are filterable by a
+    # known tenant_id (raw OII per approved Data Profile). Weighted so one
+    # tenant dominates for a clear "filter to this tenant" demo.
+    synth_tenants = (
+        ["11111111-1111-1111-1111-111111111111"] * 3  # Contoso (demo, primary)
+        + ["22222222-2222-2222-2222-222222222222"] * 2  # Fabrikam (demo)
+        + ["33333333-3333-3333-3333-333333333333"]      # Northwind (demo)
+    )
     bad = 0
     for _ in range(max(1, n)):
-        # Seed a fresh synthetic identity so DAU/instance counts vary.
-        set_identity(str(uuid.uuid4()), str(uuid.uuid4()))
+        # Random instance per iteration (so active-install / DAU counts vary),
+        # but a fixed-pool tenant so per-tenant filtering returns meaningful
+        # slices. No developer/user identifier is ever emitted.
+        set_identity(tenant_id=random.choice(synth_tenants), instance_id=str(uuid.uuid4()))
         # Force a brand-new session each iteration; otherwise start_session
         # short-circuits as "existing-session" (30-min window) and only the
         # first loop emits adk.session.start, starving the Sessions cube.
@@ -667,7 +672,7 @@ def _emit_synthetic(n: int = 1) -> int:
         cap = random.choice(capabilities)
         agent_id = str(uuid.uuid4())
         emitters = [
-            lambda: start_session(developer_oid="", tenant_id="", adk_capability=cap, block=True),
+            lambda: start_session(adk_capability=cap, block=True),
             lambda: emit_capability_use(cap, block=True),
             lambda: emit_agent_create(agent_id=agent_id, adk_capability="onboarding", block=True),
             lambda: emit_build_start(agent_id=agent_id, adk_capability=cap, block=True),
@@ -691,9 +696,9 @@ def _emit_synthetic(n: int = 1) -> int:
                 error_code="DEPLOY_AUTH_FAILURE", error_category="auth",
             ),
             lambda: emit_flightcheck_run(
-                agent_id=agent_id, run_index=random.randint(1, 4)),
+                agent_id=agent_id, adk_capability=cap, run_index=random.randint(1, 4)),
             lambda: emit_flightcheck_result(
-                agent_id=agent_id, run_index=random.randint(1, 4),
+                agent_id=agent_id, adk_capability=cap, run_index=random.randint(1, 4),
                 result=random.choice(["pass", "fail", "partial"]),
                 duration_ms=random.randint(3000, 45000)),
             lambda: emit_flightcheck_error(

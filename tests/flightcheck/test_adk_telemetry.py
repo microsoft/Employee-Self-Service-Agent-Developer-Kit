@@ -55,12 +55,11 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(adk, "BUFFER_PATH", str(cfg_dir / "telemetry-buffer.ndjson"))
     monkeypatch.setattr(adk, "RUNS_PATH", str(cfg_dir / "flightcheck-runs.json"))
     monkeypatch.setattr(adk, "_SYNC", True)
-    monkeypatch.setattr(adk, "_IDENTITY", {"developer_id": "", "tenant_id": ""})
+    monkeypatch.setattr(adk, "_IDENTITY", {"instance_id": "", "tenant_id": ""})
 
     for var in (
         "ESS_ADK_TELEMETRY",
         "ESS_ADK_TELEMETRY_SYNC",
-        "ESS_ADK_TELEMETRY_SALT",
         "ESS_ADK_ARIA_ENV",
         "ESS_ADK_ARIA_IKEY",
         "ESS_ADK_VERSION",
@@ -82,47 +81,37 @@ def captured_post(monkeypatch):
     return calls
 
 
-# --- identity hashing -----------------------------------------------------
-def test_developer_hash_is_deterministic_and_tenant_scoped():
-    a = adk.hash_developer_id("oid-1", "tenant-A")
-    b = adk.hash_developer_id("oid-1", "tenant-A")
-    other_tenant = adk.hash_developer_id("oid-1", "tenant-B")
-
-    assert a == b                         # deterministic
-    assert a != other_tenant              # same maker, different tenant => differs
-    assert re.fullmatch(r"[0-9a-f]{64}", a)
-
-
-def test_empty_oid_hashes_to_empty_string():
-    assert adk.hash_developer_id("", "tenant-A") == ""
+# --- identity (instance_id; no developer identity) ------------------------
+def test_set_identity_stores_instance_and_raw_tenant(monkeypatch):
+    monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
+    ident = adk.set_identity(tenant_id="tenant-Z")
+    # No developer/user identifier is ever collected.
+    assert "developer_id" not in ident
+    assert ident["instance_id"] == "install-guid-1"
+    assert ident["tenant_id"] == "tenant-Z"
 
 
-def test_tenant_hash_empty_and_distinct_from_developer():
-    assert adk.hash_tenant_id("") == ""
-    t = adk.hash_tenant_id("tenant-A")
-    assert re.fullmatch(r"[0-9a-f]{64}", t)
-    # Different salt domain prefix => tenant hash != developer hash.
-    assert t != adk.hash_developer_id("tenant-A", "tenant-A")
+def test_explicit_instance_id_overrides_persisted(monkeypatch):
+    monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
+    ident = adk.set_identity(tenant_id="tenant-Z", instance_id="explicit-2")
+    assert ident["instance_id"] == "explicit-2"
 
 
-def test_salt_override_changes_hash(monkeypatch):
-    base = adk.hash_tenant_id("tenant-A")
-    monkeypatch.setenv("ESS_ADK_TELEMETRY_SALT", "rotated-salt-2027")
-    assert adk.hash_tenant_id("tenant-A") != base
-
-
-def test_set_identity_populates_both_and_flows_into_dimensions():
-    adk.set_identity("oid-9", "tenant-Z")
+def test_identity_flows_into_dimensions(monkeypatch):
+    monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
+    adk.set_identity(tenant_id="tenant-Z", instance_id="inst-9")
     dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
-    assert dims["developer_id"] == adk.hash_developer_id("oid-9", "tenant-Z")
-    assert dims["tenant_id"] == adk.hash_tenant_id("tenant-Z")
+    assert "developer_id" not in dims
+    assert dims["instance_id"] == "inst-9"
+    # tenant_id is emitted RAW (approved Data Profile: OII, no transformation).
+    assert dims["tenant_id"] == "tenant-Z"
 
 
 # --- common dimensions + envelope ----------------------------------------
 def test_common_dimensions_shape():
     dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
     for key in (
-        "schema_version", "developer_id", "tenant_id",
+        "schema_version", "instance_id", "tenant_id",
         "session_id", "surface", "adk_version", "timestamp",
     ):
         assert key in dims

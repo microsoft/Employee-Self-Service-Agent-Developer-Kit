@@ -365,7 +365,7 @@ def main():
 
             _agent_id = active_agent.get("botId", "")
             if tenant_id:
-                _adk.set_identity("", tenant_id)
+                _adk.set_identity(tenant_id=tenant_id)
             _ridx = _adk.next_run_index(_agent_id)
             _adk.emit_flightcheck_run(agent_id=_agent_id, run_index=_ridx)
             _result_map = {

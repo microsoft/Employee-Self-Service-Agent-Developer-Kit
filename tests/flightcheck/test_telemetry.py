@@ -234,6 +234,33 @@ def test_emit_posts_full_key_in_header_and_succeeds(monkeypatch, tmp_path):
     assert json.loads(first_line)["iKey"] == f"o:{DEV_TOKEN}"
 
 
+def test_emit_tenant_id_is_raw(monkeypatch, tmp_path):
+    """tenant_id is emitted RAW (Entra tenant GUID), never hashed/transformed.
+
+    Per the approved Data Profile it is OII with "No Data Transformation"; a
+    raw value is what makes per-tenant dashboard filtering usable.
+    """
+    captured = {}
+
+    class FakeResp:
+        status_code = 200
+
+    def fake_post(url, data=None, headers=None, timeout=None):
+        captured["data"] = data
+        return FakeResp()
+
+    monkeypatch.setattr(telemetry.requests, "post", fake_post)
+
+    telemetry.emit_flightcheck_telemetry(
+        FakeRun(),
+        tenant_id="DEMO-TENANT-0001",
+        agent_id="a",
+        local_dir=str(tmp_path / ".local"),
+    )
+    for line in captured["data"].decode("utf-8").splitlines():
+        assert json.loads(line)["data"]["tenantId"] == "DEMO-TENANT-0001"
+
+
 def test_emit_is_fail_open_on_post_exception(monkeypatch, tmp_path):
     def boom(*a, **k):
         raise RuntimeError("network down")

@@ -25,8 +25,12 @@ Design rules (all deliberate — read before changing):
   event also carries an ``env`` dimension as defense-in-depth so dashboards
   can hard-filter ``env == 'prod'``. Default is **dev**.
 
-* **Privacy: identifiers + enums only, never free text.** Per the Data
-  Profile for this feature, we emit instance/tenant/agent identifiers and
+* **Privacy: identifiers + enums only, never free text.** Per the approved
+  Data Profile (Data Scout, privacy review COMPLETED) for this feature,
+  ``tenant_id`` is classified Organizational Identifiable Information (OII)
+  with **"No Data Transformation"** — i.e. emitted as the RAW Microsoft Entra
+  tenant GUID (it identifies the enterprise tenant, not an individual user),
+  retained <= 30 days. We also emit instance/agent identifiers and
   System-Metadata enums (checkpoint id, category, priority, status, counts,
   verdict). We deliberately DO NOT emit a check's ``result`` or
   ``remediation`` strings — those can contain EUII / customer content
@@ -251,7 +255,7 @@ def _run_data(
         "env": env,
         "runId": run_id,
         "instanceId": instance_id,   # System Metadata
-        "tenantId": tenant_id,       # OII
+        "tenantId": tenant_id,       # OII (raw Entra tenant GUID; approved Data Profile)
         "agentId": agent_id,         # OII
         "agentCount": agent_count,
         "adkVersion": get_adk_version(),

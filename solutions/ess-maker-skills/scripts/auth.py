@@ -236,7 +236,8 @@ def authenticate(env_url):
             except OSError:
                 pass
 
-    # Record the (hashed) maker identity and start a telemetry session.
+    # Record the tenant + start a telemetry session. No developer identity is
+    # collected; active-install counts dedupe on a random instance_id.
     # Best-effort: never let telemetry affect authentication.
     try:
         import adk_telemetry
@@ -244,7 +245,6 @@ def authenticate(env_url):
         claims = result.get("id_token_claims", {}) or {}
         adk_telemetry.maybe_print_notice()
         adk_telemetry.start_session(
-            developer_oid=claims.get("oid", ""),
             tenant_id=claims.get("tid", "") or tenant,
             adk_capability="connect",
         )
