@@ -38,6 +38,13 @@ from typing import Any, Callable
 from urllib.parse import urlparse
 
 from ..runner import CheckResult, Priority, Role, Status
+from ._dlp_utils import (
+    agent_connector_ids,
+    evaluate_connector_classification,
+    iter_effective_policies,
+    policy_label,
+    ppac_dlp_policies_url,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════
@@ -385,6 +392,229 @@ def check_microsoft_service_reachability(runner: Any) -> list[CheckResult]:
 
 
 # ───────────────────────────────────────────────────────────────────────
+# INFRA-006: DLP policies permit every agent connector, co-grouped, none Blocked
+#
+# Deep counterpart to ENV-008 (which only checks whether *a* policy
+# applies). Reconciles each connector the agent's solution depends on
+# (resolved from Dataverse connection references) against the connector
+# groups of every DLP policy effective on the environment, applying the
+# platform's most-restrictive-policy-wins rule.
+#
+# Read-only and idempotent: lists apiPolicies + reads connectionreferences;
+# never mutates. Classic data policies only — advanced connector policies
+# (ACP) and tenant custom-connector URL patterns are out of scope (v1).
+# ───────────────────────────────────────────────────────────────────────
+
+_DOC_LINK_INFRA_006 = (
+    "https://learn.microsoft.com/en-us/copilot/microsoft-365/"
+    "employee-self-service/prepare#allow-the-external-systems-connector"
+)
+
+
+def _infra_006_row(status: str, result: str, remediation: str = "") -> CheckResult:
+    return CheckResult(
+        checkpoint_id="INFRA-006",
+        category="Infrastructure",
+        priority=Priority.CRITICAL.value,
+        status=status,
+        description="DLP policies permit every agent connector",
+        result=result,
+        remediation=remediation,
+        doc_link=_DOC_LINK_INFRA_006,
+        roles=[Role.POWER_PLATFORM_ADMIN.value],
+    )
+
+
+def _infra_006_could_not_determine_directive() -> str:
+    return (
+        "Probable cause: The kit could not read the DLP policies or the agent's "
+        "connection references for this environment.\n\n"
+        "Scope + confidence: Could not determine — no verdict was possible. "
+        "Owner: Power Platform Administrator.\n\n"
+        "Next step: Re-run FlightCheck signed in with the Power Platform "
+        "Administrator role and a valid Dataverse connection.\n\n"
+        "Still stuck? Verify the environment id and that the signed-in account "
+        "has administrative access to it."
+    )
+
+
+def _infra_006_fail_directive(ev, policy_names: str) -> str:
+    issues = []
+    if ev.blocked:
+        issues.append(f"these connectors are in the Blocked group: {', '.join(ev.blocked)}")
+    if ev.cross_group:
+        groups = ", ".join(ev.cross_group_groups)
+        issues.append(
+            f"required connectors are split across data-groups ({groups}) in "
+            f"policy '{ev.cross_group_policy}', so they cannot be combined in a "
+            "single agent action"
+        )
+    fix_ids = ", ".join(sorted(set(ev.blocked) | set(ev.groups_seen))) or "the affected connectors"
+    return (
+        f"Probable cause: In the effective DLP policy/policies ({policy_names}), "
+        f"{'; '.join(issues)}. Power Platform applies the most restrictive policy, "
+        "so a Blocked or cross-group connector stops the agent from calling that "
+        "system.\n\n"
+        "Scope + confidence: High confidence — read directly from the apiPolicies "
+        "admin endpoint for this environment. Owner: Power Platform Administrator.\n\n"
+        f"Next step: Open the [Power Platform admin center Data policies]"
+        f"({ppac_dlp_policies_url()}), edit the named policy, and move every "
+        "connector the agent uses into the SAME allowed group (Business or "
+        f"Non-Business) — none in Blocked. Connectors to fix: {fix_ids}.\n\n"
+        "Still stuck? If a connector must stay Blocked for compliance, deploy the "
+        "agent to a dedicated environment whose data policy allows the full "
+        "connector set."
+    )
+
+
+def _infra_006_warn_directive(ev, policy_names: str) -> str:
+    listed = ", ".join(ev.indeterminate) if ev.indeterminate else "the affected connectors"
+    return (
+        f"Probable cause: In the effective DLP policy/policies ({policy_names}), "
+        f"these connectors are not explicitly placed in a group: {listed}. "
+        "New or unclassified connectors inherit the policy's default group "
+        "(usually Non-Business), which the API does not report, so the kit cannot "
+        "prove they are allowed and co-grouped with the agent's other "
+        "connectors.\n\n"
+        "Scope + confidence: Medium confidence — the policy was read successfully "
+        "but does not pin these connectors. Owner: Power Platform Administrator.\n\n"
+        f"Next step: Open the [Power Platform admin center Data policies]"
+        f"({ppac_dlp_policies_url()}) and explicitly classify the listed connectors "
+        "into the same allowed group (Business or Non-Business) as the agent's "
+        "other connectors.\n\n"
+        "Still stuck? Confirm the policy's default data group; if it is Blocked, "
+        "these connectors are effectively blocked and must be classified "
+        "explicitly."
+    )
+
+
+def check_dlp_connector_classification(runner: Any) -> list[CheckResult]:
+    """Verify DLP policies permit every agent connector, co-grouped, none Blocked (INFRA-006).
+
+    AC1 enumerates the DLP policies effective on the environment; AC2
+    reconciles each agent connector against their classification; AC3/AC4/AC5
+    map the outcome to PASS / FAIL / WARN. Defers DLP *coverage* (no policy
+    at all) to ENV-008 — INFRA-006 never re-reports "no DLP policy found".
+    """
+    pp = getattr(runner, "pp_admin", None)
+    env_id = getattr(runner, "env_id", None)
+    env_url = getattr(runner, "env_url", None)
+    dv_token = getattr(runner, "dv_token", None)
+
+    if not pp or not env_id:
+        return [_infra_006_row(
+            Status.SKIPPED.value,
+            "Power Platform Admin API not available — cannot read DLP policies.",
+            "Re-run FlightCheck signed in with the Power Platform Administrator role.",
+        )]
+
+    # ── AC1: enumerate effective policies ───────────────────────────────
+    try:
+        policies = iter_effective_policies(pp, env_id)
+    except Exception as e:  # noqa: BLE001 — degrade to WARN, never false PASS
+        return [_infra_006_row(
+            Status.WARNING.value,
+            f"DLP connector classification could not be determined: {e}",
+            _infra_006_could_not_determine_directive(),
+        )]
+
+    if isinstance(policies, dict) and "_error" in policies:
+        return [_infra_006_row(
+            Status.WARNING.value,
+            "DLP policies could not be read — the apiPolicies admin endpoint "
+            "returned a permissions error.",
+            _infra_006_could_not_determine_directive(),
+        )]
+
+    # Defend the get_dlp_policies_for_env contract (list | {"_error": ...}).
+    # Any other shape (a truthy dict without _error, a scalar) is a contract
+    # drift we must not iterate blindly — degrade to WARN, never crash to ERROR.
+    if not isinstance(policies, list):
+        return [_infra_006_row(
+            Status.WARNING.value,
+            "DLP policies could not be read — unexpected response shape from the "
+            "apiPolicies admin endpoint.",
+            _infra_006_could_not_determine_directive(),
+        )]
+
+    # Defer coverage to ENV-008: no policy applies → nothing to classify.
+    if not policies:
+        return [_infra_006_row(
+            Status.SKIPPED.value,
+            "No DLP policy applies to this environment — connector classification "
+            "is not applicable (DLP coverage is reported by ENV-008).",
+        )]
+
+    # ── AC2: resolve the agent's connectors ─────────────────────────────
+    if not env_url or not dv_token:
+        return [_infra_006_row(
+            Status.WARNING.value,
+            "Dataverse access not available — cannot resolve the agent's "
+            "connectors to classify against DLP.",
+            _infra_006_could_not_determine_directive(),
+        )]
+    try:
+        agent_ids = agent_connector_ids(env_url, dv_token)
+    except Exception as e:  # noqa: BLE001 — degrade to WARN, never false PASS
+        return [_infra_006_row(
+            Status.WARNING.value,
+            f"Could not resolve the agent's connection references: {e}",
+            _infra_006_could_not_determine_directive(),
+        )]
+
+    if not agent_ids:
+        return [_infra_006_row(
+            Status.WARNING.value,
+            "No connection references found for the agent — nothing to classify "
+            "against DLP.",
+            _infra_006_could_not_determine_directive(),
+        )]
+
+    # ── AC3/AC4/AC5: reconcile and verdict ──────────────────────────────
+    ev = evaluate_connector_classification(agent_ids, policies)
+    policy_names = ", ".join(policy_label(p) for p in policies)
+    n_pol = len(policies)
+    n_conn = len(agent_ids)
+
+    if ev.verdict == "pass":
+        # A PASS implies every connector is allowed and in one group, so
+        # groups_seen collapses to a single distinct label.
+        grp = sorted(set(ev.groups_seen.values()))[0]
+        return [_infra_006_row(
+            Status.PASSED.value,
+            f"All {n_conn} agent connector(s) are allowed and in the same "
+            f"data-group ({grp}) across {n_pol} effective DLP policy/policies.",
+        )]
+
+    if ev.verdict == "fail":
+        detail = []
+        if ev.blocked:
+            detail.append(f"Blocked: {', '.join(ev.blocked)}")
+        if ev.cross_group:
+            groups = ", ".join(ev.cross_group_groups)
+            detail.append(
+                f"connectors split across data-groups ({groups}) in policy "
+                f"'{ev.cross_group_policy}' — cannot be combined in one agent action"
+            )
+        return [_infra_006_row(
+            Status.FAILED.value,
+            f"DLP misclassification across {n_pol} effective policy/policies: "
+            f"{'; '.join(detail)}.",
+            _infra_006_fail_directive(ev, policy_names),
+        )]
+
+    # WARN — indeterminate / could-not-fully-determine
+    return [_infra_006_row(
+        Status.WARNING.value,
+        "Some agent connectors are not explicitly classified by the effective "
+        f"DLP policy/policies and fall into the default group: "
+        f"{', '.join(ev.indeterminate)}. Their effective grouping cannot be "
+        "confirmed from the API.",
+        _infra_006_warn_directive(ev, policy_names),
+    )]
+
+
+# ───────────────────────────────────────────────────────────────────────
 # Check registry — add new INFRA-xxx orchestrators here
 #
 # Each entry is a callable (runner) -> list[CheckResult]. The public
@@ -394,9 +624,9 @@ def check_microsoft_service_reachability(runner: Any) -> list[CheckResult]:
 
 _INFRA_CHECKS: list[Callable[[Any], list[CheckResult]]] = [
     check_microsoft_service_reachability,
+    check_dlp_connector_classification,
     # Future checks — add here:
     # check_hr_system_reachability,
-    # check_dlp_policy_compliance,
 ]
 
 

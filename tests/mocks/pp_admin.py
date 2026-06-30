@@ -174,6 +174,110 @@ def connection(
     }
 
 
+def dlp_policy(
+    *,
+    display_name: str = "Mock DLP Policy",
+    policy_id: str = "00000000-0000-0000-0000-0000000d1p01",
+    business: Iterable[str] = (),
+    non_business: Iterable[str] = (),
+    blocked: Iterable[str] = (),
+    environments: Iterable[str] | None = None,
+) -> dict[str, Any]:
+    """Build a DLP (data) policy record in the apiPolicies 2021-04-01 shape.
+
+    ``business`` / ``non_business`` / ``blocked`` accept connector
+    api-names (e.g. ``"shared_workdaysoap"``) or full connector ids; they
+    are emitted under ``properties.connectorGroups`` with the wire
+    classification tokens ``Confidential`` / ``General`` / ``Blocked``
+    respectively (the PowerShell/REST vocabulary; the admin-center UI
+    labels these Business / Non-Business / Blocked).
+
+    ``environments`` — BAP env ids the policy is scoped to. Omit (``None``)
+    for a tenant-wide (all-environments) policy with no environment filter.
+
+    API tier: the BAP apiPolicies surface is **documented** tier (see
+    tests/fixtures/cassettes/INDEX.md → API tier registry; the captured
+    ``flightcheck_pp_admin.yaml`` apiPolicies response is an empty
+    ``{"value": []}`` and does not exercise connector groups). The
+    connector-group shape below is therefore verified against MS Learn,
+    not a cassette. A populated apiPolicies capture would upgrade this to
+    validated — see INDEX.md follow-up note.
+
+    Documented shape (MS Learn) — one policy's connector groups::
+
+        "properties": {
+            "displayName": "Block non-business",
+            "connectorGroups": [
+                {"classification": "Confidential",   # = Business
+                 "connectors": [
+                     {"id": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
+                      "name": "shared_commondataserviceforapps",
+                      "type": "Microsoft.PowerApps/apis"}]},
+                {"classification": "General",        # = Non-Business
+                 "connectors": [...]},
+                {"classification": "Blocked",
+                 "connectors": [...]}
+            ]
+        }
+
+    The classification token vocabulary (``Confidential`` / ``General`` /
+    ``Blocked``) is documented at:
+      - https://learn.microsoft.com/power-platform/admin/dlp-connector-classification
+        (Business / Non-Business / Blocked data groups — conceptual)
+      - https://learn.microsoft.com/power-platform/admin/dlp-custom-connector-parity#powershell-support-for-custom-connector-url-patterns
+        (``customConnectorRuleClassification`` supported values:
+        ``General | Confidential | Blocked | Ignore``)
+
+    Consumer:
+      flightcheck/checks/_dlp_utils.policy_connector_groups
+    """
+
+    def _conns(names: Iterable[str]) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for n in names:
+            cid = (
+                str(n)
+                if str(n).startswith("/providers/")
+                else f"/providers/Microsoft.PowerApps/apis/{n}"
+            )
+            out.append({
+                "id": cid,
+                "name": str(n).rsplit("/", 1)[-1],
+                "type": "Microsoft.PowerApps/apis",
+            })
+        return out
+
+    groups: list[dict[str, Any]] = []
+    if business:
+        groups.append({"classification": "Confidential", "connectors": _conns(business)})
+    if non_business:
+        groups.append({"classification": "General", "connectors": _conns(non_business)})
+    if blocked:
+        groups.append({"classification": "Blocked", "connectors": _conns(blocked)})
+
+    properties: dict[str, Any] = {
+        "displayName": display_name,
+        "connectorGroups": groups,
+    }
+    if environments is not None:
+        env_entries = [{"name": e} for e in environments]
+        # Newer payloads expose `environments`; the kit's env filter also
+        # reads the legacy `environmentFilter.environments` shape — emit
+        # both for fidelity.
+        properties["environments"] = env_entries
+        properties["environmentFilter"] = {"environments": env_entries}
+
+    return {
+        "id": (
+            "/providers/Microsoft.BusinessAppPlatform/scopes/admin/"
+            f"apiPolicies/{policy_id}"
+        ),
+        "name": policy_id,
+        "type": "Microsoft.BusinessAppPlatform/scopes/admin/apiPolicies",
+        "properties": properties,
+    }
+
+
 def workday_connection(
     *,
     status: str = "Connected",
