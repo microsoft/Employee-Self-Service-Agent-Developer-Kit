@@ -168,13 +168,19 @@ YYYY-MM-DD_HH-MM-SS
 A Pipeline Step **never** opens, reads, or writes a diagnostics/report file
 itself. Instead:
 
-1. Throughout execution, every step reports through the framework **Logger**,
-   which streams the **`session.log`** live (all stages, all levels).
-2. Every step also **accumulates** structured outcome data into the shared
-   `MigrationContext` through the Diagnostics framework — `context.Logs`,
-   `context.Warnings`, `context.Errors`, and `context.Changes` (see
-   DOMAIN_MODEL.md → MigrationContext).
-3. A **single terminal step**, `GenerateMigrationReport()`, runs last in the
+1. When the run starts, the **Logger** installs a stdout/stderr tee (section
+   6.1), so **`session.log`** becomes a full live transcript of the CLI for the
+   whole run.
+2. Throughout execution, each step reports through the framework Logger using two
+   channels (section 6.2): the **engineer channel** (`LogDebug`/`LogInfo`/…) goes
+   to the CLI and is mirrored into `session.log`; the **customer channel**
+   (`LogCustomer`/`LogFancy`) appends structured entries to the report model
+   only.
+3. Every step also **accumulates** structured outcome data into the shared
+   `MigrationContext` — `context.Logs`, `context.Warnings`, `context.Errors`, and
+   `context.Changes` (see DOMAIN_MODEL.md → MigrationContext). This is the report
+   model the customer channel writes to.
+4. A **single terminal step**, `GenerateMigrationReport()`, runs last in the
    Output Pipeline and asks the **Reporter service** to render
    **`migration_report.md`** from those collectors.
 
@@ -186,24 +192,57 @@ into the session bundle.
 
 # 6. Logger
 
-The Logger is the only approved mechanism for runtime output.
+The Logger is the only approved mechanism for runtime output. Direct use of
+`print()` from business logic is prohibited (DIAG-005). The Logger is
+initialized once at the **application entry point** (the composition root, before
+the pipeline runs) and is the single I/O boundary for all console and log output.
 
-The Logger writes simultaneously to:
+## 6.1 Transcript capture (session.log is a full CLI replay)
 
-* Console
-* Session Log
+When the Logger initializes, it **installs a stdout/stderr tee** for the process.
+From that line onward, **every byte written to the CLI** — Logger output,
+incidental third-party library output, and tracebacks alike — is mirrored into
+`output/session-<timestamp>/session.log`. The engineer therefore receives a
+complete, replayable transcript of the run, not just hand-picked log lines.
 
-Direct use of:
+> Capture begins at the **Python application entry** (the migration run), not in
+> the shell wrapper. Environment provisioning output (`uv sync`, etc.) is **not**
+> part of the session bundle — the app owns the session folder and its log.
 
-```
-print()
-```
+## 6.2 Two channels
 
-is prohibited.
+The Logger exposes two semantically distinct channels:
+
+| Channel            | Method (illustrative) | Console (CLI) | `session.log` | `migration_report.md` |
+| ------------------ | --------------------- | :-----------: | :-----------: | :-------------------: |
+| **Engineer**       | `LogDebug` / `LogInfo` / `LogWarning` / `LogError` | ✅ (via tee) | ✅ | ✗ |
+| **Customer**       | `LogCustomer` / `LogFancy` | ✗ | ✗ | ✅ (rendered) |
+
+* **Engineer channel** — ordinary diagnostics. Prints to the CLI as usual; the
+  transcript tee (6.1) mirrors it into `session.log`. This is the developer/ESS
+  debugging stream and honors the log levels in section 7.
+* **Customer channel** — customer-facing narrative. It does **not** print to the
+  CLI or `session.log`. Instead it appends **structured entries** to an
+  intermediate **report model** (see 6.3) that the Reporter later renders into
+  the fancy `migration_report.md`. Example (Discover mode): recording each
+  unsupported component in a readable way so the customer can decide whether to
+  proceed with writeback.
+
+## 6.3 Report model (intermediate)
+
+Customer-channel calls accumulate into a structured, in-memory **report model**
+(the `MigrationContext` collectors — `Changes`, `Warnings`, `Errors`, plus
+summary counters; see DOMAIN_MODEL.md). The Reporter (section 9) renders this
+model into `migration_report.md` at the end of the run. Persisting the model as
+an intermediate `report.json` is permitted internally as a render input, but it
+is **not** a session-bundle artifact — the bundle remains exactly the two files
+in section 5.
 
 ---
 
 # 7. Log Levels
+
+The log levels below apply to the **engineer channel** (console + `session.log`).
 
 Supported log levels:
 
