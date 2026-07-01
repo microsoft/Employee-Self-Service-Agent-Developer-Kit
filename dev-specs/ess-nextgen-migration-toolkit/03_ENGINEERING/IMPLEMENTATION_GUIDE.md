@@ -335,7 +335,7 @@ Avoid modifying framework infrastructure unless explicitly required.
 
 ## Adding a New Dataverse API
 
-1. Extend `dataverse_api.py`.
+1. Extend `dataverse_client.py`.
 2. Update the corresponding Service.
 3. Add integration tests.
 4. Update TASKS.md if required.

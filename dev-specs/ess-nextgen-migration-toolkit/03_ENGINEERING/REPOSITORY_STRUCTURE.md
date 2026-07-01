@@ -61,11 +61,13 @@ tools/
     src/
         constants/
         core/
+            auth/
+                token_provider.py
             pipeline/
             logging/
             models/
             outbound/
-                dataverse_api.py
+                dataverse_client.py
             utils/
         modules/
             preprocessing/
@@ -183,7 +185,7 @@ Contains:
 Initially implemented as:
 
 ```text
-dataverse_api.py
+dataverse_client.py
 ```
 
 Business logic never belongs here.
@@ -582,7 +584,7 @@ New functionality should primarily be implemented by:
 * Adding new Domain Models.
 * Adding new Services.
 * Adding new Pipeline Steps.
-* Extending `dataverse_api.py`.
+* Extending `dataverse_client.py`.
 * Adding corresponding tests.
 
 Framework infrastructure should remain stable throughout the lifetime of the migration toolkit.

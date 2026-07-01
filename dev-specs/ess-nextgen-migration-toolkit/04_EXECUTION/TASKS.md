@@ -132,6 +132,7 @@ Instead, it establishes the complete framework, wiring, and developer experience
 | [TASK-005](tasks/TASK-005-diagnostics-framework.md)      | Diagnostics Framework          | TODO   | —        |
 | [TASK-006](tasks/TASK-006-preprocessing-pipeline.md)     | Preprocessing Pipeline         | TODO   | —        |
 | [TASK-007](tasks/TASK-007-postprocessing-pipeline.md)    | Postprocessing Pipeline        | TODO   | —        |
+| [TASK-008](tasks/TASK-008-authentication-token-provider.md) | Authentication Token Provider | TODO | —        |
 | [TASK-009](tasks/TASK-009-end-to-end-framework-validation.md) | End-to-End Framework Validation | TODO | —      |
 
 ---
