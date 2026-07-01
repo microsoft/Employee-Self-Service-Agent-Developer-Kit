@@ -246,7 +246,7 @@ tests/golden/
 
     expected/
 
-    debug/reports/
+    expected_report/
 ```
 
 Every Golden Test consists of:

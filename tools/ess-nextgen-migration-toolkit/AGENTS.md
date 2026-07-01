@@ -32,7 +32,7 @@
 
 * **The buildable toolkit (implementation)** lives here under
   `tools/ess-nextgen-migration-toolkit/` (`src/`, `tests/`, `scripts/`, etc.),
-  with generated output under `debug/logs/` and `debug/reports/`, as defined by
+  with generated output under `output/session-<timestamp>/`, as defined by
   [`REPOSITORY_STRUCTURE.md`](../../dev-specs/ess-nextgen-migration-toolkit/03_ENGINEERING/REPOSITORY_STRUCTURE.md).
 
 ## Implementation navigation
