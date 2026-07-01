@@ -181,7 +181,7 @@ class Logger:
         """Write an ERROR engineer-channel message to CLI/session.log."""
         self._write_engineer(LogLevel.ERROR, message, pipeline_stage, pipeline_step)
 
-    def LogCustomer(
+    def LogAdvisory(
         self,
         message: str,
         *,
@@ -190,7 +190,7 @@ class Logger:
         component: str | None = None,
         recommendation: str | None = None,
     ) -> None:
-        """Append a customer-channel diagnostic to the report model only."""
+        """Append a customer-channel manual-review advisory to the report model only."""
         entry = DiagnosticEntry(
             message=message,
             severity=severity,
@@ -207,7 +207,7 @@ class Logger:
         else:
             self._context.Logs.append(entry)
 
-    def LogFancy(
+    def LogChange(
         self,
         message: str,
         *,
