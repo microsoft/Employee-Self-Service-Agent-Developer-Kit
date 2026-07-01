@@ -153,4 +153,8 @@ where the specs allow, and resolve the rest during your serial integration
   to hand it back to the worker to preserve the master/worker separation.
 - **Do not commit** unless the user explicitly asks. Stage and summarize; let the
   user decide.
+- **Commit/PR title convention.** MTK commit and PR titles follow
+  `type(scope): [Role] | subject`. Commits and PRs you create as the orchestrator
+  are prefixed `[Master]` (e.g. `spec(mtk): [Master] | super-pipeline redesign`);
+  worker commits are prefixed `[Worker]`. Always keep the role tag.
 - Cite specs by full repo-root-relative path plus a section number; never use the section-symbol shorthand.
