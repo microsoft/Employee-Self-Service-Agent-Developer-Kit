@@ -148,6 +148,20 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
   solely to the orchestrator (`TASK-003`), eliminating the former
   CLI/orchestrator overlap. Renamed the task file to
   `TASK-999-manual-e2e-validation.md`.
+- **Synced the top-level Copilot instructions mirror to the restructure and made
+  it a doc-sync target.** Corrected two stale statements in
+  `.github/instructions/ess-nextgen-toolkit.instructions.md`: the dependency
+  direction (`UI → Core → Migration → Services → SDK → Dataverse` →
+  `Orchestration → Pipeline → Modules → Dataverse Client → Dataverse`) and the
+  dependency-management step (dropped the non-existent `requirements*.txt`
+  exports; it is `pyproject.toml` + `uv.lock` only, per
+  `03_ENGINEERING/CODING_STANDARDS.md` section 16). Added a self-guard "Keep this
+  file in sync" section to that file, and listed it explicitly as a doc-sync
+  target in the Definition of Done (`04_EXECUTION/TASKS.md` section 5) and in the
+  Documentation Requirements (`AGENTS.md` section 15), so any change to the
+  layer/dependency model, repository structure, invariants,
+  dependency-management workflow, or naming conventions must update the mirror in
+  the same change.
 
 ### Changed
 

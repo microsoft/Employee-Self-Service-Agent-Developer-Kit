@@ -217,8 +217,13 @@ A task is considered complete only when:
 * Logging is implemented.
 * Reports are updated.
 * Documentation is updated wherever applicable — README, any affected
-  dev-specs, and CHANGELOG.md — so specifications and implementation stay
-  synchronized.
+  dev-specs, the top-level Copilot instructions mirror
+  (`.github/instructions/ess-nextgen-toolkit.instructions.md`), and
+  CHANGELOG.md — so specifications and implementation stay synchronized. In
+  particular, any change to the layer/dependency model, repository structure,
+  invariants, dependency-management workflow, or naming conventions must be
+  reflected in that instructions file, which only summarizes the canonical
+  specs.
 * No specification violations exist.
 * Corresponding Migration Rule is implemented.
 * Task status is updated to **DONE**.
