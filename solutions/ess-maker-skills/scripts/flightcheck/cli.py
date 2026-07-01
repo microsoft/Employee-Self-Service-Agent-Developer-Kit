@@ -12,6 +12,7 @@ Usage:
 Scopes:
     full            — Run all checks (default)
     prerequisites   — Licenses, roles only
+    infrastructure  — Network connectivity probes
     environment     — PP environment, Dataverse, DLP
     authentication  — Entra ID, SSO, CA policies
     external        — Integration discovery (flows)
@@ -44,6 +45,8 @@ from flightcheck.runner import (
 from flightcheck.graph_client import GraphClient
 from flightcheck.pp_admin_client import PPAdminClient, derive_environment_id
 from flightcheck.pva_client import PVAClient
+from flightcheck.powerplatform_client import PowerPlatformClient
+from flightcheck.azure_arm_client import AzureArmClient
 
 # Check modules
 from flightcheck.checks.prerequisites import run_prerequisites_checks
@@ -57,10 +60,12 @@ from flightcheck.checks.local_files import run_local_file_checks
 from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.checks.licensing import run_licensing_checks
 from flightcheck.checks.cloud_policy import run_cloud_policy_checks
+from flightcheck.checks.infrastructure import run_infrastructure_checks
 
 
 SCOPE_MAP = {
     "prerequisites": [("Prerequisites", run_prerequisites_checks)],
+    "infrastructure": [("Infrastructure", run_infrastructure_checks)],
     "environment": [("Environment", run_environment_checks)],
     "authentication": [("Authentication", run_authentication_checks)],
     "external": [("External Systems", run_external_systems_checks)],
@@ -84,6 +89,7 @@ SCOPE_MAP = {
 
 FULL_SCOPE = [
     ("Prerequisites", run_prerequisites_checks),
+    ("Infrastructure", run_infrastructure_checks),
     ("Environment", run_environment_checks),
     ("Authentication", run_authentication_checks),
     ("External Systems", run_external_systems_checks),
@@ -168,8 +174,9 @@ def main():
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
 
+    infra_only_scope = args.scope == "infrastructure"
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
-    if not env_url:
+    if not env_url and not infra_only_scope:
         print("ERROR: No dataverseEndpoint in .local/config.json.")
         sys.exit(1)
 
@@ -198,96 +205,111 @@ def main():
     print("=" * 64)
     print()
 
-    # --- Authenticate ---
-    from auth import authenticate, discover_tenant
-
-    print("Authenticating to Dataverse...")
-    dv_token = authenticate(env_url)
-
-    tenant_id = discover_tenant(env_url)
-    print(f"Tenant: {tenant_id}")
-
-    # Initialize clients
-    print("Authenticating to Microsoft Graph...")
-    graph = GraphClient(tenant_id)
-    try:
-        graph.authenticate()
-        print("  Graph: OK")
-    except Exception as e:
-        print(f"  Graph: WARNING — {e}")
-        print("  (Some checks will be skipped)")
-
-    print("Authenticating to Power Platform Admin API...")
-    pp_admin = PPAdminClient(tenant_id)
-    try:
-        pp_admin.authenticate()
-        print("  Power Platform: OK")
-    except Exception as e:
-        print(f"  Power Platform: WARNING — {e}")
-        print("  (Some checks will be skipped)")
+    if infra_only_scope:
+        print("Skipping Dataverse/Graph/Power Platform auth for infrastructure scope.")
+        dv_token = None
+        tenant_id = None
+        graph = None
         pp_admin = None
-
-    # Derive the BAP environment ID. This MUST run after pp_admin is
-    # authenticated: the correct id comes from the BAP env list
-    # (matched on linkedEnvironmentMetadata.instanceUrl), not from the
-    # Dataverse WhoAmI OrganizationId (which is a different guid for
-    # almost every tenant — see derive_environment_id docstring).
-    #
-    # derive_environment_id intentionally tolerates pp_admin=None and
-    # falls back to the WhoAmI/OrganizationId path so that operators
-    # whose Power Platform sign-in failed (network issue, cancelled
-    # browser, MSAL error) can still run the substantial fraction of
-    # FlightCheck that doesn't need pp_admin — PRE-* (license SKUs),
-    # AUTH-*, WD-ENV-* (Workday env vars / ISU format), WD-WF-*
-    # (Workday SOAP runtime), and CONFIG-* (local agent / topic /
-    # knowledge source). Erroring out here would block those.
-    print("Deriving Power Platform environment ID...")
-    if args.environment_id:
-        env_id = args.environment_id
-        print(f"Environment ID: {env_id} (provided via --environment-id)")
+        env_id = args.environment_id or None
     else:
-        env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
-        if env_id and pp_admin is not None:
-            print(f"Environment ID: {env_id}")
-        elif env_id:
-            # pp_admin is None: we fell back to WhoAmI/OrganizationId.
-            # That value is wrong for BAP admin calls AND for any URL
-            # that embeds an env id (Copilot Studio, maker portal, ...).
-            print(
-                f"Environment ID: {env_id} (Dataverse OrganizationId fallback "
-                "— Power Platform sign-in failed, so BAP-scoped checks "
-                "(ENV-*, EXT-*, WD-CONN-*) will be skipped)"
-            )
-        elif pp_admin is not None:
-            # BAP auth succeeded but no env matched the Dataverse hostname.
-            # Usually means the signed-in user lacks admin access on the
-            # env hosting this Dataverse instance. Tell the operator how
-            # to override so deep links and BAP-scoped checks still work.
-            print(
-                f"WARNING: Could not find a BAP environment whose linked "
-                f"Dataverse instance matches {env_url}. You may not have "
-                "Power Platform admin access on that environment. "
-                "BAP-scoped checks (ENV-*, EXT-*, WD-CONN-*) will be skipped "
-                "and Copilot Studio deep links will fall back to the "
-                "homepage. To override, pass --environment-id <guid> "
-                "(find it in the Power Platform admin center or in the "
-                "Copilot Studio bot URL: "
-                "https://copilotstudio.microsoft.com/environments/<guid>/bots/...)."
-            )
+        # --- Authenticate ---
+        from auth import authenticate, discover_tenant
+
+        print("Authenticating to Dataverse...")
+        dv_token = authenticate(env_url)
+
+        tenant_id = discover_tenant(env_url)
+        print(f"Tenant: {tenant_id}")
+
+        # Initialize clients
+        print("Authenticating to Microsoft Graph...")
+        graph = GraphClient(tenant_id)
+        try:
+            graph.authenticate()
+            print("  Graph: OK")
+        except Exception as e:
+            print(f"  Graph: WARNING — {e}")
+            print("  (Some checks will be skipped)")
+            # Discard the unauthenticated client so Graph-dependent checks see a
+            # clean None and emit SKIPPED, rather than each call raising
+            # "Call authenticate() first". Mirrors the pp_admin / powerplatform /
+            # azure_arm failure handling below.
+            graph = None
+
+        print("Authenticating to Power Platform Admin API...")
+        pp_admin = PPAdminClient(tenant_id)
+        try:
+            pp_admin.authenticate()
+            print("  Power Platform: OK")
+        except Exception as e:
+            print(f"  Power Platform: WARNING — {e}")
+            print("  (Some checks will be skipped)")
+            pp_admin = None
+
+        # Derive the BAP environment ID. This MUST run after pp_admin is
+        # authenticated: the correct id comes from the BAP env list
+        # (matched on linkedEnvironmentMetadata.instanceUrl), not from the
+        # Dataverse WhoAmI OrganizationId (which is a different guid for
+        # almost every tenant — see derive_environment_id docstring).
+        #
+        # derive_environment_id intentionally tolerates pp_admin=None and
+        # falls back to the WhoAmI/OrganizationId path so that operators
+        # whose Power Platform sign-in failed (network issue, cancelled
+        # browser, MSAL error) can still run the substantial fraction of
+        # FlightCheck that doesn't need pp_admin — PRE-* (license SKUs),
+        # AUTH-*, WD-ENV-* (Workday env vars / ISU format), WD-WF-*
+        # (Workday SOAP runtime), and CONFIG-* (local agent / topic /
+        # knowledge source). Erroring out here would block those.
+        print("Deriving Power Platform environment ID...")
+        if args.environment_id:
+            env_id = args.environment_id
+            print(f"Environment ID: {env_id} (provided via --environment-id)")
         else:
-            print(
-                f"WARNING: Could not derive environment ID for {env_url}. "
-                "BAP-scoped checks (ENV-*, EXT-*, WD-CONN-*) will be skipped; "
-                "license, auth, Workday env-var, Workday SOAP, and local-file "
-                "checks will still run."
-            )
+            env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
+            if env_id and pp_admin is not None:
+                print(f"Environment ID: {env_id}")
+            elif env_id:
+                # pp_admin is None: we fell back to WhoAmI/OrganizationId.
+                # That value is wrong for BAP admin calls AND for any URL
+                # that embeds an env id (Copilot Studio, maker portal, ...).
+                print(
+                    f"Environment ID: {env_id} (Dataverse OrganizationId fallback "
+                    "— Power Platform sign-in failed, so BAP-scoped checks "
+                    "(ENV-*, EXT-*, WD-CONN-*) will be skipped)"
+                )
+            elif pp_admin is not None:
+                # BAP auth succeeded but no env matched the Dataverse hostname.
+                # Usually means the signed-in user lacks admin access on the
+                # env hosting this Dataverse instance. Tell the operator how
+                # to override so deep links and BAP-scoped checks still work.
+                print(
+                    f"WARNING: Could not find a BAP environment whose linked "
+                    f"Dataverse instance matches {env_url}. You may not have "
+                    "Power Platform admin access on that environment. "
+                    "BAP-scoped checks (ENV-*, EXT-*, WD-CONN-*) will be skipped "
+                    "and Copilot Studio deep links will fall back to the "
+                    "homepage. To override, pass --environment-id <guid> "
+                    "(find it in the Power Platform admin center or in the "
+                    "Copilot Studio bot URL: "
+                    "https://copilotstudio.microsoft.com/environments/<guid>/bots/...)."
+                )
+            else:
+                print(
+                    f"WARNING: Could not derive environment ID for {env_url}. "
+                    "BAP-scoped checks (ENV-*, EXT-*, WD-CONN-*) will be skipped; "
+                    "license, auth, Workday env-var, Workday SOAP, and local-file "
+                    "checks will still run."
+                )
 
     # Gate PVA (Copilot Studio Island Gateway) auth on scope.
     # Only CONFIG-013 needs PVA today, and it lives in run_local_file_checks.
     # Authenticating unconditionally would prompt for a second interactive login
     # on scopes like --scope prerequisites that don't need it.
     pva = None
-    if args.scope in ("full", "local", "graphconnector"):
+    if infra_only_scope:
+        print("Skipping Copilot Studio auth for infrastructure scope.")
+    elif args.scope in ("full", "local", "graphconnector"):
         print("Authenticating to Copilot Studio (Island Gateway)...")
         pva = PVAClient(tenant_id, env_url)
         try:
@@ -304,6 +326,33 @@ def main():
     else:
         print("Skipping Copilot Studio auth (not required for this scope).")
 
+    # Gate the PayG billing clients (PRE-005) on scope. Only the
+    # prerequisites checks read them, and each is a separate interactive
+    # sign-in (Power Platform API + Azure ARM are distinct audiences), so
+    # don't prompt on scopes that won't run PRE-005. Mirrors the PVA gating.
+    powerplatform = None
+    azure_arm = None
+    if args.scope in ("full", "prerequisites"):
+        print("Authenticating to Power Platform API (billing policies)...")
+        powerplatform = PowerPlatformClient(tenant_id)
+        try:
+            powerplatform.authenticate()
+            print("  Power Platform API: OK")
+        except Exception as e:
+            print(f"  Power Platform API: WARNING — {e}")
+            print("  (PRE-005 PayG check will be skipped)")
+            powerplatform = None
+
+        print("Authenticating to Azure (subscription health)...")
+        azure_arm = AzureArmClient(tenant_id)
+        try:
+            azure_arm.authenticate()
+            print("  Azure: OK")
+        except Exception as e:
+            print(f"  Azure: WARNING — {e}")
+            print("  (PRE-005 will report PayG subscription health as unverifiable)")
+            azure_arm = None
+
     # --- Build runner ---
     runner = FlightCheckRunner(scope=args.scope)
     runner.config = config
@@ -313,6 +362,8 @@ def main():
     runner.graph = graph
     runner.pp_admin = pp_admin
     runner.pva = pva
+    runner.powerplatform = powerplatform
+    runner.azure_arm = azure_arm
 
     # Register checks based on scope
     if args.scope == "full":

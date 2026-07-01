@@ -306,6 +306,8 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 | `/evaluate` | Generate evaluation test sets for your agent |
 | `/flightcheck` | Run pre-deployment readiness validation — licenses, environment, integrations, agent files |
 | `/push` | Push all local changes to Copilot Studio |
+| `/backup-template-configs` | Capture customised Workday HCM reference-data template configs before an ESS package update |
+| `/restore-template-configs` | Restore captured Workday HCM template configs after an ESS package update |
 | `/menu` | See all available commands |
 
 You can also describe what you want in plain English — the agent will figure out the right approach.

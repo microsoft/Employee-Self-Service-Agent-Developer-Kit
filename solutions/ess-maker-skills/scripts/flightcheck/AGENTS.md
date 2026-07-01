@@ -20,6 +20,8 @@ available:
 | Dataverse | `../auth.py` | `{env_url}/user_impersonation` | Bot components (topics, variables, knowledge source *config*), template configs, solution metadata, statecode (enabled/disabled) |
 | Microsoft Graph | `graph_client.py` | `https://graph.microsoft.com/.default` | Licenses, user roles, Entra app registrations, CA policies |
 | Power Platform Admin (BAP) | `pp_admin_client.py` | `https://service.powerapps.com//.default` | Environments, cloud flows, connections, DLP policies |
+| Power Platform API (Licensing/Billing) | `powerplatform_client.py` | `https://api.powerplatform.com/.default` | Billing policies, PayG environment linkage (PRE-005) |
+| Azure Resource Manager | `azure_arm_client.py` | `https://management.azure.com/.default` | Azure subscription health/`state` for the PayG-linked subscription, and Consumption budgets (spending guardrails) for PRE-005 |
 | Island Gateway (Copilot Studio) | `pva_client.py` | `96ff4394-9197-43aa-b393-6a41652e21f8/.default` | Live bot component status, model config, knowledge source *runtime state* |
 
 > **Note:** `../auth.py` lives at `scripts/auth.py`, outside the flightcheck
@@ -197,6 +199,8 @@ Runner attributes available to checks (set up by `cli.py`):
 | `runner.env_id` | `str` | Power Platform (BAP) environment ID |
 | `runner.graph` | `GraphClient \| None` | Microsoft Graph client |
 | `runner.pp_admin` | `PowerPlatformAdminClient \| None` | BAP admin client |
+| `runner.powerplatform` | `PowerPlatformClient \| None` | Power Platform API client (billing policies; PRE-005) |
+| `runner.azure_arm` | `AzureArmClient \| None` | Azure Resource Manager client (subscription health; PRE-005) |
 | `runner.pva` | `PVAClient \| None` | Island Gateway client |
 | `runner.config` | `dict` | Parsed `.local/config.json` |
 

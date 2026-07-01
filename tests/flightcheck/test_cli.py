@@ -19,7 +19,10 @@ URIs. These tests pin that behavior so it doesn't regress.
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
+
+import pytest
 
 from flightcheck import cli
 
@@ -108,3 +111,82 @@ class TestOpenReportInBrowser:
         # tmp_path is absolute; the resolved URI must contain it (modulo
         # platform-specific drive-letter encoding).
         assert "workspace/flightcheck/report.html" in uri
+
+
+class _FakeRunner:
+    def __init__(self, scope: str) -> None:
+        self.scope = scope
+        self.registered = []
+        self.config = None
+        self.env_url = None
+        self.dv_token = None
+        self.env_id = None
+        self.graph = None
+        self.pp_admin = None
+        self.pva = None
+
+    def register(self, category, fn):
+        self.registered.append((category, fn))
+
+    def run(self):
+        return SimpleNamespace(
+            failed=0,
+            results=[],
+            overall="READY",
+            warnings=0,
+            errors=0,
+            manual=0,
+            not_configured=0,
+            skipped=0,
+            passed=0,
+            total=0,
+            duration_secs=0,
+        )
+
+
+class TestInfrastructureScopeAuthGating:
+    def test_infrastructure_scope_runs_without_dataverse_endpoint(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        local_dir = tmp_path / ".local"
+        local_dir.mkdir()
+        (local_dir / "config.json").write_text('{"agents":[]}', encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(cli, "FlightCheckRunner", _FakeRunner)
+        monkeypatch.setattr(cli, "_print_prioritized_summary", lambda _result: None)
+        monkeypatch.setattr(cli, "save_results", lambda _result, _output: None)
+        monkeypatch.setattr(
+            cli,
+            "GraphClient",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("Graph auth should be skipped")),
+        )
+        monkeypatch.setattr(
+            cli,
+            "PPAdminClient",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("PP auth should be skipped")),
+        )
+        monkeypatch.setattr(
+            cli,
+            "PVAClient",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("PVA auth should be skipped")),
+        )
+        monkeypatch.setattr("sys.argv", ["cli.py", "--scope", "infrastructure", "--no-open"])
+
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+
+        assert exc.value.code == 0
+
+    def test_non_infrastructure_scope_requires_dataverse_endpoint(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        local_dir = tmp_path / ".local"
+        local_dir.mkdir()
+        (local_dir / "config.json").write_text('{"agents":[]}', encoding="utf-8")
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("sys.argv", ["cli.py", "--scope", "environment", "--no-open"])
+
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+
+        assert exc.value.code == 1

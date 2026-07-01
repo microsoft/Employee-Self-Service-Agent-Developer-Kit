@@ -85,7 +85,8 @@ Order of grounding sources (highest to lowest):
 2. `src/examples/ess-samples/` - vendored snapshot of the
    microsoft/CopilotStudioSamples Employee Self-Service Agent samples.
 3. `src/skills/` - kit-shipped skill instructions for /create, /update,
-   /delete, /scan, /evaluate, /push, /flightcheck.
+   /delete, /scan, /evaluate, /push, /flightcheck,
+   /backup-template-configs, /restore-template-configs.
 4. `src/reference/` (other subfolders) - additional kit-shipped guidance.
 5. Web fetch / general knowledge - only when none of the above answer the
    question and only after telling the user you're falling back.
@@ -299,6 +300,10 @@ After a successful push, `.baseline/` is updated to match the new state.
 | Validate / quality-check evaluation test sets | `src/skills/evaluations/validate/SKILL.md` |
 | Troubleshoot connectivity/auth issues | `src/skills/troubleshoot/SKILL.md` |
 | Debug Workday ISU errors | `src/skills/troubleshoot/SKILL.md` |
+| Back up Workday HCM template configs before an ESS package update | `src/skills/backup-template-configs/SKILL.md` |
+| Save / capture / snapshot Workday reference-data customisations | `src/skills/backup-template-configs/SKILL.md` |
+| Restore Workday HCM template configs after a package update | `src/skills/restore-template-configs/SKILL.md` |
+| Re-apply / put back Workday reference-data customisations | `src/skills/restore-template-configs/SKILL.md` |
 
 **Trigger phrases for connect:** "connect ServiceNow", "set up ServiceNow",
 "integrate ServiceNow", "connect Workday", "set up Workday", "add ServiceNow",
