@@ -257,7 +257,7 @@ Always respect module ownership.
 | Orchestration entry   | `src/service/mtk_orchestrator.py`               |
 | Utilities             | `src/core/utils/`                               |
 | Diagnostics code      | `src/core/logging/`                             |
-| Generated output      | `debug/logs/`, `debug/reports/`         |
+| Generated output      | `output/session-<timestamp>/`           |
 
 ---
 

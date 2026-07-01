@@ -18,10 +18,10 @@ logic is introduced.
 
 - [ ] The `src/` layout exists exactly as specified in
   `03_ENGINEERING/REPOSITORY_STRUCTURE.md` (`constants/`, `core/`, `modules/`,
-  `service/`, `debug/`, and `service/mtk_orchestrator.py`).
+  `service/`, `output/`, and `service/mtk_orchestrator.py`).
 - [ ] The `tests/` layout exists (`unit/`, `integration/`, `golden/`, `e2e/`).
-- [ ] The toolkit-root `debug/` folder is present with `logs/` and `reports/`
-  subfolders (generated, gitignored, kept via `.gitkeep`).
+- [ ] The toolkit-root `output/` folder is present (generated, gitignored, kept
+  via `.gitkeep`) for per-execution session bundles.
 - [ ] `scripts/`, `README.md`, and `pyproject.toml` are present.
 - [ ] No business logic or migration transformation is implemented.
 
@@ -30,7 +30,7 @@ logic is introduced.
 - Folder scaffold
 - Source layout
 - Test layout
-- `debug/` folder (logs and reports)
+- `output/` folder (session bundles)
 - Scripts folder
 - README
 - `pyproject.toml`

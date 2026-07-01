@@ -30,9 +30,8 @@ src/
             preprocessing/
             migration/      migration_pipeline.py, steps/
             postprocessing/
-debug/               Generated, gitignored output
-    logs/
-    reports/
+output/               Generated, gitignored output
+    session-<timestamp>/   migration_report.md, session.log
 tests/
     unit/            Mirror src/
     integration/     Dataverse interactions

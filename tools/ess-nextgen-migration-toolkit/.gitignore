@@ -13,8 +13,6 @@ venv/
 .mypy_cache/
 .ruff_cache/
 
-# Generated execution artifacts (keep folders, ignore contents)
-debug/logs/*
-debug/reports/*
-!debug/logs/.gitkeep
-!debug/reports/.gitkeep
+# Generated execution artifacts (keep folder, ignore contents)
+output/*
+!output/.gitkeep
