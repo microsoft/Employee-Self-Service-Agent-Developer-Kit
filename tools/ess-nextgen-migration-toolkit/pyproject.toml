@@ -10,7 +10,9 @@ readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Anil Kumar Adepu" }]
-dependencies = []
+dependencies = [
+    "msal>=1.37.0",
+]
 
 # Developer tooling lives in a PEP 735 dependency-group (not an optional-
 # dependency "extra"). uv installs the "dev" group BY DEFAULT for `uv sync` and
