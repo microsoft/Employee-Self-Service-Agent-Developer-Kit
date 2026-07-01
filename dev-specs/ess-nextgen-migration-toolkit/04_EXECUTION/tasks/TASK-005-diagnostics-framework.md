@@ -11,25 +11,31 @@
 
 Implement the diagnostics infrastructure. All toolkit output shall flow through
 the framework Logger; direct `print()` is prohibited. Logging code lives in
-`src/core/logging/`; generated output is written to `debug/logs/` and
-`debug/reports/`.
+`src/core/logging/`. Each execution produces one timestamped **session bundle**
+under `output/session-<timestamp>/` containing exactly two files:
+`migration_report.md` (customer-facing) and `session.log` (ESS-engineer
+diagnostics). Steps accumulate into the `MigrationContext` collectors; the
+Reporter renders the report — steps never write files.
 
 ## Acceptance Criteria
 
-- [ ] A Logger is implemented and is the single output channel for the toolkit.
-- [ ] A Session Manager tracks per-session diagnostics.
-- [ ] A Report Writer emits reports to `debug/reports/`.
-- [ ] Console output and log files are produced; log files are written to
-  `debug/logs/`.
-- [ ] No component bypasses the framework Logger with direct prints.
+- [ ] A Logger is implemented and is the single output channel for the toolkit;
+  it streams `session.log` live across all stages.
+- [ ] A Session Manager tracks per-session diagnostics and owns the
+  `output/session-<timestamp>/` bundle folder.
+- [ ] A Reporter renders `migration_report.md` (summary, changes, warnings
+  sections) from the `MigrationContext` collectors.
+- [ ] `MigrationContext` exposes the diagnostic collectors (`Logs`, `Warnings`,
+  `Errors`, `Changes`) that steps append to.
+- [ ] No component bypasses the framework Logger/Reporter with direct prints or
+  file writes.
 
 ## Deliverables
 
-- Logger
-- Session Manager
-- Report Writer
-- Console output
-- Log files
+- Logger (streams `session.log`)
+- Session Manager (owns the session bundle)
+- Reporter (renders `migration_report.md`)
+- MigrationContext diagnostic collectors
 
 ## References
 

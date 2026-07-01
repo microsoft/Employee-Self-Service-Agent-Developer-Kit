@@ -173,10 +173,19 @@ Migration Orchestrator
 - Environment
 - Agent
 - Components
+- ComponentSet (keyed view: ComponentType → Component[])
 - Candidates
+- Changes
+- Warnings
+- Errors
+- Logs
 - Reports
 - Diagnostics
 - Configuration
+
+`Changes`, `Warnings`, `Errors`, and `Logs` are the diagnostic accumulation
+collectors that Pipeline Steps append to; the Output Pipeline renders
+`migration_report.md` from them (see DIAGNOSTICS.md section 5).
 
 ---
 

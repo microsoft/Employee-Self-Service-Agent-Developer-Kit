@@ -205,6 +205,18 @@ Diagnostics are emitted through the Diagnostics framework.
 
 ---
 
+## PIPE-007
+
+Pipelines and steps are strongly typed and composed as a super-pipeline.
+
+The framework is generic (`Pipeline[TInput, TOutput]`,
+`PipelineStep[TInput, TOutput]`). The toolkit executes as three stage pipelines —
+Input → Migration → Output — over a shared `MigrationContext`. The Migration
+Orchestrator is only the composition root; it builds, configures, executes, and
+returns. Pipeline behaviour never lives in the orchestrator.
+
+---
+
 # 6. Service Invariants
 
 ---
@@ -332,6 +344,17 @@ Examples
 * OAuth tokens
 * Secrets
 * Connection strings
+
+---
+
+## DIAG-004
+
+Every execution produces exactly one session bundle.
+
+Each run writes one timestamped folder `output/session-<timestamp>/` containing
+exactly two files: `migration_report.md` (customer-facing) and `session.log`
+(ESS-engineer diagnostics). Steps accumulate into the `MigrationContext`
+collectors; only the Logger and the Reporter service write files.
 
 ---
 
