@@ -132,35 +132,55 @@ Close Session
 
 ---
 
-# 5. Session Folder Structure
+# 5. Session Bundle (the product)
 
-Each execution creates timestamped output under the generated debug tree.
+Every execution produces exactly **one** timestamped **session bundle** — a
+single self-contained folder. After a run, the user is presented with exactly
+**two files**:
 
 ```
-debug/logs/
+output/
 
-    2026-07-18_14-32-05/
+    session-2026-07-18_14-32-05/
 
-        session.log
-
-        diagnostics_summary.txt
-
-debug/reports/
-
-    2026-07-18_14-32-05/
-
-        readiness_report.txt
-
-        preview_report.txt
-
-        migration_report.txt
+        migration_report.md     # customer-facing report (see section 9)
+        session.log             # engineering diagnostics log (see section 6)
 ```
 
-The timestamp format shall be:
+| File                 | Audience        | Purpose                                                    |
+| -------------------- | --------------- | ---------------------------------------------------------- |
+| `migration_report.md`| **Customer**    | The human-readable outcome: summary, changes, warnings.    |
+| `session.log`        | **ESS Engineer**| The full diagnostics log, shared for debugging issues.     |
+
+Especially in **Discover** and **Preview** modes, `migration_report.md` *is* the
+deliverable. `session.log` is what the customer forwards (or a support engineer
+retrieves) when something needs investigation. Two files, one folder — nothing
+scattered across the filesystem.
+
+The session folder name is `session-<timestamp>`, where the timestamp format is:
 
 ```
 YYYY-MM-DD_HH-MM-SS
 ```
+
+## 5.1 How the two files are produced (read-only steps)
+
+A Pipeline Step **never** opens, reads, or writes a diagnostics/report file
+itself. Instead:
+
+1. Throughout execution, every step reports through the framework **Logger**,
+   which streams the **`session.log`** live (all stages, all levels).
+2. Every step also **accumulates** structured outcome data into the shared
+   `MigrationContext` through the Diagnostics framework — `context.Logs`,
+   `context.Warnings`, `context.Errors`, and `context.Changes` (see
+   DOMAIN_MODEL.md → MigrationContext).
+3. A **single terminal step**, `GenerateMigrationReport()`, runs last in the
+   Output Pipeline and asks the **Reporter service** to render
+   **`migration_report.md`** from those collectors.
+
+This keeps DIAG-005 and PIPE-006 intact — business steps never touch the
+filesystem; only the Logger and the Reporter service write, and both write only
+into the session bundle.
 
 ---
 
@@ -230,18 +250,53 @@ Overrode agent metadata.
 
 # 9. Reporter
 
-The Reporter generates customer-facing artifacts.
+The Reporter renders the single customer-facing artifact —
+**`migration_report.md`** — from the `MigrationContext` collectors. It is the
+only component (besides the Logger) that writes files.
 
-Reports include:
+`migration_report.md` is one document composed of sections, so the customer has
+a single readable file rather than many:
 
-* Migration Readiness Report
-* Preview Report
-* Migration Report
-* Diagnostics Summary
+* **Summary** — one-pager (mode, duration, components, migrated, warnings, errors, writeback)
+* **Changes** — human-readable per-rule change log (section 9.1)
+* **Warnings** — manual-review items only (section 9.2)
 
-Reports are generated from the MigrationContext.
+The report is mode-aware: it presents the Readiness view in Discover, the
+Preview view in Preview, and the Migration view in Migrate (sections 10–13). The
+engineering `session.log` is produced separately by the Logger (section 6).
 
-Generated report output is written to `debug/reports/`.
+## 9.1 Changes section
+
+The heart of the report: what changed, grouped by Migration Rule.
+
+```
+## Changes
+
+### RULE-001 — Updated Agent Metadata
+Runtime Provider   CA → DA
+Template           CA → DA
+
+### RULE-002 — Replaced EndConversation
+Topic              Employee Leave
+Replacements       1
+
+### RULE-003 — Deprecated Topics
+Trigger            OnActivity
+Topic              Employee Context
+Reason             Unsupported in DA
+```
+
+## 9.2 Warnings section
+
+Manual-review items only.
+
+```
+## Warnings — Manual Review Required
+
+Topic            Employee Context
+Reason           OnActivity trigger unsupported.
+Recommendation   Move logic into OnConversationStart.
+```
 
 ---
 

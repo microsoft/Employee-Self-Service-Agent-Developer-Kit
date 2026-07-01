@@ -28,6 +28,15 @@ anything appears to conflict, the canonical `AGENTS.md` wins.
 - Every implementation originates from an approved `TASK-XXX` in
   `04_EXECUTION/TASKS.md`; resolve its `Consumes`/`References` before coding.
 - One Migration Rule (`RULE-XXX`) maps to exactly one Pipeline Step.
+- The toolkit is a fluent **super-pipeline** of three stage pipelines —
+  Input → Migration → Output — over a shared, typed `MigrationContext`; the
+  Migration Orchestrator is only the composition root (build, configure,
+  execute, return). Pipelines and steps are generic:
+  `Pipeline[TInput, TOutput]`, `PipelineStep[TInput, TOutput]`.
+- Every execution produces one session bundle `output/session-<timestamp>/`
+  with exactly two files: `migration_report.md` (customer) and `session.log`
+  (ESS engineer). Steps accumulate into `MigrationContext` collectors; only the
+  Logger and Reporter service write files.
 - Respect architectural boundaries and dependency direction
   (Orchestration → Pipeline → Modules → Dataverse Client → Dataverse).
 - Determinism is required; never delete customer customizations.
