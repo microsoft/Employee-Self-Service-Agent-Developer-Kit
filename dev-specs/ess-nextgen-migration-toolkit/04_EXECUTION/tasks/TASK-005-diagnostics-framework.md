@@ -28,10 +28,13 @@ The Logger has two responsibilities that define this framework:
 2. **Two channels** — the Logger exposes an **engineer channel**
    (`LogDebug`/`LogInfo`/`LogWarning`/`LogError`) that prints to the CLI as usual
    (and is mirrored to `session.log` by the tee), and a **customer channel**
-   (`LogCustomer`/`LogFancy`) that does **not** touch the CLI or `session.log`
+   (`LogChange`/`LogAdvisory`) that does **not** touch the CLI or `session.log`
    but instead appends structured entries to the report model (the
    `MigrationContext` collectors) that the Reporter later renders into the fancy
-   `migration_report.md`.
+   `migration_report.md`. `LogChange` records a successful transformation
+   (`ChangeEntry` → `context.Changes` → `## Changes`); `LogAdvisory` records a
+   manual-review advisory (`DiagnosticEntry` → `context.Warnings`/`Errors`/`Logs`
+   by `severity` → `## Warnings — Manual Review Required`).
 
 ## Acceptance Criteria
 
@@ -41,7 +44,7 @@ The Logger has two responsibilities that define this framework:
   run (Logger output, incidental library output, and tracebacks alike).
 - [ ] The Logger exposes an **engineer channel** (`LogDebug`/`LogInfo`/… →
   console + `session.log`, honoring log levels) and a **customer channel**
-  (`LogCustomer`/`LogFancy` → report model only, never console/`session.log`).
+  (`LogChange`/`LogAdvisory` → report model only, never console/`session.log`).
 - [ ] A Session Manager tracks per-session diagnostics and owns the
   `output/session-<timestamp>/` bundle folder.
 - [ ] A Reporter renders `migration_report.md` (summary, changes, warnings
