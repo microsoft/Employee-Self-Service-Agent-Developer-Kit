@@ -174,7 +174,7 @@ itself. Instead:
 2. Throughout execution, each step reports through the framework Logger using two
    channels (section 6.2): the **engineer channel** (`LogDebug`/`LogInfo`/…) goes
    to the CLI and is mirrored into `session.log`; the **customer channel**
-   (`LogCustomer`/`LogFancy`) appends structured entries to the report model
+   (`LogChange`/`LogAdvisory`) appends structured entries to the report model
    only.
 3. Every step also **accumulates** structured outcome data into the shared
    `MigrationContext` — `context.Logs`, `context.Warnings`, `context.Errors`, and
@@ -216,7 +216,7 @@ The Logger exposes two semantically distinct channels:
 | Channel            | Method (illustrative) | Console (CLI) | `session.log` | `migration_report.md` |
 | ------------------ | --------------------- | :-----------: | :-----------: | :-------------------: |
 | **Engineer**       | `LogDebug` / `LogInfo` / `LogWarning` / `LogError` | ✅ (via tee) | ✅ | ✗ |
-| **Customer**       | `LogCustomer` / `LogFancy` | ✗ | ✗ | ✅ (rendered) |
+| **Customer**       | `LogChange` / `LogAdvisory` | ✗ | ✗ | ✅ (rendered) |
 
 * **Engineer channel** — ordinary diagnostics. Prints to the CLI as usual; the
   transcript tee (6.1) mirrors it into `session.log`. This is the developer/ESS
@@ -227,6 +227,18 @@ The Logger exposes two semantically distinct channels:
   the fancy `migration_report.md`. Example (Discover mode): recording each
   unsupported component in a readable way so the customer can decide whether to
   proceed with writeback.
+
+  The customer channel has **two intent-revealing methods**, each feeding a
+  distinct report section (do not conflate them):
+
+  | Method        | Report model collector          | `migration_report.md` section        | Records… |
+  | ------------- | ------------------------------- | ------------------------------------ | -------- |
+  | `LogChange`   | `context.Changes` (`ChangeEntry`) | `## Changes`                        | **What the toolkit did** — a successful transformation, keyed by `RULE-xxx` (e.g. Runtime Provider CA → DA). |
+  | `LogAdvisory` | `context.Warnings` / `Errors` / `Logs` (`DiagnosticEntry`, routed by `severity`) | `## Warnings — Manual Review Required` / Errors | **What the customer must act on** — a manual-review advisory with `severity` + `recommendation`. |
+
+  `LogChange` is the changelog; `LogAdvisory` is the action list. Keeping them
+  separate lets the Reporter render Changes and Warnings without re-classifying a
+  single blended stream.
 
 ## 6.3 Report model (intermediate)
 
