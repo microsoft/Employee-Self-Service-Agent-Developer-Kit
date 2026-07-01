@@ -52,22 +52,20 @@ Implementation must never precede specification.
 
 # 2. Task Lifecycle
 
-Every task progresses through the following lifecycle.
+Every task uses **exactly one** of these four canonical statuses (no other
+values are permitted in a task header or the index table below):
+
+| Status    | Meaning                                                            |
+| --------- | ----------------------------------------------------------------- |
+| `TODO`    | Not started; ready to be picked up once its `Consumes` are met.    |
+| `ACTIVE`  | Being implemented right now (a worktree/branch is in flight).      |
+| `BLOCKED` | Cannot proceed until a dependency or decision is resolved.         |
+| `DONE`    | Merged and meets the Definition of Done (section 5).               |
 
 ```text
-TODO
-
-↓
-
-IN PROGRESS
-
-↓
-
-BLOCKED
-
-↓
-
-DONE
+TODO  →  ACTIVE  →  DONE
+             ↕
+          BLOCKED
 ```
 
 Completed tasks shall remain in this document for traceability.
@@ -126,13 +124,13 @@ Instead, it establishes the complete framework, wiring, and developer experience
 | Task                                                     | Title                          | Status | Consumes |
 | -------------------------------------------------------- | ------------------------------ | ------ | -------- |
 | [TASK-001](tasks/TASK-001-repository-scaffold.md)        | Repository Scaffold            | DONE   | —        |
-| [TASK-002](tasks/TASK-002-pipeline-framework.md)         | Pipeline Framework             | TODO   | —        |
+| [TASK-002](tasks/TASK-002-pipeline-framework.md)         | Pipeline Framework             | ACTIVE | —        |
 | [TASK-003](tasks/TASK-003-migration-orchestrator.md)     | Migration Orchestrator         | TODO   | —        |
 | [TASK-004](tasks/TASK-004-dataverse-client.md)           | Dataverse Client               | TODO   | —        |
-| [TASK-005](tasks/TASK-005-diagnostics-framework.md)      | Diagnostics Framework          | TODO   | —        |
+| [TASK-005](tasks/TASK-005-diagnostics-framework.md)      | Diagnostics Framework          | ACTIVE | —        |
 | [TASK-006](tasks/TASK-006-preprocessing-pipeline.md)     | Preprocessing Pipeline         | TODO   | —        |
 | [TASK-007](tasks/TASK-007-postprocessing-pipeline.md)    | Postprocessing Pipeline        | TODO   | —        |
-| [TASK-008](tasks/TASK-008-authentication-token-provider.md) | Authentication Token Provider | IN PROGRESS | —   |
+| [TASK-008](tasks/TASK-008-authentication-token-provider.md) | Authentication Token Provider | ACTIVE | —   |
 | [TASK-009](tasks/TASK-009-end-to-end-framework-validation.md) | End-to-End Framework Validation | TODO | —      |
 
 ---
