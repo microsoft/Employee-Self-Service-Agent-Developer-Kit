@@ -105,7 +105,8 @@ RUNS_PATH = os.path.join(CONFIG_DIR, "flightcheck-runs.json")
 
 NOTICE_TEXT = (
     "ADK collects pseudonymous usage data to improve the product.\n"
-    "To disable telemetry, run: adk telemetry off\n"
+    "To disable telemetry, run: python scripts/adk_telemetry.py off\n"
+    "(or set the environment variable ESS_ADK_TELEMETRY=off)\n"
     "Learn more: https://aka.ms/adk-telemetry\n"
 )
 
