@@ -13,13 +13,13 @@ telemetry emits fire-and-forget events and produces no CheckResult, so it is
 exercised here with mocks only — mirroring ``test_telemetry.py``.
 
 What we lock down:
-  * identity hashing: determinism, per-tenant scoping, empty-oid => "".
+  * identity: random ``instance_id`` dedup + raw ``tenant_id``, no developer id.
   * common-dimensions shape + Common Schema 4.0 envelope.
   * error-field scrubbing/attachment (no paths / URLs / newlines leak).
   * consent: env override + ``~/.adk/config`` opt-out, one-time notice.
   * session: persists across calls, rolls after the 30-min window.
   * run-index counter: per-agent within a session.
-  * ikey resolution (default dev, env override, raw-key override).
+  * ikey resolution (shared default env, env override, raw-key override).
   * fail-open: a raising POST never propagates; the event is buffered, then
     a later successful POST flushes the buffer.
 """
@@ -212,7 +212,7 @@ def test_run_index_increments_per_agent_within_session():
 
 
 # --- ikey resolution ------------------------------------------------------
-def test_resolve_ikey_default_dev():
+def test_resolve_ikey_default_matches_shared_default():
     ikey, env = adk.resolve_ikey()
     assert env == _fc.DEFAULT_ENV
     assert ikey == _fc.ARIA_IKEYS[_fc.DEFAULT_ENV]
@@ -227,7 +227,8 @@ def test_resolve_ikey_env_and_raw_override(monkeypatch):
 
 
 # --- emit happy path + fail-open + buffering ------------------------------
-def test_emit_happy_path_posts_envelope(captured_post):
+def test_emit_happy_path_posts_envelope(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
     res = adk.emit_capability_use("evaluations", block=True)
     assert res["sent"] is True
     assert len(captured_post) == 1
@@ -286,3 +287,20 @@ def test_buffer_flushes_on_next_successful_emit(monkeypatch):
     # The buffered event was replayed (its own POST) plus the live event.
     flushed_names = [e["name"] for envs in posted for e in envs]
     assert "adk.capability.use" in flushed_names
+
+
+def test_buffer_oversize_drops_oldest_and_accepts_newest(monkeypatch):
+    # Shrink the byte cap so a handful of events exceed it. The buffer must drop
+    # the OLDEST events (never grow unbounded) while still accepting the newest.
+    import os
+
+    monkeypatch.setattr(adk, "BUFFER_MAX_BYTES", 200)
+    for i in range(20):
+        adk._buffer_append([adk.build_event(f"adk.evt.{i}", {"n": i}, "o:tok")])
+
+    size = os.path.getsize(adk.BUFFER_PATH)
+    assert size <= 300  # bounded near the cap, not accumulating all 20 events
+    with open(adk.BUFFER_PATH, "r", encoding="utf-8") as f:
+        names = [json.loads(ln)["name"] for ln in f.read().splitlines() if ln.strip()]
+    assert "adk.evt.19" in names      # newest kept
+    assert "adk.evt.0" not in names   # oldest dropped

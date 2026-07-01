@@ -23,7 +23,8 @@ Design rules (all deliberate — read before changing):
   test runs don't pollute the production "success rate" dashboard. The
   active environment is selectable (``ESS_FLIGHTCHECK_ARIA_ENV``); every
   event also carries an ``env`` dimension as defense-in-depth so dashboards
-  can hard-filter ``env == 'prod'``. Default is **dev**.
+  can hard-filter ``env == 'prod'``. Default is **prod** (real maker runs go
+  to prod); set ``ESS_FLIGHTCHECK_ARIA_ENV=dev`` for test / seeding runs.
 
 * **Privacy: identifiers + enums only, never free text.** Per the approved
   Data Profile (Data Scout, privacy review COMPLETED) for this feature,
@@ -75,9 +76,10 @@ ARIA_IKEYS = {
     "dev": "08e397b2c6c243eeaeb341e111c36167-294d89f6-c806-4c65-adf3-dea3bb44f949-7206",
     "prod": "311254257bbc417e860c76781d4863c8-8cff75a4-47b7-4675-9646-45a4ca9bc138-7062",
 }
-# Emit everything to dev for now; flip the default (or set
-# ESS_FLIGHTCHECK_ARIA_ENV=prod) when prod metrics are wanted.
-DEFAULT_ENV = "dev"
+# Emit real maker runs to prod. Set ESS_FLIGHTCHECK_ARIA_ENV=dev (or
+# ESS_ADK_ARIA_ENV=dev) for local testing / dashboard seeding so those runs
+# don't pollute the production "success rate" dashboard.
+DEFAULT_ENV = "prod"
 
 COLLECTOR_URL = (
     "https://mobile.events.data.microsoft.com/OneCollector/1.0/"
@@ -101,18 +103,37 @@ def _env_disabled() -> bool:
     return val in ("0", "off", "false", "no", "disabled")
 
 
+def _consent_disabled() -> bool:
+    """True if the maker opted out via the unified ``adk telemetry off`` control.
+
+    The consent notice we print tells makers to run ``adk telemetry off`` to
+    disable telemetry. That writes ``~/.adk/config`` (and/or sets
+    ``ESS_ADK_TELEMETRY``), which the ``adk.*`` emitter honors. Consult the same
+    signal here so that single documented opt-out ALSO silences these legacy
+    ``ESSMakerKit.FlightCheck.*`` events — otherwise a maker who follows the
+    instruction is still tracked. Best-effort: if ``adk_telemetry`` can't be
+    imported, fall back to the FlightCheck-specific env var only.
+    """
+    try:
+        import adk_telemetry  # sibling module (scripts/ is on sys.path)
+
+        return not adk_telemetry.telemetry_enabled()
+    except Exception:  # noqa: BLE001 — never let opt-out resolution raise
+        return False
+
+
 def resolve_ikey() -> tuple[str | None, str]:
     """Resolve the active (iKey, env_label).
 
     Precedence:
-      1. ``ESS_FLIGHTCHECK_TELEMETRY`` off  -> (None, env) (disabled)
+      1. ``ESS_FLIGHTCHECK_TELEMETRY`` off / ``adk telemetry off`` -> (None, env)
       2. ``ESS_FLIGHTCHECK_ARIA_IKEY``      -> explicit key override
-      3. ``ESS_FLIGHTCHECK_ARIA_ENV``       -> 'dev' | 'prod' (default dev)
+      3. ``ESS_FLIGHTCHECK_ARIA_ENV``       -> 'dev' | 'prod' (default prod)
     """
     env = os.environ.get("ESS_FLIGHTCHECK_ARIA_ENV", DEFAULT_ENV).strip().lower()
     if env not in ARIA_IKEYS:
         env = DEFAULT_ENV
-    if _env_disabled():
+    if _env_disabled() or _consent_disabled():
         return None, env
     override = os.environ.get("ESS_FLIGHTCHECK_ARIA_IKEY", "").strip()
     if override:

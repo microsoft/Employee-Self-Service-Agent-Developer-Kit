@@ -123,6 +123,9 @@ _IDENTITY: dict[str, str] = {"instance_id": "", "tenant_id": ""}
 # Track dispatched daemon threads so flush() can join them (tests / session end).
 _THREADS: list[threading.Thread] = []
 
+# Serializes read-modify-write of the on-disk buffer across async emit threads.
+_BUFFER_LOCK = threading.Lock()
+
 
 # --- Identity model (spec) ------------------------------------------------
 def set_identity(tenant_id: str = "", instance_id: str | None = None) -> dict[str, str]:
@@ -339,9 +342,10 @@ def build_event(event_name: str, data: dict[str, Any], ikey_envelope: str) -> di
 def resolve_ikey() -> tuple[str, str]:
     """Resolve ``(full_ikey, env)`` for ADK general telemetry.
 
-    Defaults to the same dev project as FlightCheck so all ADK telemetry
-    lands in one Aria tenant. Override env via ``ESS_ADK_ARIA_ENV`` or the
-    raw key via ``ESS_ADK_ARIA_IKEY``.
+    Defaults to the same env as FlightCheck (``_fc.DEFAULT_ENV`` = prod) so all
+    ADK telemetry lands in one Aria tenant alongside FlightCheck. Override env
+    via ``ESS_ADK_ARIA_ENV`` (e.g. ``dev`` for seeding) or the raw key via
+    ``ESS_ADK_ARIA_IKEY``.
     """
     env = os.environ.get("ESS_ADK_ARIA_ENV", _fc.DEFAULT_ENV).strip().lower()
     if env not in _fc.ARIA_IKEYS:
@@ -351,37 +355,42 @@ def resolve_ikey() -> tuple[str, str]:
 
 
 def _buffer_append(envelopes: list[dict[str, Any]]) -> None:
-    try:
-        os.makedirs(CONFIG_DIR, exist_ok=True)
-        existing: list[str] = []
-        if os.path.exists(BUFFER_PATH):
-            if os.path.getsize(BUFFER_PATH) > BUFFER_MAX_BYTES:
-                return  # buffer full — drop newest rather than grow unbounded
-            with open(BUFFER_PATH, "r", encoding="utf-8") as f:
-                existing = [ln for ln in f.read().splitlines() if ln.strip()]
-        new_lines = [json.dumps(e, separators=(",", ":")) for e in envelopes]
-        combined = (existing + new_lines)[-BUFFER_MAX_EVENTS:]
-        with open(BUFFER_PATH, "w", encoding="utf-8") as f:
-            f.write("\n".join(combined) + "\n")
-    except OSError:
-        pass
+    with _BUFFER_LOCK:
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            existing: list[str] = []
+            if os.path.exists(BUFFER_PATH):
+                with open(BUFFER_PATH, "r", encoding="utf-8") as f:
+                    existing = [ln for ln in f.read().splitlines() if ln.strip()]
+            new_lines = [json.dumps(e, separators=(",", ":")) for e in envelopes]
+            combined = (existing + new_lines)[-BUFFER_MAX_EVENTS:]
+            # Byte cap: drop oldest events until under the size limit so a
+            # persistently-failing flush can't grow the file without bound
+            # (always accept the newest events rather than the earlier ones).
+            while len(combined) > 1 and len("\n".join(combined)) + 1 > BUFFER_MAX_BYTES:
+                combined.pop(0)
+            with open(BUFFER_PATH, "w", encoding="utf-8") as f:
+                f.write("\n".join(combined) + "\n")
+        except OSError:
+            pass
 
 
 def _buffer_flush(ikey: str) -> None:
-    if not os.path.exists(BUFFER_PATH):
-        return
-    try:
-        with open(BUFFER_PATH, "r", encoding="utf-8") as f:
-            lines = [ln for ln in f.read().splitlines() if ln.strip()]
-        if not lines:
+    with _BUFFER_LOCK:
+        if not os.path.exists(BUFFER_PATH):
             return
-        envs = [json.loads(ln) for ln in lines]
-        if _fc._post(ikey, envs) in (200, 204):
-            os.remove(BUFFER_PATH)
-    except (OSError, ValueError):
-        pass
-    except Exception:  # noqa: BLE001 — flush is best-effort, never raises
-        pass
+        try:
+            with open(BUFFER_PATH, "r", encoding="utf-8") as f:
+                lines = [ln for ln in f.read().splitlines() if ln.strip()]
+            if not lines:
+                return
+            envs = [json.loads(ln) for ln in lines]
+            if _fc._post(ikey, envs) in (200, 204):
+                os.remove(BUFFER_PATH)
+        except (OSError, ValueError):
+            pass
+        except Exception:  # noqa: BLE001 — flush is best-effort, never raises
+            pass
 
 
 def _emit_sync(event_name: str, data: dict[str, Any]) -> dict[str, Any]:
@@ -417,6 +426,7 @@ def _emit(event_name: str, data: dict[str, Any], *, block: bool = False) -> dict
         return _emit_sync(event_name, data)
     t = threading.Thread(target=_emit_sync, args=(event_name, data), daemon=True)
     t.start()
+    _THREADS[:] = [x for x in _THREADS if x.is_alive()]
     _THREADS.append(t)
     return {"sent": None, "async": True, "event": event_name}
 
@@ -428,6 +438,7 @@ def flush(timeout: float = 5.0) -> None:
             t.join(timeout)
         except RuntimeError:
             pass
+    _THREADS[:] = [t for t in _THREADS if t.is_alive()]
 
 
 # --- Public event emitters (spec Event Catalog) ---------------------------

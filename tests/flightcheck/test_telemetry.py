@@ -74,6 +74,10 @@ def _clean_env(monkeypatch):
         "ESS_ADK_VERSION",
     ):
         monkeypatch.delenv(var, raising=False)
+    # resolve_ikey() now also honors the unified `adk telemetry off` opt-out
+    # (adk_telemetry.telemetry_enabled). Pin it ON so these tests don't depend
+    # on the developer's real ~/.adk/config; the opt-out test overrides this.
+    monkeypatch.setenv("ESS_ADK_TELEMETRY", "on")
 
 
 # --- envelope iKey mapping ------------------------------------------------
@@ -163,10 +167,10 @@ def test_serialize_ndjson_is_newline_delimited_not_array():
 
 
 # --- env / key resolution -------------------------------------------------
-def test_resolve_ikey_defaults_to_dev():
+def test_resolve_ikey_defaults_to_prod():
     ikey, env = telemetry.resolve_ikey()
-    assert env == "dev"
-    assert ikey == telemetry.ARIA_IKEYS["dev"]
+    assert env == "prod"
+    assert ikey == telemetry.ARIA_IKEYS["prod"]
 
 
 def test_resolve_ikey_prod(monkeypatch):
@@ -186,7 +190,16 @@ def test_resolve_ikey_disabled(monkeypatch):
     monkeypatch.setenv("ESS_FLIGHTCHECK_TELEMETRY", "off")
     ikey, env = telemetry.resolve_ikey()
     assert ikey is None
-    assert env == "dev"
+    assert env == "prod"
+
+
+def test_resolve_ikey_disabled_via_unified_adk_optout(monkeypatch):
+    # `adk telemetry off` (ESS_ADK_TELEMETRY=off / ~/.adk/config) must silence
+    # the legacy FlightCheck emitter too, matching the printed consent notice.
+    monkeypatch.setenv("ESS_ADK_TELEMETRY", "off")
+    ikey, env = telemetry.resolve_ikey()
+    assert ikey is None
+    assert env == "prod"
 
 
 # --- instance_id persistence ----------------------------------------------
@@ -202,6 +215,7 @@ def test_instance_id_generated_once_and_stable(tmp_path):
 
 # --- emit: happy path + fail-open -----------------------------------------
 def test_emit_posts_full_key_in_header_and_succeeds(monkeypatch, tmp_path):
+    monkeypatch.setenv("ESS_FLIGHTCHECK_ARIA_ENV", "dev")
     captured = {}
 
     class FakeResp:
