@@ -107,14 +107,14 @@ def test_customer_channel_updates_report_model_only(
         clock=lambda: FIXED_TIME,
     )
     try:
-        logger.LogCustomer("Customer note", category="Summary")
-        logger.LogCustomer(
+        logger.LogAdvisory("Customer note", category="Summary")
+        logger.LogAdvisory(
             "Manual review needed",
             severity="WARNING",
             component="Employee Context",
             recommendation="Move logic into OnConversationStart.",
         )
-        logger.LogFancy(
+        logger.LogChange(
             "Runtime Provider CA → DA",
             rule_id="RULE-001",
             title="Updated Agent Metadata",
