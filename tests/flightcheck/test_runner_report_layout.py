@@ -475,6 +475,64 @@ def test_action_panel_all_clear_when_no_blockers_or_warnings(tmp_path):
     assert "Nothing needs action" in html
 
 
+def test_action_pill_carries_priority_class(tmp_path):
+    """Each blocker pill carries a priority-derived class so the panel
+    can colour Critical/High/Medium/Low distinctly (Critical=red,
+    High=amber, Medium=neutral, Low=na) instead of one flat colour."""
+    from flightcheck.runner import save_results
+    result = _build_run_with([
+        _make_result("CRIT-1", "Failed", priority="Critical"),
+        _make_result("HIGH-1", "Failed", priority="High"),
+        _make_result("MED-1", "Failed", priority="Medium"),
+        _make_result("LOW-1", "Failed", priority="Low"),
+    ])
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert 'class="ap-pri critical"' in html
+    assert 'class="ap-pri high"' in html
+    assert 'class="ap-pri medium"' in html
+    assert 'class="ap-pri low"' in html
+
+
+def test_synopsis_collapses_per_agent_categories(tmp_path):
+    """Per-agent categories (e.g. "Topics (Agent A)") collapse to a
+    single base tile ("Topics") in the readiness synopsis, coloured by
+    the worst status across agents. The per-category detail anchors stay
+    intact so the tile still deep-links into a real section."""
+    from flightcheck.runner import _render_synopsis
+    result = _build_run_with([_make_result("P-1", "Passed")])
+    categories = [
+        ("Topics (Agent A)", [_make_result("T-A", "Passed")]),
+        ("Topics (Agent B)", [_make_result("T-B", "Failed")]),
+        ("External Systems", [_make_result("E-1", "Passed")]),
+    ]
+
+    html = _render_synopsis(result, categories)
+
+    # Two base tiles, not three per-agent tiles.
+    assert html.count('class="syn-tile') == 2
+    assert ">Topics<" in html
+    assert ">External Systems<" in html
+    assert "Agent A" not in html and "Agent B" not in html
+    # Collapsed tile links to the first matching category's section and is
+    # coloured red because one agent failed.
+    assert 'href="#cat-topics-agent-a"' in html
+    assert 'class="syn-tile red"' in html
+
+
+def test_base_category_strips_agent_suffix():
+    """_base_category strips a trailing "(...)" agent suffix but leaves
+    suffix-free categories untouched."""
+    from flightcheck.runner import _base_category
+
+    assert _base_category("Topics (Contoso HR)") == "Topics"
+    assert _base_category("External Systems") == "External Systems"
+    assert _base_category("Cloud Policies / Telemetry") == (
+        "Cloud Policies / Telemetry"
+    )
+
+
 def test_action_rows_sorted_critical_before_high_in_html(tmp_path):
     """Within a category section, a Critical-priority row must appear
     BEFORE a High-priority row in the rendered cards — even if

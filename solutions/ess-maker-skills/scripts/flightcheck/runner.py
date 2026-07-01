@@ -612,6 +612,10 @@ _REPORT_CSS = """
   .ap-pri{flex:none;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;
     padding:3px 9px;border-radius:999px;border:1px solid;margin-top:1px;white-space:nowrap;
     color:var(--fail);background:var(--fail-bg);border-color:var(--fail-line)}
+  .ap-pri.critical{color:var(--fail);background:var(--fail-bg);border-color:var(--fail-line)}
+  .ap-pri.high{color:var(--warn);background:var(--warn-bg);border-color:var(--warn-line)}
+  .ap-pri.medium{color:var(--manual);background:var(--manual-bg);border-color:var(--manual-line)}
+  .ap-pri.low{color:var(--na);background:var(--na-bg);border-color:var(--na-line)}
   .ap-title{font-weight:650;font-size:14px}
   .ap-title .id{font-family:ui-monospace,monospace;font-size:12px;color:var(--muted);font-weight:600;margin-inline-start:6px}
   .ap-meta{color:var(--muted);font-size:12.5px;margin-top:3px}
@@ -751,6 +755,22 @@ def _slug(text: str) -> str:
     return s or "item"
 
 
+def _base_category(category: str) -> str:
+    """Collapse a per-agent category to its base name for the synopsis.
+
+    FlightCheck scans every agent under ``workspace/agents/``, so many
+    categories arrive suffixed with the agent name, e.g.
+    ``"Topics (Contoso HR)"``. The readiness synopsis rolls these up to a
+    single tile per base name (``"Topics"``) so the at-a-glance grid stays
+    compact regardless of how many agents were scanned. Categories with no
+    trailing ``"(...)"`` suffix (shared infra / prerequisite checks) pass
+    through unchanged. The per-category detail sections below are NOT
+    collapsed — only the synopsis overview is.
+    """
+    import re
+    return re.sub(r"\s*\([^()]*\)\s*$", "", category).strip() or category
+
+
 def _group_by_category(r: RunResult) -> list[tuple[str, list[CheckResult]]]:
     """Group results by category, ordered per RunResult.categories.
 
@@ -884,13 +904,14 @@ def _render_action_panel(dict_buckets: dict[str, list[CheckResult]]) -> str:
         for b in blockers:
             owner = _html_escape(", ".join(b.roles)) if b.roles else "\u2014"
             anchor = f"chk-{_slug(b.checkpoint_id)}"
+            prio_cls = _html_escape((b.priority or "").lower())
             id_html = (
                 f'<span class="id">{_html_escape(b.checkpoint_id)}</span>'
                 if b.checkpoint_id else ""
             )
             parts.append(
                 '      <li class="ap-item">'
-                f'<span class="ap-pri">{_html_escape(b.priority)}</span>'
+                f'<span class="ap-pri {prio_cls}">{_html_escape(b.priority)}</span>'
                 f'<div><div class="ap-title">{_html_escape(b.description)}'
                 f'{id_html}</div>'
                 f'<div class="ap-meta">Owner <b>{owner}</b> \u00b7 '
@@ -929,7 +950,14 @@ def _render_synopsis(
     r: RunResult,
     categories: list[tuple[str, list[CheckResult]]],
 ) -> str:
-    """Readiness-at-a-glance: per-status totals + a tile per category."""
+    """Readiness-at-a-glance: per-status totals + a tile per category.
+
+    Per-agent categories (e.g. ``"Topics (Agent A)"``,
+    ``"Topics (Agent B)"``) are collapsed to a single base tile
+    (``"Topics"``) so the grid stays compact when several agents are
+    scanned. A base tile is coloured by the worst status across all its
+    agents and links to the first matching category's detail section.
+    """
     stats = [
         ("pass", "green", r.passed, "Passed"),
         ("fail", "red", r.failed, "Failed"),
@@ -947,9 +975,23 @@ def _render_synopsis(
         for cls, dot, n, label in stats
     )
 
+    # Collapse per-agent categories into one group per base name. Each
+    # group keeps the first matching category's anchor and accumulates the
+    # results of every agent so the tile colour reflects the worst status
+    # across all of them.
+    groups: list[list] = []  # [base_name, combined_results, first_anchor_cat]
+    base_index: dict[str, int] = {}
+    for category, results in categories:
+        base = _base_category(category)
+        if base in base_index:
+            groups[base_index[base]][1].extend(results)
+        else:
+            base_index[base] = len(groups)
+            groups.append([base, list(results), category])
+
     tiles = []
     fix_count = review_count = 0
-    for index, (category, results) in enumerate(categories, start=1):
+    for index, (base, results, anchor_cat) in enumerate(groups, start=1):
         color = _category_color(results)
         if color == "red":
             fix_count += 1
@@ -959,10 +1001,10 @@ def _render_synopsis(
         role_txt = " + ".join(roles) if roles else "No action"
         role_cls = " act" if roles else ""
         tiles.append(
-            f'      <a class="syn-tile {color}" href="#cat-{_slug(category)}">'
+            f'      <a class="syn-tile {color}" href="#cat-{_slug(anchor_cat)}">'
             f'<div class="syn-top"><i class="dot {color}"></i>'
             f'<span class="syn-no">Stage {index}</span></div>'
-            f'<div class="syn-name">{_html_escape(category)}</div>'
+            f'<div class="syn-name">{_html_escape(base)}</div>'
             f'<div class="syn-role{role_cls}">{_html_escape(role_txt)}</div>'
             '</a>\n'
         )
