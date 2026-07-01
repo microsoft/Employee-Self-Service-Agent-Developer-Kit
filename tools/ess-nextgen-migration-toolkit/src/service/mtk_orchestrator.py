@@ -4,7 +4,7 @@ This is the single entry point for the toolkit and the top of the dependency
 graph (the Application / Orchestration layer). It composes and drives the lower
 layers — the Pipeline Engine (``core.pipeline``), the pipeline-stage business
 logic (``modules`` — preprocessing, migration, postprocessing), and the
-Dataverse Client (``core.outbound``). For now it is a hello-world placeholder;
+Dataverse Client (``core.outbound``). For now it is a silent placeholder;
 orchestration logic and any command surface are added by later tasks.
 
 Run it via the ``mtk`` dispatcher (``./mtk.sh start``), which provisions the
@@ -16,8 +16,6 @@ from __future__ import annotations
 
 def main() -> None:
     """Toolkit orchestration entry point. Placeholder until wired up."""
-    # User-facing output (not diagnostics); print is the intended channel.
-    print("Hello from the ESS NextGen Migration Toolkit orchestrator.")  # noqa: T201
 
 
 if __name__ == "__main__":
