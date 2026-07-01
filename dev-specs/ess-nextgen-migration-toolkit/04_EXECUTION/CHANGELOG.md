@@ -162,6 +162,28 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
   layer/dependency model, repository structure, invariants,
   dependency-management workflow, or naming conventions must update the mirror in
   the same change.
+- **TASK-008 — Authentication Token Provider (new foundation task).** Added a new
+  Workstream 0 task defining the toolkit's token *producer* — the single
+  primitive that acquires and refreshes Dataverse access tokens — reusing the
+  vacated `TASK-008` slot. The specifications keep every downstream layer as a
+  token *consumer*: `AuthenticationService` only accepts a bearer token and never
+  stores credentials (`02_ARCHITECTURE/SERVICES.md` section 13), and
+  `AuthenticationClient` never acquires, refreshes, or persists tokens
+  (`02_ARCHITECTURE/DATAVERSE_CLIENT.md` section 5, Dataverse Client-005), yet
+  nothing produced the token they consume. The provider fills that gap at
+  `src/core/auth/`, performs **proactive refresh** (`get_token()` returns a
+  currently-valid token on every read and writeback so hour-plus sessions never
+  issue an expired token), and — diverging from the `solutions/ess-maker-skills`
+  reference pattern — keeps its MSAL cache **in memory only**, never persisting
+  tokens, per `00_META/INVARIANTS.md` DIAG-003. Added the task file
+  `TASK-008-authentication-token-provider.md` and its `TASKS.md` index row.
+- **`TASK-004` consumes the Token Provider; Dataverse module renamed.** Updated
+  `TASK-004` so authentication is provided externally by `TASK-008` (the client
+  accepts a fresh bearer token per request and never acquires/refreshes/persists
+  it), and renamed the Dataverse module `dataverse_api.py` → `dataverse_client.py`
+  across the stub (`git mv`), `03_ENGINEERING/REPOSITORY_STRUCTURE.md` (tree +
+  section 5 + section 12; also added the `core/auth/` package to the tree),
+  `03_ENGINEERING/IMPLEMENTATION_GUIDE.md`, and the toolkit `README.md`.
 
 ### Changed
 
