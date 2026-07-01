@@ -29,9 +29,19 @@ anything appears to conflict, the canonical `AGENTS.md` wins.
   `04_EXECUTION/TASKS.md`; resolve its `Consumes`/`References` before coding.
 - One Migration Rule (`RULE-XXX`) maps to exactly one Pipeline Step.
 - Respect architectural boundaries and dependency direction
-  (UI → Core → Migration → Services → SDK → Dataverse).
+  (Orchestration → Pipeline → Modules → Dataverse Client → Dataverse).
 - Determinism is required; never delete customer customizations.
 - Keep dependencies pinned and reproducible (`uv.lock` is the source of truth;
-  update `pyproject.toml` + `uv.lock` + the `requirements*.txt` exports together).
+  update `pyproject.toml` and `uv.lock` together).
 
 When in doubt, improve the specification before changing the implementation.
+
+## Keep this file in sync
+
+This file is a **summary mirror** of the canonical specifications, not a source
+of truth. Whenever a dev-spec or code change alters what it summarizes — the
+layer/dependency model, repository structure, invariants, dependency-management
+workflow, or naming conventions — update this file in the same change so it
+never goes stale. If it ever conflicts with
+`dev-specs/ess-nextgen-migration-toolkit/AGENTS.md` or the specs it points to,
+the canonical specs win and this file must be corrected.
