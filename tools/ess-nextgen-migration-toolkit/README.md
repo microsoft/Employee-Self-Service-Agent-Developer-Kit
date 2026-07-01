@@ -23,7 +23,7 @@ src/
         orchestrator/
         logging/
         models/      Canonical domain models
-        outbound/    Dataverse client (dataverse_api.py)
+        outbound/    Dataverse client (dataverse_client.py)
     service/         Reusable application capabilities
         utils/       Generic helpers
         modules/
