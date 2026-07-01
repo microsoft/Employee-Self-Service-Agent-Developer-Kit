@@ -248,16 +248,13 @@ print()
 
 is prohibited.
 
-Execution logs must be written to:
+Execution logs and the customer-facing report are written to the per-execution
+session bundle:
 
 ```
-debug/logs/
-```
-
-Migration reports must be written to:
-
-```
-debug/reports/
+output/session-YYYY-MM-DD_HH-MM-SS/
+    migration_report.md
+    session.log
 ```
 
 ---

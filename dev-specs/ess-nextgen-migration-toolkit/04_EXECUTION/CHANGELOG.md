@@ -12,12 +12,44 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 
 ## [Unreleased]
 
+- **Customer-channel method rename (clarity).** Renamed the two customer-channel
+  Logger methods to be intent-revealing: `LogFancy` → **`LogChange`** (records a
+  successful transformation → `context.Changes` → `## Changes`) and
+  `LogCustomer` → **`LogAdvisory`** (records a manual-review advisory →
+  `context.Warnings`/`Errors`/`Logs` by `severity` → `## Warnings`). Engineer
+  channel (`LogDebug`/`LogInfo`/`LogWarning`/`LogError`) unchanged. Updated
+  `03_ENGINEERING/DIAGNOSTICS.md` (section 6.2 + mapping table) and TASK-005.
+- **Pipeline framework redesign (super-pipeline + typed stages).** Reworked
+  `02_ARCHITECTURE/PIPELINES.md` to v2.0: the toolkit is now a fluent
+  **super-pipeline** of three stage pipelines — **Input → Migration → Output** —
+  over a shared, typed `MigrationContext`. The framework is generic
+  (`Pipeline[TInput, TOutput]`, `PipelineStep[TInput, TOutput]`) with a
+  type-threading Builder (mapping the C# `KeyedComputeUnitBase` /
+  `HeterogenousPipelineStepComputeUnitBase<TIn,TOut>` reference; C# runtime
+  concerns — Autofac keyed registration, epoch versioning, per-step
+  Equals/GetHashCode — intentionally not ported). The **Migration Orchestrator
+  is only the composition root**. Added `PIPE-008/009/010` (PIPELINES) and
+  `PIPE-007` (INVARIANTS). Added the keyed `ComponentSet` (ComponentType →
+  Component[]) to `MigrationContext`. Updated TASK-002/003/006/007.
+- **Session bundle diagnostics (two-file UX).** Reworked
+  `03_ENGINEERING/DIAGNOSTICS.md`: every execution produces exactly one
+  timestamped **session bundle** `output/session-<timestamp>/` with two files —
+  `migration_report.md` (customer-facing; summary + changes + warnings sections)
+  and `session.log` (ESS-engineer diagnostics). Steps accumulate into
+  `MigrationContext` collectors (`Logs`, `Warnings`, `Errors`, `Changes`); a
+  terminal `GenerateMigrationReport()` step renders the report via the Reporter
+  service (no direct file I/O in steps). Added `DIAG-004`.
+- **`debug/` → `output/` rename.** Replaced the `debug/logs` + `debug/reports`
+  split with the single `output/session-<timestamp>/` bundle across specs
+  (REPOSITORY_STRUCTURE, IMPLEMENTATION_GUIDE, TESTING, AGENTS, TASK-001/005/007)
+  and the physical scaffold (`tools/…/output/.gitkeep`, `.gitignore`, README,
+  toolkit `AGENTS.md`). Updated the instructions mirror.
 - **TASK-001 — Repository Scaffold.** Created the frozen repository structure
   under `tools/ess-nextgen-migration-toolkit/` per
   `dev-specs/ess-nextgen-migration-toolkit/03_ENGINEERING/REPOSITORY_STRUCTURE.md`
   section 2: `src/` layout (`mtk.py`, constants, core with pipeline,
   orchestrator, logging, models, and outbound; service with utils and modules
-  for preprocessing, migration, and postprocessing; debug with logs and reports),
+  for preprocessing, migration, and postprocessing; output for session bundles),
   `tests/` layout (unit, integration, golden, e2e), `scripts/`, plus
   `pyproject.toml`, `.pre-commit-config.yaml`, `.gitignore`, and `README.md`.
   No business logic introduced.

@@ -1,7 +1,7 @@
 # PIPELINES.md
 
 # ESS NextGen Migration Toolkit — Pipeline Framework Specification
-**Status:** Draft v1.0
+**Status:** Draft v2.0
 **Owner:** Anil Kumar Adepu
 
 > **Purpose**
@@ -10,9 +10,57 @@
 >
 > The Pipeline Framework provides a deterministic, extensible execution engine for migration workflows.
 >
-> Business transformations are implemented as independent Pipeline Steps that are composed into executable Pipelines.
+> Business transformations are implemented as independent, strongly-typed Pipeline Steps that are composed into executable Pipelines.
 >
 > The framework itself is completely independent of ESS-specific migration logic.
+
+> **The toolkit is a super-pipeline (v2.0)**
+>
+> The product itself *is* a single deterministic, fluent super-pipeline composed
+> of three independently-extensible **stage pipelines**, each responsible for a
+> single concern:
+>
+> ```
+> Input Pipeline      (src/modules/preprocessing/)
+>       ↓
+> Migration Pipeline  (src/modules/migration/)
+>       ↓
+> Output Pipeline     (src/modules/postprocessing/)
+> ```
+>
+> The composition is expressed fluently:
+>
+> ```python
+> EssMigrationToolkit()
+>     .input(InputPipeline().use(...).use(...))
+>     .migrate(MigrationPipeline().use(...).use(...))
+>     .output(OutputPipeline().use(...).use(...))
+> ```
+>
+> **Each stage receives the output of the previous stage and operates over the
+> shared `MigrationContext`.** The Input Pipeline builds and enriches the
+> context (including the homogeneous keyed `ComponentSet` of customer-owned
+> components); the Migration Pipeline applies deterministic business
+> transformations to it; the Output Pipeline validates, persists, and reports on
+> it.
+>
+> **The Migration Orchestrator is only the composition root.** It builds the
+> super-pipeline, configures the execution mode (Discover / Preview / Migrate),
+> executes it, and returns the resulting reports and diagnostics. Orchestration
+> concerns are kept strictly separate from pipeline behaviour — the orchestrator
+> is *not* the primary abstraction; the super-pipeline is.
+>
+> **Typed framework foundation.** The reusable framework is generic —
+> `Pipeline[TInput, TOutput]` and `PipelineStep[TInput, TOutput]` — so the
+> Builder can type-thread steps and support type-changing steps where genuinely
+> needed. The three ESS stage pipelines instantiate this foundation over the
+> shared `MigrationContext` (`Pipeline[MigrationContext, MigrationContext]`),
+> which threads through the whole super-pipeline. (The generic `TInput, TOutput`
+> signature is the analogue of the C# `HeterogenousPipelineStepComputeUnitBase
+> <TInput, TOutput>`; a stage pipeline is the analogue of
+> `KeyedComputeUnitBase<...>`. C# runtime concerns — Autofac keyed registration,
+> `floorEpoch`/`currentEpoch` versioning, per-step `Equals`/`GetHashCode` — are
+> intentionally out of scope and not ported.)
 
 ---
 
@@ -81,6 +129,42 @@ Execution Mode selection belongs to Pipeline Steps, not the Pipeline Engine.
 Pipeline execution is fail-fast.
 
 A failed step terminates the pipeline unless explicitly configured otherwise.
+
+---
+
+## PIPE-008
+
+Pipelines and Pipeline Steps are strongly typed.
+
+The framework foundation is generic — `Pipeline[TInput, TOutput]` and
+`PipelineStep[TInput, TOutput]`. The Pipeline Builder type-threads adjacent
+steps so that the output type of one step is the input type of the next; an
+incompatible composition is a construction-time error, not a runtime error. The
+three ESS stage pipelines instantiate this foundation over the shared
+`MigrationContext`.
+
+---
+
+## PIPE-009
+
+A stage pipeline threads the shared `MigrationContext`.
+
+Within a stage, each step receives the `MigrationContext` produced by the prior
+step, enriches it, and passes it on. A step may Read, Enrich, or Validate the
+context; a step may never replace the context with an unrelated type nor smuggle
+state outside it. The context is the only object shared between steps.
+
+---
+
+## PIPE-010
+
+The toolkit is a super-pipeline of three stages.
+
+Migration executes as **Input → Migration → Output**, each a stage pipeline over
+the shared `MigrationContext`. The Migration Orchestrator is only the
+composition root: it builds the super-pipeline, configures the execution mode,
+executes it, and returns reports and diagnostics. A stage never reaches into
+another stage's steps.
 
 ---
 
@@ -183,35 +267,85 @@ Construct executable pipelines.
 
 - Register Pipeline Steps
 - Configure execution order
+- Type-thread adjacent steps (`step[n].output == step[n+1].input`)
 - Validate pipeline configuration
 
 ---
 
 ## Fluent API
 
+Each stage pipeline is built fluently over the shared `MigrationContext`. The
+generic Builder (`Pipeline.builder(name)` → `Pipeline[TInput, TOutput]`)
+type-threads every `.use(step)`; the ESS stages instantiate it as
+`Pipeline[MigrationContext, MigrationContext]`, so each step reads the context
+produced by the prior step and returns the enriched context.
+
 ```python
-pipeline = (
-    Pipeline.builder("Migration")
-
-        .use(DiscoverComponents())
-
-        .use(AnalyzeOwnership())
-
-        .use(LoadComponents())
-
-        .use(OverrideAgentMetadataStep())
-
-        .use(ReplaceEndConversationStep())
-
-        .use(ValidateMigration())
-
-        .use(Writeback())
-
-        .build()
+# Input Pipeline (src/modules/preprocessing/) — discovers artifacts and
+# builds the canonical MigrationContext, including the keyed ComponentSet.
+input_pipeline = (
+    InputPipeline()
+        .use(DiscoverAgent())
+        .use(LoadDependencies())
+        .use(RetrieveSolutionComponentLayers())
+        .use(ResolveCustomizationOwnership())
+        .use(LoadCanonicalComponents())      # populates context.ComponentSet
 )
+
+# Migration Pipeline (src/modules/migration/) — one Step per Migration Rule.
+migration_pipeline = (
+    MigrationPipeline()
+        .use(OverrideAgentMetadataStep())        # RULE-001
+        .use(ReplaceEndConversationStep())       # RULE-002
+        .use(HandleOnActivityTopicStep())        # RULE-003
+        .use(HandleGeneratedResponseTopicStep()) # RULE-004
+)
+
+# Output Pipeline (src/modules/postprocessing/) — validate, persist, and render
+# the two-file session bundle.
+output_pipeline = (
+    OutputPipeline()
+        .use(ValidateMigration())
+        .use(Writeback())                    # Migrate mode only
+        .use(GenerateMigrationReport())      # renders customer-facing migration_report.md
+)
+# session.log is streamed live by the framework Logger across all stages —
+# it is not a pipeline step.
 ```
 
-The builder creates immutable executable pipelines.
+### The super-pipeline
+
+The product itself is a single fluent super-pipeline that composes the three
+stages. Each stage receives the output of the previous stage over the shared
+`MigrationContext`:
+
+```python
+toolkit = (
+    EssMigrationToolkit()
+        .input(input_pipeline)
+        .migrate(migration_pipeline)
+        .output(output_pipeline)
+)
+
+result = toolkit.run(mode=ExecutionMode.PREVIEW)   # Discover | Preview | Migrate
+```
+
+The Builder creates immutable executable pipelines. The **Migration Orchestrator
+is only the composition root** — it assembles the super-pipeline above,
+configures the execution mode, executes it, and returns the reports and
+diagnostics (see section 16). Adding a future migration capability normally
+requires only a new Migration Rule, a new Pipeline Step, and its registration in
+the Migration Pipeline — the surrounding framework is unchanged.
+
+> **Note — where the C# reference maps.** A stage pipeline
+> (`Pipeline[TInput, TOutput]`) is the analogue of the C#
+> `KeyedComputeUnitBase<...>` (a whole module compute), and
+> `PipelineStep[TInput, TOutput]` is the analogue of
+> `HeterogenousPipelineStepComputeUnitBase<TInput, TOutput>` (a single typed step
+> compute). The C# runtime concerns — Autofac keyed registration,
+> `floorEpoch`/`currentEpoch` versioning, and per-step `Equals`/`GetHashCode` —
+> are intentionally **out of scope** for a batch migration tool and are not
+> ported.
 
 ---
 
@@ -348,11 +482,16 @@ Pipeline Steps communicate exclusively through MigrationContext.
 - Session
 - Environment
 - Agent
-- Components
+- Components (including the keyed `ComponentSet`)
 - Migration Candidates
-- Diagnostics
+- Diagnostic collectors — Logs, Warnings, Errors, Changes
 - Reports
 - Configuration
+
+The Diagnostic collectors (`Logs`, `Warnings`, `Errors`, `Changes`) are the
+accumulation buffers that steps append to; the Output Pipeline's terminal
+`GenerateMigrationReport()` step renders `migration_report.md` from them (see
+DIAGNOSTICS.md section 5).
 
 ---
 
@@ -535,50 +674,61 @@ Examples:
 
 ---
 
-# 16. Pipeline Categories
+# 16. Stage Pipelines and the Super-Pipeline
 
-The framework supports multiple Pipeline types.
+The toolkit is composed of three **stage pipelines**, each a `Pipeline` over the
+shared `MigrationContext`.
 
-## Discovery Pipeline
-
-Responsibilities
-
-- Discover components
-- Analyze ownership
-
----
-
-## Migration Pipeline
+## Input Pipeline (`src/modules/preprocessing/`)
 
 Responsibilities
 
-- Execute Migration Steps
+- Discover the target ESS Agent
+- Retrieve migration dependencies and Solution Component Layers
+- Resolve customer-owned customizations
+- Load canonical Domain Models and build the keyed `ComponentSet`
+- Produce the enriched `MigrationContext`
 
----
-
-## Validation Pipeline
-
-Responsibilities
-
-- Validate transformed artifacts
-
----
-
-## Persistence Pipeline
+## Migration Pipeline (`src/modules/migration/`)
 
 Responsibilities
 
-- Persist migrated artifacts
+- Execute Migration Steps (one Step per Migration Rule) — deterministic business
+  transformations only
 
----
-
-## Reporting Pipeline
+## Output Pipeline (`src/modules/postprocessing/`)
 
 Responsibilities
 
-- Generate reports
+- Validate migrated artifacts
+- Persist supported transformations to Dataverse (Migrate mode only)
+- Render the customer-facing `migration_report.md`
+- (The engineering `session.log` is streamed by the Logger, not a step)
 
-The Migration Orchestrator composes these pipelines into an execution workflow.
+## The Super-Pipeline
+
+The Migration Orchestrator (`src/service/mtk_orchestrator.py`) is the
+**composition root** only. It assembles the three stages into the fluent
+super-pipeline, configures the execution mode, executes it, and returns the
+reports and diagnostics:
+
+```python
+EssMigrationToolkit()
+    .input(input_pipeline)
+    .migrate(migration_pipeline)
+    .output(output_pipeline)
+```
+
+The final outputs of the toolkit are the two files of the session bundle:
+
+- `migration_report.md` — customer-facing (all modes; the product in
+  Discover/Preview)
+- `session.log` — ESS-engineer-facing diagnostics
+
+In Migrate mode the customer environment is additionally updated. Orchestration
+concerns stay strictly separate from pipeline behaviour — the super-pipeline is
+the primary abstraction; the orchestrator merely builds, configures, executes,
+and returns.
 
 ---
 

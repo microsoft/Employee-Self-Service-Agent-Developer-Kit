@@ -78,9 +78,10 @@ tools/
         service/
             mtk_orchestrator.py
 
-    debug/
-        logs/
-        reports/
+    output/
+        session-YYYY-MM-DD_HH-MM-SS/
+            migration_report.md
+            session.log
 
     tests/
 
@@ -312,17 +313,18 @@ orchestration logic and any command surface are added later.
 
 ---
 
-## debug/
+## output/
 
 Owns generated, gitignored execution output. It sits at the toolkit root as a
 sibling of `src/` (not a Python package).
 
-Contains:
+Contains one timestamped **session bundle** per execution:
 
-* `logs/`
-* `reports/`
+* `session-YYYY-MM-DD_HH-MM-SS/`
+  * `migration_report.md` — customer-facing report
+  * `session.log` — ESS-engineer diagnostics log
 
-The subfolders are retained in version control only through `.gitkeep` files.
+The folder is retained in version control only through a `.gitkeep` file.
 
 ---
 
@@ -440,19 +442,15 @@ End-to-end tests validate complete migration workflows through the Orchestrator.
 
 # 10. Logging and Reports
 
-Execution artifacts are written to:
+Each execution produces one timestamped session bundle under:
 
 ```text
-debug/logs/
+output/session-YYYY-MM-DD_HH-MM-SS/
 ```
 
-Session logs are timestamped and written using the framework logging abstraction.
-
-Customer-facing reports are written to:
-
-```text
-debug/reports/
-```
+The bundle contains exactly two files: `migration_report.md` (customer-facing)
+and `session.log` (ESS-engineer diagnostics). Session logs are written using the
+framework logging abstraction; the report is rendered by the Reporter service.
 
 Business logic must never write files directly.
 

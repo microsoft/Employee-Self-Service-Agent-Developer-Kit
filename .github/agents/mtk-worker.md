@@ -51,9 +51,11 @@ under
    worktree's own task branch, which follows the convention
    `users/aniladepu/features/mtk/task-XXX-<slug>` (the Master created it; do not
    rename it). Do not push, do not merge, do not switch or touch any other
-   branch — the Master handles integration. Use a clear message referencing the
-   task (e.g. `TASK-004: implement Dataverse client`) and include the trailer
-   `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>`.
+   branch — the Master handles integration. Use a clear message following the
+   MTK commit-title convention `type(scope): [Worker] | subject` — worker
+   commits are always prefixed with the `[Worker]` role tag (e.g.
+   `feat(mtk): [Worker] | TASK-004 implement Dataverse client`) — and include the
+   trailer `Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>`.
 8. **Report back.** Summarize the files you changed, how each **Acceptance
    Criteria** item is satisfied, the gate results, and your branch name. Do
    **not** mark the task DONE yourself — the Master reviews, merges, and updates
