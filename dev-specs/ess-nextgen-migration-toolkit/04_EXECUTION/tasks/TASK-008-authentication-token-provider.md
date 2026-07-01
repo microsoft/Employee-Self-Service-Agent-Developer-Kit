@@ -4,7 +4,7 @@
 | ---------- | ------------------------- |
 | ID         | TASK-008                  |
 | Workstream | 0 — Repository Foundation |
-| Status     | IN PROGRESS               |
+| Status     | ACTIVE                     |
 | Consumes   | —                         |
 
 ## Description

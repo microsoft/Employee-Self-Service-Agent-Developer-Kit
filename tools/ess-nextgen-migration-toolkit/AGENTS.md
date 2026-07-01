@@ -45,7 +45,7 @@
 | Pipeline Registration | `src/modules/migration/`                        |
 | Utilities             | `src/core/utils/`                               |
 | Diagnostics code      | `src/core/logging/`                             |
-| Generated output      | `debug/logs/`, `debug/reports/`                 |
+| Generated output      | `output/session-<timestamp>/`                   |
 
 ---
 
