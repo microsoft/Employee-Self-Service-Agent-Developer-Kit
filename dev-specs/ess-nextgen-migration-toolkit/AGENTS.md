@@ -408,6 +408,10 @@ No feature is complete without tests.
 When behavior changes:
 
 * Update the relevant specification.
+* Update the top-level Copilot instructions mirror
+  (`.github/instructions/ess-nextgen-toolkit.instructions.md`) whenever the
+  change touches what it summarizes — the layer/dependency model, repository
+  structure, invariants, dependency-management workflow, or naming conventions.
 * Update CHANGELOG.md.
 * Update tests.
 
