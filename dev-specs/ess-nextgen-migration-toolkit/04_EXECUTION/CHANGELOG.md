@@ -12,6 +12,13 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 
 ## [Unreleased]
 
+- **Customer-channel method rename (clarity).** Renamed the two customer-channel
+  Logger methods to be intent-revealing: `LogFancy` → **`LogChange`** (records a
+  successful transformation → `context.Changes` → `## Changes`) and
+  `LogCustomer` → **`LogAdvisory`** (records a manual-review advisory →
+  `context.Warnings`/`Errors`/`Logs` by `severity` → `## Warnings`). Engineer
+  channel (`LogDebug`/`LogInfo`/`LogWarning`/`LogError`) unchanged. Updated
+  `03_ENGINEERING/DIAGNOSTICS.md` (section 6.2 + mapping table) and TASK-005.
 - **Pipeline framework redesign (super-pipeline + typed stages).** Reworked
   `02_ARCHITECTURE/PIPELINES.md` to v2.0: the toolkit is now a fluent
   **super-pipeline** of three stage pipelines — **Input → Migration → Output** —
