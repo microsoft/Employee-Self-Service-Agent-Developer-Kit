@@ -6,7 +6,7 @@
 Pure-logic tests — no network, no cassettes. They pin:
   * The `Role` enum membership.
   * `CheckResult.roles` defaults to an empty list.
-  * The HTML report renders a "Role" column (header + cell).
+  * The HTML report renders the next-step owner role on each check card.
   * `save_results` persists `roles` into results.json.
   * The terminal summary surfaces the role(s) on action/manual rows.
   * A representative production check module (publishing) sets roles on
@@ -74,49 +74,56 @@ def test_checkresult_roles_defaults_to_empty_list():
     assert r.roles == []
 
 
-def test_html_rows_render_role_column():
-    from flightcheck.runner import Role, _render_rows
-    rows = _render_rows([
+def test_html_card_renders_role():
+    from flightcheck.runner import Role, _render_check_card
+    card = _render_check_card(
         _result("X-001", "Failed",
                 [Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value]),
-    ])
-    assert "Entra Admin, Workday Admin" in rows
+    )
+    assert "Entra Admin, Workday Admin" in card
 
 
-def test_html_rows_render_dash_when_no_roles():
-    from flightcheck.runner import _render_rows
-    rows = _render_rows([_result("X-002", "Passed", [])])
-    assert "—" in rows
+def test_html_card_renders_dash_when_no_roles():
+    from flightcheck.runner import _render_check_card
+    card = _render_check_card(_result("X-002", "Passed", []))
+    assert "\u2014" in card
 
 
-def test_html_rows_blank_role_for_passed_even_if_populated():
+def test_html_card_blank_role_for_passed_even_if_populated():
     """Passed/Skipped rows have no next step — Role cell is blank even
     if the constructor populated roles (e.g. a conditional-status check
     that happened to pass)."""
-    from flightcheck.runner import Role, _render_rows
-    passed = _render_rows([_result("X-005", "Passed", [Role.WORKDAY_ADMIN.value])])
+    from flightcheck.runner import Role, _render_check_card
+    passed = _render_check_card(
+        _result("X-005", "Passed", [Role.WORKDAY_ADMIN.value])
+    )
     assert "Workday Admin" not in passed
-    skipped = _render_rows([_result("X-006", "Skipped", [Role.WORKDAY_ADMIN.value])])
+    skipped = _render_check_card(
+        _result("X-006", "Skipped", [Role.WORKDAY_ADMIN.value])
+    )
     assert "Workday Admin" not in skipped
 
 
-def test_html_rows_show_role_for_actionable_statuses():
-    from flightcheck.runner import Role, _render_rows
+def test_html_card_shows_role_for_actionable_statuses():
+    from flightcheck.runner import Role, _render_check_card
     for status in ("Failed", "Warning", "Manual", "NotConfigured", "Error"):
-        rows = _render_rows([_result("X-007", status, [Role.ENTRA_ADMIN.value])])
-        assert "Entra Admin" in rows, f"role missing for {status}"
+        card = _render_check_card(
+            _result("X-007", status, [Role.ENTRA_ADMIN.value])
+        )
+        assert "Entra Admin" in card, f"role missing for {status}"
 
 
-def test_html_section_header_includes_role_column():
-    from flightcheck.runner import _render_section
-    section = _render_section(
-        section_id="s", title="t", subtitle="sub", empty_text="none",
-        rows_html="<tr></tr>", count=1, open_by_default=True,
+def test_html_card_role_sits_after_status_and_title():
+    """The role is rendered in a dedicated `.role` element positioned
+    after the status pill and check title in the card header."""
+    from flightcheck.runner import Role, _render_check_card
+    card = _render_check_card(
+        _result("X-008", "Failed", [Role.ENTRA_ADMIN.value])
     )
-    assert "<th>Role</th>" in section
-    # Role column sits between Status and Result.
-    assert section.index("<th>Status</th>") < section.index("<th>Role</th>")
-    assert section.index("<th>Role</th>") < section.index("<th>Result</th>")
+    assert 'class="role"' in card
+    # pill and title come before the role element.
+    assert card.index('class="pill') < card.index('class="role"')
+    assert card.index('class="check-title"') < card.index('class="role"')
 
 
 def test_results_json_persists_roles(tmp_path):

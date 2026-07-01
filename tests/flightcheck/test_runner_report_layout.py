@@ -1,19 +1,20 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Unit tests for the prioritized FlightCheck report layout introduced
-in PR for grahamc/flightcheck-report-prioritized-format.
+"""Unit tests for the FlightCheck HTML report layout.
 
-The redesign reshapes the operator's triage path: a verdict banner at
-the top tells them at a glance whether the deployment is ready, and
-results are split into three sections so they don't have to scan a
-single mixed table to find what needs action.
+The report gives the operator a fast triage path: a verdict banner at
+the top says whether the deployment is ready, an action-items panel
+lists the blockers to fix and the warnings to review, a readiness
+synopsis shows one tile per category, and the results themselves are
+grouped into one collapsible section per category (one check card per
+result).
 
 This file pins the layout contracts so a future refactor cannot
-silently break the "find what needs my attention" path the report
-was designed for.
+silently break the "find what needs my attention" path.
 
-The three buckets are:
+The pure-logic bucket helper still classifies statuses into three
+triage buckets (used to order the action panel and sort cards):
   - ACTION REQUIRED:  Failed, Error
   - MANUAL:           Warning, Manual, NotConfigured
   - PASSED:           Passed, Skipped
@@ -314,14 +315,22 @@ def test_verdict_not_ready_headline_counts_failures_only_not_warnings(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Section rendering — the three stacked sections.
+# Section rendering — per-category collapsible sections with check cards.
+#
+# The report groups results by category (one <details class="sec"> per
+# category, in RunResult.categories order) rather than the old three
+# fixed buckets. These tests pin the new structure: the synopsis grid,
+# per-category sections, data-s status attributes on cards, open/collapse
+# behaviour, the action-items panel, and the "next step" remediation line.
+# _build_run_with registers a single "Test" category, so the section id
+# is "cat-test".
 # ---------------------------------------------------------------------------
 
 
-def test_html_renders_three_named_sections(tmp_path):
-    """The three section anchors must exist regardless of which
-    sections happen to be populated, so the layout is stable for any
-    downstream tooling that links into specific section ids."""
+def test_html_renders_synopsis_grid_and_category_section(tmp_path):
+    """The report must render the readiness synopsis grid and one
+    collapsible section per category, so the operator can jump from a
+    tile to the matching detail block."""
     from flightcheck.runner import save_results
     result = _build_run_with([
         _make_result("F-1", "Failed"),
@@ -331,71 +340,19 @@ def test_html_renders_three_named_sections(tmp_path):
     save_results(result, output_dir=str(tmp_path))
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
 
-    assert 'id="section-action"' in html
-    assert 'id="section-manual"' in html
-    assert 'id="section-passed"' in html
-    assert "Action required" in html
-    assert "Needs manual verification" in html
-    assert ">Passed</h2>" in html
+    # Synopsis grid with a tile linking to the category section.
+    assert 'class="synopsis"' in html
+    assert 'class="syn-grid"' in html
+    assert 'href="#cat-test"' in html
+    # One section per category, anchored by a slug of the category name.
+    assert 'id="cat-test"' in html
+    assert re.search(r'<details class="sec" id="cat-test"', html)
 
 
-def test_action_section_open_by_default_passed_section_collapsed(tmp_path):
-    """The ACTION section must be open (operator sees rows
-    immediately), the PASSED section must be collapsed (operator
-    isn't forced to scroll past every passing row)."""
-    from flightcheck.runner import save_results
-    result = _build_run_with([
-        _make_result("F-1", "Failed"),
-        _make_result("P-1", "Passed"),
-    ])
-    save_results(result, output_dir=str(tmp_path))
-    html = (tmp_path / "report.html").read_text(encoding="utf-8")
-
-    # <details id="section-action" class="section" open> — note the
-    # exact attribute presence, since absence flips the default.
-    assert re.search(
-        r'<details id="section-action" class="section" open>', html
-    ), "Action section must be open by default"
-    assert re.search(
-        r'<details id="section-manual" class="section" open>', html
-    ), "Manual section must be open by default"
-
-    # PASSED has no `open` attribute — collapsed.
-    passed_block = re.search(
-        r'<details id="section-passed"[^>]*>', html
-    )
-    assert passed_block is not None
-    assert " open" not in passed_block.group(0), (
-        "Passed section must NOT be open by default"
-    )
-
-
-def test_empty_section_shows_friendly_note_not_an_empty_table(tmp_path):
-    """A section with zero results must show a friendly empty-note,
-    not an empty table the operator has to decode."""
-    from flightcheck.runner import save_results
-    # Only passing rows — both action_required and manual sections
-    # are empty.
-    result = _build_run_with([_make_result("OK-1", "Passed")])
-    save_results(result, output_dir=str(tmp_path))
-    html = (tmp_path / "report.html").read_text(encoding="utf-8")
-
-    assert "nothing here" in html.lower() or "no failing" in html.lower()
-    # The empty section should NOT have a table inside it; check that
-    # by ensuring action section header is followed by the empty-note
-    # class before the next section.
-    m = re.search(
-        r'id="section-action".*?</details>', html, flags=re.S
-    )
-    assert m is not None
-    assert "empty-note" in m.group(0)
-    assert "<table>" not in m.group(0)
-
-
-def test_status_to_section_routing_in_rendered_html(tmp_path):
-    """Each status renders inside the section its bucket dictates.
-    Warning lands under MANUAL (operator must verify); Skipped lands
-    under PASSED (kit chose not to run the check)."""
+def test_check_cards_carry_data_s_status_attributes(tmp_path):
+    """Each check renders as a card carrying a data-s attribute so the
+    filter bar can show/hide by status. Statuses map to the filter
+    keys pass/fail/warn/manual/na."""
     from flightcheck.runner import save_results
     result = _build_run_with([
         _make_result("FAIL-X", "Failed"),
@@ -407,71 +364,120 @@ def test_status_to_section_routing_in_rendered_html(tmp_path):
     save_results(result, output_dir=str(tmp_path))
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
 
-    def section_html(section_id: str) -> str:
-        m = re.search(
-            rf'id="{section_id}".*?</details>', html, flags=re.S
-        )
-        assert m is not None, f"Section {section_id} not in HTML"
-        return m.group(0)
-
-    action_html = section_html("section-action")
-    manual_html = section_html("section-manual")
-    passed_html = section_html("section-passed")
-
-    # FAIL belongs in action
-    assert "FAIL-X" in action_html
-    assert "FAIL-X" not in manual_html and "FAIL-X" not in passed_html
-
-    # WARN + MAN belong in manual (Warning folds here per design —
-    # it's an operator-verification question, not a fix-this).
-    assert "WARN-X" in manual_html
-    assert "MAN-X" in manual_html
-    assert "WARN-X" not in action_html and "WARN-X" not in passed_html
-    assert "MAN-X" not in action_html and "MAN-X" not in passed_html
-
-    # PASS + SKIP belong in passed (Skipped folds here per design —
-    # the kit chose not to run the check, so the row needs no action).
-    assert "PASS-X" in passed_html
-    assert "SKIP-X" in passed_html
-    assert "PASS-X" not in action_html and "PASS-X" not in manual_html
-    assert "SKIP-X" not in action_html and "SKIP-X" not in manual_html
+    # Every filter key used by a rendered card must be present.
+    assert 'data-s="fail"' in html
+    assert 'data-s="warn"' in html
+    assert 'data-s="manual"' in html
+    assert 'data-s="pass"' in html
+    # Skipped folds into the neutral "na" bucket.
+    assert 'data-s="na"' in html
+    # Each card anchors by a slug of its checkpoint id for deep links.
+    assert 'id="chk-fail-x"' in html
 
 
-def test_section_count_badge_matches_bucket_size(tmp_path):
-    """The badge next to each section header shows the bucket count
-    so the operator sees scale before expanding. Counts reflect the
-    new mapping: Warning is in MANUAL (not ACTION), Skipped is in
-    PASSED (not MANUAL)."""
+def test_category_section_open_when_actionable_collapsed_when_all_pass(
+    tmp_path,
+):
+    """A category containing any actionable row (Failed/Error/Warning/
+    Manual/NotConfigured) opens by default so the operator sees it
+    immediately; an all-passing category stays collapsed."""
+    from flightcheck.runner import save_results
+
+    actionable = _build_run_with([
+        _make_result("F-1", "Failed"),
+        _make_result("P-1", "Passed"),
+    ])
+    save_results(actionable, output_dir=str(tmp_path))
+    html_actionable = (tmp_path / "report.html").read_text(encoding="utf-8")
+    assert re.search(
+        r'<details class="sec" id="cat-test" open>', html_actionable
+    ), "A category with a failure must open by default"
+
+    all_pass = _build_run_with([_make_result("P-1", "Passed")])
+    save_results(all_pass, output_dir=str(tmp_path))
+    html_pass = (tmp_path / "report.html").read_text(encoding="utf-8")
+    m = re.search(r'<details class="sec" id="cat-test"[^>]*>', html_pass)
+    assert m is not None
+    assert " open" not in m.group(0), (
+        "An all-passing category must NOT be open by default"
+    )
+
+
+def test_empty_category_renders_friendly_note(tmp_path):
+    """Defensive: a category with zero results renders a friendly note
+    rather than an empty card list. (The grouping path never emits an
+    empty category, so we exercise the renderer directly.)"""
+    from flightcheck.runner import _render_category_section
+
+    section = _render_category_section(1, "Empty Stage", [])
+    assert 'id="cat-empty-stage"' in section
+    assert "Nothing here" in section
+    # No status card / filter attribute should be present.
+    assert "data-s=" not in section
+
+
+def test_failed_result_details_appear_in_html(tmp_path):
+    """A Failed result must surface its checkpoint id, its result
+    payload, and its remediation text in the rendered HTML — the
+    operator needs all three to act."""
+    from flightcheck.runner import save_results
+    result = _build_run_with([_make_result("FAIL-DETAIL", "Failed")])
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert "FAIL-DETAIL" in html
+    assert "result for FAIL-DETAIL" in html
+    assert "remediation for FAIL-DETAIL" in html
+
+
+def test_next_step_renders_remediation(tmp_path):
+    """Remediation renders as an explicit "Next step" line on the
+    check card (replacing the dropped per-step checklist widget)."""
+    from flightcheck.runner import save_results
+    result = _build_run_with([_make_result("F-1", "Failed")])
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert "Next step" in html
+    assert "remediation for F-1" in html
+    # The dropped checklist widget must not resurface.
+    assert 'class="checklist"' not in html
+
+
+def test_action_panel_lists_blockers_with_anchor_links(tmp_path):
+    """The action-items panel lists Failed/Error results as blockers,
+    each linking to its check card below."""
     from flightcheck.runner import save_results
     result = _build_run_with([
         _make_result("F-1", "Failed"),
-        _make_result("F-2", "Failed"),
-        _make_result("W-1", "Warning"),
-        _make_result("M-1", "Manual"),
-        _make_result("S-1", "Skipped"),
         _make_result("P-1", "Passed"),
-        _make_result("P-2", "Passed"),
-        _make_result("P-3", "Passed"),
     ])
     save_results(result, output_dir=str(tmp_path))
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
 
-    def badge_count_for(section_id: str) -> str:
-        m = re.search(
-            rf'id="{section_id}".*?count-badge">(\d+)</span>',
-            html, flags=re.S,
-        )
-        assert m is not None, f"No count badge for {section_id}"
-        return m.group(1)
+    assert 'class="actions-panel"' in html
+    assert "Action items" in html
+    # Blocker links to the failing check's card anchor.
+    assert 'href="#chk-f-1"' in html
+    # No fabricated "auto-fix available" badge (not in the data model).
+    assert "auto-fix available" not in html
 
-    assert badge_count_for("section-action") == "2"   # 2 Failed only
-    assert badge_count_for("section-manual") == "2"   # 1 Warning + 1 Manual
-    assert badge_count_for("section-passed") == "4"   # 3 Passed + 1 Skipped
+
+def test_action_panel_all_clear_when_no_blockers_or_warnings(tmp_path):
+    """When a run has neither blockers nor warnings, the action panel
+    becomes a positive all-clear note instead of an empty red box."""
+    from flightcheck.runner import save_results
+    result = _build_run_with([_make_result("P-1", "Passed")])
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert "actions-panel allclear" in html
+    assert "Nothing needs action" in html
 
 
 def test_action_rows_sorted_critical_before_high_in_html(tmp_path):
-    """Within ACTION REQUIRED, a Critical-priority row must appear
-    BEFORE a High-priority row in the rendered table — even if
+    """Within a category section, a Critical-priority row must appear
+    BEFORE a High-priority row in the rendered cards — even if
     Critical was registered later."""
     from flightcheck.runner import save_results
     result = _build_run_with([
@@ -482,17 +488,17 @@ def test_action_rows_sorted_critical_before_high_in_html(tmp_path):
     save_results(result, output_dir=str(tmp_path))
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
 
-    action_section_match = re.search(
-        r'id="section-action".*?</details>', html, flags=re.S,
+    section_match = re.search(
+        r'id="cat-test".*?</details>', html, flags=re.S,
     )
-    assert action_section_match is not None
-    section_html = action_section_match.group(0)
+    assert section_match is not None
+    section_html = section_match.group(0)
 
     crit_pos = section_html.index("CRIT-1")
     high_pos = section_html.index("HIGH-1")
     med_pos = section_html.index("MED-1")
     assert crit_pos < high_pos < med_pos, (
-        "Within Action Required, priorities must render Critical -> "
+        "Within a category, priorities must render Critical -> "
         "High -> Medium so operator triages worst-first."
     )
 
