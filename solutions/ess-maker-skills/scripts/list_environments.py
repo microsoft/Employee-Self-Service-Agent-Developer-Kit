@@ -116,6 +116,30 @@ def print_environment_table(environments):
     print()
 
 
+def write_environment_markdown(environments, path="workspace/onboarding/environments.md"):
+    """Write a clean, numbered Markdown table of environments to a file.
+
+    The onboarding flow reads this file to show the user a complete,
+    untruncated table — rather than scraping the terminal scrollback, which
+    Copilot Chat may truncate. Returns the path written.
+    """
+    lines = [
+        "| # | Environment Name | Type | Region | URL |",
+        "| --- | --- | --- | --- | --- |",
+    ]
+    for i, e in enumerate(environments, 1):
+        name = (e.get("displayName") or "").replace("|", "\\|")
+        env_type = (e.get("type") or "").replace("|", "\\|")
+        region = (e.get("region") or "").replace("|", "\\|")
+        url = e.get("instanceUrl") or "(no Dataverse linked)"
+        lines.append(f"| {i} | {name} | {env_type} | {region} | {url} |")
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("\n".join(lines) + "\n")
+    return path
+
+
 def main():
     """Standalone entry point for listing environments."""
     import argparse
