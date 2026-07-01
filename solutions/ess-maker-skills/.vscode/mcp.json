@@ -1,8 +1,0 @@
-{
-  "servers": {
-    "Dataverse": {
-      "type": "http",
-      "url": "https://orgc43de63f.crm.dynamics.com/api/mcp"
-    }
-  }
-}

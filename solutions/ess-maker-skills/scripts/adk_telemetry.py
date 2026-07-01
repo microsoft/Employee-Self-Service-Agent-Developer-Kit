@@ -127,6 +127,10 @@ _THREADS: list[threading.Thread] = []
 # Serializes read-modify-write of the on-disk buffer across async emit threads.
 _BUFFER_LOCK = threading.Lock()
 
+# Serializes read-modify-write of ~/.adk/session.json (get_session) so
+# concurrent skills can't clobber each other's session/run bookkeeping.
+_SESSION_LOCK = threading.Lock()
+
 
 # --- Identity model (spec) ------------------------------------------------
 def set_identity(tenant_id: str = "", instance_id: str | None = None) -> dict[str, str]:
@@ -214,36 +218,37 @@ def get_session(surface: str = SURFACE_CLI) -> tuple[str, bool]:
     callers can emit exactly one ``session.start`` per session).
     """
     now = time.time()
-    data: dict[str, Any] = {}
-    try:
-        with open(SESSION_PATH, "r", encoding="utf-8") as f:
-            loaded = json.load(f)
-        if isinstance(loaded, dict):
-            data = loaded
-    except (OSError, ValueError):
-        data = {}
+    with _SESSION_LOCK:
+        data: dict[str, Any] = {}
+        try:
+            with open(SESSION_PATH, "r", encoding="utf-8") as f:
+                loaded = json.load(f)
+            if isinstance(loaded, dict):
+                data = loaded
+        except (OSError, ValueError):
+            data = {}
 
-    entry = data.get(surface)
-    sid = None
-    is_new = True
-    if isinstance(entry, dict):
-        last = entry.get("last", 0)
-        sid = entry.get("id")
-        if sid and (now - float(last or 0)) <= SESSION_TIMEOUT_SECS:
-            is_new = False
-
-    if not sid or is_new:
-        sid = str(uuid.uuid4())
+        entry = data.get(surface)
+        sid = None
         is_new = True
+        if isinstance(entry, dict):
+            last = entry.get("last", 0)
+            sid = entry.get("id")
+            if sid and (now - float(last or 0)) <= SESSION_TIMEOUT_SECS:
+                is_new = False
 
-    data[surface] = {"id": sid, "last": now}
-    try:
-        os.makedirs(CONFIG_DIR, exist_ok=True)
-        with open(SESSION_PATH, "w", encoding="utf-8") as f:
-            json.dump(data, f)
-    except OSError:
-        pass
-    return sid, is_new
+        if not sid or is_new:
+            sid = str(uuid.uuid4())
+            is_new = True
+
+        data[surface] = {"id": sid, "last": now}
+        try:
+            os.makedirs(CONFIG_DIR, exist_ok=True)
+            with open(SESSION_PATH, "w", encoding="utf-8") as f:
+                json.dump(data, f)
+        except OSError:
+            pass
+        return sid, is_new
 
 
 def next_run_index(agent_id: str, surface: str = SURFACE_CLI) -> int:
@@ -310,6 +315,15 @@ def _scrub(text: str, limit: int = 200) -> str:
     s = re.sub(r"[A-Za-z]:\\[^\s]+", "<path>", s)
     s = re.sub(r"https?://[^\s]+", "<url>", s)
     s = re.sub(r"(?<!\w)/[^\s]+", "<path>", s)
+    # Redact emails / UPNs and GUIDs: Dataverse exceptions can echo a user's
+    # UPN or object id, which would contradict the "no developer/user identity"
+    # Data Profile. Do this before truncation so partial matches don't slip in.
+    s = re.sub(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}", "<email>", s)
+    s = re.sub(
+        r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b",
+        "<guid>",
+        s,
+    )
     return s[:limit]
 
 
@@ -433,10 +447,19 @@ def _emit(event_name: str, data: dict[str, Any], *, block: bool = False) -> dict
 
 
 def flush(timeout: float = 5.0) -> None:
-    """Join outstanding async emit threads (call before process exit)."""
+    """Join outstanding async emit threads (call before process exit).
+
+    ``timeout`` is a single overall deadline shared across all outstanding
+    threads, so exit latency is bounded by ``timeout`` regardless of how many
+    emit threads are in flight (not ``timeout`` per thread).
+    """
+    deadline = time.monotonic() + max(0.0, timeout)
     for t in list(_THREADS):
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         try:
-            t.join(timeout)
+            t.join(remaining)
         except RuntimeError:
             pass
     _THREADS[:] = [t for t in _THREADS if t.is_alive()]

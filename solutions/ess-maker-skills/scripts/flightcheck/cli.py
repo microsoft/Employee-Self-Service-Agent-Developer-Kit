@@ -386,13 +386,15 @@ def main():
 
     # Emit anonymous outcome telemetry (best-effort; never affects exit code).
     if not args.no_telemetry:
+        # Resolve the active agent once, up front, so both the legacy and the
+        # adk.* telemetry blocks can use it even if the first block raises early.
+        active_agent = next(
+            (a for a in agents if a.get("slug") == active),
+            agents[0] if agents else {},
+        )
         try:
             from flightcheck import telemetry
 
-            active_agent = next(
-                (a for a in agents if a.get("slug") == active),
-                agents[0] if agents else {},
-            )
             _tele = telemetry.emit_flightcheck_telemetry(
                 result,
                 tenant_id=tenant_id,

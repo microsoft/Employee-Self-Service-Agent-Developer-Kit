@@ -274,6 +274,10 @@ def query_all(env_url, token, entity_set, select, filter_expr=None):
         if resp.status_code == 401:
             _emit_api_call(entity_set, "read", _start, status=401)
             raise AuthExpiredError(response=resp)
+        if resp.status_code >= 400:
+            # Emit the failed read before raising so 403/500 etc. show up in the
+            # api-error metrics alongside create/update/delete/get failures.
+            _emit_api_call(entity_set, "read", _start, status=resp.status_code)
         raise_api_error(resp, resource_name=entity_set, operation="read")
         data = resp.json()
         records = data.get("value", [])

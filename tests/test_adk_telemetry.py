@@ -140,6 +140,17 @@ def test_scrub_strips_paths_urls_newlines_and_truncates():
     assert len(adk._scrub("x" * 500)) == 200
 
 
+def test_scrub_redacts_emails_upns_and_guids():
+    # Dataverse exceptions routinely echo a UPN or object id; neither may leak.
+    out = adk._scrub(
+        "User principal@contoso.onmicrosoft.com "
+        "(6f7c8f9c-1234-4abc-9def-0123456789ab) lacks access"
+    )
+    assert "principal@contoso.onmicrosoft.com" not in out
+    assert "6f7c8f9c-1234-4abc-9def-0123456789ab" not in out
+    assert "<email>" in out and "<guid>" in out
+
+
 def test_error_fields_attached_only_on_error_outcome():
     ok = {}
     adk._apply_error_fields(ok, "success", "", "", "")
