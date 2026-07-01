@@ -431,8 +431,9 @@ def test_failed_result_details_appear_in_html(tmp_path):
 
 
 def test_next_step_renders_remediation(tmp_path):
-    """Remediation renders as an explicit "Next step" line on the
-    check card (replacing the dropped per-step checklist widget)."""
+    """For non-manual checks, remediation renders as an explicit
+    "Next step" line on the card, NOT as a checklist (the completion
+    checklist is reserved for Manual items)."""
     from flightcheck.runner import save_results
     result = _build_run_with([_make_result("F-1", "Failed")])
     save_results(result, output_dir=str(tmp_path))
@@ -440,7 +441,7 @@ def test_next_step_renders_remediation(tmp_path):
 
     assert "Next step" in html
     assert "remediation for F-1" in html
-    # The dropped checklist widget must not resurface.
+    # A failed check must not get the manual completion checklist.
     assert 'class="checklist"' not in html
 
 
@@ -733,3 +734,168 @@ def test_overall_verdict_error_plus_warning_is_not_ready_not_ready_with_warnings
     assert result.errors == 1
     assert result.warnings == 1
     assert result.overall == "NOT_READY"
+
+
+# ---------------------------------------------------------------------------
+# View tools, how-to guide, and manual completion checklists.
+# ---------------------------------------------------------------------------
+
+
+def test_fold_unfold_controls_present(tmp_path):
+    """The report ships Fold all / Unfold all controls (hidden until JS
+    un-hides them) plus the script hooks that open/close every section."""
+    from flightcheck.runner import save_results
+    result = _build_run_with([_make_result("P-1", "Passed")])
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert 'id="viewtools"' in html
+    assert 'id="unfoldAll"' in html
+    assert 'id="foldAll"' in html
+    # Hidden in the no-JS view so the buttons aren't dead controls.
+    assert re.search(r'<div class="viewtools" id="viewtools" hidden>', html)
+
+
+def test_howto_guide_is_collapsed_and_below_verdict(tmp_path):
+    """A collapsed "How to read this report" guide renders after the
+    verdict banner (not first) so the outcome leads."""
+    from flightcheck.runner import save_results
+    result = _build_run_with([_make_result("P-1", "Passed")])
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert '<details class="howto">' in html
+    assert "How to read this report" in html
+    # Collapsed by default (no open attribute on the howto details).
+    assert re.search(r'<details class="howto">\s*<summary>', html)
+    # It sits below the verdict banner, above the action panel. Anchor on
+    # body-only markup (these class names also appear in the <style> block).
+    assert html.index('<div class="verdict ') < html.index('<details class="howto">')
+    assert html.index('<details class="howto">') < html.index('aria-label="Action items"')
+
+
+def _manual_with_steps():
+    """A manual CheckResult whose remediation carries two real steps."""
+    from flightcheck.runner import CheckResult
+    return CheckResult(
+        checkpoint_id="AUTH-006",
+        category="Authentication",
+        priority="High",
+        status="Manual",
+        description="SAML NameID alignment",
+        result="Found Workday SAML app",
+        remediation=(
+            "Manual verification required.\n\n"
+            "Step 1 - Identify the active Entra app:\n"
+            "  a. Sign in to the Workday tenant.\n"
+            "  b. Open Edit Tenant Setup - Security.\n"
+            "Step 2 - Compare the NameID mapping and confirm alignment."
+        ),
+    )
+
+
+def test_manual_check_renders_completion_checklist(tmp_path):
+    """A Manual check renders a completion checklist: one tick per real
+    step, plus an explicit "Mark as verified" item, plus the run-only
+    note. Total counter = steps + 1."""
+    from flightcheck.runner import FlightCheckRunner, save_results
+
+    runner = FlightCheckRunner(scope="test")
+    runner.register("Authentication", lambda _r: [_manual_with_steps()])
+    result = runner.run()
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert 'class="checklist"' in html
+    assert "Completion checklist" in html
+    # Two real steps + the explicit "Mark as verified" affordance.
+    assert "Mark as verified" in html
+    assert 'class="cl-count">0 / 3<' in html
+    assert "Step 1" in html and "Step 2" in html
+    # Expectation-setting note (mitigation instead of persistence).
+    assert "Progress applies to this run only." in html
+    # The Manual card must NOT also render the plain "Next step" line.
+    assert "Next step" not in html
+
+
+def test_manual_check_without_steps_gets_single_verify_item(tmp_path):
+    """A Manual check whose remediation has no "Step N" markers still
+    gets a checklist, but with only the explicit "Mark as verified"
+    item (no fabricated steps): counter = 0 / 1."""
+    from flightcheck.runner import FlightCheckRunner, CheckResult, save_results
+
+    runner = FlightCheckRunner(scope="test")
+    runner.register("Publishing", lambda _r: [
+        CheckResult(
+            checkpoint_id="PUB-001", category="Publishing",
+            priority="Critical", status="Manual",
+            description="Solution present in target environment",
+            result="Not auto-verifiable",
+            remediation="In Power Apps, confirm the solution is present.",
+        ),
+    ])
+    result = runner.run()
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert 'class="checklist"' in html
+    assert 'class="cl-count">0 / 1<' in html
+    assert "Mark as verified" in html
+
+
+def test_manual_checklist_items_parses_steps():
+    """_manual_checklist_items returns (preamble, steps): a leading
+    paragraph plus one block per "Step N", and an empty step list when
+    there are no markers."""
+    from flightcheck.runner import _manual_checklist_items
+
+    preamble, steps = _manual_checklist_items(
+        _manual_with_steps().remediation
+    )
+    assert preamble == "Manual verification required."
+    assert len(steps) == 2
+    assert steps[0].startswith("Step 1")
+    # The step block keeps its indented sub-lines.
+    assert "a. Sign in" in steps[0]
+    assert steps[1].startswith("Step 2")
+
+    pre2, steps2 = _manual_checklist_items("Just one paragraph, no steps.")
+    assert pre2 == "Just one paragraph, no steps."
+    assert steps2 == []
+
+
+def test_mask_sensitive_redacts_upn_and_guid():
+    """_mask_sensitive keeps enough context to stay actionable while
+    hiding the identifying part of emails/UPNs and GUIDs."""
+    from flightcheck.runner import _mask_sensitive
+
+    masked = _mask_sensitive("Owner lmoulet@EmployeeHub.onmicrosoft.com")
+    assert "lmoulet" not in masked
+    assert "l***@EmployeeHub.onmicrosoft.com" in masked
+
+    g = _mask_sensitive("Env 1a2b3c4d-1111-2222-3333-444455556666 is bound")
+    assert "1111-2222" not in g
+    assert "1a2b3c4d-****-****-****-************" in g
+
+
+def test_manual_checklist_masks_sensitive_data(tmp_path):
+    """A UPN in a manual check's remediation is masked in the rendered
+    checklist so a shared report doesn't leak the identity."""
+    from flightcheck.runner import FlightCheckRunner, CheckResult, save_results
+
+    runner = FlightCheckRunner(scope="test")
+    runner.register("Environment", lambda _r: [
+        CheckResult(
+            checkpoint_id="ENV-004", category="Environment",
+            priority="Medium", status="Manual",
+            description="Unbound connection",
+            result="Unbound",
+            remediation="Rebind the connection owned by jdoe@contoso.com.",
+        ),
+    ])
+    result = runner.run()
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert "jdoe@contoso.com" not in html
+    assert "j***@contoso.com" in html

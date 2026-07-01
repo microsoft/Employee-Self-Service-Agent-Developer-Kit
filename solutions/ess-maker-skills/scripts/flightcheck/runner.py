@@ -365,18 +365,22 @@ def _generate_html_report(r: RunResult) -> str:
     Layout (top to bottom):
       - Header with scope / timestamp / duration and the verdict banner
         (green / amber / red) driven by ``_verdict_text``.
-      - Action items panel: blocking failures/errors to fix, plus the
-        warnings to review. Each links to its check card below. When the
-        run has no blockers and no warnings, this becomes an "all clear"
-        note instead.
-      - Readiness at a glance: per-status totals plus one tile per
-        category, coloured by the worst status in that category and
-        linking to the category section.
-      - Filter bar (All / Failed / Warnings / Manual / Passed).
-      - One collapsible section per category (in ``RunResult.categories``
-        order), each containing one card per check. Categories with any
-        Failed/Error/Warning/Manual/NotConfigured row open by default;
-        all-passing categories stay collapsed.
+    - A collapsed "How to read this report" guide (below the verdict).
+    - Action items panel: blocking failures/errors to fix, plus the
+      warnings to review. Each links to its check card below. When the
+      run has no blockers and no warnings, this becomes an "all clear"
+      note instead.
+    - Readiness at a glance: per-status totals plus one tile per
+      category, coloured by the worst status in that category and
+      linking to the category section.
+    - Filter bar (All / Failed / Warnings / Manual / Passed) and
+      Fold all / Unfold all controls.
+    - One collapsible section per category (in ``RunResult.categories``
+      order), each containing one card per check. Categories with any
+      Failed/Error/Warning/Manual/NotConfigured row open by default;
+      all-passing categories stay collapsed. Manual cards carry a
+      per-run completion checklist built from their real remediation
+      steps.
 
     Everything is derived from ``RunResult`` — no fabricated content.
     The bucket helpers (``bucket_results`` / ``_sort_key``) are reused
@@ -407,9 +411,11 @@ def _generate_html_report(r: RunResult) -> str:
         + _render_header(
             r, verdict_class, verdict_icon, verdict_headline, verdict_sub
         )
+        + _render_howto()
         + _render_action_panel(buckets)
         + _render_synopsis(r, categories)
         + _FILTER_BAR
+        + _VIEW_TOOLS
         + sections_html
         + _render_footer()
         + "</div>\n"
@@ -601,6 +607,41 @@ _REPORT_CSS = """
   .sw{width:10px;height:10px;border-radius:3px;display:inline-block}
   .hidden{display:none !important}
 
+  /* Collapsed "how to read this" guide (below the verdict). */
+  details.howto{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+    box-shadow:var(--shadow);margin:0 0 16px;overflow:hidden}
+  details.howto>summary{list-style:none;cursor:pointer;padding:12px 18px;font-weight:650;font-size:14px;
+    display:flex;align-items:center;gap:8px}
+  details.howto>summary::-webkit-details-marker{display:none}
+  details.howto>summary::before{content:"\\25B8";color:var(--muted);font-size:12px}
+  details.howto[open]>summary::before{content:"\\25BE"}
+  .howto-body{border-top:1px solid var(--line);padding:12px 18px;font-size:13px;color:var(--muted);line-height:1.6}
+  .howto-body b{color:var(--ink)}
+
+  /* View tools: fold / unfold all sections. */
+  .viewtools{display:flex;gap:8px;margin:0 0 16px;justify-content:flex-end}
+  .viewtools button{font:inherit;font-size:12.5px;font-weight:600;cursor:pointer;
+    border:1px solid var(--line-strong);background:var(--surface);color:var(--ink);
+    border-radius:7px;padding:6px 12px}
+  .viewtools button:hover{border-color:var(--accent)}
+
+  /* Manual completion checklist (per-run, not persisted). */
+  .checklist{margin:12px 0 2px;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}
+  .cl-head{display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--manual-bg);
+    border-bottom:1px solid var(--line);font-size:12.5px;font-weight:650;color:var(--ink)}
+  .cl-head .cl-count{margin-inline-start:auto;font-size:12px;font-weight:600;color:var(--muted);
+    border:1px solid var(--line-strong);border-radius:999px;padding:1px 9px}
+  .cl-head .cl-count.done{color:var(--pass);border-color:var(--pass-line);background:var(--pass-bg)}
+  .cl-note{padding:6px 12px;font-size:11.5px;color:var(--muted);border-bottom:1px solid var(--line);font-style:italic}
+  .cl-item{display:flex;gap:10px;align-items:flex-start;padding:9px 12px;border-bottom:1px solid var(--line);
+    cursor:pointer;font-size:13px;color:var(--ink)}
+  .cl-item:last-child{border-bottom:none}
+  .cl-item:hover{background:var(--bg)}
+  .cl-item input{margin:2px 0 0;width:15px;height:15px;accent-color:var(--pass);flex:none;cursor:pointer}
+  .cl-item code{background:var(--chip);padding:1px 5px;border-radius:4px;font-size:12px}
+  .cl-item.done{color:var(--muted)}
+  .cl-item.done .cl-text{text-decoration:line-through}
+
   /* Action items panel */
   .actions-panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
     box-shadow:var(--shadow);padding:16px 18px;margin:0 0 16px;border-inline-start:4px solid var(--fail)}
@@ -672,10 +713,11 @@ _REPORT_CSS = """
   .actions-panel.allclear{border-inline-start-color:var(--pass)}
 """
 
-# Progressive-enhancement JS copied verbatim from the mockup: anchor-jump that
-# opens the target <details>, and the status filter bar. The mockup's third
-# IIFE (a localStorage completion checklist) is intentionally dropped — the
-# data model has no per-step checklist, so rendering one would fabricate data.
+# Progressive-enhancement JS: anchor-jump that opens the target <details>,
+# the status filter bar, fold/unfold-all controls, and the manual completion
+# checklists. The checklists are per-run only (no localStorage persistence)
+# and are built from real CheckResult.remediation steps, so nothing is
+# fabricated.
 _REPORT_SCRIPT = """
   // Progressive enhancement only — the report is fully readable without JS.
 
@@ -719,6 +761,45 @@ _REPORT_SCRIPT = """
       });
     });
   })();
+
+  // Fold all / Unfold all — open or collapse every category section at once.
+  (function(){
+    var vt = document.getElementById('viewtools');
+    if(!vt) return;
+    vt.hidden = false;
+    var secs = Array.prototype.slice.call(document.querySelectorAll('details.sec'));
+    var unfold = document.getElementById('unfoldAll');
+    var fold = document.getElementById('foldAll');
+    if(unfold){ unfold.addEventListener('click', function(){ secs.forEach(function(s){ s.open = true; }); }); }
+    if(fold){ fold.addEventListener('click', function(){ secs.forEach(function(s){ s.open = false; }); }); }
+  })();
+
+  // Manual completion checklists — live counter, per-run only (not saved).
+  (function(){
+    var lists = Array.prototype.slice.call(document.querySelectorAll('.checklist'));
+    lists.forEach(function(list){
+      var items = Array.prototype.slice.call(list.querySelectorAll('.cl-item'));
+      var count = list.querySelector('.cl-count');
+      function update(){
+        var done = 0;
+        items.forEach(function(it){
+          var box = it.querySelector('input');
+          var on = !!(box && box.checked);
+          it.classList.toggle('done', on);
+          if(on){ done++; }
+        });
+        if(count){
+          count.textContent = done + ' / ' + items.length;
+          count.classList.toggle('done', done === items.length && items.length > 0);
+        }
+      }
+      items.forEach(function(it){
+        var box = it.querySelector('input');
+        if(box){ box.addEventListener('change', update); }
+      });
+      update();
+    });
+  })();
 """
 
 # Filter bar markup. Rendered hidden; the filter IIFE un-hides it when JS runs
@@ -730,6 +811,16 @@ _FILTER_BAR = (
     '    <button data-f="warn">Warnings</button>\n'
     '    <button data-f="manual">Manual</button>\n'
     '    <button data-f="pass">Passed</button>\n'
+    '  </div>\n'
+)
+
+# Fold/unfold-all controls. Hidden until the fold IIFE un-hides them, so the
+# no-JS view isn't left with dead buttons (each section is a native <details>
+# the reader can still toggle by hand).
+_VIEW_TOOLS = (
+    '  <div class="viewtools" id="viewtools" hidden>\n'
+    '    <button id="unfoldAll" type="button">Unfold all</button>\n'
+    '    <button id="foldAll" type="button">Fold all</button>\n'
     '  </div>\n'
 )
 
@@ -1132,10 +1223,13 @@ def _render_check_card(res: CheckResult) -> str:
                 f'<dd>{_html_escape(res.result)}</dd></dl>\n'
             )
     if res.remediation:
-        parts.append(
-            '        <div class="next"><b>Next step</b> \u2014 '
-            f'{_md_links_to_html(res.remediation)}</div>\n'
-        )
+        if res.status == Status.MANUAL.value:
+            parts.append(_render_manual_checklist(res.remediation))
+        else:
+            parts.append(
+                '        <div class="next"><b>Next step</b> \u2014 '
+                f'{_md_links_to_html(res.remediation)}</div>\n'
+            )
     if res.doc_link:
         parts.append(
             '        <div class="actions">'
@@ -1146,17 +1240,25 @@ def _render_check_card(res: CheckResult) -> str:
     return "".join(parts)
 
 
-def _render_footer() -> str:
-    """Static footer: how-to-read guidance + status legend."""
+def _render_howto() -> str:
+    """Collapsed "how to read this report" guide, shown below the verdict.
+
+    Placed after the verdict banner (not first) so the headline outcome
+    is what the operator sees on load; the guide expands on demand. The
+    content is static reading guidance plus the status colour legend.
+    """
     return (
-        '  <footer>\n'
-        '    <div class="grid-note">\n'
-        '      <h3>How to read this report</h3>\n'
+        '  <details class="howto">\n'
+        '    <summary>How to read this report</summary>\n'
+        '    <div class="howto-body">\n'
         '      Fix the <b style="color:var(--fail)">red</b> items first '
         '\u2014 they block deployment. '
         '<b style="color:var(--warn)">Warnings</b> and <b>Manual</b> items '
-        'need your review but don\u2019t block. After fixing, re-run '
-        '<code>/flightcheck</code>.\n'
+        'need your review but don\u2019t block. Manual checks include a '
+        'completion checklist you can tick off as you verify each step '
+        '(progress applies to this run only). Use the filter bar to focus '
+        'on one status, or <b>Fold all</b> / <b>Unfold all</b> to collapse '
+        'the sections. After fixing, re-run <code>/flightcheck</code>.\n'
         '      <div class="legend">\n'
         '        <span><i class="sw" style="background:var(--pass)"></i> '
         'Passed</span>\n'
@@ -1169,6 +1271,36 @@ def _render_footer() -> str:
         '        <span><i class="sw" style="background:var(--na)"></i> '
         'Not configured</span>\n'
         '      </div>\n'
+        '    </div>\n'
+        '  </details>\n'
+    )
+
+
+def _render_footer() -> str:
+    """Static footer: status legend + re-run pointer.
+
+    The prose reading guide lives in the collapsed top guide
+    (``_render_howto``); the footer keeps only the always-visible colour
+    legend so the two don't duplicate the same paragraph.
+    """
+    return (
+        '  <footer>\n'
+        '    <div class="grid-note">\n'
+        '      <h3>Status legend</h3>\n'
+        '      <div class="legend">\n'
+        '        <span><i class="sw" style="background:var(--pass)"></i> '
+        'Passed</span>\n'
+        '        <span><i class="sw" style="background:var(--fail)"></i> '
+        'Failed / Error</span>\n'
+        '        <span><i class="sw" style="background:var(--warn)"></i> '
+        'Warning</span>\n'
+        '        <span><i class="sw" style="background:var(--manual)"></i> '
+        'Manual</span>\n'
+        '        <span><i class="sw" style="background:var(--na)"></i> '
+        'Not configured</span>\n'
+        '      </div>\n'
+        '      <div style="margin-top:10px">After fixing the red items, '
+        're-run <code>/flightcheck</code>.</div>\n'
         '    </div>\n'
         '  </footer>\n'
     )
@@ -1195,3 +1327,108 @@ def _md_links_to_html(text: str) -> str:
         r'<a href="\2" target="_blank">\1</a>',
         escaped,
     )
+
+
+def _multiline_html(text: str) -> str:
+    """HTML for multi-line text: escape, linkify markdown, keep line breaks.
+
+    Used for manual checklist step blocks, which carry a "Step N" line
+    plus its indented a/b/c sub-lines. Line breaks become <br> so the
+    authored structure survives inside a single checkbox label.
+    """
+    return _md_links_to_html(text).replace("\n", "<br>")
+
+
+def _mask_sensitive(text: str) -> str:
+    """Redact operator-identifying values before they reach the report.
+
+    The manual completion checklist echoes ``CheckResult.remediation``,
+    which can name a specific user (email / UPN) or a resource GUID. These
+    aren't secrets, but a readiness report is often shared beyond the
+    operator, so we mask the local part of addresses and the middle of
+    GUIDs while keeping enough context (domain, first block) to stay
+    actionable.
+    """
+    import re
+    # Email / UPN -> keep first char + full domain: j***@contoso.com
+    text = re.sub(
+        r'([A-Za-z0-9])[A-Za-z0-9._%+-]*(@[A-Za-z0-9.-]+\.[A-Za-z]{2,})',
+        r'\1***\2', text,
+    )
+    # GUID -> keep first block: 1a2b3c4d-****-****-****-************
+    text = re.sub(
+        r'\b([0-9a-fA-F]{8})-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
+        r'[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b',
+        r'\1-****-****-****-************', text,
+    )
+    return text
+
+
+def _manual_checklist_items(remediation: str) -> tuple[str, list[str]]:
+    """Split a manual check's remediation into (preamble, step blocks).
+
+    Real manual remediation is uneven: a few checks carry numbered
+    "Step 1 ... Step 2 ..." blocks (each with indented a/b/c sub-lines),
+    most are a single paragraph. This surfaces the numbered blocks as
+    checklist items (one tick per real step) and returns any leading text
+    as preamble context. Nothing is invented: a check with no "Step N"
+    markers yields an empty step list, so the caller renders only the
+    explicit "Mark as verified" affordance.
+    """
+    import re
+    lines = remediation.splitlines()
+    step_starts = [
+        i for i, ln in enumerate(lines)
+        if re.match(r'^\s*Step\s+\d+\b', ln)
+    ]
+    if not step_starts:
+        return remediation.strip(), []
+    preamble = "\n".join(lines[:step_starts[0]]).strip()
+    bounds = step_starts + [len(lines)]
+    steps = []
+    for start, end in zip(step_starts, bounds[1:]):
+        block = "\n".join(lines[start:end]).strip()
+        if block:
+            steps.append(block)
+    return preamble, steps
+
+
+def _render_manual_checklist(remediation: str) -> str:
+    """Render a manual check's remediation as a per-run completion checklist.
+
+    Always includes an explicit "Mark as verified" checkbox; where the
+    remediation has real numbered steps, each becomes its own tick. Any
+    leading context renders above the list. Progress is NOT persisted (the
+    JS counter resets on reload; the "this run only" note sets that
+    expectation). Identifying values are masked via ``_mask_sensitive``.
+    """
+    preamble, steps = _manual_checklist_items(remediation)
+    parts = []
+    if preamble:
+        parts.append(
+            '        <div class="next"><b>Manual check</b> \u2014 '
+            f'{_md_links_to_html(_mask_sensitive(preamble))}</div>\n'
+        )
+    total = len(steps) + 1  # +1 for the explicit "Mark as verified" item
+    parts.append('        <div class="checklist">\n')
+    parts.append(
+        '          <div class="cl-head">Completion checklist'
+        f'<span class="cl-count">0 / {total}</span></div>\n'
+    )
+    parts.append(
+        '          <div class="cl-note">Progress applies to this run only.'
+        '</div>\n'
+    )
+    for step in steps:
+        label = _multiline_html(_mask_sensitive(step))
+        parts.append(
+            '          <label class="cl-item"><input type="checkbox">'
+            f'<span class="cl-text">{label}</span></label>\n'
+        )
+    parts.append(
+        '          <label class="cl-item"><input type="checkbox">'
+        '<span class="cl-text">Mark as verified \u2014 I\u2019ve completed '
+        'this manual check.</span></label>\n'
+    )
+    parts.append('        </div>\n')
+    return "".join(parts)
