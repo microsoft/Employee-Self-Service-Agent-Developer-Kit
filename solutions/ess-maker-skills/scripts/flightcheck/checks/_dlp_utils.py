@@ -12,7 +12,10 @@ policies across FlightCheck checks:
     connector the agent depends on allowed and co-grouped, with none
     Blocked?
 
-Wire schema (apiPolicies, api-version 2021-04-01)::
+The apiPolicies (api-version 2021-04-01) endpoint returns a policy in one
+of TWO shapes; this module parses both.
+
+Legacy / documented shape — ``properties.connectorGroups``::
 
     policy["properties"]["connectorGroups"] = [
         {"classification": "Confidential" | "General" | "Blocked",
@@ -26,6 +29,27 @@ The PowerShell/REST classification vocabulary is ``Confidential``
 (= Business), ``General`` (= Non-Business), ``Blocked``. The Power
 Platform admin center UI labels these Business / Non-Business / Blocked.
 Both spellings are accepted defensively.
+
+Modern shape — ``properties.definition.apiGroups`` (what real tenants
+return; verified against a live apiPolicies response, 2026-06-30)::
+
+    policy["properties"]["definition"] = {
+        "apiGroups": {
+            "hbi":     {"description": "Business data only",
+                        "apis": [{"id": ".../shared_x", ...}, ...]},
+            "lbi":     {"description": "No business data allowed",
+                        "apis": [...]},
+            "blocked": {"apis": [...]},
+        },
+        "defaultApiGroup": "lbi",   # group unlisted connectors inherit
+        ...
+    }
+
+Here the group KEY is the classification: ``hbi`` = Business,
+``lbi`` = Non-Business, ``blocked`` = Blocked. Unlike the legacy shape,
+the modern shape reports ``defaultApiGroup``, so a connector absent from
+every explicit group inherits a KNOWN group instead of being
+indeterminate.
 
 Multi-policy rule (Power Platform): when several policies apply to one
 environment, the *most restrictive* policy wins. A connector Blocked in
@@ -67,6 +91,15 @@ _GROUP_LABEL = {
     BUSINESS: "Business",
     NON_BUSINESS: "Non-Business",
     BLOCKED: "Blocked",
+}
+
+# Modern schema (properties.definition.apiGroups) uses the group KEY as the
+# classification: hbi = Business, lbi = Non-Business, blocked = Blocked.
+# The same keys appear in properties.definition.defaultApiGroup.
+_APIGROUP_KEY_TO_GROUP = {
+    "hbi": BUSINESS,
+    "lbi": NON_BUSINESS,
+    "blocked": BLOCKED,
 }
 
 # Power Platform admin center — Data policies area. There is no documented,
@@ -135,15 +168,25 @@ def iter_effective_policies(pp, env_id: str):
 def policy_connector_groups(policy: dict | None) -> dict[str, str]:
     """Map ``normalized connector id → canonical group`` for one policy.
 
-    Reads ``properties.connectorGroups[].{classification, connectors[].id}``.
-    Connectors whose group token is unrecognized are skipped (treated as
-    not-explicitly-classified).
+    Parses whichever schema the policy uses:
+
+    * Legacy: ``properties.connectorGroups[].{classification, connectors[].id}``.
+    * Modern: ``properties.definition.apiGroups.{hbi|lbi|blocked}.apis[].id``.
+
+    A policy carries only one of the two shapes, so reading both is safe.
+    Connectors whose group token/key is unrecognized are skipped (treated as
+    not-explicitly-classified). Default-group fallthrough is resolved by
+    ``policy_default_group`` at evaluation time, not here.
     """
     out: dict[str, str] = {}
     if not isinstance(policy, dict):
         return out
-    groups = policy.get("properties", {}).get("connectorGroups", []) or []
-    for grp in groups:
+    props = policy.get("properties", {})
+    if not isinstance(props, dict):
+        return out
+
+    # Legacy shape: properties.connectorGroups[]
+    for grp in props.get("connectorGroups") or []:
         group = classify_token(grp.get("classification"))
         if group is None:
             continue
@@ -151,7 +194,41 @@ def policy_connector_groups(policy: dict | None) -> dict[str, str]:
             cid = normalize_connector_id(conn.get("id") or conn.get("name"))
             if cid:
                 out[cid] = group
+
+    # Modern shape: properties.definition.apiGroups.{hbi|lbi|blocked}.apis[]
+    definition = props.get("definition")
+    if isinstance(definition, dict):
+        api_groups = definition.get("apiGroups")
+        if isinstance(api_groups, dict):
+            for key, gval in api_groups.items():
+                group = _APIGROUP_KEY_TO_GROUP.get(str(key).strip().lower())
+                if group is None or not isinstance(gval, dict):
+                    continue
+                for api in gval.get("apis", []) or []:
+                    cid = normalize_connector_id(api.get("id") or api.get("name"))
+                    if cid:
+                        out[cid] = group
     return out
+
+
+def policy_default_group(policy: dict | None) -> str | None:
+    """Canonical group unlisted connectors inherit, or ``None`` if unknown.
+
+    Modern policies expose ``properties.definition.defaultApiGroup``
+    (e.g. ``"lbi"``), so a connector absent from every explicit group still
+    resolves to a KNOWN group. Legacy ``connectorGroups`` policies do not
+    report a default — this returns ``None`` and the connector stays
+    indeterminate (unchanged legacy behavior).
+    """
+    if not isinstance(policy, dict):
+        return None
+    definition = policy.get("properties", {}).get("definition")
+    if not isinstance(definition, dict):
+        return None
+    key = definition.get("defaultApiGroup")
+    if not key:
+        return None
+    return _APIGROUP_KEY_TO_GROUP.get(str(key).strip().lower())
 
 
 def policy_label(policy: dict | None) -> str:
@@ -226,9 +303,10 @@ def evaluate_connector_classification(agent_ids, policies) -> DlpEvaluation:
     Blocked in ANY policy is blocked; agent connectors split across the
     Business and Non-Business groups within ANY single policy are
     cross-group (they can't be combined in one agent action). Connectors
-    absent from a policy's explicit groups are indeterminate — they inherit
-    the policy's default group (usually Non-Business), which the API does
-    not report, so their effective grouping can't be proven.
+    absent from a policy's explicit groups inherit that policy's
+    ``defaultApiGroup`` when the modern schema reports one; only when no
+    default is known (legacy ``connectorGroups`` policies) do they remain
+    indeterminate — their effective grouping can't be proven.
 
     Verdict precedence: FAIL (blocked or cross-group) > WARN (indeterminate)
     > PASS.
@@ -252,9 +330,14 @@ def evaluate_connector_classification(agent_ids, policies) -> DlpEvaluation:
 
     for policy in policies:
         cmap = policy_connector_groups(policy)
+        default_group = policy_default_group(policy)
         allowed_groups_this_policy: set[str] = set()
         for cid in agent_ids:
             group = cmap.get(cid)
+            if group is None:
+                # Fall back to the policy's default group when the modern
+                # schema reports one; otherwise the connector is unprovable.
+                group = default_group
             if group is None:
                 indeterminate.add(cid)
             elif group == BLOCKED:

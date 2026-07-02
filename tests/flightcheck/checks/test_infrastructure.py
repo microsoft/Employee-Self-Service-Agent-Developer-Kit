@@ -670,6 +670,108 @@ class TestInfra006Verdicts:
         assert result.remediation == ""
 
 
+class TestInfra006ModernSchema:
+    """INFRA-006 against the modern ``definition.apiGroups`` policy shape.
+
+    Real tenants return classification under
+    ``properties.definition.apiGroups.{hbi|lbi|blocked}`` with a
+    ``defaultApiGroup``, not the legacy ``connectorGroups``. These tests use
+    the ``dlp_policy_modern`` builder (verified against a live 2026-06-30
+    apiPolicies response) to prevent regressing to the false WARN that the
+    legacy-only parser produced.
+    """
+
+    def test_modern_all_business_passes(self, monkeypatch):
+        # Arrange: both agent connectors classified Business (hbi).
+        _patch_refs(monkeypatch, _DATAVERSE, _WORKDAY)
+        policies = [ppa.dlp_policy_modern(business=[_DATAVERSE, _WORKDAY])]
+
+        # Act
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        # Assert
+        assert result.status == Status.PASSED.value
+        assert "same data-group" in result.result
+        assert "Business" in result.result
+
+    def test_modern_default_group_resolves_not_indeterminate(self, monkeypatch):
+        # Arrange: Dataverse explicit in hbi; Workday unlisted but the policy
+        # default is hbi, so it resolves to Business rather than indeterminate.
+        _patch_refs(monkeypatch, _DATAVERSE, _WORKDAY)
+        policies = [ppa.dlp_policy_modern(business=[_DATAVERSE], default_group="hbi")]
+
+        # Act
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        # Assert: no false WARN — the default group makes the verdict provable.
+        assert result.status == Status.PASSED.value
+
+    def test_modern_default_group_causes_cross_group_fail(self, monkeypatch):
+        # Arrange: mirrors the live tenant. Dataverse in hbi (Business); the
+        # second connector is unlisted and inherits the lbi default
+        # (Non-Business), so the two connectors are split across groups.
+        _patch_refs(monkeypatch, _DATAVERSE, _WORKDAY)
+        policies = [ppa.dlp_policy_modern(business=[_DATAVERSE], default_group="lbi")]
+
+        # Act
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        # Assert
+        assert result.status == Status.FAILED.value
+        assert "split across data-groups" in result.result
+
+    def test_modern_blocked_connector_fails(self, monkeypatch):
+        # Arrange: the second connector is explicitly Blocked.
+        _patch_refs(monkeypatch, _DATAVERSE, _WORKDAY)
+        policies = [ppa.dlp_policy_modern(business=[_DATAVERSE], blocked=[_WORKDAY])]
+
+        # Act
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        # Assert
+        assert result.status == Status.FAILED.value
+        assert "Blocked" in result.result
+
+    def test_modern_default_blocked_fails(self, monkeypatch):
+        # Arrange: unlisted connector inherits a Blocked default group.
+        _patch_refs(monkeypatch, _WORKDAY)
+        policies = [ppa.dlp_policy_modern(business=[_DATAVERSE], default_group="blocked")]
+
+        # Act
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        # Assert
+        assert result.status == Status.FAILED.value
+        assert "Blocked" in result.result
+
+
+class TestDlpModernSchemaParsing:
+    """Direct parser coverage for the modern ``definition.apiGroups`` shape."""
+
+    def test_policy_connector_groups_reads_apigroups(self):
+        policy = ppa.dlp_policy_modern(
+            business=[_DATAVERSE], non_business=[_HTTP_AAD], blocked=[_WORKDAY],
+        )
+        cmap = dlp_utils.policy_connector_groups(policy)
+
+        assert cmap[_DATAVERSE] == "business"
+        assert cmap[_HTTP_AAD] == "nonbusiness"
+        assert cmap[_WORKDAY] == "blocked"
+
+    def test_policy_default_group_reads_default_api_group(self):
+        assert dlp_utils.policy_default_group(
+            ppa.dlp_policy_modern(default_group="lbi")) == "nonbusiness"
+        assert dlp_utils.policy_default_group(
+            ppa.dlp_policy_modern(default_group="hbi")) == "business"
+        assert dlp_utils.policy_default_group(
+            ppa.dlp_policy_modern(default_group="blocked")) == "blocked"
+
+    def test_legacy_policy_has_no_default_group(self):
+        # Legacy connectorGroups shape reports no default → None (unchanged).
+        assert dlp_utils.policy_default_group(
+            ppa.dlp_policy(business=[_DATAVERSE])) is None
+
+
 class TestInfra006Schema:
     """INFRA-006 row schema + owning role guard (mirrors PRE-004/005)."""
 
