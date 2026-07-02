@@ -56,7 +56,7 @@ Running readiness checks — this takes 1–3 minutes...
 Run in the terminal:
 
 ```
-python scripts/flightcheck/cli.py --scope full
+python scripts/flightcheck/cli.py --scope full --invocation-source adk
 ```
 
 Wait for the script to finish.

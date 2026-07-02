@@ -123,6 +123,15 @@ def open_report_in_browser(output_dir):
 
 
 def main():
+    # Force UTF-8 console output so summary glyphs (→, •) don't crash on
+    # Windows cp1252 terminals. Without this, _print_prioritized_summary
+    # raises UnicodeEncodeError before save_results/telemetry are reached.
+    for _stream in (sys.stdout, sys.stderr):
+        try:
+            _stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError):
+            pass
+
     parser = argparse.ArgumentParser(description="ESS FlightCheck — Pre-deployment Validator")
     parser.add_argument(
         "--scope", default="full",
@@ -144,6 +153,15 @@ def main():
     parser.add_argument(
         "--no-open", action="store_true",
         help="Don't open the HTML report in a browser after running",
+    )
+    parser.add_argument(
+        "--no-telemetry", action="store_true",
+        help="Don't emit anonymous FlightCheck outcome telemetry",
+    )
+    parser.add_argument(
+        "--invocation-source", default="cli",
+        choices=["adk", "installer", "cli"],
+        help="How FlightCheck was invoked (adk=slash-command, installer=standalone installer, cli=direct Python CLI)",
     )
     args = parser.parse_args()
 
@@ -365,6 +383,70 @@ def main():
 
     # Save results
     save_results(result, args.output)
+
+    # Emit anonymous outcome telemetry (best-effort; never affects exit code).
+    if not args.no_telemetry:
+        # Telemetry status is internal detail makers shouldn't normally see;
+        # only surface it when explicitly debugging telemetry.
+        _tele_debug = os.environ.get(
+            "ESS_FLIGHTCHECK_TELEMETRY_DEBUG", ""
+        ).strip().lower() in ("1", "on", "true", "yes")
+        # Resolve the active agent once, up front, so both the legacy and the
+        # adk.* telemetry blocks can use it even if the first block raises early.
+        active_agent = next(
+            (a for a in agents if a.get("slug") == active),
+            agents[0] if agents else {},
+        )
+        try:
+            from flightcheck import telemetry
+
+            _tele = telemetry.emit_flightcheck_telemetry(
+                result,
+                tenant_id=tenant_id,
+                agent_id=active_agent.get("botId", ""),
+                scope=args.scope,
+                agent_count=len(agents),
+                invocation_source=args.invocation_source,
+            )
+            if _tele_debug:
+                print(
+                    f"[telemetry] env={_tele.get('env')} sent={_tele.get('sent')} "
+                    f"events={_tele.get('events')} status={_tele.get('status')} "
+                    f"reason={_tele.get('reason')}"
+                )
+        except Exception as _tele_err:  # never break the run
+            if _tele_debug:
+                print(f"[telemetry] skipped — {type(_tele_err).__name__}: {_tele_err}")
+
+        # Additive adk.* event family (spec Feature #7403772). Emitted alongside
+        # the legacy ESSMakerKit.FlightCheck.* events; never affects the run.
+        try:
+            import adk_telemetry as _adk
+
+            _agent_id = active_agent.get("botId", "")
+            if tenant_id:
+                _adk.set_identity(tenant_id=tenant_id)
+            _ridx = _adk.next_run_index(_agent_id)
+            _adk.emit_flightcheck_run(agent_id=_agent_id, run_index=_ridx)
+            _result_map = {
+                "READY": "pass",
+                "READY_WITH_WARNINGS": "partial",
+                "NOT_READY": "fail",
+            }
+            _adk.emit_flightcheck_result(
+                agent_id=_agent_id,
+                run_index=_ridx,
+                result=_result_map.get(result.overall, "fail"),
+                duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
+            )
+            _adk.flush(timeout=3)
+        except Exception:  # noqa: BLE001 — adk telemetry must never break the run
+            pass
+    else:
+        if os.environ.get(
+            "ESS_FLIGHTCHECK_TELEMETRY_DEBUG", ""
+        ).strip().lower() in ("1", "on", "true", "yes"):
+            print("[telemetry] disabled via --no-telemetry")
 
     # Open HTML report in browser (skip with --no-open for CI / headless runs)
     if not args.no_open:
