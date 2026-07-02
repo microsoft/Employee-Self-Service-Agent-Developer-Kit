@@ -21,9 +21,11 @@ This skill analyzes:
 - the topic's **Power Fx expression logic** (guidance:
   `src/reference/ess-docs/conformance/powerfx-topic-local.md`) — decidable from the authored topic file;
 - **`Global.*` reference integrity** across the agent (guidance:
-  `src/reference/ess-docs/conformance/dangling-globals.md`) — references that resolve to no variable.
+  `src/reference/ess-docs/conformance/dangling-globals.md`) — references that resolve to no variable;
+- **adaptive-card UX contract** (guidance: `src/reference/ess-docs/conformance/ux-contract.md`) — card
+  data bindings that resolve to nothing, and empty/error/confirmation-state gaps.
 
-Other checks (adaptive-card UX, cross-component error-code coverage) are not part of this skill; if the
+Other checks (cross-component error-code coverage) are not part of this skill; if the
 maker asks about those, say they are not covered rather than guessing.
 
 ## Step 1: Identify the topic to review
@@ -62,19 +64,34 @@ for some records": if the detector reports it, it will **always** read blank. Re
 applying the precision bar and reachability scoring to set severity. If the script genuinely cannot be
 run, say so in the report rather than silently skipping.
 
-## Step 4: Analyze Power Fx expression logic (internal reasoning)
+## Step 4: Check adaptive-card UX contract
+
+If the topic contains an adaptive card, run the binding detector from the
+`solutions/ess-maker-skills/` directory:
+
+```
+python scripts/scan_bindings.py --agent {agent-slug} --topic {topic-stem}
+```
+
+Its output is **authoritative** on whether a card's `Topic.*` reference resolves: every reference it
+reports **will always render blank at runtime**. Then read
+`src/reference/ess-docs/conformance/ux-contract.md` and assess the card's empty/error/confirmation states
+(Part 2). Turn each into a finding with the shared precision bar and severity mapping. If the script
+cannot run, say so rather than silently skipping.
+
+## Step 5: Analyze Power Fx expression logic (internal reasoning)
 
 Read the analysis guidance at
 `src/reference/ess-docs/conformance/powerfx-topic-local.md` and apply every heuristic in it to the
 expressions you gathered. Use its precision bar (>=80% confidence), reachability scoring, and severity
 mapping to decide which candidates are real findings and how serious each is.
 
-Steps 3–4 are **internal reasoning**. Their rule IDs (e.g. `BTPF-001`), reachability tags
+Steps 3–5 are **internal reasoning**. Their rule IDs (e.g. `BTPF-001`), reachability tags
 (`REACHABLE_NORMAL_UI`, etc.), and the word "lens" are working vocabulary **for you** — they are NOT
-shown to the customer (see Step 5). Carry each finding's node locators (`id` / `displayName` / `kind`)
+shown to the customer (see Step 6). Carry each finding's node locators (`id` / `displayName` / `kind`)
 and `Fix targets` through internally so the customer-facing step can name the step and a fixer can act.
 
-## Step 5: Present the advisory report (customer-facing)
+## Step 6: Present the advisory report (customer-facing)
 
 Present findings in **plain language**. Do NOT expose internal terminology to the customer — no "lens",
 no rule IDs, no reachability tag names, no file-format jargon. Translate severity to plain words
@@ -113,7 +130,7 @@ customer's own content, not internal terminology). Refer to each site by its **s
 locatable. Order High -> Medium -> Low. Group any "no user impact today" items under a short
 **Minor / cleanup** heading so the customer prioritizes the most likely issues first.
 
-## Step 6: Close
+## Step 7: Close
 
 End advisory, never blocking:
 
