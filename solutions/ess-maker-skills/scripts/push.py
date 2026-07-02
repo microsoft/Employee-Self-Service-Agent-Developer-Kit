@@ -21,6 +21,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 import uuid
 
 try:
@@ -225,6 +226,7 @@ def main():
     env_url = config["dataverseEndpoint"]
     bot_id = config["agent"]["botId"]
     schema_name = config["agent"]["schemaName"]
+    _push_start = time.perf_counter()
 
     if not os.path.exists(agent_dir):
         print(f"ERROR: Agent folder not found: {agent_dir}")
@@ -358,6 +360,15 @@ def main():
     auth = _AuthHolder(env_url)
     auth.acquire()
     print("Authenticated.\n")
+
+    # Telemetry: a push is the ADK "build" of an agent's components into
+    # Copilot Studio. Best-effort; never affects the push.
+    try:
+        import adk_telemetry
+
+        adk_telemetry.emit_build_start(agent_id=bot_id, adk_capability="publishing")
+    except Exception:  # noqa: BLE001 — telemetry must never break push
+        pass
 
     success = 0
     errors = 0
@@ -1016,6 +1027,37 @@ def main():
     print("PUSH COMPLETE")
     print(f"{'=' * 50}")
     print(f"Success: {success}")
+
+    # Telemetry: emit build.complete + agent.deploy with the push outcome.
+    # Best-effort, synchronous flush so the events make it out before exit.
+    try:
+        import adk_telemetry
+
+        _duration_ms = int((time.perf_counter() - _push_start) * 1000)
+        _outcome = "failure" if errors else "success"
+        _deploy_target = os.environ.get("ESS_ADK_DEPLOY_TARGET", "production").strip() or "production"
+        _err_kwargs = {}
+        if errors:
+            _err_kwargs = {
+                "error_code": "PUSH_PARTIAL_FAILURE",
+                "error_category": "runtime",
+                "error_message": f"{errors} component(s) failed",
+            }
+        adk_telemetry.emit_build_complete(
+            agent_id=bot_id, adk_capability="publishing",
+            outcome=_outcome, duration_ms=_duration_ms, **_err_kwargs,
+        )
+        adk_telemetry.emit_agent_deploy(
+            agent_id=bot_id, deploy_target=_deploy_target, adk_capability="publishing",
+            outcome=("server_error" if errors else "success"),
+            duration_ms=_duration_ms,
+            **({"error_code": "DEPLOY_PARTIAL_FAILURE", "error_category": "runtime",
+                "error_message": f"{errors} component(s) failed"} if errors else {}),
+        )
+        adk_telemetry.flush(timeout=5)
+    except Exception:  # noqa: BLE001 — telemetry must never break push
+        pass
+
     if errors:
         print(f"Errors:  {errors}")
         sys.exit(1)

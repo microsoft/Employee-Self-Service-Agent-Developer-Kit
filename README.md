@@ -99,6 +99,14 @@ CONTRIBUTING.md         Contribution guide, maintenance, privacy posture, valida
 SUPPORT.md              Support model
 ```
 
+## Telemetry
+
+The ESS Maker Skills CLI collects pseudonymous usage telemetry (enabled by
+default) to help improve the product. No developer identity, agent content, or
+personal data is collected. See
+[Telemetry & Privacy](solutions/ess-maker-skills/README.md#telemetry--privacy)
+for what's collected and how to opt out.
+
 ## Contributing
 
 This project welcomes contributions and suggestions. Most contributions require you to agree to a Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us the rights to use your contribution. For details, visit https://cla.microsoft.com.
