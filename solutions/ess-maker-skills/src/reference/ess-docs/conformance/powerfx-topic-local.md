@@ -76,18 +76,25 @@ findings.
 
 ## Output format
 
-Report findings as a numbered list using `BTPF-NNN` IDs (Bot Topic Power Fx):
+Report findings as a numbered list using `BTPF-NNN` IDs (Bot Topic Power Fx).
+
+**Locators (important).** The fix is applied in the chat panel, not by a human navigating to a line —
+so cite each site by its **stable node identity**, which is what a fixer keys on: the action's `id:`,
+its `displayName:` (if present), and its action `kind:`. Include the short expression excerpt so the
+target is unambiguous. A line number is **best-effort context only**, never the primary locator (line
+numbers drift and the agentic read does not track them reliably).
 
 ```text
 BTPF-NNN — <one-line summary>
   Severity:     HIGH | MEDIUM | LOW
   Reachability: REACHABLE_NORMAL_UI | REACHABLE_NORMAL_UI_WITH_DATA_PRECONDITION | NOT_REACHABLE_VIA_BOT_UI | OPERATOR_OR_HYGIENE_ONLY
   Site(s):
-    - <topic file>:<line>  <short expression excerpt>
+    - kind=<action kind>  id=<node id>  displayName=<node displayName, if any>  expr=<short excerpt>  (~line <N>)
     - (additional sites if multi-site)
   What's wrong:   <1-3 sentence anti-pattern explanation>
   Why it matters: <observable user/operator impact>
   Concrete fix:   <specific proposed change — Power Fx snippet or YAML edit>
+  Fix targets:    <the node id(s) the fix edits or the node it inserts before/after — so the fixer can act>
 ```
 
 Sort findings HIGH -> MEDIUM -> LOW. After the list, emit a **Defense-in-depth** section for real

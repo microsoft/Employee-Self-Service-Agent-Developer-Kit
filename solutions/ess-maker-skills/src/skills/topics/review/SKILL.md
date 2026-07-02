@@ -42,8 +42,9 @@ State the full path of the file you are about to review.
 ## Step 2: Read the topic
 
 Read the entire target `.mcs.yml`. Identify every Power Fx expression: any value beginning with `=`, and
-the expression bodies inside `AdaptiveCardPrompt.card` and `AdaptiveCardTemplate.cardContent`. Keep track
-of line numbers so findings can cite `file:line`.
+the expression bodies inside `AdaptiveCardPrompt.card` and `AdaptiveCardTemplate.cardContent`. For each,
+capture the enclosing action's **`id:`**, **`displayName:`** (if present), and **`kind:`** — these are the
+stable node locators the fix step keys on. Note the approximate line number as secondary context only.
 
 ## Step 3: Analyze the topic (internal reasoning)
 
@@ -54,7 +55,8 @@ mapping to decide which candidates are real findings and how serious each is.
 
 This step is **internal reasoning**. Its rule IDs (e.g. `BTPF-001`), reachability tags
 (`REACHABLE_NORMAL_UI`, etc.), and the word "lens" are working vocabulary **for you** — they are NOT
-shown to the customer (see Step 4).
+shown to the customer (see Step 4). Carry each finding's node locators (`id` / `displayName` / `kind`)
+and `Fix targets` through internally so the customer-facing step can name the step and a fixer can act.
 
 ## Step 4: Present the advisory report (customer-facing)
 
@@ -77,21 +79,22 @@ Directly under the verdict, include this framing line:
 > These are potential issues flagged from common patterns — not confirmed bugs. Some may not apply to
 > your scenario; use your judgment.
 
-Then a plain findings table:
+Then a plain findings table. Locate each finding by the **step/action it lives in** (its name/label),
+not a line number — that is how you (or `/update`) will find and fix it:
 
 > **Review — `{TopicName}`** — {verdict}
 >
 > This is advisory — it won't block publishing.
 >
-> | # | Severity | Where | Potential issue | Suggested fix |
-> |---|----------|-------|-----------------|---------------|
-> | 1 | Medium | `line 157` | The flow call may not handle a failure, so an error could show the user nothing | Consider adding a branch that handles the failure case and shows an error message |
+> | # | Severity | Where (step) | Potential issue | Suggested fix |
+> |---|----------|--------------|-----------------|---------------|
+> | 1 | Medium | "Redirect to Workday Get Common Execution" | The flow call may not handle a failure, so an error could show the user nothing | Consider adding a branch that handles the failure case and shows an error message |
 
 Below the table, give each finding a short plain explanation, hedged: what **might** be wrong, why it
 **could** matter to the user, and a suggested fix (a Power Fx snippet or YAML edit is fine — that is the
-customer's own content, not internal terminology). Order High -> Medium -> Low. Group any "no user impact
-today" items under a short **Minor / cleanup** heading so the customer prioritizes the most likely issues
-first.
+customer's own content, not internal terminology). Refer to each site by its **step name/label** so it is
+locatable. Order High -> Medium -> Low. Group any "no user impact today" items under a short
+**Minor / cleanup** heading so the customer prioritizes the most likely issues first.
 
 ## Step 5: Close
 
