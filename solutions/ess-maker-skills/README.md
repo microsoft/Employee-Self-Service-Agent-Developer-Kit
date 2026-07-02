@@ -347,6 +347,56 @@ solutions/ess-maker-skills/
 
 `workspace/` and `.local/` scaffold dirs are committed (just `.gitkeep` files); contents are gitignored. Reference samples (topic YAMLs, template configs, evaluation test sets) live at the repo root in [`samples/`](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/tree/main/samples), peer to `solutions/`.
 
+## Telemetry & Privacy
+
+The ADK collects **pseudonymous** usage telemetry to help us understand which
+capabilities are used and where they fail, so we can improve the product. It is
+**enabled by default**, and a one-time notice is printed the first time you run a
+CLI command.
+
+**What is collected**
+
+- A random **instance ID** (a GUID generated per installation) — used to count
+  active installs and DAU/WAU/MAU. It is **not** tied to your identity.
+- Your **tenant ID** (the Entra tenant GUID) — identifies the enterprise tenant,
+  not an individual user.
+- Non-identifying context: ADK version, surface, session ID, event name, and
+  per-event enums/metrics (e.g. FlightCheck verdicts, durations, check categories).
+- Scrubbed, non-sensitive **error categories** when something fails.
+
+**What is _not_ collected**
+
+- No developer, user, or account identifier (no AAD OID, email, or name).
+- No agent content, prompts, credentials, file contents, or personal data.
+
+**How to opt out**
+
+Run from the `solutions/ess-maker-skills` directory:
+
+```bash
+python scripts/adk_telemetry.py off      # disable telemetry
+python scripts/adk_telemetry.py on       # re-enable telemetry
+python scripts/adk_telemetry.py status   # show current setting
+```
+
+You can also set an environment variable, which takes precedence:
+
+```bash
+ESS_ADK_TELEMETRY=off
+```
+
+**Storage, retention & deletion**
+
+- Your preference is stored per-machine in `~/.adk/config`. Delete that file to
+  reset to the default (enabled).
+- Opting out stops all future collection immediately; it does not delete data
+  already collected.
+- Collected telemetry is retained for at most **30 days**.
+- For full details and data-deletion requests, see
+  [https://aka.ms/adk-telemetry](https://aka.ms/adk-telemetry).
+
+---
+
 ## Contributing
 
 See the repository [Contributing Guide](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/blob/main/CONTRIBUTING.md) for the contribution model, the Microsoft CLA process, security maintenance commitments, scope policy, and validation guide.

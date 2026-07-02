@@ -8,3 +8,7 @@ workspace/**
 .local/**
 !.local/
 !.local/.gitkeep
+
+# Kit-internal state can also land under scripts/.local/ when tools are run
+# from the scripts dir (e.g. `python adk_telemetry.py --selftest`). Never commit.
+scripts/.local/

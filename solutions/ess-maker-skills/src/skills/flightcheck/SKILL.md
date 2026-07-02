@@ -68,7 +68,7 @@ Running readiness checks — this takes 1–3 minutes depending on scope...
 Run in the terminal:
 
 ```
-python scripts/flightcheck/cli.py --scope {SCOPE}
+python scripts/flightcheck/cli.py --scope {SCOPE} --invocation-source adk
 ```
 
 Wait for the script to finish.
@@ -206,7 +206,7 @@ appropriate skill file:
 After all auto-fixes complete, re-run flightcheck:
 
 ```
-python scripts/flightcheck/cli.py --scope {SCOPE}
+python scripts/flightcheck/cli.py --scope {SCOPE} --invocation-source adk
 ```
 
 `cli.py` reopens the updated report in the browser automatically — **do not run

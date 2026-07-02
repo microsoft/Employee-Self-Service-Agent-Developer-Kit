@@ -210,6 +210,47 @@ class TestQueryAll:
             )
 
     @responses.activate
+    def test_emits_api_call_on_client_error_before_raising(
+        self, dataverse_url: str, fake_token: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A 403 read must be recorded in api-call telemetry, not silently
+        dropped, so failed reads show up in the outcome distribution alongside
+        create/update/delete/get failures. (5xx is retried by the Session and
+        surfaces as RetryError before reaching here; 403 falls straight
+        through to raise_api_error.)"""
+        import auth
+
+        calls: list[dict] = []
+        monkeypatch.setattr(
+            auth,
+            "_emit_api_call",
+            lambda endpoint, op, start, *, status=None, error=None: calls.append(
+                {"endpoint": endpoint, "op": op, "status": status}
+            ),
+        )
+
+        responses.add(
+            responses.GET,
+            dv.build_query_url(
+                dataverse_url,
+                "environmentvariabledefinitions",
+                select="schemaname",
+            ),
+            json={"error": {"code": "0x80040220", "message": "forbidden"}},
+            status=403,
+        )
+
+        with pytest.raises(auth.APIError):
+            auth.query_all(
+                dataverse_url, fake_token,
+                "environmentvariabledefinitions", "schemaname",
+            )
+
+        assert calls == [
+            {"endpoint": "environmentvariabledefinitions", "op": "read", "status": 403}
+        ]
+
+    @responses.activate
     def test_sends_bearer_token(
         self, dataverse_url: str, fake_token: str
     ) -> None:
