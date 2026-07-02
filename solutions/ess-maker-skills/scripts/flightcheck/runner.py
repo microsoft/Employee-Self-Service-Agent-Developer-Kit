@@ -71,6 +71,7 @@ class CheckResult:
     result: str            # Finding detail
     remediation: str = ""  # How to fix
     doc_link: str = ""     # Microsoft Learn URL
+    doc_label: str = ""    # Link text for doc_link; falls back to "Docs"
     # roles — the persona(s) who own the next step (fix or manual
     # validation). Every production check sets this; defaults to empty
     # so the runner's ERROR fallback and unit-test constructions still
@@ -391,10 +392,7 @@ def _generate_html_report(r: RunResult) -> str:
     verdict_class, verdict_icon, verdict_headline, verdict_sub = _verdict_text(r)
 
     categories = _group_by_category(r)
-    sections_html = "".join(
-        _render_category_section(index, category, results)
-        for index, (category, results) in enumerate(categories, start=1)
-    )
+    sections_html = _render_sections(categories)
 
     return (
         "<!DOCTYPE html>\n"
@@ -574,6 +572,11 @@ _REPORT_CSS = """
   .mini .b.warn{color:var(--warn);background:var(--warn-bg);border-color:var(--warn-line)}
   .mini .b.pass{color:var(--pass);background:var(--pass-bg);border-color:var(--pass-line)}
   .sec-body{border-top:1px solid var(--line);padding:6px 0 4px}
+  /* Per-agent nesting: base subgroups inside one agent section. */
+  .subsec{border-top:1px solid var(--line)}
+  .subsec:first-child{border-top:none}
+  .subhead{display:flex;align-items:center;gap:12px;padding:11px 18px;font-weight:650;
+    font-size:13.5px;color:var(--ink);background:var(--bg)}
 
   /* Check rows */
   .check{padding:14px 18px;border-bottom:1px solid var(--line)}
@@ -728,8 +731,8 @@ _REPORT_SCRIPT = """
       var el = document.getElementById(hash.slice(1));
       if(!el) return;
       if(el.tagName === 'DETAILS'){ el.open = true; }
-      var d = el.closest ? el.closest('details') : null;
-      if(d){ d.open = true; }
+      var d = el.parentElement;
+      while(d){ if(d.tagName === 'DETAILS'){ d.open = true; } d = d.parentElement; }
       el.scrollIntoView({behavior:'smooth', block:'start'});
     }
     document.addEventListener('click', function(e){
@@ -747,12 +750,18 @@ _REPORT_SCRIPT = """
     bar.hidden = false;
     var checks = Array.prototype.slice.call(document.querySelectorAll('.check'));
     var secs = Array.prototype.slice.call(document.querySelectorAll('details.sec'));
+    var subsecs = Array.prototype.slice.call(document.querySelectorAll('.subsec'));
     bar.addEventListener('click', function(e){
       var btn = e.target.closest('button'); if(!btn) return;
       var f = btn.getAttribute('data-f');
       bar.querySelectorAll('button').forEach(function(b){ b.setAttribute('aria-pressed', b===btn ? 'true':'false'); });
       checks.forEach(function(c){
         c.classList.toggle('hidden', !(f==='all' || c.getAttribute('data-s')===f));
+      });
+      // hide agent subgroups that have no visible rows under the active filter
+      subsecs.forEach(function(ss){
+        var anyVisible = ss.querySelector('.check:not(.hidden)');
+        ss.classList.toggle('hidden', f!=='all' && !anyVisible);
       });
       // open sections that still have visible rows; collapse empty ones
       secs.forEach(function(s){
@@ -855,11 +864,67 @@ def _base_category(category: str) -> str:
     single tile per base name (``"Topics"``) so the at-a-glance grid stays
     compact regardless of how many agents were scanned. Categories with no
     trailing ``"(...)"`` suffix (shared infra / prerequisite checks) pass
-    through unchanged. The per-category detail sections below are NOT
-    collapsed — only the synopsis overview is.
+    through unchanged.
     """
     import re
     return re.sub(r"\s*\([^()]*\)\s*$", "", category).strip() or category
+
+
+# Base category names that FlightCheck emits once per scanned agent, suffixed
+# with the agent name, e.g. "Topics (Contoso HR)". The detail view nests these
+# under a single section per agent instead of listing every agent x base pair
+# as a flat sibling, which otherwise explodes to ~20 sections for a 5-agent run.
+_AGENT_SCOPED_BASES = ("Configuration", "Topics", "Knowledge Sources", "Template Configs")
+
+
+def _split_agent(category: str) -> tuple[str, str | None]:
+    """Split ``"<Base> (<Agent>)"`` into ``(base, agent)`` for agent-scoped
+    categories; return ``(category, None)`` for tenant-wide categories.
+
+    Only the known per-agent bases are treated as agent-scoped so that a
+    tenant category that happens to carry a trailing parenthetical is left
+    intact.
+    """
+    import re
+    match = re.match(r"^(.*?)\s*\(([^()]*)\)\s*$", category)
+    if not match:
+        return category, None
+    base, agent = match.group(1).strip(), match.group(2).strip()
+    if base in _AGENT_SCOPED_BASES and agent:
+        return base, agent
+    return category, None
+
+
+def _status_minis(results: list[CheckResult]) -> tuple[str, bool]:
+    """Build the "N fail / N warn / N manual / N ok" mini badges for a group.
+
+    Returns the badge HTML and whether the group has any actionable row
+    (fail/error/warning/manual/not-configured) so callers can decide
+    whether to open the section by default.
+    """
+    n_fail = sum(
+        1 for x in results
+        if x.status in (Status.FAILED.value, Status.ERROR.value)
+    )
+    n_warn = sum(1 for x in results if x.status == Status.WARNING.value)
+    n_other = sum(
+        1 for x in results
+        if x.status in (Status.MANUAL.value, Status.NOT_CONFIGURED.value)
+    )
+    n_ok = sum(
+        1 for x in results
+        if x.status in (Status.PASSED.value, Status.SKIPPED.value)
+    )
+    minis = []
+    if n_fail:
+        minis.append(f'<span class="b fail">{n_fail} fail</span>')
+    if n_warn:
+        minis.append(f'<span class="b warn">{n_warn} warn</span>')
+    if n_other:
+        minis.append(f'<span class="b">{n_other} manual</span>')
+    if n_ok:
+        minis.append(f'<span class="b pass">{n_ok} ok</span>')
+    return "".join(minis), bool(n_fail or n_warn or n_other)
 
 
 def _group_by_category(r: RunResult) -> list[tuple[str, list[CheckResult]]]:
@@ -1180,6 +1245,78 @@ def _render_category_section(
     )
 
 
+def _render_agent_section(
+    index: int,
+    agent: str,
+    subs: list[tuple[str, str, list[CheckResult]]],
+) -> str:
+    """One collapsible section per scanned agent, with a subgroup per base.
+
+    ``subs`` is a list of ``(base, full_category, results)`` for that agent,
+    e.g. ``("Topics", "Topics (Contoso HR)", [...])``. Each subgroup keeps
+    the original per-agent anchor id (``cat-topics-contoso-hr``) so the
+    readiness synopsis tiles still resolve, and the outer section opens by
+    default when any of the agent's checks are actionable.
+    """
+    all_results = [x for _base, _cat, results in subs for x in results]
+    minis_html, actionable = _status_minis(all_results)
+    open_attr = " open" if actionable else ""
+
+    body_parts = []
+    for base, category, results in subs:
+        sub_minis, _ = _status_minis(results)
+        cards = "".join(_render_check_card(x) for x in results)
+        body_parts.append(
+            f'      <div class="subsec" id="cat-{_slug(category)}">\n'
+            f'        <div class="subhead">{_html_escape(base)}'
+            '<span class="spacer"></span>'
+            f'<span class="mini">{sub_minis}</span></div>\n'
+            f'{cards}      </div>\n'
+        )
+
+    return (
+        f'  <details class="sec" id="cat-agent-{_slug(agent)}"{open_attr}>\n'
+        f'    <summary><span class="stage-no">{index}</span> '
+        f'{_html_escape(agent)}<span class="spacer"></span>'
+        f'<span class="mini">{minis_html}</span></summary>\n'
+        f'    <div class="sec-body">\n{"".join(body_parts)}    </div>\n'
+        '  </details>\n'
+    )
+
+
+def _render_sections(
+    categories: list[tuple[str, list[CheckResult]]],
+) -> str:
+    """Render all detail sections, nesting per-agent categories.
+
+    Tenant-wide categories render as flat sections in their existing order.
+    Agent-scoped categories (Configuration / Topics / Knowledge Sources /
+    Template Configs) are folded into a single section per agent, placed at
+    the position where that agent first appears, so the section list stays
+    readable regardless of how many agents were scanned.
+    """
+    agent_subs: dict[str, list[tuple[str, str, list[CheckResult]]]] = {}
+    items: list[tuple] = []  # ("cat", category, results) | ("agent", agent)
+    for category, results in categories:
+        base, agent = _split_agent(category)
+        if agent is None:
+            items.append(("cat", category, results))
+        else:
+            if agent not in agent_subs:
+                agent_subs[agent] = []
+                items.append(("agent", agent))
+            agent_subs[agent].append((base, category, results))
+
+    parts = []
+    for index, item in enumerate(items, start=1):
+        if item[0] == "cat":
+            parts.append(_render_category_section(index, item[1], item[2]))
+        else:
+            agent = item[1]
+            parts.append(_render_agent_section(index, agent, agent_subs[agent]))
+    return "".join(parts)
+
+
 def _render_check_card(res: CheckResult) -> str:
     """One check rendered as a card: pill, title, role, result, next step.
 
@@ -1231,10 +1368,11 @@ def _render_check_card(res: CheckResult) -> str:
                 f'{_md_links_to_html(res.remediation)}</div>\n'
             )
     if res.doc_link:
+        link_text = _html_escape(res.doc_label) if res.doc_label else "Docs"
         parts.append(
             '        <div class="actions">'
             f'<a class="btn link" href="{_html_escape(res.doc_link)}" '
-            'target="_blank">Docs \u2197</a></div>\n'
+            f'target="_blank">{link_text} \u2197</a></div>\n'
         )
     parts.append('      </div>\n')
     return "".join(parts)
