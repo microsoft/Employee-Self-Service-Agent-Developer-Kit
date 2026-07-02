@@ -122,25 +122,6 @@ def open_report_in_browser(output_dir):
     return webbrowser.open(report_path.resolve().as_uri())
 
 
-def _make_stdio_unicode_safe():
-    """Force UTF-8 console output so summaries can't crash on Windows.
-
-    Check ``result`` / ``remediation`` text legitimately contains bullets
-    (\u2022), arrows, and em dashes. On a default Windows console stdout is
-    cp1252, which raises ``UnicodeEncodeError`` mid-print — and because the
-    terminal summary runs before ``save_results`` / ``open_report_in_browser``,
-    that crash also loses the HTML report. ``errors="replace"`` keeps output
-    readable rather than aborting the run.
-    """
-    for stream in (sys.stdout, sys.stderr):
-        reconfigure = getattr(stream, "reconfigure", None)
-        if reconfigure is not None:
-            try:
-                reconfigure(encoding="utf-8", errors="replace")
-            except (ValueError, OSError):
-                pass
-
-
 def main():
     # Force UTF-8 console output so summary glyphs (→, •) don't crash on
     # Windows cp1252 terminals. Without this, _print_prioritized_summary
