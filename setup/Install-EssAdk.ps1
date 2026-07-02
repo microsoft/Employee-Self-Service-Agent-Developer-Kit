@@ -1039,11 +1039,11 @@ if ($FlightCheckOnly) {
             $prevEAP = $ErrorActionPreference
             $ErrorActionPreference = 'Continue'
             if ($pythonExe -eq 'py -3.12') {
-                & py -3.12 scripts/flightcheck/cli.py --scope full
+                & py -3.12 scripts/flightcheck/cli.py --scope full --invocation-source installer
             } elseif ($pythonExe -eq 'py -3') {
-                & py -3 scripts/flightcheck/cli.py --scope full
+                & py -3 scripts/flightcheck/cli.py --scope full --invocation-source installer
             } else {
-                & $pythonExe scripts/flightcheck/cli.py --scope full
+                & $pythonExe scripts/flightcheck/cli.py --scope full --invocation-source installer
             }
             $ErrorActionPreference = $prevEAP
         } finally { Pop-Location }
