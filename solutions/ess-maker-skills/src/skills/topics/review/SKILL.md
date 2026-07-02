@@ -43,24 +43,38 @@ the expression bodies inside `AdaptiveCardPrompt.card` and `AdaptiveCardTemplate
 capture the enclosing action's **`id:`**, **`displayName:`** (if present), and **`kind:`** — these are the
 stable node locators the fix step keys on. Note the approximate line number as secondary context only.
 
-## Step 3: Analyze the topic (internal reasoning)
+## Step 3: Check Global reference integrity (run the detector)
+
+Run this from the `solutions/ess-maker-skills/` directory:
+
+```
+python scripts/scan_globals.py --agent {agent-slug} --topic {topic-stem}
+```
+
+- `{agent-slug}` = the agent folder name under `workspace/agents/` (from `.local/config.json`).
+- `{topic-stem}` = the reviewed topic's filename without `.mcs.yml`.
+
+The detector's output is **authoritative** on whether a `Global.*` reference resolves. Every reference it
+reports as dangling **does not exist** anywhere in this agent — it is neither written by any topic nor
+declared as a variable. Do **not** reason about whether such a reference "might be blank" or "might exist
+for some records": if the detector reports it, it will **always** read blank. Read
+`src/reference/ess-docs/conformance/dangling-globals.md` and turn each reported reference into a finding,
+applying the precision bar and reachability scoring to set severity. If the script genuinely cannot be
+run, say so in the report rather than silently skipping.
+
+## Step 4: Analyze Power Fx expression logic (internal reasoning)
 
 Read the analysis guidance at
 `src/reference/ess-docs/conformance/powerfx-topic-local.md` and apply every heuristic in it to the
 expressions you gathered. Use its precision bar (>=80% confidence), reachability scoring, and severity
 mapping to decide which candidates are real findings and how serious each is.
 
-Then check `Global.*` reference integrity: read
-`src/reference/ess-docs/conformance/dangling-globals.md` and follow it — run `scripts/scan_globals.py`
-for the agent and topic, and turn each reported dangling reference into a finding using the same precision
-bar and severity mapping. If the script cannot run, skip this check and continue.
-
-This step is **internal reasoning**. Its rule IDs (e.g. `BTPF-001`), reachability tags
+Steps 3–4 are **internal reasoning**. Their rule IDs (e.g. `BTPF-001`), reachability tags
 (`REACHABLE_NORMAL_UI`, etc.), and the word "lens" are working vocabulary **for you** — they are NOT
-shown to the customer (see Step 4). Carry each finding's node locators (`id` / `displayName` / `kind`)
+shown to the customer (see Step 5). Carry each finding's node locators (`id` / `displayName` / `kind`)
 and `Fix targets` through internally so the customer-facing step can name the step and a fixer can act.
 
-## Step 4: Present the advisory report (customer-facing)
+## Step 5: Present the advisory report (customer-facing)
 
 Present findings in **plain language**. Do NOT expose internal terminology to the customer — no "lens",
 no rule IDs, no reachability tag names, no file-format jargon. Translate severity to plain words
@@ -99,7 +113,7 @@ customer's own content, not internal terminology). Refer to each site by its **s
 locatable. Order High -> Medium -> Low. Group any "no user impact today" items under a short
 **Minor / cleanup** heading so the customer prioritizes the most likely issues first.
 
-## Step 5: Close
+## Step 6: Close
 
 End advisory, never blocking:
 
