@@ -386,6 +386,11 @@ def main():
 
     # Emit anonymous outcome telemetry (best-effort; never affects exit code).
     if not args.no_telemetry:
+        # Telemetry status is internal detail makers shouldn't normally see;
+        # only surface it when explicitly debugging telemetry.
+        _tele_debug = os.environ.get(
+            "ESS_FLIGHTCHECK_TELEMETRY_DEBUG", ""
+        ).strip().lower() in ("1", "on", "true", "yes")
         # Resolve the active agent once, up front, so both the legacy and the
         # adk.* telemetry blocks can use it even if the first block raises early.
         active_agent = next(
@@ -403,13 +408,15 @@ def main():
                 agent_count=len(agents),
                 invocation_source=args.invocation_source,
             )
-            print(
-                f"[telemetry] env={_tele.get('env')} sent={_tele.get('sent')} "
-                f"events={_tele.get('events')} status={_tele.get('status')} "
-                f"reason={_tele.get('reason')}"
-            )
+            if _tele_debug:
+                print(
+                    f"[telemetry] env={_tele.get('env')} sent={_tele.get('sent')} "
+                    f"events={_tele.get('events')} status={_tele.get('status')} "
+                    f"reason={_tele.get('reason')}"
+                )
         except Exception as _tele_err:  # never break the run
-            print(f"[telemetry] skipped — {type(_tele_err).__name__}: {_tele_err}")
+            if _tele_debug:
+                print(f"[telemetry] skipped — {type(_tele_err).__name__}: {_tele_err}")
 
         # Additive adk.* event family (spec Feature #7403772). Emitted alongside
         # the legacy ESSMakerKit.FlightCheck.* events; never affects the run.
@@ -436,7 +443,10 @@ def main():
         except Exception:  # noqa: BLE001 — adk telemetry must never break the run
             pass
     else:
-        print("[telemetry] disabled via --no-telemetry")
+        if os.environ.get(
+            "ESS_FLIGHTCHECK_TELEMETRY_DEBUG", ""
+        ).strip().lower() in ("1", "on", "true", "yes"):
+            print("[telemetry] disabled via --no-telemetry")
 
     # Open HTML report in browser (skip with --no-open for CI / headless runs)
     if not args.no_open:

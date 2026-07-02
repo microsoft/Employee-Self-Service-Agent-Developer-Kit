@@ -104,15 +104,16 @@ def _env_disabled() -> bool:
 
 
 def _consent_disabled() -> bool:
-    """True if the maker opted out via the unified ``adk telemetry off`` control.
+    """True if the maker opted out via the unified opt-out control.
 
-    The consent notice we print tells makers to run ``adk telemetry off`` to
-    disable telemetry. That writes ``~/.adk/config`` (and/or sets
-    ``ESS_ADK_TELEMETRY``), which the ``adk.*`` emitter honors. Consult the same
-    signal here so that single documented opt-out ALSO silences these legacy
-    ``ESSMakerKit.FlightCheck.*`` events — otherwise a maker who follows the
-    instruction is still tracked. Best-effort: if ``adk_telemetry`` can't be
-    imported, fall back to the FlightCheck-specific env var only.
+    The consent notice we print tells makers to run
+    ``python scripts/adk_telemetry.py off`` to disable telemetry. That writes
+    ``~/.adk/config`` (and/or sets ``ESS_ADK_TELEMETRY``), which the ``adk.*``
+    emitter honors. Consult the same signal here so that single documented
+    opt-out ALSO silences these legacy ``ESSMakerKit.FlightCheck.*`` events —
+    otherwise a maker who follows the instruction is still tracked. Best-effort:
+    if ``adk_telemetry`` can't be imported, fall back to the FlightCheck-specific
+    env var only.
     """
     try:
         import adk_telemetry  # sibling module (scripts/ is on sys.path)
@@ -126,7 +127,8 @@ def resolve_ikey() -> tuple[str | None, str]:
     """Resolve the active (iKey, env_label).
 
     Precedence:
-      1. ``ESS_FLIGHTCHECK_TELEMETRY`` off / ``adk telemetry off`` -> (None, env)
+      1. ``ESS_FLIGHTCHECK_TELEMETRY`` off / opted-out via
+         ``python scripts/adk_telemetry.py off`` -> (None, env)
       2. ``ESS_FLIGHTCHECK_ARIA_IKEY``      -> explicit key override
       3. ``ESS_FLIGHTCHECK_ARIA_ENV``       -> 'dev' | 'prod' (default prod)
     """
