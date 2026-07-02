@@ -16,11 +16,15 @@ returns an **advisory** report — findings the maker should consider before pub
 
 ## What this checks
 
-This skill analyzes the topic's **Power Fx expression logic** (the checks in the analysis guidance at
-`src/reference/ess-docs/conformance/powerfx-topic-local.md`) — decidable from the authored topic file
-itself. Other checks (adaptive-card UX, cross-topic `Global.*` usage, cross-component error-code
-coverage) are not part of this skill; if the maker asks about those, say they are not covered rather than
-guessing.
+This skill analyzes:
+
+- the topic's **Power Fx expression logic** (guidance:
+  `src/reference/ess-docs/conformance/powerfx-topic-local.md`) — decidable from the authored topic file;
+- **`Global.*` reference integrity** across the agent (guidance:
+  `src/reference/ess-docs/conformance/dangling-globals.md`) — references that resolve to no variable.
+
+Other checks (adaptive-card UX, cross-component error-code coverage) are not part of this skill; if the
+maker asks about those, say they are not covered rather than guessing.
 
 ## Step 1: Identify the topic to review
 
@@ -45,6 +49,11 @@ Read the analysis guidance at
 `src/reference/ess-docs/conformance/powerfx-topic-local.md` and apply every heuristic in it to the
 expressions you gathered. Use its precision bar (>=80% confidence), reachability scoring, and severity
 mapping to decide which candidates are real findings and how serious each is.
+
+Then check `Global.*` reference integrity: read
+`src/reference/ess-docs/conformance/dangling-globals.md` and follow it — run `scripts/scan_globals.py`
+for the agent and topic, and turn each reported dangling reference into a finding using the same precision
+bar and severity mapping. If the script cannot run, skip this check and continue.
 
 This step is **internal reasoning**. Its rule IDs (e.g. `BTPF-001`), reachability tags
 (`REACHABLE_NORMAL_UI`, etc.), and the word "lens" are working vocabulary **for you** — they are NOT
