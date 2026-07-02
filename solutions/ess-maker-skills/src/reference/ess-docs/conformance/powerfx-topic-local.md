@@ -1,14 +1,13 @@
-# Power Fx topic-local conformance lens
+# Power Fx topic-local conformance analysis
 
-Reviewer instructions for the **topic-local Power Fx** conformance lens used by the `topics/review`
-skill. This lens finds bugs expressed **inside Power Fx expressions of a single authored topic** — read
-directly from the one `.mcs.yml` file, no preprocessing script and no reference repo required.
+Analysis guidance for the **Power Fx expression** checks used by the `topics/review` skill. These checks
+find bugs expressed **inside the Power Fx expressions of a single authored topic** — read directly from
+the one `.mcs.yml` file, needing only the topic itself.
 
-> **Scope (slice 1):** topic-local only. Every heuristic below is decidable from the authored
-> `.mcs.yml` alone (plus, at most, the other topics in the maker's own agent folder). Two Power Fx
-> heuristics that need cross-repo reference data — **dead/dangling `Global.*`** (writers live in the
-> shipped ESS framework) and **upstream/downstream error-code coverage gaps** (needs the shared
-> workflow's emitted error strings) — are **out of scope here** and handled in a later slice.
+> **Scope:** the checks below are each decidable from the authored `.mcs.yml` alone (plus, at most, the
+> other topics in the maker's own agent folder). Do not attempt checks that need data beyond the topic —
+> **dead/dangling `Global.*`** (needs the agent's declared variables) and **upstream/downstream
+> error-code coverage** (needs the shared workflow's emitted error strings) are **not covered here**.
 
 ## How to run this lens
 
@@ -115,6 +114,6 @@ DiD-NNN — <one-line summary>
 - Does not analyze adaptive-card field/visibility contracts (that is the UX lens), plugin C#, or workflow
   JSON action graphs.
 - Does not evaluate dead/dangling `Global.*` or upstream/downstream error-code coverage — those need
-  cross-topic + shipped-framework reference data and land in a later slice.
+  cross-topic + reference data and are handled by a separate reference-aware check.
 - Does not build an AST — token/expression-level reading only.
 - Findings are **advisory prose** in the response; this lens writes nothing to disk.

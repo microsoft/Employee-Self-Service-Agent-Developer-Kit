@@ -1,33 +1,26 @@
 # Review Topic Skill
 
 This skill runs an **authoring-time conformance review** over a single authored Copilot Studio topic and
-returns an **advisory** report — findings the maker should consider before publishing. It is the static
-half of ESS agent hardening (the runtime half is `topics/test`).
+returns an **advisory** report — findings the maker should consider before publishing.
 
-> **Advisory by construction.** This review has no power to block. There is no PR or CI gate at the
-> authoring stage — the skill surfaces findings and the maker decides. Never present a finding as a
-> hard failure or refuse to proceed. This mirrors `evaluations/validate`: a gate, not a blocker.
+> **Advisory by construction.** This review has no power to block — it surfaces findings and the maker
+> decides. Never present a finding as a hard failure or refuse to proceed.
 
 ## Rules
 
-- Do NOT run terminal commands or scripts. Use built-in file reading tools only. This review is
-  **agentic**: you read the authored topic and reason about it, guided by the lens instructions.
-- Do NOT modify the topic. This skill only reads and reports.
+- Do NOT modify the topic. This skill only reads and reports; the review output is advisory prose and is
+  not written to disk.
 - Operate on the authored `.mcs.yml` in the maker's agent folder (`{agent.folder}/topics/`), i.e. the
   topic **before publish**. Do not require the published `samples/` copy.
-- Report findings as **advisory prose**; write nothing to disk.
 - **TRACK PROGRESS**: use the todo list tool to track the steps below so the maker can see where you are.
 
-## Scope (current slice)
+## What this checks
 
-This slice runs **one lens**: the **topic-local Power Fx** lens. It finds bugs expressed inside the
-topic's Power Fx expressions, decidable from the single authored file alone — no preprocessing and no
-reference repository required.
-
-Lenses NOT yet wired in (planned for later slices, do not attempt them here): UX-contract (adaptive
-cards), logic-and-dataflow, injection-and-auth, hygiene; and the reference-dependent Power Fx checks
-(dead/dangling `Global.*`, upstream/downstream error-code coverage) that need the shipped ESS framework.
-If the maker asks for those, say they are not in this slice yet.
+This skill analyzes the topic's **Power Fx expression logic** (the checks in the analysis guidance at
+`src/reference/ess-docs/conformance/powerfx-topic-local.md`) — decidable from the authored topic file
+itself. Other checks (adaptive-card UX, cross-topic `Global.*` usage, cross-component error-code
+coverage) are not part of this skill; if the maker asks about those, say they are not covered rather than
+guessing.
 
 ## Step 1: Identify the topic to review
 
@@ -62,7 +55,8 @@ and `Fix targets` through internally so the customer-facing step can name the st
 
 Present findings in **plain language**. Do NOT expose internal terminology to the customer — no "lens",
 no rule IDs, no reachability tag names, no file-format jargon. Translate severity to plain words
-(**High / Medium / Low**). Cite locations as `line N` of the topic.
+(**High / Medium / Low**). Locate each finding by the **step/action it lives in** (its name/label), not a
+line number.
 
 Frame every finding as a **potential** issue, not a confirmed bug. These come from common-pattern
 heuristics and can be false positives — hedge accordingly ("this might…", "you may want to check…",
