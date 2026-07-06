@@ -174,9 +174,17 @@ az ad sp list --display-name "Workday" --query "[].{name:displayName, appId:appI
 - **If Workday SAML app(s) already exist** — consider only the returned apps in
   SAML mode (`sso == "saml"`):
 
-  - **Exactly one** → save its `appId` → `WD_ENTRA_APP_ID`, resolve its
-    `application` object id → `WD_ENTRA_APP_OBJECT_ID`, and its `id` →
-    `WD_ENTRA_SP_ID`.
+  - **Exactly one** → save its `appId` → `WD_ENTRA_APP_ID` and its `id` (the
+    service-principal id) → `WD_ENTRA_SP_ID`, then resolve its **application**
+    object id — the `az ad sp list` query above returns the *service-principal*
+    id, **not** the app object id, so query it explicitly:
+
+    ```
+    az ad app list --filter "appId eq '{WD_ENTRA_APP_ID}'" --query "[0].id" -o tsv
+    ```
+
+    → `WD_ENTRA_APP_OBJECT_ID`. Then **skip to Persist below** so `entraAppId` is
+    written to config.
 
   - **More than one** → do **not** guess which is correct. The app chosen here is
     pinned to `entraAppId` in config, and every later step and FlightCheck check
@@ -208,8 +216,17 @@ az ad sp list --display-name "Workday" --query "[].{name:displayName, appId:appI
     Copilot)`** as `recommended` when present — that is the app this kit
     provisions. Then:
     - **User picks an existing app** → map the chosen label back to that app and
-      save its `appId` → `WD_ENTRA_APP_ID`, its `application` object id →
-      `WD_ENTRA_APP_OBJECT_ID`, and its `id` → `WD_ENTRA_SP_ID`.
+      save its `appId` → `WD_ENTRA_APP_ID` and its `id` (the service-principal
+      id) → `WD_ENTRA_SP_ID`, then resolve its **application** object id — the
+      `az ad sp list` results carry the *service-principal* id, **not** the app
+      object id, so query it explicitly:
+
+      ```
+      az ad app list --filter "appId eq '{WD_ENTRA_APP_ID}'" --query "[0].id" -o tsv
+      ```
+
+      → `WD_ENTRA_APP_OBJECT_ID`. Then **skip to Persist below** so `entraAppId`
+      is written to config — do **not** jump ahead to verify.
     - **User picks "Create a new app instead"** → follow the **If none exists**
       instantiate path below.
 
