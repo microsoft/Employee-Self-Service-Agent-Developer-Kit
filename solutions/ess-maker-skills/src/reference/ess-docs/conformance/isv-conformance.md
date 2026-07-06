@@ -25,14 +25,16 @@ skip it.
 
 ## Step 2: Locate the ISV reference doc
 
-Look for the ESS ISV reference docs in an ESS reference checkout available in the environment (commonly a
-sibling checkout, e.g. `../ESSVivaCopilot/skills/docs/isv-<connector>.md`). Read only the one doc for the
-ISV determined in Step 1.
+The ESS ISV reference docs live in an **ESSVivaCopilot** checkout, at `skills/docs/isv-<connector>.md`.
+That checkout is typically cloned **alongside the Employee-Self-Service-Agent-Developer-Kit repo** under
+the same parent folder — so from this kit workspace it is a few levels up (for example
+`../../../ESSVivaCopilot/skills/docs/`). Search upward from the repo for an `ESSVivaCopilot` directory and
+read only the one doc for the ISV determined in Step 1.
 
-If the reference doc cannot be found, **skip this check** and note it in the report, for example: "ISV
-conformance was not checked — the ESS ISV reference docs were not available in this environment." Do not
-infer ISV behavior from general knowledge; the reference docs are authoritative for how these
-integrations actually behave.
+If no `ESSVivaCopilot` checkout (or the specific `isv-<connector>.md`) can be found, **skip this check**
+and note it in the report, for example: "ISV conformance was not checked — the ESS ISV reference docs
+were not available in this environment." Do not infer ISV behavior from general knowledge; the reference
+docs are authoritative for how these integrations actually behave.
 
 ## Step 3: Apply the ISV reference to the topic
 
