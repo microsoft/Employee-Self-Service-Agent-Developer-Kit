@@ -26,7 +26,10 @@ This skill analyzes:
   data bindings that resolve to nothing, and empty/error/confirmation-state gaps;
 - **ISV conformance** (guidance: `src/reference/ess-docs/conformance/isv-conformance.md`) — the topic
   against the documented field/schema conventions and known pitfalls of the backend system it integrates
-  with, when ISV reference docs are available.
+  with, when ISV reference docs are available;
+- **ISV integration pattern** (guidance: `src/reference/ess-docs/conformance/isv-integration-pattern.md`) —
+  whether a topic for an ESS-orchestrated backend uses the shared template-config pattern rather than a
+  standalone flow.
 
 Other checks (cross-component error-code coverage) are not part of this skill; if the
 maker asks about those, say they are not covered rather than guessing.
@@ -97,7 +100,14 @@ scenario name, read that ISV's reference doc if one is available in the environm
 against the documented field/schema conventions and known pitfalls. If the ISV reference docs are not
 available, note that ISV conformance was not checked and continue — do not guess ISV behavior.
 
-Steps 3–6 are **internal reasoning**. Their rule IDs (e.g. `BTPF-001`), reachability tags
+## Step 6b: Check the ISV integration pattern
+
+Read `src/reference/ess-docs/conformance/isv-integration-pattern.md` and follow it: if the topic
+integrates an ESS-orchestrated backend (ServiceNow, Workday, SAP SuccessFactors), confirm it delegates the
+backend call to the shared system topic rather than calling its own cloud flow. This check reads only the
+authored topic and always applies (no reference docs needed).
+
+Steps 3–6b are **internal reasoning**. Their rule IDs (e.g. `BTPF-001`), reachability tags
 (`REACHABLE_NORMAL_UI`, etc.), and the word "lens" are working vocabulary **for you** — they are NOT
 shown to the customer (see Step 7). Carry each finding's node locators (`id` / `displayName` / `kind`)
 and `Fix targets` through internally so the customer-facing step can name the step and a fixer can act.
