@@ -25,16 +25,14 @@ skip it.
 
 ## Step 2: Locate the ISV reference doc
 
-The ESS ISV reference docs live in an **ESSVivaCopilot** checkout, at `skills/docs/isv-<connector>.md`.
-That checkout is typically cloned **alongside the Employee-Self-Service-Agent-Developer-Kit repo** under
-the same parent folder — so from this kit workspace it is a few levels up (for example
-`../../../ESSVivaCopilot/skills/docs/`). Search upward from the repo for an `ESSVivaCopilot` directory and
-read only the one doc for the ISV determined in Step 1.
+The ISV reference docs are synced into this workspace at `src/reference/ess-docs/isv/isv-<connector>.md`.
+Read the one doc for the ISV determined in Step 1, by its exact path.
 
-If no `ESSVivaCopilot` checkout (or the specific `isv-<connector>.md`) can be found, **skip this check**
-and note it in the report, for example: "ISV conformance was not checked — the ESS ISV reference docs
-were not available in this environment." Do not infer ISV behavior from general knowledge; the reference
-docs are authoritative for how these integrations actually behave.
+If that file is not present, the ISV reference docs have not been synced into this environment. Note in the
+report that ISV conformance was not checked and that the docs can be synced by running
+`python scripts/sync_isv_docs.py` from `solutions/ess-maker-skills/`, then continue. Do not infer ISV
+behavior from general knowledge — the reference docs are authoritative for how these integrations
+actually behave.
 
 ## Step 3: Apply the ISV reference to the topic
 
