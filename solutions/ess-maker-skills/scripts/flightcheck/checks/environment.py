@@ -16,6 +16,12 @@ from ._maker_urls import (
     maker_solutions_url,
 )
 from .connections import get_connection_status
+from .licensing import (
+    _CAPACITY_DOC,
+    _CAPACITY_PORTAL,
+    _env_mcs_allocation,
+    classify_copilot_studio_capacity,
+)
 from auth import query_all, dataverse_get, AuthExpiredError  # scripts/auth.py, on path via cli.py
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
@@ -290,6 +296,9 @@ def run_environment_checks(runner) -> list[CheckResult]:
     # ---- ENV-004: Connections & Connection References ----
     results.extend(_check_connections_and_refs(runner))
 
+    # ---- ENV-CAPACITY-001: Copilot Studio capacity provisioned ----
+    results.extend(_check_copilot_studio_capacity_provisioned(runner))
+
     # ---- ENV-008: DLP policies ----
     try:
         policies = pp.get_dlp_policies_for_env(env_id)
@@ -359,6 +368,67 @@ def run_environment_checks(runner) -> list[CheckResult]:
     results.extend(_check_preferred_solution(runner))
 
     return results
+
+
+def _env_capacity(status: str, result: str, remediation: str = "") -> CheckResult:
+    """Build an ENV-CAPACITY-001 row (every branch shares id/category/role)."""
+    return CheckResult(
+        roles=[Role.POWER_PLATFORM_ADMIN.value],
+        checkpoint_id="ENV-CAPACITY-001", category="Environment",
+        priority=Priority.CRITICAL.value, status=status,
+        description="Copilot Studio capacity provisioned",
+        result=result, remediation=remediation, doc_link=_CAPACITY_DOC,
+    )
+
+
+def _check_copilot_studio_capacity_provisioned(runner) -> list[CheckResult]:
+    """ENV-CAPACITY-001 — Copilot Studio message capacity provisioned for THIS
+    environment, the precondition skill-1 verifies before the ESS agent is
+    installed.
+
+    This is the "is capacity provisioned?" variant of the shared capacity
+    verdict (``checks/licensing.py``). Unlike PRE-004 it runs **before** the
+    agent exists, so there is no shared/published population to size against —
+    it asks only whether the environment has any dedicated Copilot Studio
+    capacity (``population=None``), while still honouring PRE-004's PayG-aware
+    tri-state for the zero-allocation case.
+
+    When the allocation cannot be read programmatically (no Power Platform
+    Licensing client wired, or a permission error) the row is **MANUAL** — a
+    visible attestation the operator must confirm in the portal, never a silent
+    pass.
+    """
+    env_id = getattr(runner, "env_id", None)
+    if not env_id:
+        return [_env_capacity(Status.MANUAL.value,
+            "Environment ID is unavailable, so Copilot Studio capacity could not be read; confirm capacity is allocated to this environment in the portal.",
+            f"Verify the environment, then confirm Copilot Studio message capacity is allocated in {_CAPACITY_PORTAL}.")]
+
+    allocated = _env_mcs_allocation(getattr(runner, "powerplatform", None), env_id)
+    payg_flag = getattr(runner, "_payg_configured", None)
+    status, reason = classify_copilot_studio_capacity(
+        allocated, population=None, payg_flag=payg_flag)
+
+    if reason == "unreadable":
+        # Not queryable -> attestation, never a silent pass (skill-1 contract).
+        return [_env_capacity(Status.MANUAL.value,
+            "This environment's Copilot Studio message capacity allocation could not be read programmatically (Power Platform Licensing API unavailable or permission denied). Confirm capacity is allocated before installing the ESS agent.",
+            f"Sign in with the Power Platform Administrator role so capacity can be read, or confirm and attest that Copilot Studio message capacity is allocated to this environment in {_CAPACITY_PORTAL}.")]
+    if reason == "covered":
+        return [_env_capacity(Status.PASSED.value,
+            f"{allocated} Copilot Studio message credit(s) are allocated to this environment.")]
+    if reason == "zero_with_payg":
+        return [_env_capacity(Status.WARNING.value,
+            "No prepaid Copilot Studio message capacity is allocated to this environment, but Pay-as-you-go billing is configured, so agent messages bill directly to Azure (surprise-billing risk).",
+            f"To cap spend, allocate prepaid Copilot Studio message capacity to this environment in {_CAPACITY_PORTAL}, or confirm a spending budget is in place for the Pay-as-you-go subscription.")]
+    if reason == "zero_payg_unknown":
+        return [_env_capacity(Status.WARNING.value,
+            "No Copilot Studio message capacity is allocated to this environment, and Pay-as-you-go status was not determined in this run.",
+            f"Allocate Copilot Studio message capacity to this environment in {_CAPACITY_PORTAL} before installing the ESS agent, or run the prerequisites scope so Pay-as-you-go billing is evaluated.")]
+    # reason == "zero_no_payg"
+    return [_env_capacity(Status.FAILED.value,
+        "No Copilot Studio message capacity is allocated to this environment and Pay-as-you-go billing is not configured, so the ESS agent will have no message capacity to consume at runtime.",
+        f"Allocate Copilot Studio message capacity to this environment in {_CAPACITY_PORTAL} before installing the ESS agent, or configure Pay-as-you-go billing.")]
 
 
 # ---------------------------------------------------------------------------

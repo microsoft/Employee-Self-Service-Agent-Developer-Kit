@@ -755,3 +755,119 @@ def run_licensing_checks(runner) -> list[CheckResult]:
     results.extend(_check_traditional_flow_licensing(runner))
     results.extend(_check_shared_user_licensing(runner))
     return results
+
+
+# ---------------------------------------------------------------------------
+# Copilot Studio message capacity — shared helpers.
+#
+# These are reused by BOTH the Prerequisites surface (PRE-004 sufficiency check,
+# which sizes the shared/published population) and the skill-1 Environment
+# surface (ENV-CAPACITY-001 "is capacity provisioned?" check, which runs before
+# the agent exists and therefore has no population to size against). The
+# allocation read and the PayG-aware status decision live here so the two
+# callers can't drift; each caller still owns its own human-readable result /
+# remediation phrasing (population-aware vs provisioned-only).
+# ---------------------------------------------------------------------------
+
+# Copilot Studio message capacity in the Power Platform Licensing
+# "currency allocation" API (ExternalCurrencyType enum). The Sept 2025 rename
+# to "Copilot Credits" did not change this API contract value.
+_MCS_MESSAGES_CURRENCY = "MCSMessages"
+
+# Capacity remediation anchors shared by PRE-004/PRE-006 and ENV-CAPACITY-001.
+# The prepaid-capacity / message-credit model is documented on the Copilot
+# Studio "messages management" page; the ESS prerequisites doc links there for
+# "Set up Copilot Studio capacity".
+_CAPACITY_DOC = (
+    "https://learn.microsoft.com/en-us/microsoft-copilot-studio/"
+    "requirements-messages-management?tabs=new#prepaid-capacity"
+)
+_CAPACITY_PORTAL = (
+    "[Power Platform Admin Center > Licensing > Copilot Studio > Manage capacity]"
+    "(https://admin.powerplatform.microsoft.com/licensing)"
+)
+_M365_ADMIN_CENTER = "[Microsoft 365 admin center](https://admin.microsoft.com)"
+
+
+def _env_mcs_allocation(powerplatform, env_id) -> int | None:
+    """Copilot Studio message capacity allocated to *this* environment.
+
+    ``_has_prepaid_messages`` is tenant-wide (Graph ``subscribedSkus``), so it
+    cannot tell whether the *target* environment actually has capacity — only
+    that the tenant owns some. This reads the per-environment prepaid
+    allocation via the Power Platform Licensing currency-allocation API so
+    PRE-005 can catch the case where a tenant holds capacity but none is
+    allocated to the environment under test.
+
+    Returns:
+      - ``int``  — MCSMessages units allocated to the environment. ``0`` means
+        the read succeeded and this environment has no dedicated allocation.
+      - ``None`` — could not determine (no client, no env id, permission
+        denied, or the call failed); the caller must fall back to the
+        tenant-wide signal.
+    """
+    if powerplatform is None or not env_id:
+        return None
+    try:
+        allocations = powerplatform.get_currency_allocations(env_id)
+    except Exception:
+        return None
+    if isinstance(allocations, dict):  # {"_error": ...} sentinel
+        return None
+    total = 0
+    for allocation in allocations:
+        currency = str(allocation.get("currencyType") or "").strip().lower()
+        if currency == _MCS_MESSAGES_CURRENCY.lower():
+            try:
+                total += int(allocation.get("allocated") or 0)
+            except (TypeError, ValueError):
+                continue
+    return total
+
+
+def classify_copilot_studio_capacity(
+    allocated: int | None,
+    *,
+    population: int | None = None,
+    payg_flag: bool | None = None,
+) -> tuple[str | None, str]:
+    """Pure capacity verdict shared by PRE-004 and ENV-CAPACITY-001.
+
+    Encodes the PayG-aware tri-state so the two callers can't diverge.
+    Inputs are already-computed signals; this function does NO I/O.
+
+    Args:
+      allocated: MCSMessages units allocated to the environment, or ``None``
+        when the allocation could not be read.
+      population: the shared/published user count to size against
+        (PRE-004 sufficiency mode), or ``None`` for the "is capacity
+        provisioned?" mode (ENV-CAPACITY-001), where the
+        allocation-vs-users comparison is skipped.
+      payg_flag: Pay-as-you-go cross-check — ``True`` configured,
+        ``False`` provably absent, ``None`` undetermined (e.g. PRE-005 did
+        not run this pass).
+
+    Returns ``(status, reason)``. ``status`` is a ``Status`` value for every
+    reason except ``"unreadable"``, where it is ``None`` so the caller decides
+    WARNING (PRE-004) vs MANUAL attestation (ENV-CAPACITY-001). ``reason`` is a
+    stable code the caller maps to its own result/remediation text:
+
+      - ``"unreadable"``       — allocation could not be read.
+      - ``"covered"``          — allocation > 0 (and >= population when sized).
+      - ``"under_provisioned"``— 0 < allocation < population (sufficiency mode).
+      - ``"zero_with_payg"``   — allocation == 0 but PayG configured.
+      - ``"zero_payg_unknown"``— allocation == 0 and PayG undetermined.
+      - ``"zero_no_payg"``     — allocation == 0 and provably no PayG.
+    """
+    if allocated is None:
+        return (None, "unreadable")
+    if allocated > 0:
+        if population is not None and allocated < population:
+            return (Status.WARNING.value, "under_provisioned")
+        return (Status.PASSED.value, "covered")
+    # allocated == 0
+    if payg_flag is True:
+        return (Status.WARNING.value, "zero_with_payg")
+    if payg_flag is None:
+        return (Status.WARNING.value, "zero_payg_unknown")
+    return (Status.FAILED.value, "zero_no_payg")

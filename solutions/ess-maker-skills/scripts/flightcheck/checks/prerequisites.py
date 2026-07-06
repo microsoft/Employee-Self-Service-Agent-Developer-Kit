@@ -11,7 +11,14 @@ licenses, role assignments, and capacity.
 from auth import AuthExpiredError
 
 from ..runner import CheckResult, Priority, Role, Status
-from .licensing import resolve_shared_with_users
+from .licensing import (
+    _CAPACITY_DOC,
+    _CAPACITY_PORTAL,
+    _M365_ADMIN_CENTER,
+    _env_mcs_allocation,
+    classify_copilot_studio_capacity,
+    resolve_shared_with_users,
+)
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
 
@@ -139,48 +146,6 @@ def _has_prepaid_capacity(graph) -> bool | None:
     except Exception:
         return None
     return any(_sku_matches(s, PREPAID_CAPACITY_SKUS) for s in skus)
-
-
-# Copilot Studio message capacity in the Power Platform Licensing
-# "currency allocation" API (ExternalCurrencyType enum). The Sept 2025 rename
-# to "Copilot Credits" did not change this API contract value.
-_MCS_MESSAGES_CURRENCY = "MCSMessages"
-
-
-def _env_mcs_allocation(powerplatform, env_id) -> int | None:
-    """Copilot Studio message capacity allocated to *this* environment.
-
-    ``_has_prepaid_messages`` is tenant-wide (Graph ``subscribedSkus``), so it
-    cannot tell whether the *target* environment actually has capacity — only
-    that the tenant owns some. This reads the per-environment prepaid
-    allocation via the Power Platform Licensing currency-allocation API so
-    PRE-005 can catch the case where a tenant holds capacity but none is
-    allocated to the environment under test.
-
-    Returns:
-      - ``int``  — MCSMessages units allocated to the environment. ``0`` means
-        the read succeeded and this environment has no dedicated allocation.
-      - ``None`` — could not determine (no client, no env id, permission
-        denied, or the call failed); the caller must fall back to the
-        tenant-wide signal.
-    """
-    if powerplatform is None or not env_id:
-        return None
-    try:
-        allocations = powerplatform.get_currency_allocations(env_id)
-    except Exception:
-        return None
-    if isinstance(allocations, dict):  # {"_error": ...} sentinel
-        return None
-    total = 0
-    for allocation in allocations:
-        currency = str(allocation.get("currencyType") or "").strip().lower()
-        if currency == _MCS_MESSAGES_CURRENCY.lower():
-            try:
-                total += int(allocation.get("allocated") or 0)
-            except (TypeError, ValueError):
-                continue
-    return total
 
 
 # The documented billing-policy API exposes a plan's linkage + bound
@@ -400,20 +365,12 @@ def _run_graph_prereq_checks(graph) -> list[CheckResult]:
     return results
 
 
-# PRE-004 — Copilot Studio capacity. The prepaid-capacity / message-credit
-# model is documented on the Copilot Studio "messages management" page; the ESS
-# prerequisites doc links there for "Set up Copilot Studio capacity".
-_CAPACITY_DOC = (
-    "https://learn.microsoft.com/en-us/microsoft-copilot-studio/"
-    "requirements-messages-management?tabs=new#prepaid-capacity"
-)
-_CAPACITY_PORTAL = (
-    "[Power Platform Admin Center > Licensing > Copilot Studio > Manage capacity]"
-    "(https://admin.powerplatform.microsoft.com/licensing)"
-)
-_M365_ADMIN_CENTER = "[Microsoft 365 admin center](https://admin.microsoft.com)"
-
-
+# PRE-004 — Copilot Studio capacity. The allocation read, the PayG-aware
+# status decision (``classify_copilot_studio_capacity``), and the capacity
+# remediation anchors (``_CAPACITY_DOC`` / ``_CAPACITY_PORTAL`` /
+# ``_M365_ADMIN_CENTER``) now live in ``checks/licensing.py`` so the skill-1
+# Environment surface (ENV-CAPACITY-001) shares the same logic. PRE-004 keeps
+# its population-aware result/remediation phrasing below.
 def _pre004(status: str, result: str, remediation: str = "") -> CheckResult:
     """Build a PRE-004 row (every branch shares id / category / priority / role)."""
     return CheckResult(
@@ -483,38 +440,41 @@ def _check_copilot_studio_capacity(runner) -> CheckResult:
         # 2) How much Copilot Studio message capacity is allocated to THIS env?
         allocated = _env_mcs_allocation(
             getattr(runner, "powerplatform", None), getattr(runner, "env_id", None))
-        if allocated is None:
+        # PRE-005 cross-check is tri-state: True (PayG bills) / False (provably no
+        # PayG) / None (PRE-005 did not run this pass — unknown, never assume).
+        payg_flag = getattr(runner, "_payg_configured", None)
+        # Shared, PayG-aware verdict (checks/licensing.py). PRE-004 sizes against
+        # the shared/published population (sufficiency mode); the population-
+        # specific phrasing stays here, keyed by the returned reason code.
+        _status, reason = classify_copilot_studio_capacity(
+            allocated, population=m, payg_flag=payg_flag)
+
+        if reason == "unreadable":
             return _pre004(Status.WARNING.value,
                 f"The agent is shared/published to {m} user(s), but this environment's Copilot Studio message capacity allocation could not be read (Power Platform API unavailable or permission denied).",
                 f"Grant the Power Platform Admin role (or sign in to the Power Platform API when prompted) so FlightCheck can read this environment's capacity allocation, then re-run. Review capacity in {_CAPACITY_PORTAL}.")
 
-        # PRE-005 cross-check is read per-branch below (tri-state).
-
-        if allocated > 0:
-            if allocated >= m:
-                return _pre004(Status.PASSED.value,
-                    f"{allocated} Copilot Studio message credits are allocated to this environment for the {m} user(s) the agent is shared/published to (~{allocated // m} per user). Every shared user is backed by allocated capacity; actual sufficiency depends on per-user message volume.")
+        if reason == "covered":
+            return _pre004(Status.PASSED.value,
+                f"{allocated} Copilot Studio message credits are allocated to this environment for the {m} user(s) the agent is shared/published to (~{allocated // m} per user). Every shared user is backed by allocated capacity; actual sufficiency depends on per-user message volume.")
+        if reason == "under_provisioned":
             # 0 < allocated < m: fewer credits than users breaches the one-per-user floor.
             return _pre004(Status.WARNING.value,
                 f"Only {allocated} Copilot Studio message credit(s) are allocated to this environment for the {m} user(s) the agent is shared/published to — fewer than one credit per user, so the environment is under-provisioned and overflow will draw on overage or Pay-as-you-go (surprise-billing risk).",
                 f"Allocate more Copilot Studio message capacity to this environment in {_CAPACITY_PORTAL}, or purchase additional prepaid message packs in the {_M365_ADMIN_CENTER}.")
 
-        # allocated == 0: read succeeded; this environment has no dedicated credits.
-        # PRE-005 cross-check is tri-state: True (PayG bills) / False (provably no
-        # PayG) / None (PRE-005 did not run this pass — unknown, never assume).
-        payg_flag = getattr(runner, "_payg_configured", None)
-        if payg_flag is True:
+        if reason == "zero_with_payg":
             return _pre004(Status.WARNING.value,
                 f"No prepaid Copilot Studio message capacity is allocated to this environment, but Pay-as-you-go billing is configured, so messages from all {m} shared/published user(s) bill directly to Azure (surprise-billing risk).",
                 f"To cap spend, allocate prepaid Copilot Studio message capacity to this environment in {_CAPACITY_PORTAL}, or confirm a spending budget is in place for the Pay-as-you-go subscription (see PRE-005).")
-        if payg_flag is None:
+        if reason == "zero_payg_unknown":
             # PRE-005 sets _payg_configured earlier in the run; None means it did
             # not run (PRE-004 invoked in isolation or reordered). An undetermined
             # PayG state must not become a hard FAIL -> WARN and point at the gap.
             return _pre004(Status.WARNING.value,
                 f"No Copilot Studio message capacity is allocated to this environment for the {m} shared/published user(s), and Pay-as-you-go status could not be determined in this pass.",
                 f"Run the full prerequisites scope so PRE-005 evaluates Pay-as-you-go, or allocate Copilot Studio message capacity to this environment in {_CAPACITY_PORTAL}.")
-        # payg_flag is False: provably no PayG. Strict AC2 -> FAIL.
+        # reason == "zero_no_payg": provably no PayG. Strict AC2 -> FAIL.
         # Surface the tenant-level pool too (the heritage check enumerates tenant
         # AND environment capacity): when the tenant owns capacity, the only way
         # this env runs is the "Draw from tenant capacity" overage — a toggle no

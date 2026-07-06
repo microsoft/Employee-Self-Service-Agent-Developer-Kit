@@ -146,13 +146,14 @@ _REF_SUFFIX_ROLES = {
 #     }
 #
 #   The ``ff0df`` connection is configured with Power Platform's
-#   "Microsoft Entra ID Integrated" authentication type (per
-#   src/skills/connect/workday/step3.md lines 155-166), not Basic
-#   auth. That auth type authenticates the signed-in employee against
-#   a federated Workday enterprise app in Entra (Application ID URI
-#   ``http://www.workday.com/{WD_TENANT}``), which is the same
-#   enterprise app the connect skill provisions in step2.md lines
-#   191-264. The X.509 signing certificate WD-CONN-102 inspects lives
+#   "Microsoft Entra ID Integrated" authentication type (per skill-5,
+#   src/skills/setup/workday/install-workday-extension-pack.md S5.3), not
+#   Basic auth. That auth type authenticates the signed-in employee
+#   against a federated Workday enterprise app in Entra (Application ID
+#   URI ``http://www.workday.com/{WD_TENANT}``), which is the same
+#   enterprise app the setup flow provisions in skill-3,
+#   src/skills/setup/workday/provision-workday-entra-app.md. The X.509
+#   signing certificate WD-CONN-102 inspects lives
 #   on that enterprise app as a keyCredential. It is the most visible
 #   expiry-driven health signal on the federation app that the
 #   user-context SOAP/REST runtime path depends on.
@@ -637,7 +638,19 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # present, this tenant has no Workday integration. Skip the
     # downstream Workday-specific checks (preserves the pre-existing
     # behavior of returning early when there's no Workday signal).
-    if not wd_flows and flavor in (None, "none"):
+    #
+    # `"skipped"` is folded in alongside `None`/`"none"` because it means
+    # WD-PKG-001 had no Dataverse token to detect the install flavor — the
+    # case for a Graph-only single-checkpoint run (e.g.
+    # `--checkpoint WD-CONN-102` / `WD-CONN-010`, both of which run above
+    # this guard). Without Dataverse the deep block below can only SKIP, but
+    # `_check_workflows` / `_check_personal_data_write_permission` would first
+    # prompt interactively for a Test Employee ID and ISU username/password
+    # (`input()` / `getpass`) — raw stdin prompts that hang a headless,
+    # skill-launched run forever. Returning here keeps those Graph-only
+    # invocations non-interactive. Full-scope runs authenticate Dataverse, so
+    # `flavor` is never `"skipped"` there and this branch is a no-op for them.
+    if not wd_flows and flavor in (None, "none", "skipped"):
         return results
 
     print("\n  Running Workday deep validation...")

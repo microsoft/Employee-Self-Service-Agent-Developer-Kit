@@ -112,10 +112,16 @@ class RunResult:
 class FlightCheckRunner:
     """Executes registered check functions and aggregates results."""
 
-    def __init__(self, scope: str = "full"):
+    def __init__(self, scope: str = "full", target_matcher: Callable | None = None):
         self.scope = scope
         self.results: list[CheckResult] = []
         self._check_fns: list[tuple[str, Callable]] = []
+        # Single-checkpoint mode (--checkpoint). When set, run() hydrates by
+        # executing the registered prerequisite category functions in full,
+        # then filters self.results down to the rows the matcher accepts (the
+        # target checkpoint, or every member of a target family) before the
+        # summary/verdict is built. None = normal full/scope run (no filter).
+        self._target_matcher: Callable | None = target_matcher
 
     def register(self, category: str, fn: Callable):
         """Register a check function. fn(runner) -> list[CheckResult]."""
@@ -145,6 +151,19 @@ class FlightCheckRunner:
                 traceback.print_exc()
 
         duration = time.time() - start
+
+        # Single-checkpoint mode: the prerequisite category functions ran in
+        # full to hydrate shared state; now keep only the rows belonging to the
+        # requested target so the summary, verdict, and exit code reflect just
+        # that checkpoint. A synthetic "{CAT}-ERR" sentinel (appended above when
+        # a category function raised) is always kept so a hydration/owner
+        # failure surfaces as an error instead of an empty, falsely-green run.
+        if self._target_matcher is not None:
+            self.results = [
+                r for r in self.results
+                if self._target_matcher(r.checkpoint_id)
+                or r.checkpoint_id.endswith("-ERR")
+            ]
 
         # Build category summaries
         cat_map: dict[str, CategorySummary] = {}

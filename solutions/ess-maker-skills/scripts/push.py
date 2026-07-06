@@ -113,8 +113,12 @@ def collect_files(root_dir):
                 continue
             full = os.path.join(dirpath, fname)
             rel = os.path.relpath(full, root_dir).replace("\\", "/")
-            with open(full, "r", encoding="utf-8") as f:
-                files[rel] = f.read()
+            # OneDrive placeholders can occasionally enumerate but be unreadable.
+            try:
+                with open(full, "r", encoding="utf-8") as f:
+                    files[rel] = f.read()
+            except FileNotFoundError:
+                continue
     return files
 
 

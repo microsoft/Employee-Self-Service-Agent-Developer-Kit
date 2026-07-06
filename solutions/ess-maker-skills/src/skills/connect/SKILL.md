@@ -15,15 +15,16 @@ pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
 
 Read `src/skills/connect/step1.md` and follow it.
 
-(Step 1 asks which integration. It checks `.local/connect/{integration}/tasks.md`
-for existing state — completed, in-progress, or fresh. Then it dispatches to
-the integration-specific step files.)
+(Step 1 asks which integration, detects existing state, and dispatches —
+ServiceNow to its own step files, Workday to the setup orchestrator
+`src/skills/setup/SKILL.md`.)
 
 ---
 
 ## Routing
 
-Each integration has its own folder with its own tasks.md and step files:
+Each integration routes differently — ServiceNow has its own step files;
+Workday delegates to the setup orchestrator:
 
 - **ServiceNow**: `src/skills/connect/servicenow/`
   - Tasks template: `src/skills/connect/servicenow/tasks.md`
@@ -39,56 +40,13 @@ Each integration has its own folder with its own tasks.md and step files:
   - Step 3 (Basic): `step3-basic.md` — install extension pack (Basic fields)
   - Step 4: `step4.md` — verify connection
 
-- **Workday**: `src/skills/connect/workday/`
-  - Tasks template: `src/skills/connect/workday/tasks.md`
-  - State file: `.local/connect/workday/tasks.md`
-  - Config file: `.local/connect/workday/config.json`
-  - Step 1: `step1.md` — gather info, MCP setup, connectivity check, detect existing state (Entra app, extension pack, RaaS report) and classify the install path (simplified vs legacy)
-  - Step 2: `step2.md` — admin setup. Simplified path = Entra SSO + register the Workday API client (the `ff0df` connection's `oauthClientId`). Legacy path = Entra SSO + ISU accounts, security groups, auth policies, API client, domain permissions, RaaS report
-  - Step 3: `step3.md` — extension pack install (or diagnose existing), connection setup (simplified: 2 connections; legacy: 4 connections / 3 auth types), post-install verification, topic redirect auto-push, end-to-end test
-
-**Workday key principles:**
-- **Two supported install paths.** Detect which one applies in step 1
-  and branch:
-  - **Simplified** (Microsoft's current default for new installs) —
-    only the OAuthUser connection (`ff0df`) + Dataverse. No ISU service
-    accounts, no security groups, no RaaS report. User context comes
-    from the Workday REST `/workers/me` endpoint via the V2 user-context
-    topic. The OAuthUser connection requires a **Workday REST base URL**
-    field in addition to the SOAP base URL, and signs in with a
-    customer-registered **Workday API client** whose Client ID
-    (`oauthClientId`) is captured during admin setup.
-  - **Legacy** — the older 4-connection install (`d6081`, `0786a`,
-    `ff0df`, Dataverse) with ISU accounts, security groups, and the
-    `WD_User_Context` RaaS report. Still fully supported; keep existing
-    installs on this path. Fresh installs DEFAULT to simplified.
-- **Entra SSO is MANDATORY on BOTH paths.** The Workday extension pack's
-  OAuthUser connection (`ff0df`) uses `runtimeSource: invoker` — it
-  authenticates to Workday AS the employee via Entra SSO. Do NOT offer
-  to skip SSO setup.
-- **Legacy path: three connections, three configs.** The 3 Workday SOAP
-  connections need DIFFERENT auth types:
-  - `d6081` (Context Generic) = Basic auth with ISU_WQL credentials
-  - `0786a` (Generic User) = Basic auth with ISU_GENERIC credentials
-  - `ff0df` (OAuthUser) = Microsoft Entra ID Integrated (employee SSO)
-- **Never skip tasks based on MCP pre-flight.** The Workday MCP uses
-  the user's admin credentials. The Power Platform flows use ISU
-  accounts (legacy) or the employee's Entra identity (simplified).
-  These have different permissions. A passing MCP check does NOT
-  mean the runtime connections work.
-- **Verify-then-create pattern (legacy).** Use idempotent creation
-  (Add_Only=true, catch "already exists") to detect existing ISU
-  accounts and security groups without asking the user to search the
-  Workday UI.
-- **Auto-push the topic redirect.** The `[Admin] - User Context - Setup`
-  topic must redirect to the Workday user-context system topic
-  (`WorkdaySystemGetUserContext` on legacy, the V2 REST topic on
-  simplified). Push this via push.py automatically — do NOT leave it as
-  a manual portal step.
-- **Post-install verification.** After extension pack install, verify
-  programmatically: connection refs (2 for simplified, 3 for legacy),
-  2 flows, the topic redirect, plus the env var on legacy. Do NOT
-  accept "done" without checking.
+- **Workday**: handled by the **setup orchestrator**
+  (`src/skills/setup/SKILL.md`), not a `connect/workday/` step sequence.
+  `src/skills/connect/step1.md` routes the Workday branch straight there. The
+  orchestrator sequences the six Workday setup skills (environment, ESS install,
+  Entra app, tenant config, extension pack, topic) using the master checklist as
+  a resume-aware spine, and persists state under `.local/setup/workday/tasks.md`
+  + `setupStatus` in `.local/connect/workday/config.json`.
 
 Each integration's tasks.md and config.json persist after completion.
 Running `/connect` again lets the user add a different integration

@@ -133,13 +133,14 @@ Both flows declare exactly one Workday connection:
 ```
 
 `ff0df` is configured with Power Platform's **"Microsoft Entra ID
-Integrated"** authentication type (see
-`src/skills/connect/workday/step3.md` lines 155–166), not Basic auth.
+Integrated"** authentication type (see skill-5,
+`src/skills/setup/workday/install-workday-extension-pack.md`, S5.3), not Basic
+auth.
 "Microsoft Entra ID Integrated" authenticates the signed-in employee against
 a **federated Workday enterprise app** in Entra
 (Application ID URI: `http://www.workday.com/{WD_TENANT}`) — the same
-enterprise app the connect skill provisions in
-`src/skills/connect/workday/step2.md` lines 191–264. The X.509 signing
+enterprise app the setup flow provisions in skill-3,
+`src/skills/setup/workday/provision-workday-entra-app.md`. The X.509 signing
 certificate WD-CONN-102 inspects lives on that same enterprise app as a
 `keyCredential`. It is the signing key Entra uses to issue SAML assertions
 for browser-based Workday SSO and is the most visible expiry-driven artifact

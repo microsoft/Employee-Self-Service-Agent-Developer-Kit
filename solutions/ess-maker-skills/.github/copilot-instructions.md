@@ -285,6 +285,7 @@ After a successful push, `.baseline/` is updated to match the new state.
 
 | User intent | Skill to read |
 |-------------|--------------|
+| Provision/connect the Workday setup environment (`/connect workday`) | `src/skills/setup/SKILL.md` |
 | Connect to ServiceNow/Workday | `src/skills/connect/SKILL.md` |
 | Create a topic | `src/skills/topics/create/SKILL.md` |
 | Create a workflow | `src/skills/workflows/create/SKILL.md` |
