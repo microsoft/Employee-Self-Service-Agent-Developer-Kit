@@ -190,3 +190,4 @@ class TestInfrastructureScopeAuthGating:
             cli.main()
 
         assert exc.value.code == 1
+
