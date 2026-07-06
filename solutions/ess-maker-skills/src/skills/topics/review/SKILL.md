@@ -23,7 +23,10 @@ This skill analyzes:
 - **`Global.*` reference integrity** across the agent (guidance:
   `src/reference/ess-docs/conformance/dangling-globals.md`) — references that resolve to no variable;
 - **adaptive-card UX contract** (guidance: `src/reference/ess-docs/conformance/ux-contract.md`) — card
-  data bindings that resolve to nothing, and empty/error/confirmation-state gaps.
+  data bindings that resolve to nothing, and empty/error/confirmation-state gaps;
+- **ISV conformance** (guidance: `src/reference/ess-docs/conformance/isv-conformance.md`) — the topic
+  against the documented field/schema conventions and known pitfalls of the backend system it integrates
+  with, when ISV reference docs are available.
 
 Other checks (cross-component error-code coverage) are not part of this skill; if the
 maker asks about those, say they are not covered rather than guessing.
@@ -86,12 +89,20 @@ Read the analysis guidance at
 expressions you gathered. Use its precision bar (>=80% confidence), reachability scoring, and severity
 mapping to decide which candidates are real findings and how serious each is.
 
-Steps 3–5 are **internal reasoning**. Their rule IDs (e.g. `BTPF-001`), reachability tags
+## Step 6: Check ISV conformance (if the topic integrates a backend system)
+
+If the topic calls an ISV scenario, read
+`src/reference/ess-docs/conformance/isv-conformance.md` and follow it: determine the target ISV from the
+scenario name, read that ISV's reference doc if one is available in the environment, and check the topic
+against the documented field/schema conventions and known pitfalls. If the ISV reference docs are not
+available, note that ISV conformance was not checked and continue — do not guess ISV behavior.
+
+Steps 3–6 are **internal reasoning**. Their rule IDs (e.g. `BTPF-001`), reachability tags
 (`REACHABLE_NORMAL_UI`, etc.), and the word "lens" are working vocabulary **for you** — they are NOT
-shown to the customer (see Step 6). Carry each finding's node locators (`id` / `displayName` / `kind`)
+shown to the customer (see Step 7). Carry each finding's node locators (`id` / `displayName` / `kind`)
 and `Fix targets` through internally so the customer-facing step can name the step and a fixer can act.
 
-## Step 6: Present the advisory report (customer-facing)
+## Step 7: Present the advisory report (customer-facing)
 
 Present findings in **plain language**. Do NOT expose internal terminology to the customer — no "lens",
 no rule IDs, no reachability tag names, no file-format jargon. Translate severity to plain words
@@ -130,7 +141,7 @@ customer's own content, not internal terminology). Refer to each site by its **s
 locatable. Order High -> Medium -> Low. Group any "no user impact today" items under a short
 **Minor / cleanup** heading so the customer prioritizes the most likely issues first.
 
-## Step 7: Close
+## Step 8: Close
 
 End advisory, never blocking:
 
