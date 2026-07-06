@@ -26,7 +26,9 @@ skip it.
 ## Step 2: Locate the ISV reference doc
 
 The ISV reference docs are synced into this workspace at `src/reference/ess-docs/isv/isv-<connector>.md`.
-Read the one doc for the ISV determined in Step 1, by its exact path.
+Read the one doc for the ISV determined in Step 1, by its exact path, **in full** — these docs are short,
+so load the entire document into context and treat all of it (field tables, schema conventions,
+type-coercion notes, and pitfalls) as authoritative reference for the analysis.
 
 If that file is not present, the ISV reference docs have not been synced into this environment. Note in the
 report that ISV conformance was not checked and that the docs can be synced by running
@@ -36,9 +38,10 @@ actually behave.
 
 ## Step 3: Apply the ISV reference to the topic
 
-Read the reference doc's field/schema sections and its **Known Pitfall Areas**, and check the authored
-topic against them. The reference doc is the source of what to look for — each documented convention and
-pitfall is a lens on the topic. Typical checks the docs support:
+Using the **full** reference doc you loaded in Step 2 as authoritative context — its field/schema tables,
+type-coercion notes, and Known Pitfall Areas — check the authored topic against it. The reference doc is
+the source of what to look for — each documented convention and pitfall is a lens on the topic. Typical
+checks the docs support:
 
 - **Field/schema faithfulness** — the topic references response fields that exist in the ISV's documented
   schema, with the documented names; a field the topic reads that the ISV does not produce will be blank.
