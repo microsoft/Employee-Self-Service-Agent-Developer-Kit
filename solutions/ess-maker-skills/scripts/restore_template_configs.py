@@ -65,7 +65,7 @@ class _AuthHolder:
         self.token = None
 
     def acquire(self):
-        self.token = authenticate(self.env_url)
+        self.token = authenticate(self.env_url, session_capability="restore_template_configs")
         return self.token
 
     def refresh(self):

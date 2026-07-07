@@ -216,7 +216,7 @@ def main():
         from auth import authenticate, discover_tenant
 
         print("Authenticating to Dataverse...")
-        dv_token = authenticate(env_url)
+        dv_token = authenticate(env_url, session_capability="flightcheck")
 
         tenant_id = discover_tenant(env_url)
         print(f"Tenant: {tenant_id}")

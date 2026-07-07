@@ -315,3 +315,131 @@ def test_buffer_oversize_drops_oldest_and_accepts_newest(monkeypatch):
         names = [json.loads(ln)["name"] for ln in f.read().splitlines() if ln.strip()]
     assert "adk.evt.19" in names      # newest kept
     assert "adk.evt.0" not in names   # oldest dropped
+
+
+# --- capability taxonomy + normalization ----------------------------------
+def test_normalize_capability_known_values_pass_through():
+    for cap in adk.ADK_CAPABILITIES:
+        assert adk.normalize_capability(cap) == cap
+
+
+def test_normalize_capability_empty_stays_empty():
+    # Some events legitimately carry no capability (e.g. an uncategorized
+    # session) — those must NOT be coerced to "unknown".
+    assert adk.normalize_capability("") == ""
+    assert adk.normalize_capability(None) == ""
+
+
+def test_normalize_capability_case_and_whitespace_insensitive():
+    assert adk.normalize_capability("  Topic_Create ") == "topic_create"
+    assert adk.normalize_capability("WORKFLOW_DELETE") == "workflow_delete"
+
+
+def test_normalize_capability_unknown_bucketed():
+    assert adk.normalize_capability("bogus") == adk.CAPABILITY_UNKNOWN
+    assert adk.normalize_capability("topics") == adk.CAPABILITY_UNKNOWN
+
+
+def test_emit_capability_use_coerces_unknown(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    adk.emit_capability_use("not-a-real-cap", block=True)
+    data = captured_post[0][1][0]["data"]
+    # Out-of-taxonomy values still emit, but land in the controlled bucket so
+    # the "Capability Usage by Type" dimension never mints stray slices.
+    assert data["adk_capability"] == adk.CAPABILITY_UNKNOWN
+
+
+def test_emit_capability_use_known_value_preserved(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    adk.emit_capability_use("Topic_Create", block=True)
+    assert captured_post[0][1][0]["data"]["adk_capability"] == "topic_create"
+
+
+# --- session capability is parametrized (no more hardcoded "connect") ------
+def test_start_session_tags_passed_capability(captured_post):
+    res = adk.start_session(adk_capability="publishing", block=True)
+    assert res["sent"] is True
+    data = captured_post[0][1][0]["data"]
+    assert data["adk_capability"] == "publishing"
+
+
+def test_start_session_without_capability_omits_dimension(captured_post):
+    # A caller that passes no capability yields an UNCATEGORIZED session — it
+    # must not be silently mislabeled (the old bug hardcoded "connect" here).
+    res = adk.start_session(block=True)
+    assert res["sent"] is True
+    data = captured_post[0][1][0]["data"]
+    assert "adk_capability" not in data
+
+
+def test_start_session_unknown_capability_bucketed(captured_post):
+    res = adk.start_session(adk_capability="whatever", block=True)
+    assert res["sent"] is True
+    assert captured_post[0][1][0]["data"]["adk_capability"] == adk.CAPABILITY_UNKNOWN
+
+
+# --- the capabilities wired across the kit stay in the canonical list ------
+def test_wired_capabilities_are_in_canonical_list():
+    """Every capability string the entry points / SKILL.md skills emit must be
+    a member of ADK_CAPABILITIES, or it would silently normalize to
+    "unknown" on the dashboards. This is the "keep in sync" contract."""
+    wired = {
+        # auth.py callers (session_capability)
+        "setup", "onboarding", "publishing", "flightcheck",
+        "backup_template_configs", "restore_template_configs",
+        # emit_capability.py shim invocations across the SKILL.md skills
+        "topic_create", "topic_update", "topic_delete",
+        "workflow_create", "workflow_update", "workflow_delete",
+        "evaluations", "cleanup", "troubleshoot",
+    }
+    missing = wired - set(adk.ADK_CAPABILITIES)
+    assert not missing, f"wired capabilities not in ADK_CAPABILITIES: {missing}"
+
+
+# --- emit_capability.py shim (the SKILL.md-driven hook) -------------------
+def test_shim_emits_capability_and_exits_zero(captured_post, monkeypatch):
+    import emit_capability
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    rc = emit_capability.main(["emit_capability.py", "topic_create"])
+    assert rc == 0
+    assert len(captured_post) == 1
+    envelope = captured_post[0][1][0]
+    assert envelope["name"] == "adk.capability.use"
+    assert envelope["data"]["adk_capability"] == "topic_create"
+
+
+def test_shim_unknown_capability_still_exits_zero(captured_post, monkeypatch):
+    import emit_capability
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    rc = emit_capability.main(["emit_capability.py", "not-real"])
+    assert rc == 0
+    # Emitted, but bucketed — a bad SKILL.md argument can't fail the step and
+    # can't pollute the dashboard dimension.
+    assert captured_post[0][1][0]["data"]["adk_capability"] == adk.CAPABILITY_UNKNOWN
+
+
+def test_shim_list_and_help_do_not_emit(captured_post):
+    import emit_capability
+    assert emit_capability.main(["emit_capability.py", "--list"]) == 0
+    assert emit_capability.main(["emit_capability.py", "--help"]) == 0
+    assert emit_capability.main(["emit_capability.py"]) == 0  # no args -> help
+    assert captured_post == []
+
+
+def test_shim_no_op_when_telemetry_disabled(captured_post, monkeypatch):
+    import emit_capability
+    monkeypatch.setenv("ESS_ADK_TELEMETRY", "off")
+    rc = emit_capability.main(["emit_capability.py", "cleanup"])
+    assert rc == 0
+    assert captured_post == []
+
+
+def test_shim_never_raises_even_if_post_fails(monkeypatch):
+    import emit_capability
+
+    def _boom(ikey, envelopes):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(_fc, "_post", _boom)
+    # Fail-open contract: a telemetry failure must never fail the skill step.
+    assert emit_capability.main(["emit_capability.py", "troubleshoot"]) == 0

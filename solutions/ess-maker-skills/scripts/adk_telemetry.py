@@ -87,6 +87,67 @@ EVENT_FLIGHTCHECK_RUN = "adk.flightcheck.run"
 EVENT_FLIGHTCHECK_RESULT = "adk.flightcheck.result"
 EVENT_FLIGHTCHECK_ERROR = "adk.flightcheck.error"
 
+# --- Canonical ADK capability value-list (single source of truth) ---------
+# Every ``adk_capability`` value emitted anywhere in the kit MUST be one of
+# these. This is the ONE place the taxonomy is defined: the synthetic
+# emitter, the ``emit_capability.py`` shim, and the Aria "Sessions by
+# Capability" / "Capability Usage by Type" donut value-lists are all kept in
+# sync with it. When you add a capability here, also add it to those two Aria
+# cube dimension value-lists (see the telemetry dashboards story, ADO
+# #7532631) so the new slice renders.
+#
+# One capability per real maker-facing ADK skill / entry point:
+#   setup / onboarding      -> first-run environment setup + discovery
+#   connect                 -> ServiceNow / Workday connection setup
+#   topic_*                 -> topic authoring (create / update / delete)
+#   workflow_*              -> workflow authoring (create / update / delete)
+#   evaluations             -> eval test-set authoring + validation runs
+#   cleanup                 -> error scan / fix pass
+#   troubleshoot            -> connectivity / auth diagnosis
+#   backup_template_configs -> Workday template-config backup
+#   restore_template_configs-> Workday template-config restore
+#   publishing              -> push / deploy to Copilot Studio
+#   flightcheck             -> pre-deployment readiness check
+ADK_CAPABILITIES = (
+    "setup",
+    "onboarding",
+    "connect",
+    "topic_create",
+    "topic_update",
+    "topic_delete",
+    "workflow_create",
+    "workflow_update",
+    "workflow_delete",
+    "evaluations",
+    "cleanup",
+    "troubleshoot",
+    "backup_template_configs",
+    "restore_template_configs",
+    "publishing",
+    "flightcheck",
+)
+_CAPABILITY_SET = frozenset(ADK_CAPABILITIES)
+
+# Bucket for any value not in ADK_CAPABILITIES. Keeps the dashboard dimension
+# controlled (an out-of-taxonomy value shows up as a single visible "unknown"
+# slice rather than silently minting a new slice), which also makes the
+# "keep in sync" contract testable.
+CAPABILITY_UNKNOWN = "unknown"
+
+
+def normalize_capability(capability: str) -> str:
+    """Normalize an ``adk_capability`` to the canonical value-list.
+
+    Empty stays empty (some events legitimately carry no capability).
+    Any non-empty value is lower-cased/stripped and mapped to itself if it
+    is a known capability, else to :data:`CAPABILITY_UNKNOWN`.
+    """
+    if not capability:
+        return ""
+    c = str(capability).strip().lower()
+    return c if c in _CAPABILITY_SET else CAPABILITY_UNKNOWN
+
+
 # Outcomes the spec treats as errors (must carry error_* fields).
 _ERROR_OUTCOMES = frozenset(
     {"client_error", "server_error", "timeout", "abandoned", "failure", "fail"}
@@ -485,6 +546,7 @@ def start_session(
     if not is_new:
         return {"sent": False, "reason": "existing-session", "session_id": sid}
     data = common_dimensions(surface, session_id=sid)
+    adk_capability = normalize_capability(adk_capability)
     if adk_capability:
         data["adk_capability"] = adk_capability
     return _emit(EVENT_SESSION_START, data, block=block)
@@ -508,7 +570,7 @@ def emit_agent_create(
 ) -> dict[str, Any]:
     sid, _ = get_session(surface)
     data = common_dimensions(surface, session_id=sid)
-    data.update({"agent_id": agent_id, "adk_capability": adk_capability})
+    data.update({"agent_id": agent_id, "adk_capability": normalize_capability(adk_capability)})
     return _emit(EVENT_AGENT_CREATE, data, block=block)
 
 
@@ -530,7 +592,7 @@ def emit_agent_deploy(
     data.update({
         "agent_id": agent_id,
         "deploy_target": deploy_target,
-        "adk_capability": adk_capability,
+        "adk_capability": normalize_capability(adk_capability),
         "outcome": outcome,
         "duration_ms": int(duration_ms),
     })
@@ -547,7 +609,7 @@ def emit_build_start(
 ) -> dict[str, Any]:
     sid, _ = get_session(surface)
     data = common_dimensions(surface, session_id=sid)
-    data.update({"agent_id": agent_id, "adk_capability": adk_capability})
+    data.update({"agent_id": agent_id, "adk_capability": normalize_capability(adk_capability)})
     return _emit(EVENT_BUILD_START, data, block=block)
 
 
@@ -567,7 +629,7 @@ def emit_build_complete(
     data = common_dimensions(surface, session_id=sid)
     data.update({
         "agent_id": agent_id,
-        "adk_capability": adk_capability,
+        "adk_capability": normalize_capability(adk_capability),
         "outcome": outcome,
         "duration_ms": int(duration_ms),
     })
@@ -602,7 +664,7 @@ def emit_capability_use(
 ) -> dict[str, Any]:
     sid, _ = get_session(surface)
     data = common_dimensions(surface, session_id=sid)
-    data["adk_capability"] = adk_capability
+    data["adk_capability"] = normalize_capability(adk_capability)
     return _emit(EVENT_CAPABILITY_USE, data, block=block)
 
 
@@ -618,7 +680,7 @@ def emit_flightcheck_run(
     data = common_dimensions(surface, session_id=sid)
     data.update({
         "agent_id": agent_id,
-        "adk_capability": adk_capability,
+        "adk_capability": normalize_capability(adk_capability),
         "run_index": int(run_index),
     })
     return _emit(EVENT_FLIGHTCHECK_RUN, data, block=block)
@@ -638,7 +700,7 @@ def emit_flightcheck_result(
     data = common_dimensions(surface, session_id=sid)
     data.update({
         "agent_id": agent_id,
-        "adk_capability": adk_capability,
+        "adk_capability": normalize_capability(adk_capability),
         "run_index": int(run_index),
         "result": result,
         "duration_ms": int(duration_ms),
@@ -671,16 +733,12 @@ def _emit_synthetic(n: int = 1) -> int:
     """
     import random
 
-    # Only emit capabilities that have real telemetry wiring in the ADK
-    # (session start -> connect; discover/list_environments -> onboarding;
-    # evaluate_evals -> evaluations; push -> publishing; flightcheck/cli ->
-    # flightcheck). Other real SKILL.md skills (topic_create/topic_update,
-    # troubleshoot, workflows, cleanup) have no emit_* hook yet, so seeding
-    # them here would paint the dashboards with capabilities that never appear
-    # in production. Keep this list in sync with the capability donut value-lists.
-    capabilities = [
-        "onboarding", "connect", "evaluations", "publishing", "flightcheck",
-    ]
+    # Seed the dashboards with the full canonical capability taxonomy so every
+    # donut slice renders. Now that all real ADK skills emit (session start,
+    # capability use, and the SKILL.md-driven skills via emit_capability.py),
+    # the synthetic spread should mirror the whole value-list rather than only
+    # the handful of originally-wired capabilities.
+    capabilities = list(ADK_CAPABILITIES)
     deploy_targets = ["test", "staging", "production"]
     api_endpoints = ["dataverse/bots", "dataverse/botcomponents", "bap/environments"]
     # Fixed, recognizable demo tenant GUIDs so dashboards are filterable by a

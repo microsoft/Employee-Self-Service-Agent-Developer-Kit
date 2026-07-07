@@ -279,7 +279,7 @@ def main():
         managed = config["agent"].get("isManaged", False)
 
         print("Authenticating to Dataverse...")
-        token = authenticate(env_url)
+        token = authenticate(env_url, session_capability="setup")
         print("Authenticated.\n")
 
         try:
@@ -302,7 +302,7 @@ def main():
     env_url = args.url.rstrip("/")
 
     print("Authenticating to Dataverse...")
-    token = authenticate(env_url)
+    token = authenticate(env_url, session_capability="setup")
     print("Authenticated.\n")
 
     try:

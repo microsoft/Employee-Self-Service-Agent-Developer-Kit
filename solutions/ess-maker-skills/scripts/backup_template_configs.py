@@ -199,7 +199,7 @@ def main():
 
     print("Authenticating to Dataverse...")
     try:
-        token = authenticate(env_url)
+        token = authenticate(env_url, session_capability="backup_template_configs")
     except SystemExit:
         # authenticate() prints its own friendly error and exits 1.
         raise
