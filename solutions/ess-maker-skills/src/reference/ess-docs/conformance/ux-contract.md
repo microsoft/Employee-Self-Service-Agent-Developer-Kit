@@ -25,7 +25,7 @@ bindings. It reports two anomaly classes:
 
 Every reference the detector reports **will always be blank at runtime** — do not reason about whether it
 "might" be populated. Turn each into a finding, applying the precision bar and reachability scoring from
-[`powerfx-topic-local.md`](powerfx-topic-local.md) to set severity, and name the intended field in the
+the shared [`finding-contract.md`](finding-contract.md) to set severity, and name the intended field in the
 suggested fix when there is an obvious near-match. If the script cannot run, say so in the report.
 
 ## Part 2 — Empty, error, and confirmation states (read the card)
@@ -47,5 +47,6 @@ surrounding actions, and assess:
 - **Links with empty components** — a URL built by concatenating a base and an id where either part can be
   empty, producing a broken link.
 
-Apply the same precision bar and severity mapping. A gap on a path a normal user reaches is higher
-severity than one behind an unreachable branch.
+Apply the same precision bar and severity mapping from the shared
+[`finding-contract.md`](finding-contract.md). A gap on a path a normal user reaches is higher
+severity than one behind an unreachable branch. This check uses the `BTUX` finding-ID prefix.

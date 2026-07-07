@@ -39,8 +39,8 @@ For each dangling reference the detector reports, decide whether it is a real de
 - A reference with no plausible intended target may be a variable that was **renamed or removed**, or a
   read that was never wired up.
 
-Apply the precision bar and reachability scoring from
-[`powerfx-topic-local.md`](powerfx-topic-local.md) — a dangling read on a path a normal user hits is
-higher severity than one on an unreachable path. Report confirmed findings with the same output format,
-locating each by the reading action's node identity (`id` / `displayName` / `kind`) and naming the
-intended variable in the suggested fix.
+Apply the precision bar and reachability scoring from the shared
+[`finding-contract.md`](finding-contract.md) — a dangling read on a path a normal user hits is
+higher severity than one on an unreachable path. This check uses the `BTDG` finding-ID prefix. Report
+confirmed findings with the shared output format, locating each by the reading action's node identity
+(`id` / `displayName` / `kind`) and naming the intended variable in the suggested fix.

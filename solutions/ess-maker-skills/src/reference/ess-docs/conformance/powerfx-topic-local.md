@@ -15,7 +15,8 @@ You are invoked with the path to one authored topic (`{agent.folder}/topics/{Nam
 whole file. Walk every Power Fx expression (any value beginning with `=`, and expression bodies inside
 `AdaptiveCardPrompt.card` / `AdaptiveCardTemplate.cardContent`). Evaluate each against the heuristics
 below. This is a **judgment lens**, not a closed rule set — each heuristic is a starting question; the
-precision bar and reachability rubric decide what becomes a finding.
+precision bar and reachability rubric in the shared
+[`finding-contract.md`](finding-contract.md) decide what becomes a finding.
 
 ## Heuristics (topic-local)
 
@@ -49,65 +50,11 @@ precision bar and reachability rubric decide what becomes a finding.
   domain-valued quantity (years, count). Domain judgment — only flag if the cap plausibly rejects a
   realistic valid case (retry-counter caps are **not** bugs).
 
-## Precision bar
+## Reporting
 
-Report a finding only at **≥80% confidence** that:
-
-1. The cited expression actually contains the claimed pattern (re-read the expression text before
-   reporting — this is where reviewer hallucinations surface).
-2. The pattern is a real defect, not an intentional design choice.
-3. Either the bug is user-reachable through normal chat UI with normal auth (HIGH/MEDIUM), or it is real
-   code/operator-level damage (LOW).
-
-When the same anti-pattern occurs at multiple sites, **report one finding with all sites listed**, not N
-findings.
-
-## Reachability scoring (dominant input to severity)
-
-- **REACHABLE_NORMAL_UI** — a normal user with normal auth doing what the topic is built to do hits this
-  path. -> HIGH (or MEDIUM if user-visible impact is small).
-- **REACHABLE_NORMAL_UI_WITH_DATA_PRECONDITION** — reachable via normal UI but needs a specific data
-  state. -> MEDIUM.
-- **NOT_REACHABLE_VIA_BOT_UI** — upstream-gated; only reachable via flow-direct invocation, a race
-  window, or a future code change. Real bug, no user impact today. -> LOW.
-- **OPERATOR_OR_HYGIENE_ONLY** — dead code, redundant writes, hardcoded IDs with no runtime user impact.
-  -> LOW.
-
-## Output format
-
-Report findings as a numbered list using `BTPF-NNN` IDs (Bot Topic Power Fx).
-
-**Locators (important).** The fix is applied in the chat panel, not by a human navigating to a line —
-so cite each site by its **stable node identity**, which is what a fixer keys on: the action's `id:`,
-its `displayName:` (if present), and its action `kind:`. Include the short expression excerpt so the
-target is unambiguous. A line number is **best-effort context only**, never the primary locator (line
-numbers drift and the agentic read does not track them reliably).
-
-```text
-BTPF-NNN — <one-line summary>
-  Severity:     HIGH | MEDIUM | LOW
-  Reachability: REACHABLE_NORMAL_UI | REACHABLE_NORMAL_UI_WITH_DATA_PRECONDITION | NOT_REACHABLE_VIA_BOT_UI | OPERATOR_OR_HYGIENE_ONLY
-  Site(s):
-    - kind=<action kind>  id=<node id>  displayName=<node displayName, if any>  expr=<short excerpt>  (~line <N>)
-    - (additional sites if multi-site)
-  What's wrong:   <1-3 sentence anti-pattern explanation>
-  Why it matters: <observable user/operator impact>
-  Concrete fix:   <specific proposed change — Power Fx snippet or YAML edit>
-  Fix targets:    <the node id(s) the fix edits or the node it inserts before/after — so the fixer can act>
-```
-
-Sort findings HIGH -> MEDIUM -> LOW. After the list, emit a **Defense-in-depth** section for real
-anti-patterns whose sites all scored `NOT_REACHABLE_VIA_BOT_UI` or `OPERATOR_OR_HYGIENE_ONLY`, so
-reviewers prioritize reachable bugs first:
-
-```text
-## Defense in depth (no reachable user impact today)
-
-DiD-NNN — <one-line summary>
-  Pattern:   <anti-pattern name>
-  Site(s):   <topic file>:<line>, ...
-  Rationale: <why it's worth fixing despite no current reachability>
-```
+This lens uses the `BTPF` finding-ID prefix. Apply the precision bar, reachability scoring, output format,
+and Defense-in-depth conventions from the shared [`finding-contract.md`](finding-contract.md). Locate each
+finding by the action's node identity (`id` / `displayName` / `kind`) with a short expression excerpt.
 
 ## What this lens does NOT do
 

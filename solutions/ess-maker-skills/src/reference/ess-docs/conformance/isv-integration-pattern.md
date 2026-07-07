@@ -39,7 +39,8 @@ ESS-orchestrated systems above, which are expected to go through the shared syst
 
 ## Reporting
 
-Apply the same precision bar and reachability scoring as
-[`powerfx-topic-local.md`](powerfx-topic-local.md). When you flag a bypass, locate it by the
-`InvokeFlowAction` node's identity, and the suggested fix is to route the backend call through the shared
-system topic for that backend (passing `scenarioName` + `parameters`) instead of the direct flow call.
+Apply the same precision bar and reachability scoring as the shared
+[`finding-contract.md`](finding-contract.md). This check uses the `BTIP` finding-ID prefix. When you flag
+a bypass, locate it by the `InvokeFlowAction` node's identity, and the suggested fix is to route the
+backend call through the shared system topic for that backend (passing `scenarioName` + `parameters`)
+instead of the direct flow call.

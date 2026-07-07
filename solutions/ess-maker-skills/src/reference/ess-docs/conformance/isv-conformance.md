@@ -58,7 +58,7 @@ checks the docs support:
   conventions.
 
 Treat each as a starting question, not a closed rule — the specific conventions come from the reference
-doc for the ISV under review. Apply the same precision bar and reachability scoring as
-[`powerfx-topic-local.md`](powerfx-topic-local.md), and report confirmed findings with the shared output
-format, locating each by the action's node identity and naming the documented convention it conflicts
-with.
+doc for the ISV under review. Apply the same precision bar and reachability scoring as the shared
+[`finding-contract.md`](finding-contract.md), and report confirmed findings with the shared output
+format. This check uses the `BTIC` finding-ID prefix. Locate each by the action's node identity and name
+the documented convention it conflicts with.

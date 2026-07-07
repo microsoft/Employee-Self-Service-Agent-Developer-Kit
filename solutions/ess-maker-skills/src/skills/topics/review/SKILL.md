@@ -119,15 +119,19 @@ python scripts/scan_config.py --agent {agent-slug} --topic {topic-stem}
 
 Its output is **authoritative** on whether a parsed response field is returned by the scenario's template
 config: every field it reports is one the topic parses but the config never produces, so it **will always
-render blank at runtime**. Turn each reported field into a finding, applying the shared precision bar and
-reachability scoring for severity. The detector covers ServiceNow scenarios only (Workday's config declares
-only a top-level key); if it reports nothing, or the topic is not ServiceNow, this check contributes no
-findings. If the script cannot run, say so rather than silently skipping.
+render blank at runtime**. Turn each reported field into a finding, applying the precision bar and
+reachability scoring from the shared [`finding-contract.md`](src/reference/ess-docs/conformance/finding-contract.md)
+(this check uses the `BTCF` finding-ID prefix). The detector covers ServiceNow scenarios only (Workday's
+config declares only a top-level key); if it reports nothing, or the topic is not ServiceNow, this check
+contributes no findings. If the script cannot run, say so rather than silently skipping.
 
-Steps 3–6c are **internal reasoning**. Their rule IDs (e.g. `BTPF-001`), reachability tags
-(`REACHABLE_NORMAL_UI`, etc.), and the word "lens" are working vocabulary **for you** — they are NOT
-shown to the customer (see Step 7). Carry each finding's node locators (`id` / `displayName` / `kind`)
-and `Fix targets` through internally so the customer-facing step can name the step and a fixer can act.
+Steps 3–6c are **internal reasoning**, and every lens reports findings in the one shared shape defined by
+[`finding-contract.md`](src/reference/ess-docs/conformance/finding-contract.md) — precision bar, severity
+via reachability, finding-ID prefixes, and the structured output format. Their rule IDs (e.g. `BTPF-001`),
+reachability tags (`REACHABLE_NORMAL_UI`, etc.), and the word "lens" are working vocabulary **for you** —
+they are NOT shown to the customer (see Step 7). Carry each finding's node locators (`id` / `displayName` /
+`kind`) and `Fix targets` through internally so the customer-facing step can name the step and a fixer can
+act.
 
 ## Step 7: Present the advisory report (customer-facing)
 
