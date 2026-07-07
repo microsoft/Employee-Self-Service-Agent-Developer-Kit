@@ -30,6 +30,8 @@ This skill analyzes:
 - **ISV integration pattern** (guidance: `src/reference/ess-docs/conformance/isv-integration-pattern.md`) —
   whether a topic for an ESS-orchestrated backend uses the shared template-config pattern rather than a
   standalone flow.
+- **ServiceNow response-field integrity** — response fields the topic parses that the scenario's template
+  config never returns, and which therefore render blank at runtime.
 
 Other checks (cross-component error-code coverage) are not part of this skill; if the
 maker asks about those, say they are not covered rather than guessing.
@@ -107,7 +109,22 @@ integrates an ESS-orchestrated backend (ServiceNow, Workday, SAP SuccessFactors)
 backend call to the shared system topic rather than calling its own cloud flow. This check reads only the
 authored topic and always applies (no reference docs needed).
 
-Steps 3–6b are **internal reasoning**. Their rule IDs (e.g. `BTPF-001`), reachability tags
+## Step 6c: Check ServiceNow response-field integrity (run the detector)
+
+If the topic integrates ServiceNow, run this from the `solutions/ess-maker-skills/` directory:
+
+```
+python scripts/scan_config.py --agent {agent-slug} --topic {topic-stem}
+```
+
+Its output is **authoritative** on whether a parsed response field is returned by the scenario's template
+config: every field it reports is one the topic parses but the config never produces, so it **will always
+render blank at runtime**. Turn each reported field into a finding, applying the shared precision bar and
+reachability scoring for severity. The detector covers ServiceNow scenarios only (Workday's config declares
+only a top-level key); if it reports nothing, or the topic is not ServiceNow, this check contributes no
+findings. If the script cannot run, say so rather than silently skipping.
+
+Steps 3–6c are **internal reasoning**. Their rule IDs (e.g. `BTPF-001`), reachability tags
 (`REACHABLE_NORMAL_UI`, etc.), and the word "lens" are working vocabulary **for you** — they are NOT
 shown to the customer (see Step 7). Carry each finding's node locators (`id` / `displayName` / `kind`)
 and `Fix targets` through internally so the customer-facing step can name the step and a fixer can act.
