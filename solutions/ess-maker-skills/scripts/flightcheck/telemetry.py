@@ -90,11 +90,55 @@ EVENT_RUN = "ESSMakerKit.FlightCheck.Run"
 EVENT_CHECK = "ESSMakerKit.FlightCheck.Check"
 
 # Bump when the emitted field set changes so dashboards can version-gate.
-TELEMETRY_SCHEMA_VERSION = "1.0"
+# 1.1: added derived ``tenantClass`` (internal vs customer) — ADO 7558661.
+TELEMETRY_SCHEMA_VERSION = "1.1"
 
 # Short, fail-open timeout (connect, read) seconds. Telemetry runs at the
 # very end of a FlightCheck; we never want it to hang the CLI.
 _POST_TIMEOUT = (3.05, 5)
+
+
+# --- Tenant classification (ADO 7558661) ----------------------------------
+# Report internal Microsoft dogfood/testing traffic separately from real
+# external customer usage. ``tenant_class`` is DERIVED from ``tenant_id`` — a
+# coarse, non-identifying bucket (strictly lower sensitivity than the raw
+# tenant GUID it is computed from). It is classified at EMIT time, not in the
+# Aria cube, because 1DS RTA cubes map an event property straight to a
+# dimension and cannot derive one dimension's value from another.
+#
+# Seeded with the Microsoft corporate Entra tenant only. Additional internal /
+# dogfood tenants can be added WITHOUT a code change via the
+# ``ESS_ADK_INTERNAL_TENANTS`` env var (comma-separated GUIDs) — preferred over
+# growing a hard-coded list.
+MICROSOFT_CORP_TENANT_ID = "72f988bf-86f1-41af-91ab-2d7cd011db47"
+
+TENANT_CLASS_INTERNAL = "internal"
+TENANT_CLASS_CUSTOMER = "customer"
+TENANT_CLASS_UNKNOWN = "unknown"
+
+
+def _internal_tenant_ids() -> frozenset[str]:
+    """Allow-list of tenant GUIDs treated as internal Microsoft tenancy."""
+    ids = {MICROSOFT_CORP_TENANT_ID}
+    extra = os.environ.get("ESS_ADK_INTERNAL_TENANTS", "")
+    ids.update(t.strip().lower() for t in extra.split(",") if t.strip())
+    return frozenset(ids)
+
+
+def classify_tenant(tenant_id: str) -> str:
+    """Map a raw Entra tenant GUID to ``internal`` | ``customer`` | ``unknown``.
+
+    Empty / missing tenant -> ``unknown`` (we never guess). A tenant in the
+    internal allow-list -> ``internal``; anything else is an external
+    ``customer``. Case/whitespace-insensitive.
+    """
+    if not tenant_id:
+        return TENANT_CLASS_UNKNOWN
+    return (
+        TENANT_CLASS_INTERNAL
+        if str(tenant_id).strip().lower() in _internal_tenant_ids()
+        else TENANT_CLASS_CUSTOMER
+    )
 
 
 def _env_disabled() -> bool:
@@ -279,6 +323,7 @@ def _run_data(
         "runId": run_id,
         "instanceId": instance_id,   # System Metadata
         "tenantId": tenant_id,       # OII (raw Entra tenant GUID; approved Data Profile)
+        "tenantClass": classify_tenant(tenant_id),  # derived: internal|customer|unknown
         "agentId": agent_id,         # OII
         "agentCount": agent_count,
         "adkVersion": get_adk_version(),
@@ -314,6 +359,7 @@ def _check_data(
         "runId": run_id,
         "instanceId": instance_id,
         "tenantId": tenant_id,
+        "tenantClass": classify_tenant(tenant_id),
         "checkpointId": getattr(check, "checkpoint_id", ""),
         "category": getattr(check, "category", ""),
         "priority": getattr(check, "priority", ""),

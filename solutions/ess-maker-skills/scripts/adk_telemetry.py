@@ -68,7 +68,8 @@ from flightcheck import telemetry as _fc  # noqa: E402
 
 
 # --- Spec constants -------------------------------------------------------
-SCHEMA_VERSION = "1.0.0"
+# 1.1.0: added derived ``tenant_class`` (internal vs customer) — ADO 7558661.
+SCHEMA_VERSION = "1.1.0"
 
 # Surfaces the ADK emits from (spec enum: sdk | cli | studio | docs). The
 # Python skill scripts are the CLI surface.
@@ -355,12 +356,14 @@ def common_dimensions(
     tenant_id: str | None = None,
 ) -> dict[str, Any]:
     """Build the dimensions present on every event (spec Common Dimensions)."""
+    tid = _IDENTITY["tenant_id"] if tenant_id is None else tenant_id
     return {
         "schema_version": SCHEMA_VERSION,
         "instance_id": (
             _IDENTITY["instance_id"] or _fc.get_instance_id()
         ) if instance_id is None else instance_id,
-        "tenant_id": _IDENTITY["tenant_id"] if tenant_id is None else tenant_id,
+        "tenant_id": tid,
+        "tenant_class": _fc.classify_tenant(tid),
         "session_id": session_id,
         "surface": surface,
         "adk_version": _fc.get_adk_version(),
@@ -741,9 +744,10 @@ def _emit_synthetic(n: int = 1) -> int:
     # known tenant_id (raw OII per approved Data Profile). Weighted so one
     # tenant dominates for a clear "filter to this tenant" demo.
     synth_tenants = (
-        ["11111111-1111-1111-1111-111111111111"] * 3  # Contoso (demo, primary)
-        + ["22222222-2222-2222-2222-222222222222"] * 2  # Fabrikam (demo)
-        + ["33333333-3333-3333-3333-333333333333"]      # Northwind (demo)
+        ["11111111-1111-1111-1111-111111111111"] * 3  # Contoso (demo customer, primary)
+        + ["22222222-2222-2222-2222-222222222222"] * 2  # Fabrikam (demo customer)
+        + ["33333333-3333-3333-3333-333333333333"]      # Northwind (demo customer)
+        + [_fc.MICROSOFT_CORP_TENANT_ID] * 2            # Microsoft corp (internal dogfood)
     )
     bad = 0
     for _ in range(max(1, n)):

@@ -107,11 +107,55 @@ def test_identity_flows_into_dimensions(monkeypatch):
     assert dims["tenant_id"] == "tenant-Z"
 
 
+# --- tenant_class (internal vs customer; ADO 7558661) ---------------------
+def test_classify_tenant_microsoft_corp_is_internal():
+    assert _fc.classify_tenant(_fc.MICROSOFT_CORP_TENANT_ID) == "internal"
+    # case / whitespace insensitive
+    assert _fc.classify_tenant(f"  {_fc.MICROSOFT_CORP_TENANT_ID.upper()} ") == "internal"
+
+
+def test_classify_tenant_other_tenant_is_customer():
+    assert _fc.classify_tenant("11111111-1111-1111-1111-111111111111") == "customer"
+
+
+def test_classify_tenant_empty_is_unknown():
+    assert _fc.classify_tenant("") == "unknown"
+    assert _fc.classify_tenant(None) == "unknown"
+
+
+def test_classify_tenant_env_allowlist_extends(monkeypatch):
+    extra = "abababab-abab-abab-abab-abababababab"
+    monkeypatch.setenv("ESS_ADK_INTERNAL_TENANTS", f"{extra}, dead-beef")
+    assert _fc.classify_tenant(extra) == "internal"
+    assert _fc.classify_tenant("DEAD-BEEF") == "internal"
+    # corp tenant is still internal alongside the env additions
+    assert _fc.classify_tenant(_fc.MICROSOFT_CORP_TENANT_ID) == "internal"
+    # an unrelated tenant is still customer
+    assert _fc.classify_tenant("11111111-1111-1111-1111-111111111111") == "customer"
+
+
+def test_tenant_class_flows_into_dimensions(monkeypatch):
+    monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
+    adk.set_identity(tenant_id=_fc.MICROSOFT_CORP_TENANT_ID, instance_id="inst-9")
+    dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
+    assert dims["tenant_class"] == "internal"
+
+    adk.set_identity(tenant_id="11111111-1111-1111-1111-111111111111", instance_id="inst-9")
+    dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
+    assert dims["tenant_class"] == "customer"
+
+    # explicit tenant override is classified too
+    dims = adk.common_dimensions(
+        adk.SURFACE_CLI, session_id="sid-1", tenant_id=_fc.MICROSOFT_CORP_TENANT_ID
+    )
+    assert dims["tenant_class"] == "internal"
+
+
 # --- common dimensions + envelope ----------------------------------------
 def test_common_dimensions_shape():
     dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
     for key in (
-        "schema_version", "instance_id", "tenant_id",
+        "schema_version", "instance_id", "tenant_id", "tenant_class",
         "session_id", "surface", "adk_version", "timestamp",
     ):
         assert key in dims
