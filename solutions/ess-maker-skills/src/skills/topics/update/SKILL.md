@@ -50,6 +50,14 @@ already clear. Common modifications:
 Show the user the relevant section of the current topic and propose the
 specific edit. Explain what will change and why.
 
+**Acting on a `/review` finding.** If the change comes from a `/review` finding, it already names the exact
+node (its step/label plus the action `id` / `kind`) and a suggested fix. Locate that action by its
+identity — not a line number — and apply the finding's fix. The canonical fix pattern for the flagging
+heuristic lives in that finding's conformance lens doc; map the finding's rule-ID prefix
+(`BTPF`/`BTDG`/`BTUX`/`BTIC`/`BTIP`/`BTCF`) to its doc via the prefix table in
+`src/reference/ess-docs/conformance/finding-contract.md`, and apply the **Fix** shown next to the matching
+heuristic. If the finding merged several rule IDs, apply the fix for each. Then continue from Step 3.
+
 ## Step 3: Checkpoint
 
 Run in the terminal:

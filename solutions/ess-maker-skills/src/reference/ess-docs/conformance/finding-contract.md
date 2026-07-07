@@ -64,9 +64,13 @@ never the primary locator — line numbers drift and the agentic read does not t
     - (additional sites if multi-site)
   What's wrong:   <1-3 sentence anti-pattern explanation>
   Why it matters: <observable user/operator impact>
-  Concrete fix:   <specific proposed change — Power Fx snippet or YAML edit>
+  Concrete fix:   <the canonical Fix for the flagging heuristic (see its lens doc), made specific to this site>
   Fix targets:    <the node id(s) the fix edits or the node it inserts before/after — so the fixer can act>
 ```
+
+Each lens doc carries a canonical **Fix** next to the heuristic that owns it. Fill `Concrete fix` from
+that pattern, specialized to the site — this keeps the suggested fix ESS-correct and lets `/update` apply
+it directly (it maps the finding's `<PREFIX>` back to the lens doc via the table above).
 
 Sort findings HIGH -> MEDIUM -> LOW. After the list, emit a **Defense-in-depth** section for real
 anti-patterns whose sites all scored `NOT_REACHABLE_VIA_BOT_UI` or `OPERATOR_OR_HYGIENE_ONLY`, so

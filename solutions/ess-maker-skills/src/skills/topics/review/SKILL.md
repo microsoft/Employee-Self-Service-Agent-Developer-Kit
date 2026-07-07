@@ -123,7 +123,9 @@ render blank at runtime**. Turn each reported field into a finding, applying the
 reachability scoring from the shared [`finding-contract.md`](src/reference/ess-docs/conformance/finding-contract.md)
 (this check uses the `BTCF` finding-ID prefix). The detector covers ServiceNow scenarios only (Workday's
 config declares only a top-level key); if it reports nothing, or the topic is not ServiceNow, this check
-contributes no findings. If the script cannot run, say so rather than silently skipping.
+contributes no findings. If the script cannot run, say so rather than silently skipping. **Fix** for a
+reported field: remove it from the topic's parse schema, or add it to the scenario config's
+`OutputFieldMapping` if the integration should return it.
 
 Steps 3–6c are **internal reasoning**, and every lens reports findings in the one shared shape defined by
 [`finding-contract.md`](src/reference/ess-docs/conformance/finding-contract.md) — precision bar, severity
@@ -189,8 +191,12 @@ the site by its **step name/label**. If every finding is self-explanatory from t
 
 End advisory, never blocking:
 
-> This is advisory — you can publish as-is. Consider addressing the higher-severity items first (use
-> `/update` to edit the topic), then re-run `/review` after edits to re-check.
+> This is advisory — you can publish as-is. Consider addressing the higher-severity items first, then
+> re-run `/review` after edits to re-check.
+
+Each finding names the exact step and a suggested fix, so `/update` can apply it directly — point the
+customer there for any finding they want fixed ("type `/update` and mention the step, e.g. the one in
+row 2").
 
 **If invoked as a subagent by a parent flow** (not directly by the customer): skip the plain-language
 translation and instead return the **structured** findings — rule IDs, severity, reachability, and sites

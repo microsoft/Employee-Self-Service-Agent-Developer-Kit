@@ -22,7 +22,8 @@ precision bar and reachability rubric in the shared
 
 - **Self-referential record literals.** Record-literal fields where the value is the unqualified field
   name — `{ID: ID, Name: Name}`. Almost always an intended `ID: currentRecord.ID` (or similar) that was
-  left dangling, so the field silently binds to itself / blank.
+  left dangling, so the field silently binds to itself / blank. **Fix:** qualify each value with its source
+  record (e.g. `ID: currentRecord.ID`).
 - **Power Fx string-literal quote-run quirks.** Doubled double-quotes are escape syntax: `"a""b"` is the
   3-char string `a"b`, and `""""""` (six quotes) is the 2-char string `""`, **not** an empty string. An
   equality check `value = """"""` does **not** test for empty. Count quote-runs carefully — miscounting is
@@ -30,17 +31,20 @@ precision bar and reachability rubric in the shared
 - **`ParseValue` / `ParseJSON` without an `isSuccess` gate (structural half).** When a topic calls a
   flow/dialog that returns `isSuccess`, then runs `ParseValue`/`ParseJSON` on the response **without a
   preceding branch on `isSuccess = false`**, a schema mismatch (API drift) silently produces blanks
-  downstream. Flag when the parse site is **not** inside/after an `isSuccess = true` guard.
+  downstream. Flag when the parse site is **not** inside/after an `isSuccess = true` guard. **Fix:** move
+  the parse inside the `isSuccess = true` branch, or add an `isSuccess = false` ConditionGroup before it.
 - **Flow failure-branch gaps (structural half).** A `BeginDialog`/`InvokeFlowAction` call site whose
   result path has **no `isSuccess = false` (or equivalent failure) branch** — the topic continues with
-  empty data on failure and the user gets no error. Flag the missing failure branch.
+  empty data on failure and the user gets no error. Flag the missing failure branch. **Fix:** add an
+  `isSuccess = false` ConditionGroup after the call with an error `SendActivity` that stops the flow.
 - **Hardcoded environment-specific values.** GUID-like literals, agent IDs, environment IDs, connection
   IDs, model IDs (`aIModelId`), and flow IDs (`flowId`) written inline in the topic. These are
   environment-bound and should be resolved by the platform (connection references / solution-aware
-  bindings), not hardcoded — hardcoding breaks on import to another environment.
+  bindings), not hardcoded — hardcoding breaks on import to another environment. **Fix:** replace the
+  literal with a connection reference or environment variable the platform resolves per environment.
 - **String/numeric parsing without explicit guards.** `Find()` / `Substring()` / `Text(Value(...))`
   chains on user-supplied strings with no length/format pre-check — throws or misparses on unexpected
-  input.
+  input. **Fix:** add an `IsBlank`/length/format pre-check before the parse and branch on the invalid case.
 - **Write-then-refetch-then-lookup-by-mutable-key.** A `SetVariable` that writes via an Update call,
   then a later `BeginDialog` re-fetches the list, then a `LookUp` matches by a user-supplied text key —
   a race window between write and refetch plus lookup-key-collision risk.

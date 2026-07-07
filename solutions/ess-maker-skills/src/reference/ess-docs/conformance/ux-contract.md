@@ -34,18 +34,23 @@ Read each adaptive card body (`AdaptiveCardTemplate.cardContent` / `AdaptiveCard
 surrounding actions, and assess:
 
 - **Required-field visibility** — an input marked `isRequired: true` that is also `visible: false` cannot
-  be satisfied by the user; the card can never be submitted.
+  be satisfied by the user; the card can never be submitted. **Fix:** make the input `visible: true`, or
+  drop `isRequired` if it is genuinely optional.
 - **Empty data sets** — a choice set or repeated section bound to a collection that can be empty renders a
-  blank control with no explanation. Check whether an empty result is handled.
+  blank control with no explanation. Check whether an empty result is handled. **Fix:** add an
+  `IsEmpty(...)` branch that shows an explanatory message instead of the empty control.
 - **Parse-driven empty UI** — when a card renders data from a `ParseValue`/`ParseJSON` that can fail or
   return empty, the card shows blank fields with no message unless an empty/error branch handles it.
+  **Fix:** gate the card render on the parse succeeding and show an empty/error message otherwise.
 - **Missing confirmation** — an action that creates or changes something (a flow call that returns an id
   or ticket number) but ends without telling the user it succeeded, or without surfacing the returned
-  identifier.
+  identifier. **Fix:** add a `SendActivity` confirming success and surfacing the returned identifier.
 - **Blank / null field rendering** — fields shown directly (e.g. in a `FactSet`) with no `N/A` fallback or
-  conditional hide, so a null value renders as an empty row.
+  conditional hide, so a null value renders as an empty row. **Fix:** wrap each field in
+  `Coalesce(field, "N/A")` or add a `visible` condition that hides the row when the value is blank.
 - **Links with empty components** — a URL built by concatenating a base and an id where either part can be
-  empty, producing a broken link.
+  empty, producing a broken link. **Fix:** guard the URL build with `IsBlank` on each component and hide
+  the link when any part is empty.
 
 Apply the same precision bar and severity mapping from the shared
 [`finding-contract.md`](finding-contract.md). A gap on a path a normal user reaches is higher
