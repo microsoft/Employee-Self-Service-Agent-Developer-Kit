@@ -439,28 +439,18 @@ def _infra_006_could_not_determine_directive() -> str:
 
 
 def _infra_006_fail_directive(ev, policy_names: str) -> str:
-    issues = []
-    if ev.blocked:
-        issues.append(f"these connectors are in the Blocked group: {', '.join(ev.blocked)}")
-    if ev.cross_group:
-        groups = ", ".join(ev.cross_group_groups)
-        issues.append(
-            f"required connectors are split across data-groups ({groups}) in "
-            f"policy '{ev.cross_group_policy}', so they cannot be combined in a "
-            "single agent action"
-        )
-    fix_ids = ", ".join(sorted(set(ev.blocked) | set(ev.groups_seen))) or "the affected connectors"
+    blocked_list = ", ".join(ev.blocked) or "the affected connectors"
     return (
         f"Probable cause: In the effective DLP policy/policies ({policy_names}), "
-        f"{'; '.join(issues)}. Power Platform applies the most restrictive policy, "
-        "so a Blocked or cross-group connector stops the agent from calling that "
-        "system.\n\n"
+        f"these connectors are in the Blocked group: {blocked_list}. Power "
+        "Platform applies the most restrictive policy, so a Blocked connector "
+        "stops the agent from calling that system.\n\n"
         "Scope + confidence: High confidence — read directly from the apiPolicies "
         "admin endpoint for this environment. Owner: Power Platform Administrator.\n\n"
         f"Next step: Open the [Power Platform admin center Data policies]"
         f"({ppac_dlp_policies_url()}), edit the named policy, and move every "
         "connector the agent uses into the SAME allowed group (Business or "
-        f"Non-Business) — none in Blocked. Connectors to fix: {fix_ids}.\n\n"
+        f"Non-Business) — none in Blocked. Connectors to fix: {blocked_list}.\n\n"
         "Still stuck? If a connector must stay Blocked for compliance, deploy the "
         "agent to a dedicated environment whose data policy allows the full "
         "connector set."
@@ -468,23 +458,42 @@ def _infra_006_fail_directive(ev, policy_names: str) -> str:
 
 
 def _infra_006_warn_directive(ev, policy_names: str) -> str:
-    listed = ", ".join(ev.indeterminate) if ev.indeterminate else "the affected connectors"
+    sections = []
+    if ev.cross_group:
+        groups = ", ".join(ev.cross_group_groups)
+        sections.append(
+            f"Cross-group (functional risk): in policy '{ev.cross_group_policy}', "
+            f"the agent's connectors are all allowed but split across data-groups "
+            f"({groups}). Power Platform blocks combining connectors from "
+            "different groups in one app, flow, or agent action, so any agent "
+            "action that uses two cross-grouped connectors together will fail at "
+            "runtime. Fix: open the [Power Platform admin center Data policies]"
+            f"({ppac_dlp_policies_url()}), edit that policy, and move every "
+            "connector the agent uses into the SAME allowed group (Business or "
+            "Non-Business)."
+        )
+    if ev.indeterminate:
+        listed = ", ".join(ev.indeterminate)
+        sections.append(
+            f"Unclassified (medium confidence): these connectors are not "
+            f"explicitly placed in a group: {listed}. New or unclassified "
+            "connectors inherit the policy's default group (usually Non-Business), "
+            "which the API does not report, so the kit cannot prove they are "
+            "allowed and co-grouped with the agent's other connectors. Fix: open "
+            f"the [Power Platform admin center Data policies]({ppac_dlp_policies_url()}) "
+            "and explicitly classify the listed connectors into the same allowed "
+            "group as the agent's other connectors. If the policy's default group "
+            "is Blocked, they are effectively blocked and must be classified "
+            "explicitly."
+        )
+    body = "\n\n".join(sections) or (
+        "The effective DLP policy/policies could not fully classify the agent's "
+        "connectors."
+    )
     return (
-        f"Probable cause: In the effective DLP policy/policies ({policy_names}), "
-        f"these connectors are not explicitly placed in a group: {listed}. "
-        "New or unclassified connectors inherit the policy's default group "
-        "(usually Non-Business), which the API does not report, so the kit cannot "
-        "prove they are allowed and co-grouped with the agent's other "
-        "connectors.\n\n"
-        "Scope + confidence: Medium confidence — the policy was read successfully "
-        "but does not pin these connectors. Owner: Power Platform Administrator.\n\n"
-        f"Next step: Open the [Power Platform admin center Data policies]"
-        f"({ppac_dlp_policies_url()}) and explicitly classify the listed connectors "
-        "into the same allowed group (Business or Non-Business) as the agent's "
-        "other connectors.\n\n"
-        "Still stuck? Confirm the policy's default data group; if it is Blocked, "
-        "these connectors are effectively blocked and must be classified "
-        "explicitly."
+        f"Probable cause: {body}\n\n"
+        "Scope + confidence: Owner: Power Platform Administrator. Read from the "
+        f"apiPolicies admin endpoint for this environment ({policy_names})."
     )
 
 
@@ -587,29 +596,34 @@ def check_dlp_connector_classification(runner: Any) -> list[CheckResult]:
         )]
 
     if ev.verdict == "fail":
-        detail = []
-        if ev.blocked:
-            detail.append(f"Blocked: {', '.join(ev.blocked)}")
-        if ev.cross_group:
-            groups = ", ".join(ev.cross_group_groups)
-            detail.append(
-                f"connectors split across data-groups ({groups}) in policy "
-                f"'{ev.cross_group_policy}' — cannot be combined in one agent action"
-            )
+        # AC4: a Blocked connector is the only hard failure.
         return [_infra_006_row(
             Status.FAILED.value,
             f"DLP misclassification across {n_pol} effective policy/policies: "
-            f"{'; '.join(detail)}.",
+            f"Blocked: {', '.join(ev.blocked)}.",
             _infra_006_fail_directive(ev, policy_names),
         )]
 
-    # WARN — indeterminate / could-not-fully-determine
+    # WARN — AC5 cross-group (all allowed but split) and/or indeterminate
+    # (default-group fallthrough the API can't prove). Both share the WARNING
+    # bucket, so they are reported in a single status-bucketed row.
+    detail = []
+    if ev.cross_group:
+        groups = ", ".join(ev.cross_group_groups)
+        detail.append(
+            f"connectors are all allowed but split across data-groups ({groups}) "
+            f"in policy '{ev.cross_group_policy}', so they cannot be combined in "
+            "one agent action"
+        )
+    if ev.indeterminate:
+        detail.append(
+            "these connectors are not explicitly classified and fall into the "
+            f"default group: {', '.join(ev.indeterminate)}"
+        )
     return [_infra_006_row(
         Status.WARNING.value,
-        "Some agent connectors are not explicitly classified by the effective "
-        f"DLP policy/policies and fall into the default group: "
-        f"{', '.join(ev.indeterminate)}. Their effective grouping cannot be "
-        "confirmed from the API.",
+        f"DLP classification concern across {n_pol} effective policy/policies: "
+        f"{'; '.join(detail)}.",
         _infra_006_warn_directive(ev, policy_names),
     )]
 

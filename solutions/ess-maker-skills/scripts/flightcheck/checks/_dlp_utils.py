@@ -308,8 +308,11 @@ def evaluate_connector_classification(agent_ids, policies) -> DlpEvaluation:
     default is known (legacy ``connectorGroups`` policies) do they remain
     indeterminate — their effective grouping can't be proven.
 
-    Verdict precedence: FAIL (blocked or cross-group) > WARN (indeterminate)
-    > PASS.
+    Verdict precedence (INFRA-006 AC4/AC5): FAIL (blocked) > WARN
+    (cross-group or indeterminate) > PASS. A Blocked connector is the only
+    hard failure. Cross-group connectors are all allowed but can't be
+    combined in one agent action, so they surface as WARN alongside
+    indeterminate (unprovable) connectors.
 
     Raises ``ValueError`` when ``policies`` or ``agent_ids`` is empty: an
     empty input has no defensible verdict, and silently returning PASS
@@ -359,9 +362,9 @@ def evaluate_connector_classification(agent_ids, policies) -> DlpEvaluation:
     # A blocked connector is reported as blocked, not also indeterminate.
     indeterminate -= blocked
 
-    if blocked or cross_group:
+    if blocked:
         verdict = "fail"
-    elif indeterminate:
+    elif cross_group or indeterminate:
         verdict = "warn"
     else:
         verdict = "pass"

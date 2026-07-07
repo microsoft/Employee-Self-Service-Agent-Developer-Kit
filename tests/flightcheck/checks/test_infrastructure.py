@@ -584,8 +584,9 @@ class TestInfra006Verdicts:
         assert "Business" in result.result
         assert result.remediation == ""
 
-    def test_cross_group_fails(self, monkeypatch):
-        # Arrange: Dataverse=Business, HTTP=Non-Business → can't be combined.
+    def test_cross_group_warns(self, monkeypatch):
+        # Arrange: Dataverse=Business, HTTP=Non-Business → all allowed but can't
+        # be combined. AC5: cross-group is a WARNING, not a FAIL.
         _patch_refs(monkeypatch, _DATAVERSE, _HTTP_AAD)
         policies = [ppa.dlp_policy(business=[_DATAVERSE], non_business=[_HTTP_AAD])]
 
@@ -593,7 +594,7 @@ class TestInfra006Verdicts:
         result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
 
         # Assert
-        assert result.status == Status.FAILED.value
+        assert result.status == Status.WARNING.value
         assert "split across data-groups" in result.result
         assert result.remediation  # non-empty, names the fix
 
@@ -706,7 +707,7 @@ class TestInfra006ModernSchema:
         # Assert: no false WARN — the default group makes the verdict provable.
         assert result.status == Status.PASSED.value
 
-    def test_modern_default_group_causes_cross_group_fail(self, monkeypatch):
+    def test_modern_default_group_causes_cross_group_warn(self, monkeypatch):
         # Arrange: mirrors the live tenant. Dataverse in hbi (Business); the
         # second connector is unlisted and inherits the lbi default
         # (Non-Business), so the two connectors are split across groups.
@@ -716,8 +717,8 @@ class TestInfra006ModernSchema:
         # Act
         result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
 
-        # Assert
-        assert result.status == Status.FAILED.value
+        # Assert: AC5 — cross-group is a WARNING, not a FAIL.
+        assert result.status == Status.WARNING.value
         assert "split across data-groups" in result.result
 
     def test_modern_blocked_connector_fails(self, monkeypatch):
@@ -877,7 +878,7 @@ class TestInfra006Resilience:
         assert result.status == Status.WARNING.value
 
     def test_cross_group_names_offending_policy(self, monkeypatch):
-        # I3: the FAIL message must name the specific policy that splits the
+        # I3: the WARN message must name the specific policy that splits the
         # connectors, not a union across all effective policies.
         _patch_refs(monkeypatch, _DATAVERSE, _HTTP_AAD)
         policies = [
@@ -887,7 +888,7 @@ class TestInfra006Resilience:
 
         result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
 
-        assert result.status == Status.FAILED.value
+        assert result.status == Status.WARNING.value
         assert "Split Policy" in result.result
         assert "Business" in result.result and "Non-Business" in result.result
 
