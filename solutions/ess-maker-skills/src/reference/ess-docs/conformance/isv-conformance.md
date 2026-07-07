@@ -45,6 +45,9 @@ checks the docs support:
 
 - **Field/schema faithfulness** — the topic references response fields that exist in the ISV's documented
   schema, with the documented names; a field the topic reads that the ISV does not produce will be blank.
+- **Config-owned values** — values the topic hardcodes inline (scenario-specific mappings, field or table
+  names, constants) that the template config is meant to own and supply, rather than being fixed in the
+  topic's logic.
 - **Type handling** — the topic handles fields the ISV can return in more than one shape (e.g. a value
   that may be a string or a number/boolean depending on display settings) rather than assuming one type.
 - **Identifier/URL construction** — links and identifiers are built the way the ISV requires (e.g. the
