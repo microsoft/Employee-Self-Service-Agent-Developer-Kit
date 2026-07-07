@@ -129,11 +129,26 @@ Steps 3–6c are **internal reasoning**, and every lens reports findings in the 
 [`finding-contract.md`](src/reference/ess-docs/conformance/finding-contract.md) — precision bar, severity
 via reachability, finding-ID prefixes, and the structured output format. Their rule IDs (e.g. `BTPF-001`),
 reachability tags (`REACHABLE_NORMAL_UI`, etc.), and the word "lens" are working vocabulary **for you** —
-they are NOT shown to the customer (see Step 7). Carry each finding's node locators (`id` / `displayName` /
-`kind`) and `Fix targets` through internally so the customer-facing step can name the step and a fixer can
-act.
+they are NOT shown to the customer (see Step 8). Carry each finding's node locators (`id` / `displayName` /
+`kind`) and `Fix targets` through internally so the consolidation and customer-facing steps can name the
+step and a fixer can act.
 
-## Step 7: Present the advisory report (customer-facing)
+## Step 7: Consolidate findings
+
+Before presenting, dedupe the findings from Steps 3–6c so each fix site is shown once. Different
+heuristics — and different lenses — can flag the same node (e.g. a hardcoded `flowId` caught by both the
+Power Fx and ISV integration-pattern lenses).
+
+Group findings by **fix-target node id** (fall back to the site `id` / `kind` if a finding has no distinct
+fix target). Within a group:
+
+- If **one fix resolves the group**, merge into a single finding: highest severity, one unified fix,
+  keeping every contributing rule ID.
+- If the node genuinely needs **two independent fixes**, keep both rows and add a short "same step" note.
+
+Carry the consolidated locators, rule IDs, and `Fix targets` to Step 8.
+
+## Step 8: Present the advisory report (customer-facing)
 
 Present findings in **plain language**. Do NOT expose internal terminology to the customer — no "lens",
 no rule IDs, no reachability tag names, no file-format jargon. Translate severity to plain words
@@ -170,7 +185,7 @@ sees the most likely issues first. Add a short explanation under the table **onl
 suggested fix needs a Power Fx snippet or a nuance the table cell can't hold; keep it hedged and refer to
 the site by its **step name/label**. If every finding is self-explanatory from the table, add nothing.
 
-## Step 8: Close
+## Step 9: Close
 
 End advisory, never blocking:
 
