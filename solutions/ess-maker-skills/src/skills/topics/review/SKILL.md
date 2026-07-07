@@ -156,17 +156,15 @@ not a line number — that is how you (or `/update`) will find and fix it:
 
 > **Review — `{TopicName}`** — {verdict}
 >
-> This is advisory — it won't block publishing.
->
 > | # | Severity | Where (step) | Potential issue | Suggested fix |
 > |---|----------|--------------|-----------------|---------------|
 > | 1 | Medium | "Redirect to Workday Get Common Execution" | The flow call may not handle a failure, so an error could show the user nothing | Consider adding a branch that handles the failure case and shows an error message |
 
-Below the table, give each finding a short plain explanation, hedged: what **might** be wrong, why it
-**could** matter to the user, and a suggested fix (a Power Fx snippet or YAML edit is fine — that is the
-customer's own content, not internal terminology). Refer to each site by its **step name/label** so it is
-locatable. Order High -> Medium -> Low. Group any "no user impact today" items under a short
-**Minor / cleanup** heading so the customer prioritizes the most likely issues first.
+The table carries each finding — do **not** restate its rows in prose below. Order rows High -> Medium ->
+Low, and group any "no user impact today" items under a short **Minor / cleanup** heading so the customer
+sees the most likely issues first. Add a short explanation under the table **only** for a finding whose
+suggested fix needs a Power Fx snippet or a nuance the table cell can't hold; keep it hedged and refer to
+the site by its **step name/label**. If every finding is self-explanatory from the table, add nothing.
 
 ## Step 8: Close
 
