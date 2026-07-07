@@ -65,7 +65,7 @@ class _AuthHolder:
         self.token = None
 
     def acquire(self):
-        self.token = authenticate(self.env_url, session_capability="restore_template_configs")
+        self.token = authenticate(self.env_url)
         return self.token
 
     def refresh(self):
@@ -220,6 +220,15 @@ def main():
     print("Authenticating to Dataverse...")
     auth.acquire()
     print("Authenticated.\n")
+
+    try:
+        import adk_telemetry
+
+        # block=True: short-lived CLI process, emit synchronously so the event
+        # isn't dropped when the interpreter exits and kills a daemon thread.
+        adk_telemetry.emit_capability_use("restore_template_configs", block=True)
+    except Exception:  # noqa: BLE001 — telemetry must never break the flow
+        pass
 
     try:
         index = _call_with_refresh(

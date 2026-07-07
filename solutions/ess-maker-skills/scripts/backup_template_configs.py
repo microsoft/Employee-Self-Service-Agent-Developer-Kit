@@ -199,11 +199,20 @@ def main():
 
     print("Authenticating to Dataverse...")
     try:
-        token = authenticate(env_url, session_capability="backup_template_configs")
+        token = authenticate(env_url)
     except SystemExit:
         # authenticate() prints its own friendly error and exits 1.
         raise
     print("Authenticated.\n")
+
+    try:
+        import adk_telemetry
+
+        # block=True: short-lived CLI process, emit synchronously so the event
+        # isn't dropped when the interpreter exits and kills a daemon thread.
+        adk_telemetry.emit_capability_use("backup_template_configs", block=True)
+    except Exception:  # noqa: BLE001 — telemetry must never break the flow
+        pass
 
     try:
         records = fetch_records(env_url, token)

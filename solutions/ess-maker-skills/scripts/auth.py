@@ -167,21 +167,11 @@ def discover_tenant(env_url):
     return "organizations"
 
 
-def authenticate(env_url, *, session_capability=None):
+def authenticate(env_url):
     """Get a Dataverse access token via MSAL interactive browser auth.
 
     Uses a token cache so repeat runs within the same session don't re-prompt.
     Discovers the correct tenant from the environment automatically.
-
-    ``session_capability`` tags the telemetry session that this auth starts
-    with the ADK capability the *calling* flow represents (e.g. ``"connect"``
-    for the connect skill, ``"publishing"`` for push, ``"flightcheck"`` for
-    the readiness check). It MUST be a value from
-    ``adk_telemetry.ADK_CAPABILITIES`` or ``None``. Historically this function
-    hard-coded ``"connect"``, which mislabeled every authenticated flow (push,
-    flightcheck, discover, setup, ...) as a connect session on the "Sessions
-    by Capability" dashboard. Callers now pass their own capability; ``None``
-    starts an uncategorized session rather than a mislabeled one.
     """
     _validate_https_url(env_url)
     tenant = discover_tenant(env_url)
@@ -256,7 +246,6 @@ def authenticate(env_url, *, session_capability=None):
         adk_telemetry.maybe_print_notice()
         adk_telemetry.start_session(
             tenant_id=claims.get("tid", "") or tenant,
-            adk_capability=session_capability or "",
         )
     except Exception:  # noqa: BLE001 — telemetry must never break auth
         pass

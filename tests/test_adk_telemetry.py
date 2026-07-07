@@ -355,27 +355,16 @@ def test_emit_capability_use_known_value_preserved(captured_post, monkeypatch):
     assert captured_post[0][1][0]["data"]["adk_capability"] == "topic_create"
 
 
-# --- session capability is parametrized (no more hardcoded "connect") ------
-def test_start_session_tags_passed_capability(captured_post):
-    res = adk.start_session(adk_capability="publishing", block=True)
-    assert res["sent"] is True
-    data = captured_post[0][1][0]["data"]
-    assert data["adk_capability"] == "publishing"
-
-
-def test_start_session_without_capability_omits_dimension(captured_post):
-    # A caller that passes no capability yields an UNCATEGORIZED session — it
-    # must not be silently mislabeled (the old bug hardcoded "connect" here).
+# --- session start no longer carries a capability dimension ---------------
+def test_start_session_omits_capability_dimension(captured_post):
+    # "Sessions by Capability" was removed; adk.session.start is now a plain
+    # engagement signal (feeds session total/trend only) and must NOT carry an
+    # adk_capability. The old code hardcoded "connect" here, which is exactly
+    # the mislabeling bug that motivated dropping the chart.
     res = adk.start_session(block=True)
     assert res["sent"] is True
     data = captured_post[0][1][0]["data"]
     assert "adk_capability" not in data
-
-
-def test_start_session_unknown_capability_bucketed(captured_post):
-    res = adk.start_session(adk_capability="whatever", block=True)
-    assert res["sent"] is True
-    assert captured_post[0][1][0]["data"]["adk_capability"] == adk.CAPABILITY_UNKNOWN
 
 
 # --- the capabilities wired across the kit stay in the canonical list ------
@@ -384,16 +373,19 @@ def test_wired_capabilities_are_in_canonical_list():
     a member of ADK_CAPABILITIES, or it would silently normalize to
     "unknown" on the dashboards. This is the "keep in sync" contract."""
     wired = {
-        # auth.py callers (session_capability)
-        "setup", "onboarding", "publishing", "flightcheck",
+        # emit_capability_use(...) from the Python entry points
+        "setup", "onboarding", "evaluations",
         "backup_template_configs", "restore_template_configs",
+        # emit_build_*/flightcheck_* event families
+        "publishing", "flightcheck",
         # emit_capability.py shim invocations across the SKILL.md skills
         "topic_create", "topic_update", "topic_delete",
         "workflow_create", "workflow_update", "workflow_delete",
-        "evaluations", "cleanup", "troubleshoot",
+        "cleanup", "troubleshoot",
     }
     missing = wired - set(adk.ADK_CAPABILITIES)
     assert not missing, f"wired capabilities not in ADK_CAPABILITIES: {missing}"
+
 
 
 # --- emit_capability.py shim (the SKILL.md-driven hook) -------------------

@@ -130,7 +130,7 @@ def main():
     env_url = args.url.rstrip("/")
 
     print("Authenticating to Dataverse...")
-    token = authenticate(env_url, session_capability="onboarding")
+    token = authenticate(env_url)
     print("Authenticated.\n")
 
     print("Discovering agents...")

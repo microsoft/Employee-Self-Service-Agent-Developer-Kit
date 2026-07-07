@@ -58,7 +58,7 @@ class _AuthHolder:
         self.token = None
 
     def acquire(self):
-        self.token = authenticate(self.env_url, session_capability="publishing")
+        self.token = authenticate(self.env_url)
         return self.token
 
     def refresh(self):

@@ -532,7 +532,6 @@ def start_session(
     *,
     tenant_id: str = "",
     instance_id: str | None = None,
-    adk_capability: str = "",
     block: bool = False,
 ) -> dict[str, Any]:
     """Set identity and emit ``adk.session.start`` once per session.
@@ -546,9 +545,6 @@ def start_session(
     if not is_new:
         return {"sent": False, "reason": "existing-session", "session_id": sid}
     data = common_dimensions(surface, session_id=sid)
-    adk_capability = normalize_capability(adk_capability)
-    if adk_capability:
-        data["adk_capability"] = adk_capability
     return _emit(EVENT_SESSION_START, data, block=block)
 
 
@@ -765,7 +761,7 @@ def _emit_synthetic(n: int = 1) -> int:
         cap = random.choice(capabilities)
         agent_id = str(uuid.uuid4())
         emitters = [
-            lambda: start_session(adk_capability=cap, block=True),
+            lambda: start_session(block=True),
             lambda: emit_capability_use(cap, block=True),
             lambda: emit_agent_create(agent_id=agent_id, adk_capability="onboarding", block=True),
             lambda: emit_build_start(agent_id=agent_id, adk_capability=cap, block=True),

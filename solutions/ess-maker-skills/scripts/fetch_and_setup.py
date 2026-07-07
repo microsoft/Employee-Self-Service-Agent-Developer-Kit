@@ -279,8 +279,15 @@ def main():
         managed = config["agent"].get("isManaged", False)
 
         print("Authenticating to Dataverse...")
-        token = authenticate(env_url, session_capability="setup")
+        token = authenticate(env_url)
         print("Authenticated.\n")
+
+        try:
+            import adk_telemetry
+
+            adk_telemetry.emit_capability_use("setup", block=True)
+        except Exception:  # noqa: BLE001 — telemetry must never break setup
+            pass
 
         try:
             components, template_configs, workflows = fetch_all(
@@ -302,8 +309,15 @@ def main():
     env_url = args.url.rstrip("/")
 
     print("Authenticating to Dataverse...")
-    token = authenticate(env_url, session_capability="setup")
+    token = authenticate(env_url)
     print("Authenticated.\n")
+
+    try:
+        import adk_telemetry
+
+        adk_telemetry.emit_capability_use("setup", block=True)
+    except Exception:  # noqa: BLE001 — telemetry must never break setup
+        pass
 
     try:
         components, template_configs, workflows = fetch_all(
