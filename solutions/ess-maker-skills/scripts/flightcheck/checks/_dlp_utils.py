@@ -282,8 +282,6 @@ class DlpEvaluation:
     cross_group_policy: display name of the first policy that tripped
                     cross_group ("" when not cross_group)
     cross_group_groups: the conflicting group labels in that policy
-    non_business:   normalized ids that are allowed but classified
-                    Non-Business in some policy (INFRA-006 requires Business)
     indeterminate:  normalized ids not explicitly classified by some policy
                     (default-group fallthrough — group cannot be proven)
     groups_seen:    normalized id → group label, for allowed connectors
@@ -294,7 +292,6 @@ class DlpEvaluation:
     cross_group: bool = False
     cross_group_policy: str = ""
     cross_group_groups: list[str] = field(default_factory=list)
-    non_business: list[str] = field(default_factory=list)
     indeterminate: list[str] = field(default_factory=list)
     groups_seen: dict[str, str] = field(default_factory=dict)
 
@@ -311,15 +308,11 @@ def evaluate_connector_classification(agent_ids, policies) -> DlpEvaluation:
     default is known (legacy ``connectorGroups`` policies) do they remain
     indeterminate — their effective grouping can't be proven.
 
-    Verdict precedence (INFRA-006 AC3/AC4/AC5): FAIL (blocked) > WARN
-    (cross-group, Non-Business, or indeterminate) > PASS. A Blocked
-    connector is the only hard failure. PASS requires every agent
-    connector to be classified Business in the same data-group (per the
-    validation method "assert it's classified Business / not Blocked").
-    Connectors that are allowed but classified Non-Business, split across
-    groups (cross-group), or unprovable (indeterminate) all surface as
-    WARN — they are not blocked, but they are not the required Business
-    classification either.
+    Verdict precedence (INFRA-006 AC4/AC5): FAIL (blocked) > WARN
+    (cross-group or indeterminate) > PASS. A Blocked connector is the only
+    hard failure. Cross-group connectors are all allowed but can't be
+    combined in one agent action, so they surface as WARN alongside
+    indeterminate (unprovable) connectors.
 
     Raises ``ValueError`` when ``policies`` or ``agent_ids`` is empty: an
     empty input has no defensible verdict, and silently returning PASS
@@ -333,7 +326,6 @@ def evaluate_connector_classification(agent_ids, policies) -> DlpEvaluation:
         raise ValueError("evaluate_connector_classification requires at least one connector")
     blocked: set[str] = set()
     indeterminate: set[str] = set()
-    non_business: set[str] = set()
     cross_group = False
     cross_group_policy = ""
     cross_group_groups: list[str] = []
@@ -356,8 +348,6 @@ def evaluate_connector_classification(agent_ids, policies) -> DlpEvaluation:
             else:
                 allowed_groups_this_policy.add(group)
                 groups_seen[cid] = _GROUP_LABEL[group]
-                if group == NON_BUSINESS:
-                    non_business.add(cid)
         if len(allowed_groups_this_policy) > 1:
             cross_group = True
             # Capture the first offending policy + its conflicting groups so
@@ -369,14 +359,12 @@ def evaluate_connector_classification(agent_ids, policies) -> DlpEvaluation:
                     _GROUP_LABEL[g] for g in allowed_groups_this_policy
                 )
 
-    # A blocked connector is reported as blocked, not also indeterminate
-    # or Non-Business.
+    # A blocked connector is reported as blocked, not also indeterminate.
     indeterminate -= blocked
-    non_business -= blocked
 
     if blocked:
         verdict = "fail"
-    elif cross_group or non_business or indeterminate:
+    elif cross_group or indeterminate:
         verdict = "warn"
     else:
         verdict = "pass"
@@ -387,7 +375,6 @@ def evaluate_connector_classification(agent_ids, policies) -> DlpEvaluation:
         cross_group=cross_group,
         cross_group_policy=cross_group_policy,
         cross_group_groups=cross_group_groups,
-        non_business=sorted(non_business),
         indeterminate=sorted(indeterminate),
         groups_seen=groups_seen,
     )
