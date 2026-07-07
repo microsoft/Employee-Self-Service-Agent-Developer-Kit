@@ -472,6 +472,16 @@ def _infra_006_warn_directive(ev, policy_names: str) -> str:
             "connector the agent uses into the SAME allowed group (Business or "
             "Non-Business)."
         )
+    if ev.non_business and not ev.cross_group:
+        listed = ", ".join(ev.non_business)
+        sections.append(
+            f"Non-Business classification (functional risk): these connectors are "
+            f"allowed but classified Non-Business: {listed}. INFRA-006 requires the "
+            "agent's connectors to be classified Business so business data can flow "
+            "through them. Fix: open the [Power Platform admin center Data policies]"
+            f"({ppac_dlp_policies_url()}) and move these connectors into the Business "
+            "group."
+        )
     if ev.indeterminate:
         listed = ", ".join(ev.indeterminate)
         sections.append(
@@ -604,8 +614,9 @@ def check_dlp_connector_classification(runner: Any) -> list[CheckResult]:
             _infra_006_fail_directive(ev, policy_names),
         )]
 
-    # WARN — AC5 cross-group (all allowed but split) and/or indeterminate
-    # (default-group fallthrough the API can't prove). Both share the WARNING
+    # WARN — cross-group (allowed but split), Non-Business (allowed but not
+    # the required Business classification), and/or indeterminate
+    # (default-group fallthrough the API can't prove). All share the WARNING
     # bucket, so they are reported in a single status-bucketed row.
     detail = []
     if ev.cross_group:
@@ -614,6 +625,12 @@ def check_dlp_connector_classification(runner: Any) -> list[CheckResult]:
             f"connectors are all allowed but split across data-groups ({groups}) "
             f"in policy '{ev.cross_group_policy}', so they cannot be combined in "
             "one agent action"
+        )
+    elif ev.non_business:
+        detail.append(
+            "these connectors are allowed but classified Non-Business, and "
+            "INFRA-006 requires Business classification: "
+            f"{', '.join(ev.non_business)}"
         )
     if ev.indeterminate:
         detail.append(

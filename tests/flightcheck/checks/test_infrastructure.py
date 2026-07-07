@@ -598,6 +598,21 @@ class TestInfra006Verdicts:
         assert "split across data-groups" in result.result
         assert result.remediation  # non-empty, names the fix
 
+    def test_all_non_business_same_group_warns(self, monkeypatch):
+        # Arrange: both agent connectors allowed but classified Non-Business.
+        # PASS requires Business (per the validation method), so an
+        # all-Non-Business same-group config is a WARNING, not a PASS.
+        _patch_refs(monkeypatch, _DATAVERSE, _WORKDAY)
+        policies = [ppa.dlp_policy(non_business=[_DATAVERSE, _WORKDAY])]
+
+        # Act
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        # Assert
+        assert result.status == Status.WARNING.value
+        assert "Non-Business" in result.result
+        assert result.remediation  # non-empty, names the fix
+
     def test_blocked_connector_fails(self, monkeypatch):
         # Arrange: Workday is Blocked.
         _patch_refs(monkeypatch, _DATAVERSE, _WORKDAY)
@@ -892,10 +907,10 @@ class TestInfra006Resilience:
         assert "Split Policy" in result.result
         assert "Business" in result.result and "Non-Business" in result.result
 
-    def test_consistent_disagreeing_policies_pass_with_deterministic_label(self, monkeypatch):
-        # I3 (PASS half): two policies that classify the same connectors into
-        # different but internally-consistent groups are combinable in both →
-        # PASS, and the label is deterministic (last policy wins = Non-Business).
+    def test_disagreeing_policies_non_business_warns(self, monkeypatch):
+        # Two policies classify the same connectors into different groups.
+        # Policy B places them Non-Business; INFRA-006 requires Business, so
+        # the effective verdict is WARN (not PASS).
         _patch_refs(monkeypatch, _DATAVERSE, _WORKDAY)
         policies = [
             ppa.dlp_policy(display_name="A", business=[_DATAVERSE, _WORKDAY]),
@@ -904,5 +919,5 @@ class TestInfra006Resilience:
 
         result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
 
-        assert result.status == Status.PASSED.value
+        assert result.status == Status.WARNING.value
         assert "Non-Business" in result.result
