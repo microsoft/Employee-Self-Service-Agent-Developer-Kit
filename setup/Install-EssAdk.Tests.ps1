@@ -12,10 +12,10 @@ function Test([string]$Name, [scriptblock]$Block) {
     try {
         & $Block
         $script:passed++
-        Write-Host "  ✓ $Name" -ForegroundColor Green
+        Write-Host "  [PASS] $Name" -ForegroundColor Green
     } catch {
         $script:failed++
-        Write-Host "  ✗ $Name" -ForegroundColor Red
+        Write-Host "  [FAIL] $Name" -ForegroundColor Red
         Write-Host "    $($_.Exception.Message)" -ForegroundColor Yellow
     }
 }
