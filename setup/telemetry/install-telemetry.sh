@@ -190,6 +190,9 @@ ess_tel_init() {
     ESS_TEL_INSTALLER="${1:-adk}"
     ESS_TEL_TENANT="${2:-}"
     ess_tel_enabled || { ESS_TEL_READY=0; return 0; }
+    # The Lite-mode installer is being merged into the standard ADK installer
+    # (mode will become an onboarding prompt), so it is no longer instrumented.
+    [[ "$ESS_TEL_INSTALLER" == "lite" ]] && { ESS_TEL_READY=0; return 0; }
     ess_tel_notice
     local envname
     envname="$(printf '%s' "${ESS_ADK_ARIA_ENV:-${ESS_FLIGHTCHECK_ARIA_ENV:-}}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"

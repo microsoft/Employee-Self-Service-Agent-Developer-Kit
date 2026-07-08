@@ -227,6 +227,22 @@ Test 'opt-out is honored via the ESS_ADK_TELEMETRY env var' {
 Test 'envelope iKey uses the o: prefix of the token before the first dash' {
     if ((Get-EssTelEnvelopeIKey -FullIKey 'abc123-def-456') -ne 'o:abc123') { throw 'envelope ikey wrong' }
 }
+Test 'lite installer is not instrumented (no telemetry ready, no events)' {
+    $old = $env:ESS_ADK_TELEMETRY
+    try {
+        $env:ESS_ADK_TELEMETRY = ''   # ensure telemetry is otherwise enabled
+        Initialize-EssInstallTelemetry -Installer 'lite' -TenantId ''
+        if ($script:EssTel.Ready) { throw 'lite installer should not be telemetry-ready' }
+    } finally { $env:ESS_ADK_TELEMETRY = $old }
+}
+Test 'PowerShell emitter guards out the lite installer' {
+    $emitterSrc = Get-Content $psEmitter -Raw
+    if ($emitterSrc -notmatch "Installer\s+-eq\s+'lite'") { throw 'lite guard missing in PS emitter' }
+}
+Test 'bash emitter guards out the lite installer' {
+    $shSrc = Get-Content $shEmitter -Raw
+    if ($shSrc -notmatch 'ESS_TEL_INSTALLER.*==.*"lite"') { throw 'lite guard missing in bash emitter' }
+}
 
 # --- macOS installer + all bootstraps wiring -------------------------------
 Write-Host "`nmacOS installer + bootstrap telemetry wiring:" -ForegroundColor Cyan

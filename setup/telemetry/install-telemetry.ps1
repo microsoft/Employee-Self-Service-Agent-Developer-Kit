@@ -251,6 +251,9 @@ function Initialize-EssInstallTelemetry {
     )
     try {
         if (-not (Test-EssTelemetryEnabled)) { $script:EssTel.Ready = $false; return }
+        # The Lite-mode installer is being merged into the standard ADK installer
+        # (mode will become an onboarding prompt), so it is no longer instrumented.
+        if ($Installer -eq 'lite') { $script:EssTel.Ready = $false; return }
         Show-EssTelemetryNotice | Out-Null
 
         $envName = "$env:ESS_ADK_ARIA_ENV".Trim().ToLowerInvariant()
