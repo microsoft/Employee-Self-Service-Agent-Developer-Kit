@@ -371,7 +371,8 @@ CLI command.
   available) emit the same kind of event natively from PowerShell/bash: an
   install **start**, **per-step** progress, and a **completion**
   (`success` / `failure` / `cancelled`) carrying the installer variant
-  (ADK / ADK-lite / FlightCheck), platform, which step failed, and a scrubbed
+  (ADK or FlightCheck — the ADK-lite installer is not instrumented), platform,
+  which step failed, and a scrubbed
   error category. This measures setup reliability. It is fail-open (a telemetry
   problem never breaks your install) and honors the same opt-out below.
 

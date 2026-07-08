@@ -227,6 +227,19 @@ Test 'opt-out is honored via the ESS_ADK_TELEMETRY env var' {
 Test 'envelope iKey uses the o: prefix of the token before the first dash' {
     if ((Get-EssTelEnvelopeIKey -FullIKey 'abc123-def-456') -ne 'o:abc123') { throw 'envelope ikey wrong' }
 }
+Test 'envelope time is culture-invariant ISO-8601 (non-colon-separator locales)' {
+    # Regression: a custom DateTime format string renders ':' as the current
+    # culture's TimeSeparator ('.' under fi-FI), which would corrupt the
+    # Common Schema time field. It must stay ISO-8601 regardless of locale.
+    $orig = [System.Threading.Thread]::CurrentThread.CurrentCulture
+    try {
+        [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo('fi-FI')
+        $envelope = New-EssTelEnvelope -Name 'ESSMakerKit.Installer.Start' -EnvelopeIKey 'o:abc' -Data @{}
+        if ($envelope.time -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$') { throw "time not ISO-8601 under fi-FI: $($envelope.time)" }
+    } finally {
+        [System.Threading.Thread]::CurrentThread.CurrentCulture = $orig
+    }
+}
 Test 'lite installer is not instrumented (no telemetry ready, no events)' {
     $old = $env:ESS_ADK_TELEMETRY
     try {

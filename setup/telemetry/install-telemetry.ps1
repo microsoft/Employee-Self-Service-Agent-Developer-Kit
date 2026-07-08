@@ -191,7 +191,7 @@ function New-EssTelEnvelope {
     return @{
         ver  = '4.0'
         name = $Name
-        time = $now.ToString('yyyy-MM-ddTHH:mm:ss.') + ('{0:000}' -f $now.Millisecond) + 'Z'
+        time = $now.ToString('yyyy-MM-ddTHH:mm:ss.', [System.Globalization.CultureInfo]::InvariantCulture) + ('{0:000}' -f $now.Millisecond) + 'Z'
         iKey = $EnvelopeIKey
         data = $Data
     }
