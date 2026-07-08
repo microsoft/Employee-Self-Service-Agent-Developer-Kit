@@ -82,15 +82,6 @@ def main():
                         help="Select agent by number and output JSON")
     args = parser.parse_args()
 
-    try:
-        import adk_telemetry
-
-        # block=True: this is a short-lived CLI process, so emit synchronously
-        # rather than on a daemon thread the interpreter would kill on exit.
-        adk_telemetry.emit_capability_use("onboarding", block=True)
-    except Exception:  # noqa: BLE001 — telemetry must never break discovery
-        pass
-
     # --- Environment listing mode ---
     if args.list_environments:
         from list_environments import (

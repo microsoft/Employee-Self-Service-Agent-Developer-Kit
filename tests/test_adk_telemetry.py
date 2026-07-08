@@ -235,7 +235,7 @@ def test_notice_shown_once(capsys):
 
 def test_disabled_emit_does_not_post(monkeypatch, captured_post):
     monkeypatch.setenv("ESS_ADK_TELEMETRY", "off")
-    res = adk.emit_capability_use("onboarding", block=True)
+    res = adk.emit_capability_use("setup", block=True)
     assert res["sent"] is False
     assert res["reason"] == "disabled"
     assert captured_post == []
@@ -312,7 +312,7 @@ def test_failing_post_is_swallowed_and_buffered(monkeypatch):
         raise RuntimeError("network down")
 
     monkeypatch.setattr(_fc, "_post", _boom)
-    res = adk.emit_capability_use("onboarding", block=True)  # must not raise
+    res = adk.emit_capability_use("setup", block=True)  # must not raise
     assert res["sent"] is False
     import os
     assert os.path.exists(adk.BUFFER_PATH)
@@ -325,7 +325,7 @@ def test_failing_post_is_swallowed_and_buffered(monkeypatch):
 def test_buffer_flushes_on_next_successful_emit(monkeypatch):
     # First emit fails -> buffered.
     monkeypatch.setattr(_fc, "_post", lambda ikey, envs: (_ for _ in ()).throw(OSError("x")))
-    adk.emit_capability_use("onboarding", block=True)
+    adk.emit_capability_use("setup", block=True)
     import os
     assert os.path.exists(adk.BUFFER_PATH)
 
@@ -418,7 +418,7 @@ def test_wired_capabilities_are_in_canonical_list():
     "unknown" on the dashboards. This is the "keep in sync" contract."""
     wired = {
         # emit_capability_use(...) from the Python entry points
-        "setup", "onboarding", "evaluations",
+        "setup", "evaluations",
         "backup_template_configs", "restore_template_configs",
         # emit_build_*/flightcheck_* event families
         "publishing", "flightcheck",

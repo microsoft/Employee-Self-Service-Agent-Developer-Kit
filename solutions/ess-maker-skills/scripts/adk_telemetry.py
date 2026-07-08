@@ -98,7 +98,12 @@ EVENT_FLIGHTCHECK_ERROR = "adk.flightcheck.error"
 # #7532631) so the new slice renders.
 #
 # One capability per real maker-facing ADK skill / entry point:
-#   setup / onboarding      -> first-run environment setup + discovery
+#   setup                   -> first-run environment setup + discovery
+#                              (discover / list_environments are sub-steps of
+#                              this flow and do NOT emit their own capability;
+#                              the adk.agent.create event at the end of setup is
+#                              tracked separately by the "Agents Created" KPI and
+#                              is NOT a capability-donut slice)
 #   connect                 -> ServiceNow / Workday connection setup
 #   topic_*                 -> topic authoring (create / update / delete)
 #   workflow_*              -> workflow authoring (create / update / delete)
@@ -111,7 +116,6 @@ EVENT_FLIGHTCHECK_ERROR = "adk.flightcheck.error"
 #   flightcheck             -> pre-deployment readiness check
 ADK_CAPABILITIES = (
     "setup",
-    "onboarding",
     "connect",
     "topic_create",
     "topic_update",
@@ -563,7 +567,7 @@ def emit_session_end(
 def emit_agent_create(
     *,
     agent_id: str = "",
-    adk_capability: str = "onboarding",
+    adk_capability: str = "setup",
     surface: str = SURFACE_CLI,
     block: bool = False,
 ) -> dict[str, Any]:
@@ -767,7 +771,7 @@ def _emit_synthetic(n: int = 1) -> int:
         emitters = [
             lambda: start_session(block=True),
             lambda: emit_capability_use(cap, block=True),
-            lambda: emit_agent_create(agent_id=agent_id, adk_capability="onboarding", block=True),
+            lambda: emit_agent_create(agent_id=agent_id, adk_capability="setup", block=True),
             lambda: emit_build_start(agent_id=agent_id, adk_capability=cap, block=True),
             lambda: emit_build_complete(
                 agent_id=agent_id, adk_capability=cap,
