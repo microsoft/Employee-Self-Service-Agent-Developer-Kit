@@ -8,10 +8,13 @@ returns an **advisory** report — findings the maker should consider before pub
 
 ## Rules
 
-- Do NOT modify the topic. This skill only reads and reports; the review output is advisory prose and is
-  not written to disk.
+- Do NOT modify the topic. This skill only reads, reports, and writes its findings catalog/ledger under
+  `.local/`; it never edits the topic.
 - Operate on the authored `.mcs.yml` in the maker's agent folder (`{agent.folder}/topics/`), i.e. the
   topic **before publish**. Do not require the published `samples/` copy.
+- **Run the analysis silently.** Steps 3–8 are internal: run the detectors, read the reference docs, and
+  persist the catalog **without narrating them**. Do not tell the maker what tools you are calling or what
+  files you are reading. The only thing the maker sees is the final report in Step 9.
 - **TRACK PROGRESS**: use the todo list tool to track the steps below so the maker can see where you are.
 
 ## What this checks
@@ -190,55 +193,57 @@ would pass a different scope with no other change).
    "previously flagged, the code has since changed — worth confirming." If the script cannot run, present
    this run's consolidated findings and say the cross-run catalog was unavailable.
 
-## Step 9: Present the advisory report (customer-facing)
+## Step 9: Present the report
 
-Present findings in **plain language**. Do NOT expose internal terminology to the customer — no "lens",
-no rule IDs, no reachability tag names, no file-format jargon. Translate severity to plain words
-(**High / Medium / Low**). Locate each finding by the **step/action it lives in** (its name/label), not a
+Follow this format exactly. Do **not** add prose between sections, narrate what you checked, or explain the
+process. Use plain words for severity (**High / Medium / Low**); never show internal terms (rule IDs,
+"lens", reachability tags, file jargon). Locate each finding by the **step/action it lives in**, never a
 line number.
 
-Frame every finding as a **potential** issue, not a confirmed bug. These come from common-pattern
-heuristics and can be false positives — hedge accordingly ("this might…", "you may want to check…",
-"this could…"), never "this is broken" or "you must fix". Use the highest-severity finding for the
-verdict:
+### 9a — No findings
 
-- No findings -> `I looked over this topic's logic and didn't spot anything to flag.`
-- Only Low / no-impact -> `This topic looks good — a couple of minor things you might want to double-check before publishing.`
-- Any Medium -> `I spotted a few things that might be worth a look before you publish this topic.`
-- Any High -> `I spotted some things that could cause problems — you may want to review these before publishing.`
+If the active set is empty, show only this and stop — no table, no disclaimer, nothing to caveat:
 
-Directly under the verdict, include this framing line:
+**Message:**
 
-> These are potential issues flagged from common patterns — not confirmed bugs. Some may not apply to
-> your scenario; use your judgment.
+I looked over `{TopicName}` and didn't spot anything to flag — you're good to publish.
 
-Then a plain findings table. Locate each finding by the **step/action it lives in** (its name/label),
-not a line number — that is how you (or `/update`) will find and fix it:
+**End message.**
 
-> **Review — `{TopicName}`** — {verdict}
->
-> | # | Severity | Where (step) | Potential issue | Suggested fix |
-> |---|----------|--------------|-----------------|---------------|
-> | 1 | Medium | "Redirect to Workday Get Common Execution" | The flow call may not handle a failure, so an error could show the user nothing | Consider adding a branch that handles the failure case and shows an error message |
+### 9b — Verdict line
 
-The table carries each finding — do **not** restate its rows in prose below. Order rows High -> Medium ->
-Low, and group any "no user impact today" items under a short **Minor / cleanup** heading so the customer
-sees the most likely issues first. Add a short explanation under the table **only** for a finding whose
-suggested fix needs a Power Fx snippet or a nuance the table cell can't hold; keep it hedged and refer to
-the site by its **step name/label**. If every finding is self-explanatory from the table, add nothing.
+Otherwise show one verdict line, keyed to the highest severity present:
 
-## Step 10: Close
+- Any High → `⚠️ **{TopicName}** — I spotted some things that could cause problems; worth a look before you publish.`
+- Any Medium (no High) → `**{TopicName}** — a few things that might be worth a look before you publish.`
+- Only Low → `**{TopicName}** — looks good; a couple of minor things to double-check before publishing.`
 
-End advisory, never blocking:
+Directly under it, this framing line **verbatim**:
 
-> This is advisory — you can publish as-is. Consider addressing the higher-severity items first, then
-> re-run `/review` after edits to re-check.
+> These are potential issues flagged from common patterns — not confirmed bugs. Some may not apply to your
+> scenario; use your judgment.
 
-Each finding names the exact step and a suggested fix, so `/update` can apply it directly — point the
-customer there for any finding they want fixed ("type `/update` and mention the step, e.g. the one in
-row 2").
+### 9c — Findings table
 
-**If invoked as a subagent by a parent flow** (not directly by the customer): skip the plain-language
-translation and instead return the **structured** findings — rule IDs, severity, reachability, and sites
-from the analysis guidance — so the parent can consume them programmatically. Do not prompt the customer
-directly in that case.
+Then this table, one row per finding, sorted High → Medium → Low. Put any "no user impact today" items under
+a short **Minor / cleanup** heading below the main rows.
+
+| # | Severity | Where (step) | Potential issue | Suggested fix |
+|---|----------|--------------|-----------------|---------------|
+| 1 | Medium | "{step name/label}" | {what might be wrong — hedged} | {suggested fix} |
+
+The table carries each finding — do not restate rows in prose. Add one short line under the table **only**
+when a fix needs a Power Fx snippet or nuance the cell can't hold.
+
+### 9d — Close
+
+End with this **verbatim**:
+
+> Advisory — you can publish as-is. To fix one, type `/update` and name its step; re-run `/review` after
+> edits to re-check.
+
+### Subagent mode
+
+**If invoked as a subagent by a parent flow** (not directly by the maker): skip 9a–9d and instead return the
+**structured** findings — rule IDs, severity, reachability, and sites from the analysis guidance — so the
+parent can consume them programmatically. Do not prompt the maker directly.
