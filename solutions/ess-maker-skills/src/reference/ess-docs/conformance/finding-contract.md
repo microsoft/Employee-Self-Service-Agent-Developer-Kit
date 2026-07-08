@@ -69,8 +69,9 @@ never the primary locator — line numbers drift and the agentic read does not t
 ```
 
 Each lens doc carries a canonical **Fix** next to the heuristic that owns it. Fill `Concrete fix` from
-that pattern, specialized to the site — this keeps the suggested fix ESS-correct and lets `/update` apply
-it directly (it maps the finding's `<PREFIX>` back to the lens doc via the table above).
+that pattern, specialized to the site — this keeps the suggested fix ESS-correct. The fix travels **with
+the finding** (its `Concrete fix` field), so whoever acts on it — the customer, or `/update` — has the fix
+in hand without re-deriving it.
 
 Sort findings HIGH -> MEDIUM -> LOW. After the list, emit a **Defense-in-depth** section for real
 anti-patterns whose sites all scored `NOT_REACHABLE_VIA_BOT_UI` or `OPERATOR_OR_HYGIENE_ONLY`, so
@@ -84,3 +85,63 @@ DiD-NNN — <one-line summary>
   Site(s):   <topic file>:<line>, ...
   Rationale: <why it's worth fixing despite no current reachability>
 ```
+
+## Persisted form (catalog + resolution ledger)
+
+`/review` persists findings via `scripts/merge_findings.py` into two gitignored, workspace-scoped artifacts
+under `.local/review-findings/`, following the ESS hardening-analyzer's model scoped to the maker workflow:
+
+- **`<solution>-catalog.json`** — the findings catalog for a review **scope** (the `solution` field). The
+  scope is whatever was reviewed: a single topic today, a whole ISV or solution later. Nothing here assumes
+  one topic — a finding's `files[]` can span several files, so widening the review needs no schema change.
+  (The field is named `solution` to stay valid against the ESS analyzer's ledger schema; its value is the
+  scope reviewed.)
+- **`resolved-issue-ledger.jsonl`** — a shared, append-only log of resolution evidence (one JSON line per
+  resolved finding). Each row carries `solution` + `issue_id`, the `resolution` outcome, and `resolved_by`
+  — the actor that produced it (`maker` for a dismissal, `update-skill` for a tool fix, `review-skill` when
+  `/review` confirms a fix during reconcile; caller-settable, default `review-skill`). The same semantic id
+  can legitimately appear under different scopes, so this ledger is keyed by **(`solution`, `issue_id`)**:
+  any future resolution match against it must scope by `solution`, never `issue_id` alone, or one scope's
+  resolution would wrongly clear another's. A finding belongs to exactly one catalog per scope.
+
+Each catalog finding is this contract serialized, plus the analyzer's cross-run fields:
+
+```json
+{
+  "id": "missing-issuccess-branch",
+  "title": "Flow result not checked before parse",
+  "severity": "HIGH",
+  "reachability": "confirmed",
+  "root_cause": "The ParseValue runs without a preceding isSuccess = false branch.",
+  "concrete_fix": "Add an isSuccess = false ConditionGroup before the parse.",
+  "verification": "static",
+  "files": [{ "path": "workspace/agents/<slug>/topics/<name>.mcs.yml", "lines": [188] }],
+  "status": "active",
+  "evidence_stale": false,
+  "evidence_hashes": [{ "file": "workspace/agents/<slug>/topics/<name>.mcs.yml", "sha256": "…" }],
+  "first_seen": "2026-07-08T18:00:00Z",
+  "last_seen": "2026-07-08T19:30:00Z"
+}
+```
+
+- **`id`** is a stable kebab-case behavior-describing slug and is the cross-run identity — reused across
+  runs (read the prior catalog with `merge_findings.py --solution <solution> --show` and reuse the exact prior
+  slug for a finding you recognize; never invent a new slug for a previously-identified finding).
+- **`status`** (assigned by the script, not the agent) is `active` or `resolved`. `resolved` requires a
+  matching `resolved-issue-ledger.jsonl` entry, whose `resolution` records *why*: `fixed` (the code was
+  corrected), `not-a-bug` (the maker dismissed it as a false positive), or `wont-fix` (acknowledged,
+  declined). A finding not re-detected this run stays `active` (absence is never resolution, because LLM
+  coverage is nondeterministic). A finding **resolved this run** appears once as `resolved`, then the **next
+  run prunes it** from the catalog — the ledger is its permanent record. A pruned finding reopens as a fresh
+  `active` finding only if its code changes and it is re-detected.
+- **`verification`** is `static` (decidable from the authored files — every current lens) or
+  `needs-runtime-test` (only confirmable by running the bot). A `needs-runtime-test` finding is the explicit
+  hand-off to Layer-3 runtime testing: generate an assertion case rather than a `/update` edit. The script
+  defaults it to `static` when a finding omits it.
+- **`evidence_hashes` / `evidence_stale`** make staleness deterministic. The script stores a sha256 of each
+  file a finding implicates. When a finding is not re-detected, the script compares the stored hashes to the
+  files' current hashes: all match → still `active` (the code is unchanged, so the finding stands); any
+  mismatch → `active` with `evidence_stale: true` — the code moved, so **re-verify** (read the site; if the
+  node is gone, resolve it by writing a ledger entry). This is objective, not an LLM judgment.
+- The customer-facing report presents the **active** set; call out `evidence_stale` findings as "previously
+  flagged, code has since changed — worth confirming."

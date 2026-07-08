@@ -1,0 +1,353 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+"""
+ESS Maker Kit - Review Findings Catalog + Ledger
+
+Persists /review findings and reconciles them across runs, following the ESS
+hardening-analyzer's model (issue-catalog + resolved-issue-ledger) scoped to the
+maker workflow. Two artifacts under .local/review-findings/ (gitignored):
+
+  <solution>-catalog.json         per-scope findings catalog (this run's state)
+  resolved-issue-ledger.jsonl     shared, append-only resolution evidence
+
+The `solution` field is the review scope identifier — a single topic today, a
+whole ISV or solution later. Nothing here assumes a single topic; a finding's
+files[] can span several files, so widening the review needs no schema change.
+(The field is named `solution` to stay valid against the ESS analyzer's ledger
+schema; its value is whatever scope was reviewed.)
+
+Why a script (not the agent): /review's lenses are agentic and LLM coverage is
+nondeterministic — a finding missing from a later run is NOT evidence it was
+fixed. Two things must therefore be mechanical: the carry-forward rule ("absence
+is not resolution"), and staleness. This script computes a sha256 evidence hash of
+each file a finding implicates; on a later run, a finding that was not re-detected
+is still 'active' if its files are unchanged (hash matches), and is flagged
+evidence-stale if any file changed (hash mismatch) — an objective signal to
+re-verify, not an LLM guess.
+
+Finding identity across runs is the semantic id (a stable kebab-case slug the
+agent reuses). Status is 'active' or 'resolved'; 'resolved' requires a matching
+resolved-issue-ledger.jsonl entry (written when /update confirms a fix, or when
+/review confirms an evidence-stale finding's node is gone).
+
+Scope invariant: a finding belongs to exactly one catalog per review scope (the
+`solution` value). The same semantic id can legitimately appear under different
+scopes, so the shared ledger is keyed by (solution, issue_id) — any future
+resolution match against the ledger MUST scope by solution, never by issue_id
+alone, or one scope's resolution would wrongly clear another's. (This merge does
+not read the ledger back to set status, so the risk is latent, not live.)
+
+Usage:
+    python scripts/merge_findings.py --solution <id> --current run.json
+    python scripts/merge_findings.py --solution <id> --current run.json --resolve resolved.json
+    python scripts/merge_findings.py --solution <id> --show
+"""
+
+import argparse
+import hashlib
+import json
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
+_SCHEMA_VERSION = "1.0.0"
+_SEVERITY_RANK = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
+# Maker-facing resolutions are fixed / not-a-bug / wont-fix; the other two are
+# retained for compatibility with the analyzer ledger enum (v1.2.0).
+_RESOLUTION_KINDS = {"fixed", "wont-fix", "not-a-bug", "defense-in-depth", "false-positive"}
+_VERIFICATION_KINDS = {"static", "needs-runtime-test"}
+_REVIEW_DIR = Path(".local") / "review-findings"
+
+
+def _resolution_of(finding: dict) -> str:
+    val = str(finding.get("resolution", "fixed")).strip()
+    return val if val in _RESOLUTION_KINDS else "fixed"
+
+
+def _verification_of(finding: dict) -> str:
+    val = str(finding.get("verification", "static")).strip()
+    return val if val in _VERIFICATION_KINDS else "static"
+
+
+def _resolved_by_of(finding: dict) -> str:
+    val = str(finding.get("resolved_by", "")).strip()
+    return val or "review-skill"
+
+
+def load_config() -> dict:
+    config_path = Path(".local") / "config.json"
+    if not config_path.is_file():
+        print("ERROR: .local/config.json not found. Run /setup first.", file=sys.stderr)
+        sys.exit(1)
+    return json.loads(config_path.read_text(encoding="utf-8"))
+
+
+def catalog_path(solution: str) -> Path:
+    return _REVIEW_DIR / f"{solution}-catalog.json"
+
+
+def ledger_path() -> Path:
+    return _REVIEW_DIR / "resolved-issue-ledger.jsonl"
+
+
+def _read_json(path: Path):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _read_jsonl(path: Path) -> list[dict]:
+    out: list[dict] = []
+    try:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            line = line.strip()
+            if line:
+                try:
+                    obj = json.loads(line)
+                    if isinstance(obj, dict):
+                        out.append(obj)
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        pass
+    return out
+
+
+def _issues_of(doc) -> list[dict]:
+    """Accept a bare list, {issues:[...]}, or {findings:[...]}."""
+    if isinstance(doc, list):
+        return [f for f in doc if isinstance(f, dict)]
+    if isinstance(doc, dict):
+        for key in ("issues", "findings"):
+            if isinstance(doc.get(key), list):
+                return [f for f in doc[key] if isinstance(f, dict)]
+    return []
+
+
+def sha256_file(path: Path) -> str | None:
+    try:
+        return hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError:
+        return None
+
+
+def _file_paths(finding: dict) -> list[str]:
+    files = finding.get("files")
+    paths: list[str] = []
+    if isinstance(files, list):
+        for f in files:
+            if isinstance(f, dict) and isinstance(f.get("path"), str):
+                paths.append(f["path"])
+            elif isinstance(f, str):
+                paths.append(f)
+    return paths
+
+
+def evidence_hashes(finding: dict) -> list[dict]:
+    """Current sha256 of every file the finding implicates (files[].path)."""
+    out: list[dict] = []
+    for p in _file_paths(finding):
+        out.append({"file": p, "sha256": sha256_file(Path(p))})
+    return out
+
+
+def _hashes_match(stored: list[dict]) -> bool:
+    """True if every stored evidence hash still equals the file's current hash."""
+    if not stored:
+        return False
+    for entry in stored:
+        if not isinstance(entry, dict):
+            return False
+        if sha256_file(Path(entry.get("file", ""))) != entry.get("sha256"):
+            return False
+    return True
+
+
+def _higher_severity(a: str, b: str) -> str:
+    return a if _SEVERITY_RANK.get(a, 0) >= _SEVERITY_RANK.get(b, 0) else b
+
+
+def _next_resolution_ref(issue_id: str, ledger: list[dict]) -> str:
+    n = sum(1 for e in ledger if e.get("issue_id") == issue_id) + 1
+    return f"{issue_id}:r{n}"
+
+
+def merge(
+    prior: list[dict], current: list[dict], resolutions: dict[str, dict], run_date: str,
+) -> list[dict]:
+    prior_by_id = {str(f.get("id", "")).strip(): f for f in prior}
+    current_by_id = {str(f.get("id", "")).strip(): f for f in current}
+    merged: list[dict] = []
+
+    # Current findings are active. A re-detected finding that was previously
+    # resolved reopens automatically here (the code came back).
+    for issue_id, cur in current_by_id.items():
+        rec = dict(cur)
+        rec["status"] = "active"
+        rec["evidence_stale"] = False
+        rec["evidence_hashes"] = evidence_hashes(cur)
+        rec["verification"] = _verification_of(cur)
+        rec.pop("resolution", None)
+        rec.pop("resolution_ref", None)
+        old = prior_by_id.get(issue_id)
+        if old is not None:
+            rec["severity"] = _higher_severity(
+                str(rec.get("severity", "LOW")), str(old.get("severity", "LOW"))
+            )
+            rec["first_seen"] = old.get("first_seen", run_date)
+        else:
+            rec["first_seen"] = run_date
+        rec["last_seen"] = run_date
+        merged.append(rec)
+
+    # Prior findings not re-detected this run.
+    for issue_id, old in prior_by_id.items():
+        if issue_id in current_by_id:
+            continue
+        rec = dict(old)
+        if issue_id in resolutions:
+            # Resolved this run (fixed, or dismissed as not-a-bug / wont-fix).
+            rec["status"] = "resolved"
+            rec["resolution"] = resolutions[issue_id]["resolution"]
+            rec["resolution_ref"] = resolutions[issue_id]["ref"]
+        elif old.get("status") == "resolved":
+            # Resolved in a prior run — prune from the catalog (the ledger is the
+            # permanent record). Re-detection reopens it as active via the loop above.
+            continue
+        else:
+            # Absence is not resolution. Keep the original evidence hashes so the
+            # staleness signal persists; a file change flips it to evidence-stale.
+            rec["status"] = "active"
+            rec["evidence_stale"] = not _hashes_match(old.get("evidence_hashes", []))
+        merged.append(rec)
+
+    return merged
+
+
+def append_resolutions(
+    resolved_findings: list[dict], lookups: list[list[dict]], solution: str, run_date: str,
+    ledger: list[dict],
+) -> dict[str, dict]:
+    """Append one ledger line per resolved issue; return issue_id -> {ref, resolution}.
+
+    Each resolved finding may carry a `resolution` kind (default `fixed`; a maker
+    dismisses a false positive with `not-a-bug` or declines with `wont-fix`) and a
+    `resolved_by` identity (default `review-skill`; e.g. `update-skill` for a fix,
+    `maker` for a dismissal). A resolved finding's files[] (for the evidence hash)
+    are taken from its own entry if present, else from the first lookup list that
+    has it (prior catalog, then current run).
+    """
+    resolved = {str(f.get("id", "")).strip(): f for f in resolved_findings if str(f.get("id", "")).strip()}
+    if not resolved:
+        return {}
+    by_id: dict[str, dict] = {}
+    for source in [resolved_findings, *lookups]:
+        for f in source:
+            fid = str(f.get("id", "")).strip()
+            if fid and (fid not in by_id or not _file_paths(by_id[fid])):
+                if _file_paths(f) or fid not in by_id:
+                    by_id[fid] = f
+    out: dict[str, dict] = {}
+    lines: list[str] = []
+    for issue_id in sorted(resolved):
+        ref = _next_resolution_ref(issue_id, ledger + [{"issue_id": i} for i in out])
+        resolution = _resolution_of(resolved[issue_id])
+        out[issue_id] = {"ref": ref, "resolution": resolution}
+        finding = by_id.get(issue_id, {})
+        hashes = evidence_hashes(finding) if finding else []
+        entry = {
+            "id": ref,
+            "solution": solution,
+            "issue_id": issue_id,
+            "resolution": resolution,
+            "resolved_date": run_date,
+            "resolved_by": _resolved_by_of(resolved[issue_id]),
+            "evidence_hash": hashes[0]["sha256"] if hashes else None,
+        }
+        lines.append(json.dumps(entry))
+    path = ledger_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as fh:
+        for line in lines:
+            fh.write(line + "\n")
+    return out
+
+
+def summarize(issues: list[dict]) -> dict[str, int]:
+    counts = {"active": 0, "resolved": 0, "evidence_stale": 0}
+    for f in issues:
+        counts[f.get("status", "active")] = counts.get(f.get("status", "active"), 0) + 1
+        if f.get("evidence_stale"):
+            counts["evidence_stale"] += 1
+    return counts
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Merge a /review run into the findings catalog + ledger.")
+    parser.add_argument("--solution", "-s", required=True, help="Review scope id (a topic stem today; an ISV/solution later).")
+    parser.add_argument("--current", "-c", help="JSON of this run's findings (list, or {issues:[...]}).")
+    parser.add_argument("--resolve", "-r", help="JSON listing findings resolved this run (appended to the ledger).")
+    parser.add_argument("--show", action="store_true", help="Print the catalog and exit.")
+    args = parser.parse_args()
+
+    load_config()
+    cpath = catalog_path(args.solution)
+
+    if args.show:
+        existing = _read_json(cpath)
+        if existing is None:
+            print(f"No findings catalog for '{args.solution}'.")
+            return 0
+        print(json.dumps(existing, indent=2))
+        return 0
+
+    if not args.current:
+        print("ERROR: --current is required unless --show is used.", file=sys.stderr)
+        return 1
+
+    current_doc = _read_json(Path(args.current))
+    if current_doc is None:
+        print(f"ERROR: could not read current findings from {args.current}", file=sys.stderr)
+        return 1
+    current = _issues_of(current_doc)
+
+    resolved_findings: list[dict] = []
+    if args.resolve:
+        resolved_findings = _issues_of(_read_json(Path(args.resolve)) or [])
+
+    prior_doc = _read_json(cpath)
+    prior = _issues_of(prior_doc) if prior_doc is not None else []
+
+    run_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    ledger = _read_jsonl(ledger_path())
+    resolutions = append_resolutions(
+        resolved_findings, [prior, current], args.solution, run_date, ledger
+    )
+
+    merged = merge(prior, current, resolutions, run_date)
+
+    catalog = {
+        "schema_version": _SCHEMA_VERSION,
+        "solution": args.solution,
+        "date": run_date,
+        "mode": "review",
+        "issues": merged,
+    }
+    cpath.parent.mkdir(parents=True, exist_ok=True)
+    cpath.write_text(json.dumps(catalog, indent=2) + "\n", encoding="utf-8")
+
+    counts = summarize(merged)
+    print(f"Catalog updated: {cpath}")
+    print(f"  active={counts.get('active', 0)}  resolved={counts.get('resolved', 0)}  evidence-stale={counts.get('evidence_stale', 0)}")
+    if counts.get("evidence_stale"):
+        print("  NOTE: evidence-stale findings had their files change but were not re-detected — re-verify (likely fixed).")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

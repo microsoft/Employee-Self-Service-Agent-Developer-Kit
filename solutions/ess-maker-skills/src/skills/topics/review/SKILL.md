@@ -131,7 +131,7 @@ Steps 3–6c are **internal reasoning**, and every lens reports findings in the 
 [`finding-contract.md`](src/reference/ess-docs/conformance/finding-contract.md) — precision bar, severity
 via reachability, finding-ID prefixes, and the structured output format. Their rule IDs (e.g. `BTPF-001`),
 reachability tags (`REACHABLE_NORMAL_UI`, etc.), and the word "lens" are working vocabulary **for you** —
-they are NOT shown to the customer (see Step 8). Carry each finding's node locators (`id` / `displayName` /
+they are NOT shown to the customer (see Step 9). Carry each finding's node locators (`id` / `displayName` /
 `kind`) and `Fix targets` through internally so the consolidation and customer-facing steps can name the
 step and a fixer can act.
 
@@ -150,7 +150,47 @@ fix target). Within a group:
 
 Carry the consolidated locators, rule IDs, and `Fix targets` to Step 8.
 
-## Step 8: Present the advisory report (customer-facing)
+## Step 8: Persist and reconcile across runs
+
+The lenses are agentic, so coverage varies run to run — **a finding missing from this run is not evidence it
+was fixed.** Persist this run into the findings catalog and let the script reconcile it against the prior
+run, so the report is consistent session to session and `/update` can act on a finding precisely. The
+review scope is passed as `--solution` — the topic stem today (scope-neutral: a wider ISV/solution review
+would pass a different scope with no other change).
+
+1. Write this run's consolidated findings to a temp JSON file (`{"issues": [...]}`), each in the
+   finding-contract shape: `id` (a stable kebab-case behavior-describing slug), `title`, `severity`,
+   `reachability`, `root_cause`, `concrete_fix`, `verification` (`static` for all current lenses;
+   `needs-runtime-test` only for a finding that can only be confirmed by running the bot), and `files[]`
+   (`path` relative to `solutions/ess-maker-skills/` — the topic file, plus the config or other topic a
+   finding depends on, so its evidence hash is complete).
+   The **`id` is the cross-run identity** — first read the prior catalog
+   (`python scripts/merge_findings.py --solution {topic-stem} --show`) and **reuse the exact prior `id`** for a
+   finding you recognize, so it is matched as the same finding rather than a new one.
+2. Reconcile prior findings. For each prior finding **not** re-detected this run — especially any the
+   catalog marks `evidence_stale` (its files changed) — read the current topic: if its node/expression is
+   now gone or corrected, add it (at minimum its `id`) to a temp `--resolve` file. Also add a finding here
+   if the **maker dismisses it** — set `"resolution": "not-a-bug"` when they judge it a false positive, or
+   `"wont-fix"` when they acknowledge it but decline, and set `"resolved_by": "maker"`; the defaults are
+   `"resolution": "fixed"` and `"resolved_by": "review-skill"`. A finding merely being absent this run is
+   **not** resolution. A dismissed finding stays resolved until its code changes and it is re-detected, which
+   reopens it.
+3. Run from the `solutions/ess-maker-skills/` directory:
+
+   ```
+   python scripts/merge_findings.py --solution {topic-stem} --current {tempCurrent.json} [--resolve {tempResolved.json}]
+   ```
+
+   The script writes `.local/review-findings/{topic-stem}-catalog.json` (and appends any resolutions to the
+   shared `.local/review-findings/resolved-issue-ledger.jsonl`), reusing stable ids, keeping the higher
+   severity on a re-found finding, computing each finding's `evidence_hashes`, and setting `status`
+   (`active` / `resolved`) and `evidence_stale`. Its output is **authoritative** on the cross-run set.
+4. Present (Step 9) the **active** set from the merged catalog. A finding not re-detected this run whose
+   files are unchanged still appears (previously flagged, code unchanged). Flag `evidence_stale` findings as
+   "previously flagged, the code has since changed — worth confirming." If the script cannot run, present
+   this run's consolidated findings and say the cross-run catalog was unavailable.
+
+## Step 9: Present the advisory report (customer-facing)
 
 Present findings in **plain language**. Do NOT expose internal terminology to the customer — no "lens",
 no rule IDs, no reachability tag names, no file-format jargon. Translate severity to plain words
@@ -187,7 +227,7 @@ sees the most likely issues first. Add a short explanation under the table **onl
 suggested fix needs a Power Fx snippet or a nuance the table cell can't hold; keep it hedged and refer to
 the site by its **step name/label**. If every finding is self-explanatory from the table, add nothing.
 
-## Step 9: Close
+## Step 10: Close
 
 End advisory, never blocking:
 
