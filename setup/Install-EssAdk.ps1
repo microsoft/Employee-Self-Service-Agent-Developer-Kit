@@ -89,7 +89,7 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-function Write-Step  { param([string]$m) Write-Host "`n==> $m" -ForegroundColor Cyan }
+function Write-Step  { param([string]$m) Write-Host "`n==> $m" -ForegroundColor Cyan; try { Write-EssInstallStep -Step (Get-EssStepKey $m) } catch {} }
 function Write-Ok    { param([string]$m) Write-Host "    [ok]   $m" -ForegroundColor Green }
 function Write-Warn2 { param([string]$m) Write-Host "    [warn] $m" -ForegroundColor Yellow }
 function Write-Err2  { param([string]$m) Write-Host "    [err]  $m" -ForegroundColor Red }
@@ -294,6 +294,55 @@ function Install-PipRequirements {
 
     return $pipExit
 }
+
+# ---------------------------------------------------------------------------
+# Installer telemetry (Aria/1DS). Fail-open: never breaks the install.
+# ---------------------------------------------------------------------------
+function Get-EssStepKey {
+    param([string]$m)
+    switch -regex ($m) {
+        'Preflight'                { 'preflight'; break }
+        'winget|toolchain'         { 'toolchain'; break }
+        'pip'                      { 'pip_dependencies'; break }
+        'extension'                { 'vscode_extensions'; break }
+        'Clon|clone|repo'          { 'clone'; break }
+        'Maker Profile'            { 'maker_profile'; break }
+        'FlightCheck environment|environment'  { 'flightcheck_config'; break }
+        'agent solution|Fetch'     { 'fetch_agent'; break }
+        'Running FlightCheck|Run FlightCheck'  { 'flightcheck_run'; break }
+        'workspace|Launch|Open'    { 'launch'; break }
+        default {
+            # Fall back to a scrubbed slug of the first few words.
+            $slug = ($m -replace '[^A-Za-z0-9 ]', '' ).Trim().ToLower() -replace '\s+', '_'
+            if ($slug.Length -gt 40) { $slug = $slug.Substring(0, 40) }
+            if ([string]::IsNullOrWhiteSpace($slug)) { 'step' } else { $slug }
+        }
+    }
+}
+
+# Locate + dot-source the emitter: env var set by the bootstrap (one-liner
+# install), else the copy shipped alongside this script in a clone. If it can't
+# be found, define no-op stubs so every telemetry call below is always safe.
+$essTelLoaded = $false
+$essTelCandidates = @()
+if ($env:ESS_INSTALL_TELEMETRY_LIB) { $essTelCandidates += $env:ESS_INSTALL_TELEMETRY_LIB }
+if ($PSScriptRoot)  { $essTelCandidates += (Join-Path $PSScriptRoot 'telemetry\install-telemetry.ps1') }
+if ($PSCommandPath) { $essTelCandidates += (Join-Path (Split-Path -Parent $PSCommandPath) 'telemetry\install-telemetry.ps1') }
+foreach ($cand in $essTelCandidates) {
+    if ($cand -and (Test-Path $cand)) {
+        try { . $cand; $essTelLoaded = $true; break } catch { }
+    }
+}
+if (-not $essTelLoaded) {
+    function Initialize-EssInstallTelemetry { param($Installer, $TenantId) }
+    function Write-EssInstallStep          { param($Step) }
+    function Complete-EssInstallTelemetry  { param($Outcome, $ErrorRecord) }
+}
+
+$essInstaller = if ($FlightCheckOnly) { 'flightcheck' } elseif ($SkipMakerProfile) { 'adk' } else { 'lite' }
+Initialize-EssInstallTelemetry -Installer $essInstaller -TenantId $env:ESS_TENANT_ID
+
+try {
 
 # ---------------------------------------------------------------------------
 # 1. Preflight
@@ -1115,3 +1164,13 @@ if (-not $SkipLaunch) {
 }
 
 Write-Host "`nDone. Workspace: $workspace" -ForegroundColor Green
+
+}
+catch {
+    Complete-EssInstallTelemetry -Outcome 'failure' -ErrorRecord $_
+    throw
+}
+finally {
+    # Idempotent: no-op if a failure/cancel outcome was already recorded above.
+    Complete-EssInstallTelemetry -Outcome 'success'
+}

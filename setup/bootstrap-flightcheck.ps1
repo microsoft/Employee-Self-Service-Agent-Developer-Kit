@@ -58,6 +58,16 @@ foreach ($f in $files) {
     }
 }
 
+# Best-effort: fetch the installer telemetry emitter (fail-open — a telemetry
+# download failure must never block the install).
+$telLib = Join-Path $tempDir 'install-telemetry.ps1'
+try {
+    Invoke-WebRequest -Uri "$SourceBaseUrl/telemetry/install-telemetry.ps1" -OutFile $telLib -UseBasicParsing -TimeoutSec 30
+    $env:ESS_INSTALL_TELEMETRY_LIB = $telLib
+} catch {
+    Write-Host "  [warn] Installer telemetry unavailable (continuing)" -ForegroundColor DarkYellow
+}
+
 $installer = Join-Path $tempDir 'Install-EssAdk.ps1'
 
 # Run the installer in-memory (as a script block) so execution policy never

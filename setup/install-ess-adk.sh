@@ -38,7 +38,69 @@ NC='\033[0m' # No Color
 ok()   { echo -e "    ${GREEN}[ok]${NC}   $1"; }
 warn() { echo -e "    ${YELLOW}[warn]${NC} $1"; }
 err()  { echo -e "    ${RED}[ERR]${NC}  $1"; }
-step() { echo -e "\n${CYAN}==> $1${NC}"; }
+step() { echo -e "\n${CYAN}==> $1${NC}"; ess_tel_step "$(ess_step_key "$1")" || true; }
+
+# ---------------------------------------------------------------------------
+# Installer telemetry (Aria / 1DS). Fail-open: never breaks the install.
+# ---------------------------------------------------------------------------
+# Map a human step message to a short, stable step key for dashboards.
+ess_step_key() {
+    case "$1" in
+        *Checking*)             echo preflight ;;
+        *toolchain*|*Homebrew*) echo toolchain ;;
+        *pip*)                  echo pip_dependencies ;;
+        *Resolving\ Python*)    echo resolve_python ;;
+        *Cloning*|*repository*) echo clone ;;
+        *extension*)            echo vscode_extensions ;;
+        *Maker\ Profile*)       echo maker_profile ;;
+        *FlightCheck\ environ*) echo flightcheck_config ;;
+        *agent\ solution*)      echo fetch_agent ;;
+        *Running\ FlightCheck*) echo flightcheck_run ;;
+        *workspace*|*Opening*)  echo launch ;;
+        *) echo "$1" | tr '[:upper:] ' '[:lower:]_' | tr -cd 'a-z0-9_' | cut -c1-40 ;;
+    esac
+}
+
+# Locate + source the emitter: env var set by the bootstrap (one-liner install),
+# else the copy shipped alongside this script in a clone. If it can't be found,
+# define no-op stubs so every telemetry call below is always safe.
+_ess_tel_lib="${ESS_INSTALL_TELEMETRY_LIB:-}"
+if [[ -z "$_ess_tel_lib" ]]; then
+    _ess_tel_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo .)"
+    _ess_tel_lib="$_ess_tel_dir/telemetry/install-telemetry.sh"
+fi
+if [[ -n "$_ess_tel_lib" && -f "$_ess_tel_lib" ]]; then
+    # shellcheck disable=SC1090
+    source "$_ess_tel_lib" || true
+fi
+if ! declare -f ess_tel_init >/dev/null 2>&1; then
+    ess_tel_init()     { :; }
+    ess_tel_step()     { :; }
+    ess_tel_complete() { :; }
+fi
+
+# Installer identity: flightcheck | adk (full, maker profile skipped) | lite.
+if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
+    _ess_installer=flightcheck
+elif [[ "$SKIP_MAKER_PROFILE" == "true" ]]; then
+    _ess_installer=adk
+else
+    _ess_installer=lite
+fi
+ess_tel_init "$_ess_installer" "${ESS_TENANT_ID:-}" || true
+
+# Emit a completion event on any exit (success on 0, failure otherwise). The
+# FlightCheck-only path records success explicitly before it exits, so a
+# non-zero FlightCheck *result* isn't misreported as an install failure.
+ess_tel_on_exit() {
+    local code="${1:-0}"
+    if [[ "$code" -eq 0 ]]; then
+        ess_tel_complete success || true
+    else
+        ess_tel_complete failure "installer exited with code $code" || true
+    fi
+}
+trap 'ess_tel_on_exit $?' EXIT
 
 # ---------------------------------------------------------------------------
 # 1. Homebrew
@@ -511,6 +573,7 @@ with open(sys.argv[6], 'w', encoding='utf-8') as f:
 
     # --- Run FlightCheck ---
     step "Running FlightCheck"
+    ess_tel_complete success || true
     "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope full --invocation-source installer
     exit $?
 fi
