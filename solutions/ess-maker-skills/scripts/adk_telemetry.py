@@ -91,11 +91,10 @@ EVENT_FLIGHTCHECK_ERROR = "adk.flightcheck.error"
 # --- Canonical ADK capability value-list (single source of truth) ---------
 # Every ``adk_capability`` value emitted anywhere in the kit MUST be one of
 # these. This is the ONE place the taxonomy is defined: the synthetic
-# emitter, the ``emit_capability.py`` shim, and the Aria "Sessions by
-# Capability" / "Capability Usage by Type" donut value-lists are all kept in
-# sync with it. When you add a capability here, also add it to those two Aria
-# cube dimension value-lists (see the telemetry dashboards story, ADO
-# #7532631) so the new slice renders.
+# emitter, the ``emit_capability.py`` shim, and the Aria "Capability Usage by
+# Type" donut value-list are all kept in sync with it. When you add a
+# capability here, also add it to that Aria cube dimension value-list (see the
+# telemetry dashboards story, ADO #7532631) so the new slice renders.
 #
 # One capability per real maker-facing ADK skill / entry point:
 #   setup                   -> first-run environment setup + discovery

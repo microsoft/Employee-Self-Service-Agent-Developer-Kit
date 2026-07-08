@@ -423,6 +423,7 @@ def test_wired_capabilities_are_in_canonical_list():
         # emit_build_*/flightcheck_* event families
         "publishing", "flightcheck",
         # emit_capability.py shim invocations across the SKILL.md skills
+        "connect",
         "topic_create", "topic_update", "topic_delete",
         "workflow_create", "workflow_update", "workflow_delete",
         "cleanup", "troubleshoot",
