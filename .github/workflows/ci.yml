@@ -57,3 +57,18 @@ jobs:
         PATHS: ${{ steps.discover.outputs.paths }}
       run: |
         python -m compileall -q $PATHS
+
+  installer-scripts:
+    name: Installer script smoke tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    # pwsh is preinstalled on GitHub-hosted ubuntu runners. The harness only
+    # parses and string-matches the setup scripts (no OS-specific execution),
+    # so it runs cross-platform. Guards against the Windows PowerShell 5.1
+    # parse crash by asserting the scripts stay ASCII-only. See PR #185.
+    - name: Run installer smoke tests
+      shell: pwsh
+      run: ./setup/Install-EssAdk.Tests.ps1

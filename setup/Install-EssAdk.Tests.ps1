@@ -28,7 +28,7 @@ Write-Host "Install-EssAdk.ps1 validation:" -ForegroundColor Cyan
 
 Test 'script parses without syntax errors' {
     $tokens = $null; $errors = $null
-    [System.Management.Automation.Language.Parser]::ParseFile($installerPath, [ref]$tokens, [ref]$errors)
+    $null = [System.Management.Automation.Language.Parser]::ParseFile($installerPath, [ref]$tokens, [ref]$errors)
     if ($errors.Count -gt 0) {
         throw "Parse errors: $($errors[0].Message)"
     }
@@ -88,7 +88,7 @@ $bootstrapSrc = Get-Content $bootstrapPath -Raw
 
 Test 'bootstrap.ps1 parses without errors' {
     $tokens = $null; $errors = $null
-    [System.Management.Automation.Language.Parser]::ParseFile($bootstrapPath, [ref]$tokens, [ref]$errors)
+    $null = [System.Management.Automation.Language.Parser]::ParseFile($bootstrapPath, [ref]$tokens, [ref]$errors)
     if ($errors.Count -gt 0) { throw "Parse errors: $($errors[0].Message)" }
 }
 
@@ -105,7 +105,7 @@ $liteSrc = Get-Content $litePath -Raw
 
 Test 'bootstrap-lite.ps1 parses without errors' {
     $tokens = $null; $errors = $null
-    [System.Management.Automation.Language.Parser]::ParseFile($litePath, [ref]$tokens, [ref]$errors)
+    $null = [System.Management.Automation.Language.Parser]::ParseFile($litePath, [ref]$tokens, [ref]$errors)
     if ($errors.Count -gt 0) { throw "Parse errors: $($errors[0].Message)" }
 }
 
@@ -113,6 +113,45 @@ Test 'bootstrap-lite.ps1 does NOT pass SkipMakerProfile as an argument' {
     # It may mention SkipMakerProfile in a comment, but the actual args hash should not include it
     if ($liteSrc -match 'SkipMakerProfile\s*=\s*\$true') {
         throw 'bootstrap-lite.ps1 should not set SkipMakerProfile = $true'
+    }
+}
+
+# ---------------------------------------------------------------------------
+# Encoding safety - regression guard for the Windows PowerShell 5.1 crash.
+#
+# 5.1 decodes a no-BOM script as ANSI (CP1252), so any non-ASCII byte (e.g. an
+# em-dash U+2014) is mangled and [ScriptBlock]::Create parsing fails with a
+# cascade of "Unexpected token" errors. The 'parses without errors' tests above
+# use the running PowerShell (7 in CI), which defaults to UTF-8 and therefore
+# does NOT catch this - so we assert ASCII-only bytes directly (parser- and
+# version-independent), and check the bootstraps decode as UTF-8 explicitly.
+# See PR #185.
+# ---------------------------------------------------------------------------
+Write-Host "`nEncoding safety:" -ForegroundColor Cyan
+
+Test 'all setup/*.ps1 are ASCII-only (Windows PowerShell 5.1 safe)' {
+    $offenders = @()
+    Get-ChildItem (Join-Path $PSScriptRoot '*.ps1') | ForEach-Object {
+        $lines = [System.IO.File]::ReadAllLines($_.FullName, [System.Text.Encoding]::UTF8)
+        for ($i = 0; $i -lt $lines.Count; $i++) {
+            if ($lines[$i] -match '[^\x00-\x7F]') {
+                $offenders += "$($_.Name):$($i + 1)"
+            }
+        }
+    }
+    if ($offenders.Count -gt 0) {
+        throw "Non-ASCII characters found (replace with ASCII to keep the installer 5.1-safe): $($offenders -join ', ')"
+    }
+}
+
+Test 'bootstraps read the fetched installer as UTF-8 explicitly' {
+    foreach ($name in @('bootstrap.ps1', 'bootstrap-lite.ps1', 'bootstrap-flightcheck.ps1')) {
+        $path = Join-Path $PSScriptRoot $name
+        if (-not (Test-Path $path)) { continue }
+        $text = [System.IO.File]::ReadAllText($path, [System.Text.Encoding]::UTF8)
+        if ($text -notmatch 'ReadAllText\(\$installer,\s*\[System\.Text\.Encoding\]::UTF8\)') {
+            throw "$name does not read the installer via [IO.File]::ReadAllText(`$installer, [System.Text.Encoding]::UTF8) - Get-Content -Raw can mis-decode under 5.1"
+        }
     }
 }
 
