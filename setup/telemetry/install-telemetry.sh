@@ -13,14 +13,16 @@
 #   * Fail-open, NEVER break the install. Every function returns 0 and
 #     swallows its own errors; telemetry never changes the installer's exit.
 #   * Same privacy model: no developer/user identity; random per-install
-#     instance_id for dedup; raw tenant GUID (OII) only where available;
-#     enums + scrubbed errors only (paths/URLs/emails/GUIDs stripped).
+#     instance_id for dedup; enums + scrubbed errors only (paths/URLs/emails/
+#     GUIDs stripped). The installer runs BEFORE sign-in, so the tenant is
+#     unknown here and no tenant dimension is emitted (the internal-vs-external
+#     split lives in the post-auth ADK/FlightCheck telemetry).
 #   * Same unified opt-out: ESS_ADK_TELEMETRY=off or ~/.adk/config
 #     {"telemetry":"disabled"}; one-time notice on first install.
 #
 # The iKeys are 1DS ingestion keys: write-only, safe to embed.
 #
-# Source this file, then call: ess_tel_init <adk|lite|flightcheck> [tenant_id]
+# Source this file, then call: ess_tel_init <adk|lite|flightcheck>
 #   ess_tel_step <step>; ess_tel_complete <success|failure|cancelled> [msg]
 # ---------------------------------------------------------------------------
 
@@ -28,8 +30,6 @@ ESS_TEL_IKEY_DEV='08e397b2c6c243eeaeb341e111c36167-294d89f6-c806-4c65-adf3-dea3b
 ESS_TEL_IKEY_PROD='311254257bbc417e860c76781d4863c8-8cff75a4-47b7-4675-9646-45a4ca9bc138-7062'
 ESS_TEL_COLLECTOR='https://mobile.events.data.microsoft.com/OneCollector/1.0/?cors=true&content-type=application/x-json-stream'
 ESS_TEL_SCHEMA='1.0'
-# Microsoft corporate Entra tenant — the only internal tenancy by default.
-ESS_TEL_CORP_TENANT='72f988bf-86f1-41af-91ab-2d7cd011db47'
 ESS_TEL_CONFIG_DIR="$HOME/.adk"
 ESS_TEL_CONFIG="$ESS_TEL_CONFIG_DIR/config"
 
@@ -38,7 +38,6 @@ ESS_TEL_INSTALLER='adk'
 ESS_TEL_ENV='prod'
 ESS_TEL_IKEY=''
 ESS_TEL_INSTANCE=''
-ESS_TEL_TENANT=''
 ESS_TEL_FIRSTRUN='true'
 ESS_TEL_PLATFORM='macOS'
 ESS_TEL_OS=''
@@ -121,20 +120,6 @@ ess_tel_instance_info() {
     return 0
 }
 
-ess_tel_tenant_class() {
-    local t="$1"
-    if [[ -z "$t" ]]; then printf 'unknown'; return 0; fi
-    t="$(printf '%s' "$t" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
-    local corp; corp="$(printf '%s' "$ESS_TEL_CORP_TENANT" | tr '[:upper:]' '[:lower:]')"
-    local internal=",$corp,"
-    if [[ -n "${ESS_ADK_INTERNAL_TENANTS:-}" ]]; then
-        local extra; extra="$(printf '%s' "$ESS_ADK_INTERNAL_TENANTS" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
-        internal="$internal$extra,"
-    fi
-    if [[ "$internal" == *",$t,"* ]]; then printf 'internal'; else printf 'customer'; fi
-    return 0
-}
-
 # --- scrub (mirrors adk_telemetry._scrub) ----------------------------------
 ess_tel_scrub() {
     local s="$1"
@@ -167,12 +152,14 @@ ess_tel_send() {
     ns="$(date +%N 2>/dev/null || echo 0)"; ns="${ns//[!0-9]/}"; [[ -n "$ns" ]] || ns=0
     ms=$(( (10#$ns / 1000000) % 1000 ))
     ts="$(date -u +%Y-%m-%dT%H:%M:%S).$(printf '%03d' "$ms")Z"
-    local tclass; tclass="$(ess_tel_tenant_class "$ESS_TEL_TENANT")"
     local data
-    data="{\"schemaVersion\":\"$ESS_TEL_SCHEMA\",\"env\":\"$ESS_TEL_ENV\",\"installer\":\"$ESS_TEL_INSTALLER\",\"invocationSource\":\"installer\",\"platform\":\"$ESS_TEL_PLATFORM\",\"os\":\"$(_ess_tel_jesc "$ESS_TEL_OS")\",\"instanceId\":\"$ESS_TEL_INSTANCE\",\"tenantId\":\"$(_ess_tel_jesc "$ESS_TEL_TENANT")\",\"tenantClass\":\"$tclass\",\"adkVersion\":\"$(_ess_tel_jesc "$ESS_TEL_ADKVER")\",\"firstRun\":$ESS_TEL_FIRSTRUN$extra}"
+    data="{\"schemaVersion\":\"$ESS_TEL_SCHEMA\",\"env\":\"$ESS_TEL_ENV\",\"installer\":\"$ESS_TEL_INSTALLER\",\"invocationSource\":\"installer\",\"platform\":\"$ESS_TEL_PLATFORM\",\"os\":\"$(_ess_tel_jesc "$ESS_TEL_OS")\",\"instanceId\":\"$ESS_TEL_INSTANCE\",\"adkVersion\":\"$(_ess_tel_jesc "$ESS_TEL_ADKVER")\",\"firstRun\":$ESS_TEL_FIRSTRUN$extra}"
     local body="{\"ver\":\"4.0\",\"name\":\"$name\",\"time\":\"$ts\",\"iKey\":\"$envtoken\",\"data\":$data}"
     local uploadms; uploadms="$(( $(date +%s) * 1000 ))"
-    curl -fsS -m 5 -X POST "$ESS_TEL_COLLECTOR" \
+    # Circuit breaker: an unreachable/slow collector must not add its timeout to
+    # every remaining step. On the first failed send, disable telemetry for the
+    # rest of the process so total added latency is bounded to ~one timeout.
+    if curl -fsS -m 3 -X POST "$ESS_TEL_COLLECTOR" \
         -H "apikey: $ESS_TEL_IKEY" \
         -H 'Client-Id: NO_AUTH' \
         -H "client-version: ess-maker-installer-$ESS_TEL_ADKVER" \
@@ -180,15 +167,18 @@ ess_tel_send() {
         -H 'cache-control: no-cache, no-store' \
         -H 'NoResponseBody: true' \
         -H 'Content-Type: application/x-json-stream' \
-        --data-binary "$body"$'\n' >/dev/null 2>&1 || true
+        --data-binary "$body"$'\n' >/dev/null 2>&1; then
+        :
+    else
+        ESS_TEL_READY=0
+    fi
     return 0
 }
 
 # --- public API ------------------------------------------------------------
 ess_tel_init() {
-    # $1 = installer (adk|lite|flightcheck), $2 = tenant_id (optional)
+    # $1 = installer (adk|lite|flightcheck)
     ESS_TEL_INSTALLER="${1:-adk}"
-    ESS_TEL_TENANT="${2:-}"
     ess_tel_enabled || { ESS_TEL_READY=0; return 0; }
     # The Lite-mode installer is being merged into the standard ADK installer
     # (mode will become an onboarding prompt), so it is no longer instrumented.

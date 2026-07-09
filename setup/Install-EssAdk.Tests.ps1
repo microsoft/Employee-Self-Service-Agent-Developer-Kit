@@ -206,14 +206,13 @@ Test 'bash emitter exists with a shebang' {
 # Dot-source the PS emitter and exercise its pure (no-network) functions.
 . $psEmitter
 
-Test 'tenant class: the MS corp tenant is internal' {
-    if ((Get-EssTelTenantClass -TenantId '72f988bf-86f1-41af-91ab-2d7cd011db47') -ne 'internal') { throw 'corp tenant not internal' }
-}
-Test 'tenant class: any other tenant is customer' {
-    if ((Get-EssTelTenantClass -TenantId '11111111-1111-1111-1111-111111111111') -ne 'customer') { throw 'other tenant not customer' }
-}
-Test 'tenant class: an empty tenant is unknown' {
-    if ((Get-EssTelTenantClass -TenantId '') -ne 'unknown') { throw 'empty tenant not unknown' }
+Test 'installer telemetry emits no tenant dimension (unknowable pre-sign-in)' {
+    # The installer runs before sign-in, so the tenant is never known; emitting
+    # tenantId/tenantClass produced a meaningless 'unknown' on ~every event.
+    $data = Get-EssTelCommonData
+    if ($data.ContainsKey('tenantId'))    { throw 'tenantId should not be emitted by the installer' }
+    if ($data.ContainsKey('tenantClass')) { throw 'tenantClass should not be emitted by the installer' }
+    if (Get-Command -Name 'Get-EssTelTenantClass' -ErrorAction SilentlyContinue) { throw 'Get-EssTelTenantClass should be removed' }
 }
 Test 'scrub strips paths, urls, emails and guids' {
     $s = ConvertTo-EssTelScrubbed -Text 'boom C:\Users\x https://a.com/b user@contoso.com 72f988bf-86f1-41af-91ab-2d7cd011db47'
@@ -244,7 +243,7 @@ Test 'lite installer is not instrumented (no telemetry ready, no events)' {
     $old = $env:ESS_ADK_TELEMETRY
     try {
         $env:ESS_ADK_TELEMETRY = ''   # ensure telemetry is otherwise enabled
-        Initialize-EssInstallTelemetry -Installer 'lite' -TenantId ''
+        Initialize-EssInstallTelemetry -Installer 'lite'
         if ($script:EssTel.Ready) { throw 'lite installer should not be telemetry-ready' }
     } finally { $env:ESS_ADK_TELEMETRY = $old }
 }
@@ -286,6 +285,36 @@ foreach ($bs in @('bootstrap-mac.sh', 'bootstrap-flightcheck-mac.sh', 'bootstrap
         if ($bsSrc -notmatch 'install-telemetry\.sh') { throw 'telemetry lib not downloaded' }
         if ($bsSrc -notmatch 'ESS_INSTALL_TELEMETRY_LIB') { throw 'env var not set' }
     }
+}
+
+Test 'install-ess-adk.sh maps SIGINT/SIGTERM (130/143) to a cancelled outcome' {
+    if ($macInstaller -notmatch 'ess_tel_complete cancelled') { throw 'cancelled outcome not emitted on interrupt' }
+    if ($macInstaller -notmatch '130' -or $macInstaller -notmatch '143') { throw 'SIGINT/SIGTERM codes not handled' }
+}
+Test 'Install-EssAdk.ps1 records success on the normal path, not in finally' {
+    # Regression: Ctrl+C bypasses catch, so success must be emitted at the end of
+    # try. finally must fall back to cancelled, never force success.
+    if ($src -notmatch "(?s)Done\. Workspace.*?Complete-EssInstallTelemetry -Outcome 'success'") {
+        throw "success not recorded at the end of the try block"
+    }
+    if ($src -notmatch "(?s)finally\s*\{[^}]*Complete-EssInstallTelemetry -Outcome 'cancelled'") {
+        throw "finally must record 'cancelled', not 'success'"
+    }
+    if ($src -match "(?s)finally\s*\{[^}]*Complete-EssInstallTelemetry -Outcome 'success'") {
+        throw "finally must not force a 'success' outcome (mislabels Ctrl+C)"
+    }
+}
+Test 'PS emitter uses a short send timeout and trips a circuit breaker on failure' {
+    $emitterSrc = Get-Content $psEmitter -Raw
+    if ($emitterSrc -notmatch 'TimeoutSec 3') { throw 'PS emitter should use a short (3s) send timeout' }
+    # The catch of the transport must disable further sends so an unreachable
+    # collector adds ~one timeout total, not one per step.
+    if ($emitterSrc -notmatch '(?s)catch\s*\{[^}]*EssTel\.Ready\s*=\s*\$false') { throw 'PS emitter missing circuit breaker' }
+}
+Test 'bash emitter uses a short send timeout and trips a circuit breaker on failure' {
+    $shSrc = Get-Content $shEmitter -Raw
+    if ($shSrc -notmatch 'curl -fsS -m 3') { throw 'bash emitter should use a short (3s) send timeout' }
+    if ($shSrc -notmatch 'ESS_TEL_READY=0') { throw 'bash emitter missing circuit breaker' }
 }
 
 # Summary

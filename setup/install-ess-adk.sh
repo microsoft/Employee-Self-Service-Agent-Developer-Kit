@@ -87,15 +87,19 @@ elif [[ "$SKIP_MAKER_PROFILE" == "true" ]]; then
 else
     _ess_installer=lite
 fi
-ess_tel_init "$_ess_installer" "${ESS_TENANT_ID:-}" || true
+ess_tel_init "$_ess_installer" || true
 
-# Emit a completion event on any exit (success on 0, failure otherwise). The
-# FlightCheck-only path records success explicitly before it exits, so a
-# non-zero FlightCheck *result* isn't misreported as an install failure.
+# Emit a completion event on any exit (success on 0, cancelled on Ctrl+C/term,
+# failure otherwise). The FlightCheck-only path records success explicitly
+# before it exits, so a non-zero FlightCheck *result* isn't misreported as an
+# install failure.
 ess_tel_on_exit() {
     local code="${1:-0}"
     if [[ "$code" -eq 0 ]]; then
         ess_tel_complete success || true
+    elif [[ "$code" -eq 130 || "$code" -eq 143 ]]; then
+        # 130 = SIGINT (Ctrl+C), 143 = SIGTERM — the user cancelled the install.
+        ess_tel_complete cancelled || true
     else
         ess_tel_complete failure "installer exited with code $code" || true
     fi

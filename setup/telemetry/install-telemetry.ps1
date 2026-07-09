@@ -19,9 +19,11 @@
       errors; nothing here throws, and telemetry never changes the installer's
       exit code. A telemetry bug must never break a customer's setup.
     * Same privacy model as the ADK/FlightCheck telemetry: no developer/user
-      identity; a random per-install ``instance_id`` for dedup; the raw tenant
-      GUID (OII) only where available; enums + scrubbed errors only. Error
-      text is scrubbed of paths, URLs, emails/UPNs and GUIDs.
+      identity; a random per-install ``instance_id`` for dedup; enums +
+      scrubbed errors only. The installer runs BEFORE sign-in, so the tenant
+      is unknown here — no tenant dimension is emitted from the installer (the
+      internal-vs-external split lives in the post-auth ADK/FlightCheck
+      telemetry). Error text is scrubbed of paths, URLs, emails/UPNs and GUIDs.
     * Same unified opt-out: ``ESS_ADK_TELEMETRY=off`` or
       ``python scripts/adk_telemetry.py off`` (which writes ~/.adk/config).
       The one-time consent notice is shown on first install.
@@ -41,9 +43,6 @@ $script:EssTelIKeys = @{
 }
 $script:EssTelCollectorUrl = 'https://mobile.events.data.microsoft.com/OneCollector/1.0/?cors=true&content-type=application/x-json-stream'
 $script:EssTelSchemaVersion = '1.0'
-# Microsoft corporate Entra tenant — the only internal tenancy by default
-# (mirrors flightcheck/telemetry.py classify_tenant; ADO 7558661).
-$script:EssTelCorpTenant = '72f988bf-86f1-41af-91ab-2d7cd011db47'
 
 # Per-process state, populated by Initialize-EssInstallTelemetry.
 $script:EssTel = @{
@@ -52,7 +51,6 @@ $script:EssTel = @{
     Env          = 'prod'
     IKey         = ''
     InstanceId   = ''
-    TenantId     = ''
     FirstRun     = $true
     Platform     = 'Windows'
     OsVersion    = ''
@@ -152,21 +150,6 @@ function Get-EssTelInstanceInfo {
     return @{ Id = $newId; FirstRun = $true }
 }
 
-function Get-EssTelTenantClass {
-    param([string]$TenantId)
-    if ([string]::IsNullOrWhiteSpace($TenantId)) { return 'unknown' }
-    $t = $TenantId.Trim().ToLowerInvariant()
-    $internal = @($script:EssTelCorpTenant.ToLowerInvariant())
-    if ($env:ESS_ADK_INTERNAL_TENANTS) {
-        foreach ($x in ($env:ESS_ADK_INTERNAL_TENANTS -split ',')) {
-            $x = $x.Trim().ToLowerInvariant()
-            if ($x) { $internal += $x }
-        }
-    }
-    if ($internal -contains $t) { return 'internal' }
-    return 'customer'
-}
-
 # --- Scrub (mirrors adk_telemetry._scrub) ----------------------------------
 function ConvertTo-EssTelScrubbed {
     param([string]$Text, [int]$Limit = 200)
@@ -214,9 +197,14 @@ function Send-EssTelEvent {
         }
         $resp = Invoke-WebRequest -Uri $script:EssTelCollectorUrl -Method Post `
             -Body ($line + "`n") -ContentType 'application/x-json-stream' `
-            -Headers $headers -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop
+            -Headers $headers -TimeoutSec 3 -UseBasicParsing -ErrorAction Stop
         return [int]$resp.StatusCode
     } catch {
+        # Circuit breaker: an unreachable or slow collector must not add its
+        # timeout to every remaining step. After the first failed send, disable
+        # telemetry for the rest of the process so the total added latency is
+        # bounded to ~one timeout, not (number-of-steps x timeout).
+        $script:EssTel.Ready = $false
         return $null
     }
 }
@@ -231,8 +219,6 @@ function Get-EssTelCommonData {
         platform         = $script:EssTel.Platform
         os               = $script:EssTel.OsVersion
         instanceId       = $script:EssTel.InstanceId
-        tenantId         = $script:EssTel.TenantId
-        tenantClass      = (Get-EssTelTenantClass -TenantId $script:EssTel.TenantId)
         adkVersion       = $script:EssTel.AdkVersion
         firstRun         = $script:EssTel.FirstRun
     }
@@ -242,12 +228,10 @@ function Initialize-EssInstallTelemetry {
     <#
     .SYNOPSIS Begin installer telemetry: notice, identity, and the start event.
     .PARAMETER Installer  One of adk | lite | flightcheck.
-    .PARAMETER TenantId   Raw Entra tenant GUID if known (optional).
     #>
     param(
         [ValidateSet('adk', 'lite', 'flightcheck')]
-        [string]$Installer = 'adk',
-        [string]$TenantId = ''
+        [string]$Installer = 'adk'
     )
     try {
         if (-not (Test-EssTelemetryEnabled)) { $script:EssTel.Ready = $false; return }
@@ -268,7 +252,6 @@ function Initialize-EssInstallTelemetry {
         $script:EssTel.IKey        = $script:EssTelIKeys[$envName]
         $script:EssTel.InstanceId  = $inst.Id
         $script:EssTel.FirstRun    = $inst.FirstRun
-        $script:EssTel.TenantId    = $TenantId
         $script:EssTel.Platform    = 'Windows'
         $script:EssTel.OsVersion   = [string][Environment]::OSVersion.Version
         $script:EssTel.AdkVersion  = $adkVer

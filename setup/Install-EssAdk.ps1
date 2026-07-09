@@ -334,13 +334,13 @@ foreach ($cand in $essTelCandidates) {
     }
 }
 if (-not $essTelLoaded) {
-    function Initialize-EssInstallTelemetry { param($Installer, $TenantId) }
+    function Initialize-EssInstallTelemetry { param($Installer) }
     function Write-EssInstallStep          { param($Step) }
     function Complete-EssInstallTelemetry  { param($Outcome, $ErrorRecord) }
 }
 
 $essInstaller = if ($FlightCheckOnly) { 'flightcheck' } elseif ($SkipMakerProfile) { 'adk' } else { 'lite' }
-Initialize-EssInstallTelemetry -Installer $essInstaller -TenantId $env:ESS_TENANT_ID
+Initialize-EssInstallTelemetry -Installer $essInstaller
 
 try {
 
@@ -1165,12 +1165,18 @@ if (-not $SkipLaunch) {
 
 Write-Host "`nDone. Workspace: $workspace" -ForegroundColor Green
 
+# Record success here, at the end of the normal path (NOT in finally) so an
+# interrupt (Ctrl+C bypasses catch) is never mislabeled as a successful install.
+Complete-EssInstallTelemetry -Outcome 'success'
+
 }
 catch {
     Complete-EssInstallTelemetry -Outcome 'failure' -ErrorRecord $_
     throw
 }
 finally {
-    # Idempotent: no-op if a failure/cancel outcome was already recorded above.
-    Complete-EssInstallTelemetry -Outcome 'success'
+    # Safety net for cancellation: if neither success nor failure was recorded
+    # above (Ctrl+C stops the pipeline and skips catch), record it as cancelled.
+    # Idempotent: a no-op once any outcome has already been emitted.
+    Complete-EssInstallTelemetry -Outcome 'cancelled'
 }
