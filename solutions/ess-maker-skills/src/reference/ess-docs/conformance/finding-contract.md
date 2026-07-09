@@ -42,17 +42,6 @@ terminating the dialog stack so code after it never runs. Apply confirmed rules 
 rules with caution and say so. If the docs are absent, score structurally and note that runtime calibration
 was unavailable.
 
-**When a heuristic caps a finding to unreachable and you drop it, you MUST leave a breadcrumb.** If a runtime
-heuristic reclassifies a would-be finding to `NOT_REACHABLE_VIA_BOT_UI` and you therefore surface **no**
-finding because it is intentional, centrally-handled design (e.g. an ungated `ParseValue` in a topic that
-delegates to a shared `*System*` orchestrator), you **must** record it in the catalog's `suppressions` array
-— never let it silently vanish. Each entry is a lightweight stub — `{ "id", "site", "suppressed_by": "<heuristic-id>" }`
-(the script fills `date`) — **not** a finding: no severity / root_cause / concrete_fix (there is nothing to
-fix), no evidence hash, no cross-run merge. It is written per run (overwritten each time the lens
-re-evaluates), kept out of `issues`, and **never shown to the maker**. Its sole purpose is auditability: it
-distinguishes a site that was *evaluated and correctly suppressed* from one that was *never analyzed*, so a
-0-finding review is legible after the fact.
-
 ## Finding IDs
 
 Each lens uses its own prefix so findings are distinguishable and stable across runs. IDs are
@@ -165,6 +154,3 @@ Each catalog finding is this contract serialized, plus the analyzer's cross-run 
   node is gone, resolve it by writing a ledger entry). This is objective, not an LLM judgment.
 - The customer-facing report presents the **active** set; call out `evidence_stale` findings as "previously
   flagged, code has since changed — worth confirming."
-- The catalog also carries a top-level **`suppressions`** array (sibling to `issues`) — the per-run,
-  internal-only audit breadcrumbs described under the reachability rubric above. No report or `/update`
-  consumer reads it; it exists only to make a 0-finding run auditable.
