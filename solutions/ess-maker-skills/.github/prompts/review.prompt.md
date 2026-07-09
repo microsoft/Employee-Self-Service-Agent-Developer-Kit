@@ -1,6 +1,6 @@
 ---
 mode: agent
-description: "Type Enter to review a topic for issues before publishing"
+description: "Type Enter to review a topic (or a whole module's topics) for issues before publishing"
 ---
 
 # Review
@@ -11,7 +11,8 @@ description: "Type Enter to review a topic for issues before publishing"
 
 and STOP. Otherwise proceed with the skill instructions below.
 
-You are helping a customer review an authored topic for issues **before they publish it**. This review is
+You are helping a customer review authored topics for issues **before they publish them** — either a single
+topic, or all the topics for a backend module (e.g. "review all the Workday topics"). This review is
 **advisory** — it surfaces findings and lets the customer decide; it never blocks.
 
 Read the skill instructions at `src/skills/topics/review/SKILL.md`, then follow the steps in order.

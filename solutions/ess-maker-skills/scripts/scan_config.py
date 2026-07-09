@@ -208,6 +208,7 @@ def main() -> int:
     )
     parser.add_argument("--agent", "-a", help="Agent folder under workspace/agents/. Auto-detected if only one.")
     parser.add_argument("--topic", "-t", help="Topic file stem to review. Reviews all topics if omitted.")
+    parser.add_argument("--module", help="Restrict to topics whose name starts with this module id (e.g. workday, servicenow-hrsd). Ignored if --topic is given.")
     parser.add_argument("--output", "-o", help="Write the full per-topic detail to this JSON file.")
     args = parser.parse_args()
 
@@ -237,6 +238,8 @@ def main() -> int:
     if args.topic:
         stem = args.topic.removesuffix(".mcs.yml")
         topic_files = [topics_dir / f"{stem}.mcs.yml"]
+    elif args.module:
+        topic_files = sorted(topics_dir.glob(f"{args.module}*.mcs.yml"))
     else:
         topic_files = sorted(topics_dir.glob("*.mcs.yml"))
 

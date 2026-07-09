@@ -1,7 +1,8 @@
 # Review Topic Skill
 
-This skill runs an **authoring-time conformance review** over a single authored Copilot Studio topic and
-returns an **advisory** report — findings the maker should consider before publishing.
+This skill runs an **authoring-time conformance review** over an authored Copilot Studio topic — or a whole
+module's topics at once — and returns an **advisory** report of findings the maker should consider before
+publishing.
 
 > **Advisory by construction.** This review has no power to block — it surfaces findings and the maker
 > decides. Never present a finding as a hard failure or refuse to proceed.
@@ -39,15 +40,20 @@ This skill analyzes:
 Other checks (cross-component error-code coverage) are not part of this skill; if the
 maker asks about those, say they are not covered rather than guessing.
 
-## Step 1: Identify the topic to review
+## Step 1: Identify the scope
 
-Determine the target `.mcs.yml`:
+Decide whether the maker wants **one topic** or a **module scope** (all topics for a backend), then branch:
 
-- If the maker gave a path, use it.
-- Otherwise read `.local/config.json` for the agent folder, list `{agent.folder}/topics/*.mcs.yml`, and
-  ask the maker which topic to review (or offer to review the most recently modified one).
+- If the maker named a single topic (a path or one topic name) → **single-topic review**: use it and continue
+  with Steps 2–9 below.
+- If the maker asked to review a **module / backend / "all"** (e.g. "review all the Workday topics", "review
+  ServiceNow HRSD", "review everything") → **scoped review**: resolve the module id, then jump to the
+  **Scoped review** section at the end of this skill (do not run Steps 2–9 directly).
+- If it is ambiguous, read `.local/config.json` for the agent folder, list the module prefixes present in
+  `{agent.folder}/topics/` (the leading `servicenow-hrsd`, `servicenow-itsm`, `workday`, … segment), and ask
+  the maker whether they want one topic or a whole module.
 
-State the full path of the file you are about to review.
+For a single-topic review, state the full path of the file you are about to review.
 
 ## Step 2: Read the topic
 
@@ -247,3 +253,78 @@ End with this **verbatim**:
 **If invoked as a subagent by a parent flow** (not directly by the maker): skip 9a–9d and instead return the
 **structured** findings — rule IDs, severity, reachability, and sites from the analysis guidance — so the
 parent can consume them programmatically. Do not prompt the maker directly.
+
+## Scoped review (a whole module)
+
+Reached from Step 1 when the maker asked to review a module rather than one topic. The scope is a **module
+id** — the leading filename segment shared by a backend's topics (`servicenow-hrsd`, `servicenow-itsm`,
+`workday`). Confirm the resolved module and the count of topics it matches before starting.
+
+Run the analysis silently (the no-chatter rule still applies); the maker sees only the roll-up in S-4.
+
+### S-1: Run the detectors once across the scope
+
+From `solutions/ess-maker-skills/`, run each detector **once** with `--module` (not per topic):
+
+```
+python scripts/scan_globals.py  --agent {agent-slug} --module {module-id}
+python scripts/scan_bindings.py --agent {agent-slug} --module {module-id}
+python scripts/scan_config.py   --agent {agent-slug} --module {module-id}
+```
+
+Each reports findings for every in-scope topic at once (globals availability is still resolved agent-wide;
+`--module` only filters which topics are reported). Their output is authoritative, as in Steps 3/4/6c.
+
+### S-2: Fan out the agentic lenses over the scope
+
+Dispatch the three agentic lenses as **parallel subagents**, each ranging over the whole scoped topic set,
+not one per topic:
+
+- Power Fx topic-local (`powerfx-topic-local.md`)
+- ISV conformance (`isv-conformance.md`) — reads the module's ISV reference doc **once** for the whole set
+- ISV integration pattern (`isv-integration-pattern.md`)
+
+Each subagent applies its lens to every in-scope topic and returns findings **tagged with the owning
+topic**, in the finding-contract shape. (Reading the ISV doc once per lens — not once per topic — is why
+this fans out by lens.)
+
+### S-3: Regroup, consolidate, and persist per topic
+
+Collect all findings (detectors + lens subagents) and **group them by topic**. For each topic with findings,
+run the Step 7 consolidation, then persist that topic's catalog with `merge_findings.py --solution
+{topic-stem}` exactly as Step 8 does for a single topic. Every topic keeps its own
+`{topic-stem}-catalog.json`; a topic with no findings gets an empty active set (still reconciled, so a
+previously-flagged finding there is correctly carried forward).
+
+### S-4: Present the roll-up
+
+Show a scope-level summary, then a per-topic table — not each topic's full findings table. Follow the
+no-chatter and plain-language rules from Step 9.
+
+If **no topic** in the scope has an active finding:
+
+**Message:**
+
+I reviewed all {N} `{module-id}` topics and didn't spot anything to flag.
+
+**End message.**
+
+Otherwise:
+
+> **Review — `{module-id}`** ({N} topics) — {highest severity across the scope, as a Step-9b-style verdict}
+
+> These are potential issues flagged from common patterns — not confirmed bugs. Some may not apply to your
+> scenario; use your judgment.
+
+| Topic | High | Medium | Low |
+|-------|------|--------|-----|
+| {topic-stem} | {n} | {n} | {n} |
+
+List topics with findings first (worst severity first); omit clean topics from the table but note the count
+("{k} other topics were clean"). Then:
+
+> To see a topic's details, ask to review it by name (e.g. `review {topic-stem}`) — its findings are saved.
+> To fix one, type `/update` and name the topic and step. Re-run to re-check.
+
+**Drill-down:** if the maker asks to see one topic, render that topic's Step-9c table from its
+`{topic-stem}-catalog.json` (active set) — no re-analysis needed.

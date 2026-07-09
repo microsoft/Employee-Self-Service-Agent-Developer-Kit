@@ -103,6 +103,12 @@ def main() -> int:
              "Availability is still resolved across the whole agent.",
     )
     parser.add_argument(
+        "--module",
+        help="Report only dangling references read by topics whose name starts with this "
+             "module id (e.g. workday, servicenow-hrsd). Availability is still resolved "
+             "across the whole agent. Ignored if --topic is given.",
+    )
+    parser.add_argument(
         "--output", "-o",
         help="Write the full reads/writes/declared/dangling map to this JSON file.",
     )
@@ -134,6 +140,12 @@ def main() -> int:
         stem = args.topic.removesuffix(".mcs.yml")
         dangling = {
             name: [s for s in sites if s.startswith(f"{stem}.mcs.yml:")]
+            for name, sites in dangling.items()
+        }
+        dangling = {name: sites for name, sites in dangling.items() if sites}
+    elif args.module:
+        dangling = {
+            name: [s for s in sites if s.split(":", 1)[0].startswith(args.module)]
             for name, sites in dangling.items()
         }
         dangling = {name: sites for name, sites in dangling.items() if sites}
