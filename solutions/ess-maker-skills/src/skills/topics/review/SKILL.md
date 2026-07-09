@@ -186,7 +186,10 @@ would pass a different scope with no other change).
    `reachability`, `root_cause`, `concrete_fix`, `verification` (`static` for all current lenses;
    `needs-runtime-test` only for a finding that can only be confirmed by running the bot), and `files[]`
    (`path` relative to `solutions/ess-maker-skills/` — the topic file, plus the config or other topic a
-   finding depends on, so its evidence hash is complete).
+   finding depends on, so its evidence hash is complete). When a runtime heuristic **caps a would-be finding
+   to `unreachable`** so you surface **no** finding (see the reachability rubric in `finding-contract.md`),
+   add an internal-only breadcrumb to a sibling `suppressions` array — `{ "id", "site", "suppressed_by" }` —
+   so a 0-finding result stays auditable (evaluated-and-suppressed, not never-looked).
    The **`id` is the cross-run identity** — first read the prior catalog
    (`python scripts/merge_findings.py --solution {topic-stem} --show`) and **reuse the exact prior `id`** for a
    finding you recognize, so it is matched as the same finding rather than a new one.

@@ -11,6 +11,11 @@ maker workflow. Two artifacts under .local/review-findings/ (gitignored):
   <solution>-catalog.json         per-scope findings catalog (this run's state)
   resolved-issue-ledger.jsonl     shared, append-only resolution evidence
 
+The catalog carries two collections: `issues` (contract-shaped findings, the set
+the report and /update read) and `suppressions` (lightweight per-run audit
+breadcrumbs for would-be findings a runtime heuristic capped to unreachable — kept
+out of `issues`, never shown to the maker; see _suppressions_of).
+
 The `solution` field is the review scope identifier — a single topic today, a
 whole ISV or solution later. Nothing here assumes a single topic; a finding's
 files[] can span several files, so widening the review needs no schema change.
@@ -71,6 +76,9 @@ _SEVERITY_RANK = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
 # location / fix instead of root_cause / files / concrete_fix) fails loudly instead
 # of persisting a schema-broken catalog. `verification` is optional (defaults static).
 _REQUIRED_FINDING_KEYS = ("id", "title", "severity", "reachability", "root_cause", "concrete_fix")
+# Audit breadcrumb for a would-be finding a runtime heuristic capped to unreachable.
+# Lightweight by design (not the finding contract) — see _suppressions_of.
+_SUPPRESSION_KEYS = ("id", "site", "suppressed_by", "date")
 # Maker-facing resolutions are fixed / not-a-bug / wont-fix; the other two are
 # retained for compatibility with the analyzer ledger enum (v1.2.0).
 _RESOLUTION_KINDS = {"fixed", "wont-fix", "not-a-bug", "defense-in-depth", "false-positive"}
@@ -169,6 +177,33 @@ def _issues_of(doc) -> list[dict]:
             if isinstance(doc.get(key), list):
                 return [f for f in doc[key] if isinstance(f, dict)]
     return []
+
+
+def _suppressions_of(doc, run_date: str) -> list[dict]:
+    """Per-run suppression breadcrumbs from the current input (overwrite, not merged).
+
+    Each is a lightweight audit stub — a would-be finding a runtime heuristic capped
+    to unreachable/LOW, recorded so a 0-findings run is auditable (evaluated-and-
+    suppressed vs never-looked). Deliberately NOT the finding contract: no severity /
+    root_cause / concrete_fix (a suppressed site is not an actionable problem), no
+    evidence_hashes, no validation-gating, and never merged or carried forward — the
+    lens re-derives suppressions every run, so this is simply overwritten. Kept out of
+    `issues` so no report / `/update` / summarize consumer ever sees it. Malformed
+    entries are dropped (this must never block persistence of real findings).
+    """
+    raw = doc.get("suppressions") if isinstance(doc, dict) else None
+    if not isinstance(raw, list):
+        return []
+    out: list[dict] = []
+    for s in raw:
+        if not isinstance(s, dict):
+            continue
+        rec = {k: s[k] for k in _SUPPRESSION_KEYS if k in s and s[k] is not None}
+        if not (rec.get("id") or rec.get("site")):
+            continue  # need at least a locator to be a useful breadcrumb
+        rec.setdefault("date", run_date)
+        out.append(rec)
+    return out
 
 
 def sha256_file(path: Path) -> str | None:
@@ -418,6 +453,7 @@ def main() -> int:
     )
 
     merged = merge(prior, current, resolutions, run_date)
+    suppressions = _suppressions_of(current_doc, run_date)
 
     catalog = {
         "schema_version": _SCHEMA_VERSION,
@@ -425,13 +461,14 @@ def main() -> int:
         "date": run_date,
         "mode": "review",
         "issues": merged,
+        "suppressions": suppressions,
     }
     cpath.parent.mkdir(parents=True, exist_ok=True)
     cpath.write_text(json.dumps(catalog, indent=2) + "\n", encoding="utf-8")
 
     counts = summarize(merged)
     print(f"Catalog updated: {cpath}")
-    print(f"  active={counts.get('active', 0)}  resolved={counts.get('resolved', 0)}  evidence-stale={counts.get('evidence_stale', 0)}")
+    print(f"  active={counts.get('active', 0)}  resolved={counts.get('resolved', 0)}  evidence-stale={counts.get('evidence_stale', 0)}  suppressed={len(suppressions)}")
     if counts.get("evidence_stale"):
         print("  NOTE: evidence-stale findings had their files change but were not re-detected — re-verify (likely fixed).")
     return 0
