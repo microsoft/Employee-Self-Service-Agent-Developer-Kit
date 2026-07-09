@@ -181,7 +181,7 @@ run, so the report is consistent session to session and `/update` can act on a f
 review scope is passed as `--solution` — the topic stem today (scope-neutral: a wider ISV/solution review
 would pass a different scope with no other change).
 
-1. Write this run's consolidated findings to a temp JSON file (`{"issues": [...]}`), each in the
+1. Assemble this run's consolidated findings as JSON (`{"issues": [...]}`), each in the
    finding-contract shape: `id` (a stable kebab-case behavior-describing slug), `title`, `severity`,
    `reachability`, `root_cause`, `concrete_fix`, `verification` (`static` for all current lenses;
    `needs-runtime-test` only for a finding that can only be confirmed by running the bot), and `files[]`
@@ -192,17 +192,26 @@ would pass a different scope with no other change).
    finding you recognize, so it is matched as the same finding rather than a new one.
 2. Reconcile prior findings. For each prior finding **not** re-detected this run — especially any the
    catalog marks `evidence_stale` (its files changed) — read the current topic: if its node/expression is
-   now gone or corrected, add it (at minimum its `id`) to a temp `--resolve` file. Also add a finding here
+   now gone or corrected, add it (at minimum its `id`) to a `--resolve` file under `.local\tmp\` (see step 3
+   for the workspace-internal staging rule). Also add a finding here
    if the **maker dismisses it** — set `"resolution": "not-a-bug"` when they judge it a false positive, or
    `"wont-fix"` when they acknowledge it but decline, and set `"resolved_by": "maker"`; the defaults are
    `"resolution": "fixed"` and `"resolved_by": "review-skill"`. A finding merely being absent this run is
    **not** resolution. A dismissed finding stays resolved until its code changes and it is re-detected, which
    reopens it.
-3. Run from the `solutions/ess-maker-skills/` directory:
+3. Run from the `solutions/ess-maker-skills/` directory. **Pipe the findings JSON to the script on stdin
+   with `--current -`.** Do not pass a temp-file path — a mis-pathed temp file (a Unix `/tmp/...` path on
+   Windows) or shell heredoc is a known failure. If you must stage the JSON in a file first, write it
+   **inside the workspace** under `.local\tmp\` (gitignored) — **never** `$env:TEMP`, `C:\temp`, or `/tmp`,
+   which are outside the workspace and trigger sensitive-file prompts. In PowerShell:
 
    ```
-   python scripts/merge_findings.py --solution {topic-stem} --current {tempCurrent.json} [--resolve {tempResolved.json}]
+   New-Item -ItemType Directory -Force .local\tmp | Out-Null
+   Set-Content -Path .local\tmp\findings.json -Value $json -Encoding utf8
+   Get-Content .local\tmp\findings.json -Raw | python scripts/merge_findings.py --solution {topic-stem} --current -
    ```
+
+   To record resolutions, add `--resolve .local\tmp\resolved.json` (a workspace-internal path).
 
    The script writes `.local/review-findings/{topic-stem}-catalog.json` (and appends any resolutions to the
    shared `.local/review-findings/resolved-issue-ledger.jsonl`), reusing stable ids, keeping the higher
@@ -304,11 +313,12 @@ Dispatch **one subagent for the whole module** (not one per topic, and not one p
       output — do not re-run the detectors.
    2. Consolidate (Step 7).
    3. **Persist this topic's catalog — the required last action of the iteration, before moving to the next
-      topic.** Write this topic's consolidated findings to a temp JSON and run, from
-      `solutions/ess-maker-skills/`:
+      topic.** Pipe this topic's consolidated findings to the script on stdin, from
+      `solutions/ess-maker-skills/` (see Step 8 for the exact stdin form and the `.local\tmp\`
+      workspace-internal staging rule — never `$env:TEMP` / `/tmp`):
 
       ```
-      python scripts/merge_findings.py --solution {topic-stem} --current {tempCurrent.json}
+      Get-Content .local\tmp\findings.json -Raw | python scripts/merge_findings.py --solution {topic-stem} --current -
       ```
 
       This write is **mandatory and per-topic**: do it once for each topic as you finish it. Do **not**

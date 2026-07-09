@@ -46,6 +46,8 @@ alone, or one scope's resolution would wrongly clear another's. (This merge does
 not read the ledger back to set status, so the risk is latent, not live.)
 
 Usage:
+    # findings from stdin (preferred — no temp file, no shell heredoc):
+    Get-Content run.json | python scripts/merge_findings.py --solution <id> --current -
     python scripts/merge_findings.py --solution <id> --current run.json
     python scripts/merge_findings.py --solution <id> --current run.json --resolve resolved.json
     python scripts/merge_findings.py --solution <id> --show
@@ -112,6 +114,33 @@ def _read_json(path: Path):
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
+
+
+def read_findings_source(value: str) -> tuple[object, str | None]:
+    """Read a findings document from a file path or stdin.
+
+    `value` of "-" reads from stdin, so the caller can pipe findings JSON
+    directly (no temp file to mis-path, no shell heredoc) — the temp-file seam
+    was a live failure source on Windows. Returns (doc, None) on success or
+    (None, error) with a message that distinguishes not-found from invalid JSON.
+    """
+    if value == "-":
+        raw = sys.stdin.read()
+        if not raw.strip():
+            return None, "no findings JSON received on stdin"
+        try:
+            return json.loads(raw), None
+        except json.JSONDecodeError as e:
+            return None, f"invalid JSON on stdin ({e})"
+    path = Path(value)
+    if not path.is_file():
+        return None, f"file not found: {value}"
+    try:
+        return json.loads(path.read_text(encoding="utf-8")), None
+    except json.JSONDecodeError as e:
+        return None, f"invalid JSON in {value} ({e})"
+    except OSError as e:
+        return None, f"could not read {value} ({e})"
 
 
 def _read_jsonl(path: Path) -> list[dict]:
@@ -335,7 +364,7 @@ def summarize(issues: list[dict]) -> dict[str, int]:
 def main() -> int:
     parser = argparse.ArgumentParser(description="Merge a /review run into the findings catalog + ledger.")
     parser.add_argument("--solution", "-s", required=True, help="Review scope id (a topic stem today; an ISV/solution later).")
-    parser.add_argument("--current", "-c", help="JSON of this run's findings (list, or {issues:[...]}).")
+    parser.add_argument("--current", "-c", help="Findings for this run: a file path, or '-' to read JSON from stdin (list, or {issues:[...]}).")
     parser.add_argument("--resolve", "-r", help="JSON listing findings resolved this run (appended to the ledger).")
     parser.add_argument("--show", action="store_true", help="Print the catalog and exit.")
     args = parser.parse_args()
@@ -355,16 +384,17 @@ def main() -> int:
         print("ERROR: --current is required unless --show is used.", file=sys.stderr)
         return 1
 
-    current_doc = _read_json(Path(args.current))
-    if current_doc is None:
-        print(f"ERROR: could not read current findings from {args.current}", file=sys.stderr)
+    current_doc, read_err = read_findings_source(args.current)
+    if read_err is not None:
+        print(f"ERROR: could not read current findings ({read_err})", file=sys.stderr)
         return 1
     current = _issues_of(current_doc)
 
     errors = validate_current_findings(current)
     if errors:
+        src = "stdin" if args.current == "-" else args.current
         print(
-            f"ERROR: {len(errors)} finding(s) in {args.current} do not match the finding contract "
+            f"ERROR: {len(errors)} finding(s) from {src} do not match the finding contract "
             "(id/title/severity/reachability/root_cause/concrete_fix + files[]). "
             "Catalog NOT written. A catalog may only be produced by this script from contract-shaped findings; "
             "do not hand-write catalogs or improvise a scanner.",
