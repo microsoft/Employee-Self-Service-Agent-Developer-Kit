@@ -304,30 +304,46 @@ per-topic catalogs are the intermediates the roll-up is built from.
 
 ### S-4: Present the roll-up
 
-Show a scope-level summary, then a per-topic table — not each topic's full findings table. Follow the
-no-chatter and plain-language rules from Step 9.
+Show a scope-level summary, then a per-topic table and an issue-type rollup — **not** each topic's full
+findings table. Follow the same exact-template discipline as Step 9: use the verbatim lines below, do not
+improvise the verdict, add prose between sections, or narrate the analysis (including todo-list activity).
 
 If **no topic** in the scope has an active finding:
 
 **Message:**
 
-I reviewed all {N} `{module-id}` topics and didn't spot anything to flag.
+I reviewed all {N} `{module-id}` topics and didn't spot anything to flag — you're good to publish.
 
 **End message.**
 
-Otherwise:
+Otherwise, one verdict line keyed to the highest severity anywhere in the scope (verbatim):
 
-> **Review — `{module-id}`** ({N} topics) — {highest severity across the scope, as a Step-9b-style verdict}
+- Any High → `⚠️ **Review — {module-id}** ({N} topics) — some things across these topics could cause problems; worth a look before you publish.`
+- Any Medium (no High) → `**Review — {module-id}** ({N} topics) — a few things across these topics might be worth a look before you publish.`
+- Only Low → `**Review — {module-id}** ({N} topics) — looks good; a few minor things to double-check before publishing.`
+
+Directly under it, this framing line **verbatim**:
 
 > These are potential issues flagged from common patterns — not confirmed bugs. Some may not apply to your
 > scenario; use your judgment.
+
+Then the **per-topic table** — topics with findings first, worst severity first; omit clean topics but note
+the count below:
 
 | Topic | High | Medium | Low |
 |-------|------|--------|-----|
 | {topic-stem} | {n} | {n} | {n} |
 
-List topics with findings first (worst severity first); omit clean topics from the table but note the count
-("{k} other topics were clean"). Then:
+`{k} other topics were clean.`
+
+Then the **issue-type rollup** — the same active findings grouped by their plain-language issue type, so the
+maker sees which problems recur across the scope. Order by severity, then count:
+
+| Issue | Topics affected | Severity |
+|-------|-----------------|----------|
+| {plain-language issue type} | {count} | {High/Medium/Low} |
+
+Close with this **verbatim**:
 
 > To see a topic's details, ask to review it by name (e.g. `review {topic-stem}`) — its findings are saved.
 > To fix one, type `/update` and name the topic and step. Re-run to re-check.
