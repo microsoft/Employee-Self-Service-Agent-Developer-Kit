@@ -223,13 +223,15 @@ def test_manual_count_serialized_to_json(tmp_path) -> None:
     data = json.loads((tmp_path / "results.json").read_text(encoding="utf-8"))
     assert data["manual"] == 1
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
-    # The HTML summary card and the row status both need to be visible.
+    # The Manual status must be visible on the check card (pill + filter
+    # key) so the operator can spot and filter it.
     assert "Manual" in html
-    assert "status-manual" in html
-    # And the cell-text class must be applied to the result +
-    # remediation cells so multi-line strings preserve their
-    # formatting (issue: wall-of-text rendering in early AUTH-006
-    # iterations). Pin both the class application and the CSS rule.
-    assert 'class="cell-text"' in html
-    assert "white-space: pre-wrap" in html
-    assert "line-height: 1.5" in html
+    assert "pill manual" in html
+    assert 'data-s="manual"' in html
+    # Multi-line result payloads must keep their formatting: they render
+    # in a <pre class="err"> block whose CSS pins whitespace preservation
+    # (issue: wall-of-text rendering in early AUTH-006 iterations).
+    assert '<pre class="err">' in html
+    assert "white-space:pre" in html
+    assert "Manual finding line 1" in html
+    assert "line 2 \u2014 indented" in html

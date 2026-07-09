@@ -14,6 +14,7 @@ from __future__ import annotations
 import socket
 import ssl
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 from unittest.mock import MagicMock, patch
 
@@ -23,11 +24,23 @@ from flightcheck.checks.infrastructure import (
     ProbeResult,
     _discover_microsoft_service_targets,
     _host_from_url,
+    check_dlp_connector_classification,
     check_microsoft_service_reachability,
     probe_endpoint,
     run_infrastructure_checks,
 )
+import flightcheck.checks._dlp_utils as dlp_utils
 from flightcheck.runner import Status
+
+from tests.conftest import (
+    FAKE_DATAVERSE_URL,
+    FAKE_ENV_ID,
+    FAKE_TOKEN,
+    require_validated_mock,
+)
+from tests.mocks import pp_admin as ppa
+
+require_validated_mock(ppa)
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -488,3 +501,408 @@ class TestRunInfrastructureChecks:
         assert len(infra_001) >= 5
         for r in infra_001:
             assert r.status == Status.PASSED.value
+
+
+# ───────────────────────────────────────────────────────────────────────
+# INFRA-006: DLP connector classification
+#
+# Unit tests drive check_dlp_connector_classification directly with a fake
+# PP-Admin client (get_dlp_policies_for_env) and a monkeypatched
+# _dlp_utils.query_all (the Dataverse connection-references source). DLP
+# policies are built with the validated tests/mocks/pp_admin.dlp_policy()
+# builder (apiPolicies 2021-04-01 connectorGroups shape).
+# ───────────────────────────────────────────────────────────────────────
+
+# Canonical agent connector api-names used across INFRA-006 tests.
+_DATAVERSE = "shared_commondataserviceforapps"
+_WORKDAY = "shared_workdaysoap"
+_HTTP_AAD = "shared_webcontents"
+
+
+class _FakeDlpPP:
+    """Minimal PP-Admin stub exposing only get_dlp_policies_for_env.
+
+    ``policies`` may be a list of policy dicts, a ``{"_error": ...}`` dict
+    (permission failure), or an Exception instance to raise.
+    """
+
+    def __init__(self, policies):
+        self._policies = policies
+
+    def get_dlp_policies_for_env(self, _env_id):
+        if isinstance(self._policies, Exception):
+            raise self._policies
+        return self._policies
+
+
+def _dlp_runner(policies, *, env_url=FAKE_DATAVERSE_URL, dv_token=FAKE_TOKEN):
+    return SimpleNamespace(
+        pp_admin=_FakeDlpPP(policies),
+        env_id=FAKE_ENV_ID,
+        env_url=env_url,
+        dv_token=dv_token,
+    )
+
+
+def _ref_rows(*connector_api_names):
+    """Build Dataverse connectionreferences rows for the given connectors."""
+    return [
+        {
+            "connectionreferenceid": f"00000000-0000-0000-0000-00000000000{i}",
+            "connectorid": f"/providers/Microsoft.PowerApps/apis/{name}",
+            "statuscode": 1,
+        }
+        for i, name in enumerate(connector_api_names)
+    ]
+
+
+def _patch_refs(monkeypatch, *connector_api_names):
+    monkeypatch.setattr(
+        dlp_utils, "query_all",
+        lambda *a, **kw: _ref_rows(*connector_api_names),
+    )
+
+
+def _infra_006(results):
+    return next(r for r in results if r.checkpoint_id == "INFRA-006")
+
+
+class TestInfra006Verdicts:
+    """INFRA-006 verdict mapping across the heritage scenarios (AC3/AC4/AC5)."""
+
+    def test_all_allowed_same_group_passes(self, monkeypatch):
+        # Arrange: both agent connectors classified Business (Confidential).
+        _patch_refs(monkeypatch, _DATAVERSE, _WORKDAY)
+        policies = [ppa.dlp_policy(business=[_DATAVERSE, _WORKDAY])]
+
+        # Act
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        # Assert
+        assert result.status == Status.PASSED.value
+        assert "same data-group" in result.result
+        assert "Business" in result.result
+        assert result.remediation == ""
+
+    def test_cross_group_warns(self, monkeypatch):
+        # Arrange: Dataverse=Business, HTTP=Non-Business → all allowed but can't
+        # be combined. AC5: cross-group is a WARNING, not a FAIL.
+        _patch_refs(monkeypatch, _DATAVERSE, _HTTP_AAD)
+        policies = [ppa.dlp_policy(business=[_DATAVERSE], non_business=[_HTTP_AAD])]
+
+        # Act
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        # Assert
+        assert result.status == Status.WARNING.value
+        assert "split across data-groups" in result.result
+        assert result.remediation  # non-empty, names the fix
+
+    def test_blocked_connector_fails(self, monkeypatch):
+        # Arrange: Workday is Blocked.
+        _patch_refs(monkeypatch, _DATAVERSE, _WORKDAY)
+        policies = [ppa.dlp_policy(business=[_DATAVERSE], blocked=[_WORKDAY])]
+
+        # Act
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        # Assert
+        assert result.status == Status.FAILED.value
+        assert "Blocked" in result.result
+        assert _WORKDAY in result.remediation
+
+    def test_partial_indeterminate_across_policies_warns(self, monkeypatch):
+        # Arrange: two effective policies. Policy A classifies both Business;
+        # policy B omits Workday (default-group fallthrough) → indeterminate.
+        _patch_refs(monkeypatch, _DATAVERSE, _WORKDAY)
+        policies = [
+            ppa.dlp_policy(display_name="Policy A", business=[_DATAVERSE, _WORKDAY]),
+            ppa.dlp_policy(display_name="Policy B", business=[_DATAVERSE]),
+        ]
+
+        # Act
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        # Assert
+        assert result.status == Status.WARNING.value
+        assert _WORKDAY in result.result
+        assert result.remediation
+
+    def test_permission_error_warns(self, monkeypatch):
+        # Arrange: apiPolicies admin endpoint denied access.
+        _patch_refs(monkeypatch, _DATAVERSE)
+        runner = _dlp_runner({"_error": "forbidden", "_status": 403})
+
+        # Act
+        result = _infra_006(check_dlp_connector_classification(runner))
+
+        # Assert
+        assert result.status == Status.WARNING.value
+        assert "permissions error" in result.result.lower()
+
+    def test_dataverse_unreadable_warns(self, monkeypatch):
+        # Arrange: policy reads fine, but resolving connectors raises.
+        monkeypatch.setattr(
+            dlp_utils, "query_all",
+            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("dv down")),
+        )
+        policies = [ppa.dlp_policy(business=[_DATAVERSE])]
+
+        # Act
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        # Assert
+        assert result.status == Status.WARNING.value
+        assert "connection references" in result.result.lower()
+
+    def test_no_policy_skips_and_defers_to_env_008(self, monkeypatch):
+        # Arrange: no DLP policy applies to the environment.
+        _patch_refs(monkeypatch, _DATAVERSE, _WORKDAY)
+
+        # Act
+        results = check_dlp_connector_classification(_dlp_runner([]))
+
+        # Assert: exactly one INFRA-006 finding, SKIPPED, deferring to ENV-008,
+        # with NO duplicate "no DLP policy found" coverage claim.
+        assert len(results) == 1
+        result = results[0]
+        assert result.status == Status.SKIPPED.value
+        assert "ENV-008" in result.result
+        assert result.remediation == ""
+
+
+class TestInfra006ModernSchema:
+    """INFRA-006 against the modern ``definition.apiGroups`` policy shape.
+
+    Real tenants return classification under
+    ``properties.definition.apiGroups.{hbi|lbi|blocked}`` with a
+    ``defaultApiGroup``, not the legacy ``connectorGroups``. These tests use
+    the ``dlp_policy_modern`` builder (verified against a live 2026-06-30
+    apiPolicies response) to prevent regressing to the false WARN that the
+    legacy-only parser produced.
+    """
+
+    def test_modern_all_business_passes(self, monkeypatch):
+        # Arrange: both agent connectors classified Business (hbi).
+        _patch_refs(monkeypatch, _DATAVERSE, _WORKDAY)
+        policies = [ppa.dlp_policy_modern(business=[_DATAVERSE, _WORKDAY])]
+
+        # Act
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        # Assert
+        assert result.status == Status.PASSED.value
+        assert "same data-group" in result.result
+        assert "Business" in result.result
+
+    def test_modern_default_group_resolves_not_indeterminate(self, monkeypatch):
+        # Arrange: Dataverse explicit in hbi; Workday unlisted but the policy
+        # default is hbi, so it resolves to Business rather than indeterminate.
+        _patch_refs(monkeypatch, _DATAVERSE, _WORKDAY)
+        policies = [ppa.dlp_policy_modern(business=[_DATAVERSE], default_group="hbi")]
+
+        # Act
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        # Assert: no false WARN — the default group makes the verdict provable.
+        assert result.status == Status.PASSED.value
+
+    def test_modern_default_group_causes_cross_group_warn(self, monkeypatch):
+        # Arrange: mirrors the live tenant. Dataverse in hbi (Business); the
+        # second connector is unlisted and inherits the lbi default
+        # (Non-Business), so the two connectors are split across groups.
+        _patch_refs(monkeypatch, _DATAVERSE, _WORKDAY)
+        policies = [ppa.dlp_policy_modern(business=[_DATAVERSE], default_group="lbi")]
+
+        # Act
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        # Assert: AC5 — cross-group is a WARNING, not a FAIL.
+        assert result.status == Status.WARNING.value
+        assert "split across data-groups" in result.result
+
+    def test_modern_blocked_connector_fails(self, monkeypatch):
+        # Arrange: the second connector is explicitly Blocked.
+        _patch_refs(monkeypatch, _DATAVERSE, _WORKDAY)
+        policies = [ppa.dlp_policy_modern(business=[_DATAVERSE], blocked=[_WORKDAY])]
+
+        # Act
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        # Assert
+        assert result.status == Status.FAILED.value
+        assert "Blocked" in result.result
+
+    def test_modern_default_blocked_fails(self, monkeypatch):
+        # Arrange: unlisted connector inherits a Blocked default group.
+        _patch_refs(monkeypatch, _WORKDAY)
+        policies = [ppa.dlp_policy_modern(business=[_DATAVERSE], default_group="blocked")]
+
+        # Act
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        # Assert
+        assert result.status == Status.FAILED.value
+        assert "Blocked" in result.result
+
+
+class TestDlpModernSchemaParsing:
+    """Direct parser coverage for the modern ``definition.apiGroups`` shape."""
+
+    def test_policy_connector_groups_reads_apigroups(self):
+        policy = ppa.dlp_policy_modern(
+            business=[_DATAVERSE], non_business=[_HTTP_AAD], blocked=[_WORKDAY],
+        )
+        cmap = dlp_utils.policy_connector_groups(policy)
+
+        assert cmap[_DATAVERSE] == "business"
+        assert cmap[_HTTP_AAD] == "nonbusiness"
+        assert cmap[_WORKDAY] == "blocked"
+
+    def test_policy_default_group_reads_default_api_group(self):
+        assert dlp_utils.policy_default_group(
+            ppa.dlp_policy_modern(default_group="lbi")) == "nonbusiness"
+        assert dlp_utils.policy_default_group(
+            ppa.dlp_policy_modern(default_group="hbi")) == "business"
+        assert dlp_utils.policy_default_group(
+            ppa.dlp_policy_modern(default_group="blocked")) == "blocked"
+
+    def test_legacy_policy_has_no_default_group(self):
+        # Legacy connectorGroups shape reports no default → None (unchanged).
+        assert dlp_utils.policy_default_group(
+            ppa.dlp_policy(business=[_DATAVERSE])) is None
+
+
+class TestInfra006Schema:
+    """INFRA-006 row schema + owning role guard (mirrors PRE-004/005)."""
+
+    @pytest.mark.parametrize("policies, refs, expected_status", [
+        ([ppa.dlp_policy(business=[_DATAVERSE])], (_DATAVERSE,), Status.PASSED.value),
+        ([ppa.dlp_policy(blocked=[_DATAVERSE])], (_DATAVERSE,), Status.FAILED.value),
+        ([ppa.dlp_policy(business=[_DATAVERSE])], (_WORKDAY,), Status.WARNING.value),
+    ])
+    def test_row_schema_and_owning_role(self, monkeypatch, policies, refs, expected_status):
+        _patch_refs(monkeypatch, *refs)
+
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        assert result.checkpoint_id == "INFRA-006"
+        assert result.category == "Infrastructure"
+        assert result.priority == "Critical"
+        assert result.roles == ["Power Platform Admin"]
+        assert result.doc_link  # doc link always set
+        assert result.status == expected_status
+        # Remediation present iff the check is not a clean PASS.
+        if expected_status == Status.PASSED.value:
+            assert result.remediation == ""
+        else:
+            assert result.remediation
+
+    def test_read_only_idempotent(self, monkeypatch):
+        # Running twice against the same inputs yields identical verdicts (AC8).
+        _patch_refs(monkeypatch, _DATAVERSE, _WORKDAY)
+        policies = [ppa.dlp_policy(business=[_DATAVERSE, _WORKDAY])]
+
+        first = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+        second = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        assert first.status == second.status == Status.PASSED.value
+        assert first.result == second.result
+
+
+class TestInfra006Resilience:
+    """INFRA-006 boundary/robustness behavior (reviewer findings M1, M2, I1, I2, I3)."""
+
+    def test_malformed_policies_shape_warns_not_crashes(self, monkeypatch):
+        # M1: client contract drift — a truthy dict without "_error". Must NOT
+        # iterate dict keys and crash; degrade to WARN.
+        _patch_refs(monkeypatch, _DATAVERSE)
+        runner = _dlp_runner({"value": [{"properties": {}}]})
+
+        result = _infra_006(check_dlp_connector_classification(runner))
+
+        assert result.status == Status.WARNING.value
+        assert "unexpected response shape" in result.result.lower()
+
+    def test_list_with_non_dict_element_does_not_crash(self, monkeypatch):
+        # M1 (inner): a list containing a stray non-dict entry must be tolerated
+        # without raising. The junk entry parses as a policy with no groups, so
+        # the connector reads indeterminate there → safe WARN, never a crash.
+        _patch_refs(monkeypatch, _DATAVERSE)
+        policies = ["garbage", ppa.dlp_policy(business=[_DATAVERSE])]
+
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        assert result.status == Status.WARNING.value
+
+    def test_evaluate_helper_rejects_empty_inputs(self):
+        # M2: the public helper must not return a false PASS for empty inputs.
+        policies = [ppa.dlp_policy(business=[_DATAVERSE])]
+        with pytest.raises(ValueError):
+            dlp_utils.evaluate_connector_classification({_DATAVERSE}, [])
+        with pytest.raises(ValueError):
+            dlp_utils.evaluate_connector_classification(set(), policies)
+
+    def test_inactive_reference_is_excluded(self, monkeypatch):
+        # I2: a disabled (statuscode=2) reference to a Blocked connector must
+        # NOT drive a FAIL — it is not a runtime dependency. Only the active
+        # Dataverse ref counts → PASS.
+        monkeypatch.setattr(dlp_utils, "query_all", lambda *a, **kw: [
+            {"connectionreferenceid": "r1",
+             "connectorid": f"/providers/Microsoft.PowerApps/apis/{_DATAVERSE}",
+             "statuscode": 1},
+            {"connectionreferenceid": "r2",
+             "connectorid": f"/providers/Microsoft.PowerApps/apis/{_WORKDAY}",
+             "statuscode": 2},
+        ])
+        policies = [ppa.dlp_policy(business=[_DATAVERSE], blocked=[_WORKDAY])]
+
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        assert result.status == Status.PASSED.value
+
+    def test_blocked_custom_connector_id_mismatch_degrades_to_warn(self, monkeypatch):
+        # I1: a custom connector whose Dataverse id carries an env/GUID suffix
+        # will not match the policy's certified-style id, so a genuinely
+        # Blocked custom connector currently surfaces as WARN (indeterminate),
+        # not FAIL. This test LOCKS that documented limitation.
+        monkeypatch.setattr(dlp_utils, "query_all", lambda *a, **kw: [
+            {"connectionreferenceid": "r1",
+             "connectorid": "/providers/Microsoft.PowerApps/apis/shared_custom-abc123env",
+             "statuscode": 1},
+        ])
+        policies = [ppa.dlp_policy(blocked=["shared_custom"])]
+
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        assert result.status == Status.WARNING.value
+
+    def test_cross_group_names_offending_policy(self, monkeypatch):
+        # I3: the WARN message must name the specific policy that splits the
+        # connectors, not a union across all effective policies.
+        _patch_refs(monkeypatch, _DATAVERSE, _HTTP_AAD)
+        policies = [
+            ppa.dlp_policy(display_name="Split Policy",
+                           business=[_DATAVERSE], non_business=[_HTTP_AAD]),
+        ]
+
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        assert result.status == Status.WARNING.value
+        assert "Split Policy" in result.result
+        assert "Business" in result.result and "Non-Business" in result.result
+
+    def test_consistent_disagreeing_policies_pass_with_deterministic_label(self, monkeypatch):
+        # I3 (PASS half): two policies that classify the same connectors into
+        # different but internally-consistent groups are combinable in both →
+        # PASS, and the label is deterministic (last policy wins = Non-Business).
+        _patch_refs(monkeypatch, _DATAVERSE, _WORKDAY)
+        policies = [
+            ppa.dlp_policy(display_name="A", business=[_DATAVERSE, _WORKDAY]),
+            ppa.dlp_policy(display_name="B", non_business=[_DATAVERSE, _WORKDAY]),
+        ]
+
+        result = _infra_006(check_dlp_connector_classification(_dlp_runner(policies)))
+
+        assert result.status == Status.PASSED.value
+        assert "Non-Business" in result.result

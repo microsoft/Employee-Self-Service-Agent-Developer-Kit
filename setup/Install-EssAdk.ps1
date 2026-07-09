@@ -57,7 +57,7 @@
     Skip installing the bundled "ESS Maker Profile" VS Code extension. The
     profile hides developer chrome (file tree, tabs, status bar, etc.) and
     drops the user into a chat-first surface tailored to the HR/IT admin
-    persona. Use this switch to keep the stock VS Code layout — typically
+    persona. Use this switch to keep the stock VS Code layout - typically
     only relevant for developers iterating on the kit itself.
 
 .EXAMPLE
@@ -183,11 +183,11 @@ function Test-IsWindowsArm64 {
 # appear (one per tenant/realm); dedupe.
 #
 # Output contract: pipeline-emits zero or more username strings. Callers
-# MUST wrap the result with `@( ... )` to get a proper array — bare
+# MUST wrap the result with `@( ... )` to get a proper array - bare
 # assignment of a single-element pipeline output collapses to a string in
 # PowerShell (and `.Count` on that string then throws under
 # `Set-StrictMode -Version Latest`, which some users have in their
-# profile). Returns nothing on any parse failure — callers treat that as
+# profile). Returns nothing on any parse failure - callers treat that as
 # "unknown user" and fall back to a generic prompt.
 function Get-CachedUsernames {
     param([Parameter(Mandatory)] [string] $CachePath)
@@ -212,7 +212,7 @@ function Get-CachedUsernames {
 }
 
 # Helper: install pip requirements with ARM64-aware guardrails.
-#   - Upgrades pip first (failures are warnings, not fatal — older pip can still install).
+#   - Upgrades pip first (failures are warnings, not fatal - older pip can still install).
 #   - Uses --prefer-binary so resolution favors wheels over sdists when possible.
 #   - On Windows ARM64, adds --only-binary cryptography. cryptography source
 #     builds need Rust + the MSVC linker (link.exe), which most ARM64 dev
@@ -587,7 +587,7 @@ if (-not $SkipClone) {
             # Self-heal --single-branch clones from earlier installer versions.
             # Without this, `git fetch origin` only refreshes the originally-
             # cloned branch and `git checkout $Branch` fails for any other
-            # branch — pinning users to whatever branch they first installed
+            # branch - pinning users to whatever branch they first installed
             # from. Idempotent: no-op if the refspec is already broad.
             $null = Invoke-Native { & git remote set-branches origin '*' }
 
@@ -664,7 +664,7 @@ if ($deferPip) {
 # ---------------------------------------------------------------------------
 # The bundled extension at tools/ess-maker-profile/extension/ hides developer
 # chrome and surfaces a big-button "Quick actions" rail tied to the kit's
-# slash commands. We install it from the cloned repo (not the marketplace —
+# slash commands. We install it from the cloned repo (not the marketplace -
 # this is a POC build that isn't published) so it auto-activates the next
 # time `code` launches. When the maker profile is installed, the extension
 # itself opens chat and injects /setup (section 7 just opens the workspace).
@@ -716,7 +716,7 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions) {
             }
 
             if ($vsix_exit -eq 0) {
-                Write-Ok "ESS Maker Profile installed ($($vsix.Name)) — $modeLabel mode"
+                Write-Ok "ESS Maker Profile installed ($($vsix.Name)) - $modeLabel mode"
             } else {
                 Write-Warn2 "ess-maker-profile vsix install returned exit $vsix_exit (non-fatal)"
                 ($out | Out-String).TrimEnd() -split "`r?`n" | ForEach-Object { Write-Warn2 "  $_" }
@@ -739,7 +739,7 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions) {
                 # Insert after opening brace
                 $raw = $raw -replace '^\s*\{', "{ $modeEntry,"
             } else {
-                # Malformed — create fresh
+                # Malformed - create fresh
                 $raw = "{ $modeEntry }"
             }
             Set-Content -Path $settingsFile -Value $raw -Encoding UTF8 -NoNewline
@@ -765,7 +765,7 @@ if ($FlightCheckOnly) {
     $localDir = Join-Path $workspace '.local'
     $configPath = Join-Path $localDir 'config.json'
 
-    # Resolve python command early — needed for both discovery and fetch
+    # Resolve python command early - needed for both discovery and fetch
     $pythonExe = Resolve-Python
     if (-not $pythonExe) {
         throw 'Python not found on PATH or known locations. Cannot run FlightCheck.'
@@ -798,13 +798,13 @@ if ($FlightCheckOnly) {
     # prompt covers every code path that hits the MSAL cache.
     # All FlightCheck clients share .local/.token_cache.bin. The cached
     # tokens silently sign the next run in as whichever user authenticated
-    # last — desirable most of the time, but bites users who installed
+    # last - desirable most of the time, but bites users who installed
     # under one account and now need to FlightCheck a different tenant /
     # different user (e.g. customer-engineer scenarios). Offer an explicit
     # switch rather than making them hunt for the cache file.
     $tokenCacheFile = Join-Path $localDir '.token_cache.bin'
     if (Test-Path $tokenCacheFile) {
-        # Force array context with @(...) — Get-CachedUsernames returns a
+        # Force array context with @(...) - Get-CachedUsernames returns a
         # [string[]] guarded by the unary comma operator, but belt-and-
         # suspenders here in case the function output ever changes.
         $cachedUsers = @(Get-CachedUsernames -CachePath $tokenCacheFile)
@@ -1025,7 +1025,7 @@ if ($FlightCheckOnly) {
         }
     } else {
         Write-Host ''
-        Write-Host '    [info] No agent selected — skipping solution fetch (local file checks will be skipped).' -ForegroundColor Gray
+        Write-Host '    [info] No agent selected - skipping solution fetch (local file checks will be skipped).' -ForegroundColor Gray
     }
 
     # --- Run FlightCheck ---
@@ -1039,11 +1039,11 @@ if ($FlightCheckOnly) {
             $prevEAP = $ErrorActionPreference
             $ErrorActionPreference = 'Continue'
             if ($pythonExe -eq 'py -3.12') {
-                & py -3.12 scripts/flightcheck/cli.py --scope full
+                & py -3.12 scripts/flightcheck/cli.py --scope full --invocation-source installer
             } elseif ($pythonExe -eq 'py -3') {
-                & py -3 scripts/flightcheck/cli.py --scope full
+                & py -3 scripts/flightcheck/cli.py --scope full --invocation-source installer
             } else {
-                & $pythonExe scripts/flightcheck/cli.py --scope full
+                & $pythonExe scripts/flightcheck/cli.py --scope full --invocation-source installer
             }
             $ErrorActionPreference = $prevEAP
         } finally { Pop-Location }
@@ -1080,7 +1080,7 @@ if (-not $SkipLaunch) {
         Push-Location $workspace
         try {
             if ($SkipMakerProfile) {
-                # Standard mode — use code chat to open /setup in sidebar panel
+                # Standard mode - use code chat to open /setup in sidebar panel
                 Write-Step 'Opening workspace in VS Code and requesting /setup in Copilot Chat'
                 $chatOutput = Invoke-Native { & $codePath chat '/setup' }
                 $chatExit = $LASTEXITCODE
@@ -1097,7 +1097,7 @@ if (-not $SkipLaunch) {
                     Write-Host "If /setup does not start after trust/sign-in, open Copilot Chat manually and run /setup." -ForegroundColor Yellow
                 }
             } else {
-                # Lite mode — extension handles /setup after welcome wizard
+                # Lite mode - extension handles /setup after welcome wizard
                 Write-Step 'Opening workspace in VS Code'
                 Start-Process -FilePath $codePath -ArgumentList @('.') | Out-Null
                 Write-Ok "Launched VS Code at $workspace"

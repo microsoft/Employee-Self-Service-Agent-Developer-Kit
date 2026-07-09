@@ -221,3 +221,95 @@ class TestDeriveEnvironmentIdFallbackBehavior:
             pp_admin=StubAdmin(),
         )
         assert result == "ecf4737d-bef7-e58a-aa5e-e71a60780efc"
+
+
+class TestGetDlpPoliciesForEnv:
+    """Pins environment-scoping of get_dlp_policies_for_env across both
+    DLP policy schemas.
+
+    Bug being fixed: the filter historically read env scope ONLY from the
+    legacy ``properties.environmentFilter.environments``. Modern-schema
+    policies store scope under ``properties.definition.constraints``
+    (``EnvironmentFilter``) and leave ``environmentFilter`` empty, so a
+    modern policy scoped to a DIFFERENT environment resolved to an empty
+    env list and was wrongly treated as tenant-wide — corrupting the
+    INFRA-006 verdict (false FAIL/WARN) for that environment.
+    """
+
+    _THIS_ENV = pp.MOCK_ENV_ID
+    _OTHER_ENV = "Default-99999999-9999-9999-9999-999999999999"
+
+    def _client(self, policies):
+        from flightcheck.pp_admin_client import PPAdminClient
+
+        client = PPAdminClient(tenant_id="00000000-0000-0000-0000-000000001111")
+        client.get_dlp_policies = lambda: policies  # type: ignore[method-assign]
+        return client
+
+    def test_unscoped_policy_applies_to_all_envs(self):
+        client = self._client([pp.dlp_policy_modern(business=["shared_x"])])
+        result = client.get_dlp_policies_for_env(self._THIS_ENV)
+        assert len(result) == 1
+
+    def test_legacy_include_scopes_by_env(self):
+        client = self._client([
+            pp.dlp_policy(display_name="here", environments=[self._THIS_ENV]),
+            pp.dlp_policy(display_name="elsewhere", environments=[self._OTHER_ENV]),
+        ])
+        result = client.get_dlp_policies_for_env(self._THIS_ENV)
+        names = [p["properties"]["displayName"] for p in result]
+        assert names == ["here"]
+
+    def test_modern_scoped_to_this_env_is_included(self):
+        client = self._client([
+            pp.dlp_policy_modern(display_name="here", environments=[self._THIS_ENV]),
+        ])
+        result = client.get_dlp_policies_for_env(self._THIS_ENV)
+        assert len(result) == 1
+
+    def test_modern_scoped_to_other_env_is_excluded(self):
+        # The core regression: a modern policy governing a DIFFERENT env
+        # must NOT be returned as effective on this env.
+        client = self._client([
+            pp.dlp_policy_modern(display_name="elsewhere", environments=[self._OTHER_ENV]),
+        ])
+        result = client.get_dlp_policies_for_env(self._THIS_ENV)
+        assert result == []
+
+    def test_permission_error_passthrough(self):
+        client = self._client({"_error": "insufficient_permissions", "_status": 403})
+        result = client.get_dlp_policies_for_env(self._THIS_ENV)
+        assert isinstance(result, dict)
+        assert result["_error"] == "insufficient_permissions"
+
+
+class TestPolicyEnvScopeParsing:
+    """Direct coverage for the schema-aware env-scope extractor."""
+
+    def test_modern_constraints_scope_and_default_include(self):
+        from flightcheck.pp_admin_client import _policy_applies_to_env
+
+        policy = pp.dlp_policy_modern(environments=["env-a"])
+        assert _policy_applies_to_env(policy, "env-a") is True
+        assert _policy_applies_to_env(policy, "env-b") is False
+
+    def test_exclude_filter_applies_to_all_but_listed(self):
+        from flightcheck.pp_admin_client import _policy_env_scope, _policy_applies_to_env
+
+        policy = pp.dlp_policy_modern(environments=["env-a"])
+        # Flip the modern constraint to an exclude filter.
+        params = (
+            policy["properties"]["definition"]["constraints"]
+            ["environmentFilter1"]["parameters"]
+        )
+        params["filterType"] = "exclude"
+
+        ft, ids = _policy_env_scope(policy)
+        assert ft == "exclude" and ids == ["env-a"]
+        assert _policy_applies_to_env(policy, "env-a") is False
+        assert _policy_applies_to_env(policy, "env-b") is True
+
+    def test_unscoped_policy_has_no_filter(self):
+        from flightcheck.pp_admin_client import _policy_env_scope
+
+        assert _policy_env_scope(pp.dlp_policy_modern()) == (None, [])
