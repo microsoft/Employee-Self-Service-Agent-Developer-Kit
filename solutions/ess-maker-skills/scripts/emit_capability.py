@@ -77,9 +77,12 @@ def main(argv: list[str]) -> int:
     try:
         # block=True: short-lived CLI process — emit synchronously so the
         # event isn't dropped when the interpreter exits and kills a daemon
-        # thread. emit_capability_use() no-ops when telemetry is disabled.
+        # thread. This posts on the calling thread and flushes the on-disk
+        # buffer, so no explicit flush() is needed (flush() only joins async
+        # emit threads, of which block=True creates none). Matches the other
+        # inline hooks (backup/restore_template_configs.py, fetch_and_setup.py).
+        # emit_capability_use() no-ops when telemetry is disabled.
         adk_telemetry.emit_capability_use(capability, block=True)
-        adk_telemetry.flush(timeout=3)
     except Exception:  # noqa: BLE001 — telemetry must never break a skill
         pass
 

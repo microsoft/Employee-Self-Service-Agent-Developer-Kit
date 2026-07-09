@@ -64,6 +64,7 @@ import os
 import platform
 import uuid
 from datetime import datetime, timezone
+from functools import lru_cache
 from typing import Any
 
 import requests
@@ -118,9 +119,21 @@ TENANT_CLASS_UNKNOWN = "unknown"
 
 
 def _internal_tenant_ids() -> frozenset[str]:
-    """Allow-list of tenant GUIDs treated as internal Microsoft tenancy."""
+    """Allow-list of tenant GUIDs treated as internal Microsoft tenancy.
+
+    The env var is still consulted on every call (a cheap dict lookup), so a
+    changed ``ESS_ADK_INTERNAL_TENANTS`` is honored without a restart, but the
+    frozenset build is cached on the raw env-var string so hot paths
+    (``common_dimensions``, per-check events, synthetic seeding) don't rebuild
+    it every call.
+    """
+    return _parse_internal_tenant_ids(os.environ.get("ESS_ADK_INTERNAL_TENANTS", ""))
+
+
+@lru_cache(maxsize=8)
+def _parse_internal_tenant_ids(extra: str) -> frozenset[str]:
+    """Parse the comma-separated allow-list, cached per distinct env value."""
     ids = {MICROSOFT_CORP_TENANT_ID}
-    extra = os.environ.get("ESS_ADK_INTERNAL_TENANTS", "")
     ids.update(t.strip().lower() for t in extra.split(",") if t.strip())
     return frozenset(ids)
 
