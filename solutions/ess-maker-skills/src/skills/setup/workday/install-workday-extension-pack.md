@@ -96,9 +96,9 @@ If `GATE_RESULT` is `"stop"`, **halt** — do not continue. Otherwise carry
 
 ## P5.1 — Install the extension pack & verify it landed (WD-PKG-001) *(completes S5.1)*
 
-Installing the Workday extension pack is a portal / AppSource action — it cannot be
-automated. First check whether it is already installed (resumes and idempotent
-re-runs must not ask the user to reinstall):
+Installing the Workday extension pack is a Copilot Studio **Settings → Customize**
+action — it cannot be automated. First check whether it is already installed
+(resumes and idempotent re-runs must not ask the user to reinstall):
 
 **Message:**
 
@@ -113,15 +113,44 @@ python scripts/flightcheck/cli.py --checkpoint WD-PKG-001
 
 - **`PASSED`** (the pack's Workday connection references are present) → the pack is
   installed; go to **record S5.1** below.
-- **`NotConfigured`** / **`FAILED`** → show the install instructions:
+- **`NotConfigured`** / **`FAILED`** → the pack isn't installed yet. First surface
+  the connection values the user will paste into the extension pack's connection
+  form, then show the install steps.
+
+  Read the captured values from `.local/connect/workday/config.json` (persisted by
+  skill-4): `appIdUri`, `tokenEndpoint`, `oauthClientId`, `soapBaseUrl`, and
+  `restBaseUrl`. Present them with their Copilot Studio form labels — never the
+  internal field names. If any is blank, it was not captured: go back to skill-4
+  (the Workday tenant configuration, P4.3) to capture it before installing.
 
   **Message:**
 
-  Let's install the Workday extension pack into your Employee Self Service agent.
-  In Copilot Studio, open your agent, go to **Add-ins** (or AppSource), find the
-  **Workday** extension, and install it into this environment. The install runs as
-  a solution import — wait until it finishes, then tell me it's done and I'll
-  verify it.
+  Before we install, here are the Workday connection values you'll need during
+  setup. Keep them handy — you'll paste them into the connection form when the
+  installer prompts you:
+
+  - **Microsoft Entra resource URL (Application ID URI):** {appIdUri}
+  - **Workday OAuth token URL (Token Endpoint):** {tokenEndpoint}
+  - **Client ID:** {oauthClientId}
+  - **SOAP base URL:** {soapBaseUrl}
+  - **REST base URL:** {restBaseUrl}
+
+  **End message.**
+
+  **Message:**
+
+  Now let's install the Workday extension pack into your Employee Self-Service
+  agent:
+
+  1. In Copilot Studio, open your agent.
+  2. Go to **Settings**, then select **Customize** in the left navigation.
+  3. Find **Workday** in the list and choose **Install**.
+  4. When the installer prompts you to set up connections, create each one by
+     selecting the ellipses (**...**) on its right and signing in — use the
+     connection values above where the form asks for them.
+
+  The install runs as a solution import — wait until it finishes, then tell me it's
+  done and I'll verify it.
 
   **End message.**
 
@@ -481,6 +510,6 @@ control to the setup router (`SKILL.md`) to resume at the next unverified row.
 Your Workday extension pack is installed and wired — the connections are bound and
 authenticated, the REST endpoint and cloud flows are verified, the user-context
 redirect is in place, and the network allowlisting is recorded. Next up is creating
-your first Workday topic.
+your first custom Workday topic.
 
 **End message.**

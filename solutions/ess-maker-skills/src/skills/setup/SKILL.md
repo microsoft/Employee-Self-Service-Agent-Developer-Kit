@@ -14,6 +14,30 @@ those require explicit user acknowledgement (enforced by
 
 ---
 
+## Handling Workday credentials — never put secrets in chat
+
+The Workday **password is a secret**. **Never** ask for it with a chat question
+(`vscode_askQuestions`, or a plain "paste your Workday password" message) — the
+chat question tool has no masked-input option, so anything typed is recorded
+verbatim in the transcript.
+
+When a Workday secret is genuinely required (only the FlightCheck Workday SOAP
+workflow tests need one), it is collected **exclusively** through a masked
+input that keeps the value out of chat history:
+
+- the `.vscode/mcp.json` `workdayPass` input — a `promptString` with
+  `"password": true`, which VS Code masks and substitutes directly into the
+  check environment, or
+- the FlightCheck CLI's own `getpass` prompt when you run
+  `python scripts/flightcheck/cli.py --scope workday` in the terminal.
+
+Non-secret connection identifiers (tenant, SOAP/REST/token URLs, OAuth client
+ID, App ID URI) are safe to capture in chat — see
+[`shared/connection-fields.md`](./shared/connection-fields.md). The Workday
+**username** is likewise not masked (`"password": false`); only the password is.
+
+---
+
 ## Start
 
 1. **Working copy.** If `.local/setup/workday/tasks.md` does not exist, render it by
@@ -68,7 +92,7 @@ those require explicit user acknowledgement (enforced by
    - {m} Wire up the employee-context lookup
    - {m} Allow Workday through your firewall
 
-   **6. Your first Workday topic**
+   **6. Your first custom Workday topic**
    - {m} Give your new topic its trigger phrases
    - {m} Wire your new topic to Workday
 

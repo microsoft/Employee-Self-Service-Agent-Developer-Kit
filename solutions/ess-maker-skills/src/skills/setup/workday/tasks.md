@@ -106,7 +106,7 @@ express; all items start `pending`.
 - [ ] **Allow Workday through your firewall** — Add the Workday REST and SOAP endpoints to your network allowlist so traffic can get through.
   <!-- id: S5.8 | role: InfoSec/IT | skill: skill-5 | automatable: No | checkpoints: WD-NET-001 | gate: attest | status: pending -->
 
-### 6. Your first Workday topic
+### 6. Your first custom Workday topic
 
 - [ ] **Give your new topic its trigger phrases** — Define the new topic and the phrases employees will use to start it.
   <!-- id: S6.1 | role: Environment Maker (+ Workday SME) | skill: skill-6 | automatable: Yes | checkpoints: TOPIC-TRIGGER-* | gate: prog | status: pending -->
