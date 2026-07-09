@@ -25,7 +25,7 @@ the caller supplies.
 import json
 import os
 
-from ..runner import CheckResult, Priority, Role, Status
+from ..runner import CheckResult, Role, Status
 
 # Entra gallery applicationTemplate displayName prefix we use to
 # resolve the immutable templateId(s) for the Workday SSO gallery
