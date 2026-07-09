@@ -42,11 +42,11 @@ terminating the dialog stack so code after it never runs. Apply confirmed rules 
 rules with caution and say so. If the docs are absent, score structurally and note that runtime calibration
 was unavailable.
 
-**When a heuristic caps a finding to unreachable and you drop it, leave a breadcrumb.** If a runtime
-heuristic reclassifies a would-be finding to `NOT_REACHABLE_VIA_BOT_UI` and you decide it is an intentional,
-centrally-handled design (so you surface **no** finding — e.g. an ungated `ParseValue` in a topic that
-delegates to a shared `*System*` orchestrator), record it in the catalog's `suppressions` array rather than
-letting it vanish. Each entry is a lightweight stub — `{ "id", "site", "suppressed_by": "<heuristic-id>" }`
+**When a heuristic caps a finding to unreachable and you drop it, you MUST leave a breadcrumb.** If a runtime
+heuristic reclassifies a would-be finding to `NOT_REACHABLE_VIA_BOT_UI` and you therefore surface **no**
+finding because it is intentional, centrally-handled design (e.g. an ungated `ParseValue` in a topic that
+delegates to a shared `*System*` orchestrator), you **must** record it in the catalog's `suppressions` array
+— never let it silently vanish. Each entry is a lightweight stub — `{ "id", "site", "suppressed_by": "<heuristic-id>" }`
 (the script fills `date`) — **not** a finding: no severity / root_cause / concrete_fix (there is nothing to
 fix), no evidence hash, no cross-run merge. It is written per run (overwritten each time the lens
 re-evaluates), kept out of `issues`, and **never shown to the maker**. Its sole purpose is auditability: it
