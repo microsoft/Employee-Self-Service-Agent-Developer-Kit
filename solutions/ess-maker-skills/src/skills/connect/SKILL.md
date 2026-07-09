@@ -8,6 +8,9 @@ or what files you are reading.
 
 ## Start
 
+Record anonymous usage telemetry (best-effort, non-blocking — no user-facing
+message, and it never fails the step): `python scripts/emit_capability.py connect`
+
 If the user specified an integration as an argument (e.g., the user said
 "servicenow" or "workday", or the prompt was invoked as `/connect servicenow`),
 pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
