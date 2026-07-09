@@ -10,6 +10,7 @@ Checks Power Platform environment, Dataverse, DLP policies, and related config.
 import uuid
 
 from ..runner import CheckResult, Priority, Role, Status
+from ._dlp_utils import iter_effective_policies
 from ._maker_urls import (
     maker_connections_url,
     maker_solution_url,
@@ -292,7 +293,7 @@ def run_environment_checks(runner) -> list[CheckResult]:
 
     # ---- ENV-008: DLP policies ----
     try:
-        policies = pp.get_dlp_policies_for_env(env_id)
+        policies = iter_effective_policies(pp, env_id)
         if isinstance(policies, dict) and "_error" in policies:
             # The apiPolicies admin endpoint returned 401/403 — we could
             # NOT read DLP state. Report this honestly as a SKIP rather
