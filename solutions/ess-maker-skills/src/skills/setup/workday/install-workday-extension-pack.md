@@ -79,7 +79,7 @@ extension-pack work, with:
   ```
 
   ```
-  az rest --method GET --resource "{ENV_URL}" --url "{ENV_URL}/api/data/v9.2/systemusers({USER_ID})/systemuserroles_association?$select=name" --query "value[].name" -o json
+  az rest --method GET --resource "{ENV_URL}" --url "{ENV_URL}/api/data/v9.2/systemusers({USER_ID})/systemuserroles_association?%24select=name" --query "value[].name" -o json
   ```
 
   The role is held if the returned role names include **`Environment Maker`**, or
@@ -99,6 +99,13 @@ If `GATE_RESULT` is `"stop"`, **halt** — do not continue. Otherwise carry
 Installing the Workday extension pack is a portal / AppSource action — it cannot be
 automated. First check whether it is already installed (resumes and idempotent
 re-runs must not ask the user to reinstall):
+
+**Message:**
+
+First, let me check whether the Workday extension pack is already installed in
+your agent.
+
+**End message.**
 
 ```
 python scripts/flightcheck/cli.py --checkpoint WD-PKG-001
@@ -141,6 +148,12 @@ confirmation. Persist the P5.0 `GATE_EVIDENCE`. Then continue to P5.2.
 
 ## P5.2 — Verify the Workday connection reference is bound (WD-CONN-012) *(completes S5.2)*
 
+**Message:**
+
+Now I'll check the Workday connection is bound to an active, signed-in connection.
+
+**End message.**
+
 ```
 python scripts/flightcheck/cli.py --checkpoint WD-CONN-012
 ```
@@ -168,6 +181,13 @@ connection.
 ---
 
 ## P5.3 — Confirm the Workday connection authentication type (WD-CONN-AUTH-001) *(completes S5.3)*
+
+**Message:**
+
+Now I'll read how the Workday connection signs in so you can confirm it uses
+Microsoft Entra ID.
+
+**End message.**
 
 ```
 python scripts/flightcheck/cli.py --checkpoint WD-CONN-AUTH-001
@@ -216,6 +236,13 @@ Use the `vscode_askQuestions` tool:
 
 ## P5.4 — Verify the Dataverse connection reference (DV-CONN-001) *(completes S5.4)*
 
+**Message:**
+
+Now I'll check the Dataverse connection is bound to an active connection owned by
+your account.
+
+**End message.**
+
 ```
 python scripts/flightcheck/cli.py --checkpoint DV-CONN-001
 ```
@@ -247,6 +274,12 @@ confirm it is your own account.
 
 ## P5.5 — Verify the REST base URL (WD-REST-001) *(completes S5.5)*
 
+**Message:**
+
+Now I'll confirm the Workday REST address is captured and trimmed correctly.
+
+**End message.**
+
 ```
 python scripts/flightcheck/cli.py --checkpoint WD-REST-001
 ```
@@ -268,6 +301,12 @@ version segment breaks the simplified pack's REST `/workers/me` call.
 ---
 
 ## P5.6 — Verify the Workday cloud flows are on (WD-FLOW-*) *(completes S5.6)*
+
+**Message:**
+
+Now I'll confirm the Workday cloud flows are all turned on.
+
+**End message.**
 
 ```
 python scripts/flightcheck/cli.py --checkpoint WD-FLOW-*
@@ -303,6 +342,12 @@ yet." On the simplified pack this is the REST V2 topic
 and `WD-REST-002` reports `Skipped`.
 
 First check the current state:
+
+**Message:**
+
+Now I'll check whether the user-context redirect is already wired into your agent.
+
+**End message.**
 
 ```
 python scripts/flightcheck/cli.py --checkpoint WD-REST-002
@@ -374,6 +419,13 @@ fails, roll back with the checkpoint you saved and re-attempt; leave S5.7
 ---
 
 ## P5.8 — Record the firewall allowlisting (WD-NET-001) *(completes S5.8)*
+
+**Message:**
+
+Now I'll list the Workday endpoints your firewall needs to allow — this is a
+record-keeping step, not a live test.
+
+**End message.**
 
 ```
 python scripts/flightcheck/cli.py --checkpoint WD-NET-001

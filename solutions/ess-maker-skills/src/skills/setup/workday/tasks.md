@@ -57,7 +57,7 @@ express; all items start `pending`.
 ### 2. Employee Self-Service base agent
 
 - [ ] **Install the Employee Self-Service agent** — Add the Microsoft Employee Self-Service base agent to your environment from AppSource.
-  <!-- id: S2.1 | role: Environment Maker | skill: skill-2 | automatable: No | checkpoints: ESS-SOLN-001 | gate: manual | status: pending -->
+  <!-- id: S2.1 | role: Environment Maker | skill: skill-2 | automatable: No | checkpoints: ESS-SOLN-001 | gate: prog | status: pending -->
 
 ### 3. Workday single sign-on (Entra)
 

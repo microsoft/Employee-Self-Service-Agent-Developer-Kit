@@ -46,7 +46,7 @@ The API client is registered **before** the authentication policy because the
 policy must be scoped to the OAuth client identity, which only exists once the
 client is registered. Each section states which checklist row(s) it completes.
 
-**On every resume, always re-run P4.0 (role gate) and P4.0b (single-tenant SAML
+**On every resume, always re-run P4.0 (Workday-admin gate) and P4.0b (single-tenant SAML
 pre-gate) first — both are idempotent/read-only — before working the first
 incomplete row.** The SAML pre-gate is a safety check that must run before any
 tenant change; skipping it on resume risks silently overwriting an active
@@ -55,19 +55,69 @@ state is already `done`.
 
 ---
 
-## P4.0 — Role gate (Workday Administrator)
+## P4.0 — Workday administrator gate
 
-Apply the shared [`permission-gate.md`](../shared/permission-gate.md) before any
-Workday work, with:
+Every task in this skill is a **manual Workday-tenant change** — the SAML signing
+certificate, Tenant Setup – Security, the Workday API client, and the
+authentication policy. None is reachable through a Microsoft admin API, and the
+person running this kit (the maker) is often **not** a Workday administrator. So
+these steps must be performed **together with a Workday administrator**. Before
+making any tenant change, confirm one is lined up.
 
-- `REQUIRED_ROLE` = `"Workday Administrator"`
-- `GATE_MODE` = `"attested"` — Workday has **no directory the kit can query**, so
-  this is an explicit named-role attestation (per the mode table in
-  `permission-gate.md`), not a programmatic check.
-- `STEP_ID` = `"S4.1"`
+This is the attested gate for **S4.1** (`GATE_MODE = "attested"`, `STEP_ID =
+"S4.1"`, per [`permission-gate.md`](../shared/permission-gate.md)) — Workday has
+**no directory the kit can query**, so it is an explicit confirmation, not a
+programmatic check.
 
-If `GATE_RESULT` is `"stop"`, **halt** — do not continue. Otherwise carry
-`GATE_EVIDENCE` forward (recorded when the S4 rows are updated).
+**Message:**
+
+The next steps change your Workday tenant directly — the SAML signing
+certificate, Tenant Setup – Security, the Workday API client, and the
+authentication policy. These are Workday-administrator tasks, so they should be
+done **together with a Workday administrator** (if that isn't you). Before we
+start, please confirm you have a Workday administrator ready to work through these
+steps with you.
+
+**End message.**
+
+Use the `vscode_askQuestions` tool:
+
+```json
+[
+  {
+    "header": "Workday administrator",
+    "question": "Have you provisioned a Workday administrator to perform these manual Workday configuration steps with you?",
+    "options": [
+      { "label": "Yes, I have", "recommended": true },
+      { "label": "No, I have not" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+**If the user chose "Yes, I have":**
+- Set `GATE_RESULT = "pass"` and
+  `GATE_EVIDENCE = { "verifiedBy": "attested", "note": "user confirmed a Workday administrator is available to perform S4.1–S4.4 with them" }`.
+- Carry `GATE_EVIDENCE` forward (recorded when the S4 rows are updated), and
+  continue to P4.0b.
+
+**If the user chose "No, I have not":**
+
+**Message:**
+
+No problem — these steps have to be done with a Workday administrator. Line one up
+(or ask whoever holds that role to join you), then come back and run this skill
+again.
+
+**End message.**
+
+- Set `GATE_RESULT = "stop"` and **halt** — do not continue.
+
+> An attested `"pass"` records that a Workday administrator was **confirmed
+> available**, not directory-proven. It satisfies the *gate*, but it does **not**
+> by itself complete any S4 row — each row still needs its own captured evidence
+> and acknowledgement per [`checklist-updater.md`](../shared/checklist-updater.md).
 
 ---
 
@@ -129,6 +179,13 @@ Workday, run the **Create x509 Public Key** task and paste that certificate. Typ
 
 Wait for the user, then verify the thumbprint parity against the certificate
 skill-3 activated in Entra.
+
+**Message:**
+
+Now I'll compare the certificate you uploaded in Workday against the one activated
+in Entra to make sure they match.
+
+**End message.**
 
 **Verify (WD-CONN-102):**
 
@@ -230,6 +287,12 @@ passing whatever is already known from
 back to `.local/connect/workday/config.json` (round-trip merge — never drop
 fields owned by other steps).
 
+**Message:**
+
+Now I'll confirm the Workday API client you registered was captured correctly.
+
+**End message.**
+
 **Verify (WD-API-CLIENT-001):**
 
 ```
@@ -267,6 +330,13 @@ are activated.
 **End message.**
 
 Wait for the user, then verify the whole tenant configuration.
+
+**Message:**
+
+Now I'll confirm your Workday tenant security and authentication-policy settings
+are in place.
+
+**End message.**
 
 **Verify (WD-TENANT-001):**
 

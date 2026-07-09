@@ -54,8 +54,10 @@ Run the `ROLE_QUERY` the calling file supplied. Examples of what a caller passes
 
 - **Entra role (Graph):**
   ```
-  az rest --method GET --url "https://graph.microsoft.com/v1.0/me/memberOf?$select=displayName" --query "value[].displayName" -o json
+  az rest --method GET --url "https://graph.microsoft.com/v1.0/me/memberOf?%24select=displayName" --query "value[].displayName" -o json
   ```
+  (OData options are percent-encoded — `%24select` not `$select` — so the URL
+  survives PowerShell/bash `$`-expansion and runs first-try on every shell.)
   Pass if the result contains a directory role that grants `REQUIRED_ROLE`
   (e.g. `Application Administrator`, `Cloud Application Administrator`,
   `Global Administrator`).

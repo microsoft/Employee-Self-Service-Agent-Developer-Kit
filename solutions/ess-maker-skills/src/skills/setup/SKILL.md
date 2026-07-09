@@ -111,8 +111,8 @@ When it returns, go back to **Start** to resume at the next unverified row.
 Read `src/skills/setup/workday/install-ess.md` and follow it. That playbook
 role-gates (Environment Maker), guides the manual AppSource install of the base
 Employee Self Service agent, verifies the solution landed (`ESS-SOLN-001`), and
-updates row **S2.1** through the shared checklist-updater (manual gate — needs
-acknowledgement).
+updates row **S2.1** through the shared checklist-updater (prog gate —
+auto-completes on a passing `ESS-SOLN-001`).
 
 When it returns, go back to **Start** to resume at the next unverified row.
 

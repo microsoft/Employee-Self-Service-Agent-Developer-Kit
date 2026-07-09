@@ -188,8 +188,9 @@ _SPECS: list[CheckpointSpec] = [
     # (DATAVERSE client, already wired in cli.py's single-checkpoint path — no
     # new client init). Prereq ENV-002 (Dataverse provisioned) transitively
     # pulls ENV-001 (environment exists). Environment Maker owns the fix; the
-    # AppSource install itself is manual so the S2.1 checklist row is gated
-    # `manual` even when this check passes.
+    # AppSource install itself is a manual portal action, but this check
+    # definitively verifies the outcome, so the S2.1 checklist row auto-completes
+    # (`prog` gate) on a PASSED result.
     CheckpointSpec(
         key="ESS-SOLN-001",
         category_fn=run_solution_checks,

@@ -64,7 +64,7 @@ Entra work, with:
   signed-in user:
 
   ```
-  az rest --method GET --url "https://graph.microsoft.com/v1.0/me/memberOf?$select=displayName" --query "value[].displayName" -o json
+  az rest --method GET --url "https://graph.microsoft.com/v1.0/me/memberOf?%24select=displayName" --query "value[].displayName" -o json
   ```
 
   The role is held if the returned role names include **`Application
@@ -234,7 +234,7 @@ az ad sp list --display-name "Workday" --query "[].{name:displayName, appId:appI
   template id, then instantiate it:
 
   ```
-  az rest --method GET --url "https://graph.microsoft.com/v1.0/applicationTemplates?\$filter=displayName%20eq%20'Workday'" --query "value[0].id" -o tsv
+  az rest --method GET --url "https://graph.microsoft.com/v1.0/applicationTemplates?%24filter=displayName%20eq%20'Workday'" --query "value[0].id" -o tsv
   ```
 
   ```powershell
@@ -286,9 +286,10 @@ token and run silently.)
 
 **Message (do NOT wait for a response — continue immediately):**
 
-I'm running the first readiness check now. A browser window will open for a
-Microsoft Graph sign-in — please complete it with the same admin account, and I'll
-continue automatically once it finishes.
+I'm running the first readiness check now — it confirms the single sign-on signing
+certificate for your Workday app is present and healthy. A browser window will open
+for a Microsoft Graph sign-in — please complete it with the same admin account, and
+I'll continue automatically once it finishes.
 
 **End message.**
 
@@ -357,6 +358,13 @@ Workday connector can obtain an on-behalf-of token.
 **Persist** to `.local/connect/workday/config.json` (merge): `scopeGuid` =
 `SCOPE_GUID`, `appIdUri` = `api://{WD_ENTRA_APP_ID}`, `entraSSO` = `true`.
 
+**Message:**
+
+Now I'll verify the Workday app exposes its API permission and that the Power
+Platform Workday connector is pre-authorized to call it.
+
+**End message.**
+
 **Verify (WD-ENTRA-SCOPE-001):**
 
 ```
@@ -397,6 +405,13 @@ Administrator, or Global Administrator). Type **done** when the consent is grant
 
 Wait for the user, then verify.
 
+**Message:**
+
+Now I'll confirm that admin consent was recorded for the Workday app's
+permissions.
+
+**End message.**
+
 **Verify (WD-ENTRA-CONSENT-001):**
 
 ```
@@ -428,6 +443,13 @@ python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-CONSENT-001
 Ensure the Workday enterprise app either does not require user assignment, or has
 the ESS user security group assigned — otherwise the OBO handshake fails for end
 users at first access.
+
+**Message:**
+
+Now I'll check whether the Workday enterprise app requires user assignment and, if
+so, that the right users are assigned.
+
+**End message.**
 
 **Verify (WD-ASSIGN-001):**
 
@@ -486,6 +508,13 @@ set.
 
 Wait for the user, then verify.
 
+**Message:**
+
+Now I'll verify the single sign-on user identifier (NameID) is mapped to the value
+your Workday tenant expects.
+
+**End message.**
+
 **Verify (WD-ENTRA-NAMEID-001):**
 
 ```
@@ -513,6 +542,13 @@ This signing option has no documented Graph property, so it is a **manual portal
 gate** — a Workday service provider that validates signatures rejects the
 assertion if it is set wrong.
 
+**Message:**
+
+Next I'll cover the SAML signing option — this one has to be confirmed in the
+portal, because the kit can't read the setting directly.
+
+**End message.**
+
 **Verify (WD-ENTRA-SIGNOPT-001):** this checkpoint always returns `MANUAL` (the kit
 cannot read the setting).
 
@@ -520,15 +556,23 @@ cannot read the setting).
 python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-SIGNOPT-001
 ```
 
-Present the checkpoint's instructions, then:
+Present the checkpoint's instructions — its remediation now names the customer's
+own Entra SAML IdP identifiers (Issuer / Entity ID, SSO / Login URL, SP audience,
+and federation-metadata URL, derived from the captured `tenantId` and
+`entraAppId`) so they can match them against their Workday SP configuration. If the
+earlier certificate check (S3.1 / `WD-CONN-102`) surfaced a signing-certificate
+thumbprint, restate it here too so the customer knows exactly which certificate
+Workday must trust. Then:
 
 **Message:**
 
 One SAML setting can only be set in the portal. Open https://entra.microsoft.com →
 **Enterprise applications** → the Workday app → **Single sign-on** → **SAML
 Signing Certificate** → **Edit** → set **Signing Option** to **Sign SAML response
-and assertion**, and **Save**. Confirm it matches what your Workday tenant's SAML
-IdP configuration expects. Type **done** when it's set.
+and assertion**, and **Save**. Then confirm your Workday tenant's SAML IdP is
+configured with the **Issuer**, **SSO / Login URL**, and **SP audience** shown in
+the check result above, and that it trusts the signing certificate you activated
+earlier. Type **done** when it's set.
 
 **End message.**
 
@@ -544,6 +588,13 @@ completes it.
 
 Confirm exactly one Entra tenant federates to the Workday tenant ESS uses (a
 misaligned or duplicate federation breaks user-context SAML SSO).
+
+**Message:**
+
+Now I'll review the Workday SAML federation to confirm exactly one Entra tenant is
+linked to the Workday tenant your agent uses.
+
+**End message.**
 
 **Verify (WD-CONN-010):**
 

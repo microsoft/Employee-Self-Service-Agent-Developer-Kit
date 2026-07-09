@@ -44,7 +44,7 @@ install work, with:
   ```
 
   ```
-  az rest --method GET --resource "{ENV_URL}" --url "{ENV_URL}/api/data/v9.2/systemusers({USER_ID})/systemuserroles_association?$select=name" --query "value[].name" -o json
+  az rest --method GET --resource "{ENV_URL}" --url "{ENV_URL}/api/data/v9.2/systemusers({USER_ID})/systemuserroles_association?%24select=name" --query "value[].name" -o json
   ```
 
   The role is held if the returned role names include **`Environment Maker`**, or
@@ -59,11 +59,18 @@ If `GATE_RESULT` is `"stop"`, **halt** — do not continue. Otherwise carry
 
 ---
 
-## P2.1 — Install the ESS base agent (manual, gated)
+## P2.1 — Install the ESS base agent (manual portal step)
 
 Installing from AppSource is a portal action — it cannot be automated. First
 check whether it is already installed (idempotent re-runs and resumes shouldn't
 ask the user to reinstall):
+
+**Message:**
+
+First, let me check whether the Employee Self Service agent is already installed
+in this environment.
+
+**End message.**
 
 ```
 python scripts/flightcheck/cli.py --checkpoint ESS-SOLN-001
@@ -91,6 +98,13 @@ Wait for the user to confirm they've completed the install, then go to **P2.2**.
 Run the verification checkpoint (this is the gate — never accept "installed"
 without a re-check):
 
+**Message:**
+
+Now I'll confirm the Employee Self Service agent solution actually landed in your
+environment.
+
+**End message.**
+
 ```
 python scripts/flightcheck/cli.py --checkpoint ESS-SOLN-001
 ```
@@ -110,23 +124,23 @@ Branch on the result:
   **End message.**
 
   After the user confirms, re-run `--checkpoint ESS-SOLN-001`. Loop until it
-  passes. While it is not yet passing, keep S2.1 `in-progress` (see P2.3 with
-  `ACK=false`).
+  passes. While it is not yet `PASSED` the row stays `in-progress`; a `FAILED`
+  result parks it `blocked` (see P2.3).
 - **`WARNING`** (the check couldn't reach Dataverse — expired token or a
   transient error). Re-run once; if it still warns, surface the message to the
-  user and treat it like `FAILED` (the install is unverified, so the row cannot
-  complete).
+  user; the install is unverified, so the row cannot complete and stays
+  `in-progress`.
 
 ---
 
-## P2.3 — Record S2.1 (manual gate — needs acknowledgement)
+## P2.3 — Record S2.1 (prog gate — auto-completes on a passing check)
 
-Row S2.1 is **manual-gated**: the AppSource install is a human portal action, so
-a passing checkpoint alone does not complete the row — it needs the user's
-explicit acknowledgement.
+Row S2.1 is **programmatically gated**: `ESS-SOLN-001` queries Dataverse and
+definitively proves whether the ESS solution landed, so a passing check completes
+the row on its own — no separate acknowledgement is needed. (The install action
+in P2.1 is still a human portal step; only its *outcome* is verified here.)
 
-When `ESS-SOLN-001` is `PASSED`, present it as evidence and ask the user to
-confirm:
+When `ESS-SOLN-001` is `PASSED`, tell the user and record the row:
 
 **Message:**
 
@@ -134,18 +148,17 @@ The Employee Self Service solution is installed and verified in your environment
 
 **End message.**
 
-Then, per [`checklist-updater.md`](../shared/checklist-updater.md)'s manual rule,
-ask for an explicit acknowledgement (only `ACK=true` on an explicit "Yes"). Update
-**S2.1** via [`checklist-updater.md`](../shared/checklist-updater.md) with:
+Update **S2.1** via [`checklist-updater.md`](../shared/checklist-updater.md) with:
 
 - `STEP_ID="S2.1"`
-- `GATE="manual"`
-- `CHECKPOINT_RESULT="PASSED"` (or `"FAILED"` / `null` while still verifying)
-- `ACK` = the user's explicit confirmation
+- `GATE="prog"`
+- `CHECKPOINT_RESULT="PASSED"` (or `"FAILED"` / `"WARNING"` / `null` while still
+  verifying)
 - Persist the P2.0 `GATE_EVIDENCE`.
 
-On `ACK=true` with `CHECKPOINT_RESULT="PASSED"`, the row becomes `done`. A
-checkpoint pass without acknowledgement leaves the row `in-progress`.
+Per the updater's U.2 gate table, a `prog` row maps `PASSED` → `done`,
+`FAILED` → `blocked`, and `WARNING` / `null` → `in-progress`. Only a `PASSED`
+result completes the row — never mark it `done` on an unverified `WARNING`.
 
 ---
 

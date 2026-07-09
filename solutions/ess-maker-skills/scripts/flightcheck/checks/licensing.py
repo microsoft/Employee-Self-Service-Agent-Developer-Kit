@@ -784,7 +784,7 @@ _CAPACITY_DOC = (
 )
 _CAPACITY_PORTAL = (
     "[Power Platform Admin Center > Licensing > Copilot Studio > Manage capacity]"
-    "(https://admin.powerplatform.microsoft.com/licensing)"
+    "(https://admin.powerplatform.microsoft.com/billing/licenses/copilotStudio/overview)"
 )
 _M365_ADMIN_CENTER = "[Microsoft 365 admin center](https://admin.microsoft.com)"
 

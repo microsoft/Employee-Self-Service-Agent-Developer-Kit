@@ -514,11 +514,77 @@ def _check_nameid_mapping(graph, config) -> list[CheckResult]:
 # ─────────────────────────────────────────────────────────────────────
 
 
+def _entra_idp_endpoints(config) -> dict:
+    """Derive the customer's Entra SAML IdP identifiers from captured config.
+
+    In this federation Entra is the SAML IdP and Workday is the SP, so the
+    values Workday's SP configuration must trust are deterministic from the
+    Entra tenant id (issuer / login) and the app id (audience / federation
+    metadata) — no Graph call needed. Any field the config hasn't captured
+    yet is omitted so callers can degrade to generic guidance.
+    Docs: https://learn.microsoft.com/entra/identity-platform/single-sign-on-saml-protocol
+    """
+    cfg = config or {}
+    tenant_id = cfg.get("tenantId")
+    entra_app_id = cfg.get("entraAppId")
+    out: dict = {}
+    if cfg.get("tenant"):
+        out["workday_tenant"] = cfg["tenant"]
+    if tenant_id:
+        out["issuer"] = f"https://sts.windows.net/{tenant_id}/"
+        out["login_url"] = (
+            f"https://login.microsoftonline.com/{tenant_id}/saml2"
+        )
+        if entra_app_id:
+            out["metadata_url"] = (
+                f"https://login.microsoftonline.com/{tenant_id}"
+                "/federationmetadata/2007-06/federationmetadata.xml"
+                f"?appid={entra_app_id}"
+            )
+    if entra_app_id:
+        out["audience"] = f"api://{entra_app_id}"
+    return out
+
+
 def _check_signing_option(graph, config) -> list[CheckResult]:
     # Portal-only: there is no documented Graph property for the "Sign SAML
     # response and assertion" signing option (the beta samlSingleSignOnSettings
     # resource exposes only relayState), so this always emits a MANUAL
     # attestation. clients=frozenset() in the registry — needs no auth.
+    #
+    # The signing-option VALUE stays a fixed target, but we personalize the
+    # remediation with the customer's own IdP identifiers (derived from
+    # config, no Graph call) so the attestation names the concrete values
+    # Workday must trust instead of generic guidance.
+    idp = _entra_idp_endpoints(config)
+    remediation = (
+        "Verify in the Entra portal: Enterprise applications → the "
+        "Workday app → Single sign-on → SAML Signing Certificate → Edit "
+        "→ set 'Signing Option' to 'Sign SAML response and assertion'. "
+        "Confirm it matches what the Workday tenant's SAML IdP "
+        "configuration expects, then re-run the setup step to record the "
+        "attestation."
+    )
+    facts = []
+    if idp.get("issuer"):
+        facts.append(f"IdP Issuer/Entity ID {idp['issuer']}")
+    if idp.get("login_url"):
+        facts.append(f"SSO/Login URL {idp['login_url']}")
+    if idp.get("audience"):
+        facts.append(f"SP audience (Identifier) {idp['audience']}")
+    if idp.get("metadata_url"):
+        facts.append(f"federation metadata {idp['metadata_url']}")
+    if facts:
+        lead = (
+            f"For your Workday tenant '{idp['workday_tenant']}', the "
+            if idp.get("workday_tenant")
+            else "The "
+        )
+        remediation += (
+            " " + lead + "Entra SAML IdP values Workday must trust are: "
+            + "; ".join(facts) + "."
+        )
+
     return [CheckResult(roles=_ROLES,
         checkpoint_id="WD-ENTRA-SIGNOPT-001", category=_CATEGORY,
         priority=Priority.HIGH.value, status=Status.MANUAL.value,
@@ -530,14 +596,7 @@ def _check_signing_option(graph, config) -> list[CheckResult]:
             "service provider that validates signatures rejects the "
             "assertion if this is set wrong, so it must not be skipped."
         ),
-        remediation=(
-            "Verify in the Entra portal: Enterprise applications → the "
-            "Workday app → Single sign-on → SAML Signing Certificate → Edit "
-            "→ set 'Signing Option' to 'Sign SAML response and assertion'. "
-            "Confirm it matches what the Workday tenant's SAML IdP "
-            "configuration expects, then re-run the setup step to record the "
-            "attestation."
-        ),
+        remediation=remediation,
         doc_link=_DOC_LINK,
     )]
 

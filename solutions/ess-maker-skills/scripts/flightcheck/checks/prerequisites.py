@@ -853,7 +853,7 @@ def run_prerequisites_checks(runner) -> list[CheckResult]:
                 env_alloc = _env_mcs_allocation(pp, getattr(runner, "env_id", None))
                 capacity_portal = (
                     "[Power Platform Admin Center > Licensing > Copilot Studio > Manage capacity]"
-                    "(https://admin.powerplatform.microsoft.com/licensing)"
+                    "(https://admin.powerplatform.microsoft.com/billing/licenses/copilotStudio/overview)"
                 )
                 if env_alloc is not None and env_alloc > 0:
                     payg_result = CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],

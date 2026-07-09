@@ -104,6 +104,13 @@ not drop other keys). Go to P1.3.
 
 ## P1.3 — Verify environment + Dataverse (S1.1)
 
+**Message:**
+
+Now I'll confirm your Power Platform environment exists and has a Dataverse
+database set up — that's the foundation your agent runs on.
+
+**End message.**
+
 Run the two reused checkpoints in isolation:
 
 ```
@@ -135,6 +142,13 @@ python scripts/flightcheck/cli.py --checkpoint ENV-002
 
 ## P1.4 — Verify Copilot Studio capacity (S1.2)
 
+**Message:**
+
+Now I'll check that this environment has Copilot Studio capacity allocated —
+without it the agent can't run.
+
+**End message.**
+
 Run the capacity checkpoint:
 
 ```
@@ -152,7 +166,7 @@ Branch on the result:
   **Message:**
 
   This environment has no Copilot Studio message capacity allocated yet. Open
-  [Power Platform admin center → Licensing → Copilot Studio → Manage capacity](https://admin.powerplatform.microsoft.com/licensing),
+  [Power Platform admin center → Licensing → Copilot Studio → Manage capacity](https://admin.powerplatform.microsoft.com/billing/licenses/copilotStudio/overview),
   allocate capacity to this environment, then tell me when it's done and I'll
   re-check.
 
@@ -169,7 +183,7 @@ Branch on the result:
 
   I can't read this environment's Copilot Studio capacity automatically, so I
   need you to confirm it directly. In
-  [Power Platform admin center → Licensing → Copilot Studio → Manage capacity](https://admin.powerplatform.microsoft.com/licensing),
+  [Power Platform admin center → Licensing → Copilot Studio → Manage capacity](https://admin.powerplatform.microsoft.com/billing/licenses/copilotStudio/overview),
   check that message capacity is allocated to this environment.
 
   **End message.**

@@ -717,6 +717,37 @@ class TestSigningOption:
         assert "portal-only" in result.result
         assert "Sign SAML response and assertion" in result.remediation
 
+    def test_personalized_idp_values_when_config_present(self) -> None:
+        from flightcheck.checks.entra_app import _check_signing_option
+
+        # With the captured Entra tenant + app ids, the attestation names the
+        # customer's own IdP identifiers Workday must trust — still MANUAL,
+        # still portal-only, and the fixed target value is retained.
+        config = {
+            "tenant": "acme_dpt1",
+            "tenantId": "00000000-0000-0000-0000-000000000000",
+            "entraAppId": "11111111-1111-1111-1111-111111111111",
+        }
+        result = _check_signing_option(None, config)[0]
+
+        assert result.status == "Manual"
+        assert "portal-only" in result.result
+        assert "Sign SAML response and assertion" in result.remediation
+        # Customer-specific, config-derived IdP values.
+        assert "acme_dpt1" in result.remediation
+        assert (
+            "https://sts.windows.net/00000000-0000-0000-0000-000000000000/"
+            in result.remediation
+        )
+        assert (
+            "https://login.microsoftonline.com/"
+            "00000000-0000-0000-0000-000000000000/saml2" in result.remediation
+        )
+        assert (
+            "api://11111111-1111-1111-1111-111111111111" in result.remediation
+        )
+        assert "federationmetadata" in result.remediation
+
 
 # ───────────────────────────────────────────────────────────────────────
 # run_entra_app_checks — dispatch, SKIPPED fan-out, WARNING guard
