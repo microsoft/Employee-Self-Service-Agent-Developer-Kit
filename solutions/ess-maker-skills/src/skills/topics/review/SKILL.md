@@ -16,6 +16,11 @@ publishing.
 - **Run the analysis silently.** Steps 3–8 are internal: run the detectors, read the reference docs, and
   persist the catalog **without narrating them**. Do not tell the maker what tools you are calling or what
   files you are reading. The only thing the maker sees is the final report in Step 9.
+- **Speak the maker's language.** Everything the maker sees — the Step 9 report and the scoped roll-up — uses
+  plain words: plain severity (High/Medium/Low), the step's **display name** (never a node id or line
+  number), and everyday descriptions. Never surface internal working vocabulary, such as: "lens", "detector",
+  "conformance", "reachability", "ISV", "orchestrator", rule IDs (`BTPF-001`), or catalog/file paths — the
+  list is illustrative; the test is whether a maker who never saw this skill's internals would understand it.
 - **TRACK PROGRESS**: use the todo list tool to track the steps below so the maker can see where you are.
 
 ## What this checks
@@ -225,9 +230,8 @@ would pass a different scope with no other change).
 ## Step 9: Present the report
 
 Follow this format exactly. Do **not** add prose between sections, narrate what you checked, or explain the
-process. Use plain words for severity (**High / Medium / Low**); never show internal terms (rule IDs,
-"lens", reachability tags, file jargon). Locate each finding by the **step/action it lives in**, never a
-line number.
+process. Use plain words per the **Speak the maker's language** rule; locate each finding by the
+**step/action it lives in** (its display name), never a node id or line number.
 
 ### 9a — No findings
 
@@ -348,8 +352,9 @@ the roll-up only once every in-scope topic has a valid catalog.
 ### S-4: Present the roll-up
 
 Show a scope-level summary, then a per-topic table and an issue-type rollup — **not** each topic's full
-findings table. Follow the same exact-template discipline as Step 9: use the verbatim lines below, do not
-improvise the verdict, add prose between sections, or narrate the analysis (including todo-list activity).
+findings table. Follow the same exact-template discipline as Step 9 (including the **Speak the maker's
+language** rule — plain words, step display names, no internal vocabulary): use the verbatim lines below, do
+not improvise the verdict, add prose between sections, or narrate the analysis (including todo-list activity).
 
 If **no topic** in the scope has an active finding:
 
