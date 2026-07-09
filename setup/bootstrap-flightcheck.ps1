@@ -58,7 +58,7 @@ foreach ($f in $files) {
     }
 }
 
-# Best-effort: fetch the installer telemetry emitter (fail-open — a telemetry
+# Best-effort: fetch the installer telemetry emitter (fail-open - a telemetry
 # download failure must never block the install).
 $telLib = Join-Path $tempDir 'install-telemetry.ps1'
 try {
