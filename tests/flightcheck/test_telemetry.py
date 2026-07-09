@@ -125,6 +125,9 @@ def test_build_events_shape_and_required_fields():
     assert run_data["overall"] == "READY"
     assert run_data["total"] == 2 and run_data["passed"] == 1 and run_data["failed"] == 1
     assert run_data["tenantId"] == "tenant-abc"
+    # tenant_class is derived from tenant_id at emit time (ADO 7558661).
+    assert run_data["tenantClass"] == "customer"
+    assert events[1]["data"]["tenantClass"] == "customer"
     assert run_data["agentId"] == "bot-xyz"
     assert run_data["instanceId"] == "inst-123"
     assert run_data["invocationSource"] == "cli"

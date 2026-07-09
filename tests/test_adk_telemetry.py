@@ -107,11 +107,55 @@ def test_identity_flows_into_dimensions(monkeypatch):
     assert dims["tenant_id"] == "tenant-Z"
 
 
+# --- tenant_class (internal vs customer; ADO 7558661) ---------------------
+def test_classify_tenant_microsoft_corp_is_internal():
+    assert _fc.classify_tenant(_fc.MICROSOFT_CORP_TENANT_ID) == "internal"
+    # case / whitespace insensitive
+    assert _fc.classify_tenant(f"  {_fc.MICROSOFT_CORP_TENANT_ID.upper()} ") == "internal"
+
+
+def test_classify_tenant_other_tenant_is_customer():
+    assert _fc.classify_tenant("11111111-1111-1111-1111-111111111111") == "customer"
+
+
+def test_classify_tenant_empty_is_unknown():
+    assert _fc.classify_tenant("") == "unknown"
+    assert _fc.classify_tenant(None) == "unknown"
+
+
+def test_classify_tenant_env_allowlist_extends(monkeypatch):
+    extra = "abababab-abab-abab-abab-abababababab"
+    monkeypatch.setenv("ESS_ADK_INTERNAL_TENANTS", f"{extra}, dead-beef")
+    assert _fc.classify_tenant(extra) == "internal"
+    assert _fc.classify_tenant("DEAD-BEEF") == "internal"
+    # corp tenant is still internal alongside the env additions
+    assert _fc.classify_tenant(_fc.MICROSOFT_CORP_TENANT_ID) == "internal"
+    # an unrelated tenant is still customer
+    assert _fc.classify_tenant("11111111-1111-1111-1111-111111111111") == "customer"
+
+
+def test_tenant_class_flows_into_dimensions(monkeypatch):
+    monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
+    adk.set_identity(tenant_id=_fc.MICROSOFT_CORP_TENANT_ID, instance_id="inst-9")
+    dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
+    assert dims["tenant_class"] == "internal"
+
+    adk.set_identity(tenant_id="11111111-1111-1111-1111-111111111111", instance_id="inst-9")
+    dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
+    assert dims["tenant_class"] == "customer"
+
+    # explicit tenant override is classified too
+    dims = adk.common_dimensions(
+        adk.SURFACE_CLI, session_id="sid-1", tenant_id=_fc.MICROSOFT_CORP_TENANT_ID
+    )
+    assert dims["tenant_class"] == "internal"
+
+
 # --- common dimensions + envelope ----------------------------------------
 def test_common_dimensions_shape():
     dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
     for key in (
-        "schema_version", "instance_id", "tenant_id",
+        "schema_version", "instance_id", "tenant_id", "tenant_class",
         "session_id", "surface", "adk_version", "timestamp",
     ):
         assert key in dims
@@ -191,7 +235,7 @@ def test_notice_shown_once(capsys):
 
 def test_disabled_emit_does_not_post(monkeypatch, captured_post):
     monkeypatch.setenv("ESS_ADK_TELEMETRY", "off")
-    res = adk.emit_capability_use("onboarding", block=True)
+    res = adk.emit_capability_use("setup", block=True)
     assert res["sent"] is False
     assert res["reason"] == "disabled"
     assert captured_post == []
@@ -268,7 +312,7 @@ def test_failing_post_is_swallowed_and_buffered(monkeypatch):
         raise RuntimeError("network down")
 
     monkeypatch.setattr(_fc, "_post", _boom)
-    res = adk.emit_capability_use("onboarding", block=True)  # must not raise
+    res = adk.emit_capability_use("setup", block=True)  # must not raise
     assert res["sent"] is False
     import os
     assert os.path.exists(adk.BUFFER_PATH)
@@ -281,7 +325,7 @@ def test_failing_post_is_swallowed_and_buffered(monkeypatch):
 def test_buffer_flushes_on_next_successful_emit(monkeypatch):
     # First emit fails -> buffered.
     monkeypatch.setattr(_fc, "_post", lambda ikey, envs: (_ for _ in ()).throw(OSError("x")))
-    adk.emit_capability_use("onboarding", block=True)
+    adk.emit_capability_use("setup", block=True)
     import os
     assert os.path.exists(adk.BUFFER_PATH)
 
@@ -315,3 +359,124 @@ def test_buffer_oversize_drops_oldest_and_accepts_newest(monkeypatch):
         names = [json.loads(ln)["name"] for ln in f.read().splitlines() if ln.strip()]
     assert "adk.evt.19" in names      # newest kept
     assert "adk.evt.0" not in names   # oldest dropped
+
+
+# --- capability taxonomy + normalization ----------------------------------
+def test_normalize_capability_known_values_pass_through():
+    for cap in adk.ADK_CAPABILITIES:
+        assert adk.normalize_capability(cap) == cap
+
+
+def test_normalize_capability_empty_stays_empty():
+    # Some events legitimately carry no capability (e.g. an uncategorized
+    # session) — those must NOT be coerced to "unknown".
+    assert adk.normalize_capability("") == ""
+    assert adk.normalize_capability(None) == ""
+
+
+def test_normalize_capability_case_and_whitespace_insensitive():
+    assert adk.normalize_capability("  Topic_Create ") == "topic_create"
+    assert adk.normalize_capability("WORKFLOW_DELETE") == "workflow_delete"
+
+
+def test_normalize_capability_unknown_bucketed():
+    assert adk.normalize_capability("bogus") == adk.CAPABILITY_UNKNOWN
+    assert adk.normalize_capability("topics") == adk.CAPABILITY_UNKNOWN
+
+
+def test_emit_capability_use_coerces_unknown(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    adk.emit_capability_use("not-a-real-cap", block=True)
+    data = captured_post[0][1][0]["data"]
+    # Out-of-taxonomy values still emit, but land in the controlled bucket so
+    # the "Capability Usage by Type" dimension never mints stray slices.
+    assert data["adk_capability"] == adk.CAPABILITY_UNKNOWN
+
+
+def test_emit_capability_use_known_value_preserved(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    adk.emit_capability_use("Topic_Create", block=True)
+    assert captured_post[0][1][0]["data"]["adk_capability"] == "topic_create"
+
+
+# --- session start no longer carries a capability dimension ---------------
+def test_start_session_omits_capability_dimension(captured_post):
+    # "Sessions by Capability" was removed; adk.session.start is now a plain
+    # engagement signal (feeds session total/trend only) and must NOT carry an
+    # adk_capability. The old code hardcoded "connect" here, which is exactly
+    # the mislabeling bug that motivated dropping the chart.
+    res = adk.start_session(block=True)
+    assert res["sent"] is True
+    data = captured_post[0][1][0]["data"]
+    assert "adk_capability" not in data
+
+
+# --- the capabilities wired across the kit stay in the canonical list ------
+def test_wired_capabilities_are_in_canonical_list():
+    """Every capability string the entry points / SKILL.md skills emit must be
+    a member of ADK_CAPABILITIES, or it would silently normalize to
+    "unknown" on the dashboards. This is the "keep in sync" contract."""
+    wired = {
+        # emit_capability_use(...) from the Python entry points
+        "setup", "evaluations",
+        "backup_template_configs", "restore_template_configs",
+        # emit_build_*/flightcheck_* event families
+        "publishing", "flightcheck",
+        # emit_capability.py shim invocations across the SKILL.md skills
+        "connect",
+        "topic_create", "topic_update", "topic_delete",
+        "workflow_create", "workflow_update", "workflow_delete",
+        "cleanup", "troubleshoot",
+    }
+    missing = wired - set(adk.ADK_CAPABILITIES)
+    assert not missing, f"wired capabilities not in ADK_CAPABILITIES: {missing}"
+
+
+
+# --- emit_capability.py shim (the SKILL.md-driven hook) -------------------
+def test_shim_emits_capability_and_exits_zero(captured_post, monkeypatch):
+    import emit_capability
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    rc = emit_capability.main(["emit_capability.py", "topic_create"])
+    assert rc == 0
+    assert len(captured_post) == 1
+    envelope = captured_post[0][1][0]
+    assert envelope["name"] == "adk.capability.use"
+    assert envelope["data"]["adk_capability"] == "topic_create"
+
+
+def test_shim_unknown_capability_still_exits_zero(captured_post, monkeypatch):
+    import emit_capability
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    rc = emit_capability.main(["emit_capability.py", "not-real"])
+    assert rc == 0
+    # Emitted, but bucketed — a bad SKILL.md argument can't fail the step and
+    # can't pollute the dashboard dimension.
+    assert captured_post[0][1][0]["data"]["adk_capability"] == adk.CAPABILITY_UNKNOWN
+
+
+def test_shim_list_and_help_do_not_emit(captured_post):
+    import emit_capability
+    assert emit_capability.main(["emit_capability.py", "--list"]) == 0
+    assert emit_capability.main(["emit_capability.py", "--help"]) == 0
+    assert emit_capability.main(["emit_capability.py"]) == 0  # no args -> help
+    assert captured_post == []
+
+
+def test_shim_no_op_when_telemetry_disabled(captured_post, monkeypatch):
+    import emit_capability
+    monkeypatch.setenv("ESS_ADK_TELEMETRY", "off")
+    rc = emit_capability.main(["emit_capability.py", "cleanup"])
+    assert rc == 0
+    assert captured_post == []
+
+
+def test_shim_never_raises_even_if_post_fails(monkeypatch):
+    import emit_capability
+
+    def _boom(ikey, envelopes):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(_fc, "_post", _boom)
+    # Fail-open contract: a telemetry failure must never fail the skill step.
+    assert emit_capability.main(["emit_capability.py", "troubleshoot"]) == 0

@@ -283,6 +283,13 @@ def main():
         print("Authenticated.\n")
 
         try:
+            import adk_telemetry
+
+            adk_telemetry.emit_capability_use("setup", block=True)
+        except Exception:  # noqa: BLE001 — telemetry must never break setup
+            pass
+
+        try:
             components, template_configs, workflows = fetch_all(
                 env_url, token, bot_id)
         except APIError as e:
@@ -304,6 +311,13 @@ def main():
     print("Authenticating to Dataverse...")
     token = authenticate(env_url)
     print("Authenticated.\n")
+
+    try:
+        import adk_telemetry
+
+        adk_telemetry.emit_capability_use("setup", block=True)
+    except Exception:  # noqa: BLE001 — telemetry must never break setup
+        pass
 
     try:
         components, template_configs, workflows = fetch_all(
