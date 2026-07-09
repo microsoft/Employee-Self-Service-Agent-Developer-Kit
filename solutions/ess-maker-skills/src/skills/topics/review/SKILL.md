@@ -297,12 +297,26 @@ Dispatch **one subagent for the whole module** (not one per topic, and not one p
    it) and the conformance guidance (`powerfx-topic-local.md`, `isv-conformance.md`,
    `isv-integration-pattern.md`). A module maps to a single ISV, so its topics share one ISV doc; reading it
    once here is what avoids re-reading it per topic.
-2. **Loops each in-scope topic, running the per-topic engine (Steps 2–8) on it** — reading the topic, all
-   six lenses (using this topic's slice of the S-1 detector output, not re-running the detectors),
-   consolidating (Step 7), and persisting its catalog (Step 8) — before moving to the next topic. Give each
-   topic its own full attention; per-topic focus is deliberate, because scanning many topics at once for one
-   lens skims and misses per-topic detail (e.g. a single hardcoded value). Persisting each catalog as it goes
-   keeps findings from accumulating in context, so a long module does not degrade the review.
+2. **Loops each in-scope topic**, giving each its own full attention (per-topic focus is deliberate —
+   scanning many topics at once for one lens skims and misses per-topic detail like a single hardcoded
+   value). For **each** topic, in order, run the per-topic engine and finish with the mandatory persist:
+   1. Read the topic and apply all six lenses (Steps 2–6c), using this topic's slice of the S-1 detector
+      output — do not re-run the detectors.
+   2. Consolidate (Step 7).
+   3. **Persist this topic's catalog — the required last action of the iteration, before moving to the next
+      topic.** Write this topic's consolidated findings to a temp JSON and run, from
+      `solutions/ess-maker-skills/`:
+
+      ```
+      python scripts/merge_findings.py --solution {topic-stem} --current {tempCurrent.json}
+      ```
+
+      This write is **mandatory and per-topic**: do it once for each topic as you finish it. Do **not**
+      defer persistence to the end of the loop, do **not** collect all topics and write them together, and
+      do **not** author a helper script to batch-write. The `{topic-stem}-catalog.json` on disk is the only
+      durable record of this topic's findings — the roll-up and drill-down read from it, and skipping the
+      write silently loses the topic's results. Writing as you go also keeps findings from accumulating in
+      context, so a long module does not degrade the review.
 
 The subagent returns only a compact per-topic summary (counts + finding ids); the per-topic catalogs on disk
 are the source the roll-up is built from. (If a module is very large and the loop risks losing focus late,
