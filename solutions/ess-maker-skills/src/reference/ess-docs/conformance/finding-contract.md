@@ -33,6 +33,15 @@ findings.
 - **OPERATOR_OR_HYGIENE_ONLY** — dead code, redundant writes, hardcoded IDs with no runtime user impact.
   -> LOW.
 
+**Check the runtime heuristics before finalizing reachability.** ESS runtime behavior is documented in
+`../runtime/confirmed-runtime-heuristics.md` (authoritative) and `../runtime/pending-runtime-heuristics.md`
+(provisional), synced by `scripts/sync_runtime_heuristics.py`. A confirmed rule can move a finding to
+`NOT_REACHABLE_VIA_BOT_UI` (cap at LOW) even when a purely structural read looks HIGH — for example, the
+AI-orchestration layer emitting a "no data" message on an empty parse, or an OnError/`*System*` topic
+terminating the dialog stack so code after it never runs. Apply confirmed rules directly; apply pending
+rules with caution and say so. If the docs are absent, score structurally and note that runtime calibration
+was unavailable.
+
 ## Finding IDs
 
 Each lens uses its own prefix so findings are distinguishable and stable across runs. IDs are

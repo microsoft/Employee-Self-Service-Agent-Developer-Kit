@@ -18,6 +18,14 @@ below. This is a **judgment lens**, not a closed rule set — each heuristic is 
 precision bar and reachability rubric in the shared
 [`finding-contract.md`](finding-contract.md) decide what becomes a finding.
 
+**Consult the runtime heuristics for severity.** ESS runtime behavior is documented in
+`../runtime/confirmed-runtime-heuristics.md` (authoritative) and `../runtime/pending-runtime-heuristics.md`
+(provisional — apply with caution), synced into the workspace by `scripts/sync_runtime_heuristics.py`. Read
+the confirmed catalog before scoring severity: several rules (notably the AI-orchestration "no data"
+behavior and OnError dialog termination) cap otherwise-alarming findings at LOW / `reachable: unreachable`.
+If the runtime docs are not present, score from the finding-contract rubric alone and note that runtime
+calibration was unavailable.
+
 ## Heuristics (topic-local)
 
 - **Self-referential record literals.** Record-literal fields where the value is the unqualified field
@@ -31,12 +39,22 @@ precision bar and reachability rubric in the shared
 - **`ParseValue` / `ParseJSON` without an `isSuccess` gate (structural half).** When a topic calls a
   flow/dialog that returns `isSuccess`, then runs `ParseValue`/`ParseJSON` on the response **without a
   preceding branch on `isSuccess = false`**, a schema mismatch (API drift) silently produces blanks
-  downstream. Flag when the parse site is **not** inside/after an `isSuccess = true` guard. **Fix:** move
-  the parse inside the `isSuccess = true` branch, or add an `isSuccess = false` ConditionGroup before it.
+  downstream. Flag when the parse site is **not** inside/after an `isSuccess = true` guard. **Severity is
+  governed by the confirmed runtime heuristics** (`../runtime/confirmed-runtime-heuristics.md`): when the
+  topic uses the standard `ParseValue → ForAll → response-table` pattern and delegates the call to a shared
+  `*System*` orchestrator topic (the ESS pattern), the AI-orchestration layer emits a "no data" message and
+  failure is handled centrally — so the finding is `reachable: unreachable`, **cap at LOW**. Reserve
+  higher severity for a topic that parses a response it fetched **directly** (no shared orchestrator) or
+  that renders a hardcoded card regardless of data. **Fix:** move the parse inside the `isSuccess = true`
+  branch, or add an `isSuccess = false` ConditionGroup before it.
 - **Flow failure-branch gaps (structural half).** A `BeginDialog`/`InvokeFlowAction` call site whose
   result path has **no `isSuccess = false` (or equivalent failure) branch** — the topic continues with
-  empty data on failure and the user gets no error. Flag the missing failure branch. **Fix:** add an
-  `isSuccess = false` ConditionGroup after the call with an error `SendActivity` that stops the flow.
+  empty data on failure. Flag the missing failure branch, but check the confirmed runtime heuristics before
+  scoring: if the call is a `BeginDialog` into a shared `*System*`/OnError topic that terminates or centrally
+  handles failure, code after it is `reachable: unreachable` (**cap at LOW**) — do not claim "the user gets
+  no error." Reserve higher severity for a **direct** flow call that ignores `isSuccess`, or a **write** that
+  proceeds on unverified success. **Fix:** add an `isSuccess = false` ConditionGroup after the call with an
+  error `SendActivity` that stops the flow.
 - **Hardcoded environment-specific values.** GUID-like literals, agent IDs, environment IDs, connection
   IDs, model IDs (`aIModelId`), and flow IDs (`flowId`) written inline in the topic. These are
   environment-bound and should be resolved by the platform (connection references / solution-aware
