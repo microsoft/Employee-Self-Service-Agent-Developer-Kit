@@ -275,26 +275,32 @@ python scripts/scan_config.py   --agent {agent-slug} --module {module-id}
 Each reports findings for every in-scope topic at once (globals availability is still resolved agent-wide;
 `--module` only filters which topics are reported). Their output is authoritative, as in Steps 3/4/6c.
 
-### S-2: Fan out the agentic lenses over the scope
+### S-2: Review each topic in a read-once, per-topic loop
 
-Dispatch the three agentic lenses as **parallel subagents**, each ranging over the whole scoped topic set,
-not one per topic:
+Dispatch **one subagent for the whole module** (not one per topic, and not one per lens). That subagent:
 
-- Power Fx topic-local (`powerfx-topic-local.md`)
-- ISV conformance (`isv-conformance.md`) — reads the module's ISV reference doc **once** for the whole set
-- ISV integration pattern (`isv-integration-pattern.md`)
+1. Reads the shared reference material **once** — the module's ISV reference doc (in full — do not distill
+   it) and the conformance guidance (`powerfx-topic-local.md`, `isv-conformance.md`,
+   `isv-integration-pattern.md`). A module maps to a single ISV, so its topics share one ISV doc; reading it
+   once here is what avoids re-reading it per topic.
+2. **Loops each in-scope topic**, giving each its own full attention: apply the Power Fx, ISV-conformance,
+   and integration-pattern lenses to that one topic (Steps 5, 6, 6b), exactly as the single-topic path does.
+   Per-topic focus is deliberate — scanning many topics at once for one lens skims and misses per-topic
+   detail (e.g. a single hardcoded value).
+3. **Writes each topic's catalog to disk immediately** after finishing that topic (S-3), before moving to
+   the next. Offloading as it goes keeps findings from accumulating in context, so a long module does not
+   degrade the review. It returns only a compact per-topic summary (counts + finding ids), not full findings.
 
-Each subagent applies its lens to every in-scope topic and returns findings **tagged with the owning
-topic**, in the finding-contract shape. (Reading the ISV doc once per lens — not once per topic — is why
-this fans out by lens.)
+(If a module is very large and the loop risks losing focus late, split it into batches of topics across a
+few subagents — but read the shared docs once within each batch.)
 
-### S-3: Regroup, consolidate, and persist per topic
+### S-3: Consolidate and persist per topic (inside the loop)
 
-Collect all findings (detectors + lens subagents) and **group them by topic**. For each topic with findings,
-run the Step 7 consolidation, then persist that topic's catalog with `merge_findings.py --solution
-{topic-stem}` exactly as Step 8 does for a single topic. Every topic keeps its own
-`{topic-stem}-catalog.json`; a topic with no findings gets an empty active set (still reconciled, so a
-previously-flagged finding there is correctly carried forward).
+For each topic, combine that topic's detector findings (from S-1) with its lens findings (from S-2), run the
+Step 7 consolidation, then persist its catalog with `merge_findings.py --solution {topic-stem}` exactly as
+Step 8 does for a single topic. Every topic keeps its own `{topic-stem}-catalog.json`; a topic with no
+findings still gets reconciled (so a previously-flagged finding there is correctly carried forward). These
+per-topic catalogs are the intermediates the roll-up is built from.
 
 ### S-4: Present the roll-up
 
