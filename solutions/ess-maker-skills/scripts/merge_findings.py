@@ -31,6 +31,13 @@ agent reuses). Status is 'active' or 'resolved'; 'resolved' requires a matching
 resolved-issue-ledger.jsonl entry (written when /update confirms a fix, or when
 /review confirms an evidence-stale finding's node is gone).
 
+Catalog integrity: this script is the ONLY sanctioned way to write a catalog, and
+it validates every catalog-bound finding against the finding contract (required
+fields id/title/severity/reachability/root_cause/concrete_fix + a non-empty files[]
+for the evidence hash). A run whose findings use the wrong field names or omit
+files[] is REJECTED (exit 2) and no catalog is written — so an improvised scanner
+or hand-written catalog fails loudly instead of persisting schema-broken state.
+
 Scope invariant: a finding belongs to exactly one catalog per review scope (the
 `solution` value). The same semantic id can legitimately appear under different
 scopes, so the shared ledger is keyed by (solution, issue_id) — any future
@@ -56,6 +63,12 @@ if sys.stdout.encoding and sys.stdout.encoding.lower() != "utf-8":
 
 _SCHEMA_VERSION = "1.0.0"
 _SEVERITY_RANK = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
+# Keys the agent must supply on every catalog-bound finding (the script assigns
+# status / evidence_stale / evidence_hashes / first_seen / last_seen itself).
+# Enforced so an improvised writer using the wrong field names (e.g. description /
+# location / fix instead of root_cause / files / concrete_fix) fails loudly instead
+# of persisting a schema-broken catalog. `verification` is optional (defaults static).
+_REQUIRED_FINDING_KEYS = ("id", "title", "severity", "reachability", "root_cause", "concrete_fix")
 # Maker-facing resolutions are fixed / not-a-bug / wont-fix; the other two are
 # retained for compatibility with the analyzer ledger enum (v1.2.0).
 _RESOLUTION_KINDS = {"fixed", "wont-fix", "not-a-bug", "defense-in-depth", "false-positive"}
@@ -146,6 +159,38 @@ def _file_paths(finding: dict) -> list[str]:
             elif isinstance(f, str):
                 paths.append(f)
     return paths
+
+
+def _nonempty_str(val) -> bool:
+    return isinstance(val, str) and val.strip() != ""
+
+
+def validate_current_findings(findings: list[dict]) -> list[str]:
+    """Return a list of human-readable errors for catalog-bound findings.
+
+    A finding must carry every _REQUIRED_FINDING_KEYS field as a non-empty string,
+    a severity in {HIGH, MEDIUM, LOW}, and a non-empty files[] that yields at least
+    one path (so evidence_hashes can be computed — an empty files[] silently breaks
+    the whole staleness / /update-locate design). Empty in → empty error list.
+    """
+    errors: list[str] = []
+    seen_ids: set[str] = set()
+    for i, f in enumerate(findings):
+        where = str(f.get("id", "")).strip() or f"#{i}"
+        for key in _REQUIRED_FINDING_KEYS:
+            if not _nonempty_str(f.get(key)):
+                errors.append(f"[{where}] missing or empty required field '{key}'")
+        sev = str(f.get("severity", "")).strip()
+        if sev and sev not in _SEVERITY_RANK:
+            errors.append(f"[{where}] severity '{sev}' is not one of HIGH/MEDIUM/LOW")
+        if not _file_paths(f):
+            errors.append(f"[{where}] files[] is missing or has no usable path (evidence_hashes would be empty)")
+        fid = str(f.get("id", "")).strip()
+        if fid:
+            if fid in seen_ids:
+                errors.append(f"[{fid}] duplicate id within this run (ids are the cross-run identity)")
+            seen_ids.add(fid)
+    return errors
 
 
 def evidence_hashes(finding: dict) -> list[dict]:
@@ -315,6 +360,19 @@ def main() -> int:
         print(f"ERROR: could not read current findings from {args.current}", file=sys.stderr)
         return 1
     current = _issues_of(current_doc)
+
+    errors = validate_current_findings(current)
+    if errors:
+        print(
+            f"ERROR: {len(errors)} finding(s) in {args.current} do not match the finding contract "
+            "(id/title/severity/reachability/root_cause/concrete_fix + files[]). "
+            "Catalog NOT written. A catalog may only be produced by this script from contract-shaped findings; "
+            "do not hand-write catalogs or improvise a scanner.",
+            file=sys.stderr,
+        )
+        for e in errors:
+            print(f"  - {e}", file=sys.stderr)
+        return 2
 
     resolved_findings: list[dict] = []
     if args.resolve:

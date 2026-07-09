@@ -313,14 +313,27 @@ Dispatch **one subagent for the whole module** (not one per topic, and not one p
 
       This write is **mandatory and per-topic**: do it once for each topic as you finish it. Do **not**
       defer persistence to the end of the loop, do **not** collect all topics and write them together, and
-      do **not** author a helper script to batch-write. The `{topic-stem}-catalog.json` on disk is the only
-      durable record of this topic's findings — the roll-up and drill-down read from it, and skipping the
-      write silently loses the topic's results. Writing as you go also keeps findings from accumulating in
-      context, so a long module does not degrade the review.
+      do **not** author a helper script to batch-write. `merge_findings.py` is the **only** sanctioned way to
+      write a catalog: it validates each finding against the contract (`id`, `title`, `severity`,
+      `reachability`, `root_cause`, `concrete_fix`, and a non-empty `files[]`) and **exits non-zero without
+      writing** if any is malformed. If it exits non-zero, the finding shape is wrong — correct the field names
+      and re-run for this topic; never hand-write a catalog or improvise a scanner to work around it. The
+      `{topic-stem}-catalog.json` on disk is the only durable record of this topic's findings — the roll-up and
+      drill-down read from it, and skipping the write silently loses the topic's results. Writing as you go also
+      keeps findings from accumulating in context, so a long module does not degrade the review.
 
 The subagent returns only a compact per-topic summary (counts + finding ids); the per-topic catalogs on disk
 are the source the roll-up is built from. (If a module is very large and the loop risks losing focus late,
 split it into batches of topics across a few subagents — but read the shared docs once within each batch.)
+
+### S-3: Verify every topic persisted
+
+Before presenting, confirm the loop actually wrote a valid catalog for **each** in-scope topic. For every
+topic stem, check that `.local/review-findings/{topic-stem}-catalog.json` exists and parses (has an
+`issues` array). A missing or unparseable catalog means that topic's persist was skipped or its findings
+were rejected — **re-run the per-topic engine for that one topic** (Steps 2–8, persisting via
+`merge_findings.py`), then re-check. Do this only for the missing/invalid topics, not the whole module. Build
+the roll-up only once every in-scope topic has a valid catalog.
 
 ### S-4: Present the roll-up
 
