@@ -55,6 +55,20 @@ Decide whether the maker wants **one topic** or a **module scope** (all topics f
 
 For a single-topic review, state the full path of the file you are about to review.
 
+## The per-topic review engine (Steps 2–8)
+
+Steps 2–8 are the **unit of review** — everything needed to review one topic and persist its catalog. Both
+entry paths run this same engine:
+
+- **Single-topic** (from Step 1) runs it **once**, then presents with Step 9.
+- **Scoped** (the Scoped review section) runs it **per topic in a loop**, then presents with S-4.
+
+**Detector source (Steps 3, 4, 6c).** Those steps need this topic's `scan_globals` / `scan_bindings` /
+`scan_config` results. In a **single-topic** review, run each detector with `--topic {topic-stem}` as shown.
+In a **scoped** review the detectors have already run **once** across the module with `--module` (Scoped
+S-1); use this topic's slice of that output — do **not** re-run them per topic (`scan_globals` re-reads the
+whole agent on each call). Either way the detector output is authoritative.
+
 ## Step 2: Read the topic
 
 Read the entire target `.mcs.yml`. Identify every Power Fx expression: any value beginning with `=`, and
@@ -275,7 +289,7 @@ python scripts/scan_config.py   --agent {agent-slug} --module {module-id}
 Each reports findings for every in-scope topic at once (globals availability is still resolved agent-wide;
 `--module` only filters which topics are reported). Their output is authoritative, as in Steps 3/4/6c.
 
-### S-2: Review each topic in a read-once, per-topic loop
+### S-2: Review each topic through the engine (per-topic loop)
 
 Dispatch **one subagent for the whole module** (not one per topic, and not one per lens). That subagent:
 
@@ -283,24 +297,16 @@ Dispatch **one subagent for the whole module** (not one per topic, and not one p
    it) and the conformance guidance (`powerfx-topic-local.md`, `isv-conformance.md`,
    `isv-integration-pattern.md`). A module maps to a single ISV, so its topics share one ISV doc; reading it
    once here is what avoids re-reading it per topic.
-2. **Loops each in-scope topic**, giving each its own full attention: apply the Power Fx, ISV-conformance,
-   and integration-pattern lenses to that one topic (Steps 5, 6, 6b), exactly as the single-topic path does.
-   Per-topic focus is deliberate — scanning many topics at once for one lens skims and misses per-topic
-   detail (e.g. a single hardcoded value).
-3. **Writes each topic's catalog to disk immediately** after finishing that topic (S-3), before moving to
-   the next. Offloading as it goes keeps findings from accumulating in context, so a long module does not
-   degrade the review. It returns only a compact per-topic summary (counts + finding ids), not full findings.
+2. **Loops each in-scope topic, running the per-topic engine (Steps 2–8) on it** — reading the topic, all
+   six lenses (using this topic's slice of the S-1 detector output, not re-running the detectors),
+   consolidating (Step 7), and persisting its catalog (Step 8) — before moving to the next topic. Give each
+   topic its own full attention; per-topic focus is deliberate, because scanning many topics at once for one
+   lens skims and misses per-topic detail (e.g. a single hardcoded value). Persisting each catalog as it goes
+   keeps findings from accumulating in context, so a long module does not degrade the review.
 
-(If a module is very large and the loop risks losing focus late, split it into batches of topics across a
-few subagents — but read the shared docs once within each batch.)
-
-### S-3: Consolidate and persist per topic (inside the loop)
-
-For each topic, combine that topic's detector findings (from S-1) with its lens findings (from S-2), run the
-Step 7 consolidation, then persist its catalog with `merge_findings.py --solution {topic-stem}` exactly as
-Step 8 does for a single topic. Every topic keeps its own `{topic-stem}-catalog.json`; a topic with no
-findings still gets reconciled (so a previously-flagged finding there is correctly carried forward). These
-per-topic catalogs are the intermediates the roll-up is built from.
+The subagent returns only a compact per-topic summary (counts + finding ids); the per-topic catalogs on disk
+are the source the roll-up is built from. (If a module is very large and the loop risks losing focus late,
+split it into batches of topics across a few subagents — but read the shared docs once within each batch.)
 
 ### S-4: Present the roll-up
 
