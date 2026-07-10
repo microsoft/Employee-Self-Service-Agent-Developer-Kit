@@ -253,8 +253,9 @@ def test_passed_when_selected_solution_matches(runner: _MinimalRunner) -> None:
     # with the WARNING path (operator can confirm the binding at a glance).
     assert "ContosoPublisher" in r.result
     assert "contoso" in r.result
-    # Principle 8: PASSED has no remediation.
-    assert r.remediation == ""
+    # PASSED remediation describes what was validated.
+    assert r.remediation.startswith("Validated:")
+    assert "preferred" in r.remediation
 
 
 @responses.activate
@@ -468,7 +469,7 @@ def test_passed_when_publisher_fetch_fails_degrades_gracefully(
     assert "ESSCustomization" in r.result
     # No publisher annotation when the fetch failed.
     assert "publisher:" not in r.result
-    assert r.remediation == ""
+    assert r.remediation.startswith("Validated:")
 
 
 @responses.activate

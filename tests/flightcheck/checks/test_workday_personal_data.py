@@ -437,14 +437,9 @@ class TestModeA_PassBranches:
         r = results[0]
         assert r.checkpoint_id == "WD-SEC-003"
         assert r.status == "Passed"
-        # AGENTS.md principle #8: PASSED branches have no remediation
-        # text. Use truthiness (not == "") so the test still holds if
-        # CheckResult ever changes the default from `str = ""` to e.g.
-        # `Optional[str] = None`. The HTML renderer already tolerates
-        # both via `res.remediation or ""` (runner.py line 620) — this
-        # test should match that tolerance rather than over-pin the
-        # current default.
-        assert not r.remediation
+        # PASSED remediation now describes what was validated.
+        assert r.remediation.startswith("Validated:")
+        assert "Personal Data" in r.remediation
         # Result must report the observed state — specifically that
         # the runtime permission is in place.
         assert "Personal Data" in r.result

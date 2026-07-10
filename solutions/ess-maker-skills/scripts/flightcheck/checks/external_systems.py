@@ -84,6 +84,7 @@ def run_external_systems_checks(runner) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="Workday solution installed",
             result=f"Found {len(wd_flows)} Workday flow(s)",
+            remediation=f"Validated: {len(wd_flows)} Workday cloud flow(s) are present in the environment, indicating the Workday solution/extension pack is installed.",
             doc_link=f"{DOC_BASE}/workday",
         ))
     else:
@@ -115,6 +116,7 @@ def run_external_systems_checks(runner) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="ServiceNow solution installed",
             result=detail,
+            remediation="Validated: ServiceNow cloud flow(s) are present in the environment, indicating the ServiceNow (HRSD/ITSM) solution is installed.",
             doc_link=f"{DOC_BASE}/servicenow",
         ))
     else:
@@ -136,6 +138,7 @@ def run_external_systems_checks(runner) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="SAP SuccessFactors solution installed",
             result=f"Found {len(sap_flows)} SAP flow(s)",
+            remediation=f"Validated: {len(sap_flows)} SAP SuccessFactors cloud flow(s) are present in the environment, indicating the SAP SuccessFactors solution is installed.",
             doc_link=f"{DOC_BASE}/sap-successfactors",
         ))
     else:

@@ -33,6 +33,7 @@ def run_authentication_checks(runner) -> list[CheckResult]:
                 priority=Priority.CRITICAL.value, status=Status.PASSED.value,
                 description="Microsoft Entra ID configured",
                 result=f"Tenant: {org['displayName']} ({org.get('id', 'N/A')})",
+                remediation="Validated: the tenant exposes a Microsoft Entra ID organization record via Microsoft Graph (GET /organization returned an org with a displayName and id).",
                 doc_link=f"{DOC_BASE}/prerequisites#identity-authentication-and-single-sign-on-sso",
             ))
         else:
@@ -70,6 +71,7 @@ def run_authentication_checks(runner) -> list[CheckResult]:
                     f"{len(enabled)} enabled, "
                     f"{len(report_only)} report-only"
                 ),
+                remediation="Validated: Conditional Access policies are readable via Microsoft Graph (GET /identity/conditionalAccess/policies) and at least one policy exists in the tenant.",
                 doc_link=f"{DOC_BASE}/prerequisites#identity-authentication-and-single-sign-on-sso",
             ))
         else:
@@ -99,6 +101,7 @@ def run_authentication_checks(runner) -> list[CheckResult]:
                 priority=Priority.HIGH.value, status=Status.PASSED.value,
                 description="User identity synchronization",
                 result=f"Verified: {len(users)} sample users found in Entra ID",
+                remediation="Validated: a sample of users resolves in Entra ID via Microsoft Graph (GET /users returned at least one user), confirming identities are present/synchronized.",
                 doc_link=f"{DOC_BASE}/prerequisites#identity-authentication-and-single-sign-on-sso",
             ))
         else:
@@ -494,6 +497,7 @@ def _check_workday_app_user_assignment(graph) -> list[CheckResult]:
             priority=Priority.CRITICAL.value, status=Status.PASSED.value,
             description=description,
             result=_format_sp_state(passed_items),
+            remediation="Validated: the service principal(s) listed above are present in Entra ID and report the expected OBO/OAuth and user/group assignment configuration.",
             doc_link=doc_link,
         ))
 

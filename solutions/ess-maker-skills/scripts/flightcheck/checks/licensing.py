@@ -194,6 +194,7 @@ def _check_traditional_flow_licensing(runner) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="Agent flow licensing",
             result="No agent topics invoke a Power Automate flow (no InvokeFlowAction references found).",
+            remediation="Validated: no agent topic contains an InvokeFlowAction, so the agent invokes no Power Automate flow and no premium-connector flow licensing applies.",
             doc_link=PA_LICENSING_FAQ,
         )]
 
@@ -291,6 +292,7 @@ def _check_traditional_flow_licensing(runner) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="Agent flow licensing",
             result="; ".join(detail_bits) + ".",
+            remediation="Validated: every agent-invoked Power Automate flow uses only standard-tier connectors (no premium or custom connector detected), so no per-user premium license is required for these flows.",
             doc_link=PA_LICENSING_FAQ,
         )]
 
@@ -666,6 +668,7 @@ def _check_shared_user_licensing(runner) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="Shared-user flow licensing",
             result="The agent is not yet shared with any user; no licenses to verify.",
+            remediation="Validated: the agent is not shared with any user, so there are no shared-with principals whose premium-connector flow licensing needs checking.",
             doc_link=PA_LICENSING_FAQ,
         )]
 
@@ -745,6 +748,7 @@ def _check_shared_user_licensing(runner) -> list[CheckResult]:
         priority=Priority.HIGH.value, status=Status.PASSED.value,
         description="Shared-user flow licensing",
         result=base + ". All shared-with users hold a qualifying license.",
+        remediation="Validated: every user the agent is shared with holds a qualifying Power Automate / Power Platform license for the premium-connector flow(s) the agent invokes.",
         doc_link=PA_LICENSING_FAQ,
     )]
 

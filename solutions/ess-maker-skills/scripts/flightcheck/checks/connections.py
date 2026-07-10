@@ -136,7 +136,7 @@ def check_connector_connections(
                 status=Status.PASSED.value if connected else Status.FAILED.value,
                 description=f"{category} connections",
                 result=f"{len(conns)} total — {len(connected)} connected, {len(errored)} errored",
-                remediation="Re-authenticate errored connections in Power Platform." if errored else "",
+                remediation="Re-authenticate errored connections in Power Platform." if errored else f"Validated: {len(connected)} of {len(conns)} {category} connection(s) report 'Connected' state via the Power Platform connections API (GET /providers/Microsoft.PowerApps/scopes/admin/environments/{{env_id}}/connections).",
                 doc_link=doc_link,
                 roles=[Role.POWER_PLATFORM_ADMIN.value],
             ))
@@ -153,7 +153,7 @@ def check_connector_connections(
                     status=Status.PASSED.value if status == "Connected" else Status.FAILED.value,
                     description=f"Connection: {name}",
                     result=f"Status: {status}",
-                    remediation=f"Re-authenticate '{name}' in Power Platform." if status != "Connected" else "",
+                    remediation=f"Re-authenticate '{name}' in Power Platform." if status != "Connected" else f"Validated: connection '{name}' reports 'Connected' status via the Power Platform connections API.",
                     roles=[Role.POWER_PLATFORM_ADMIN.value],
                 ))
         else:

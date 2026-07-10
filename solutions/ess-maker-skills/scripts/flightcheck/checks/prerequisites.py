@@ -249,6 +249,7 @@ def _run_graph_prereq_checks(graph) -> list[CheckResult]:
                 priority=Priority.CRITICAL.value, status=Status.PASSED.value,
                 description="Microsoft 365 Copilot licenses",
                 result=f"Found {consumed} consumed / {enabled} enabled",
+                remediation="Validated: at least one Microsoft 365 Copilot license seat is consumed in the tenant, read via Microsoft Graph (GET /subscribedSkus, consumedUnits > 0).",
                 doc_link=f"{DOC_BASE}/prerequisites#licensing",
             ))
         else:
@@ -281,6 +282,7 @@ def _run_graph_prereq_checks(graph) -> list[CheckResult]:
                 priority=Priority.CRITICAL.value, status=Status.PASSED.value,
                 description="Copilot Studio licenses",
                 result=f"Found: {names}",
+                remediation="Validated: at least one Copilot Studio license SKU is present in the tenant, read via Microsoft Graph (GET /subscribedSkus).",
                 doc_link=f"{DOC_BASE}/prerequisites#licensing",
             ))
         else:
@@ -312,6 +314,7 @@ def _run_graph_prereq_checks(graph) -> list[CheckResult]:
                 priority=Priority.CRITICAL.value, status=Status.PASSED.value,
                 description="Microsoft Teams licenses",
                 result=f"{consumed} users licensed for Teams",
+                remediation="Validated: at least one Microsoft Teams license is consumed in the tenant, read via Microsoft Graph (GET /subscribedSkus, consumedUnits > 0).",
                 doc_link=f"{DOC_BASE}/prerequisites#licensing",
             ))
         else:
@@ -345,6 +348,7 @@ def _run_graph_prereq_checks(graph) -> list[CheckResult]:
                 priority=Priority.CRITICAL.value, status=Status.PASSED.value,
                 description="Global Admin role assigned",
                 result=f"Assigned to {len(members)} user(s)",
+                remediation="Validated: the Global Administrator directory role has at least one active member, read via Microsoft Graph (GET /directoryRoles + members).",
                 doc_link=f"{DOC_BASE}/prerequisites#required-roles",
             ))
         else:
@@ -378,6 +382,7 @@ def _run_graph_prereq_checks(graph) -> list[CheckResult]:
                 priority=Priority.CRITICAL.value, status=Status.PASSED.value,
                 description="Power Platform Admin role assigned",
                 result=f"Assigned to {len(members)} user(s)",
+                remediation="Validated: the Power Platform Administrator directory role has at least one active member, read via Microsoft Graph (GET /directoryRoles + members).",
                 doc_link=f"{DOC_BASE}/prerequisites#required-roles",
             ))
         else:
