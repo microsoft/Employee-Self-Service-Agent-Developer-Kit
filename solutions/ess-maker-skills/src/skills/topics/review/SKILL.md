@@ -14,8 +14,9 @@ publishing.
 - Operate on the authored `.mcs.yml` in the maker's agent folder (`{agent.folder}/topics/`), i.e. the
   topic **before publish**. Do not require the published `samples/` copy.
 - **Run the analysis silently.** Steps 3–8 are internal: run the detectors, read the reference docs, and
-  persist the catalog **without narrating them**. Do not tell the maker what tools you are calling or what
-  files you are reading. The only thing the maker sees is the final report in Step 9.
+  persist the catalog **without narrating them**. Do not rephrase, add commentary, or tell the maker what
+  tools you are calling or what files you are reading. The only thing the maker sees is the final report in
+  Step 9.
 - **Speak the maker's language.** Hide the *review system's* vocabulary everywhere — "lens", "detector",
   "conformance", "reachability" tags (`REACHABLE_NORMAL_UI`), rule IDs (`BTPF-001`), catalog paths (the list
   is illustrative; the test is whether a maker who never saw this skill's internals would understand it). This
