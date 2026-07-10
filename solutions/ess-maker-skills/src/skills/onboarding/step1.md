@@ -47,35 +47,34 @@ A browser window will open for sign-in. Wait for the script to finish.
 
 **Check the terminal output:**
 
-- **Script printed a table of environments → go to step 1.1a.**
+- **Script printed `ENV_TABLE_MARKDOWN:<path>` → go to step 1.1a.**
 - **Script failed with an auth/permission error → go to step 1.1c.**
 
 ---
 
-## 1.1a — Ask the user to pick an environment
+## 1.1a — Show the table and ask the user to pick
 
-Build options from the script's environment table. Each row becomes an
-option with the environment name as the label and the URL + type as
-the description.
+Read the Markdown file at the path printed after `ENV_TABLE_MARKDOWN:`
+(it is `workspace/onboarding/environments.md`). It contains a complete,
+numbered table of environments. Do NOT rebuild it from the terminal
+output — read it from the file so no rows are lost.
 
-Use the `vscode_askQuestions` tool:
+Show the user this Message, with `{TABLE}` replaced by the **entire**
+contents of that Markdown file rendered as-is:
 
-```json
-[
-  {
-    "header": "Select environment",
-    "question": "Which environment is your ESS agent deployed in?",
-    "options": [
-      { "label": "{env 1 name}", "description": "{URL} [{type}]" },
-      { "label": "{env 2 name}", "description": "{URL} [{type}]" }
-    ],
-    "allowFreeformInput": false
-  }
-]
-```
+**Message:**
 
-Map the selected environment name back to its row number from the script
-output.
+Here are the Power Platform environments in your tenant:
+
+{TABLE}
+
+Reply with the **number** of the environment your ESS agent is deployed
+in (for example, `2`).
+
+**End message.**
+
+Wait for the user to reply with a number. Save it as NUMBER and go to
+step 1.1b.
 
 ---
 
@@ -91,6 +90,9 @@ Find the line starting with `SELECTED_ENV_JSON:` in the output. Parse the
 JSON after the colon to get the `instanceUrl` field. Save it as ENV_URL.
 **Strip any trailing slash** from ENV_URL before using it (e.g.,
 `https://org.crm.dynamics.com/` becomes `https://org.crm.dynamics.com`).
+
+If the command instead prints an `ERROR: Invalid selection` line, show the
+table again (step 1.1a) and ask for a valid number.
 
 Go to step 1.2.
 
