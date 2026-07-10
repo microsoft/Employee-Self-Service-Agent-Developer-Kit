@@ -33,6 +33,7 @@ dev = [
 packages = [
     "src/constants",
     "src/core",
+    "src/modules",
     "src/service",
 ]
 

@@ -1,1 +1,1 @@
-"""sdk package."""
+"""core.outbound — Dataverse client layer."""

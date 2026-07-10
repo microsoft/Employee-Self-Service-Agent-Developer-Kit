@@ -16,20 +16,19 @@ specifications define the system, and this code is one implementation of them.
 
 ```text
 src/
-    mtk.py           CLI entry point (customer interaction)
     constants/       Shared constants
     core/
-        pipeline/
-        orchestrator/
-        logging/
+        auth/        Authentication (token_provider.py)
+        logging/     Diagnostics framework
         models/      Canonical domain models
         outbound/    Dataverse client (dataverse_client.py)
-    service/         Reusable application capabilities
+        pipeline/    Pipeline engine
         utils/       Generic helpers
         modules/
             preprocessing/
             migration/      migration_pipeline.py, steps/
             postprocessing/
+    service/         Orchestration (mtk_orchestrator.py)
 debug/               Generated, gitignored output
     logs/
     reports/
