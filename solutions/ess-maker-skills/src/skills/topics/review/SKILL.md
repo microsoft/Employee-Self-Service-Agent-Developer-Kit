@@ -293,8 +293,10 @@ Dispatch **one subagent for the whole module** (not one per topic, and not one p
       drill-down read from it, and skipping the write silently loses the topic's results. Writing as you go also
       keeps findings from accumulating in context, so a long module does not degrade the review.
 
-The subagent returns only a compact per-topic summary (counts + finding ids); the per-topic catalogs on disk
-are the source the roll-up is built from. (If a module is very large and the loop risks losing focus late,
+The subagent returns a compact per-topic summary — per topic: the High/Medium/Low counts and, for each
+finding, its severity, plain-language issue type, and id. That summary (already in your context) is what the
+roll-up is **tabulated from**; the per-topic catalogs on disk are the durable record and the drill-down
+source, **not** re-read to aggregate. (If a module is very large and the loop risks losing focus late,
 split it into batches of topics across a few subagents — but read the shared docs once within each batch.)
 
 ### S-3: Verify every topic persisted
@@ -303,15 +305,18 @@ Before presenting, confirm the loop actually wrote a valid catalog for **each** 
 topic stem, check that `.local/review-findings/{topic-stem}-catalog.json` exists and parses (has an
 `issues` array). A missing or unparseable catalog means that topic's persist was skipped or its findings
 were rejected — **re-run the per-topic engine for that one topic** (Steps 2–8, persisting via
-`merge_findings.py`), then re-check. Do this only for the missing/invalid topics, not the whole module. Build
-the roll-up only once every in-scope topic has a valid catalog.
+`merge_findings.py`), then re-check. Do this only for the missing/invalid topics, not the whole module.
+Present the roll-up (S-4) only once every in-scope topic has a valid catalog.
 
 ### S-4: Present the roll-up
 
 Show a scope-level summary, then a per-topic table and an issue-type rollup — **not** each topic's full
-findings table. Follow the same exact-template discipline as Step 9 (including the **Speak the maker's
-language** rule — plain words, step display names, no internal vocabulary): use the verbatim lines below, do
-not improvise the verdict, add prose between sections, or narrate the analysis (including todo-list activity).
+findings table. **Tabulate it directly from the per-topic summaries the loop returned into your context**
+(counts + per-finding severity/issue-type/id) — do **not** re-read the catalogs to aggregate, and do **not**
+author a script or write a summary JSON to compute it; the roll-up is a presented table, not a persisted
+artifact. Follow the same exact-template discipline as Step 9 (including the **Speak the maker's language**
+rule — plain words, step display names, no internal vocabulary): use the verbatim lines below, do not
+improvise the verdict, add prose between sections, or narrate the analysis (including todo-list activity).
 
 If **no topic** in the scope has an active finding:
 
