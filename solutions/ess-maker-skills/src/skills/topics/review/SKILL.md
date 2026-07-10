@@ -189,203 +189,24 @@ today; scope-neutral for a wider review later).
 
 ## Step 9: Present the report
 
-Follow this format exactly. Do **not** add prose between sections, narrate what you checked, or explain the
-process. Use plain words per the **Speak the maker's language** rule; locate each finding by the
-**step/action it lives in** (its display name), never a node id or line number.
-
-### 9a — No findings
-
-If the active set is empty, show only this and stop — no table, no disclaimer, nothing to caveat:
-
-**Message:**
-
-I looked over `{TopicName}` and didn't spot anything to flag — you're good to publish.
-
-**End message.**
-
-### 9b — Verdict line
-
-Otherwise show one verdict line, keyed to the highest severity present:
-
-- Any High → `⚠️ **{TopicName}** — I spotted some things that could cause problems; worth a look before you publish.`
-- Any Medium (no High) → `**{TopicName}** — a few things that might be worth a look before you publish.`
-- Only Low → `**{TopicName}** — looks good; a couple of minor things to double-check before publishing.`
-
-Directly under it, this framing line **verbatim**:
-
-> These are potential issues flagged from common patterns — not confirmed bugs. Some may not apply to your
-> scenario; use your judgment.
-
-### 9c — Findings table
-
-Then this table, one row per finding, sorted High → Medium → Low. Put any "no user impact today" items under
-a short **Minor / cleanup** heading below the main rows.
-
-| # | Severity | Where (step) | Potential issue | Suggested fix |
-|---|----------|--------------|-----------------|---------------|
-| 1 | Medium | "{step name/label}" | {what might be wrong — hedged} | {suggested fix} |
-
-The table carries each finding — do not restate rows in prose. Add one short line under the table **only**
-when a fix needs a Power Fx snippet or nuance the cell can't hold.
-
-### 9d — Close
-
-End with this **verbatim**:
-
-> Advisory — you can publish as-is. To fix one, type `/update` and name its step; re-run `/review` after
-> edits to re-check.
-
-### Issue detail view (when the maker asks about one issue)
-
-When the maker asks to see or fix a **specific issue** — "more details on X", "explain this one", "how do I
-fix it" — present that finding in this structured shape, **not flowing prose**. Pull the finding from its
-catalog (read the cited `files[].lines` if you need the exact expression to reference — a targeted read, not
-a re-analysis). One block per issue — a bold header line (`{plain-language title}` · {High/Medium/Low} ·
-`{topic-stem}.mcs.yml:{line}` "{step display name}"), then:
-
-- **Proposed fix:** {concise prose; technical language allowed — name the expression/property and the change}
-- **Why fix it this way:** {one or two plain sentences}
-
-This is the one place the maker's own code and `file:line` appear. Still keep the review system's vocabulary
-out (no rule IDs, reachability tags, "lens").
+Present the maker-facing report exactly per
+[`report-format.md`](src/reference/ess-docs/conformance/report-format.md): the no-findings message (9a),
+verdict line (9b), findings table (9c), and close (9d); and, when the maker asks about a **specific issue**,
+the **Issue detail view**. Follow those templates verbatim and apply the **Speak the maker's language** rule.
 
 ### Subagent mode
 
-**If invoked as a subagent by a parent flow** (not directly by the maker): skip 9a–9d and instead return the
-**structured** findings — rule IDs, severity, reachability, and sites from the analysis guidance — so the
-parent can consume them programmatically. Do not prompt the maker directly.
+**If invoked as a subagent by a parent flow** (not directly by the maker): skip the maker-facing report and
+instead return the **structured** findings — rule IDs, severity, reachability, and sites from the analysis
+guidance — so the parent can consume them programmatically. Do not prompt the maker directly.
 
 ## Scoped review (a whole module)
 
-Reached from Step 1 when the maker asked to review a module rather than one topic. The scope is a **module
-id** — a filename prefix shared by a backend's topics (`servicenow-hrsd`, `servicenow-itsm`, `workday`).
-
-**Resolve the in-scope set once, by prefix, and use that exact set for everything.** The in-scope topics are
-`{agent.folder}/topics/{module-id}*.mcs.yml` — a **prefix** match (the same `startswith` the detectors'
-`--module` uses), never a substring match. List them and let **N = that count**; both the review loop and the
-S-4 "N topics" figure must come from this one enumerated set, so the reported count always equals what was
-actually reviewed. A broad or non-canonical term can resolve to more than one backend — e.g. `servicenow`
-spans `servicenow-hrsd` **and** `servicenow-itsm`, and does **not** include the differently-prefixed
-`ess-hr-servicenow-*` persona-bundle copies. If the maker's term is ambiguous or matches zero topics, confirm
-the resolved module id and the exact topic list with them before starting.
-
-Run the analysis silently (the no-chatter rule still applies); the maker sees only the roll-up in S-4.
-
-### S-1: Run the detectors once across the scope
-
-From `solutions/ess-maker-skills/`, run each detector **once** with `--module` (not per topic):
-
-```
-python scripts/scan_globals.py  --agent {agent-slug} --module {module-id}
-python scripts/scan_bindings.py --agent {agent-slug} --module {module-id}
-python scripts/scan_config.py   --agent {agent-slug} --module {module-id}
-```
-
-Each reports findings for every in-scope topic at once (globals availability is still resolved agent-wide;
-`--module` only filters which topics are reported). Their output is authoritative, as in Steps 3/4/6c.
-
-### S-2: Review each topic through the engine (per-topic loop)
-
-Dispatch **one subagent for the whole module** (not one per topic, and not one per lens). That subagent:
-
-1. Reads the shared reference material **once** — the module's ISV reference doc (in full — do not distill
-   it) and the conformance guidance (`powerfx-topic-local.md`, `isv-conformance.md`,
-   `isv-integration-pattern.md`). A module maps to a single ISV, so its topics share one ISV doc; reading it
-   once here is what avoids re-reading it per topic.
-2. **Loops each in-scope topic**, giving each its own full attention (per-topic focus is deliberate —
-   scanning many topics at once for one lens skims and misses per-topic detail like a single hardcoded
-   value). For **each** topic, in order, run the per-topic engine and finish with the mandatory persist:
-   1. Read the topic and apply all six lenses (Steps 2–6c), using this topic's slice of the S-1 detector
-      output — do not re-run the detectors.
-   2. Consolidate (Step 7).
-   3. **Persist this topic's catalog — the required last action of the iteration, before moving to the next
-      topic.** Pipe this topic's consolidated findings to the script on stdin, from
-      `solutions/ess-maker-skills/` (see Step 8 for the exact stdin form and the `.local\tmp\`
-      workspace-internal staging rule — never `$env:TEMP` / `/tmp`):
-
-      ```
-      Get-Content .local\tmp\findings.json -Raw | python scripts/merge_findings.py --solution {topic-stem} --current -
-      ```
-
-      This write is **mandatory and per-topic**: do it once for each topic as you finish it. Do **not**
-      defer persistence to the end of the loop, do **not** collect all topics and write them together, and
-      do **not** author a helper script to batch-write. `merge_findings.py` is the **only** sanctioned way to
-      write a catalog: it validates each finding against the contract (`id`, `title`, `severity`,
-      `reachability`, `root_cause`, `concrete_fix`, and a non-empty `files[]`) and **exits non-zero without
-      writing** if any is malformed. If it exits non-zero, the finding shape is wrong — correct the field names
-      and re-run for this topic; never hand-write a catalog or improvise a scanner to work around it. The
-      `{topic-stem}-catalog.json` on disk is the only durable record of this topic's findings — the roll-up and
-      drill-down read from it, and skipping the write silently loses the topic's results. Writing as you go also
-      keeps findings from accumulating in context, so a long module does not degrade the review.
-
-The subagent returns a compact per-topic summary — per topic: the High/Medium/Low counts and, for each
-finding, its severity, plain-language issue type, and id. That summary (already in your context) is what the
-roll-up is **tabulated from**; the per-topic catalogs on disk are the durable record and the drill-down
-source, **not** re-read to aggregate. (If a module is very large and the loop risks losing focus late,
-split it into batches of topics across a few subagents — but read the shared docs once within each batch.)
-
-### S-3: Verify every topic persisted
-
-Before presenting, confirm the loop actually wrote a valid catalog for **each** in-scope topic. For every
-topic stem, check that `.local/review-findings/{topic-stem}-catalog.json` exists and parses (has an
-`issues` array). A missing or unparseable catalog means that topic's persist was skipped or its findings
-were rejected — **re-run the per-topic engine for that one topic** (Steps 2–8, persisting via
-`merge_findings.py`), then re-check. Do this only for the missing/invalid topics, not the whole module.
-Present the roll-up (S-4) only once every in-scope topic has a valid catalog.
-
-### S-4: Present the roll-up
-
-Show a scope-level summary, then a per-topic table and an issue-type rollup — **not** each topic's full
-findings table. **Tabulate it directly from the per-topic summaries the loop returned into your context**
-(counts + per-finding severity/issue-type/id) — do **not** re-read the catalogs to aggregate, and do **not**
-author a script or write a summary JSON to compute it; the roll-up is a presented table, not a persisted
-artifact. Follow the same exact-template discipline as Step 9 (including the **Speak the maker's language**
-rule — plain words, step display names, no internal vocabulary): use the verbatim lines below, do not
-improvise the verdict, add prose between sections, or narrate the analysis (including todo-list activity).
-
-If **no topic** in the scope has an active finding:
-
-**Message:**
-
-I reviewed all {N} `{module-id}` topics and didn't spot anything to flag — you're good to publish.
-
-**End message.**
-
-Otherwise, one verdict line keyed to the highest severity anywhere in the scope (verbatim):
-
-- Any High → `⚠️ **Review — {module-id}** ({N} topics) — some things across these topics could cause problems; worth a look before you publish.`
-- Any Medium (no High) → `**Review — {module-id}** ({N} topics) — a few things across these topics might be worth a look before you publish.`
-- Only Low → `**Review — {module-id}** ({N} topics) — looks good; a few minor things to double-check before publishing.`
-
-Directly under it, this framing line **verbatim**:
-
-> These are potential issues flagged from common patterns — not confirmed bugs. Some may not apply to your
-> scenario; use your judgment.
-
-Then the **per-topic table** — topics with findings first, worst severity first; omit clean topics but note
-the count below:
-
-| Topic | High | Medium | Low |
-|-------|------|--------|-----|
-| {topic-stem} | {n} | {n} | {n} |
-
-`{k} other topics were clean.`
-
-Then the **issue-type rollup** — the same active findings grouped by their plain-language issue type, so the
-maker sees which problems recur across the scope. Order by severity, then count:
-
-| Issue | Topics affected | Severity |
-|-------|-----------------|----------|
-| {plain-language issue type} | {count} | {High/Medium/Low} |
-
-Close with this **verbatim**:
-
-> To see a topic's details, ask to review it by name (e.g. `review {topic-stem}`) — its findings are saved.
-> To fix one, type `/update` and name the topic and step. Re-run to re-check.
-
-**Drill-down:** if the maker asks to see one topic, render that topic's Step-9c table from its
-`{topic-stem}-catalog.json` (active set). If they ask about a **specific issue**, use the **Issue detail
-view** (Step 9) — no re-analysis, only a targeted read of the cited line to quote the current expression.
+If Step 1 resolved to a **module scope** (all topics for a backend), follow
+[`scoped-review.md`](src/reference/ess-docs/conformance/scoped-review.md) instead of running Steps 2–9
+once: it resolves the in-scope set by prefix, runs the detectors once with `--module`, loops the per-topic
+engine (Steps 2–8) persisting each catalog, verifies persistence, and presents the scoped roll-up (per
+`report-format.md`). The per-topic engine (Steps 2–8) and the finding contract are unchanged.
 
 ## References
 
@@ -398,3 +219,5 @@ Guidance docs under `src/reference/ess-docs/conformance/` (read the one a step c
 - [`ux-contract.md`](src/reference/ess-docs/conformance/ux-contract.md) — adaptive-card UX contract (Step 4).
 - [`isv-conformance.md`](src/reference/ess-docs/conformance/isv-conformance.md) — ISV field/schema conformance (Step 6).
 - [`isv-integration-pattern.md`](src/reference/ess-docs/conformance/isv-integration-pattern.md) — shared-orchestrator pattern (Step 6b).
+- [`report-format.md`](src/reference/ess-docs/conformance/report-format.md) — maker-facing output templates: single-topic report (Step 9), issue detail view, scoped roll-up.
+- [`scoped-review.md`](src/reference/ess-docs/conformance/scoped-review.md) — the module-scope sub-workflow (S-1–S-4).
