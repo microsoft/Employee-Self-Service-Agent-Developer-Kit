@@ -241,8 +241,16 @@ parent can consume them programmatically. Do not prompt the maker directly.
 ## Scoped review (a whole module)
 
 Reached from Step 1 when the maker asked to review a module rather than one topic. The scope is a **module
-id** — the leading filename segment shared by a backend's topics (`servicenow-hrsd`, `servicenow-itsm`,
-`workday`). Confirm the resolved module and the count of topics it matches before starting.
+id** — a filename prefix shared by a backend's topics (`servicenow-hrsd`, `servicenow-itsm`, `workday`).
+
+**Resolve the in-scope set once, by prefix, and use that exact set for everything.** The in-scope topics are
+`{agent.folder}/topics/{module-id}*.mcs.yml` — a **prefix** match (the same `startswith` the detectors'
+`--module` uses), never a substring match. List them and let **N = that count**; both the review loop and the
+S-4 "N topics" figure must come from this one enumerated set, so the reported count always equals what was
+actually reviewed. A broad or non-canonical term can resolve to more than one backend — e.g. `servicenow`
+spans `servicenow-hrsd` **and** `servicenow-itsm`, and does **not** include the differently-prefixed
+`ess-hr-servicenow-*` persona-bundle copies. If the maker's term is ambiguous or matches zero topics, confirm
+the resolved module id and the exact topic list with them before starting.
 
 Run the analysis silently (the no-chatter rule still applies); the maker sees only the roll-up in S-4.
 
