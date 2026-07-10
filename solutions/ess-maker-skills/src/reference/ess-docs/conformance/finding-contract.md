@@ -154,3 +154,8 @@ Each catalog finding is this contract serialized, plus the analyzer's cross-run 
   node is gone, resolve it by writing a ledger entry). This is objective, not an LLM judgment.
 - The customer-facing report presents the **active** set; call out `evidence_stale` findings as "previously
   flagged, code has since changed — worth confirming."
+
+**Recording a resolution (input).** To mark a finding resolved, pass it (at minimum its `id`) in the
+`merge_findings.py --resolve` file. Each may carry a `resolution` (`fixed` — default; `not-a-bug` or
+`wont-fix` for a maker dismissal) and `resolved_by` (`review-skill` — default; `maker` for a dismissal,
+`update-skill` for a tool fix). Absence from a run is never a resolution.

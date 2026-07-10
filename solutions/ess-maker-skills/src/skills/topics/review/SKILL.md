@@ -68,11 +68,14 @@ entry paths run this same engine:
 - **Single-topic** (from Step 1) runs it **once**, then presents with Step 9.
 - **Scoped** (the Scoped review section) runs it **per topic in a loop**, then presents with S-4.
 
-**Detector source (Steps 3, 4, 6c).** Those steps need this topic's `scan_globals` / `scan_bindings` /
-`scan_config` results. In a **single-topic** review, run each detector with `--topic {topic-stem}` as shown.
-In a **scoped** review the detectors have already run **once** across the module with `--module` (Scoped
-S-1); use this topic's slice of that output — do **not** re-run them per topic (`scan_globals` re-reads the
-whole agent on each call). Either way the detector output is authoritative.
+**Detector steps (3, 4, 6c) share one contract.** Each runs a script from `solutions/ess-maker-skills/`
+whose output is **authoritative**: every item it reports is a real defect that will always render blank at
+runtime — do **not** second-guess it with "might be blank for some records". Read the step's cited guidance
+doc, turn each reported item into a finding, and apply the precision bar + reachability from
+`finding-contract.md` to set severity. If a script genuinely cannot run, say so in the report rather than
+silently skipping. Sourcing: in a **single-topic** review run each detector with `--topic {topic-stem}`; in
+a **scoped** review they already ran **once** across the module with `--module` (S-1) — use this topic's
+slice, do **not** re-run them per topic (`scan_globals` re-reads the whole agent on each call).
 
 ## Step 2: Read the topic
 
@@ -83,37 +86,17 @@ stable node locators the fix step keys on. Note the approximate line number as s
 
 ## Step 3: Check Global reference integrity (run the detector)
 
-Run this from the `solutions/ess-maker-skills/` directory:
-
-```
-python scripts/scan_globals.py --agent {agent-slug} --topic {topic-stem}
-```
-
-- `{agent-slug}` = the agent folder name under `workspace/agents/` (from `.local/config.json`).
-- `{topic-stem}` = the reviewed topic's filename without `.mcs.yml`.
-
-The detector's output is **authoritative** on whether a `Global.*` reference resolves. Every reference it
-reports as dangling **does not exist** anywhere in this agent — it is neither written by any topic nor
-declared as a variable. Do **not** reason about whether such a reference "might be blank" or "might exist
-for some records": if the detector reports it, it will **always** read blank. Read
-`src/reference/ess-docs/conformance/dangling-globals.md` and turn each reported reference into a finding,
-applying the precision bar and reachability scoring to set severity. If the script genuinely cannot be
-run, say so in the report rather than silently skipping.
+`python scripts/scan_globals.py --agent {agent-slug} --topic {topic-stem}` (`{agent-slug}` = the agent
+folder under `workspace/agents/`, from `.local/config.json`; `{topic-stem}` = the topic filename without
+`.mcs.yml`). Every reference it reports is dangling — it exists nowhere in the agent (no writer, no variable
+declaration), so it will **always** read blank. Guidance: `dangling-globals.md`.
 
 ## Step 4: Check adaptive-card UX contract
 
-If the topic contains an adaptive card, run the binding detector from the
-`solutions/ess-maker-skills/` directory:
-
-```
-python scripts/scan_bindings.py --agent {agent-slug} --topic {topic-stem}
-```
-
-Its output is **authoritative** on whether a card's `Topic.*` reference resolves: every reference it
-reports **will always render blank at runtime**. Then read
-`src/reference/ess-docs/conformance/ux-contract.md` and assess the card's empty/error/confirmation states
-(Part 2). Turn each into a finding with the shared precision bar and severity mapping. If the script
-cannot run, say so rather than silently skipping.
+If the topic contains an adaptive card:
+`python scripts/scan_bindings.py --agent {agent-slug} --topic {topic-stem}`. Every card `Topic.*` reference
+it reports will always render blank. Then read `ux-contract.md` and also assess the card's
+empty/error/confirmation states (Part 2).
 
 ## Step 5: Analyze Power Fx expression logic (internal reasoning)
 
@@ -139,29 +122,19 @@ authored topic and always applies (no reference docs needed).
 
 ## Step 6c: Check ServiceNow response-field integrity (run the detector)
 
-If the topic integrates ServiceNow, run this from the `solutions/ess-maker-skills/` directory:
-
-```
-python scripts/scan_config.py --agent {agent-slug} --topic {topic-stem}
-```
-
-Its output is **authoritative** on whether a parsed response field is returned by the scenario's template
-config: every field it reports is one the topic parses but the config never produces, so it **will always
-render blank at runtime**. Turn each reported field into a finding, applying the precision bar and
-reachability scoring from the shared [`finding-contract.md`](src/reference/ess-docs/conformance/finding-contract.md)
-(this check uses the `BTCF` finding-ID prefix). The detector covers ServiceNow scenarios only (Workday's
-config declares only a top-level key); if it reports nothing, or the topic is not ServiceNow, this check
-contributes no findings. If the script cannot run, say so rather than silently skipping. **Fix** for a
-reported field: remove it from the topic's parse schema, or add it to the scenario config's
+If the topic integrates ServiceNow:
+`python scripts/scan_config.py --agent {agent-slug} --topic {topic-stem}`. Every field it reports is one the
+topic parses but the scenario's template config never produces, so it will always render blank (uses the
+`BTCF` finding-ID prefix per [`finding-contract.md`](src/reference/ess-docs/conformance/finding-contract.md)).
+ServiceNow scenarios only — Workday's config declares just a top-level key, so it contributes nothing there.
+**Fix:** remove the field from the topic's parse schema, or add it to the scenario config's
 `OutputFieldMapping` if the integration should return it.
 
-Steps 3–6c are **internal reasoning**, and every lens reports findings in the one shared shape defined by
-[`finding-contract.md`](src/reference/ess-docs/conformance/finding-contract.md) — precision bar, severity
-via reachability, finding-ID prefixes, and the structured output format. Their rule IDs (e.g. `BTPF-001`),
-reachability tags (`REACHABLE_NORMAL_UI`, etc.), and the word "lens" are working vocabulary **for you** —
-they are NOT shown to the customer (see Step 9). Carry each finding's node locators (`id` / `displayName` /
-`kind`) and `Fix targets` through internally so the consolidation and customer-facing steps can name the
-step and a fixer can act.
+Steps 3–6c are **internal reasoning**; every check reports findings in the one shape defined by
+[`finding-contract.md`](src/reference/ess-docs/conformance/finding-contract.md) (precision bar,
+reachability→severity, finding-ID prefixes, output format). Carry each finding's node locators (`id` /
+`displayName` / `kind`) through internally so consolidation and the report can name the step and a fixer can
+act. That structured vocabulary is internal only — see the **Speak the maker's language** rule.
 
 ## Step 7: Consolidate findings
 
@@ -180,35 +153,23 @@ Carry the consolidated locators, rule IDs, and `Fix targets` to Step 8.
 
 ## Step 8: Persist and reconcile across runs
 
-The lenses are agentic, so coverage varies run to run — **a finding missing from this run is not evidence it
-was fixed.** Persist this run into the findings catalog and let the script reconcile it against the prior
-run, so the report is consistent session to session and `/update` can act on a finding precisely. The
-review scope is passed as `--solution` — the topic stem today (scope-neutral: a wider ISV/solution review
-would pass a different scope with no other change).
+The checks are agentic, so coverage varies run to run — **a finding missing this run is not evidence it was
+fixed.** Persist this run and let the script reconcile it against the prior run so the report is consistent
+across sessions and `/update` can act precisely. The full shape, `id`-reuse, status/resolution, and
+staleness rules live in [`finding-contract.md`](src/reference/ess-docs/conformance/finding-contract.md)
+(Persisted form); this step is the mechanics. The review scope is passed as `--solution` (the topic stem
+today; scope-neutral for a wider review later).
 
-1. Assemble this run's consolidated findings as JSON (`{"issues": [...]}`), each in the
-   finding-contract shape: `id` (a stable kebab-case behavior-describing slug), `title`, `severity`,
-   `reachability`, `root_cause`, `concrete_fix`, `verification` (`static` for all current lenses;
-   `needs-runtime-test` only for a finding that can only be confirmed by running the bot), and `files[]`
-   (`path` relative to `solutions/ess-maker-skills/` — the topic file, plus the config or other topic a
-   finding depends on, so its evidence hash is complete).
-   The **`id` is the cross-run identity** — first read the prior catalog
-   (`python scripts/merge_findings.py --solution {topic-stem} --show`) and **reuse the exact prior `id`** for a
-   finding you recognize, so it is matched as the same finding rather than a new one.
-2. Reconcile prior findings. For each prior finding **not** re-detected this run — especially any the
-   catalog marks `evidence_stale` (its files changed) — read the current topic: if its node/expression is
-   now gone or corrected, add it (at minimum its `id`) to a `--resolve` file under `.local\tmp\` (see step 3
-   for the workspace-internal staging rule). Also add a finding here
-   if the **maker dismisses it** — set `"resolution": "not-a-bug"` when they judge it a false positive, or
-   `"wont-fix"` when they acknowledge it but decline, and set `"resolved_by": "maker"`; the defaults are
-   `"resolution": "fixed"` and `"resolved_by": "review-skill"`. A finding merely being absent this run is
-   **not** resolution. A dismissed finding stays resolved until its code changes and it is re-detected, which
-   reopens it.
-3. Run from the `solutions/ess-maker-skills/` directory. **Pipe the findings JSON to the script on stdin
-   with `--current -`.** Do not pass a temp-file path — a mis-pathed temp file (a Unix `/tmp/...` path on
-   Windows) or shell heredoc is a known failure. If you must stage the JSON in a file first, write it
-   **inside the workspace** under `.local\tmp\` (gitignored) — **never** `$env:TEMP`, `C:\temp`, or `/tmp`,
-   which are outside the workspace and trigger sensitive-file prompts. In PowerShell:
+1. Assemble this run's consolidated findings as `{"issues": [...]}`, each in the finding-contract shape,
+   **reusing the exact prior `id`** for a finding you recognize — read the prior catalog first with
+   `python scripts/merge_findings.py --solution {topic-stem} --show`. `files[].path` is relative to
+   `solutions/ess-maker-skills/`.
+2. Reconcile: for any prior finding now gone or corrected (especially `evidence_stale` ones), or one the
+   maker dismisses, add it to a `--resolve` file per finding-contract's *Recording a resolution*.
+3. Persist from `solutions/ess-maker-skills/`. **Pipe the findings on stdin with `--current -`** — do not
+   pass a temp-file path (a Unix `/tmp/...` path on Windows or a shell heredoc is a known failure). Any
+   staging file goes **inside the workspace** under `.local\tmp\` (gitignored) — never `$env:TEMP`,
+   `C:\temp`, or `/tmp`, which trigger sensitive-file prompts.
 
    ```
    New-Item -ItemType Directory -Force .local\tmp | Out-Null
@@ -216,16 +177,12 @@ would pass a different scope with no other change).
    Get-Content .local\tmp\findings.json -Raw | python scripts/merge_findings.py --solution {topic-stem} --current -
    ```
 
-   To record resolutions, add `--resolve .local\tmp\resolved.json` (a workspace-internal path).
-
-   The script writes `.local/review-findings/{topic-stem}-catalog.json` (and appends any resolutions to the
-   shared `.local/review-findings/resolved-issue-ledger.jsonl`), reusing stable ids, keeping the higher
-   severity on a re-found finding, computing each finding's `evidence_hashes`, and setting `status`
-   (`active` / `resolved`) and `evidence_stale`. Its output is **authoritative** on the cross-run set.
-4. Present (Step 9) the **active** set from the merged catalog. A finding not re-detected this run whose
-   files are unchanged still appears (previously flagged, code unchanged). Flag `evidence_stale` findings as
-   "previously flagged, the code has since changed — worth confirming." If the script cannot run, present
-   this run's consolidated findings and say the cross-run catalog was unavailable.
+   Add `--resolve .local\tmp\resolved.json` to record resolutions. The script's catalog is **authoritative**
+   on the cross-run set. If it cannot run, present this run's findings and say the cross-run catalog was
+   unavailable.
+4. Present (Step 9) the **active** set from the merged catalog — including findings not re-detected this run
+   whose files are unchanged; flag `evidence_stale` ones as "previously flagged, code has since changed —
+   worth confirming."
 
 ## Step 9: Present the report
 
@@ -398,3 +355,15 @@ Close with this **verbatim**:
 
 **Drill-down:** if the maker asks to see one topic, render that topic's Step-9c table from its
 `{topic-stem}-catalog.json` (active set) — no re-analysis needed.
+
+## References
+
+Guidance docs under `src/reference/ess-docs/conformance/` (read the one a step cites when you reach it):
+
+- [`finding-contract.md`](src/reference/ess-docs/conformance/finding-contract.md) — shared finding shape,
+  precision bar, reachability→severity, finding-ID prefixes, output format, and the persisted catalog/ledger form.
+- [`powerfx-topic-local.md`](src/reference/ess-docs/conformance/powerfx-topic-local.md) — Power Fx heuristics (Step 5).
+- [`dangling-globals.md`](src/reference/ess-docs/conformance/dangling-globals.md) — `Global.*` integrity (Step 3).
+- [`ux-contract.md`](src/reference/ess-docs/conformance/ux-contract.md) — adaptive-card UX contract (Step 4).
+- [`isv-conformance.md`](src/reference/ess-docs/conformance/isv-conformance.md) — ISV field/schema conformance (Step 6).
+- [`isv-integration-pattern.md`](src/reference/ess-docs/conformance/isv-integration-pattern.md) — shared-orchestrator pattern (Step 6b).
