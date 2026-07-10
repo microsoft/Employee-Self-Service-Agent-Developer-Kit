@@ -217,7 +217,7 @@ class TestOutcomeB2InlinePlaintext:
 
     @responses.activate
     def test_multiple_plaintext_secrets_collapse_to_one_failed_row(self, runner):
-        # Two plaintext-secret Text vars must bucket into ONE FAILED row
+        # Two high-confidence-name Text vars must bucket into ONE FAILED row
         # (principle 7) that lists both names.
         def_a = "00000000-0000-0000-0000-0000000060a1"
         def_b = "00000000-0000-0000-0000-0000000060a2"
@@ -231,7 +231,7 @@ class TestOutcomeB2InlinePlaintext:
                 ),
                 dv.env_var_def(
                     definition_id=def_b,
-                    schema_name="new_AccessToken",  # exercises the "token" keyword
+                    schema_name="new_DbPassword",  # exercises the "password" keyword
                     type_value=100000000,
                 ),
             ],
@@ -243,8 +243,8 @@ class TestOutcomeB2InlinePlaintext:
                 ),
                 dv.env_var_value(
                     definition_id=def_b,
-                    schema_name="new_AccessToken",
-                    value="ya29.raw-bearer-token",
+                    schema_name="new_DbPassword",
+                    value="hunter2-raw",
                 ),
             ],
             connection_refs=[],
@@ -255,7 +255,7 @@ class TestOutcomeB2InlinePlaintext:
         failed = [r for r in results if r.status == Status.FAILED.value]
         assert len(failed) == 1
         assert "new_ClientSecret" in failed[0].result
-        assert "new_AccessToken" in failed[0].result
+        assert "new_DbPassword" in failed[0].result
         assert "Rotate the exposed secret" in failed[0].remediation
 
     @responses.activate
@@ -289,6 +289,201 @@ class TestOutcomeB2InlinePlaintext:
         assert len(results) == 1
         assert results[0].status == Status.PASSED.value
         assert "No inline connector secrets detected" in results[0].result
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Outcome B2b — broad/ambiguous secret name in a Text env var → WARNING
+# ───────────────────────────────────────────────────────────────────────
+
+
+class TestOutcomeB2bBroadKeywordWarns:
+    @responses.activate
+    def test_broad_keyword_name_warns_not_fails(self, runner):
+        # A broad keyword ("token") is name-only evidence — surface as a
+        # WARNING for confirmation, never a readiness-blocking FAILED.
+        _register_state(
+            base_url=runner.env_url,
+            definitions=[
+                dv.env_var_def(
+                    definition_id=_DEF_ID,
+                    schema_name="new_AccessToken",
+                    type_value=100000000,  # String / Text
+                )
+            ],
+            values=[
+                dv.env_var_value(
+                    definition_id=_DEF_ID,
+                    schema_name="new_AccessToken",
+                    value="ya29.raw-bearer-token",
+                )
+            ],
+            connection_refs=[],
+        )
+
+        results = check_connector_secret_storage(runner)
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.checkpoint_id == "INFRA-011"
+        assert r.status == Status.WARNING.value
+        assert Status.FAILED.value not in [x.status for x in results]
+        assert "new_AccessToken" in r.result
+        assert "could not be confirmed" in r.result
+        # Remediation must frame the uncertainty (confirm) and the fix
+        # path (rotate + Key Vault) without asserting it is definitely a leak.
+        assert "flagged for confirmation" in r.remediation
+        assert "no action" in r.remediation
+        assert "Key Vault" in r.remediation
+
+    @responses.activate
+    def test_config_endpoint_name_is_warning_not_failure(self, runner):
+        # "TokenEndpointUrl" is the canonical false-positive the tiering
+        # exists to prevent: a broad keyword substring on ordinary config.
+        # It must WARN (not FAIL) so readiness is not blocked by a URL.
+        _register_state(
+            base_url=runner.env_url,
+            definitions=[
+                dv.env_var_def(
+                    definition_id=_DEF_ID,
+                    schema_name="new_TokenEndpointUrl",
+                    type_value=100000000,
+                )
+            ],
+            values=[
+                dv.env_var_value(
+                    definition_id=_DEF_ID,
+                    schema_name="new_TokenEndpointUrl",
+                    value="https://wd.example.com/oauth2/token",
+                )
+            ],
+            connection_refs=[],
+        )
+
+        results = check_connector_secret_storage(runner)
+
+        assert len(results) == 1
+        assert results[0].status == Status.WARNING.value
+        assert Status.FAILED.value not in [x.status for x in results]
+
+    @responses.activate
+    def test_multiple_broad_keywords_collapse_to_one_warning_row(self, runner):
+        # Two broad-keyword Text vars must bucket into ONE WARNING row
+        # (principle 7) that lists both names.
+        def_a = "00000000-0000-0000-0000-0000000060b1"
+        def_b = "00000000-0000-0000-0000-0000000060b2"
+        _register_state(
+            base_url=runner.env_url,
+            definitions=[
+                dv.env_var_def(
+                    definition_id=def_a,
+                    schema_name="new_AccessToken",
+                    type_value=100000000,
+                ),
+                dv.env_var_def(
+                    definition_id=def_b,
+                    schema_name="new_ApiKeyName",  # exercises the "apikey" keyword
+                    type_value=100000000,
+                ),
+            ],
+            values=[
+                dv.env_var_value(
+                    definition_id=def_a,
+                    schema_name="new_AccessToken",
+                    value="ya29.raw-bearer-token",
+                ),
+                dv.env_var_value(
+                    definition_id=def_b,
+                    schema_name="new_ApiKeyName",
+                    value="primary-key",
+                ),
+            ],
+            connection_refs=[],
+        )
+
+        results = check_connector_secret_storage(runner)
+
+        warnings = [r for r in results if r.status == Status.WARNING.value]
+        assert len(warnings) == 1
+        assert "new_AccessToken" in warnings[0].result
+        assert "new_ApiKeyName" in warnings[0].result
+        assert Status.FAILED.value not in [x.status for x in results]
+
+    @responses.activate
+    def test_high_and_broad_split_into_failed_and_warning(self, runner):
+        # A high-confidence name and a broad name in the same tenant must
+        # produce TWO rows: FAILED lists only the high-confidence var,
+        # WARNING lists only the broad var. No cross-contamination.
+        def_high = "00000000-0000-0000-0000-0000000060c1"
+        def_broad = "00000000-0000-0000-0000-0000000060c2"
+        _register_state(
+            base_url=runner.env_url,
+            definitions=[
+                dv.env_var_def(
+                    definition_id=def_high,
+                    schema_name="new_ClientSecret",
+                    type_value=100000000,
+                ),
+                dv.env_var_def(
+                    definition_id=def_broad,
+                    schema_name="new_AccessToken",
+                    type_value=100000000,
+                ),
+            ],
+            values=[
+                dv.env_var_value(
+                    definition_id=def_high,
+                    schema_name="new_ClientSecret",
+                    value="s3cr3t-1",
+                ),
+                dv.env_var_value(
+                    definition_id=def_broad,
+                    schema_name="new_AccessToken",
+                    value="ya29.raw-bearer-token",
+                ),
+            ],
+            connection_refs=[],
+        )
+
+        results = check_connector_secret_storage(runner)
+
+        failed = [r for r in results if r.status == Status.FAILED.value]
+        warnings = [r for r in results if r.status == Status.WARNING.value]
+        assert len(failed) == 1
+        assert len(warnings) == 1
+        assert "new_ClientSecret" in failed[0].result
+        assert "new_AccessToken" not in failed[0].result
+        assert "new_AccessToken" in warnings[0].result
+        assert "new_ClientSecret" not in warnings[0].result
+
+
+# ───────────────────────────────────────────────────────────────────────
+# API error while reading Dataverse → WARNING (not a silent pass)
+# ───────────────────────────────────────────────────────────────────────
+
+
+class TestApiErrorWarns:
+    @responses.activate
+    def test_dataverse_read_error_warns(self, runner):
+        # The first Dataverse read (definitions) fails with a 500. The check
+        # must catch it and emit a single WARNING — never a false PASSED that
+        # would hide an undetected inline secret (AGENTS.md principle 3).
+        responses.add(
+            method="GET",
+            url=f"{runner.env_url}/api/data/v9.2/environmentvariabledefinitions",
+            json={"error": {"code": "0x80040216", "message": "boom"}},
+            status=500,
+        )
+
+        results = check_connector_secret_storage(runner)
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.checkpoint_id == "INFRA-011"
+        assert r.status == Status.WARNING.value
+        assert "Could not read Dataverse" in r.result
+        # Remediation must state the impact (undetected secret) and the fix.
+        assert "secret-storage safety could not be verified" in r.remediation
+        assert "re-run /flightcheck" in r.remediation.lower()
 
 
 # ───────────────────────────────────────────────────────────────────────

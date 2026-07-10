@@ -30,15 +30,14 @@ Design constraints (apply to all checks in this module):
 
 from __future__ import annotations
 
-import os
 import socket
 import ssl
-import sys
 import time
 from dataclasses import dataclass
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+from auth import query_all  # scripts/auth.py, on path via cli.py
 from ..runner import CheckResult, Priority, Role, Status
 from ._dlp_utils import (
     agent_connector_ids,
@@ -671,19 +670,34 @@ _ENV_VAR_TYPE_SECRET = 100000005
 _KV_REFERENCE_MARKER = "/providers/Microsoft.KeyVault/vaults/"
 
 # Schema-name substrings that mark an env var as *intended* to hold a
-# secret. Used only to flag a secret pasted into a Text env var (B2) —
-# a deliberately narrow list to avoid false positives on ordinary config.
+# secret. Used only to flag a secret pasted into a Text env var (B2).
 #
 # SCOPE (AC2): detection is by env var NAME, not by scanning the value
 # for secret-shaped patterns. A secret pasted into a blandly named Text
 # var (e.g. "new_Config1") is intentionally NOT flagged — value-based
 # pattern matching is out of scope for v1 to keep the readiness-failing
 # FAIL bucket free of false positives.
-_SECRET_NAME_KEYWORDS = (
+#
+# The keyword list is split into two confidence tiers so a broad name
+# never fails readiness on name evidence alone:
+#
+#   * HIGH — a Text env var whose name contains one of these almost
+#     certainly holds a real secret. An inline (non-Key-Vault) value is
+#     a readiness-blocking FAILED (B2a).
+#   * BROAD — the name *may* indicate a secret, but also matches
+#     ordinary config (e.g. "TokenEndpointUrl", "ApiKeyName"). Name-only
+#     evidence is too weak to fail readiness, so an inline value is
+#     surfaced as WARNING for the operator to confirm (B2b). This keeps
+#     the FAILED bucket free of the "TokenEndpointUrl"-style false
+#     positives while still surfacing the ambiguous case.
+_SECRET_NAME_KEYWORDS_HIGH = (
     "secret",
     "password",
     "pwd",
     "clientsecret",
+)
+
+_SECRET_NAME_KEYWORDS_BROAD = (
     "apikey",
     "api_key",
     "token",
@@ -713,12 +727,24 @@ def _is_kv_reference(value: str | None) -> bool:
     return _KV_REFERENCE_MARKER in value or value.startswith("@Microsoft.KeyVault(")
 
 
-def _looks_like_secret_name(schema_name: str | None) -> bool:
-    """True if the env var's schema name suggests it is meant to hold a secret."""
+def _classify_secret_name(schema_name: str | None) -> str | None:
+    """Classify how strongly an env var's schema name implies a secret.
+
+    Returns ``"high"`` for names that almost certainly hold a secret
+    (secret / password / ...), ``"broad"`` for ambiguous names that also
+    match ordinary config (token / apikey / ...), or ``None`` when nothing
+    matches. High-confidence names fail readiness (B2a); broad names only
+    warn (B2b), so the readiness-blocking FAIL bucket stays free of
+    "TokenEndpointUrl"-style false positives.
+    """
     if not schema_name:
-        return False
+        return None
     lowered = schema_name.lower()
-    return any(keyword in lowered for keyword in _SECRET_NAME_KEYWORDS)
+    if any(keyword in lowered for keyword in _SECRET_NAME_KEYWORDS_HIGH):
+        return "high"
+    if any(keyword in lowered for keyword in _SECRET_NAME_KEYWORDS_BROAD):
+        return "broad"
+    return None
 
 
 def _classify_secret_connections(conn_refs: list[dict[str, Any]]) -> list[str]:
@@ -753,14 +779,20 @@ def check_connector_secret_storage(runner: Any) -> list[CheckResult]:
         PASSED for storage, plus a MANUAL directive to verify vault
         hardening (soft-delete / purge / RBAC) — the kit does not hold
         vault-plane rights to check those directly.
-      * A secret-looking value in a plain Text env var → FAILED. This is
-        the inline-plaintext anti-pattern INFRA-011 exists to catch.
+      * A high-confidence secret name (secret / password / ...) in a plain
+        Text env var → FAILED. This is the inline-plaintext anti-pattern
+        INFRA-011 exists to catch.
+      * A broad/ambiguous secret name (token / apikey / credential) in a
+        plain Text env var → WARNING. The name also fits ordinary config
+        (e.g. "TokenEndpointUrl"), so name-only evidence warns for
+        operator confirmation rather than failing readiness.
       * A secret-bearing connection (Workday legacy ISU, ServiceNow) →
         MANUAL. Connection secrets are never returned by any API, so the
         operator must confirm handling themselves.
       * None of the above → informational PASSED (no inline secrets).
 
-    Read-only and idempotent. MANUAL and PASSED never fail readiness.
+    Read-only and idempotent. WARNING, MANUAL, and PASSED never fail
+    readiness; only the high-confidence FAILED does.
     """
     roles_ppa = [Role.POWER_PLATFORM_ADMIN.value]
     env_url = getattr(runner, "env_url", "") or ""
@@ -789,9 +821,6 @@ def check_connector_secret_storage(runner: Any) -> list[CheckResult]:
         ]
 
     try:
-        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
-        from auth import query_all
-
         defs = query_all(
             env_url,
             dv_token,
@@ -838,7 +867,8 @@ def check_connector_secret_storage(runner: Any) -> list[CheckResult]:
     def_by_id = {d.get("environmentvariabledefinitionid"): d for d in defs}
 
     secret_env_vars: list[str] = []      # Secret-type (B1, safe storage)
-    plaintext_env_vars: list[str] = []   # secret-in-Text (B2, unsafe)
+    plaintext_env_vars: list[str] = []   # high-confidence name (B2a, FAILED)
+    suspect_env_vars: list[str] = []     # broad/ambiguous name (B2b, WARNING)
 
     for val in vals:
         def_id = val.get("_environmentvariabledefinitionid_value")
@@ -853,19 +883,25 @@ def check_connector_secret_storage(runner: Any) -> list[CheckResult]:
 
         if var_type == _ENV_VAR_TYPE_SECRET:
             secret_env_vars.append(schema)
+        # `var_type is None` means the value could not be joined back to a
+        # definition (or the definition omitted its type). Treat it as Text
+        # so a secret-named value is still evaluated: a genuinely KV-backed
+        # secret carries a Key Vault reference in its value, which
+        # `_is_kv_reference` filters out below, so this defensive default
+        # cannot fail a correctly stored secret.
         elif var_type == _ENV_VAR_TYPE_STRING or var_type is None:
-            if (
-                raw_value
-                and _looks_like_secret_name(schema)
-                and not _is_kv_reference(raw_value)
-            ):
-                plaintext_env_vars.append(schema)
+            if raw_value and not _is_kv_reference(raw_value):
+                tier = _classify_secret_name(schema)
+                if tier == "high":
+                    plaintext_env_vars.append(schema)
+                elif tier == "broad":
+                    suspect_env_vars.append(schema)
 
     secret_connections = _classify_secret_connections(conn_refs)
 
     results: list[CheckResult] = []
 
-    # ── B2: raw secret pasted into a Text env var → FAILED ──────────────
+    # ── B2a: high-confidence secret name in a Text env var → FAILED ─────
     if plaintext_env_vars:
         listed = "\n".join(f"  - {name}" for name in plaintext_env_vars)
         results.append(
@@ -890,6 +926,48 @@ def check_connector_secret_storage(runner: Any) -> list[CheckResult]:
                     "3. Recreate the environment variable(s) above as the Secret "
                     "type, referencing the Key Vault secret.\n"
                     "4. Re-run /flightcheck --scope infrastructure."
+                ),
+                doc_link=_DOC_LINK_INFRA_011,
+                roles=roles_ppa,
+            )
+        )
+
+    # ── B2b: broad/ambiguous secret name in a Text env var → WARNING ────
+    #
+    # The name matches a broad keyword (token / apikey / credential) that
+    # also fits ordinary config such as "TokenEndpointUrl" or "ApiKeyName".
+    # Name-only evidence is too weak to fail readiness, so surface it for
+    # the operator to confirm instead of blocking deployment (per the B2
+    # tiering in _classify_secret_name).
+    if suspect_env_vars:
+        listed = "\n".join(f"  - {name}" for name in suspect_env_vars)
+        results.append(
+            CheckResult(
+                checkpoint_id="INFRA-011",
+                category="Infrastructure",
+                priority=Priority.MEDIUM.value,
+                status=Status.WARNING.value,
+                description="Connector secret storage safety",
+                result=(
+                    "Text environment variable(s) whose name suggests a secret "
+                    "but whose value could not be confirmed as one (value is not "
+                    "a Key Vault reference):\n"
+                    f"{listed}"
+                ),
+                remediation=(
+                    "Impact: if any value above is a real secret, a plaintext "
+                    "secret in a Text environment variable is readable by anyone "
+                    "with maker access and travels in solution exports. The name "
+                    "alone is not conclusive, so this is flagged for confirmation "
+                    "rather than as a hard failure.\n\n"
+                    "Next steps:\n"
+                    "1. Inspect each variable above. If it holds non-sensitive "
+                    "config (e.g. an endpoint URL or a display name), no action "
+                    "is needed.\n"
+                    "2. If it holds a real secret, rotate it at the source, store "
+                    "it in Azure Key Vault, and recreate the variable as the "
+                    "Secret type referencing the vault.\n"
+                    "3. Re-run /flightcheck --scope infrastructure."
                 ),
                 doc_link=_DOC_LINK_INFRA_011,
                 roles=roles_ppa,
