@@ -28,10 +28,16 @@ calibration was unavailable.
 
 ## Heuristics (topic-local)
 
-- **Self-referential record literals.** Record-literal fields where the value is the unqualified field
-  name — `{ID: ID, Name: Name}`. Almost always an intended `ID: currentRecord.ID` (or similar) that was
-  left dangling, so the field silently binds to itself / blank. **Fix:** qualify each value with its source
-  record (e.g. `ID: currentRecord.ID`).
+- **Unqualified field value in a record literal (hygiene).** A record-literal field whose value is a bare
+  field name — `{ID: ID}` — while its siblings in the same literal explicitly qualify their source (e.g.
+  `Expiration_Date: currentRecord.Expiration_Date`). A record-literal value is evaluated in the **enclosing**
+  scope, not the record's own fields, so this is **not** self-referential and does **not** silently bind to
+  blank: inside a `ForAll`/`With` row the bare name resolves to that row's in-scope field (it works), and if
+  no such field is in scope Power Fx raises a name error at author time. When a sibling binds
+  `currentRecord: ThisRecord`, the bare `ID` and `currentRecord.ID` are the **same value** — so qualifying it
+  is a no-op for correctness. Treat this as a **LOW / hygiene** consistency nit (bare vs qualified siblings; a
+  future inner-scope binding of the same name could shadow it), never a "comes through blank" data bug, and
+  do not raise severity on it. **Fix:** qualify the value to match its siblings (e.g. `ID: currentRecord.ID`).
 - **Power Fx string-literal quote-run quirks.** Doubled double-quotes are escape syntax: `"a""b"` is the
   3-char string `a"b`, and `""""""` (six quotes) is the 2-char string `""`, **not** an empty string. An
   equality check `value = """"""` does **not** test for empty. Count quote-runs carefully — miscounting is
