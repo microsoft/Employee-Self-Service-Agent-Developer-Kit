@@ -41,11 +41,11 @@
 | --------------------- | ----------------------------------------------- |
 | Dataverse APIs        | `src/core/outbound/`                            |
 | Domain Models         | `src/core/models/`                              |
-| Migration Rules       | `src/service/modules/migration/steps/`          |
-| Pipeline Registration | `src/service/modules/migration/`                |
-| Utilities             | `src/service/utils/`                            |
+| Migration Rules       | `src/modules/migration/steps/`                  |
+| Pipeline Registration | `src/modules/migration/`                        |
+| Utilities             | `src/core/utils/`                               |
 | Diagnostics code      | `src/core/logging/`                             |
-| Generated output      | `debug/logs/`, `debug/reports/`         |
+| Generated output      | `debug/logs/`, `debug/reports/`                 |
 
 ---
 

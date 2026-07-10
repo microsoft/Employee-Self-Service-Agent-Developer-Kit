@@ -38,7 +38,7 @@ under
 5. **Implement** in the toolkit at `tools/ess-nextgen-migration-toolkit/`, placing
    code in the correct architectural layer per
    `03_ENGINEERING/REPOSITORY_STRUCTURE.md` (e.g. migration steps live only in
-   `src/service/modules/migration/steps/`; Dataverse communication only in
+   `src/modules/migration/steps/`; Dataverse communication only in
    `src/core/outbound/`). Keep changes localized to your task's scope.
 6. **Test.** Add Unit Tests and, where applicable, Golden Tests per
    `03_ENGINEERING/TESTING.md`. From `tools/ess-nextgen-migration-toolkit/`, run

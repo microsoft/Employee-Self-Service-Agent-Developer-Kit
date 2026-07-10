@@ -13,11 +13,15 @@ environment and then launches this module.
 
 from __future__ import annotations
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 
 def main() -> None:
     """Toolkit orchestration entry point. Placeholder until wired up."""
-    # User-facing output (not diagnostics); print is the intended channel.
-    print("Hello from the ESS NextGen Migration Toolkit orchestrator.")  # noqa: T201
+    logging.basicConfig(level=logging.INFO)
+    logger.info("Hello from the ESS NextGen Migration Toolkit orchestrator.")
 
 
 if __name__ == "__main__":
