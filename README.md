@@ -84,6 +84,38 @@ Additional solutions will be added under `solutions/` over time.
 
 Reference content used directly by customers — topic YAMLs, template-config XMLs, evaluation test sets, and integration walkthroughs — lives at the root under [`samples/`](samples/), peer to `solutions/`. Samples are first-class reference resources, not implementation details of any single solution.
 
+## Architecture
+
+This project follows a **monorepo** layout where each solution is self-contained and the repo root provides shared infrastructure (CI, testing, samples).
+
+```mermaid
+graph TD
+    A[VS Code + GitHub Copilot] -->|reads prompts & instructions| B[solutions/ess-maker-skills]
+    B --> C[Copilot Chat Skills<br>/setup /create /connect /flightcheck etc.]
+    C --> D[Python Scripts<br>scripts/]
+    D --> E[Power Platform / Dataverse API]
+    D --> F[Copilot Studio API]
+    B --> G[MCP Servers<br>src/mcp/]
+    G --> H[ServiceNow REST API]
+    G --> I[Workday SOAP/REST API]
+    J[samples/] -->|reference content| B
+    K[tests/] -->|validates| D
+```
+
+**Key components:**
+
+| Component | Location | Role |
+|-----------|----------|------|
+| **Copilot Chat Skills** | `solutions/ess-maker-skills/src/skills/` | Prompt-based slash-commands (`/setup`, `/create`, `/connect`, `/flightcheck`, etc.) that GitHub Copilot interprets to guide the maker experience |
+| **Python Scripts** | `solutions/ess-maker-skills/scripts/` | CLI automation backing the skills — authentication (MSAL), topic extraction, push to Dataverse, flightcheck validation, evaluation runs |
+| **MCP Servers** | `solutions/ess-maker-skills/src/mcp/` | Model Context Protocol servers for ServiceNow, Workday, and ADK integrations providing tool surfaces to Copilot |
+| **Samples** | `samples/` | Reference topic YAMLs, template-config XMLs, evaluation test sets, and integration walkthroughs for Facilities, ServiceNow, and Workday scenarios |
+| **Tests** | `tests/` | Pytest suite using VCR.py cassettes for replay-based testing of scripts and MCP code |
+| **Setup Installer** | `setup/` | One-shot install scripts (Windows/macOS) that provision VS Code, Python, Git, and dependencies |
+| **CI/CD** | `.github/workflows/` | Linting (`ruff`), CodeQL security scanning, sample validation, label sync |
+
+**Prerequisites:** Python ≥ 3.11, VS Code with GitHub Copilot extension, a Microsoft 365 / Power Platform tenant with Copilot Studio access.
+
 ## Repository structure
 
 ```
@@ -92,6 +124,9 @@ solutions/
   ess-maker-skills/     Maker kit — customize your ESS agent in VS Code with Copilot
   ess-flightcheck/      (planned) Standalone deployment-readiness validator
 samples/                Reference topics, template configs, evaluation test sets (peer to solutions/)
+setup/                  One-shot installer scripts for Windows and macOS
+tests/                  Pytest test suite (VCR cassettes, mocks, fixtures)
+tools/                  Dev tooling (sample validation, maker profile utilities)
 LICENSE                 MIT
 SECURITY.md             Microsoft MSRC reporting path
 CODE_OF_CONDUCT.md      Microsoft Open Source Code of Conduct
@@ -112,6 +147,16 @@ for what's collected and how to opt out.
 This project welcomes contributions and suggestions. Most contributions require you to agree to a Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us the rights to use your contribution. For details, visit https://cla.microsoft.com.
 
 Please read our [Contributing Guide](CONTRIBUTING.md) for the full contribution model, security maintenance commitments, scope management policy, privacy posture, and validation guide.
+
+### Pull request process
+
+1. **Fork and branch** — create a feature branch from `main`.
+2. **Lint locally** — run `ruff check` and `python -m compileall` on changed files (see [Validating your changes](CONTRIBUTING.md#validating-your-changes)).
+3. **Test** — run `pytest` from the repo root if your change touches Python scripts or MCP servers.
+4. **Open a PR** — keep changes minimal and surgical. The CLA bot will prompt external contributors to sign.
+5. **CI checks** — CI runs linting, CodeQL, and sample validation automatically. All checks must pass.
+6. **Review** — a maintainer will review your PR. Address feedback and keep commits clean.
+7. **Merge** — once approved and CI is green, a maintainer will merge via squash merge.
 
 ## License
 
