@@ -238,16 +238,15 @@ End with this **verbatim**:
 
 When the maker asks to see or fix a **specific issue** — "more details on X", "explain this one", "how do I
 fix it" — present that finding in this structured shape, **not flowing prose**. Pull the finding from its
-catalog and read the cited `files[].lines` to quote the current expression **verbatim** (a targeted read, not
+catalog (read the cited `files[].lines` if you need the exact expression to reference — a targeted read, not
 a re-analysis). One block per issue — a bold header line (`{plain-language title}` · {High/Medium/Low} ·
 `{topic-stem}.mcs.yml:{line}` "{step display name}"), then:
 
-- **Current state:** `{the exact offending expression / property, verbatim from the file}`
-- **Proposed fix:** `{the concrete replacement, verbatim}`
+- **Proposed fix:** {concise prose; technical language allowed — name the expression/property and the change}
 - **Why fix it this way:** {one or two plain sentences}
 
-This is the one place the maker's own code and `file:line` appear in full. Still keep the review system's
-vocabulary out (no rule IDs, reachability tags, "lens").
+This is the one place the maker's own code and `file:line` appear. Still keep the review system's vocabulary
+out (no rule IDs, reachability tags, "lens").
 
 ### Subagent mode
 
