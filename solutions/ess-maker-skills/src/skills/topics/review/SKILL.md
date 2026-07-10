@@ -16,11 +16,13 @@ publishing.
 - **Run the analysis silently.** Steps 3–8 are internal: run the detectors, read the reference docs, and
   persist the catalog **without narrating them**. Do not tell the maker what tools you are calling or what
   files you are reading. The only thing the maker sees is the final report in Step 9.
-- **Speak the maker's language.** Everything the maker sees — the Step 9 report and the scoped roll-up — uses
-  plain words: plain severity (High/Medium/Low), the step's **display name** (never a node id or line
-  number), and everyday descriptions. Never surface internal working vocabulary, such as: "lens", "detector",
-  "conformance", "reachability", "ISV", "orchestrator", rule IDs (`BTPF-001`), or catalog/file paths — the
-  list is illustrative; the test is whether a maker who never saw this skill's internals would understand it.
+- **Speak the maker's language.** Hide the *review system's* vocabulary everywhere — "lens", "detector",
+  "conformance", "reachability" tags (`REACHABLE_NORMAL_UI`), rule IDs (`BTPF-001`), catalog paths (the list
+  is illustrative; the test is whether a maker who never saw this skill's internals would understand it). This
+  is **not** a ban on technical content — the maker's own Power Fx, action kinds, field names, step names, and
+  `topic.mcs.yml:line` are *their* language, not ours. The roll-up and report table (Step 9c, S-4) stay plain
+  and scannable (plain severity, step **display name**, everyday description, no line numbers); the
+  **single-issue detail view** shows the maker's own code in full — the exact expression and location.
 - **TRACK PROGRESS**: use the todo list tool to track the steps below so the maker can see where you are.
 
 ## What this checks
@@ -232,6 +234,21 @@ End with this **verbatim**:
 > Advisory — you can publish as-is. To fix one, type `/update` and name its step; re-run `/review` after
 > edits to re-check.
 
+### Issue detail view (when the maker asks about one issue)
+
+When the maker asks to see or fix a **specific issue** — "more details on X", "explain this one", "how do I
+fix it" — present that finding in this structured shape, **not flowing prose**. Pull the finding from its
+catalog and read the cited `files[].lines` to quote the current expression **verbatim** (a targeted read, not
+a re-analysis). One block per issue — a bold header line (`{plain-language title}` · {High/Medium/Low} ·
+`{topic-stem}.mcs.yml:{line}` "{step display name}"), then:
+
+- **Current state:** `{the exact offending expression / property, verbatim from the file}`
+- **Proposed fix:** `{the concrete replacement, verbatim}`
+- **Why fix it this way:** {one or two plain sentences}
+
+This is the one place the maker's own code and `file:line` appear in full. Still keep the review system's
+vocabulary out (no rule IDs, reachability tags, "lens").
+
 ### Subagent mode
 
 **If invoked as a subagent by a parent flow** (not directly by the maker): skip 9a–9d and instead return the
@@ -367,7 +384,8 @@ Close with this **verbatim**:
 > To fix one, type `/update` and name the topic and step. Re-run to re-check.
 
 **Drill-down:** if the maker asks to see one topic, render that topic's Step-9c table from its
-`{topic-stem}-catalog.json` (active set) — no re-analysis needed.
+`{topic-stem}-catalog.json` (active set). If they ask about a **specific issue**, use the **Issue detail
+view** (Step 9) — no re-analysis, only a targeted read of the cited line to quote the current expression.
 
 ## References
 
