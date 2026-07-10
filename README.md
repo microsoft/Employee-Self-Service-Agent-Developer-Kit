@@ -80,6 +80,25 @@ To fix it: `File` → `Open Folder...` again, this time double-click into `solut
 
 Additional solutions will be added under `solutions/` over time.
 
+## Architecture
+
+This repo is a **monorepo** organized into two top-level content areas:
+
+- **`solutions/`** — Self-contained toolkits (e.g., `ess-maker-skills`) that each ship their own scripts, prompts, and dependencies.
+- **`samples/`** — Reference content (topic YAMLs, template configs, evaluation test sets) consumed directly by customers, independent of any single solution.
+
+### VS Code workspace toolkit approach
+
+Each solution is designed to be opened as a **VS Code workspace root**. When opened correctly, the solution exposes:
+
+- **Scripts** — Python CLI tools for automation (setup, validation, deployment).
+- **Prompt files** — Copilot Chat slash-commands and instruction files that teach GitHub Copilot how to assist with the solution's workflows.
+- **MCP servers** — Model Context Protocol servers that give Copilot access to live data (e.g., Copilot Studio environments, ServiceNow instances).
+
+### GitHub Copilot as the maker interface
+
+Rather than building a standalone GUI, this kit uses **GitHub Copilot Chat in VS Code** as the primary maker interface. Users interact with slash-commands (`/setup`, `/create`, `/connect`, etc.) that invoke the underlying scripts and prompts — enabling a conversational, AI-assisted authoring experience without requiring deep platform knowledge.
+
 ## Samples
 
 Reference content used directly by customers — topic YAMLs, template-config XMLs, evaluation test sets, and integration walkthroughs — lives at the root under [`samples/`](samples/), peer to `solutions/`. Samples are first-class reference resources, not implementation details of any single solution.
