@@ -114,6 +114,11 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    for _flag, _val in (("--agent", args.agent), ("--topic", args.topic), ("--module", args.module)):
+        if _val and ("/" in _val or "\\" in _val or ".." in _val or Path(_val).is_absolute()):
+            print(f"ERROR: invalid {_flag} '{_val}': must be a bare name, not a path.", file=sys.stderr)
+            return 1
+
     repo_root = Path(__file__).parent.parent
     agents_dir = repo_root / "workspace" / "agents"
     if not agents_dir.is_dir():

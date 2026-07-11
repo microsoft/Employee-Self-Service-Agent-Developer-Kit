@@ -76,6 +76,41 @@ _REQUIRED_FINDING_KEYS = ("id", "title", "severity", "reachability", "root_cause
 _RESOLUTION_KINDS = {"fixed", "wont-fix", "not-a-bug", "defense-in-depth", "false-positive"}
 _VERIFICATION_KINDS = {"static", "needs-runtime-test"}
 _REVIEW_DIR = Path(".local") / "review-findings"
+# Anchor for validating agent-supplied paths stay inside the maker-skills tree
+# (scripts/ lives directly under it). Used to reject path traversal in --solution
+# and in finding files[].path before any filesystem read/write.
+_SKILL_ROOT = Path(__file__).resolve().parent.parent
+
+
+def _safe_scope_id(value: str) -> str:
+    """A review scope id (`--solution`) must be a bare stem, not a path.
+
+    Rejects separators / `..` / absolute paths so it cannot steer catalog_path()
+    to read or write a `*-catalog.json` outside _REVIEW_DIR.
+    """
+    if not value or "/" in value or "\\" in value or ".." in value or Path(value).is_absolute():
+        print(
+            f"ERROR: invalid --solution '{value}': must be a bare topic/scope id, not a path.",
+            file=sys.stderr,
+        )
+        sys.exit(2)
+    return value
+
+
+def _safe_read_path(p: str) -> "Path | None":
+    """Resolve a finding's files[].path inside the skill tree, or None if it escapes.
+
+    Guards evidence hashing against reading an arbitrary file via an absolute or
+    `..`-laden files[].path in agent-supplied findings.
+    """
+    if Path(p).is_absolute():
+        return None
+    resolved = (_SKILL_ROOT / p).resolve()
+    try:
+        resolved.relative_to(_SKILL_ROOT)
+    except ValueError:
+        return None
+    return resolved
 
 
 def _resolution_of(finding: dict) -> str:
@@ -120,9 +155,10 @@ def read_findings_source(value: str) -> tuple[object, str | None]:
     """Read a findings document from a file path or stdin.
 
     `value` of "-" reads from stdin, so the caller can pipe findings JSON
-    directly (no temp file to mis-path, no shell heredoc) — the temp-file seam
-    was a live failure source on Windows. Returns (doc, None) on success or
-    (None, error) with a message that distinguishes not-found from invalid JSON.
+    directly, with no temp file to mis-path (a Unix `/tmp` path does not exist on
+    Windows) and no shell heredoc (unsupported in PowerShell). Returns (doc, None)
+    on success or (None, error) with a message that distinguishes not-found from
+    invalid JSON.
     """
     if value == "-":
         raw = sys.stdin.read()
@@ -223,10 +259,15 @@ def validate_current_findings(findings: list[dict]) -> list[str]:
 
 
 def evidence_hashes(finding: dict) -> list[dict]:
-    """Current sha256 of every file the finding implicates (files[].path)."""
+    """Current sha256 of every file the finding implicates (files[].path).
+
+    Only paths that resolve inside the skill tree are read; a path that escapes
+    (absolute or via `..`) is recorded with sha256 None rather than being read.
+    """
     out: list[dict] = []
     for p in _file_paths(finding):
-        out.append({"file": p, "sha256": sha256_file(Path(p))})
+        safe = _safe_read_path(p)
+        out.append({"file": p, "sha256": sha256_file(safe) if safe else None})
     return out
 
 
@@ -370,6 +411,7 @@ def main() -> int:
     args = parser.parse_args()
 
     load_config()
+    _safe_scope_id(args.solution)
     cpath = catalog_path(args.solution)
 
     if args.show:
@@ -408,7 +450,19 @@ def main() -> int:
     if args.resolve:
         resolved_findings = _issues_of(_read_json(Path(args.resolve)) or [])
 
-    prior_doc = _read_json(cpath)
+    if cpath.is_file():
+        try:
+            prior_doc = json.loads(cpath.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as e:
+            print(
+                f"ERROR: existing catalog {cpath} is unreadable/corrupt ({e}). "
+                "Refusing to overwrite it, which would silently drop the tracked findings "
+                "and resolution history. Fix or remove the file, then re-run.",
+                file=sys.stderr,
+            )
+            return 1
+    else:
+        prior_doc = None
     prior = _issues_of(prior_doc) if prior_doc is not None else []
 
     run_date = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")

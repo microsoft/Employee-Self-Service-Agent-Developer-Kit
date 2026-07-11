@@ -51,10 +51,29 @@ _CARD_KEYS = ("cardContent", "card")
 _MAX_LISTED = 20
 
 
+# PyYAML rejects plain scalars that begin with a reserved indicator. Workday WSDL/XML
+# topics carry @-prefixed mapping keys (@Public, @Primary, @Descriptor, @type); quote
+# such bare keys so the topic parses instead of being silently skipped.
+_RESERVED_KEY_RE = re.compile(
+    r'^(?P<indent>[ \t]*(?:-[ \t]+)?)(?P<key>@[^\s:#]+)(?P<sep>[ \t]*:(?:[ \t]|$))',
+    re.MULTILINE,
+)
+
+
+def _quote_reserved_keys(text: str) -> str:
+    return _RESERVED_KEY_RE.sub(
+        lambda m: f'{m.group("indent")}"{m.group("key")}"{m.group("sep")}', text
+    )
+
+
 def _load(path: Path):
     try:
-        return yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, yaml.YAMLError):
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    try:
+        return yaml.safe_load(_quote_reserved_keys(text))
+    except yaml.YAMLError:
         return None
 
 
@@ -163,6 +182,11 @@ def main() -> int:
     parser.add_argument("--output", "-o", help="Write the full per-topic detail to this JSON file.")
     args = parser.parse_args()
 
+    for _flag, _val in (("--agent", args.agent), ("--topic", args.topic), ("--module", args.module)):
+        if _val and ("/" in _val or "\\" in _val or ".." in _val or Path(_val).is_absolute()):
+            print(f"ERROR: invalid {_flag} '{_val}': must be a bare name, not a path.", file=sys.stderr)
+            return 1
+
     repo_root = Path(__file__).parent.parent
     agents_dir = repo_root / "workspace" / "agents"
     if not agents_dir.is_dir():
@@ -198,6 +222,10 @@ def main() -> int:
             return 1
         parsed = _load(topic_file)
         if parsed is None:
+            print(
+                f"WARNING: could not parse {topic_file.name}; it was NOT analyzed "
+                f"(a clean result does not cover this topic)."
+            )
             continue
         populated, schema_roots, consumed = collect(parsed)
         findings = reconcile(populated, schema_roots, consumed)
