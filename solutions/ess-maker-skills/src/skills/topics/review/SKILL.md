@@ -53,31 +53,39 @@ maker asks about those, say they are not covered rather than guessing.
 The **ISV field-conformance** check (Step 6) is the one check that can be *skipped* outright: it depends on a
 backend-specific reference doc (`src/reference/ess-docs/isv/isv-<system>.md`) that is synced from an ESS
 reference source and may be absent — an external maker won't have it. Whether it can run depends on the
-**specific backend** the in-scope topic integrates, not on whether any ISV doc happens to exist. Determine
-this per topic, from the topic's backend, when you reach the ISV check:
+**specific backend** the in-scope topic integrates, not on whether any ISV doc happens to exist.
 
-- **ISV conformance runs** for a topic when `isv-<its backend system>.md` is present.
-- **ISV conformance is skipped** for a topic when that specific doc is absent — this is what puts the run in
-  **reduced coverage**, and the report must say so (see `report-format.md`). A topic that calls no backend is
-  fully covered — nothing was skipped.
+**Do not decide coverage by reasoning or by an ad-hoc file check — run the coverage probe and read its
+verdict.** The probe resolves each in-scope topic's backend and checks its reference doc via a path anchored on
+the script location (cwd-immune, `.gitignore`-immune), so the answer is deterministic and does not depend on
+you remembering to run a check correctly mid-flow:
 
-**Check presence with a direct filesystem test, never a workspace/indexed search.** The `isv/` folder is
-**gitignored**, so a file-search or codebase-index lookup will report a present doc as "no match" — a
-false-absent that would silently disable ISV conformance for everyone (including internal makers whose docs
-are correctly synced). Decide presence by directly testing the exact path, e.g.
-`Test-Path src/reference/ess-docs/isv/isv-<backend>.md` (or attempting to read that exact path) — a result
-that does not depend on `.gitignore`.
+```
+python scripts/check_isv_coverage.py --agent {agent-slug} --topic {topic-stem}
+# scoped:  python scripts/check_isv_coverage.py --agent {agent-slug} --module {module-id}
+```
+
+It prints a machine-readable verdict behind `###ISV_COVERAGE_JSON###`:
+`{"mode": "full"|"reduced", "missing_backends": [...], "covered_backends": [...], "backends": {...}}`.
+
+- **`mode: full`** → ISV conformance runs (or no in-scope topic calls a backend). Say **nothing** about coverage.
+- **`mode: reduced`** → the reference doc for a backend in `missing_backends` is absent; ISV conformance is
+  skipped for that backend's topics. The report **must** disclose it (see `report-format.md`), naming the
+  backend(s) from `missing_backends`. Do not run — or claim to have run — ISV conformance for a missing backend.
+
+Treat the probe's verdict as authoritative over any impression you form while reading the topic. If the probe
+cannot run, fall back to a direct filesystem test of the exact path
+(`Test-Path src/reference/ess-docs/isv/isv-<backend>.md`) — never a workspace/indexed search (the `isv/` folder
+is gitignored, so an index-respecting search reports a present doc as a false-absent).
 
 A second synced doc, `runtime/confirmed-runtime-heuristics.md`, only *corroborates* Power Fx severity — it is
 **not** a check and its absence skips nothing. Without it the Power Fx caps still apply structurally (see
 `powerfx-topic-local.md`); score structurally and say nothing to the maker about it. Do **not** report missing
 runtime docs as reduced coverage.
 
-**Disclose reduced coverage in the report, not before it.** The backend a topic integrates is known once you
-read it, so the honest place to name it is the result: the report's coverage note carries it (`report-format.md`
-— the 9a reduced variant for a clean topic, the 9d coverage line otherwise, or the scoped roll-up's coverage
-line). Do not add a separate pre-analysis announcement. When ISV conformance runs for every in-scope topic (or
-no topic calls a backend), say nothing about coverage.
+**Disclose reduced coverage in the report, not before it** — the report's coverage note carries it
+(`report-format.md`: the 9a reduced variant for a clean topic, the 9d coverage line otherwise, or the scoped
+roll-up's coverage line). Do not add a separate pre-analysis announcement.
 
 ## Step 1: Identify the scope
 
@@ -141,11 +149,17 @@ mapping to decide which candidates are real findings and how serious each is.
 
 ## Step 6: Check ISV conformance (if the topic integrates a backend system)
 
-If the topic calls an ISV scenario, read
-`src/reference/ess-docs/conformance/isv-conformance.md` and follow it: determine the target ISV from the
-scenario name, read that ISV's reference doc if one is available in the environment, and check the topic
-against the documented field/schema conventions and known pitfalls. If the ISV reference docs are not
-available, note that ISV conformance was not checked and continue — do not guess ISV behavior.
+Gate this step on the **coverage probe verdict** (see "Coverage mode"): the probe already resolved the topic's
+backend and whether its reference doc is present.
+
+- If the topic's backend is in `covered_backends` (`mode: full`, or a covered backend under `mode: reduced`),
+  read `src/reference/ess-docs/conformance/isv-conformance.md` and follow it: read that backend's reference doc
+  by its exact path and check the topic against the documented field/schema conventions and known pitfalls.
+- If the topic's backend is in `missing_backends`, ISV conformance is **skipped** for this topic — do not run
+  it and do not guess ISV behavior. The report's coverage note (driven by the same verdict) discloses it.
+- If no backend was detected, there is nothing to check here.
+
+Do not re-derive doc presence yourself; the probe's verdict is authoritative.
 
 ## Step 6b: Check the ISV integration pattern
 

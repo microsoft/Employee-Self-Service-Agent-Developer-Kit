@@ -72,18 +72,20 @@ coverage):
 ### Coverage note (when to show it — single source of truth)
 
 There is exactly **one** skippable check: **ISV field conformance**, and only when the reference doc for the
-in-scope topic's **specific backend** (`isv-<backend>.md`) is absent (see the review skill's "Coverage mode"
-step). That condition — and nothing else — is "reduced coverage." Everything else (Power Fx, Globals, cards,
-integration pattern, ServiceNow response-field integrity) always runs, and missing `runtime/` corroboration
-is **not** reduced coverage. So:
+in-scope topic's **specific backend** (`isv-<backend>.md`) is absent. **This is decided by the coverage probe,
+not by your own judgement** — the review skill's "Coverage mode" step runs `scripts/check_isv_coverage.py`,
+which emits `mode` and `missing_backends`. Drive the coverage note **only** from that verdict; do not infer
+coverage from your impression of the environment. Everything else (Power Fx, Globals, cards, integration
+pattern, ServiceNow response-field integrity) always runs, and missing `runtime/` corroboration is **not**
+reduced coverage. So:
 
-- **Reduced coverage** → show the one honest clause naming the backend: 9a's reduced variant, the 9d coverage
-  line, and the scoped equivalents. Fill `{backend}` with the actual system (Workday, ServiceNow, SAP
-  SuccessFactors, …).
-- **Full coverage** (ISV ran for every in-scope topic, or no topic calls a backend) → show none of it: plain
+- **`mode: reduced`** → show the one honest clause naming each backend in `missing_backends`: 9a's reduced
+  variant, the 9d coverage line, and the scoped equivalents. Fill `{backend}` from `missing_backends` (Workday,
+  ServiceNow, SAP SuccessFactors, …).
+- **`mode: full`** (ISV ran for every in-scope backend, or no topic calls a backend) → show none of it: plain
   "good to publish" in 9a, no coverage line in 9d, no coverage line in the scoped roll-up. Never pad a clean
   report with coverage boilerplate when nothing was skipped, and never emit an empty "Coverage: I ran
-  everything" line.
+  everything" line, and — critically — **never emit a reduced-coverage caveat when the probe says `full`.**
 
 ## Issue detail view (when the maker asks about one issue)
 
