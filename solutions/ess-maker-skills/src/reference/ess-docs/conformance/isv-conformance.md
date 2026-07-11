@@ -36,6 +36,12 @@ report that ISV conformance was not checked and that the docs can be synced by r
 behavior from general knowledge — the reference docs are authoritative for how these integrations
 actually behave.
 
+**Determine presence by a direct filesystem check of the exact path** (e.g.
+`Test-Path src/reference/ess-docs/isv/isv-<connector>.md`, or simply attempting to read that exact path) —
+**not** a workspace file-search or codebase-index lookup. The `isv/` folder is gitignored, so an
+index-respecting search reports a present doc as missing; trusting it would wrongly mark ISV conformance as
+not-checked even when the doc is synced.
+
 ## Step 3: Apply the ISV reference to the topic
 
 Using the **full** reference doc you loaded in Step 2 as authoritative context — its field/schema tables,

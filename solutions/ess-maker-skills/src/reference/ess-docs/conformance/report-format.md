@@ -14,11 +14,20 @@ number.
 
 ### 9a — No findings
 
-If the active set is empty, show only this and stop — no table, no disclaimer, nothing to caveat:
+If the active set is empty:
 
-**Message:**
+**Message (full coverage — nothing was skipped):**
 
-I looked over `{TopicName}` and didn't spot anything to flag — you're good to publish.
+I looked over `{topic-stem}` and didn't spot anything to flag — you're good to publish.
+
+**End message.**
+
+**Message (reduced coverage — ISV conformance was skipped for this topic's backend):** do not say "good to
+publish" unqualified; name the gap, using the backend from the Coverage note rule below:
+
+I looked over `{topic-stem}` and didn't spot anything to flag in what I could check. Note: I don't have the
+`{backend}` conformance reference in this environment, so I couldn't check its field/schema conventions — if
+this topic calls `{backend}`, that part is worth a manual look.
 
 **End message.**
 
@@ -26,9 +35,9 @@ I looked over `{TopicName}` and didn't spot anything to flag — you're good to 
 
 Otherwise show one verdict line, keyed to the highest severity present:
 
-- Any High → `⚠️ **{TopicName}** — I spotted some things that could cause problems; worth a look before you publish.`
-- Any Medium (no High) → `**{TopicName}** — a few things that might be worth a look before you publish.`
-- Only Low → `**{TopicName}** — looks good; a couple of minor things to double-check before publishing.`
+- Any High → `⚠️ **{topic-stem}** — I spotted some things that could cause problems; worth a look before you publish.`
+- Any Medium (no High) → `**{topic-stem}** — a few things that might be worth a look before you publish.`
+- Only Low → `**{topic-stem}** — looks good; a couple of minor things to double-check before publishing.`
 
 Directly under it, this framing line **verbatim**:
 
@@ -54,6 +63,28 @@ End with this **verbatim**:
 > Advisory — you can publish as-is. To fix one, type `/update` and name its step; re-run `/review` after
 > edits to re-check.
 
+**In reduced coverage only**, add a coverage line directly above the close (skip it entirely in full
+coverage):
+
+> Coverage: I checked Power Fx logic, Globals, cards, and the integration pattern. I couldn't check
+> `{backend}` field conformance — its reference doc isn't available in this environment.
+
+### Coverage note (when to show it — single source of truth)
+
+There is exactly **one** skippable check: **ISV field conformance**, and only when the reference doc for the
+in-scope topic's **specific backend** (`isv-<backend>.md`) is absent (see the review skill's "Coverage mode"
+step). That condition — and nothing else — is "reduced coverage." Everything else (Power Fx, Globals, cards,
+integration pattern, ServiceNow response-field integrity) always runs, and missing `runtime/` corroboration
+is **not** reduced coverage. So:
+
+- **Reduced coverage** → show the one honest clause naming the backend: 9a's reduced variant, the 9d coverage
+  line, and the scoped equivalents. Fill `{backend}` with the actual system (Workday, ServiceNow, SAP
+  SuccessFactors, …).
+- **Full coverage** (ISV ran for every in-scope topic, or no topic calls a backend) → show none of it: plain
+  "good to publish" in 9a, no coverage line in 9d, no coverage line in the scoped roll-up. Never pad a clean
+  report with coverage boilerplate when nothing was skipped, and never emit an empty "Coverage: I ran
+  everything" line.
+
 ## Issue detail view (when the maker asks about one issue)
 
 When the maker asks to see or fix a **specific issue** — "more details on X", "explain this one", "how do I
@@ -76,9 +107,18 @@ not improvise the verdict, add prose between sections, or narrate the analysis (
 
 If **no topic** in the scope has an active finding:
 
-**Message:**
+**Message (full coverage):**
 
 I reviewed all {N} `{module-id}` topics and didn't spot anything to flag — you're good to publish.
+
+**End message.**
+
+**Message (reduced coverage — ISV conformance was skipped for one or more backends):** do not say "good to
+publish" unqualified:
+
+I reviewed all {N} `{module-id}` topics and didn't spot anything to flag in what I could check. Note: I don't
+have the {backend(s)} conformance reference here, so I couldn't check field/schema conventions for the topics
+that call {backend(s)} — that part is worth a manual look.
 
 **End message.**
 
@@ -113,6 +153,13 @@ Close with this **verbatim**:
 
 > To see a topic's details, ask to review it by name (e.g. `review {topic-stem}`) — its findings are saved.
 > To fix one, type `/update` and name the topic and step. Re-run to re-check.
+
+**In reduced coverage only**, add a coverage line directly above the close (omit in full coverage; see the
+Coverage note single-source-of-truth rule above):
+
+> Coverage: across these topics I checked Power Fx logic, Globals, cards, and the integration pattern. I
+> couldn't check {backend(s)} field conformance — that reference isn't available here, and it applies to every
+> topic that calls {backend(s)}, not just the ones flagged above.
 
 **Drill-down:** if the maker asks to see one topic, render that topic's 9c table from its
 `{topic-stem}-catalog.json` (active set). If they ask about a **specific issue**, use the **Issue detail

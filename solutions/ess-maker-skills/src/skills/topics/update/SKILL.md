@@ -19,6 +19,7 @@ take effect. **NEVER stop after editing only the local file.**
 - ALWAYS push changes to Copilot Studio after editing.
 - NEVER modify system topics (`on-error`, `conversation-start`, etc.) without
   warning the user about potential side effects.
+- **PRESERVE THE AUTHORING INVARIANTS**: follow [`authoring-invariants.md`](src/reference/ess-docs/customization/authoring-invariants.md) — an edit MUST keep the shared-system-topic delegation, the standard parse → iterate → table rendering, and the shared error path intact.
 - **TRACK PROGRESS**: Use the todo list tool to track your progress.
 
 ## Step 1: Identify the Topic

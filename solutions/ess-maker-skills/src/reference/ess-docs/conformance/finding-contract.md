@@ -33,14 +33,18 @@ findings.
 - **OPERATOR_OR_HYGIENE_ONLY** — dead code, redundant writes, hardcoded IDs with no runtime user impact.
   -> LOW.
 
-**Check the runtime heuristics before finalizing reachability.** ESS runtime behavior is documented in
+**Runtime heuristics corroborate reachability; structure decides it.** The key LOW-cap — a topic that
+delegates its backend call to a shared `*System*`/OnError orchestrator, so failure is centrally handled and
+code after it is `NOT_REACHABLE_VIA_BOT_UI` — is grounded in a **structurally visible** fact (the delegation),
+so apply it whether or not the runtime docs are present. ESS runtime behavior is further documented in
 `../runtime/confirmed-runtime-heuristics.md` (authoritative) and `../runtime/pending-runtime-heuristics.md`
-(provisional), synced by `scripts/sync_runtime_heuristics.py`. A confirmed rule can move a finding to
-`NOT_REACHABLE_VIA_BOT_UI` (cap at LOW) even when a purely structural read looks HIGH — for example, the
-AI-orchestration layer emitting a "no data" message on an empty parse, or an OnError/`*System*` topic
-terminating the dialog stack so code after it never runs. Apply confirmed rules directly; apply pending
-rules with caution and say so. If the docs are absent, score structurally and note that runtime calibration
-was unavailable.
+(provisional), synced by `scripts/sync_runtime_heuristics.py`; when present, read them to corroborate and
+refine (e.g. the AI-orchestration "no data" behavior, OnError dialog termination) — apply confirmed rules
+directly, pending rules with caution. Check for these docs with a **direct filesystem test of the exact path**,
+not a workspace/indexed search (the `runtime/` folder is gitignored, so an index-respecting search reports a
+present doc as missing). When the docs are absent, still apply the structural caps and note that
+runtime corroboration was unavailable — do **not** revert a delegated-pattern finding to structural-HIGH just
+because the runtime docs are missing.
 
 ## Finding IDs
 

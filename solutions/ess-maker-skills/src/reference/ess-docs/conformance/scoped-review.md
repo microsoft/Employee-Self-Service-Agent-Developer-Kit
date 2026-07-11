@@ -88,4 +88,6 @@ Present the **Scoped roll-up** exactly per
 [`report-format.md`](report-format.md) — tabulated **directly from the per-topic summaries the loop returned
 into your context** (counts + per-finding severity/issue-type/id). Do **not** re-read the catalogs to
 aggregate, and do **not** author a script or write a summary JSON to compute it; the roll-up is a presented
-table, not a persisted artifact.
+table, not a persisted artifact. If the run is in **reduced coverage** (see the skill's "Coverage mode" step —
+i.e. an in-scope topic's backend ISV reference doc is absent), include the roll-up's coverage line per
+`report-format.md`, naming the backend(s) whose conformance could not be checked.

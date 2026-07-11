@@ -48,6 +48,37 @@ This skill analyzes:
 Other checks (cross-component error-code coverage) are not part of this skill; if the
 maker asks about those, say they are not covered rather than guessing.
 
+## Coverage mode (ISV docs may be absent)
+
+The **ISV field-conformance** check (Step 6) is the one check that can be *skipped* outright: it depends on a
+backend-specific reference doc (`src/reference/ess-docs/isv/isv-<system>.md`) that is synced from an ESS
+reference source and may be absent — an external maker won't have it. Whether it can run depends on the
+**specific backend** the in-scope topic integrates, not on whether any ISV doc happens to exist. Determine
+this per topic, from the topic's backend, when you reach the ISV check:
+
+- **ISV conformance runs** for a topic when `isv-<its backend system>.md` is present.
+- **ISV conformance is skipped** for a topic when that specific doc is absent — this is what puts the run in
+  **reduced coverage**, and the report must say so (see `report-format.md`). A topic that calls no backend is
+  fully covered — nothing was skipped.
+
+**Check presence with a direct filesystem test, never a workspace/indexed search.** The `isv/` folder is
+**gitignored**, so a file-search or codebase-index lookup will report a present doc as "no match" — a
+false-absent that would silently disable ISV conformance for everyone (including internal makers whose docs
+are correctly synced). Decide presence by directly testing the exact path, e.g.
+`Test-Path src/reference/ess-docs/isv/isv-<backend>.md` (or attempting to read that exact path) — a result
+that does not depend on `.gitignore`.
+
+A second synced doc, `runtime/confirmed-runtime-heuristics.md`, only *corroborates* Power Fx severity — it is
+**not** a check and its absence skips nothing. Without it the Power Fx caps still apply structurally (see
+`powerfx-topic-local.md`); score structurally and say nothing to the maker about it. Do **not** report missing
+runtime docs as reduced coverage.
+
+**Disclose reduced coverage in the report, not before it.** The backend a topic integrates is known once you
+read it, so the honest place to name it is the result: the report's coverage note carries it (`report-format.md`
+— the 9a reduced variant for a clean topic, the 9d coverage line otherwise, or the scoped roll-up's coverage
+line). Do not add a separate pre-analysis announcement. When ISV conformance runs for every in-scope topic (or
+no topic calls a backend), say nothing about coverage.
+
 ## Step 1: Identify the scope
 
 Decide whether the maker wants **one topic** or a **module scope** (all topics for a backend), then branch:
@@ -145,6 +176,11 @@ Before presenting, dedupe the findings from Steps 3–6c so each fix site is sho
 heuristics — and different lenses — can flag the same node (e.g. a hardcoded `flowId` caught by both the
 Power Fx and ISV integration-pattern lenses).
 
+**Finding identity is content, not slug.** Two findings at the **same site** (same topic + node `id`/line)
+describing the **same underlying pattern** are the **same finding** — even if different lenses gave them
+different rule IDs or you'd have named them with different slugs. Never emit or persist the same
+`(site, pattern)` twice under two ids; merge them.
+
 Group findings by **fix-target node id** (fall back to the site `id` / `kind` if a finding has no distinct
 fix target). Within a group:
 
@@ -165,14 +201,17 @@ today; scope-neutral for a wider review later).
 
 1. Assemble this run's consolidated findings as `{"issues": [...]}`, each in the finding-contract shape,
    **reusing the exact prior `id`** for a finding you recognize — read the prior catalog first with
-   `python scripts/merge_findings.py --solution {topic-stem} --show`. `files[].path` is relative to
-   `solutions/ess-maker-skills/`.
+   `python scripts/merge_findings.py --solution {topic-stem} --show`. Match by **content, not name**: if a
+   prior catalog entry is at the **same site** and describes the **same pattern** as one of this run's
+   findings, it **is** that finding — reuse its `id` even if you'd have slugged it differently this run.
+   Minting a new slug for an already-cataloged issue double-counts it (the script keys cross-run identity on
+   `id`). `files[].path` is relative to `solutions/ess-maker-skills/`.
 2. Reconcile: for any prior finding now gone or corrected (especially `evidence_stale` ones), or one the
    maker dismisses, add it to a `--resolve` file per finding-contract's *Recording a resolution*.
 3. Persist from `solutions/ess-maker-skills/`. **Pipe the findings on stdin with `--current -`** — do not
-   pass a temp-file path (a Unix `/tmp/...` path on Windows or a shell heredoc is a known failure). Any
-   staging file goes **inside the workspace** under `.local\tmp\` (gitignored) — never `$env:TEMP`,
-   `C:\temp`, or `/tmp`, which trigger sensitive-file prompts.
+   pass a temp-file path (a Unix `/tmp/...` path does not exist on Windows, and a shell heredoc is not
+   supported in PowerShell). Any staging file goes **inside the workspace** under `.local\tmp\` (gitignored)
+   — never `$env:TEMP`, `C:\temp`, or `/tmp`, which trigger sensitive-file prompts.
 
    ```
    New-Item -ItemType Directory -Force .local\tmp | Out-Null
