@@ -71,6 +71,14 @@ _SEVERITY_RANK = {"HIGH": 3, "MEDIUM": 2, "LOW": 1}
 # location / fix instead of root_cause / files / concrete_fix) fails loudly instead
 # of persisting a schema-broken catalog. `verification` is optional (defaults static).
 _REQUIRED_FINDING_KEYS = ("id", "title", "severity", "reachability", "root_cause", "concrete_fix")
+# Canonical reachability enum (see finding-contract.md). Drives severity/report
+# logic downstream, so a malformed value must be rejected, not persisted.
+_REACHABILITY_KINDS = {
+    "REACHABLE_NORMAL_UI",
+    "REACHABLE_NORMAL_UI_WITH_DATA_PRECONDITION",
+    "NOT_REACHABLE_VIA_BOT_UI",
+    "OPERATOR_OR_HYGIENE_ONLY",
+}
 # Maker-facing resolutions are fixed / not-a-bug / wont-fix; the other two are
 # retained for compatibility with the analyzer ledger enum (v1.2.0).
 _RESOLUTION_KINDS = {"fixed", "wont-fix", "not-a-bug", "defense-in-depth", "false-positive"}
@@ -248,13 +256,50 @@ def validate_current_findings(findings: list[dict]) -> list[str]:
         sev = str(f.get("severity", "")).strip()
         if sev and sev not in _SEVERITY_RANK:
             errors.append(f"[{where}] severity '{sev}' is not one of HIGH/MEDIUM/LOW")
-        if not _file_paths(f):
+        reach = str(f.get("reachability", "")).strip()
+        if reach and reach not in _REACHABILITY_KINDS:
+            errors.append(
+                f"[{where}] reachability '{reach}' is not one of "
+                f"{'/'.join(sorted(_REACHABILITY_KINDS))}"
+            )
+        verif = str(f.get("verification", "")).strip()
+        if verif and verif not in _VERIFICATION_KINDS:
+            errors.append(
+                f"[{where}] verification '{verif}' is not one of {'/'.join(sorted(_VERIFICATION_KINDS))}"
+            )
+        paths = _file_paths(f)
+        if not paths:
             errors.append(f"[{where}] files[] is missing or has no usable path (evidence_hashes would be empty)")
+        else:
+            for p in paths:
+                if _safe_read_path(p) is None:
+                    errors.append(
+                        f"[{where}] files[].path '{p}' is absolute or escapes the workspace; "
+                        "evidence hashing would store sha256 null and misfire staleness"
+                    )
         fid = str(f.get("id", "")).strip()
         if fid:
             if fid in seen_ids:
                 errors.append(f"[{fid}] duplicate id within this run (ids are the cross-run identity)")
             seen_ids.add(fid)
+    return errors
+
+
+def validate_resolutions(resolved: list[dict]) -> list[str]:
+    """Errors for `--resolve` findings whose `resolution` is present but not a valid
+    kind. An absent `resolution` is fine (it legitimately defaults to `fixed`); a
+    *wrong* value must be rejected, not coerced — the ledger is append-only, so a
+    silent coercion of e.g. `not-a-bug` to `fixed` would permanently misrecord why
+    the finding was resolved.
+    """
+    errors: list[str] = []
+    for i, f in enumerate(resolved):
+        where = str(f.get("id", "")).strip() or f"#{i}"
+        res = str(f.get("resolution", "")).strip()
+        if res and res not in _RESOLUTION_KINDS:
+            errors.append(
+                f"[{where}] resolution '{res}' is not one of {'/'.join(sorted(_RESOLUTION_KINDS))}"
+            )
     return errors
 
 
@@ -272,13 +317,24 @@ def evidence_hashes(finding: dict) -> list[dict]:
 
 
 def _hashes_match(stored: list[dict]) -> bool:
-    """True if every stored evidence hash still equals the file's current hash."""
+    """True if every stored evidence hash still equals the file's current hash.
+
+    Resolve each stored path through `_safe_read_path` (the same skill-root
+    anchoring `evidence_hashes` used to compute the stored value) so the check is
+    independent of the current working directory. A path that no longer resolves
+    inside the tree, or a stored hash of None (the file was unreadable at store
+    time), counts as a mismatch — never as "unchanged".
+    """
     if not stored:
         return False
     for entry in stored:
         if not isinstance(entry, dict):
             return False
-        if sha256_file(Path(entry.get("file", ""))) != entry.get("sha256"):
+        stored_sha = entry.get("sha256")
+        if not stored_sha:
+            return False
+        safe = _safe_read_path(str(entry.get("file", "")))
+        if safe is None or sha256_file(safe) != stored_sha:
             return False
     return True
 
@@ -449,6 +505,17 @@ def main() -> int:
     resolved_findings: list[dict] = []
     if args.resolve:
         resolved_findings = _issues_of(_read_json(Path(args.resolve)) or [])
+        res_errors = validate_resolutions(resolved_findings)
+        if res_errors:
+            src = args.resolve
+            print(
+                f"ERROR: {len(res_errors)} resolution(s) from {src} use an invalid kind. "
+                "Nothing was written to the ledger (it is append-only). Fix and re-run.",
+                file=sys.stderr,
+            )
+            for e in res_errors:
+                print(f"  - {e}", file=sys.stderr)
+            return 2
 
     if cpath.is_file():
         try:

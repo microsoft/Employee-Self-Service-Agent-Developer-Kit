@@ -46,28 +46,34 @@ _DECL_RE = re.compile(r"^name:\s*(\S+)\s*$", re.MULTILINE)
 _MAX_LISTED = 20
 
 
-def _read(path: Path) -> str:
+def _read(path: Path) -> str | None:
+    """Return the file text, or None if it could not be read (distinct from an
+    empty file, which returns "")."""
     try:
         return path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
-        return ""
+        return None
 
 
-def scan_topics(topics_dir: Path) -> tuple[dict[str, list[str]], set[str]]:
-    """Return (reads, writes) where reads maps Global name -> sorted site list
-    (`file:line`), and writes is the set of Global names assigned anywhere."""
+def scan_topics(topics_dir: Path) -> tuple[dict[str, list[str]], set[str], list[str]]:
+    """Return (reads, writes, skipped) where reads maps Global name -> sorted site
+    list (`file:line`), writes is the set of Global names assigned anywhere, and
+    skipped lists topics that could not be read (so a read failure is never a
+    silent clean bill)."""
     reads: dict[str, list[str]] = {}
     writes: set[str] = set()
+    skipped: list[str] = []
     for topic in sorted(topics_dir.glob("*.mcs.yml")):
         text = _read(topic)
-        if not text:
+        if text is None:
+            skipped.append(topic.name)
             continue
         for i, line in enumerate(text.splitlines(), start=1):
             for m in _WRITE_RE.finditer(line):
                 writes.add(m.group(1))
             for m in _READ_RE.finditer(line):
                 reads.setdefault(m.group(1), []).append(f"{topic.name}:{i}")
-    return reads, writes
+    return reads, writes, skipped
 
 
 def scan_declarations(variables_dir: Path) -> set[str]:
@@ -76,7 +82,10 @@ def scan_declarations(variables_dir: Path) -> set[str]:
     if not variables_dir.is_dir():
         return declared
     for var in variables_dir.glob("*.mcs.yml"):
-        for m in _DECL_RE.finditer(_read(var)):
+        text = _read(var)
+        if text is None:
+            continue
+        for m in _DECL_RE.finditer(text):
             declared.add(m.group(1))
     return declared
 
@@ -137,9 +146,16 @@ def main() -> int:
         print(f"ERROR: no topics/ folder in {agent_dir}", file=sys.stderr)
         return 1
 
-    reads, writes = scan_topics(agent_dir / "topics")
+    reads, writes, skipped = scan_topics(agent_dir / "topics")
     declared = scan_declarations(agent_dir / "variables")
     dangling = find_dangling(reads, writes, declared)
+
+    if skipped:
+        print(
+            f"WARNING: {len(skipped)} topic(s) could not be read and were NOT analyzed "
+            f"(a clean result does not cover them): {', '.join(sorted(skipped))}",
+            file=sys.stderr,
+        )
 
     if args.topic:
         stem = args.topic.removesuffix(".mcs.yml")
@@ -165,6 +181,7 @@ def main() -> int:
                     "writes": sorted(writes),
                     "declared": sorted(declared),
                     "dangling": {k: sorted(v) for k, v in sorted(dangling.items())},
+                    "skipped": sorted(skipped),
                 },
                 indent=2,
             )
@@ -173,7 +190,13 @@ def main() -> int:
         )
 
     if not dangling:
-        print("No dangling Global.* references found.")
+        if skipped:
+            print(
+                f"No dangling Global.* references found in the topics that were read "
+                f"({len(skipped)} skipped — see warning above; coverage is incomplete)."
+            )
+        else:
+            print("No dangling Global.* references found.")
         return 0
 
     total = len(dangling)

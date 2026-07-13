@@ -48,8 +48,15 @@ because the runtime docs are missing.
 
 ## Finding IDs
 
-Each lens uses its own prefix so findings are distinguishable and stable across runs. IDs are
-`<PREFIX>-NNN` (for example `BTPF-001`).
+Two distinct identifiers, do not conflate them:
+
+- The persisted **`id` field** (in the catalog JSON) is a stable **kebab-case, behavior-describing slug**
+  (e.g. `missing-issuccess-branch`). This is the **cross-run identity** the engine keys on — reuse the exact
+  prior slug for a finding you recognize (see the persisted-form notes below).
+- The **`<PREFIX>-NNN`** form (e.g. `BTPF-001`) is a **human-facing reference label** used only in the
+  chat-panel output template below, so a maker can refer to a finding by number in one report. Each lens owns
+  a prefix so findings are distinguishable per report; it is **not** the persisted `id` and is not reused as
+  the cross-run identity.
 
 | Prefix | Lens |
 | --- | --- |
@@ -124,7 +131,7 @@ Each catalog finding is this contract serialized, plus the analyzer's cross-run 
   "id": "missing-issuccess-branch",
   "title": "Flow result not checked before parse",
   "severity": "HIGH",
-  "reachability": "confirmed",
+  "reachability": "REACHABLE_NORMAL_UI",
   "root_cause": "The ParseValue runs without a preceding isSuccess = false branch.",
   "concrete_fix": "Add an isSuccess = false ConditionGroup before the parse.",
   "verification": "static",

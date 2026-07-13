@@ -216,6 +216,7 @@ def main() -> int:
 
     detail: dict[str, dict] = {}
     total = 0
+    skipped = 0
     for topic_file in topic_files:
         if not topic_file.is_file():
             print(f"ERROR: topic not found: {topic_file}", file=sys.stderr)
@@ -223,9 +224,11 @@ def main() -> int:
         parsed = _load(topic_file)
         if parsed is None:
             print(
-                f"WARNING: could not parse {topic_file.name}; it was NOT analyzed "
-                f"(a clean result does not cover this topic)."
+                f"WARNING: could not read/parse {topic_file.name}; it was NOT analyzed "
+                f"(a clean result does not cover this topic).",
+                file=sys.stderr,
             )
+            skipped += 1
             continue
         populated, schema_roots, consumed = collect(parsed)
         findings = reconcile(populated, schema_roots, consumed)
@@ -243,7 +246,13 @@ def main() -> int:
         out.write_text(json.dumps(detail, indent=2) + "\n", encoding="utf-8")
 
     if not total:
-        print("No card/topic binding mismatches found.")
+        if skipped:
+            print(
+                f"No card/topic binding mismatches found in the topics that were read "
+                f"({skipped} skipped — see warnings above; coverage is incomplete)."
+            )
+        else:
+            print("No card/topic binding mismatches found.")
         return 0
 
     print(f"Card/topic binding mismatches ({total}):")
