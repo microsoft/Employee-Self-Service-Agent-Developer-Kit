@@ -13,8 +13,8 @@ workspace/**
 # from the scripts dir (e.g. `python adk_telemetry.py --selftest`). Never commit.
 scripts/.local/
 
-# ISV reference docs synced from an ESSVivaCopilot checkout (internal; never committed)
+# ISV reference docs synced from an internal ESS reference source (never committed)
 src/reference/ess-docs/isv/
 
-# Runtime-heuristics docs synced from an ESSVivaCopilot checkout (internal; never committed)
+# Runtime-heuristics docs synced from an internal ESS reference source (never committed)
 src/reference/ess-docs/runtime/

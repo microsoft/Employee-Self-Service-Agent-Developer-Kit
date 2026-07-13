@@ -31,10 +31,11 @@ so load the entire document into context and treat all of it (field tables, sche
 type-coercion notes, and pitfalls) as authoritative reference for the analysis.
 
 If that file is not present, the ISV reference docs have not been synced into this environment. Note in the
-report that ISV conformance was not checked and that the docs can be synced by running
-`python scripts/sync_isv_docs.py` from `solutions/ess-maker-skills/`, then continue. Do not infer ISV
-behavior from general knowledge — the reference docs are authoritative for how these integrations
-actually behave.
+report that ISV conformance was not checked and that an internal dev can sync the docs by running
+`python scripts/sync_isv_docs.py --source <path-to-reference-checkout>` from `solutions/ess-maker-skills/`
+(or by setting `referenceSource` in `.local/config.json` first, then running it with no arguments), then
+continue. Do not infer ISV behavior from general knowledge — the reference docs are authoritative for how
+these integrations actually behave.
 
 **Determine presence by a direct filesystem check of the exact path** (e.g.
 `Test-Path src/reference/ess-docs/isv/isv-<connector>.md`, or simply attempting to read that exact path) —
