@@ -55,6 +55,17 @@ _BACKEND_BY_TOKEN = (
     ("Workday", ("workday", "isv-workday-hcm.md")),
 )
 
+# Plain, maker-facing name for each backend id, emitted in the verdict so the
+# coverage note is read verbatim rather than hand-translated from the probe id
+# (which was a model-dependent step). HRSD and ITSM stay distinct — their docs
+# are separate, so coverage can differ between them.
+_BACKEND_DISPLAY = {
+    "servicenow-hrsd": "ServiceNow HRSD",
+    "servicenow-itsm": "ServiceNow ITSM",
+    "successfactors": "SAP SuccessFactors",
+    "workday": "Workday",
+}
+
 _ISV_DIR = Path(__file__).resolve().parent.parent / "src" / "reference" / "ess-docs" / "isv"
 
 
@@ -145,14 +156,18 @@ def main() -> int:
             state = "present" if e["present"] else "MISSING"
             print(f"  {bid}: {e['doc']} {state} ({len(e['topics'])} topic(s))")
         if mode == "reduced":
-            print(f"Coverage: REDUCED — missing reference doc(s) for: {', '.join(missing)}")
+            missing_names = ", ".join(_BACKEND_DISPLAY.get(bid, bid) for bid in missing)
+            print(f"Coverage: REDUCED — missing reference doc(s) for: {missing_names}")
         else:
             print("Coverage: FULL — every in-scope backend has its reference doc.")
 
     verdict = {
         "mode": mode,
         "missing_backends": missing,
+        "missing_backends_display": [_BACKEND_DISPLAY.get(bid, bid) for bid in missing],
         "covered_backends": covered,
+        "covered_backends_display": [_BACKEND_DISPLAY.get(bid, bid) for bid in covered],
+        "backend_display": {bid: _BACKEND_DISPLAY.get(bid, bid) for bid in backends},
         "isv_dir": str(_ISV_DIR),
         "backends": {bid: {"doc": e["doc"], "present": e["present"], "topics": e["topics"]}
                      for bid, e in backends.items()},

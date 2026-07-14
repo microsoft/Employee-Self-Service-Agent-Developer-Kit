@@ -153,11 +153,99 @@ def produced_fields(scenario: str, configs_dir: Path, base_keys: set[str]) -> se
     return names | base_keys
 
 
+# Depth guard for following a delegation chain (a topic that routes its backend
+# call through another component/system topic). The observed ESS chains are one
+# hop (UI topic -> component topic -> system topic); a small bound keeps a
+# malformed or cyclic map from recursing without end.
+_MAX_HOP = 4
+
+
+def _scenario_literals(value) -> list[str]:
+    """Every `msdyn_<Scenario>` literal in a binding/Switch value string, in order."""
+    return re.findall(r"msdyn_\w+", value) if isinstance(value, str) else []
+
+
+def _switch_scenarios(topic, var_name: str) -> list[str]:
+    """Scenario literals a `SetVariable` assigns to `Topic.<var_name>` via a Switch.
+
+    A create-case topic builds its scenario per user selection, e.g.
+    `ScenarioName: =Topic.MappedScenario` where `MappedScenario` is
+    `=Switch(Topic.user_selected_coe, "…", "msdyn_ServiceNowHRSDCreateCasePayroll", …)`.
+    The *selection* is runtime, but the *set* of reachable scenarios is static, so
+    return every branch literal. The caller unions their produced fields and flags
+    only fields absent from ALL branches (a guaranteed blank for every selection);
+    per-selection reachability is left to the agentic lens.
+    """
+    for node in _walk(topic):
+        if node.get("kind") == "SetVariable" and node.get("variable") == f"Topic.{var_name}":
+            lits = _scenario_literals(node.get("value"))
+            if lits:
+                return lits
+    return []
+
+
+def _resolve_scenarios(node, system_file, topic, component_map, depth: int = 0) -> list[str]:
+    """Every ServiceNow scenario reachable from a `BeginDialog`, or [] if unresolved.
+
+    Resolution order, most explicit first:
+      1. one or more `msdyn_` literals passed inline on this call's `ScenarioName`;
+      2. an inline `ScenarioName: =Topic.<var>` built by a Switch (fan-out — all branches);
+      3. a literal `ScenarioName` declared in the directly-called topic;
+      4. a transitive hop — the called topic delegates to a system topic that resolves
+         (bounded by `_MAX_HOP`).
+    """
+    binding = (node.get("input") or {}).get("binding")
+    raw = binding.get("ScenarioName") if isinstance(binding, dict) else None
+
+    lits = _scenario_literals(raw)
+    if lits:
+        return lits
+
+    if isinstance(raw, str):
+        m = re.fullmatch(r"=?\s*Topic\.([A-Za-z_]\w*)\s*", raw)
+        if m:
+            switched = _switch_scenarios(topic, m.group(1))
+            if switched:
+                return switched
+
+    literal = scenario_of(system_file) if system_file is not None else None
+    if literal:
+        return [literal]
+
+    if depth < _MAX_HOP and system_file is not None:
+        called = _load(system_file)
+        if called is not None:
+            for inner in _walk(called):
+                if inner.get("kind") != "BeginDialog":
+                    continue
+                inner_file = component_map.get(_schema_suffix(inner.get("dialog", "") or ""))
+                if inner_file is None:
+                    continue
+                resolved = _resolve_scenarios(inner, inner_file, called, component_map, depth + 1)
+                if resolved:
+                    return resolved
+    return []
+
+
 def resolve_response_vars(
     topic, component_map: dict[str, Path], configs_dir: Path, base_keys: set[str]
-) -> dict[str, set[str]]:
-    """Map each response variable to the produced-field set of its scenario."""
+) -> tuple[dict[str, set[str]], dict[str, str]]:
+    """Map each response variable to the produced-field set of its scenario.
+
+    Also returns `var_unresolved`, mapping a response variable bound by a
+    ServiceNow system dialog whose scenario could NOT be resolved statically (or
+    resolved but whose template config could not be loaded) to that dialog's
+    suffix — e.g. a topic that `BeginDialog`s into the shared `*SystemCommonExecution`
+    without an inline `ScenarioName` the reader can see. The caller uses it to
+    disclose incomplete coverage only when such a variable is actually parsed (an
+    unchecked field), rather than reporting clean.
+
+    A response variable bound by more than one dialog gets the **union** of every
+    producer's fields, so a field produced by any binding path is not spuriously
+    flagged.
+    """
     var_to_produced: dict[str, set[str]] = {}
+    var_unresolved: dict[str, str] = {}
     for node in _walk(topic):
         if node.get("kind") != "BeginDialog":
             continue
@@ -165,18 +253,43 @@ def resolve_response_vars(
         system_file = component_map.get(suffix)
         if system_file is None:
             continue
-        scenario = scenario_of(system_file)
-        if scenario is None:
-            continue
-        produced = produced_fields(scenario, configs_dir, base_keys)
-        if produced is None:
-            continue
         binding = (node.get("output") or {}).get("binding")
-        if isinstance(binding, dict):
-            for target in binding.values():
-                if isinstance(target, str) and target.startswith("Topic."):
-                    var_to_produced[target[len("Topic."):]] = produced
-    return var_to_produced
+        targets = [
+            t[len("Topic."):]
+            for t in (binding.values() if isinstance(binding, dict) else [])
+            if isinstance(t, str) and t.startswith("Topic.")
+        ]
+        if not targets:
+            continue
+        scenarios = _resolve_scenarios(node, system_file, topic, component_map)
+        if not scenarios:
+            if "servicenow" in suffix.lower():
+                for target in targets:
+                    var_unresolved.setdefault(target, suffix)
+            continue
+        # Union the produced fields across every reachable scenario (one for a
+        # direct/inline/transitive call, several for a Switch fan-out). A parsed
+        # field absent from the union is a guaranteed blank for every selection;
+        # a field produced by only some branches is left for the agentic lens.
+        produced: set[str] = set()
+        any_resolved = False
+        for scenario in scenarios:
+            fields = produced_fields(scenario, configs_dir, base_keys)
+            if fields is not None:
+                produced |= fields
+                any_resolved = True
+        if not any_resolved:
+            # Scenario(s) resolved but no template config could be loaded, so the
+            # response fields went unchecked — disclose rather than report clean.
+            if "servicenow" in suffix.lower():
+                for target in targets:
+                    var_unresolved.setdefault(target, suffix)
+            continue
+        # Union with any producer already recorded for this variable (a response
+        # var bound by more than one dialog), never overwrite.
+        for target in targets:
+            var_to_produced[target] = var_to_produced.get(target, set()) | produced
+    return var_to_produced, var_unresolved
 
 
 def _value_source(value) -> str | None:
@@ -205,20 +318,29 @@ def parsed_records(topic) -> list[tuple[str, set[str]]]:
     return records
 
 
-def reconcile(topic, component_map, configs_dir, base_keys) -> dict[str, list[str]]:
-    """Map each parsed-but-not-produced field to a one-line reason."""
-    var_to_produced = resolve_response_vars(topic, component_map, configs_dir, base_keys)
+def reconcile(topic, component_map, configs_dir, base_keys) -> tuple[dict[str, list[str]], list[str]]:
+    """Map each parsed-but-not-produced field to a one-line reason.
+
+    Returns `(findings, unresolved)` where `unresolved` lists the ServiceNow
+    dialog suffixes whose response a variable in THIS topic parses but whose
+    scenario could not be resolved (so those fields went unchecked). The caller
+    discloses them as incomplete coverage rather than reporting clean.
+    """
+    var_to_produced, var_unresolved = resolve_response_vars(topic, component_map, configs_dir, base_keys)
     findings: dict[str, list[str]] = {}
+    unresolved: list[str] = []
     for source, fields in parsed_records(topic):
         produced = var_to_produced.get(source)
         if produced is None:
+            if source in var_unresolved:
+                unresolved.append(var_unresolved[source])
             continue
         for field in sorted(fields):
             if field not in produced:
                 findings[f"{source}.{field}"] = [
                     "parsed but not produced (config never returns this field; renders blank)"
                 ]
-    return findings
+    return findings, unresolved
 
 
 def main() -> int:
@@ -270,6 +392,7 @@ def main() -> int:
     detail: dict[str, dict] = {}
     total = 0
     skipped = 0
+    incomplete: list[str] = []
     for topic_file in topic_files:
         if not topic_file.is_file():
             print(f"ERROR: topic not found: {topic_file}", file=sys.stderr)
@@ -283,7 +406,16 @@ def main() -> int:
             )
             skipped += 1
             continue
-        findings = reconcile(parsed, component_map, configs_dir, base_keys)
+        findings, unresolved = reconcile(parsed, component_map, configs_dir, base_keys)
+        if unresolved:
+            incomplete.append(topic_file.name)
+            print(
+                f"WARNING: {topic_file.name} routes ServiceNow dialog(s) "
+                f"({', '.join(sorted(set(unresolved)))}) whose scenario could not be resolved "
+                f"statically (inline scenarioName via shared execution); their response fields "
+                f"were NOT checked (coverage is incomplete for this topic).",
+                file=sys.stderr,
+            )
         if findings:
             detail[topic_file.name] = {"mismatched": dict(sorted(findings.items()))}
             total += len(findings)
@@ -291,13 +423,19 @@ def main() -> int:
     if args.output:
         out = Path(args.output)
         out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(detail, indent=2) + "\n", encoding="utf-8")
+        payload = {"detail": detail, "skipped": skipped, "incomplete": sorted(set(incomplete))}
+        out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
 
     if not total:
-        if skipped:
+        if skipped or incomplete:
+            notes = []
+            if skipped:
+                notes.append(f"{skipped} skipped")
+            if incomplete:
+                notes.append(f"{len(incomplete)} with unresolved ServiceNow scenarios")
             print(
-                f"No config/topic silent-blank mismatches found in the topics that were read "
-                f"({skipped} skipped — see warnings above; coverage is incomplete)."
+                f"No config/topic silent-blank mismatches found in the topics that were fully "
+                f"checked ({'; '.join(notes)} — see warnings above; coverage is incomplete)."
             )
         else:
             print("No config/topic silent-blank mismatches found.")

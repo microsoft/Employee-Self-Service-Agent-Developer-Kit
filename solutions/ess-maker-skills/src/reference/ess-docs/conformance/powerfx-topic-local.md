@@ -75,7 +75,7 @@ source, so classify the value **before** applying any string heuristic below:
   on how the response was obtained:** when the topic uses the standard `ParseValue → ForAll → response-table`
   pattern and **delegates the call to a shared `*System*` orchestrator topic** (structurally visible — the ESS
   pattern), failure is handled centrally and the AI-orchestration layer emits a "no data" message, so the
-  finding is `reachable: unreachable`, **cap at LOW** (the confirmed runtime heuristics corroborate this;
+  finding is `NOT_REACHABLE_VIA_BOT_UI`, **cap at LOW** (the confirmed runtime heuristics corroborate this;
   apply the cap even without them). Reserve higher severity for a topic that parses a response it fetched
   **directly** (no shared orchestrator) or that renders a hardcoded card regardless of data. **Fix:** for the
   delegated (LOW) case the shared error path already prevents the blank from reaching the user — the finding is
@@ -87,7 +87,7 @@ source, so classify the value **before** applying any string heuristic below:
   result path has **no `isSuccess = false` (or equivalent failure) branch** — the topic continues with
   empty data on failure. Flag the missing failure branch, but **score on structure**: if the call is a
   `BeginDialog` into a shared `*System*`/OnError topic that terminates or centrally handles failure
-  (structurally visible), code after it is `reachable: unreachable` (**cap at LOW**, applied with or without
+  (structurally visible), code after it is `NOT_REACHABLE_VIA_BOT_UI` (**cap at LOW**, applied with or without
   the runtime docs) — do not claim "the user gets no error." Reserve higher severity for a **direct** flow
   call that ignores `isSuccess`, or a **write** that proceeds on unverified success. **Fix:** for the delegated
   (LOW) case the shared error path already handles the failure and stops the dialog — the finding is

@@ -6,8 +6,9 @@ config/topic. Each lens produces findings in this one shape so the review can ra
 de-duplicate them uniformly. The individual lens docs describe **what** each looks for; this doc defines
 **how** a confirmed finding is scored and reported.
 
-Findings are **advisory prose** in the response — no lens writes anything to disk. This is the internal
-(structured) contract; the customer-facing translation is Step 7 of the `topics/review` skill.
+Each conformance lens produces **advisory prose** — no lens writes anything to disk itself. The skill's
+Step 8 persists the consolidated findings to the catalog and ledger; this doc is the internal (structured)
+contract, and the customer-facing translation is Step 9 of the `topics/review` skill.
 
 ## Precision bar
 
@@ -147,13 +148,18 @@ Each catalog finding is this contract serialized, plus the analyzer's cross-run 
 - **`id`** is a stable kebab-case behavior-describing slug and is the cross-run identity — reused across
   runs (read the prior catalog with `merge_findings.py --solution <solution> --show` and reuse the exact prior
   slug for a finding you recognize; never invent a new slug for a previously-identified finding).
-- **`status`** (assigned by the script, not the agent) is `active` or `resolved`. `resolved` requires a
-  matching `resolved-issue-ledger.jsonl` entry, whose `resolution` records *why*: `fixed` (the code was
-  corrected), `not-a-bug` (the maker dismissed it as a false positive), or `wont-fix` (acknowledged,
+- **`status`** (assigned by the script, not the agent) is `active`, `suppressed`, or `resolved`. `resolved`
+  requires a matching `resolved-issue-ledger.jsonl` entry, whose `resolution` records *why*: `fixed` (the code
+  was corrected), `not-a-bug` (the maker dismissed it as a false positive), or `wont-fix` (acknowledged,
   declined). A finding not re-detected this run stays `active` (absence is never resolution, because LLM
   coverage is nondeterministic). A finding **resolved this run** appears once as `resolved`, then the **next
   run prunes it** from the catalog — the ledger is its permanent record. A pruned finding reopens as a fresh
-  `active` finding only if its code changes and it is re-detected.
+  `active` finding only if its code changes and it is re-detected. **`suppressed`** is the exception a
+  deterministic detector needs: once a maker dismisses a finding (`not-a-bug` / `wont-fix` / `false-positive`),
+  the detector would otherwise re-emit it every run — so a re-detected dismissed finding is carried as
+  `suppressed` (not `active`) until its evidence hash changes, at which point it reopens as `active`. A `fixed`
+  finding is not suppressed; re-detecting it means the code regressed, so it reopens as `active`. The report
+  presents only `active` findings; `suppressed` and `resolved` are catalog/ledger bookkeeping.
 - **`verification`** is `static` (decidable from the authored files — every current lens) or
   `needs-runtime-test` (only confirmable by running the bot). A `needs-runtime-test` finding is the explicit
   hand-off to Layer-3 runtime testing: generate an assertion case rather than a `/update` edit. The script

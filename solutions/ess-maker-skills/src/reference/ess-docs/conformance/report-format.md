@@ -80,8 +80,16 @@ pattern, ServiceNow response-field integrity) always runs, and missing `runtime/
 reduced coverage. So:
 
 - **`mode: reduced`** → show the one honest clause naming each backend in `missing_backends`: 9a's reduced
-  variant, the 9d coverage line, and the scoped equivalents. Fill `{backend}` from `missing_backends` (Workday,
-  ServiceNow, SAP SuccessFactors, …).
+  variant, the 9d coverage line, and the scoped equivalents. Fill `{backend}` from
+  `missing_backends_display` — the probe emits the plain, maker-facing name for each id so you do not
+  hand-translate. The mapping (also in the verdict's `backend_display`) is:
+
+  | Probe id | `{backend}` display |
+  | --- | --- |
+  | `servicenow-hrsd` | ServiceNow HRSD |
+  | `servicenow-itsm` | ServiceNow ITSM |
+  | `workday` | Workday |
+  | `successfactors` | SAP SuccessFactors |
 - **`mode: full`** (ISV ran for every in-scope backend, or no topic calls a backend) → show none of it: plain
   "good to publish" in 9a, no coverage line in 9d, no coverage line in the scoped roll-up. Never pad a clean
   report with coverage boilerplate when nothing was skipped, and never emit an empty "Coverage: I ran

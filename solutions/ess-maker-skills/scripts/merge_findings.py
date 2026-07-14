@@ -27,9 +27,11 @@ evidence-stale if any file changed (hash mismatch) — an objective signal to
 re-verify, not an LLM guess.
 
 Finding identity across runs is the semantic id (a stable kebab-case slug the
-agent reuses). Status is 'active' or 'resolved'; 'resolved' requires a matching
-resolved-issue-ledger.jsonl entry (written when /update confirms a fix, or when
-/review confirms an evidence-stale finding's node is gone).
+agent reuses). Status is 'active', 'suppressed', or 'resolved'; 'resolved' requires
+a matching resolved-issue-ledger.jsonl entry (written when /update confirms a fix,
+or when /review confirms an evidence-stale finding's node is gone). 'suppressed' is
+a re-detected finding the maker dismissed (not-a-bug/wont-fix/false-positive), kept
+out of the active report until its evidence changes.
 
 Catalog integrity: this script is the ONLY sanctioned way to write a catalog, and
 it validates every catalog-bound finding against the finding contract (required
@@ -82,6 +84,12 @@ _REACHABILITY_KINDS = {
 # Maker-facing resolutions are fixed / not-a-bug / wont-fix; the other two are
 # retained for compatibility with the analyzer ledger enum (v1.2.0).
 _RESOLUTION_KINDS = {"fixed", "wont-fix", "not-a-bug", "defense-in-depth", "false-positive"}
+# Resolutions that mean "this is not a defect the maker will act on." A
+# deterministic detector re-emits the same pattern every run, so once dismissed
+# these must stay suppressed (not resurface as active) until the topic's evidence
+# changes. `fixed` / `defense-in-depth` are code-change intents, so re-detection of
+# those legitimately reopens the finding (a regression) and they are NOT dismissals.
+_DISMISSAL_KINDS = {"not-a-bug", "wont-fix", "false-positive"}
 _VERIFICATION_KINDS = {"static", "needs-runtime-test"}
 _REVIEW_DIR = Path(".local") / "review-findings"
 # Anchor for validating agent-supplied paths stay inside the maker-skills tree
@@ -348,20 +356,62 @@ def _next_resolution_ref(issue_id: str, ledger: list[dict]) -> str:
     return f"{issue_id}:r{n}"
 
 
+def _latest_ledger_record(issue_id: str, solution: str, ledger: list[dict]) -> "dict | None":
+    """The most recent ledger line for this (solution, issue_id), or None.
+
+    The ledger is append-only, so the last matching line wins.
+    """
+    match = None
+    for entry in ledger:
+        if entry.get("issue_id") == issue_id and entry.get("solution") == solution:
+            match = entry
+    return match
+
+
+def _active_dismissal(
+    issue_id: str, solution: str, ledger: list[dict],
+    resolutions: dict[str, dict], current_hashes: list[dict],
+) -> "dict | None":
+    """Return {ref, resolution} if a re-detected finding should stay suppressed.
+
+    A finding is suppressed when it was dismissed (not-a-bug / wont-fix /
+    false-positive) and its evidence is unchanged since the dismissal:
+
+    - dismissed *this* run (in `resolutions`): evidence is current by definition;
+    - dismissed in a *prior* run (latest ledger line): only while the stored
+      evidence hash still matches the finding's current first-file hash. A topic
+      edit moves the hash and reopens the finding as active for re-review.
+    """
+    this_run = resolutions.get(issue_id)
+    if this_run is not None and this_run.get("resolution") in _DISMISSAL_KINDS:
+        return {"ref": this_run.get("ref"), "resolution": this_run["resolution"]}
+
+    latest = _latest_ledger_record(issue_id, solution, ledger)
+    if latest is not None and latest.get("resolution") in _DISMISSAL_KINDS:
+        stored_hash = latest.get("evidence_hash")
+        current_hash = current_hashes[0]["sha256"] if current_hashes else None
+        if stored_hash is not None and stored_hash == current_hash:
+            return {"ref": latest.get("id"), "resolution": latest["resolution"]}
+    return None
+
+
 def merge(
     prior: list[dict], current: list[dict], resolutions: dict[str, dict], run_date: str,
+    ledger: list[dict], solution: str,
 ) -> list[dict]:
     prior_by_id = {str(f.get("id", "")).strip(): f for f in prior}
     current_by_id = {str(f.get("id", "")).strip(): f for f in current}
     merged: list[dict] = []
 
-    # Current findings are active. A re-detected finding that was previously
-    # resolved reopens automatically here (the code came back).
+    # Current findings are active — unless the maker dismissed them and the
+    # evidence is unchanged, in which case they stay suppressed rather than
+    # resurfacing every run. A re-detected finding that was previously *fixed*
+    # reopens automatically here (the code came back).
     for issue_id, cur in current_by_id.items():
         rec = dict(cur)
-        rec["status"] = "active"
+        cur_hashes = evidence_hashes(cur)
         rec["evidence_stale"] = False
-        rec["evidence_hashes"] = evidence_hashes(cur)
+        rec["evidence_hashes"] = cur_hashes
         rec["verification"] = _verification_of(cur)
         rec.pop("resolution", None)
         rec.pop("resolution_ref", None)
@@ -374,6 +424,13 @@ def merge(
         else:
             rec["first_seen"] = run_date
         rec["last_seen"] = run_date
+        dismissal = _active_dismissal(issue_id, solution, ledger, resolutions, cur_hashes)
+        if dismissal is not None:
+            rec["status"] = "suppressed"
+            rec["resolution"] = dismissal["resolution"]
+            rec["resolution_ref"] = dismissal["ref"]
+        else:
+            rec["status"] = "active"
         merged.append(rec)
 
     # Prior findings not re-detected this run.
@@ -390,6 +447,10 @@ def merge(
             # Resolved in a prior run — prune from the catalog (the ledger is the
             # permanent record). Re-detection reopens it as active via the loop above.
             continue
+        elif old.get("status") == "suppressed":
+            # A dismissed finding that is no longer re-detected: keep it suppressed
+            # rather than flipping it back to active on absence.
+            rec["status"] = "suppressed"
         else:
             # Absence is not resolution. Keep the original evidence hashes so the
             # staleness signal persists; a file change flips it to evidence-stale.
@@ -426,11 +487,23 @@ def append_resolutions(
     out: dict[str, dict] = {}
     lines: list[str] = []
     for issue_id in sorted(resolved):
-        ref = _next_resolution_ref(issue_id, ledger + [{"issue_id": i} for i in out])
         resolution = _resolution_of(resolved[issue_id])
-        out[issue_id] = {"ref": ref, "resolution": resolution}
         finding = by_id.get(issue_id, {})
         hashes = evidence_hashes(finding) if finding else []
+        ev_hash = hashes[0]["sha256"] if hashes else None
+        latest = _latest_ledger_record(issue_id, solution, ledger)
+        if (
+            latest is not None
+            and latest.get("resolution") == resolution
+            and latest.get("evidence_hash") == ev_hash
+        ):
+            # Idempotent: an identical resolution with identical evidence is already
+            # recorded. Reuse the existing ref instead of appending a duplicate :rN
+            # line (prevents append-only bloat when the same dismissal is re-passed).
+            out[issue_id] = {"ref": latest.get("id"), "resolution": resolution}
+            continue
+        ref = _next_resolution_ref(issue_id, ledger + [{"issue_id": i} for i in out])
+        out[issue_id] = {"ref": ref, "resolution": resolution}
         entry = {
             "id": ref,
             "solution": solution,
@@ -438,7 +511,7 @@ def append_resolutions(
             "resolution": resolution,
             "resolved_date": run_date,
             "resolved_by": _resolved_by_of(resolved[issue_id]),
-            "evidence_hash": hashes[0]["sha256"] if hashes else None,
+            "evidence_hash": ev_hash,
         }
         lines.append(json.dumps(entry))
     path = ledger_path()
@@ -450,9 +523,10 @@ def append_resolutions(
 
 
 def summarize(issues: list[dict]) -> dict[str, int]:
-    counts = {"active": 0, "resolved": 0, "evidence_stale": 0}
+    counts = {"active": 0, "resolved": 0, "suppressed": 0, "evidence_stale": 0}
     for f in issues:
-        counts[f.get("status", "active")] = counts.get(f.get("status", "active"), 0) + 1
+        status = f.get("status", "active")
+        counts[status] = counts.get(status, 0) + 1
         if f.get("evidence_stale"):
             counts["evidence_stale"] += 1
     return counts
@@ -538,7 +612,7 @@ def main() -> int:
         resolved_findings, [prior, current], args.solution, run_date, ledger
     )
 
-    merged = merge(prior, current, resolutions, run_date)
+    merged = merge(prior, current, resolutions, run_date, ledger, args.solution)
 
     catalog = {
         "schema_version": _SCHEMA_VERSION,
@@ -552,7 +626,10 @@ def main() -> int:
 
     counts = summarize(merged)
     print(f"Catalog updated: {cpath}")
-    print(f"  active={counts.get('active', 0)}  resolved={counts.get('resolved', 0)}  evidence-stale={counts.get('evidence_stale', 0)}")
+    print(
+        f"  active={counts.get('active', 0)}  resolved={counts.get('resolved', 0)}  "
+        f"suppressed={counts.get('suppressed', 0)}  evidence-stale={counts.get('evidence_stale', 0)}"
+    )
     if counts.get("evidence_stale"):
         print("  NOTE: evidence-stale findings had their files change but were not re-detected — re-verify (likely fixed).")
     return 0
