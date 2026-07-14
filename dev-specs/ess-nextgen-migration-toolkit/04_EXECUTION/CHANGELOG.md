@@ -109,13 +109,14 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
   `02_ARCHITECTURE/SERVICES.md`,
   `03_ENGINEERING/REPOSITORY_STRUCTURE.md`,
   `03_ENGINEERING/CODING_STANDARDS.md`, and `AGENTS.md` accordingly.
-- **Source tree finalized around core, service modules, and debug output.**
+- **Source tree finalized around core, service modules, and output.**
   Moved canonical models under `src/core/models/`; renamed the Dataverse
   integration folder to `src/core/outbound/` and the concept to the Dataverse
   client; changed `services/` to singular `service/`; introduced
   `src/service/modules/` for preprocessing, migration, and postprocessing;
-  relocated generated logs and reports to `debug/logs/` and
-  `debug/reports/`; and updated the architecture spec index to use
+  relocated generated output to `output/session-<timestamp>/`
+  (later refined to the two-file session bundle); and updated the architecture
+  spec index to use
   `02_ARCHITECTURE/DATAVERSE_CLIENT.md`. Relaxed the old service-layer physical
   boundary: migration rules now live exclusively in
   `src/service/modules/migration/steps/`, while reusable service capabilities

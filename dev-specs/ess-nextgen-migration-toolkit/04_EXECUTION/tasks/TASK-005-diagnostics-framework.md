@@ -34,7 +34,7 @@ The Logger has two responsibilities that define this framework:
    `migration_report.md`. `LogChange` records a successful transformation
    (`ChangeEntry` → `context.Changes` → `## Changes`); `LogAdvisory` records a
    manual-review advisory (`DiagnosticEntry` → `context.Warnings`/`Errors`/`Logs`
-   by `severity` → `## Warnings — Manual Review Required`).
+   by `severity` → `## Warnings — Manual Review Required` or `## Errors`).
 
 ## Acceptance Criteria
 
