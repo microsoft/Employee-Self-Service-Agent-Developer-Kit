@@ -64,6 +64,7 @@ tools/
             auth/
                 token_provider.py
             pipeline/
+                staged.py
             logging/
             models/
             outbound/
@@ -77,6 +78,7 @@ tools/
             postprocessing/
         service/
             mtk_orchestrator.py
+            toolkit.py
 
     output/
         session-YYYY-MM-DD_HH-MM-SS/

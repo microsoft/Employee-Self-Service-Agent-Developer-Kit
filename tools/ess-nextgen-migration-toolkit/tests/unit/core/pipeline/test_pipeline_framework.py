@@ -7,7 +7,6 @@ from dataclasses import dataclass, field
 import pytest
 
 from core.pipeline import (
-    EssMigrationToolkit,
     Pipeline,
     PipelineConfigurationError,
     PipelineExecutionError,
@@ -36,19 +35,6 @@ class RecordingContextStep(PipelineStep[ExampleContext, ExampleContext]):
 
     def execute(self, context: ExampleContext) -> ExampleContext:
         context.events.append(self._event)
-        return context
-
-
-class NoOpContextStep(PipelineStep[ExampleContext, ExampleContext]):
-    def __init__(self, name: str) -> None:
-        super().__init__(
-            input_type=ExampleContext,
-            output_type=ExampleContext,
-            name=name,
-            description=f"No-op {name}",
-        )
-
-    def execute(self, context: ExampleContext) -> ExampleContext:
         return context
 
 
@@ -188,82 +174,3 @@ def test_pipeline_rejects_incompatible_runtime_output() -> None:
 
     with pytest.raises(PipelineExecutionError, match="produced incompatible output"):
         pipeline.run(ExampleContext())
-
-
-def test_super_pipeline_composes_stages_in_deterministic_order() -> None:
-    context = ExampleContext()
-    input_pipeline = (
-        Pipeline.builder("input", input_type=ExampleContext)
-        .use(
-            RecordingContextStep("input"),
-        )
-        .build()
-    )
-    migration_pipeline = (
-        Pipeline.builder("migration", input_type=ExampleContext)
-        .use(
-            RecordingContextStep("migration"),
-        )
-        .build()
-    )
-    output_pipeline = (
-        Pipeline.builder("output", input_type=ExampleContext)
-        .use(
-            RecordingContextStep("output"),
-        )
-        .build()
-    )
-
-    result = (
-        EssMigrationToolkit[ExampleContext]()
-        .input(input_pipeline)
-        .migrate(migration_pipeline)
-        .output(output_pipeline)
-        .run(context)
-    )
-
-    assert result is context
-    assert result.events == ["input", "migration", "output"]
-
-
-def test_super_pipeline_runs_no_op_stage_pipelines_end_to_end() -> None:
-    context = ExampleContext()
-    input_pipeline = (
-        Pipeline.builder("input", input_type=ExampleContext)
-        .use(
-            NoOpContextStep("input-no-op"),
-        )
-        .build()
-    )
-    migration_pipeline = (
-        Pipeline.builder("migration", input_type=ExampleContext)
-        .use(
-            NoOpContextStep("migration-no-op"),
-        )
-        .build()
-    )
-    output_pipeline = (
-        Pipeline.builder("output", input_type=ExampleContext)
-        .use(
-            NoOpContextStep("output-no-op"),
-        )
-        .build()
-    )
-
-    result = (
-        EssMigrationToolkit[ExampleContext]()
-        .input(input_pipeline)
-        .migrate(migration_pipeline)
-        .output(output_pipeline)
-        .run(context)
-    )
-
-    assert result is context
-    assert result.events == []
-
-
-def test_super_pipeline_requires_all_three_stages() -> None:
-    pipeline = Pipeline.builder("input", input_type=ExampleContext).build()
-
-    with pytest.raises(PipelineConfigurationError, match="Migration pipeline"):
-        EssMigrationToolkit[ExampleContext]().input(pipeline).run(ExampleContext())

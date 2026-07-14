@@ -28,10 +28,12 @@
 > Output Pipeline     (src/modules/postprocessing/)
 > ```
 >
-> The composition is expressed fluently:
+> The composition is expressed fluently through `EssMigrationToolkit` (the ESS
+> product super-pipeline in `service/`, inheriting the generic
+> `StagedPipeline[TContext]` composition in `core/pipeline/`):
 >
 > ```python
-> EssMigrationToolkit()
+> EssMigrationToolkit[MigrationContext]()
 >     .input(InputPipeline().use(...).use(...))
 >     .migrate(MigrationPipeline().use(...).use(...))
 >     .output(OutputPipeline().use(...).use(...))
@@ -53,8 +55,15 @@
 > **Typed framework foundation.** The reusable framework is generic —
 > `Pipeline[TInput, TOutput]` and `PipelineStep[TInput, TOutput]` — so the
 > Builder can type-thread steps and support type-changing steps where genuinely
-> needed. The three ESS stage pipelines instantiate this foundation over the
-> shared `MigrationContext` (`Pipeline[MigrationContext, MigrationContext]`),
+> needed. The generic super-pipeline composition is likewise framework, not
+> product: `StagedPipeline[TContext]` (in `core/pipeline/`) composes an ordered
+> sequence of context-preserving stage pipelines and runs them left to right,
+> with no ESS or domain naming. The ESS product super-pipeline
+> `EssMigrationToolkit` (in `service/`) **inherits** `StagedPipeline`,
+> binding the three named stages (`.input()`/`.migrate()`/`.output()`) and the
+> "all three stages required" rule while reusing the inherited `run()`. The
+> three ESS stage pipelines instantiate the generic `Pipeline` foundation over
+> the shared `MigrationContext` (`Pipeline[MigrationContext, MigrationContext]`),
 > which threads through the whole super-pipeline. (The generic `TInput, TOutput`
 > signature is the analogue of the C# `HeterogenousPipelineStepComputeUnitBase
 > <TInput, TOutput>`; a stage pipeline is the analogue of
@@ -317,17 +326,20 @@ output_pipeline = (
 
 The product itself is a single fluent super-pipeline that composes the three
 stages. Each stage receives the output of the previous stage over the shared
-`MigrationContext`:
+`MigrationContext`. `EssMigrationToolkit` (in `service/`) is the ESS product
+super-pipeline; it **inherits** the generic `StagedPipeline[TContext]` composition
+(in `core/pipeline/`) and adds the three named stages plus the "all three stages
+required" rule:
 
 ```python
 toolkit = (
-    EssMigrationToolkit()
+    EssMigrationToolkit[MigrationContext]()   # inherits StagedPipeline
         .input(input_pipeline)
         .migrate(migration_pipeline)
         .output(output_pipeline)
 )
 
-result = toolkit.run(mode=ExecutionMode.PREVIEW)   # Discover | Preview | Migrate
+result = toolkit.run(context)   # ExecutionMode set on the context (Discover | Preview | Migrate)
 ```
 
 The Builder creates immutable executable pipelines. The **Migration Orchestrator
@@ -710,10 +722,11 @@ Responsibilities
 The Migration Orchestrator (`src/service/mtk_orchestrator.py`) is the
 **composition root** only. It assembles the three stages into the fluent
 super-pipeline, configures the execution mode, executes it, and returns the
-reports and diagnostics:
+reports and diagnostics. `EssMigrationToolkit` (in `service/`) inherits the
+generic `StagedPipeline[TContext]` composition (in `core/pipeline/`):
 
 ```python
-EssMigrationToolkit()
+EssMigrationToolkit[MigrationContext]()   # inherits StagedPipeline
     .input(input_pipeline)
     .migrate(migration_pipeline)
     .output(output_pipeline)
