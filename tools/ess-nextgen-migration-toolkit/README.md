@@ -24,10 +24,10 @@ src/
         outbound/    Dataverse client (dataverse_client.py)
         pipeline/    Pipeline engine
         utils/       Generic helpers
-        modules/
-            preprocessing/
-            migration/      migration_pipeline.py, steps/
-            postprocessing/
+    modules/
+        preprocessing/
+        migration/       migration_pipeline.py, steps/
+        postprocessing/
     service/         Orchestration (mtk_orchestrator.py)
 debug/               Generated, gitignored output
     logs/
