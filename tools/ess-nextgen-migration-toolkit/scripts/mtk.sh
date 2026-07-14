@@ -108,7 +108,8 @@ cmd_provision() {
   if ! command -v uv >/dev/null 2>&1; then
     echo ""
     echo "Tip: add uv to your PATH so you can call it directly next time:"
-    echo "      echo 'export PATH=\"\$HOME/.local/bin:\$PATH\"' >> ~/.zshrc && source ~/.zshrc"
+    echo "      export PATH=\"\$HOME/.local/bin:\$PATH\""
+    echo "      (Add this to your shell profile — e.g. ~/.bashrc, ~/.zshrc, or ~/.profile)"
   fi
 }
 

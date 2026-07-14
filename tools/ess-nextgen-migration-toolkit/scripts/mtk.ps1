@@ -1,11 +1,11 @@
 #requires -Version 5.1
 <#
 .SYNOPSIS
-    mtk — ESS NextGen Migration Toolkit command entrypoint (Windows).
+    mtk - ESS NextGen Migration Toolkit command entrypoint (Windows).
 
 .DESCRIPTION
     A SINGLE dispatcher for every developer/operator command. New operational
-    commands are added here as subcommands — never as new top-level scripts.
+    commands are added here as subcommands - never as new top-level scripts.
     Everything is pip-free: uv is a self-contained binary that provisions both
     the pinned Python and the locked dependencies.
 
@@ -49,7 +49,7 @@ function Find-Uv {
     return $null
 }
 
-function Ensure-Uv {
+function Assert-UvInstalled {
     $uv = Find-Uv
     if (-not $uv) {
         Write-Host "==> uv not found; installing the standalone uv (no Python required)..."
@@ -74,7 +74,7 @@ function Ensure-Uv {
 function Invoke-Provision {
     param([bool]$DevMode)
 
-    $UV = Ensure-Uv
+    $UV = Assert-UvInstalled
     Write-Host "==> Using uv: $(& $UV --version 2>&1)  ($UV)"
 
     $pin = if (Test-Path ".python-version") { (Get-Content ".python-version" -Raw).Trim() } else { "" }
@@ -89,7 +89,7 @@ function Invoke-Provision {
         # never have to run them by hand. The hooks are hard-scoped to this
         # toolkit (.pre-commit-config.yaml), so they no-op for commits elsewhere
         # in the monorepo. Git hooks live in the shared, un-versioned .git/hooks,
-        # so this one-time install runs per clone — folding it into provisioning
+        # so this one-time install runs per clone - folding it into provisioning
         # makes it seamless. Skipped outside a git work tree.
         git rev-parse --is-inside-work-tree *> $null
         if ($LASTEXITCODE -eq 0) {
@@ -151,7 +151,7 @@ function Invoke-Refresh {
 
 function Show-Usage {
     @"
-mtk — ESS NextGen Migration Toolkit
+mtk - ESS NextGen Migration Toolkit
 
 Usage:
   mtk start [-Dev]      Provision a pip-free, locked environment (uv + Python + .venv), then run the toolkit

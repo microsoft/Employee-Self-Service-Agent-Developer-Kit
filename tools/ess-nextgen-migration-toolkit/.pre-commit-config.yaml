@@ -6,9 +6,9 @@
 # from inside the toolkit (`uv run --project tools/ess-nextgen-migration-toolkit
 # ...`), so it can never touch solutions/, tests/, or other tools/.
 #
-# Run MANUALLY from the toolkit directory — do NOT install it as a global git
-# hook (the .git/hooks dir is shared across the whole monorepo, so a global
-# install would fire these toolkit gates on every unrelated commit):
+# The `mtk start -Dev` dispatcher auto-installs these hooks via
+# `uv run pre-commit install -c .pre-commit-config.yaml`, so they fire on
+# every commit once provisioned. To run them on-demand outside a commit:
 #     cd tools/ess-nextgen-migration-toolkit
 #     uv run pre-commit run --all-files
 #
