@@ -4,11 +4,10 @@ from core.pipeline.context import PipelineContext
 from core.pipeline.exceptions import PipelineConfigurationError, PipelineExecutionError
 from core.pipeline.pipeline import Pipeline, PipelineBuilder
 from core.pipeline.registry import PipelineRegistry
+from core.pipeline.staged import StagedPipeline
 from core.pipeline.step import PipelineStep
-from core.pipeline.toolkit import EssMigrationToolkit
 
 __all__ = [
-    "EssMigrationToolkit",
     "Pipeline",
     "PipelineBuilder",
     "PipelineConfigurationError",
@@ -16,4 +15,5 @@ __all__ = [
     "PipelineExecutionError",
     "PipelineRegistry",
     "PipelineStep",
+    "StagedPipeline",
 ]

@@ -74,7 +74,9 @@ Framework surface actually available (do not re-derive):
   `ExecutionMode: str = "DISCOVER"` and mutable collectors `Logs`, `Warnings`,
   `Errors` (`list[DiagnosticEntry]`), `Changes` (`list[ChangeEntry]`). This IS
   the shared context threaded as `Pipeline[MigrationContext, MigrationContext]`.
-- `from core.pipeline import EssMigrationToolkit, Pipeline, PipelineStep` —
+- `from service import EssMigrationToolkit` (the ESS product super-pipeline,
+  inheriting the generic `StagedPipeline[TContext]` from `core.pipeline`) and
+  `from core.pipeline import Pipeline, PipelineStep` —
   `EssMigrationToolkit` is **immutable/fluent**: `.input(p)`, `.migrate(p)`,
   `.output(p)` each return a NEW toolkit; `.run(ctx)` executes Input → Migration
   → Output threading the SAME context and raises `PipelineConfigurationError`
@@ -92,7 +94,7 @@ Reference composition-root shape (skeleton — not the final code):
 ```python
 from pathlib import Path
 from core.models import MigrationContext
-from core.pipeline import EssMigrationToolkit
+from service import EssMigrationToolkit
 from core.logging import Logger
 
 _OUTPUT_ROOT = Path(__file__).resolve().parents[2] / "output"  # <toolkit>/output
@@ -103,7 +105,7 @@ def main() -> None:
     logger = Logger.start_session(_OUTPUT_ROOT, context)
     try:
         toolkit = (
-            EssMigrationToolkit()
+            EssMigrationToolkit[MigrationContext]()
             .input(build_input_pipeline(logger))
             .migrate(build_migration_pipeline(logger))
             .output(build_output_pipeline(logger))   # terminal step renders report
