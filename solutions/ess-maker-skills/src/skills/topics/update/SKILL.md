@@ -19,6 +19,7 @@ take effect. **NEVER stop after editing only the local file.**
 - ALWAYS push changes to Copilot Studio after editing.
 - NEVER modify system topics (`on-error`, `conversation-start`, etc.) without
   warning the user about potential side effects.
+- **PRESERVE THE AUTHORING INVARIANTS**: follow [`authoring-invariants.md`](src/reference/ess-docs/customization/authoring-invariants.md) — an edit MUST keep the shared-system-topic delegation, the standard parse → iterate → table rendering, and the shared error path intact.
 - **TRACK PROGRESS**: Use the todo list tool to track your progress.
 
 ## Step 1: Identify the Topic
@@ -49,6 +50,22 @@ already clear. Common modifications:
 
 Show the user the relevant section of the current topic and propose the
 specific edit. Explain what will change and why.
+
+**Acting on a `/review` finding.** If the change comes from a `/review` finding, prefer the structured
+findings catalog `/review` writes at `.local/review-findings/{topic-stem}-catalog.json` — it survives
+across sessions and gives each finding a stable `id`, its `files[]`, and a `concrete_fix`. List it with
+`python scripts/merge_findings.py --solution {topic-stem} --show` from `solutions/ess-maker-skills/`. Act on
+the finding whose `id` (or step/label) the customer named; if the catalog is absent, fall back to the
+suggested fix in the visible `/review` report. Either way, locate the action by its **identity** (`kind` +
+node `id`, step name/label, any quoted expression) — **not** a line number — and apply the fix. Read the
+surrounding actions first: if the node's actual context makes a better fix obvious than the suggestion (for
+example, the flagged value turns out to be dead — written but never read — so removing it is cleaner than
+rewriting it), apply that and say why. If one finding covers several angles at the same node, address each.
+
+After a fix is applied and you have confirmed by re-reading the file that the flagged node is gone or
+corrected, tell the customer to re-run `/review` — its reconcile step sees the finding's file changed
+(evidence-stale), confirms the node is gone, and records it resolved in the shared ledger so it stops being
+carried forward. Then continue from Step 3.
 
 ## Step 3: Checkpoint
 

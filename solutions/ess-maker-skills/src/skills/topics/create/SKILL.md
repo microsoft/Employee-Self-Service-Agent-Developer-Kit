@@ -9,8 +9,9 @@ This skill guides the user through creating a new Copilot Studio topic.
 - ALWAYS read `.local/config.json` to get the agent folder name and schema name.
 - Write the new topic file to `{agent.folder}/topics/{TopicName}.mcs.yml`.
 - After writing the file, check for errors using the diagnostics tool on the new file.
-- **TEMPLATE CONFIG IS THE DEFAULT**: For any scenario that calls ServiceNow or Workday, use the **Template Config + Shared Flow** pattern. This is the official ESS extensibility pattern. The topic calls the existing shared system topic (e.g., `ServiceNowHRSDSystemGetCommonExecution`), which invokes the shared orchestrator flow. Do NOT create standalone cloud flows for these connectors.
-  - ALWAYS read `src/reference/ess-docs/customization/customize.md` when the scenario involves ServiceNow or Workday.
+- **PRESERVE THE AUTHORING INVARIANTS**: follow [`authoring-invariants.md`](src/reference/ess-docs/customization/authoring-invariants.md) — the generated topic MUST delegate the backend call to the shared system topic, render backend data with the standard parse → iterate → table pattern, and let failures flow through the shared error path.
+- **TEMPLATE CONFIG IS THE DEFAULT**: For any scenario that calls an ESS-orchestrated backend (ServiceNow, Workday, or SAP SuccessFactors), use the **Template Config + Shared Flow** pattern. This is the official ESS extensibility pattern. The topic calls the existing shared system topic (e.g., `ServiceNowHRSDSystemGetCommonExecution`), which invokes the shared orchestrator flow. Do NOT create standalone cloud flows for these connectors.
+  - ALWAYS read `src/reference/ess-docs/customization/customize.md` when the scenario involves ServiceNow, Workday, or SAP SuccessFactors.
   - Use an existing topic in the agent folder that calls a shared system topic as the starting pattern.
   - Guide the user through creating the template config record in Dataverse as part of the flow.
 - **STANDALONE IS THE EXCEPTION**: Only use the standalone topic + workflow pattern when the scenario requires a connector that does NOT have an existing ESS orchestrator flow (e.g., Jira, custom HTTP APIs, non-ESS connectors). In this case, read `src/skills/workflows/create/SKILL.md` to create the workflow.
