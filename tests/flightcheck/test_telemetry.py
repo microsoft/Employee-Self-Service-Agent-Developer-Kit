@@ -101,6 +101,7 @@ def test_build_events_shape_and_required_fields():
         env="dev",
         instance_id="inst-123",
         tenant_id="tenant-abc",
+        tenant_name="Contoso",
         agent_id="bot-xyz",
         agent_count=1,
         scope="full",
@@ -128,6 +129,9 @@ def test_build_events_shape_and_required_fields():
     # tenant_class is derived from tenant_id at emit time (ADO 7558661).
     assert run_data["tenantClass"] == "customer"
     assert events[1]["data"]["tenantClass"] == "customer"
+    # tenant_name (org display name) rides on both run + check events (ADO 7590589).
+    assert run_data["tenantName"] == "Contoso"
+    assert events[1]["data"]["tenantName"] == "Contoso"
     assert run_data["agentId"] == "bot-xyz"
     assert run_data["instanceId"] == "inst-123"
     assert run_data["invocationSource"] == "cli"

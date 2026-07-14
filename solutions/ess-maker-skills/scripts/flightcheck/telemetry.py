@@ -31,7 +31,11 @@ Design rules (all deliberate — read before changing):
   ``tenant_id`` is classified Organizational Identifiable Information (OII)
   with **"No Data Transformation"** — i.e. emitted as the RAW Microsoft Entra
   tenant GUID (it identifies the enterprise tenant, not an individual user),
-  retained <= 30 days. We also emit instance/agent identifiers and
+  retained <= 30 days. ``tenant_name`` (the tenant's organization display
+  name from Graph ``/organization``) is likewise OII identifying the
+  enterprise tenant, not a person; privacy review gave the green light to
+  emit it without a Data Profile update. It is best-effort — emitted as ``""``
+  when unavailable. We also emit instance/agent identifiers and
   System-Metadata enums (checkpoint id, category, priority, status, counts,
   verdict). We deliberately DO NOT emit a check's ``result`` or
   ``remediation`` strings — those can contain EUII / customer content
@@ -325,6 +329,7 @@ def _run_data(
     run_id: str,
     instance_id: str,
     tenant_id: str,
+    tenant_name: str,
     agent_id: str,
     agent_count: int,
     scope: str,
@@ -337,6 +342,7 @@ def _run_data(
         "instanceId": instance_id,   # System Metadata
         "tenantId": tenant_id,       # OII (raw Entra tenant GUID; approved Data Profile)
         "tenantClass": classify_tenant(tenant_id),  # derived: internal|customer|unknown
+        "tenantName": tenant_name,   # OII (org display name; privacy-approved, best-effort)
         "agentId": agent_id,         # OII
         "agentCount": agent_count,
         "adkVersion": get_adk_version(),
@@ -364,6 +370,7 @@ def _check_data(
     run_id: str,
     instance_id: str,
     tenant_id: str,
+    tenant_name: str = "",
 ) -> dict[str, Any]:
     # Identifiers + enums ONLY. Never `result` / `remediation` (EUII risk).
     return {
@@ -373,6 +380,7 @@ def _check_data(
         "instanceId": instance_id,
         "tenantId": tenant_id,
         "tenantClass": classify_tenant(tenant_id),
+        "tenantName": tenant_name,
         "checkpointId": getattr(check, "checkpoint_id", ""),
         "category": getattr(check, "category", ""),
         "priority": getattr(check, "priority", ""),
@@ -387,6 +395,7 @@ def build_events(
     env: str,
     instance_id: str,
     tenant_id: str,
+    tenant_name: str = "",
     agent_id: str,
     agent_count: int,
     scope: str,
@@ -406,6 +415,7 @@ def build_events(
                 run_id=run_id,
                 instance_id=instance_id,
                 tenant_id=tenant_id,
+                tenant_name=tenant_name,
                 agent_id=agent_id,
                 agent_count=agent_count,
                 scope=scope,
@@ -424,6 +434,7 @@ def build_events(
                     run_id=run_id,
                     instance_id=instance_id,
                     tenant_id=tenant_id,
+                    tenant_name=tenant_name,
                 ),
             )
         )
@@ -434,6 +445,7 @@ def emit_flightcheck_telemetry(
     run_result: Any,
     *,
     tenant_id: str = "",
+    tenant_name: str = "",
     agent_id: str = "",
     scope: str = "",
     agent_count: int = 0,
@@ -459,6 +471,7 @@ def emit_flightcheck_telemetry(
             env=env,
             instance_id=instance_id,
             tenant_id=tenant_id,
+            tenant_name=tenant_name,
             agent_id=agent_id,
             agent_count=agent_count,
             scope=scope,
