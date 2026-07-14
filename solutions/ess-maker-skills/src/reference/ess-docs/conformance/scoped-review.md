@@ -48,12 +48,12 @@ Dispatch **one subagent for the whole module** (not one per topic, and not one p
       output — do not re-run the detectors.
    2. Consolidate (skill Step 7).
    3. **Persist this topic's catalog — the required last action of the iteration, before moving to the next
-      topic.** Pipe this topic's consolidated findings to the script on stdin, from
-      `solutions/ess-maker-skills/` (see skill Step 8 for the exact stdin form and the `.local\tmp\`
-      workspace-internal staging rule — never `$env:TEMP` / `/tmp`):
+      topic.** Write this topic's consolidated findings to a file and pass its path to the script, from
+      `solutions/ess-maker-skills/` (see skill Step 8 for why the path form is preferred over inlining the
+      JSON, and the `.local\tmp\` workspace-internal staging rule — never `$env:TEMP` / `/tmp`):
 
       ```
-      Get-Content .local\tmp\findings.json -Raw | python scripts/merge_findings.py --solution {topic-stem} --current -
+      python scripts/merge_findings.py --solution {topic-stem} --current .local\tmp\findings.json
       ```
 
       This write is **mandatory and per-topic**: do it once for each topic as you finish it. Do **not**

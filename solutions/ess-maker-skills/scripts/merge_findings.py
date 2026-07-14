@@ -42,16 +42,19 @@ or hand-written catalog fails loudly instead of persisting schema-broken state.
 
 Scope invariant: a finding belongs to exactly one catalog per review scope (the
 `solution` value). The same semantic id can legitimately appear under different
-scopes, so the shared ledger is keyed by (solution, issue_id) — any future
-resolution match against the ledger MUST scope by solution, never by issue_id
-alone, or one scope's resolution would wrongly clear another's. (This merge does
-not read the ledger back to set status, so the risk is latent, not live.)
+scopes, so the shared ledger is keyed by (solution, issue_id) — any resolution
+match against the ledger MUST scope by solution, never by issue_id alone, or one
+scope's resolution would wrongly clear another's. (This merge reads the ledger
+back to suppress dismissed findings and scopes that lookup by (solution, issue_id)
+via _latest_ledger_record, so the requirement is enforced, not latent.)
 
 Usage:
-    # findings from stdin (preferred — no temp file, no shell heredoc):
-    Get-Content run.json | python scripts/merge_findings.py --solution <id> --current -
+    # findings from a file (preferred — the command text is identical across runs,
+    # so an approval sticks; the run-specific data lives in the file, not the command):
     python scripts/merge_findings.py --solution <id> --current run.json
     python scripts/merge_findings.py --solution <id> --current run.json --resolve resolved.json
+    # or piped on stdin (also valid; no temp file, no shell heredoc):
+    Get-Content run.json | python scripts/merge_findings.py --solution <id> --current -
     python scripts/merge_findings.py --solution <id> --show
 """
 

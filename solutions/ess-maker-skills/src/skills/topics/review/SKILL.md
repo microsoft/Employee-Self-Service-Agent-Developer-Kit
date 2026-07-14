@@ -222,20 +222,28 @@ today; scope-neutral for a wider review later).
    `id`). `files[].path` is relative to `solutions/ess-maker-skills/`.
 2. Reconcile: for any prior finding now gone or corrected (especially `evidence_stale` ones), or one the
    maker dismisses, add it to a `--resolve` file per finding-contract's *Recording a resolution*.
-3. Persist from `solutions/ess-maker-skills/`. **Pipe the findings on stdin with `--current -`** — do not
-   pass a temp-file path (a Unix `/tmp/...` path does not exist on Windows, and a shell heredoc is not
-   supported in PowerShell). Any staging file goes **inside the workspace** under `.local\tmp\` (gitignored)
-   — never `$env:TEMP`, `C:\temp`, or `/tmp`, which trigger sensitive-file prompts.
+3. Persist from `solutions/ess-maker-skills/`. **Put the findings in a file and pass its path — never inline
+   the run's JSON into a shell command.** Baking the findings into a `Set-Content`/here-string makes the
+   command text different every run, so it never matches a prior approval and re-prompts each time; a file the
+   script reads keeps the executed command **identical across runs** (so an allow grant sticks), with the
+   run-specific data in the file rather than the command. Stage the file **inside the workspace** under
+   `.local\tmp\` (gitignored) — never `$env:TEMP`, `C:\temp`, or `/tmp`, which trigger sensitive-file prompts.
+
+   - Write `.local\tmp\findings.json` (and, when reconciling, `.local\tmp\resolved.json`) with your
+     file-writing capability — not an inline shell here-string. Ensure `.local\tmp\` exists first (a stable
+     `New-Item -ItemType Directory -Force .local\tmp | Out-Null` is fine — its text never varies, so it is
+     approved once, not per run).
+   - Then run the **stable** command (identical every run — only the file content changes):
 
    ```
-   New-Item -ItemType Directory -Force .local\tmp | Out-Null
-   Set-Content -Path .local\tmp\findings.json -Value $json -Encoding utf8
-   Get-Content .local\tmp\findings.json -Raw | python scripts/merge_findings.py --solution {topic-stem} --current -
+   python scripts/merge_findings.py --solution {topic-stem} --current .local\tmp\findings.json
    ```
 
-   Add `--resolve .local\tmp\resolved.json` to record resolutions. The script's catalog is **authoritative**
-   on the cross-run set. If it cannot run, present this run's findings and say the cross-run catalog was
-   unavailable.
+   Add `--resolve .local\tmp\resolved.json` to record resolutions. If your only way to write a file is the
+   shell, `Get-Content .local\tmp\findings.json -Raw | python scripts/merge_findings.py --solution {topic-stem} --current -`
+   also works — the point is the findings live in the file, not inlined in the command. The script's catalog
+   is **authoritative** on the cross-run set. If it cannot run, present this run's findings and say the
+   cross-run catalog was unavailable.
 4. Present (Step 9) the **active** set from the merged catalog — including findings not re-detected this run
    whose files are unchanged; flag `evidence_stale` ones as "previously flagged, code has since changed —
    worth confirming."
