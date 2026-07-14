@@ -275,7 +275,7 @@ Construct executable pipelines.
 ## Fluent API
 
 Each stage pipeline is built fluently over the shared `MigrationContext`. The
-generic Builder (`Pipeline.builder(name)` → `Pipeline[TInput, TOutput]`)
+generic Builder (`Pipeline.builder(name, *, input_type=...)` → `Pipeline[TInput, TOutput]`)
 type-threads every `.use(step)`; the ESS stages instantiate it as
 `Pipeline[MigrationContext, MigrationContext]`, so each step reads the context
 produced by the prior step and returns the enriched context.
