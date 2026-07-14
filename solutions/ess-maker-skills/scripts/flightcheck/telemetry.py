@@ -322,6 +322,36 @@ def _post(ikey: str, events: list[dict[str, Any]]) -> int:
     return resp.status_code
 
 
+# Run-outcome buckets for the "Runs by Verdict" donut. Finer-grained than
+# ``overall``: it splits the NOT_READY verdict into "a check couldn't even run"
+# (``errored`` — an unhandled exception inside a check, runner.py:135) vs.
+# "checks ran and reported failures" (``failed``). Precedence is errored ->
+# failed -> warnings -> ready so the donut surfaces checks that could not be
+# evaluated at all (the "why did FlightCheck fail to run" signal). We can NOT
+# attribute WHY a check errored (auth vs runtime vs network) — the exception
+# text is never emitted (EUII risk) — so the bucket is deliberately just
+# "errored", not "runtime error". Aria renders the raw value as the slice
+# label (no per-value aliasing), so the values are human-readable.
+RUN_OUTCOME_READY = "Ready"
+RUN_OUTCOME_WARNINGS = "Ready with warnings"
+RUN_OUTCOME_FAILED = "Failed"
+RUN_OUTCOME_ERRORED = "Blocked (check errored)"
+
+
+def derive_run_outcome(run_result: Any) -> str:
+    """Bucket a run into a single verdict slice (errored > failed > warnings > ready)."""
+    errors = getattr(run_result, "errors", 0) or 0
+    failed = getattr(run_result, "failed", 0) or 0
+    warnings = getattr(run_result, "warnings", 0) or 0
+    if errors > 0:
+        return RUN_OUTCOME_ERRORED
+    if failed > 0:
+        return RUN_OUTCOME_FAILED
+    if warnings > 0:
+        return RUN_OUTCOME_WARNINGS
+    return RUN_OUTCOME_READY
+
+
 def _run_data(
     run_result: Any,
     *,
@@ -349,6 +379,7 @@ def _run_data(
         "scope": scope,
         "invocationSource": invocation_source,
         "overall": getattr(run_result, "overall", ""),
+        "runOutcome": derive_run_outcome(run_result),  # verdict donut split (errored|failed|warnings|ready)
         "durationSecs": getattr(run_result, "duration_secs", 0),
         "total": getattr(run_result, "total", 0),
         "passed": getattr(run_result, "passed", 0),

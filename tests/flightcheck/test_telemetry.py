@@ -132,9 +132,27 @@ def test_build_events_shape_and_required_fields():
     # tenant_name (org display name) rides on both run + check events (ADO 7590589).
     assert run_data["tenantName"] == "Contoso"
     assert events[1]["data"]["tenantName"] == "Contoso"
+    # runOutcome buckets the verdict for the donut; FakeRun has 1 failed / 0 errored.
+    assert run_data["runOutcome"] == "Failed"
     assert run_data["agentId"] == "bot-xyz"
     assert run_data["instanceId"] == "inst-123"
     assert run_data["invocationSource"] == "cli"
+
+
+def test_derive_run_outcome_precedence():
+    """errored > failed > warnings > ready (ADO 7590584)."""
+    # errored wins even when failures/warnings are also present.
+    assert telemetry.derive_run_outcome(
+        FakeRun(errors=1, failed=3, warnings=2)) == "Blocked (check errored)"
+    # failed wins over warnings when nothing errored.
+    assert telemetry.derive_run_outcome(
+        FakeRun(errors=0, failed=1, warnings=5)) == "Failed"
+    # warnings-only run.
+    assert telemetry.derive_run_outcome(
+        FakeRun(errors=0, failed=0, warnings=1)) == "Ready with warnings"
+    # clean run.
+    assert telemetry.derive_run_outcome(
+        FakeRun(errors=0, failed=0, warnings=0)) == "Ready"
 
 
 def test_check_events_never_leak_free_text():
