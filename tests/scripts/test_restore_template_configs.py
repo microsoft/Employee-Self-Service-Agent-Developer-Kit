@@ -122,7 +122,7 @@ def test_call_with_refresh_reauths_and_retries_once_on_401(monkeypatch):
     auth.token = "initial-token"
 
     # Force authenticate() (called by auth.refresh()) to return a fresh token.
-    monkeypatch.setattr(rt, "authenticate", lambda _u: "refreshed-token")
+    monkeypatch.setattr(rt, "authenticate", lambda _u, **_kw: "refreshed-token")
 
     attempts = []
 
@@ -143,7 +143,7 @@ def test_call_with_refresh_does_not_retry_more_than_once(monkeypatch):
     # loop forever.
     auth = rt._AuthHolder("https://orgX.crm.dynamics.com")
     auth.token = "initial-token"
-    monkeypatch.setattr(rt, "authenticate", lambda _u: "refreshed-token")
+    monkeypatch.setattr(rt, "authenticate", lambda _u, **_kw: "refreshed-token")
 
     def fn(env, token, *_args, **_kw):
         raise AuthExpiredError("still expired")
@@ -195,7 +195,7 @@ def test_main_restores_all_matched_records(monkeypatch, tmp_path):
         ],
     )
 
-    monkeypatch.setattr(rt, "authenticate", lambda _u: "tok")
+    monkeypatch.setattr(rt, "authenticate", lambda _u, **_kw: "tok")
     monkeypatch.setattr(
         rt,
         "query_all",
@@ -252,7 +252,7 @@ def test_main_exits_2_when_no_record_matches(monkeypatch, tmp_path):
             },
         ],
     )
-    monkeypatch.setattr(rt, "authenticate", lambda _u: "tok")
+    monkeypatch.setattr(rt, "authenticate", lambda _u, **_kw: "tok")
     monkeypatch.setattr(rt, "query_all", lambda *a, **k: [])  # env has nothing
 
     monkeypatch.setattr(

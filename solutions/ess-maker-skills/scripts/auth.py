@@ -246,7 +246,6 @@ def authenticate(env_url):
         adk_telemetry.maybe_print_notice()
         adk_telemetry.start_session(
             tenant_id=claims.get("tid", "") or tenant,
-            adk_capability="connect",
         )
     except Exception:  # noqa: BLE001 — telemetry must never break auth
         pass

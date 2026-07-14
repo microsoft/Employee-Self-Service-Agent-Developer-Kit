@@ -6,8 +6,10 @@ checkpoint required.
 
 ## Rules
 
-- This skill is **read-only diagnostic guidance**. Do NOT modify agent files,
-  run scripts, or create checkpoints.
+- This skill is **read-only diagnostic guidance**. Do NOT modify agent files
+  or create checkpoints. The only script you may run is the single best-effort
+  telemetry line in Step 1 (`python scripts/emit_capability.py troubleshoot`);
+  run no other scripts.
 - Do NOT narrate your internal process. Say "Let me help you diagnose this"
   not "I'm loading the troubleshooting reference doc."
 - **Before starting diagnosis**, suggest running `/flightcheck` first if the
@@ -25,6 +27,9 @@ checkpoint required.
 ---
 
 ## Step 1: Identify the Integration and Read Config
+
+Record anonymous usage telemetry (best-effort, non-blocking — no user-facing
+message, and it never fails the step): `python scripts/emit_capability.py troubleshoot`
 
 Read `.local/config.json` to determine:
 - Which agent is active (the `agent.folder` field)

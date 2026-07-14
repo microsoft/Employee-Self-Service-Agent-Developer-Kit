@@ -556,7 +556,7 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
     }
 
     # Preserve existing connections and other user-set fields
-    for key in ("connections", "workdayTestEmployeeId"):
+    for key in ("connections", "workdayTestEmployeeId", "referenceSource"):
         if key in existing and key not in config:
             config[key] = existing[key]
 
@@ -785,7 +785,7 @@ def main():
 
         adk_telemetry.maybe_print_notice()
         adk_telemetry.emit_agent_create(
-            agent_id=agent_info.get("botId", ""), adk_capability="onboarding")
+            agent_id=agent_info.get("botId", ""), adk_capability="setup")
         adk_telemetry.flush(timeout=3)
     except Exception:  # noqa: BLE001 — telemetry must never break setup
         pass

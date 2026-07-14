@@ -603,6 +603,10 @@ unrelated lookups that a user wouldn't chain in the same session.
 
 Run `python scripts/checkpoint.py "before evaluation test set creation"` to save current state.
 
+Then record anonymous usage telemetry (best-effort, non-blocking — no
+user-facing message, and it never fails the step):
+`python scripts/emit_capability.py evaluations`
+
 ### 4.2 — Write evaluation files
 
 Create the `evaluations/` folder inside the agent folder if it doesn't exist.

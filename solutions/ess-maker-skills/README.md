@@ -360,9 +360,21 @@ CLI command.
   active installs and DAU/WAU/MAU. It is **not** tied to your identity.
 - Your **tenant ID** (the Entra tenant GUID) — identifies the enterprise tenant,
   not an individual user.
+- A derived **tenant class** (`internal` or `customer`) — a coarse, two-value
+  flag computed from the tenant ID so we can report Microsoft-internal dogfood
+  usage separately from external customer usage. It is non-identifying and lower
+  sensitivity than the tenant ID it is derived from.
 - Non-identifying context: ADK version, surface, session ID, event name, and
   per-event enums/metrics (e.g. FlightCheck verdicts, durations, check categories).
 - Scrubbed, non-sensitive **error categories** when something fails.
+- During **installation**, the one-shot installers (which run before Python is
+  available) emit the same kind of event natively from PowerShell/bash: an
+  install **start**, **per-step** progress, and a **completion**
+  (`success` / `failure` / `cancelled`) carrying the installer variant
+  (ADK or FlightCheck — the ADK-lite installer is not instrumented), platform,
+  which step failed, and a scrubbed
+  error category. This measures setup reliability. It is fail-open (a telemetry
+  problem never breaks your install) and honors the same opt-out below.
 
 **What is _not_ collected**
 
