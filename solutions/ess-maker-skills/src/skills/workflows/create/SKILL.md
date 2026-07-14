@@ -104,6 +104,13 @@ After the user approves:
    - The Copilot Studio web link: `https://copilotstudio.microsoft.com/`
    - Example: "Your workflow is ready! Review it here: `{agent.folder}/workflows/{WorkflowName}-{GUID}/workflow.json` and test it in [Copilot Studio](https://copilotstudio.microsoft.com/)."
 
+After the files are written, record anonymous usage telemetry (best-effort,
+non-blocking — no user-facing message, and it never fails the step):
+
+```
+python scripts/emit_capability.py workflow_create
+```
+
 ## Step 5: Connect to a Topic
 
 After the workflow is created, the user needs a topic to call it. Tell them:

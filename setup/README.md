@@ -127,7 +127,19 @@ cd ~/source/Employee-Self-Service-Agent-Developer-Kit/solutions/ess-maker-skills
 | `bootstrap-lite-mac.sh` | macOS one-liner entry point (lite mode — chat-first layout). |
 | `bootstrap-flightcheck-mac.sh` | macOS one-liner entry point (FlightCheck only). |
 | `ess-adk-setup.winget.yaml` | Declarative DSC config consumed by `winget configure` (optional Windows path). |
+| `telemetry/install-telemetry.ps1` | Installer telemetry emitter (PowerShell). Fail-open; emits install start/step/completion to Aria/1DS. |
+| `telemetry/install-telemetry.sh` | Installer telemetry emitter (bash) — macOS/Linux mirror of the PowerShell emitter. |
 | `.devcontainer/devcontainer.json` | Codespace configuration. Pre-installs Python 3.12, pip dependencies, and Copilot extensions. |
+
+**Installer telemetry.** The installers emit pseudonymous setup-reliability
+telemetry (install start / per-step / success-failure-cancelled completion, with
+the installer variant, platform, failing step and a scrubbed error category)
+natively from PowerShell/bash, because they run before Python exists. It is
+fail-open — a telemetry issue never affects the install — and honors the unified
+opt-out (`ESS_ADK_TELEMETRY=off`, or `python scripts/adk_telemetry.py off`). The
+bootstraps download the emitter into their temp dir and pass its path via
+`ESS_INSTALL_TELEMETRY_LIB`; if it can't be fetched, the install proceeds with
+no-op stubs. See the ADK "Telemetry & Privacy" section for the full data model.
 
 ## Dependencies
 

@@ -477,6 +477,15 @@ def main():
     )
     args = parser.parse_args()
 
+    try:
+        import adk_telemetry
+
+        # block=True: short-lived CLI process — emit synchronously so the event
+        # isn't dropped when the interpreter exits and kills a daemon thread.
+        adk_telemetry.emit_capability_use("evaluations", block=True)
+    except Exception:  # noqa: BLE001 — telemetry must never break evaluation
+        pass
+
     # ── Locate agent folder ──────────────────────────────────────────────────
     repo_root = Path(__file__).parent.parent
     agents_dir = repo_root / "workspace" / "agents"

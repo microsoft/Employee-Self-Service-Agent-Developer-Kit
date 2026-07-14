@@ -73,9 +73,12 @@ Run in the terminal:
 
 ```
 python scripts/checkpoint.py "pre-delete-{WorkflowName}"
+python scripts/emit_capability.py workflow_delete
 ```
 
-Tell the user: "Saved a backup of your current agent files."
+Tell the user: "Saved a backup of your current agent files." The
+`emit_capability.py` line records anonymous usage telemetry (best-effort,
+non-blocking); it needs no user-facing message and never fails the step.
 
 ## Step 5: Delete the Local Files
 

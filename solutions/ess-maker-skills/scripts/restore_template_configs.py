@@ -222,6 +222,15 @@ def main():
     print("Authenticated.\n")
 
     try:
+        import adk_telemetry
+
+        # block=True: short-lived CLI process, emit synchronously so the event
+        # isn't dropped when the interpreter exits and kills a daemon thread.
+        adk_telemetry.emit_capability_use("restore_template_configs", block=True)
+    except Exception:  # noqa: BLE001 — telemetry must never break the flow
+        pass
+
+    try:
         index = _call_with_refresh(
             auth, build_unique_name_index, env_url, auth.token,
         )
