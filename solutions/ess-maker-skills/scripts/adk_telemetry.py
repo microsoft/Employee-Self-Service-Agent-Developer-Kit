@@ -585,10 +585,39 @@ def emit_agent_create(
     return _emit(EVENT_AGENT_CREATE, data, block=block)
 
 
+# Power Platform BAP `environmentSku` values that denote a non-production
+# environment. Everything else (Production, Default, or unknown/empty) is
+# treated as production. Power Platform has no first-class "staging" concept —
+# a user-designated staging environment is just another Production-SKU env and
+# is indistinguishable from prod by any API field — so deploy telemetry only
+# distinguishes the two buckets we can actually detect: sandbox vs production.
+_NON_PRODUCTION_SKUS = frozenset({
+    "sandbox", "trial", "developer", "teams",
+    "subscriptionbasedtrial", "support", "playground",
+})
+
+DEPLOY_TARGET_SANDBOX = "sandbox"
+DEPLOY_TARGET_PRODUCTION = "production"
+
+
+def classify_deploy_target(environment_sku: str) -> str:
+    """Map a Power Platform environment SKU to a deploy-target bucket.
+
+    Returns ``"sandbox"`` for non-production SKUs (Sandbox/Trial/Developer/
+    Teams/...) and ``"production"`` for Production/Default or any
+    unknown/empty value (the safe default, since real deploys are
+    overwhelmingly against Production-SKU environments).
+    """
+    sku = (environment_sku or "").strip().lower()
+    if sku in _NON_PRODUCTION_SKUS:
+        return DEPLOY_TARGET_SANDBOX
+    return DEPLOY_TARGET_PRODUCTION
+
+
 def emit_agent_deploy(
     *,
     agent_id: str = "",
-    deploy_target: str = "test",
+    deploy_target: str = "production",
     adk_capability: str = "publishing",
     outcome: str = "success",
     duration_ms: int = 0,
@@ -750,7 +779,7 @@ def _emit_synthetic(n: int = 1) -> int:
     # the synthetic spread should mirror the whole value-list rather than only
     # the handful of originally-wired capabilities.
     capabilities = list(ADK_CAPABILITIES)
-    deploy_targets = ["test", "staging", "production"]
+    deploy_targets = ["sandbox", "production"]
     api_endpoints = ["dataverse/bots", "dataverse/botcomponents", "bap/environments"]
     # Fixed, recognizable demo tenant GUIDs so dashboards are filterable by a
     # known tenant_id (raw OII per approved Data Profile). Weighted so one

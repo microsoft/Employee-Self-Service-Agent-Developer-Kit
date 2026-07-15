@@ -493,3 +493,25 @@ def test_shim_never_raises_even_if_post_fails(monkeypatch):
     monkeypatch.setattr(_fc, "_post", _boom)
     # Fail-open contract: a telemetry failure must never fail the skill step.
     assert emit_capability.main(["emit_capability.py", "troubleshoot"]) == 0
+
+
+# --- deploy-target classification (sandbox vs production) ------------------
+def test_classify_deploy_target_non_prod_skus_map_to_sandbox():
+    for sku in ("Sandbox", "Trial", "Developer", "Teams",
+                "SubscriptionBasedTrial", "Support", "Playground"):
+        assert adk.classify_deploy_target(sku) == "sandbox"
+
+
+def test_classify_deploy_target_prod_skus_map_to_production():
+    for sku in ("Production", "Default"):
+        assert adk.classify_deploy_target(sku) == "production"
+
+
+def test_classify_deploy_target_unknown_or_empty_defaults_to_production():
+    for sku in ("", None, "SomethingNew", "   "):
+        assert adk.classify_deploy_target(sku) == "production"
+
+
+def test_classify_deploy_target_is_case_and_whitespace_insensitive():
+    assert adk.classify_deploy_target("  sAnDbOx  ") == "sandbox"
+    assert adk.classify_deploy_target(" PRODUCTION ") == "production"
