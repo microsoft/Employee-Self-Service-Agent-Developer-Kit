@@ -41,13 +41,13 @@ _EXPECTED_STEPS = {
     "S3.1", "S3.2", "S3.3", "S3.4", "S3.5", "S3.6", "S3.7",
     "S4.1", "S4.2", "S4.3", "S4.4",
     "S5.1", "S5.2", "S5.3", "S5.4", "S5.5", "S5.6", "S5.7", "S5.8",
-    "S6.1", "S6.2",
+    "S6.1", "S6.2", "S6.3",
 }
 
 _METADATA_KEYS = {
     "id", "role", "skill", "automatable", "checkpoints", "gate", "status",
 }
-_VALID_GATES = {"prog", "manual", "attest"}
+_VALID_GATES = {"prog", "manual", "attest", "advisory"}
 _STEP_RE = re.compile(r"^S\d+\.\d+$")
 # Upper-case checkpoint tokens, optionally a "-*" family suffix.
 _CKPT_RE = re.compile(r"[A-Z][A-Z0-9]*(?:-[A-Z0-9]+)*(?:-\*)?")
@@ -119,6 +119,15 @@ class TestChecklistTemplate:
         failures = []
         for meta in _parse_items():
             step = meta["id"]
+            # Advisory rows (e.g. the S6.3 topic review) carry no flightcheck
+            # checkpoint — their cell is a literal "n/a" sentinel — so they are
+            # exempt from checkpoint-token resolution.
+            if re.match(r"[a-z]+", meta["gate"]).group(0) == "advisory":
+                assert meta["checkpoints"] == "n/a", (
+                    f"{step}: advisory row must seed checkpoints 'n/a', "
+                    f"got {meta['checkpoints']!r}"
+                )
+                continue
             checkpoint_cell = meta["checkpoints"]
             tokens = _CKPT_RE.findall(checkpoint_cell)
             assert tokens, f"{step}: no checkpoint token in {checkpoint_cell!r}"

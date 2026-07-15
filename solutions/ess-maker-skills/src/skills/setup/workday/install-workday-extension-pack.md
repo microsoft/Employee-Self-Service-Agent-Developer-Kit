@@ -41,6 +41,15 @@ Run any one with:
 python scripts/flightcheck/cli.py --checkpoint <ID>
 ```
 
+**After every checkpoint run, show its result in chat first.** As soon as a
+`--checkpoint` run returns, render the result to the user per
+[`shared/checklist-updater.md`](../shared/checklist-updater.md) §U.0–U.0a — the
+compact result table and, for any `MANUAL` (or `Warning` / `NotConfigured`) row,
+its full verification steps — **before** you show any later **Message** or ask any
+attestation question. Single-checkpoint runs never open the HTML report, so this
+in-chat render is the only place the user sees the manual steps; never ask a user
+to attest to steps they have not been shown.
+
 `WD-CONN-AUTH-001` and `WD-NET-001` always report `MANUAL`: the first echoes the
 observed connection auth parameter set for the operator to confirm (the Power
 Platform admin API exposes no kit-verifiable fingerprint for the
@@ -79,8 +88,14 @@ extension-pack work, with:
   ```
 
   ```
-  az rest --method GET --resource "{ENV_URL}" --url "{ENV_URL}/api/data/v9.2/systemusers({USER_ID})/systemuserroles_association?%24select=name" --query "value[].name" -o json
+  az rest --method GET --resource "{ENV_URL}" --url "{ENV_URL}/api/data/v9.2/systemusers%28{USER_ID}%29/systemuserroles_association?%24select=name" --query "value[].name" -o json
   ```
+
+  (Percent-encode the key-lookup parentheses — `%28`/`%29`, not `(`/`)` — and the
+  OData `$` — `%24select`. On Windows the `az` launcher is a `cmd.exe` batch
+  wrapper: a raw `)` closes a batch block and the call fails with
+  `... was unexpected at this time`, so the encoded form runs first-try on every
+  shell.)
 
   The role is held if the returned role names include **`Environment Maker`**, or
   a superseding role (**`System Customizer`** or **`System Administrator`**).
@@ -117,11 +132,16 @@ python scripts/flightcheck/cli.py --checkpoint WD-PKG-001
   the connection values the user will paste into the extension pack's connection
   form, then show the install steps.
 
-  Read the captured values from `.local/connect/workday/config.json` (persisted by
-  skill-4): `appIdUri`, `tokenEndpoint`, `oauthClientId`, `soapBaseUrl`, and
-  `restBaseUrl`. Present them with their Copilot Studio form labels — never the
-  internal field names. If any is blank, it was not captured: go back to skill-4
-  (the Workday tenant configuration, P4.3) to capture it before installing.
+  Read the captured values from `.local/connect/workday/config.json`: `tenant`
+  (persisted by skill-3/4), and `tokenEndpoint`, `oauthClientId`, `soapBaseUrl`,
+  and `restBaseUrl` (persisted by skill-4). Build the **Microsoft Entra resource
+  URL** as `http://www.workday.com/{tenant}` — the Workday tenant short name (the
+  same one in the Workday tenant URL, e.g. `acme_dpt1`), **not** the Entra App ID
+  URI. Present each with its Copilot Studio form label — never the internal field
+  names. If `tenant` is blank, derive it from the Workday tenant URL (the
+  `{tenant}` segment of `soapBaseUrl` / `oauthTokenUrl`); if any other value is
+  blank, it was not captured — go back to skill-4 (the Workday tenant
+  configuration, P4.3) to capture it before installing.
 
   **Message:**
 
@@ -129,7 +149,8 @@ python scripts/flightcheck/cli.py --checkpoint WD-PKG-001
   setup. Keep them handy — you'll paste them into the connection form when the
   installer prompts you:
 
-  - **Microsoft Entra resource URL (Application ID URI):** {appIdUri}
+  - **Workday tenant name:** {tenant}
+  - **Microsoft Entra resource URL:** http://www.workday.com/{tenant}
   - **Workday OAuth token URL (Token Endpoint):** {tokenEndpoint}
   - **Client ID:** {oauthClientId}
   - **SOAP base URL:** {soapBaseUrl}
@@ -228,7 +249,8 @@ parameter set (and owner) for you to confirm — the simplified extension pack's
 Workday connection must use **Microsoft Entra ID Integrated** (Entra SSO), not
 Basic/ISU or a client-secret grant.
 
-Show the user the checkpoint's result, then ask them to confirm:
+You will already have rendered the checkpoint's result in chat (the
+post-checkpoint display, U.0a). Ask the user to confirm the auth type:
 
 **Message:**
 
@@ -465,7 +487,8 @@ verify corporate firewall rules (a local probe would only prove this machine's
 egress, not the managed-connector outbound path), so it echoes the Workday REST and
 SOAP hosts that InfoSec/IT must allowlist for the Power Platform managed connectors.
 
-Show the user the echoed endpoints, then ask them to confirm:
+You will already have rendered the echoed REST + SOAP hosts in chat (the
+post-checkpoint display, U.0a). Ask the user to confirm the allowlisting is in place:
 
 **Message:**
 

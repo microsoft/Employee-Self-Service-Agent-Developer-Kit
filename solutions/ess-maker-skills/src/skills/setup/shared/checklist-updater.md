@@ -15,8 +15,9 @@ not narrate tool calls.
 - `NEW_STATE` — `"in-progress"` \| `"done"` \| `"blocked"`.
 - `CHECKPOINT_RESULT` — the flightcheck result for the row's checkpoint, one of
   `PASSED` \| `FAILED` \| `WARNING` \| `MANUAL` \| `null` (null = not run yet).
-- `GATE` — the row's gate type: `"prog"` \| `"manual"` \| `"attest"` (from the
-  master setup checklist row; also recorded in config per `config-schema.md`).
+- `GATE` — the row's gate type: `"prog"` \| `"manual"` \| `"attest"` \|
+  `"advisory"` (from the master setup checklist row; also recorded in config per
+  `config-schema.md`).
 - `ACK` — *(manual/attest rows only)* `true` once the user has explicitly
   acknowledged the step and any evidence has been captured; otherwise `false`.
 
@@ -55,6 +56,97 @@ HTML comment the tooling reads.
 
 ---
 
+## U.0 — Show the checkpoint result to the user (in chat)
+
+**Timing — render this the instant a checkpoint run returns, and for a
+manual/attest row *before* you ask the attestation question.** When a
+`python scripts/flightcheck/cli.py --checkpoint <ID>` run just produced
+`CHECKPOINT_RESULT`, surface that result to the user — the U.0 table **and** the
+U.0a manual steps — before touching any state and before any attestation, so every
+checkpoint run has a visible outcome. Single-checkpoint runs never open the HTML
+report, so this in-chat render is the only place the user sees the outcome; never
+ask a user to attest to manual steps they have not been shown. If you already
+rendered this checkpoint's result this pass (per a skill's post-checkpoint display
+convention), do not repeat it — proceed to U.1. The U.1–U.3 status update below
+runs afterwards (once any attestation is answered) and does **not** re-display the
+result.
+
+- Skip this step when `CHECKPOINT_RESULT` is `null` (the checkpoint was not run
+  this pass — e.g. the row is only being moved to `in-progress`), or when
+  `workspace/flightcheck/results.json` does not exist.
+
+Read `workspace/flightcheck/results.json` — the run that led here wrote it. It has:
+
+```json
+{ "results": [ { "checkpoint_id": "...", "description": "...", "status": "..." }, ... ] }
+```
+
+Render a GitHub-flavoured markdown table in chat, **one row per entry** in
+`results`, using `description` verbatim for **Check** and `status` verbatim for
+**Status**:
+
+```
+| Check | Status |
+| --- | --- |
+| <description> | <status> |
+```
+
+Rules:
+- **Never** include `checkpoint_id`, the Step ID, or any other internal
+  identifier — there is no ID column; `description` is the only label shown.
+- If a `description` or `status` contains a `|`, escape it as `\|`; collapse any
+  newline to a single space.
+- If `results` is empty, render **no** table.
+- This table is **in addition to** the row's own **Message** blocks and the
+  manual verification steps below (see U.0a) — it does not replace or alter them.
+- Draw the table yourself in chat. Do not mention `results.json`, file paths, or
+  the tools used to produce it.
+
+---
+
+## U.0a — Show the manual verification steps to the user (in chat)
+
+Do this right after the U.0 table, before touching any state. A
+`python scripts/flightcheck/cli.py --checkpoint <ID>` run **never opens the HTML
+report** — for `MANUAL` checks the verification steps must appear **in chat**, not
+in a browser popup. This routine is what puts them there.
+
+- Skip this step when `CHECKPOINT_RESULT` is `null`, or when
+  `workspace/flightcheck/results.json` does not exist.
+
+Each entry in `results.json` carries the full text of what the operator must do —
+not just `description`/`status` but also the finding and the how-to:
+
+```json
+{ "checkpoint_id": "...", "description": "...", "status": "Manual",
+  "result": "<the finding / what a human must verify>",
+  "remediation": "<the step-by-step verification, may span multiple lines>" }
+```
+
+For **every** entry in `results` whose `status` is `Manual` (also `Warning` or
+`NotConfigured`, when present), render a block in chat — one per entry, in the
+order they appear — using `description` as the heading, then `result`, then
+`remediation`:
+
+```
+**<description>**
+
+<result>
+
+<remediation>
+```
+
+Rules:
+- Copy `result` and `remediation` **verbatim** — keep the numbered/bulleted steps
+  and every line break. Do **not** summarise, shorten, re-order, or paraphrase the
+  steps; the operator follows them exactly.
+- Still **never** surface `checkpoint_id`, the Step ID, or the hidden comment.
+- Do **not** open, mention, or link `report.html` — the steps live in chat now.
+- If no entry has a `Manual`/`Warning`/`NotConfigured` status, render no block.
+- Do not mention `results.json`, file paths, or the tools used to produce it.
+
+---
+
 ## U.1 — Locate the item
 
 Read `.local/setup/workday/tasks.md` (render from the template first if absent).
@@ -83,8 +175,14 @@ Decide `Status` as follows:
 | `prog` | `CHECKPOINT_RESULT` = `WARNING` / `null` | `in-progress` |
 | `manual` / `attest` | `ACK` = `true` (user acknowledged **and** evidence captured) | `done` |
 | `manual` / `attest` | `ACK` = `false`, regardless of `CHECKPOINT_RESULT` | `in-progress` (or `blocked` if `FAILED`) |
+| `advisory` | the advisory step has been run and its report shown (or attempted and skipped) | `done` |
 
 Notes:
+- An `advisory` row is not backed by a flightcheck checkpoint (`CHECKPOINT_RESULT`
+  is `null`). It **never blocks** — it completes to `done` once its advisory
+  output has been presented to the user, regardless of what the output found. If
+  the advisory step can't run, note it and still complete the row (advisory rows
+  never hold up the setup).
 - A `CHECKPOINT_RESULT` of `MANUAL` means "the checkpoint reported what it could,
   but completion needs a human." It **never** maps to `done` on its own — it
   requires `ACK = true`.
@@ -93,7 +191,9 @@ Notes:
   objective signal).
 
 If the row is `manual`/`attest` and `ACK` is `false`, before leaving the row
-`in-progress` confirm the user actually saw the manual step:
+`in-progress` confirm the user actually saw the manual step. (Precondition: the
+manual verification steps — U.0a — for this row's checkpoint must already have been
+rendered in chat. If they were not, show them now, then ask.)
 
 ```json
 [
@@ -139,7 +239,7 @@ lost — the orchestrator resumes from the first non-`done` row in `setupStatus`
        "{STEP_ID}": {
          "state": "<resulting status>",
          "checkpoint": "<the item's checkpoint ID>",
-         "gate": "<prog|manual|attest>",
+         "gate": "<prog|manual|attest|advisory>",
          "verifiedBy": "<programmatic|attested|null>"
        }
      }

@@ -23,6 +23,15 @@ Run any of them with:
 python scripts/flightcheck/cli.py --checkpoint <ID>
 ```
 
+**After every checkpoint run, show its result in chat first.** As soon as a
+`--checkpoint` run returns, render the result to the user per
+[`shared/checklist-updater.md`](../shared/checklist-updater.md) §U.0–U.0a — the
+compact result table and, for any `MANUAL` (or `Warning` / `NotConfigured`) row,
+its full verification steps — **before** you show any later **Message** or ask any
+attestation question. Single-checkpoint runs never open the HTML report, so this
+in-chat render is the only place the user sees the manual steps; never ask a user
+to attest to steps they have not been shown.
+
 ---
 
 ## P1.0 — Role gate (Power Platform Administrator)

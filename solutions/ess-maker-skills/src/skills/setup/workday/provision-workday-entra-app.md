@@ -39,6 +39,15 @@ Run any one with:
 python scripts/flightcheck/cli.py --checkpoint <ID>
 ```
 
+**After every checkpoint run, show its result in chat first.** As soon as a
+`--checkpoint` run returns, render the result to the user per
+[`shared/checklist-updater.md`](../shared/checklist-updater.md) §U.0–U.0a — the
+compact result table and, for any `MANUAL` (or `Warning` / `NotConfigured`) row,
+its full verification steps — **before** you show any later **Message** or ask any
+attestation question. Single-checkpoint runs never open the HTML report, so this
+in-chat render is the only place the user sees the manual steps; never ask a user
+to attest to steps they have not been shown.
+
 **Build order (row order now matches it).** Row **S3.1** — the SSO gallery app — is
 the foundation every other row configures, so it is built first and the rows are
 numbered in build order (S3.1 → S3.7). Each section below is titled by the checklist
@@ -298,7 +307,7 @@ python scripts/flightcheck/cli.py --checkpoint WD-CONN-102
 ```
 
 `WD-CONN-102` reports the Entra-side signing-certificate health. It returns
-`MANUAL` for the healthy state because Workday-side thumbprint parity is verified
+`MANUAL` for the healthy state because Workday-side certificate parity is verified
 later in skill-4 (row S4.4). Present the certificate/thumbprint result to the
 user, then update **S3.1** via [`checklist-updater.md`](../shared/checklist-updater.md)
 with `STEP_ID="S3.1"`, `GATE="manual"`,

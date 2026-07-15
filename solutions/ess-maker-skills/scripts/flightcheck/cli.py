@@ -332,17 +332,18 @@ def _run_single_checkpoint(args):
     print("\nRunning checkpoint...\n")
     result = runner.run()
 
-    _print_prioritized_summary(result)
+    _print_prioritized_summary(result, verbose_manual=True)
     save_results(result, args.output)
 
     if not result.results:
         print(f"\nNOTE: checkpoint {target} produced no result rows (the owning "
               "check may have skipped it for this tenant state).")
 
-    # Open the HTML report only when explicitly NOT suppressed. Single-checkpoint
-    # runs are usually invoked by skills headlessly, so default to not opening.
-    if not args.no_open and result.results:
-        open_report_in_browser(args.output)
+    # Single-checkpoint mode never auto-opens the HTML report. Programmatic
+    # pass/fail rows AND MANUAL verification steps are both printed in full in
+    # the terminal above (see verbose_manual), so they surface directly in
+    # Copilot chat instead of a browser popup. results.json / report.html are
+    # still written to args.output for anyone who wants them.
 
     sys.exit(1 if result.failed > 0 else 0)
 
@@ -701,15 +702,17 @@ def main():
         ).strip().lower() in ("1", "on", "true", "yes"):
             print("[telemetry] disabled via --no-telemetry")
 
-    # Open HTML report in browser (skip with --no-open for CI / headless runs)
-    if not args.no_open:
+    # Open the HTML report only when the run includes a MANUAL check — those
+    # need the browser's rich remediation view. Runs with no manual items are
+    # fully covered by the compact chat table (skip with --no-open too).
+    if not args.no_open and result.manual > 0:
         open_report_in_browser(args.output)
 
     # Exit code
     sys.exit(1 if result.failed > 0 else 0)
 
 
-def _print_prioritized_summary(result):
+def _print_prioritized_summary(result, *, verbose_manual=False):
     """Print a triage-first summary that mirrors the HTML layout.
 
     Three sections, biggest signal first:
@@ -784,8 +787,11 @@ def _print_prioritized_summary(result):
                     print(f"          {cont}")
             print()
 
-    # Section 2 — NEEDS MANUAL VERIFICATION (one-liner per row;
-    # full prose is in report.html so the terminal stays scannable).
+    # Section 2 — NEEDS MANUAL VERIFICATION. In scope runs this stays a
+    # one-liner per row (the full prose lives in report.html so the terminal
+    # stays scannable). In single-checkpoint mode (verbose_manual) we print
+    # the full result + verification steps inline so the manual steps surface
+    # directly in Copilot chat — no HTML popup needed.
     if manual:
         print()
         print(f"  NEEDS MANUAL VERIFICATION ({len(manual)})")
@@ -793,10 +799,24 @@ def _print_prioritized_summary(result):
         for r in manual:
             tag = _status_tag(r.status)
             role_text = f" | {', '.join(r.roles)}" if r.roles else ""
-            print(f"  {tag} {r.checkpoint_id} [{r.priority}{role_text}]: "
-                  f"{r.description}")
-        print("  (Open report.html for the full result + verification "
-              "steps.)")
+            if verbose_manual:
+                print(f"  {tag} {r.checkpoint_id} [{r.priority}{role_text}]: "
+                      f"{r.result}")
+                if r.remediation:
+                    # Indent multi-line remediation under the arrow so the
+                    # verification steps stay grouped with their finding
+                    # (mirrors the ACTION REQUIRED section).
+                    lines = r.remediation.splitlines()
+                    print(f"       -> {lines[0]}")
+                    for cont in lines[1:]:
+                        print(f"          {cont}")
+                print()
+            else:
+                print(f"  {tag} {r.checkpoint_id} [{r.priority}{role_text}]: "
+                      f"{r.description}")
+        if not verbose_manual:
+            print("  (Open report.html for the full result + verification "
+                  "steps.)")
 
     # Section 3 — PASSED (count only; the operator doesn't need to
     # scroll past 200+ green rows to find what needs their attention).

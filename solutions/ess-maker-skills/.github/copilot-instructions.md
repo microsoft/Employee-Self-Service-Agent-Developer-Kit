@@ -332,6 +332,34 @@ before continuing. Do NOT proceed to review and push until the subagent
 has returned. Do NOT invoke the validate subagent after entire test set
 delete operations or after deleting the last remaining case in a category.
 
+**Topic review invocation:** When the maker runs `/create` **directly**, at
+**step 6.5 of the topic create flow** (`src/skills/topics/create/SKILL.md`) —
+after the scan and before the dry run/push — invoke `runSubagent` (the VS Code
+Copilot Chat tool) pointing the subagent to read
+`src/skills/topics/review/SKILL.md` as its first action, scoped to the **single
+topic just created** (pass the agent slug from `.local/config.json` and the
+topic stem — the filename without `.mcs.yml`) and asking it to present the
+**maker-facing report**. Running this review is **mandatory** in the direct
+`/create` flow: wait for the subagent to return, then paste its full report
+verbatim into the chat. Do NOT proceed to the dry run or push until the review
+has returned and its report is shown. The findings themselves are **advisory**
+— they never block the push; when findings exist, pause and let the maker
+choose to fix now (via `/update`) or push anyway. If the subagent or its
+detector scripts cannot run, say the review was skipped and continue — a review
+failure never blocks the push.
+
+**Do NOT invoke this step-6.5 review when the create-topic skill is running as
+the Workday setup flow's P6.1 authoring delegation**
+(`src/skills/setup/workday/create-new-topic.md`). At P6.1 the tenant reference
+IDs are not wired yet (P6.2 does that), so a review there would false-flag
+unresolved placeholders — there is **no** topic review at S6.1/P6.1. The Workday
+setup flow performs its **one and only** topic review later, at its **step P6.5
+(checklist row S6.3)** — *after* the `TOPIC-TRIGGER-*` and `TOPIC-INTEGRATION-*`
+checkpoints (S6.1, S6.2) pass and the topic is fully wired. That review uses the
+same invocation (`runSubagent` → `src/skills/topics/review/SKILL.md`, single
+topic, maker-facing report, displayed verbatim) and is `advisory` (row S6.3
+completes once the report is shown — it never blocks setup).
+
 **When the user asks to modify, delete, rename, or otherwise change an agent
 component, ALWAYS load and follow the corresponding skill file.** The skill
 contains the full checkpoint→edit→scan→push pipeline. Do NOT improvise a

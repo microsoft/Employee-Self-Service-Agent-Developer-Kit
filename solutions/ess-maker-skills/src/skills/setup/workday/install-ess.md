@@ -22,6 +22,15 @@ Run it with:
 python scripts/flightcheck/cli.py --checkpoint ESS-SOLN-001
 ```
 
+**After every checkpoint run, show its result in chat first.** As soon as a
+`--checkpoint` run returns, render the result to the user per
+[`shared/checklist-updater.md`](../shared/checklist-updater.md) §U.0–U.0a — the
+compact result table and, for any `MANUAL` (or `Warning` / `NotConfigured`) row,
+its full verification steps — **before** you show any later **Message** or ask any
+attestation question. Single-checkpoint runs never open the HTML report, so this
+in-chat render is the only place the user sees the manual steps; never ask a user
+to attest to steps they have not been shown.
+
 The base agent installs a managed solution whose unique name starts with
 `msdyn_copilotforemployeeselfservice` (the base, IT, and HR editions all match).
 
@@ -44,8 +53,14 @@ install work, with:
   ```
 
   ```
-  az rest --method GET --resource "{ENV_URL}" --url "{ENV_URL}/api/data/v9.2/systemusers({USER_ID})/systemuserroles_association?%24select=name" --query "value[].name" -o json
+  az rest --method GET --resource "{ENV_URL}" --url "{ENV_URL}/api/data/v9.2/systemusers%28{USER_ID}%29/systemuserroles_association?%24select=name" --query "value[].name" -o json
   ```
+
+  (Percent-encode the key-lookup parentheses — `%28`/`%29`, not `(`/`)` — and the
+  OData `$` — `%24select`. On Windows the `az` launcher is a `cmd.exe` batch
+  wrapper: a raw `)` closes a batch block and the call fails with
+  `... was unexpected at this time`, so the encoded form runs first-try on every
+  shell.)
 
   The role is held if the returned role names include **`Environment Maker`**, or
   a superseding role (**`System Customizer`** or **`System Administrator`**).
@@ -76,7 +91,10 @@ in this environment.
 python scripts/flightcheck/cli.py --checkpoint ESS-SOLN-001
 ```
 
-- **`PASSED`** (the solution is already installed) → skip to **P2.2**.
+- **`PASSED`** (the solution is already installed) → this pre-check **is** the
+  verification (it runs the same `ESS-SOLN-001` gate), so skip straight to
+  **P2.3** and record the row on this pass — do **not** re-run the checkpoint in
+  P2.2.
 - Anything else → show the install instructions below.
 
 **Message:**

@@ -66,7 +66,7 @@ later steps. Unknown/absent fields are treated as `null`.
 ### Per-skill status fields (owned by each skill via the checklist-updater)
 
 Each setup skill records its own checkpoint outcomes under a `setupStatus`
-object, keyed by **Step ID** (`S1.1` … `S6.2`) from the master setup checklist.
+object, keyed by **Step ID** (`S1.1` … `S6.3`) from the master setup checklist.
 This is the durable record the checklist-updater (`checklist-updater.md`) reads
 and writes; the rendered `.local/setup/workday/tasks.md` is the human-readable
 view of the same data.
@@ -81,11 +81,39 @@ view of the same data.
 ```
 
 - `state` ∈ `pending` \| `in-progress` \| `done` \| `blocked`.
-- `gate` ∈ `prog` \| `manual` \| `attest` (from the master checklist row).
-- `verifiedBy` ∈ `programmatic` \| `attested` \| `null`. A `manual`/`attest`
-  row is **never** set to `done` by a flightcheck pass alone — it needs an
-  explicit user acknowledgement plus captured evidence (see
-  `checklist-updater.md` and `permission-gate.md`).
+- `gate` ∈ `prog` \| `manual` \| `attest` \| `advisory` (from the master checklist row).
+- `verifiedBy` ∈ `programmatic` \| `attested` \| `reviewed` \| `null`. A
+  `manual`/`attest` row is **never** set to `done` by a flightcheck pass alone —
+  it needs an explicit user acknowledgement plus captured evidence (see
+  `checklist-updater.md` and `permission-gate.md`). An `advisory` row (no
+  checkpoint) completes with `verifiedBy: "reviewed"` once its report has been
+  shown; it never blocks.
+
+### Optional ready-made-topics state (owned by the OOTB-topics installer)
+
+The optional installer offered between skill-5 and skill-6
+(`install-workday-ootb-topics.md`) is **not** a tracked `setupStatus` row — it
+records its own state under a top-level `ootbTopics` object so the router never
+re-prompts once the user has installed or declined.
+
+```json
+{
+  "ootbTopics": {
+    "state": "installed",
+    "selected": ["msdyn_HRWorkdayHCMEmployeeGetVacationBalance"],
+    "installed": ["msdyn_HRWorkdayHCMEmployeeGetVacationBalance"]
+  }
+}
+```
+
+- `state` ∈ `pending` (unset — offer not yet answered) \| `in-progress`
+  (selection made, mid-install) \| `installed` \| `declined`.
+- `selected` — scenario names the user chose to add (may be mid-install).
+- `installed` — scenario names actually pushed to the environment.
+
+The router treats `installed` and `declined` as terminal (skip the offer);
+any other value (including unset) means "offer not yet resolved". Owned solely by
+the installer; other skills only read it.
 
 ---
 
