@@ -316,13 +316,21 @@ class TestEdgeCases:
         assert "Unable to read ServiceNow flow run history" in r.result
         assert "owner/maker access" in r.remediation
 
-    def test_no_flows_is_skipped(self, pp_client) -> None:
-        from flightcheck.checks.servicenow import _check_servicenow_run_health
+    def test_no_flows_means_no_run_health_row(self, pp_client) -> None:
+        """With no ServiceNow flows, run_servicenow_checks returns early and
+        SN-RUN-001 is never emitted.
+
+        This pins the real production contract. `_check_servicenow_run_health`
+        has no "no flows discovered" SKIPPED branch because its only caller,
+        `run_servicenow_checks`, returns early when `_servicenow_flows` is
+        empty (ServiceNow's sole install signal), so that branch was
+        unreachable. The not-installed state is reported by SN-001 instead.
+        """
+        from flightcheck.checks.servicenow import run_servicenow_checks
 
         runner = _MinimalRunner(pp_admin=pp_client, env_id=pp.MOCK_ENV_ID, _servicenow_flows=[])
-        r = _only(_check_servicenow_run_health(runner))
-        assert r.status == "Skipped"
-        assert "No ServiceNow flows discovered" in r.result
+        results = run_servicenow_checks(runner)
+        assert results == []
 
     def test_no_pp_admin_is_skipped(self) -> None:
         from flightcheck.checks.servicenow import _check_servicenow_run_health

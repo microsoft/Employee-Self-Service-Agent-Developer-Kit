@@ -56,7 +56,16 @@ def run_servicenow_checks(runner) -> list[CheckResult]:
     """
     results: list[CheckResult] = []
 
-    # Skip if no ServiceNow flows detected
+    # Skip if no ServiceNow flows detected. Unlike Workday (which also has a
+    # package-flavor signal, so an installed-but-no-flows-deployed tenant still
+    # runs its deep checks), ServiceNow's ONLY "is it here?" signal is the flow
+    # set itself. So this gate is unconditional, and every downstream ServiceNow
+    # check — including SN-RUN-001 — is silent when no flows exist (the
+    # not-installed state is already reported by SN-001). If ServiceNow ever
+    # gains an installed-but-no-flows detector, mirror Workday's conditional
+    # gate here and restore the "no flows discovered" SKIPPED branch in
+    # _check_servicenow_run_health (it is intentionally absent today because it
+    # was unreachable behind this gate).
     sn_flows = getattr(runner, "_servicenow_flows", [])
     if not sn_flows:
         return results
@@ -332,15 +341,10 @@ def _check_servicenow_run_health(runner) -> list[CheckResult]:
             roles=[Role.POWER_PLATFORM_ADMIN.value],
         )]
 
-    if not sn_flows:
-        return [CheckResult(
-            checkpoint_id="SN-RUN-001", category="ServiceNow",
-            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
-            description="ServiceNow flow run health",
-            result="No ServiceNow flows discovered — no run history to evaluate.",
-            remediation="",
-            roles=roles,
-        )]
+    # NOTE: no "not sn_flows" SKIPPED branch here on purpose. The only
+    # production caller (run_servicenow_checks) returns early when sn_flows is
+    # empty, so this function is never reached without flows. See the gate
+    # comment in run_servicenow_checks for the ServiceNow-vs-Workday rationale.
 
     terminal: list[dict] = []
     api_error: str | None = None
