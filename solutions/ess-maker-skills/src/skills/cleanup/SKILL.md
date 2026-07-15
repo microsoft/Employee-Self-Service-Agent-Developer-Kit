@@ -4,7 +4,7 @@ This skill scans a cloned ESS agent for compile errors and walks the user throug
 
 ## Rules
 
-- Do NOT run terminal commands or scripts EXCEPT the kit's own helper scripts under `scripts/` (specifically `python scripts/checkpoint.py` and `python scripts/push.py`, which Steps 2b and 6 require). For everything else - file edits, validation, lookups - use your built-in file reading, writing, and editing tools only. Do NOT use Python, PowerShell, Node.js, or any other scripting language to do work the editing tools can do.
+- Do NOT run terminal commands or scripts EXCEPT the kit's own helper scripts under `scripts/` (specifically `python scripts/checkpoint.py`, `python scripts/push.py`, and `python scripts/emit_capability.py`, which Steps 2b and 6 require). For everything else - file edits, validation, lookups - use your built-in file reading, writing, and editing tools only. Do NOT use Python, PowerShell, Node.js, or any other scripting language to do work the editing tools can do.
 - Do NOT fix errors automatically without user confirmation. Present each group of errors and ask the user before making changes.
 - Do NOT modify the source template files in `src/`. Only modify files inside the agent folder (the cloned agent at the workspace root).
 - After fixing errors, re-scan to verify the fix worked. Show the updated error count.
@@ -45,6 +45,8 @@ Wait for the user to confirm.
 When confirmed:
 - Run in the terminal: `python scripts/checkpoint.py "pre-scan-fixes"`
 - This saves a full snapshot of all working files before any modifications.
+- Record anonymous usage telemetry (best-effort, non-blocking — no user-facing
+  message, and it never fails the step): `python scripts/emit_capability.py cleanup`
 - Tell the user: "Checkpoint saved. Let me walk you through the fixes."
 
 ## Step 3: Scan for Errors (detailed categorization)

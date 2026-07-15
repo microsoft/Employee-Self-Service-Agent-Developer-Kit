@@ -21,6 +21,7 @@ set -euo pipefail
 BRANCH="${ESS_ADK_BRANCH:-main}"
 INSTALL_ROOT="${ESS_ADK_INSTALL_ROOT:-$HOME/source}"
 FLIGHTCHECK_ONLY="${FLIGHTCHECK_ONLY:-false}"
+SKIP_MAKER_PROFILE="${SKIP_MAKER_PROFILE:-false}"
 REPO_URL="https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit.git"
 REPO_NAME="Employee-Self-Service-Agent-Developer-Kit"
 CODE_CMD=""
@@ -37,7 +38,73 @@ NC='\033[0m' # No Color
 ok()   { echo -e "    ${GREEN}[ok]${NC}   $1"; }
 warn() { echo -e "    ${YELLOW}[warn]${NC} $1"; }
 err()  { echo -e "    ${RED}[ERR]${NC}  $1"; }
-step() { echo -e "\n${CYAN}==> $1${NC}"; }
+step() { echo -e "\n${CYAN}==> $1${NC}"; ess_tel_step "$(ess_step_key "$1")" || true; }
+
+# ---------------------------------------------------------------------------
+# Installer telemetry (Aria / 1DS). Fail-open: never breaks the install.
+# ---------------------------------------------------------------------------
+# Map a human step message to a short, stable step key for dashboards.
+ess_step_key() {
+    case "$1" in
+        *Checking*)             echo preflight ;;
+        *toolchain*|*Homebrew*) echo toolchain ;;
+        *pip*)                  echo pip_dependencies ;;
+        *Resolving\ Python*)    echo resolve_python ;;
+        *Cloning*|*repository*) echo clone ;;
+        *extension*)            echo vscode_extensions ;;
+        *Maker\ Profile*)       echo maker_profile ;;
+        *FlightCheck\ environ*) echo flightcheck_config ;;
+        *agent\ solution*)      echo fetch_agent ;;
+        *Running\ FlightCheck*) echo flightcheck_run ;;
+        *workspace*|*Opening*)  echo launch ;;
+        *) echo "$1" | tr '[:upper:] ' '[:lower:]_' | tr -cd 'a-z0-9_' | cut -c1-40 ;;
+    esac
+}
+
+# Locate + source the emitter: env var set by the bootstrap (one-liner install),
+# else the copy shipped alongside this script in a clone. If it can't be found,
+# define no-op stubs so every telemetry call below is always safe.
+_ess_tel_lib="${ESS_INSTALL_TELEMETRY_LIB:-}"
+if [[ -z "$_ess_tel_lib" ]]; then
+    _ess_tel_dir="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || echo .)"
+    _ess_tel_lib="$_ess_tel_dir/telemetry/install-telemetry.sh"
+fi
+if [[ -n "$_ess_tel_lib" && -f "$_ess_tel_lib" ]]; then
+    # shellcheck disable=SC1090
+    source "$_ess_tel_lib" || true
+fi
+if ! declare -f ess_tel_init >/dev/null 2>&1; then
+    ess_tel_init()     { :; }
+    ess_tel_step()     { :; }
+    ess_tel_complete() { :; }
+fi
+
+# Installer identity: flightcheck | adk (full, maker profile skipped) | lite.
+if [[ "$FLIGHTCHECK_ONLY" == "true" ]]; then
+    _ess_installer=flightcheck
+elif [[ "$SKIP_MAKER_PROFILE" == "true" ]]; then
+    _ess_installer=adk
+else
+    _ess_installer=lite
+fi
+ess_tel_init "$_ess_installer" || true
+
+# Emit a completion event on any exit (success on 0, cancelled on Ctrl+C/term,
+# failure otherwise). The FlightCheck-only path records success explicitly
+# before it exits, so a non-zero FlightCheck *result* isn't misreported as an
+# install failure.
+ess_tel_on_exit() {
+    local code="${1:-0}"
+    if [[ "$code" -eq 0 ]]; then
+        ess_tel_complete success || true
+    elif [[ "$code" -eq 130 || "$code" -eq 143 ]]; then
+        # 130 = SIGINT (Ctrl+C), 143 = SIGTERM — the user cancelled the install.
+        ess_tel_complete cancelled || true
+    else
+        ess_tel_complete failure "installer exited with code $code" || true
+    fi
+}
+trap 'ess_tel_on_exit $?' EXIT
 
 # ---------------------------------------------------------------------------
 # 1. Homebrew
@@ -164,6 +231,17 @@ step "Cloning repository"
 
 REPO_PATH="$INSTALL_ROOT/$REPO_NAME"
 
+# If the directory exists but isn't a git repo (leftover from partial cleanup),
+# remove it so the clone can proceed.
+if [[ -d "$REPO_PATH" && ! -d "$REPO_PATH/.git" ]]; then
+    warn "Directory exists but is not a git repo: $REPO_PATH"
+    warn "This appears to be a leftover from a partial install."
+    warn "Contents will be deleted to perform a fresh clone."
+    warn "Press Ctrl+C within 5 seconds to abort..."
+    sleep 5
+    rm -rf "$REPO_PATH"
+fi
+
 if [[ -d "$REPO_PATH/.git" ]]; then
     ok "Repo already cloned at $REPO_PATH — pulling latest"
     git -C "$REPO_PATH" fetch --quiet origin
@@ -209,25 +287,86 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
     fi
 
     if [[ -n "$CODE_CMD" ]]; then
-        # Required extensions — fail if these can't be installed
+        # Required extensions — skip if already present or built-in.
+        # Recent VS Code (>=1.99) ships Copilot as a built-in extension.
+        # `--install-extension` may exit non-zero if the marketplace version
+        # is older than the bundled one. Check --list-extensions first.
         REQUIRED_EXTENSIONS=("GitHub.copilot" "GitHub.copilot-chat")
+        INSTALLED_EXTENSIONS=$("$CODE_CMD" --list-extensions 2>/dev/null || true)
         for ext in "${REQUIRED_EXTENSIONS[@]}"; do
-            if ! "$CODE_CMD" --install-extension "$ext" --force 2>/dev/null; then
-                err "Failed to install required extension: $ext"
-                err "Possible causes:"
-                err "  - VS Code marketplace is unreachable (corporate proxy/firewall)"
-                err "  - No GitHub account with Copilot access signed in to VS Code"
-                err "Re-run this script after resolving the issue."
-                exit 1
+            if echo "$INSTALLED_EXTENSIONS" | grep -qi "^${ext}$"; then
+                ok "extension $ext (already present / built-in)"
+            elif "$CODE_CMD" --install-extension "$ext" --force 2>&1 | grep -qi "built-in\|already installed\|cannot be downgraded"; then
+                ok "extension $ext (already present / built-in)"
+            elif "$CODE_CMD" --install-extension "$ext" --force 2>/dev/null; then
+                ok "extension $ext"
+            else
+                warn "Could not install extension $ext (non-fatal — may already be built-in)"
             fi
-            ok "$ext"
         done
 
         # Optional extensions — warn on failure
         OPTIONAL_EXTENSIONS=("ms-python.python")
         for ext in "${OPTIONAL_EXTENSIONS[@]}"; do
-            "$CODE_CMD" --install-extension "$ext" --force 2>/dev/null && ok "$ext" || warn "Failed to install $ext"
+            if echo "$INSTALLED_EXTENSIONS" | grep -qi "^${ext}$"; then
+                ok "extension $ext (already present)"
+            elif "$CODE_CMD" --install-extension "$ext" --force 2>/dev/null; then
+                ok "extension $ext"
+            else
+                warn "Failed to install $ext (non-fatal)"
+            fi
         done
+
+        # ESS Maker Profile — installs in both modes. In lite mode it
+        # applies the chat-first layout; in standard mode it only handles
+        # /setup injection (no visual changes). The mode is communicated
+        # via essMaker.mode in VS Code's user settings.json.
+        if [[ "$SKIP_MAKER_PROFILE" == "true" ]]; then
+            MODE_LABEL="standard"
+        else
+            MODE_LABEL="lite"
+        fi
+        step "Installing ESS Maker Profile ($MODE_LABEL mode)"
+
+        MAKER_VSIX_DIR="$REPO_PATH/tools/ess-maker-profile/extension"
+        MAKER_VSIX=""
+        if [[ -d "$MAKER_VSIX_DIR" ]]; then
+            # shellcheck disable=SC2012
+            MAKER_VSIX="$(ls -t "$MAKER_VSIX_DIR"/ess-maker-profile-*.vsix 2>/dev/null | head -n 1 || true)"
+        fi
+
+        if [[ -z "$MAKER_VSIX" ]]; then
+            warn "No ess-maker-profile-*.vsix found under $MAKER_VSIX_DIR. Skipping extension install."
+        elif "$CODE_CMD" --install-extension "$MAKER_VSIX" --force 2>/dev/null; then
+            ok "ESS Maker Profile ($(basename "$MAKER_VSIX")) — $MODE_LABEL mode"
+        else
+            warn "ESS Maker Profile install failed (non-fatal)"
+        fi
+
+        # Write the mode setting so the extension knows whether to apply
+        # the lite layout or inject /setup (standard mode).
+        SETTINGS_DIR="$HOME/Library/Application Support/Code/User"
+        if [[ "$(uname)" != "Darwin" ]]; then
+            SETTINGS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/Code/User"
+        fi
+        mkdir -p "$SETTINGS_DIR"
+        SETTINGS_FILE="$SETTINGS_DIR/settings.json"
+        if [[ -f "$SETTINGS_FILE" ]]; then
+            # Merge into existing settings using Python (available from step 2)
+            python3 -c "
+import json, sys
+try:
+    with open('$SETTINGS_FILE', 'r') as f:
+        settings = json.load(f)
+except:
+    settings = {}
+settings['essMaker.mode'] = '$MODE_LABEL'
+with open('$SETTINGS_FILE', 'w') as f:
+    json.dump(settings, f, indent=2)
+" 2>/dev/null || true
+        else
+            echo "{\"essMaker.mode\": \"$MODE_LABEL\"}" > "$SETTINGS_FILE"
+        fi
     else
         warn "VS Code 'code' CLI not found. Install extensions manually after launching VS Code."
     fi
@@ -438,33 +577,44 @@ with open(sys.argv[6], 'w', encoding='utf-8') as f:
 
     # --- Run FlightCheck ---
     step "Running FlightCheck"
-    "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope full
+    ess_tel_complete success || true
+    "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope full --invocation-source installer
     exit $?
 fi
 
 # ---------------------------------------------------------------------------
-# 8. Launch VS Code and request /setup in Copilot Chat
+# 8. Launch VS Code
 # ---------------------------------------------------------------------------
-step "Launching VS Code and requesting /setup in Copilot Chat"
-
 WORKSPACE_PATH="$REPO_PATH/solutions/ess-maker-skills"
 
 if [[ -n "$CODE_CMD" ]]; then
-    # `code chat <prompt>` (VS Code 1.102+, June 2025) opens the chat panel in
-    # the workspace at the current working directory and submits the prompt.
-    # We cd into $WORKSPACE_PATH so it targets the kit folder.
-    # NOTE: exit 0 means "VS Code accepted the chat request," NOT that /setup
-    # actually ran. The user may still need to grant workspace trust and sign
-    # in to GitHub/Copilot before /setup executes.
-    if (cd "$WORKSPACE_PATH" && "$CODE_CMD" chat "/setup"); then
-        ok "Requested /setup in Copilot Chat at $WORKSPACE_PATH"
-        warn "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts and /setup will run."
-        warn "If /setup does not start after trust/sign-in, open Copilot Chat manually and run /setup."
+    # Launch strategy depends on mode:
+    # - Standard mode (SKIP_MAKER_PROFILE=true): use `code chat` to open
+    #   /setup in the sidebar panel (the standard chat experience).
+    # - Lite mode: just open the workspace. The ESS Maker Profile extension
+    #   handles layout + /setup injection after the welcome wizard closes.
+    if [[ "$SKIP_MAKER_PROFILE" == "true" ]]; then
+        step "Opening workspace in VS Code and requesting /setup in Copilot Chat"
+        if (cd "$WORKSPACE_PATH" && "$CODE_CMD" chat "/setup"); then
+            ok "Requested /setup in Copilot Chat at $WORKSPACE_PATH"
+            echo -e "    ${YELLOW}If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts and /setup will run.${NC}"
+            echo -e "    ${YELLOW}If /setup does not start after trust/sign-in, open Copilot Chat manually and run /setup.${NC}"
+        else
+            warn "'code chat' failed or is unsupported. Falling back to opening the workspace only."
+            warn "If you have an older VS Code (pre-1.102 / June 2025), update VS Code and re-run, or run /setup manually in Copilot Chat."
+            "$CODE_CMD" "$WORKSPACE_PATH" || warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
+            echo "Next: in VS Code, open Copilot Chat and run /setup to connect your Dataverse environment."
+        fi
     else
-        warn "'code chat' failed or is unsupported. Falling back to opening the workspace only."
-        warn "If you have an older VS Code (pre-1.102 / June 2025), update VS Code and re-run, or run /setup manually in Copilot Chat."
-        "$CODE_CMD" "$WORKSPACE_PATH" || warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
-        echo "Next: in VS Code, open Copilot Chat and run /setup to connect your Dataverse environment."
+        step "Opening workspace in VS Code"
+        if (cd "$WORKSPACE_PATH" && "$CODE_CMD" .); then
+            ok "Launched VS Code at $WORKSPACE_PATH"
+            echo -e "    ${YELLOW}The ESS Maker Profile will run /setup in Copilot Chat after the welcome screen closes.${NC}"
+            echo -e "    ${YELLOW}If VS Code prompts you to trust the workspace, accept the prompt.${NC}"
+        else
+            warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
+            echo "Next: in VS Code, open Copilot Chat and run /setup to connect your Dataverse environment."
+        fi
     fi
 else
     warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"

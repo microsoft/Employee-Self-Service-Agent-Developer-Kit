@@ -7,7 +7,19 @@
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
-SOURCE_BASE_URL="${ESS_ADK_SOURCE_URL:-https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup}"
+export SKIP_MAKER_PROFILE="true"
+
+# Parse optional --branch / --source-base-url arguments
+BRANCH="main"
+SOURCE_BASE_URL=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --branch)       BRANCH="$2"; shift 2 ;;
+        --source-base-url) SOURCE_BASE_URL="$2"; shift 2 ;;
+        *) shift ;;
+    esac
+done
+SOURCE_BASE_URL="${SOURCE_BASE_URL:-${ESS_ADK_SOURCE_URL:-https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/$BRANCH/setup}}"
 
 TEMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TEMP_DIR"' EXIT
@@ -30,5 +42,12 @@ if [[ ! -s "$TEMP_DIR/install-ess-adk.sh" ]] || ! head -1 "$TEMP_DIR/install-ess
     exit 1
 fi
 
-# Run in-memory (source) to avoid any permission issues
-source "$TEMP_DIR/install-ess-adk.sh"
+# Best-effort: fetch the installer telemetry emitter (fail-open — a telemetry
+# download failure must never block the install).
+if curl -fsSL "$SOURCE_BASE_URL/telemetry/install-telemetry.sh" -o "$TEMP_DIR/install-telemetry.sh" 2>/dev/null; then
+    export ESS_INSTALL_TELEMETRY_LIB="$TEMP_DIR/install-telemetry.sh"
+fi
+
+# Run the downloaded installer in a subshell to avoid issues if it calls exit
+export ESS_ADK_BRANCH="$BRANCH"
+bash "$TEMP_DIR/install-ess-adk.sh"

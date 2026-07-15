@@ -1,0 +1,64 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ess-nextgen-migration-toolkit"
+version = "0.1.0"
+description = "Migrates ESS Custom Engine Agents (CA) to Declarative Agents (DA)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Anil Kumar Adepu" }]
+dependencies = [
+    "msal>=1.37.0",
+]
+
+# Developer tooling lives in a PEP 735 dependency-group (not an optional-
+# dependency "extra"). uv installs the "dev" group BY DEFAULT for `uv sync` and
+# `uv run`, so contributor commands like `uv run ruff check .` work without
+# pruning the tools. Customers exclude it with `uv sync --no-dev`.
+[dependency-groups]
+dev = [
+    "pytest>=7.4",
+    "ruff>=0.4",
+    "mypy>=1.8",
+    "pre-commit>=3.5",
+]
+
+# The canonical layout
+# (dev-specs/ess-nextgen-migration-toolkit/03_ENGINEERING/REPOSITORY_STRUCTURE.md)
+# places top-level packages directly under src/. The build maps them explicitly.
+[tool.hatch.build.targets.wheel]
+packages = [
+    "src/constants",
+    "src/core",
+    "src/modules",
+    "src/service",
+]
+
+[tool.ruff]
+src = ["src", "tests"]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+# Includes flake8-print (T20) to enforce the "no direct print()" rule from
+# dev-specs/ess-nextgen-migration-toolkit/03_ENGINEERING/CODING_STANDARDS.md
+# (section 9) — diagnostics must use the framework Logger.
+select = ["E", "F", "I", "UP", "B", "T20"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["T20"]
+
+[tool.mypy]
+python_version = "3.10"
+mypy_path = "src"
+strict = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-ra"

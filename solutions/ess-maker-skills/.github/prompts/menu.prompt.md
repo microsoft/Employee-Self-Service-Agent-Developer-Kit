@@ -18,9 +18,12 @@ Here's what I can help you with:
 | `/update` | Type Enter to modify an existing topic or workflow |
 | `/delete` | Type Enter to delete a topic or workflow from your agent |
 | `/scan` | Type Enter to scan your agent for compile errors and fix them |
+| `/review` | Type Enter to review a topic (or a whole module's topics) for issues before publishing |
 | `/evaluate` | Type Enter to generate evaluation test sets for your agent |
 | `/flightcheck` | Type Enter to run a pre-deployment readiness check |
 | `/push` | Type Enter to push all local changes to Copilot Studio |
+| `/backup-template-configs` | Type Enter to back up Workday HCM template config customisations before an ESS package update |
+| `/restore-template-configs` | Type Enter to restore Workday HCM template configs from a backup file after a package update |
 | `/troubleshoot` | Type Enter to diagnose connectivity or auth errors |
 
 Tip: Switch to **Plan** mode (type `/plan`) if you'd like to brainstorm or discuss changes before making them.

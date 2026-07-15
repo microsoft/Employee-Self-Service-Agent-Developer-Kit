@@ -51,6 +51,7 @@ Workday → Entra Admin + Workday Admin).
 | PRE-001 | Microsoft 365 Copilot licenses assigned | Critical | Graph API `/subscribedSkus` | [prerequisites#licensing](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prerequisites#licensing) |
 | PRE-002 | Copilot Studio licenses for admins/makers | Critical | Graph API `/subscribedSkus` | [prerequisites#licensing](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prerequisites#licensing) |
 | PRE-003 | Microsoft Teams licenses for users | Critical | Graph API `/subscribedSkus` | [prerequisites#licensing](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prerequisites#licensing) |
+| PRE-004 | Copilot Studio capacity configured (sufficient for the shared/published user population) | Critical | Power Platform Licensing API (per-environment currency allocation) + Dataverse sharing enumeration; cross-checks PRE-005 PayG | [requirements-messages-management#prepaid-capacity](https://learn.microsoft.com/en-us/microsoft-copilot-studio/requirements-messages-management?tabs=new#prepaid-capacity) |
 | PRE-008 | Global Admin role assigned | Critical | Graph API `/directoryRoles` | [prerequisites#required-roles](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prerequisites#required-roles) |
 | PRE-009 | Power Platform Admin role assigned | Critical | Graph API `/directoryRoles` | [prerequisites#required-roles](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prerequisites#required-roles) |
 
@@ -232,6 +233,15 @@ The operator confirms the effective per-group state in the portal.
 | PUB-003 | UAT testing completed with sign-off | Critical | Manual |
 | PUB-006 | Microsoft 365 admin approval obtained | Critical | Manual |
 | PUB-011 | Publishing delay expected (48 hrs) | Medium | Manual |
+
+---
+
+## 8. Infrastructure & Security
+
+| ID | Check | Priority | Method | PASS | FAIL | WARN |
+|----|-------|----------|--------|------|------|------|
+| INFRA-001 | Inbound connectivity to Microsoft services | Critical | TCP probe (DNS → TCP → TLS) to required Microsoft endpoints (Entra ID, Power Platform, Dataverse, Copilot Studio, Graph) | All endpoints reachable with valid TLS | Any Microsoft endpoint unreachable (DNS failure, TCP timeout, connection refused) | TLS handshake failure (proxy interception, certificate issue) |
+| INFRA-006 | DLP policies permit every agent connector (classic data policies; ACP / custom-connector URL patterns out of scope) | Critical | Power Platform Admin API (apiPolicies) + Dataverse connection references; reconciles each agent connector against effective DLP connector groups (most-restrictive policy wins) | All agent connectors allowed and in the same data-group, none Blocked | Any required connector Blocked | Connectors allowed but split across data-groups (cross-group) — all allowed, but can't be combined in one agent action; or some connectors not explicitly classified AND no default group is known (legacy `connectorGroups` policies; modern `definition.apiGroups` policies resolve unlisted connectors via `defaultApiGroup`), or classification could not be determined (permissions / Dataverse unreadable). No policy → SKIPPED (coverage owned by ENV-008) |
 
 ---
 

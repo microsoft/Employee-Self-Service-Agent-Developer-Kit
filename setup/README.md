@@ -18,6 +18,29 @@ Once complete, VS Code opens at `solutions/ess-maker-skills/` and `/setup` is au
 
 > **GitHub Copilot subscription is required** for the in-editor maker experience. This script installs the toolchain and extension scaffolding; it does not grant the Copilot entitlement.
 
+## Lite Mode (Chat-First Layout)
+
+For users who prefer a simplified, chat-first experience that hides developer chrome (file tree, tabs, status bar) and shows a "Quick Actions" button rail:
+
+**Windows** (PowerShell):
+
+```powershell
+iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-lite.ps1)
+```
+
+**macOS** (Terminal):
+
+```bash
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-lite-mac.sh)"
+```
+
+This installs everything the standard installer does, plus the **ESS Maker Profile** extension which provides:
+- A chat-only layout with all developer surfaces hidden
+- Big-button "Quick Actions" rail for common tasks (Connect, Create, Scan, FlightCheck, Push)
+- A built-in tutorial explaining each button
+
+You can switch between lite mode and standard VS Code at any time using the toggle buttons in the Quick Actions panel.
+
 ## GitHub Codespaces (no local install)
 
 > **Free tier available:** GitHub accounts include [120 core-hours/month of free Codespaces usage](https://docs.github.com/en/billing/managing-billing-for-your-products/managing-billing-for-github-codespaces/about-billing-for-github-codespaces#monthly-included-storage-and-core-hours-for-personal-accounts) (60 hours on a 2-core machine). Compute is only billed while the Codespace is running — it stops automatically after 30 minutes of inactivity. For organizational accounts, your admin may need to enable Codespaces — see [managing Codespaces for your organization](https://docs.github.com/en/codespaces/managing-codespaces-for-your-organization).
@@ -97,12 +120,26 @@ cd ~/source/Employee-Self-Service-Agent-Developer-Kit/solutions/ess-maker-skills
 |---|---|
 | `Install-EssAdk.ps1` | Windows orchestrator. Installs toolchain via winget, pip dependencies, clones repo, installs extensions, launches VS Code. With `-FlightCheckOnly`, installs minimal toolchain and runs FlightCheck. |
 | `install-ess-adk.sh` | macOS orchestrator. Same as above but uses Homebrew. Set `FLIGHTCHECK_ONLY=true` for FlightCheck-only mode. |
-| `bootstrap.ps1` | Windows one-liner entry point (full maker kit). |
+| `bootstrap.ps1` | Windows one-liner entry point (standard VS Code layout). |
+| `bootstrap-lite.ps1` | Windows one-liner entry point (lite mode — chat-first layout). |
 | `bootstrap-flightcheck.ps1` | Windows one-liner entry point (FlightCheck only). |
-| `bootstrap-mac.sh` | macOS one-liner entry point (full maker kit). |
+| `bootstrap-mac.sh` | macOS one-liner entry point (standard VS Code layout). |
+| `bootstrap-lite-mac.sh` | macOS one-liner entry point (lite mode — chat-first layout). |
 | `bootstrap-flightcheck-mac.sh` | macOS one-liner entry point (FlightCheck only). |
 | `ess-adk-setup.winget.yaml` | Declarative DSC config consumed by `winget configure` (optional Windows path). |
+| `telemetry/install-telemetry.ps1` | Installer telemetry emitter (PowerShell). Fail-open; emits install start/step/completion to Aria/1DS. |
+| `telemetry/install-telemetry.sh` | Installer telemetry emitter (bash) — macOS/Linux mirror of the PowerShell emitter. |
 | `.devcontainer/devcontainer.json` | Codespace configuration. Pre-installs Python 3.12, pip dependencies, and Copilot extensions. |
+
+**Installer telemetry.** The installers emit pseudonymous setup-reliability
+telemetry (install start / per-step / success-failure-cancelled completion, with
+the installer variant, platform, failing step and a scrubbed error category)
+natively from PowerShell/bash, because they run before Python exists. It is
+fail-open — a telemetry issue never affects the install — and honors the unified
+opt-out (`ESS_ADK_TELEMETRY=off`, or `python scripts/adk_telemetry.py off`). The
+bootstraps download the emitter into their temp dir and pass its path via
+`ESS_INSTALL_TELEMETRY_LIB`; if it can't be fetched, the install proceeds with
+no-op stubs. See the ADK "Telemetry & Privacy" section for the full data model.
 
 ## Dependencies
 
@@ -162,6 +199,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipEx
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipClone           # skip git clone (toolchain only)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipLaunch          # don't open VS Code at the end
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -FlightCheckOnly     # minimal install for FlightCheck only
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipMakerProfile    # standard VS Code (no lite mode)
 ```
 
 For air-gapped / locked-down environments, IT can mirror the files internally and serve them from an intranet URL by passing `-SourceBaseUrl`.
@@ -173,6 +211,9 @@ From this folder:
 ```bash
 # Full installer:
 bash install-ess-adk.sh
+
+# Full installer with lite mode (chat-first layout):
+SKIP_MAKER_PROFILE=false bash install-ess-adk.sh
 
 # FlightCheck only:
 FLIGHTCHECK_ONLY=true bash install-ess-adk.sh

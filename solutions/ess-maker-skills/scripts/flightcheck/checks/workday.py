@@ -322,6 +322,252 @@ WORKFLOWS = [
 ]
 
 
+# ─────────────────────────────────────────────────────────────────────────
+# WD-REF-001 — Workday write-scenario reference-data availability
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Many Workday write scenarios (Add/Update phone, email, emergency contact,
+# dependent, address, government IDs, ...) require the agent to validate
+# user-supplied values against Workday reference data — ISO country codes,
+# phone device types, relationship types, government-ID types, etc. If the
+# reference set for a consumed field cannot be loaded, the agent rejects valid
+# inputs, accepts invalid ones (causing a downstream SOAP fault), or
+# hallucinates allowed values.
+#
+# How ESS loads reference data (confirmed on a live tenant 2026-06):
+#   * A write scenario declares each reference field in its request template as
+#     ``<wd:ID wd:type="Phone_Device_Type_ID">{Phone_Device_Type_ID}</wd:ID>`` —
+#     the ``type`` attribute is the Workday reference key.
+#   * The scenario's topic lazily calls the shared ``GetReferenceData`` system
+#     topic with that ``referenceDataKey`` to populate a ``Global.*LookupTable``
+#     that backs the adaptive-card picklist.
+#   * ``GetReferenceData`` fetches at runtime (via the
+#     ``msdyn_HRWorkdayHCMEmployeeGetReferenceData`` read scenario) and supports
+#     a FIXED set of keys (a switch on ``referenceDataKey``).
+#
+# So the check is a pure Dataverse reconciliation: every reference key a TOPIC
+# actually REQUESTS from GetReferenceData must be in GetReferenceData's
+# supported-key switch (and GetReferenceData must be installed). A requested key
+# that isn't supported = a picklist that can never populate = the failure mode
+# above. (We reconcile the topics' real ``referenceDataKey`` *requests*, NOT the
+# write request-template ID types: a topic loads e.g. countries via
+# ``ISO_3166-1_Alpha-2_Code`` and the request template pulls the alpha-3 / region
+# value from that same table, and some fields like gender are static — so
+# request-template ID types do NOT map 1:1 to GetReferenceData keys and would
+# false-positive on OOTB scenarios. Confirmed on a live tenant 2026-06.)
+
+# Friendly labels for the result text (best-effort; unknown keys print raw).
+_WD_REF_KEY_LABELS = {
+    "ISO_3166-1_Alpha-2_Code": "Countries (ISO alpha-2)",
+    "ISO_3166-1_Alpha-3_Code": "Countries (ISO alpha-3)",
+    "Country_Phone_Code_ID": "Country phone codes",
+    "Phone_Device_Type_ID": "Phone device types",
+    "Communication_Usage_Type_ID": "Communication usage types",
+    "Related_Person_Relationship_ID": "Relationship types",
+    "Government_ID_Type_ID": "Government ID types",
+    "National_ID_Type_Code": "National ID types",
+    "Passport_ID_Type_ID": "Passport ID types",
+    "Visa_ID_Type_ID": "Visa ID types",
+    "Marital_Status_ID": "Marital status",
+    "Gender_ID": "Gender",
+    "Ethnicity_ID": "Ethnicity",
+    "Language_ID": "Languages",
+}
+
+# In the GetReferenceData topic's switch: referenceDataKey = "KEY" -> a SUPPORTED key.
+_WD_REF_SUPPORTED_RE = re.compile(r'referenceDataKey\s*=\s*["\']([^"\']+)["\']')
+# In a calling topic: referenceDataKey: KEY -> a REQUESTED key (literal, same line).
+# A Power Fx expression value (starts with '=') is intentionally not matched (the
+# key isn't statically known), and the GetReferenceData input declaration (no
+# value on the line) is likewise not matched.
+_WD_REF_REQUESTED_RE = re.compile(r'referenceDataKey:[ \t]*([A-Za-z0-9_]+)')
+
+
+def _ref_key_label(key: str) -> str:
+    return _WD_REF_KEY_LABELS.get(key, key)
+
+
+def _extract_requested_reference_keys(topic_data: str) -> set[str]:
+    """Reference keys a topic actually REQUESTS from GetReferenceData — the
+    literal ``referenceDataKey: KEY`` input it passes on each call."""
+    if not topic_data:
+        return set()
+    return set(_WD_REF_REQUESTED_RE.findall(topic_data))
+
+
+def _wd_studio_link(runner) -> str:
+    """Markdown deep-link to the active agent in Copilot Studio (its **Topics**
+    page is where the GetReferenceData call is edited). Falls back to the
+    Copilot Studio homepage when the env/bot id can't be resolved. Reuses the
+    verified URL helper from local_files.
+
+    Resolves the active-agent slug the same way ``cli.py`` does
+    (``config['activeAgent']`` — written by ``setup.py``), then the
+    backward-compat ``config['agent'].slug``, then the first entry of
+    ``config['agents']`` as a defensive last resort.
+    """
+    try:
+        from .local_files import _studio_link_md
+        config = getattr(runner, "config", {}) or {}
+        agents = config.get("agents") or []
+        slug = (
+            config.get("activeAgent")
+            or (config.get("agent") or {}).get("slug")
+            or (agents[0].get("slug") if agents else "")
+            or ""
+        )
+        return _studio_link_md(runner, slug, "the agent in Copilot Studio")
+    except Exception:  # noqa: BLE001 — never let link-building break the check
+        return "[Copilot Studio](https://copilotstudio.microsoft.com/)"
+
+
+def _extract_supported_reference_keys(topic_data: str) -> set[str]:
+    """Reference keys the GetReferenceData topic supports (its switch)."""
+    if not topic_data:
+        return set()
+    return set(_WD_REF_SUPPORTED_RE.findall(topic_data))
+
+
+def _check_workday_reference_data(runner) -> list[CheckResult]:
+    """WD-REF-001 — verify every reference picklist a Workday topic requests is
+    supported by the shared GetReferenceData topic.
+
+    Pure Dataverse reconciliation (``documented`` tier — no external API):
+      * read all topic ``botcomponents`` -> per topic, the reference keys it
+        REQUESTS from GetReferenceData, plus GetReferenceData's SUPPORTED keys;
+      * FAIL on any requested key not supported (or GetReferenceData missing).
+    """
+    roles = [Role.ESS_MAKER.value, Role.WORKDAY_ADMIN.value]
+    cid = "WD-REF-001"
+    cat = "Workday"
+    doc = f"{DOC_BASE}/workday"
+    env_url = getattr(runner, "env_url", None)
+    dv_token = getattr(runner, "dv_token", None)
+
+    if not env_url or not dv_token:
+        return [CheckResult(
+            checkpoint_id=cid, category=cat, priority=Priority.HIGH.value,
+            status=Status.SKIPPED.value,
+            description="Workday write-scenario reference-data availability",
+            result="Dataverse token not available — cannot read topic configuration.",
+            remediation="Re-run /flightcheck with Dataverse access.",
+            roles=roles,
+        )]
+
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+        from auth import query_all
+        topics = query_all(
+            env_url, dv_token,
+            "botcomponents",
+            "name,schemaname,data",
+            filter_expr="componenttype eq 9",
+        )
+    except Exception as exc:  # noqa: BLE001 — surface verbatim
+        return [CheckResult(
+            checkpoint_id=cid, category=cat, priority=Priority.HIGH.value,
+            status=Status.SKIPPED.value,
+            description="Workday write-scenario reference-data availability",
+            result=f"Unable to read Dataverse topic configuration: {exc}.",
+            remediation="Retry with Dataverse access, or review the topics manually in the maker portal.",
+            roles=roles,
+        )]
+
+    supported: set[str] = set()
+    getref_installed = False
+    requested_by_topic: dict[str, set[str]] = {}
+    for t in topics or []:
+        schema = t.get("schemaname") or ""
+        data = t.get("data") or ""
+        if "GetReferenceData" in schema:
+            getref_installed = True
+            supported |= _extract_supported_reference_keys(data)
+            continue
+        keys = _extract_requested_reference_keys(data)
+        if keys:
+            requested_by_topic[t.get("name") or schema or "(unnamed topic)"] = keys
+
+    if not requested_by_topic:
+        return [CheckResult(
+            checkpoint_id=cid, category=cat, priority=Priority.MEDIUM.value,
+            status=Status.NOT_CONFIGURED.value,
+            description="Workday write-scenario reference-data availability",
+            result="No Workday topic requests a reference-data picklist — nothing to validate.",
+            remediation="",
+            doc_link=doc, roles=roles,
+        )]
+
+    all_requested = sorted({k for ks in requested_by_topic.values() for k in ks})
+    studio = _wd_studio_link(runner)
+
+    if not getref_installed:
+        return [CheckResult(
+            checkpoint_id=cid, category=cat, priority=Priority.HIGH.value,
+            status=Status.FAILED.value,
+            description="Workday write-scenario reference-data availability",
+            result=(
+                f"{len(requested_by_topic)} Workday topic(s) request reference-data picklists "
+                f"({', '.join(_ref_key_label(k) for k in all_requested)}), but the shared "
+                f"'GetReferenceData' topic is not installed — none of these picklists can be "
+                f"populated, so the agent cannot validate user input for these fields."
+            ),
+            remediation=(
+                "Install/repair the Workday extension so the 'GetReferenceData' system topic and "
+                "the msdyn_HRWorkdayHCMEmployeeGetReferenceData read scenario are present (they load "
+                "the reference picklists at runtime via a Workday report). "
+                f"Open {studio} \u2192 Topics to review the agent's Workday topics. See the Workday "
+                "topics + report-template configuration docs."
+            ),
+            doc_link=doc, roles=roles,
+        )]
+
+    gaps: dict[str, set[str]] = {}
+    for name, keys in requested_by_topic.items():
+        missing = keys - supported
+        if missing:
+            gaps[name] = missing
+
+    if not gaps:
+        return [CheckResult(
+            checkpoint_id=cid, category=cat, priority=Priority.HIGH.value,
+            status=Status.PASSED.value,
+            description="Workday write-scenario reference-data availability",
+            result=(
+                f"All {len(requested_by_topic)} Workday topic(s) that request reference-data "
+                f"picklists request only keys GetReferenceData supports "
+                f"({len(supported)} reference key(s) supported)."
+            ),
+            remediation="",
+            doc_link=doc, roles=roles,
+        )]
+
+    lines = [
+        f"'{name}': requests unsupported reference set(s) "
+        + ", ".join(f"{_ref_key_label(k)} [{k}]" for k in sorted(missing))
+        for name, missing in sorted(gaps.items())
+    ]
+    return [CheckResult(
+        checkpoint_id=cid, category=cat, priority=Priority.HIGH.value,
+        status=Status.FAILED.value,
+        description="Workday write-scenario reference-data availability",
+        result=(
+            f"{len(gaps)} of {len(requested_by_topic)} Workday topic(s) request a reference-data "
+            f"picklist that GetReferenceData does not support, so that picklist cannot populate — "
+            f"the agent will reject valid inputs, accept invalid ones (downstream SOAP fault), or "
+            f"hallucinate allowed values:\n" + "\n".join(lines)
+        ),
+        remediation=(
+            f"Open {studio} \u2192 Topics to fix the topic(s) above: either point each at a "
+            "reference key GetReferenceData supports, OR add the missing key to the "
+            "'GetReferenceData' topic and bind it to the Workday report that returns those "
+            "reference IDs (e.g. Get_Reference_IDs / Get_Countries). Until then the field has no "
+            "validated allowed-value list. See the Workday report-template + prompts-support "
+            "configuration docs."
+        ),
+        doc_link=doc, roles=roles,
+    )]
+
+
 def run_workday_checks(runner) -> list[CheckResult]:
     """Execute Workday-specific deep validation.
 
@@ -406,6 +652,12 @@ def run_workday_checks(runner) -> list[CheckResult]:
     results.extend(_check_connections(runner))
     results.extend(_check_connection_token_health(runner))
 
+    # WD-CONN-013 — Agent connection OBO parameter sharing. Verifies every
+    # connection the agent uses has "Allow permission to share parameters"
+    # enabled (read from the connectionreference config columns) so end users
+    # invoke the backing services without a first-use connection prompt.
+    results.extend(_check_workday_connection_obo_sharing(runner))
+
     # --- Flow Status ---
     results.extend(_check_flow_status(runner, wd_flows))
 
@@ -414,6 +666,12 @@ def run_workday_checks(runner) -> list[CheckResult]:
 
     # --- SOAP Workflow Tests (only if Workday MCP creds available) ---
     results.extend(_check_workflows(runner))
+
+    # WD-REF-001 — write-scenario reference-data availability. Reconciles the
+    # reference picklists each installed Workday write scenario consumes against
+    # the shared GetReferenceData topic's supported keys (Dataverse-only; no
+    # external API). Config-level, so it runs regardless of SOAP credentials.
+    results.extend(_check_workday_reference_data(runner))
 
     # WD-SEC-003 — Personal Data domain write-permission probe.
     # Runs right after _check_workflows so it can reuse the same
@@ -436,37 +694,110 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # SOAP tests run (e.g. credentials unavailable).
     results.extend(_check_custom_workflow_inventory(runner))
 
-    return _suppress_manual_conn_sec_when_runs_healthy(results)
+    return _suppress_manual_conn_sec_when_runs_healthy(results, runner)
+
+
+# The MANUAL Workday verification checks run-health can suppress, grouped by the
+# failure DOMAIN each diagnoses. Run history can narrow to a domain but cannot
+# split the two SSO-path checks from each other — it never distinguishes "signing
+# cert expired" from "Entra federation misconfigured", so an SSO-family break
+# surfaces both. Permission (WD-SEC-003) is independently isolable.
+_RUNHEALTH_SSO_MANUAL = ("WD-CONN-010", "WD-CONN-102")
+_RUNHEALTH_PERMISSION_MANUAL = ("WD-SEC-003",)
+_RUNHEALTH_ALL_SUPPRESSIBLE = frozenset(_RUNHEALTH_SSO_MANUAL + _RUNHEALTH_PERMISSION_MANUAL)
 
 
 def _suppress_manual_conn_sec_when_runs_healthy(
     results: list[CheckResult],
+    runner=None,
 ) -> list[CheckResult]:
-    """Hide the MANUAL Workday connection/security checks when the run-health
-    litmus test (WD-RUN-001) proves Workday is actually working.
+    """Show only the MANUAL Workday verification checks the run-health signal
+    cannot rule out.
 
     WD-CONN-010 (Entra↔Workday federation), WD-CONN-102 (SAML signing cert),
     and WD-SEC-003 (personal-data write permission) emit MANUAL rows asking the
-    operator to hand-verify config in the Workday/Entra tenant. When WD-RUN-001
-    PASSES, runtime traffic already demonstrates that chain works end to end, so
-    those manual asks are redundant noise — drop them.
+    operator to hand-verify config in the Workday/Entra tenant. They are noise
+    when the relevant chain demonstrably works, and signal when it is broken.
 
-    They are KEPT whenever WD-RUN-001 does NOT pass — i.e. it FAILED (they help
-    diagnose the break), or it could not confirm health (NOT_CONFIGURED = no
-    traffic yet, SKIPPED = run history unavailable), where hand-verification is
-    still the operator's best signal (e.g. a fresh pre-deployment env).
+    Two layers:
+
+    1. **WD-RUN-001 PASSED** — recent runtime traffic proves the whole chain
+       works end to end → drop *every* MANUAL Workday connection/security ask.
+
+    2. **WD-RUN-001 not passed** — use the classified failure signal
+       (``runner._workday_run_failure_signal``, from
+       ``_compute_run_failure_signal``) to hide only the checks whose failure
+       DOMAIN the observed errors positively exclude, leaving the verification(s)
+       plausibly responsible:
+         * ``auth_proven`` (Workday answered in any form) ⟹ the SSO / signing-cert
+           path works ⟹ suppress WD-CONN-010 / WD-CONN-102.
+         * ``auth_proven`` AND no caught Workday fault ⟹ Workday answered with no
+           permission denial on the exercised scenarios ⟹ also suppress
+           WD-SEC-003.
+       A check is removed ONLY on such positive evidence. Anything not excluded
+       stays visible — including *every* check when the signal is absent
+       (SKIPPED / NOT_CONFIGURED, or no runner) or uninformative (e.g. only a
+       no-response hard failure, or a pre-call template-retrieval error), since
+       those rule nothing out.
+
+       Safety net: if the rule-outs would suppress *every* manual check while
+       run-health is NOT passing, that is contradictory — we have classified a
+       real, unhealthy break as excluding all of our manual verifications, which
+       means the actual cause is something this model didn't anticipate (e.g. a
+       pure template/config break). Rather than leave the operator with zero
+       guidance, fail safe and show *all* of them.
     """
     run_health = next(
         (r.status for r in results if r.checkpoint_id == "WD-RUN-001"), None
     )
-    if run_health != Status.PASSED.value:
+
+    if run_health == Status.PASSED.value:
+        # Clean litmus pass — hide every MANUAL Workday connection/security row.
+        # NOTE: deliberately BROAD (prefix match) — a clean pass should silence
+        # ALL manual conn/sec asks, including any added later. The not-passed
+        # branch below is intentionally NARROW (exact ids in _RUNHEALTH_*),
+        # because failure suppression must be evidence-based. Do not "align"
+        # the two: broadening the failure branch would hide manual checks the
+        # error signal hasn't actually ruled out.
+        return [
+            r for r in results
+            if not (
+                r.status == Status.MANUAL.value
+                and (r.checkpoint_id.startswith("WD-CONN")
+                     or r.checkpoint_id.startswith("WD-SEC"))
+            )
+        ]
+
+    signal = getattr(runner, "_workday_run_failure_signal", None) if runner else None
+    if not signal:
+        # Inconclusive (no run window) or called without a runner — keep all.
+        return results
+
+    # Suppress a manual check ONLY on positive evidence that its failure domain
+    # is not the culprit. Absence of evidence is never a rule-out, so anything
+    # not positively excluded stays visible.
+    suppress: set[str] = set()
+    if signal.get("auth_proven"):
+        # Workday accepted the OAuthUser SSO token and answered in some form →
+        # the SSO / Entra-federation / signing-cert path demonstrably works.
+        suppress.update(_RUNHEALTH_SSO_MANUAL)
+        if not signal.get("workday_fault"):
+            # Workday answered AND none of the answers was a fault → no
+            # permission denial occurred on the exercised scenarios → the
+            # personal-data write-permission check is not implicated either.
+            suppress.update(_RUNHEALTH_PERMISSION_MANUAL)
+
+    if not suppress:
+        return results
+    if suppress == _RUNHEALTH_ALL_SUPPRESSIBLE:
+        # Ruled out every manual check while runs are unhealthy → the break is
+        # outside the model's domains (or we misclassified). Fail safe: show all.
+        # (suppress is only ever drawn from _RUNHEALTH_ALL_SUPPRESSIBLE, so this
+        # equality means "every suppressible domain was ruled out".)
         return results
     return [
         r for r in results
-        if not (
-            r.status == Status.MANUAL.value
-            and (r.checkpoint_id.startswith("WD-CONN") or r.checkpoint_id.startswith("WD-SEC"))
-        )
+        if not (r.status == Status.MANUAL.value and r.checkpoint_id in suppress)
     ]
 
 
@@ -1083,6 +1414,157 @@ def _check_package_connection_completeness(runner) -> list[CheckResult]:
         doc_link=doc_link,
     )]
 
+
+# ─────────────────────────────────────────────────────────────────────────
+# WD-CONN-013 — Workday connection OBO parameter sharing
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Microsoft Learn → Copilot Studio → Create and manage connections →
+# "Share connection parameters for On-Behalf-Of (OBO) authentication": the agent
+# maker turns on "Allow permission to share parameters" on each Workday
+# connection (Agent → Settings → Connection Settings → the connection → See
+# details → Connection parameters) so end users invoke Workday without being
+# prompted to establish their own connection at first use.
+#
+# Where the setting is stored (confirmed empirically by toggling it live):
+#   The flag is persisted on the AGENT's own connection reference rows in the
+#   Dataverse ``connectionreference`` table — column
+#   ``connectionparametersetconfig`` (Memo / JSON): populated = shared, null =
+#   not shared. (``promptingbehavior`` is unrelated — it is the solution-import
+#   "Prompt on import / Skip" choice. The connection ``/permissions`` role
+#   assignments are a different, unrelated sharing surface.)
+#
+# Which references count as "the agent's connections":
+#   Copilot Studio creates the agent's own connection references with a logical
+#   name of the form ``{schema}.{guid}.{connectorName}`` — e.g.
+#   ``msdyn_copilotforemployeeselfservicehr.<guid>.shared_workdaysoap`` — i.e. a
+#   GUID delimited by dots (the connector is the final segment). Those are the
+#   rows the toggle writes to, for EVERY connector the agent uses (Workday SOAP,
+#   Dataverse, etc.). The solution-template references shipped by the install
+#   (``new_sharedworkdaysoap_ff0df``, ``msdyn_sharedcommondataserviceforapps_92b66``)
+#   are bound but are NOT the agent's Connection-Settings connections; their
+#   underscore-only logical names carry no ``.{guid}.`` segment, so they're
+#   excluded. (We match on this structural format rather than the agent schema
+#   name from config: the reference prefix is the *product* bot schema, which
+#   does not necessarily equal the published agent's ``config.agent.schemaName``.)
+#
+# Data source: the same documented-tier Dataverse ``connectionreferences`` query
+# WD-PKG-001 already makes, with two extra columns
+# (``connectionparametersetconfig`` / ``connectionparametersconfig``). No new
+# endpoint, no cassette.
+
+
+# An agent's own connection reference logical name embeds a GUID between dots:
+# ``{schema}.{guid}.{connector}``. Solution-template refs (``new_x_y``) don't.
+_AGENT_CONNECTION_REF_RE = re.compile(
+    r"\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.", re.I
+)
+
+
+def _connection_label(ref: dict) -> str:
+    return (
+        ref.get("connectionreferencedisplayname")
+        or ref.get("connectionreferencelogicalname")
+        or "(unnamed connection)"
+    )
+
+
+def _check_workday_connection_obo_sharing(runner) -> list[CheckResult]:
+    """WD-CONN-013 — every connection the agent uses has OBO parameter sharing
+    ("Allow permission to share parameters") enabled, so end users invoke the
+    backing services without a first-use connection prompt.
+
+    Scopes to the agent's own connection references (logical name of the form
+    ``{schema}.{guid}.{connector}``, any connector) and requires
+    ``connectionparametersetconfig`` to be populated on each. See the module
+    comment for why this column / scoping is correct.
+    """
+    cp_id = "WD-CONN-013"
+    desc = "Agent connection OBO parameter sharing"
+    doc_link = f"{DOC_BASE}/workday#step-3-connection-references"
+    roles = [Role.POWER_PLATFORM_ADMIN.value]
+
+    env_url = getattr(runner, "env_url", None)
+    dv_token = getattr(runner, "dv_token", None)
+    if not env_url or not dv_token:
+        return [CheckResult(roles=roles, checkpoint_id=cp_id, category="Workday",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=desc,
+            result="Dataverse token not available — cannot read connection-reference sharing config.",
+        )]
+
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+        from auth import query_all
+
+        refs = query_all(
+            env_url, dv_token, "connectionreferences",
+            "connectionreferencelogicalname,connectionreferencedisplayname,"
+            "connectorid,connectionid,connectionparametersetconfig,"
+            "connectionparametersconfig",
+        )
+    except Exception as e:
+        return [CheckResult(roles=roles, checkpoint_id=cp_id, category="Workday",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=desc,
+            result=f"Unable to read Dataverse connection references: {e}.",
+            remediation="Confirm the FlightCheck identity has Dataverse read access on connectionreferences.",
+        )]
+
+    agent_refs = [
+        r for r in refs
+        if r.get("connectionid")
+        and _AGENT_CONNECTION_REF_RE.search(
+            r.get("connectionreferencelogicalname") or ""
+        )
+    ]
+
+    if not agent_refs:
+        return [CheckResult(roles=roles, checkpoint_id=cp_id, category="Workday",
+            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            description=desc,
+            result=(
+                "No agent connection references found — nothing to evaluate for "
+                "OBO parameter sharing."
+            ),
+            doc_link=doc_link,
+        )]
+
+    unshared = [
+        r for r in agent_refs
+        if not (r.get("connectionparametersetconfig") or r.get("connectionparametersconfig"))
+    ]
+
+    if not unshared:
+        return [CheckResult(roles=roles, checkpoint_id=cp_id, category="Workday",
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
+            description=desc,
+            result=(
+                f"All {len(agent_refs)} connection(s) the agent uses have OBO "
+                "parameter sharing enabled — end users invoke the backing "
+                "services without a first-use connection prompt."
+            ),
+            doc_link=doc_link,
+        )]
+
+    names = ", ".join(sorted(_connection_label(r) for r in unshared))
+    studio = _wd_studio_link(runner)
+    return [CheckResult(roles=roles, checkpoint_id=cp_id, category="Workday",
+        priority=Priority.HIGH.value, status=Status.FAILED.value,
+        description=desc,
+        result=(
+            f"{len(unshared)} of {len(agent_refs)} connection(s) the agent uses "
+            f"do NOT have OBO parameter sharing enabled: {names}. End users will "
+            "be prompted to establish their own connection the first time the "
+            "agent uses the backing service."
+        ),
+        remediation=(
+            f"In Copilot Studio, open {studio} → Settings → Connection Settings → "
+            "the connection → See details → Connection parameters → turn on "
+            "'Allow permission to share parameters' and select the parameters."
+        ),
+        doc_link=doc_link,
+    )]
 
 # ─────────────────────────────────────────────────────────────────────────
 # Install-flavor gating helper (see AGENTS.md design principle #11)
@@ -2764,6 +3246,26 @@ def _check_flow_status(runner, wd_flows: list) -> list[CheckResult]:
 # The single success Response action. Anything else is a failure branch.
 _WD_SUCCESS_RESPONSE_ACTION = "Respond_to_Copilot_with_Success"
 
+# The distinct FAILURE Response-action branches the ESS Workday shared flow
+# routes to (verified live + in the flightcheck_workday_runs.yaml cassette).
+# The Response-action name is the only run-history-visible signal of *what kind*
+# of failure occurred (the actual Workday faultstring lives behind a separate,
+# SAS-signed outputsLink we deliberately do NOT fetch — see the WD-RUN-001
+# module comment and _compute_run_failure_signal):
+#   * errorMessage          — a Workday SOAP/API fault was CAUGHT: the call
+#                             reached Workday and it answered with a fault, so
+#                             the OAuthUser SSO token was accepted. This is the
+#                             permission/credential signal.
+#   * XmlTemplate→Json fail  — Workday returned a response the flow could not
+#                             transform. Also proves the call SUCCEEDED (SSO/auth
+#                             OK); the problem is the response template/config.
+#   * TemplateRetrievalFail  — the scenario's request template could not be
+#                             retrieved from Dataverse config. A pre-call config
+#                             error that proves nothing about auth or permission.
+_WD_WORKDAY_FAULT_RESPONSE = "Respond_to_Copilot_with_failure_errorMessage"
+_WD_TEMPLATE_TRANSFORM_RESPONSE = "Respond_to_Copilot_with_XmlTemplate_To_Json_Failed"
+_WD_TEMPLATE_RETRIEVAL_RESPONSE = "Respond_to_Copilot_with_TemplateRetrievalFailure"
+
 # Terminal run statuses that are definite failures of the run itself. A run in
 # any of these did not complete successfully, regardless of response branch.
 # (Cancelled / Skipped and unknown states are intentionally NOT here — they are
@@ -2805,6 +3307,48 @@ def _classify_run(run: dict) -> str:
     if status in _RUN_FAILURE_STATUSES:
         return "hard_failure"
     return "pending"
+
+
+def _compute_run_failure_signal(window: list[dict]) -> dict[str, bool]:
+    """Summarise which failure-branch categories appear in the recent run window
+    so run-health can suppress only the MANUAL Workday verification checks whose
+    failure DOMAIN the observed errors positively rule out (see
+    ``_suppress_manual_conn_sec_when_runs_healthy``).
+
+    ``window`` rows are the dicts built in ``_check_workday_run_health`` — each
+    carries ``kind`` (from ``_classify_run``) and ``resp`` (the Response-action
+    name, or ``"?"`` for a no-response hard failure).
+
+    Returns a dict of bools:
+      auth_proven   — Workday accepted the OAuthUser SSO token and returned a
+                      response in SOME form: a success, a CAUGHT SOAP fault, or a
+                      response that failed XML→JSON transform. Any of these proves
+                      the SSO / Entra-federation / signing-cert path works, so the
+                      SAML manual checks (WD-CONN-010 / WD-CONN-102) cannot be the
+                      culprit.
+      workday_fault — a run routed to the caught-Workday-fault branch (Workday
+                      processed the request and rejected it). The permission /
+                      credential signal (keeps WD-SEC-003 visible).
+      hard_failure  — a run terminated Failed/TimedOut/etc with NO Response
+                      action — the signature of a token/connection that never
+                      completed the call. Recorded for diagnosis; it is NOT a
+                      rule-out basis on its own (a no-response failure positively
+                      excludes nothing), so it leaves every manual check visible.
+
+    A window whose failures match none of these (e.g. only TemplateRetrievalFail,
+    or an unrecognised branch) yields all-False — an *uninformative* signal, on
+    which the caller deliberately keeps every manual check visible.
+    """
+    resps = {r.get("resp") for r in window}
+    success = any(r.get("kind") == "success" for r in window)
+    workday_fault = _WD_WORKDAY_FAULT_RESPONSE in resps
+    template_transform = _WD_TEMPLATE_TRANSFORM_RESPONSE in resps
+    hard_failure = any(r.get("kind") == "hard_failure" for r in window)
+    return {
+        "auth_proven": success or workday_fault or template_transform,
+        "workday_fault": workday_fault,
+        "hard_failure": hard_failure,
+    }
 
 
 def _check_workday_run_health(runner) -> list[CheckResult]:
@@ -2899,6 +3443,11 @@ def _check_workday_run_health(runner) -> list[CheckResult]:
     n = len(window)
     win_fail = [r for r in window if r["kind"] in ("caught_failure", "hard_failure")]
     win_success = n - len(win_fail)
+
+    # Stash the classified failure signal so _suppress_manual_conn_sec_when_runs_healthy
+    # can show only the MANUAL verification checks the observed error category
+    # cannot rule out (error-aware suppression).
+    runner._workday_run_failure_signal = _compute_run_failure_signal(window)
 
     def _sample_lines(rows: list[dict]) -> str:
         lines = []

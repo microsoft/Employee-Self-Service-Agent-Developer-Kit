@@ -1,0 +1,6 @@
+{
+  "name": "ESS Maker",
+  "icon": "rocket",
+  "settings": "{\"settings\":\"{\\n  \\\"workbench.activityBar.location\\\": \\\"hidden\\\",\\n  \\\"workbench.statusBar.visible\\\": false,\\n  \\\"workbench.editor.showTabs\\\": \\\"none\\\",\\n  \\\"workbench.layoutControl.enabled\\\": false,\\n  \\\"workbench.tips.enabled\\\": false,\\n  \\\"workbench.startupEditor\\\": \\\"welcomePageInEmptyWorkbench\\\",\\n  \\\"editor.minimap.enabled\\\": false,\\n  \\\"editor.lineNumbers\\\": \\\"off\\\",\\n  \\\"breadcrumbs.enabled\\\": false,\\n  \\\"explorer.openEditors.visible\\\": 0,\\n  \\\"window.commandCenter\\\": false,\\n  \\\"window.menuBarVisibility\\\": \\\"compact\\\"\\n}\"}",
+  "extensions": "[{\"identifier\":{\"id\":\"github.copilot\"},\"displayName\":\"GitHub Copilot\"},{\"identifier\":{\"id\":\"github.copilot-chat\"},\"displayName\":\"GitHub Copilot Chat\"}]"
+}

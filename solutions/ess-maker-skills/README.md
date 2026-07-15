@@ -306,6 +306,8 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 | `/evaluate` | Generate evaluation test sets for your agent |
 | `/flightcheck` | Run pre-deployment readiness validation — licenses, environment, integrations, agent files |
 | `/push` | Push all local changes to Copilot Studio |
+| `/backup-template-configs` | Capture customised Workday HCM reference-data template configs before an ESS package update |
+| `/restore-template-configs` | Restore captured Workday HCM template configs after an ESS package update |
 | `/menu` | See all available commands |
 
 You can also describe what you want in plain English — the agent will figure out the right approach.
@@ -344,6 +346,68 @@ solutions/ess-maker-skills/
 ```
 
 `workspace/` and `.local/` scaffold dirs are committed (just `.gitkeep` files); contents are gitignored. Reference samples (topic YAMLs, template configs, evaluation test sets) live at the repo root in [`samples/`](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/tree/main/samples), peer to `solutions/`.
+
+## Telemetry & Privacy
+
+The ADK collects **pseudonymous** usage telemetry to help us understand which
+capabilities are used and where they fail, so we can improve the product. It is
+**enabled by default**, and a one-time notice is printed the first time you run a
+CLI command.
+
+**What is collected**
+
+- A random **instance ID** (a GUID generated per installation) — used to count
+  active installs and DAU/WAU/MAU. It is **not** tied to your identity.
+- Your **tenant ID** (the Entra tenant GUID) — identifies the enterprise tenant,
+  not an individual user.
+- A derived **tenant class** (`internal` or `customer`) — a coarse, two-value
+  flag computed from the tenant ID so we can report Microsoft-internal dogfood
+  usage separately from external customer usage. It is non-identifying and lower
+  sensitivity than the tenant ID it is derived from.
+- Non-identifying context: ADK version, surface, session ID, event name, and
+  per-event enums/metrics (e.g. FlightCheck verdicts, durations, check categories).
+- Scrubbed, non-sensitive **error categories** when something fails.
+- During **installation**, the one-shot installers (which run before Python is
+  available) emit the same kind of event natively from PowerShell/bash: an
+  install **start**, **per-step** progress, and a **completion**
+  (`success` / `failure` / `cancelled`) carrying the installer variant
+  (ADK or FlightCheck — the ADK-lite installer is not instrumented), platform,
+  which step failed, and a scrubbed
+  error category. This measures setup reliability. It is fail-open (a telemetry
+  problem never breaks your install) and honors the same opt-out below.
+
+**What is _not_ collected**
+
+- No developer, user, or account identifier (no AAD OID, email, or name).
+- No agent content, prompts, credentials, file contents, or personal data.
+
+**How to opt out**
+
+Run from the `solutions/ess-maker-skills` directory:
+
+```bash
+python scripts/adk_telemetry.py off      # disable telemetry
+python scripts/adk_telemetry.py on       # re-enable telemetry
+python scripts/adk_telemetry.py status   # show current setting
+```
+
+You can also set an environment variable, which takes precedence:
+
+```bash
+ESS_ADK_TELEMETRY=off
+```
+
+**Storage, retention & deletion**
+
+- Your preference is stored per-machine in `~/.adk/config`. Delete that file to
+  reset to the default (enabled).
+- Opting out stops all future collection immediately; it does not delete data
+  already collected.
+- Collected telemetry is retained for at most **30 days**.
+- For full details and data-deletion requests, see
+  [https://aka.ms/adk-telemetry](https://aka.ms/adk-telemetry).
+
+---
 
 ## Contributing
 

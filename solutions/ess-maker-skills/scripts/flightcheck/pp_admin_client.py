@@ -69,6 +69,73 @@ _SESSION = requests.Session()
 _SESSION.mount("https://", HTTPAdapter(max_retries=_RETRY))
 
 
+def _policy_env_scope(policy: dict) -> tuple[str | None, list[str]]:
+    """Return ``(filter_type, env_ids)`` for a DLP policy's environment scope.
+
+    The apiPolicies endpoint expresses environment scope in one of two
+    shapes; this reads both:
+
+    * Legacy: ``properties.environmentFilter.environments[].name`` (with an
+      optional ``filterType``; historically an include list).
+    * Modern: ``properties.definition.constraints.<key>`` where
+      ``type == "EnvironmentFilter"`` and
+      ``parameters.{filterType, environments[].name}``.
+
+    ``filter_type`` is ``"include"`` | ``"exclude"`` | ``None``. When no
+    environment filter is present ``env_ids`` is empty and the policy
+    applies to ALL environments.
+    """
+    if not isinstance(policy, dict):
+        return None, []
+    props = policy.get("properties", {})
+    if not isinstance(props, dict):
+        return None, []
+
+    # Legacy shape: properties.environmentFilter
+    legacy = props.get("environmentFilter")
+    if isinstance(legacy, dict):
+        env_list = legacy.get("environments") or []
+        ids = [e.get("name", "") for e in env_list if isinstance(e, dict)]
+        if ids:
+            ft = str(legacy.get("filterType", "include")).strip().lower()
+            return ft, ids
+
+    # Modern shape: properties.definition.constraints.<key> (EnvironmentFilter)
+    definition = props.get("definition")
+    if isinstance(definition, dict):
+        constraints = definition.get("constraints")
+        if isinstance(constraints, dict):
+            for constraint in constraints.values():
+                if not isinstance(constraint, dict):
+                    continue
+                if constraint.get("type") != "EnvironmentFilter":
+                    continue
+                params = constraint.get("parameters") or {}
+                env_list = params.get("environments") or []
+                ids = [e.get("name", "") for e in env_list if isinstance(e, dict)]
+                if ids:
+                    ft = str(params.get("filterType", "include")).strip().lower()
+                    return ft, ids
+
+    return None, []
+
+
+def _policy_applies_to_env(policy: dict, env_id: str) -> bool:
+    """Whether a DLP policy is effective on ``env_id``.
+
+    An unscoped policy (no environment filter) applies to all
+    environments. An ``include`` filter applies only to the listed
+    environments; an ``exclude`` filter applies to every environment
+    EXCEPT the listed ones.
+    """
+    filter_type, env_ids = _policy_env_scope(policy)
+    if not env_ids:
+        return True  # tenant-wide
+    if filter_type == "exclude":
+        return env_id not in env_ids
+    return env_id in env_ids  # include (default)
+
+
 class PPAdminClient:
     """Power Platform Admin API client for environment and flow queries."""
 
@@ -333,17 +400,10 @@ class PPAdminClient:
         # "environment is unrestricted" verdict.
         if isinstance(all_policies, dict) and "_error" in all_policies:
             return all_policies
-        # Filter to policies that include this environment
+        # Filter to policies effective on this environment.
         relevant = []
         for p in all_policies:
-            env_list = (
-                p.get("properties", {})
-                .get("environmentFilter", {})
-                .get("environments", [])
-            )
-            env_ids = [e.get("name", "") for e in env_list]
-            # If no env filter, policy applies to all
-            if not env_ids or env_id in env_ids:
+            if _policy_applies_to_env(p, env_id):
                 relevant.append(p)
         return relevant
 

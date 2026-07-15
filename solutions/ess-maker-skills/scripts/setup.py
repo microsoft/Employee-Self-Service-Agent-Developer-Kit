@@ -556,7 +556,7 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
     }
 
     # Preserve existing connections and other user-set fields
-    for key in ("connections", "workdayTestEmployeeId"):
+    for key in ("connections", "workdayTestEmployeeId", "referenceSource"):
         if key in existing and key not in config:
             config[key] = existing[key]
 
@@ -776,6 +776,19 @@ def main():
                  template_configs is not None and tc_count > 0,
                  tc_count, wf_count, eval_count)
     print("Config:   .local/config.json")
+
+    # Telemetry: setup completing (config written) is the ADK "agent create"
+    # for telemetry purposes — the maker now has a local agent workspace.
+    # Best-effort; never affects setup.
+    try:
+        import adk_telemetry
+
+        adk_telemetry.maybe_print_notice()
+        adk_telemetry.emit_agent_create(
+            agent_id=agent_info.get("botId", ""), adk_capability="setup")
+        adk_telemetry.flush(timeout=3)
+    except Exception:  # noqa: BLE001 — telemetry must never break setup
+        pass
 
     # Create baseline copy (immutable safety net)
     create_baseline(output_dir)
