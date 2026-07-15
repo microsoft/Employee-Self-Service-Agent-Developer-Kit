@@ -26,13 +26,22 @@ files you are reading. **Never** show internal variable names or IDs in chat.
 | S4.1 | `WD-API-CLIENT-001` — Workday API client registered (SAML ****** grant, functional areas, Include Workday Owned Scope = Yes) | attest |
 | S4.2 | `WD-TENANT-001` — Tenant Setup – Security + connection fields captured | attest |
 | S4.3 | `WD-TENANT-001` — authentication policy scoped to the OAuth client + activated | attest |
-| S4.4 | `WD-CONN-102` *(reuse)* — Workday X.509 signing-cert thumbprint matches the Entra one | manual/attest |
+| S4.4 | `WD-CONN-102` *(reuse)* — Workday X.509 signing cert matches the Entra one | manual/attest |
 
 Run any one with:
 
 ```
 python scripts/flightcheck/cli.py --checkpoint <ID>
 ```
+
+**After every checkpoint run, show its result in chat first.** As soon as a
+`--checkpoint` run returns, render the result to the user per
+[`shared/checklist-updater.md`](../shared/checklist-updater.md) §U.0–U.0a — the
+compact result table and, for any `MANUAL` (or `Warning` / `NotConfigured`) row,
+its full verification steps — **before** you show any later **Message** or ask any
+attestation question. Single-checkpoint runs never open the HTML report, so this
+in-chat render is the only place the user sees the manual steps; never ask a user
+to attest to steps they have not been shown.
 
 Both `WD-API-CLIENT-001` and `WD-TENANT-001` are always `MANUAL` — they read only
 `.local/connect/workday/config.json` and echo the captured values. A `MANUAL`
@@ -86,7 +95,7 @@ Use the `vscode_askQuestions` tool:
 [
   {
     "header": "Workday administrator",
-    "question": "Have you provisioned a Workday administrator to perform these manual Workday configuration steps with you?",
+    "question": "Have you looped in a Workday admin to perform the Workday side of configuration?",
     "options": [
       { "label": "Yes, I have", "recommended": true },
       { "label": "No, I have not" }
@@ -134,7 +143,8 @@ Before I change any Workday security settings, I need to check the tenant's
 current SAML sign-on. In Workday, search for and open the **Edit Tenant Setup –
 Security** task and find the **SAML Setup** section. Tell me, for the currently
 enabled Identity Provider row: the **Issuer** (or IdP name), the **Service
-Provider ID**, and the **x509 Certificate** name/thumbprint in use. If there is
+Provider ID**, and the **x509 Certificate** name plus its **Valid From** /
+**Valid To** dates (Workday shows no thumbprint). If there is
 no active SAML IdP yet, just say **none**.
 
 **End message.**
@@ -162,10 +172,10 @@ Wait for the user's answer, then record it as the pre-gate evidence
 
 ---
 
-## P4.1 — Upload the X.509 signing certificate & confirm thumbprint parity *(completes S4.4)*
+## P4.1 — Upload the X.509 signing certificate & confirm certificate parity *(completes S4.4)*
 
 Create the Workday **X.509 Public Key** from the Entra signing certificate skill-3
-activated, then confirm the thumbprint matches — a mismatch means the wrong
+activated, then confirm the certificate matches — a mismatch means the wrong
 certificate was uploaded and SSO will fail.
 
 **Message:**
@@ -177,7 +187,7 @@ Workday, run the **Create x509 Public Key** task and paste that certificate. Typ
 
 **End message.**
 
-Wait for the user, then verify the thumbprint parity against the certificate
+Wait for the user, then verify the certificate parity against the certificate
 skill-3 activated in Entra.
 
 **Message:**
@@ -201,11 +211,20 @@ command **opens a browser window for a Graph sign-in** before it returns. That i
 expected — do **not** cancel or re-run it while it pauses; it is blocked on the
 sign-in, not hung, and continues once you complete it.
 
+**Show the `WD-CONN-102` result in chat first.** It always returns `MANUAL` for
+the Workday-side comparison, so render it per
+[`checklist-updater.md`](../shared/checklist-updater.md) §U.0–U.0a — the result
+table **and** its full verification steps — **before** the certificate-parity
+question below. Never ask the user to attest to a comparison they have not been
+shown.
+
 **Message:**
 
-Does the certificate thumbprint you uploaded in Workday match the one shown for
-your Workday app in Entra (Single sign-on → SAML Signing Certificate →
-Thumbprint)?
+Workday doesn't display a certificate thumbprint, so we compare another way.
+Confirm you uploaded the exact **Certificate (Base64)** from your Workday app in
+Entra (Single sign-on → SAML Signing Certificate), and that the **Valid From** /
+**Valid To** dates shown on the Workday x509 Public Key match that Entra
+certificate's validity dates. Do they match?
 
 **End message.**
 
@@ -214,8 +233,8 @@ Use the `vscode_askQuestions` tool:
 ```json
 [
   {
-    "header": "Certificate thumbprint",
-    "question": "Do the Workday and Entra signing-certificate thumbprints match?",
+    "header": "Certificate parity",
+    "question": "Does the uploaded Workday certificate (and its Valid From / Valid To dates) match the Entra signing certificate?",
     "options": [
       { "label": "Yes, they match", "recommended": true },
       { "label": "No / not sure" }
@@ -300,7 +319,11 @@ python scripts/flightcheck/cli.py --checkpoint WD-API-CLIENT-001
 ```
 
 This echoes the captured `oauthClientId` / `tokenEndpoint` and restates the
-registration facts to confirm. Show the user the checkpoint's result, then:
+registration facts to confirm. `WD-API-CLIENT-001` always returns `MANUAL`, so
+render its result in chat per
+[`checklist-updater.md`](../shared/checklist-updater.md) §U.0–U.0a — the result
+table **and** its full verification steps — **before** you ask the user to
+acknowledge the row. Then:
 
 - Confirm the row via [`checklist-updater.md`](../shared/checklist-updater.md)
   with `STEP_ID="S4.1"`, `GATE="attest"`, `CHECKPOINT_RESULT="MANUAL"`, `ACK=true`
@@ -346,7 +369,10 @@ python scripts/flightcheck/cli.py --checkpoint WD-TENANT-001
 
 This echoes the captured `tenant` / `restBaseUrl` / `soapBaseUrl` / `appIdUri` and
 restates the Tenant Setup – Security and authentication-policy facts to confirm.
-Show the user the result, then update **S4.3** via
+`WD-TENANT-001` always returns `MANUAL`, so render its result in chat per
+[`checklist-updater.md`](../shared/checklist-updater.md) §U.0–U.0a — the result
+table **and** its full verification steps — **before** you ask the user to
+confirm. Then update **S4.3** via
 [`checklist-updater.md`](../shared/checklist-updater.md) with `STEP_ID="S4.3"`,
 `GATE="attest"`, `CHECKPOINT_RESULT="MANUAL"`, `ACK=true` once the user confirms
 the policy is scoped and activated.

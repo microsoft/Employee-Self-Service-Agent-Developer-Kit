@@ -178,11 +178,18 @@ the Workday API Client's Authorized Public Key setting (see table above).
 rotation before `NotAfter`; same steps as above, but stage the new cert in
 both systems first and only flip the active selection during a low-traffic
 window.
-**Fix (MANUAL — active cert is healthy on the Entra side):** Compare the
-thumbprint surfaced in the result against the `X509 Certificate` thumbprint
-on the matching `Service Provider ID` row in Workday. They must match
-byte-for-byte (colon-separated uppercase hex); if they differ, re-upload the
-active Entra `Certificate (Base64)` into Workday.
+**Fix (MANUAL — active cert is healthy on the Entra side):** Workday does
+not display a thumbprint — its `X509 Certificate` object exposes only `Name`,
+`Valid From`, `Valid To`, and the Base64 certificate body. On the matching
+`Service Provider ID` row in Workday, verify parity either by (a) confirming
+`Valid From` / `Valid To` match the Entra cert's `NotBefore` / `NotAfter`
+surfaced in the result, or (b) copying the Base64 certificate out of Workday
+into a PEM file and computing its SHA-1 to compare against the Entra
+thumbprint in the result — PowerShell
+`[System.Security.Cryptography.X509Certificates.X509Certificate2]::new("$PWD\workday.cer").Thumbprint`
+or `openssl x509 -in workday.cer -noout -fingerprint -sha1` (ignore `:`
+separators and case). If they differ, re-upload the active Entra
+`Certificate (Base64)` into Workday.
 **Verify:** Re-run `/flightcheck --scope workday`
 
 ### WD-FLOW-xxx: Flow disabled

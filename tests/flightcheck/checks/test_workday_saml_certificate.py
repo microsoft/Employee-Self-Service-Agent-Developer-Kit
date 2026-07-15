@@ -15,7 +15,8 @@ is fully automatable). It then emits one of:
   * WARNING — active cert expiring within CERT_EXPIRY_WARN_DAYS or
     NotBefore is still in the future.
   * MANUAL — active cert is healthy; operator must compare the
-    thumbprint against Workday's "Edit Tenant Setup - Security ->
+    certificate (validity dates, or an externally-computed SHA-1
+    thumbprint) against Workday's "Edit Tenant Setup - Security ->
     SAML Identity Providers" row because that is not exposed via any
     Workday API the kit talks to.
 
@@ -176,8 +177,9 @@ class TestHealthyCertManual:
 
         assert r.status == "Manual"
         assert r.priority == "High"
-        # Result text should surface the colon-hex thumbprint so the
-        # operator can compare it byte-for-byte against Workday's view.
+        # Result text should surface the colon-hex Entra thumbprint
+        # so the operator can compute the Workday cert's SHA-1 and
+        # compare against it (Workday itself shows no thumbprint).
         assert _expected_thumbprint_for("cert-healthy-1") in r.result
         # SAML entity ID (Workday "Service Provider ID" join key) is
         # what lets the operator pick the right Entra app.
@@ -187,7 +189,12 @@ class TestHealthyCertManual:
         assert "Service Provider ID" in r.remediation
         assert "Step 2" in r.remediation
         assert "X509 Certificate" in r.remediation
-        assert "match exactly" in r.remediation
+        # Workday exposes no thumbprint — the compare must be by
+        # validity dates or an externally-computed SHA-1, NOT by a
+        # thumbprint Workday supposedly displays.
+        assert "Valid From" in r.remediation
+        assert "SHA-1" in r.remediation
+        assert "does NOT" in r.remediation
 
 
 class TestSignVerifyCoalescing:

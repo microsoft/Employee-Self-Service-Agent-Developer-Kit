@@ -391,7 +391,7 @@ _SPECS: list[CheckpointSpec] = [
     # (prereqs=()) — each is independently runnable via --checkpoint. Emitted
     # by checks/workday_tenant.run_workday_tenant_checks. WD-API-CLIENT and
     # WD-TENANT are already in OWNED_PREFIXES, so the drift test forces these
-    # entries to exist. S4.4 cert-thumbprint parity reuses WD-CONN-102.
+    # entries to exist. S4.4 cert parity reuses WD-CONN-102.
     CheckpointSpec(
         key="WD-API-CLIENT-001",
         category_fn=run_workday_tenant_checks,

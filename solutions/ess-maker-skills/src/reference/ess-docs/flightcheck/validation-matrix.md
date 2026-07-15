@@ -109,7 +109,7 @@ admin API** the kit can reach, and self-verifying through a Workday connection
 would be circular, so both are **always `MANUAL`**: they read only
 `.local/connect/workday/config.json`, echo the captured values, and name the
 Workday screen to verify. Neither needs a client or a Dataverse endpoint. The
-signing-cert thumbprint parity (S4.4) reuses `WD-CONN-102` — it is **not** minted
+signing-cert parity (S4.4) reuses `WD-CONN-102` — it is **not** minted
 here. See the setup catalog below for the owning checklist rows (S4.1–S4.4).
 
 | ID | Check | Priority | Method | Doc Link |
@@ -165,6 +165,12 @@ no client, no config, no Dataverse endpoint, no cassette). When no custom topic
 exists yet, each family returns a single `NotConfigured` "nothing to verify yet"
 row (id `…-001`) so the wildcard always resolves. See the setup catalog below for
 the owning checklist rows (S6.1–S6.2).
+
+> **Advisory review (S6.3).** After both checkpoints pass, skill-6 runs an
+> advisory **topic review** over the finished topic (checklist row S6.3, `advisory`
+> gate). It is **not** a flightcheck checkpoint — it surfaces authoring findings
+> and never blocks; the row completes once the report is shown. See
+> `src/skills/topics/review/SKILL.md`.
 
 | ID | Check | Priority | Method | Doc Link |
 |----|-------|----------|--------|----------|
@@ -442,7 +448,7 @@ of those checkpoint IDs, owned by the master setup checklist
 | `WD-ENTRA-SCOPE-001` | mint | skill-3 | S3.2 | prog | `user_impersonation` exposed, `4e4707ca` pre-authorized, Graph perms granted |
 | `WD-ENTRA-CONSENT-001` | mint | skill-3 | S3.3 | prog → manual if blocked | Admin consent on the Graph delegated perms |
 | `WD-ASSIGN-001` | mint | skill-3 | S3.4 | prog | Enterprise-app user/group assignment (or confirmed not required) |
-| `WD-CONN-102` | reuse | skill-3, skill-4 | S3.1, S4.4 | manual/attest | SAML signing-certificate health / thumbprint parity (returns `MANUAL`) |
+| `WD-CONN-102` | reuse | skill-3, skill-4 | S3.1, S4.4 | manual/attest | SAML signing-certificate health / certificate parity (returns `MANUAL`) |
 | `WD-ENTRA-NAMEID-001` | mint | skill-3 | S3.5 | prog → manual if brittle | NameID claim mapping (`claimsMappingPolicy`) |
 | `WD-ENTRA-SIGNOPT-001` | mint | skill-3 | S3.6 | manual | "Sign SAML response and assertion" signing option (portal-only) |
 | `WD-CONN-010` | reuse | skill-3 | S3.7 | attest | Single-Entra-tenant federation alignment |

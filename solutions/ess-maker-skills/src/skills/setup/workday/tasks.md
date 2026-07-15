@@ -62,7 +62,7 @@ express; all items start `pending`.
 ### 3. Workday single sign-on (Entra)
 
 - [ ] **Create the Workday single sign-on app** — Set up the Entra SSO application for Workday in SAML mode, with the right sign-on URLs and an active signing certificate.
-  <!-- id: S3.1 | role: App/Cloud App Admin | skill: skill-3 | automatable: Yes | checkpoints: WD-CONN-102 | gate: prog instantiate (Graph); WD-CONN-102 healthy-state = MANUAL (Entra cert health auto-checked; Workday thumbprint parity deferred to S4.4) | status: pending -->
+  <!-- id: S3.1 | role: App/Cloud App Admin | skill: skill-3 | automatable: Yes | checkpoints: WD-CONN-102 | gate: prog instantiate (Graph); WD-CONN-102 healthy-state = MANUAL (Entra cert health auto-checked; Workday certificate parity deferred to S4.4) | status: pending -->
 - [ ] **Expose the Workday API permission** — Publish the sign-in scope, pre-authorize the Workday connector, and request the Microsoft Graph permissions the agent needs.
   <!-- id: S3.2 | role: App/Cloud App Admin or App Owner | skill: skill-3 | automatable: Yes | checkpoints: WD-ENTRA-SCOPE-001 | gate: prog | status: pending -->
 - [ ] **Grant admin consent** — Approve the requested Microsoft Graph permissions on behalf of your organization.
@@ -84,8 +84,8 @@ express; all items start `pending`.
   <!-- id: S4.2 | role: Workday Administrator | skill: skill-4 | automatable: No | checkpoints: WD-TENANT-001 | gate: attest | status: pending -->
 - [ ] **Activate the Workday authentication policy** — Scope Workday's authentication policy to the new OAuth client, allow SAML sign-in, and activate it.
   <!-- id: S4.3 | role: Workday Administrator | skill: skill-4 | automatable: No | checkpoints: WD-TENANT-001 | gate: attest | status: pending -->
-- [ ] **Match the signing certificate** — Confirm the Workday-side signing certificate thumbprint matches the one in Entra.
-  <!-- id: S4.4 | role: Workday Administrator | skill: skill-4 | automatable: No (Workday cert field not API-reachable) | checkpoints: WD-CONN-102 | gate: manual/attest (WD-CONN-102 returns MANUAL — operator compares thumbprints) | status: pending -->
+- [ ] **Match the signing certificate** — Confirm the Workday-side signing certificate matches the one in Entra (validity dates, or an externally-computed SHA-1 — Workday shows no thumbprint).
+  <!-- id: S4.4 | role: Workday Administrator | skill: skill-4 | automatable: No (Workday cert field not API-reachable) | checkpoints: WD-CONN-102 | gate: manual/attest (WD-CONN-102 returns MANUAL — operator compares certificate: dates / external SHA-1) | status: pending -->
 
 ### 5. Workday extension pack
 
@@ -112,6 +112,8 @@ express; all items start `pending`.
   <!-- id: S6.1 | role: Environment Maker (+ Workday SME) | skill: skill-6 | automatable: Yes | checkpoints: TOPIC-TRIGGER-* | gate: prog | status: pending -->
 - [ ] **Wire your new topic to Workday** — Connect the new topic to Workday using your tenant's reference IDs, with no placeholders left behind.
   <!-- id: S6.2 | role: Environment Maker (+ Workday SME) | skill: skill-6 | automatable: Yes | checkpoints: TOPIC-INTEGRATION-* | gate: prog (+ SME for IDs) | status: pending -->
+- [ ] **Review your new topic for issues** — Run a quick check over the finished topic and show you anything worth tidying up before you rely on it.
+  <!-- id: S6.3 | role: Environment Maker | skill: skill-6 | automatable: Yes | checkpoints: n/a | gate: advisory | status: pending -->
 
 > Items whose checkpoint is a `*` family (the cloud flows, and each new topic)
 > expand to one checkbox **per** emitted / created item at run time. An item backed

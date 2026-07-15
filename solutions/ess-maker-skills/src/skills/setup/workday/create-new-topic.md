@@ -6,8 +6,9 @@ values). This skill creates a new custom Workday scenario beyond the OOTB set
 (for example *Request Time Off*): it authors the topic and its template
 configuration with the **Template Config + Shared Flow** pattern, wires the
 tenant-specific reference IDs, verifies the result with two per-topic checkpoint
-families, and auto-generates a matching evaluation set. It owns master-checklist
-rows **S6.1** and **S6.2**.
+families, runs an advisory review over the finished topic, and auto-generates a
+matching evaluation set. It owns master-checklist rows **S6.1**, **S6.2**, and
+**S6.3**.
 
 Depends on skill 5 (the Workday extension pack must be installed and wired — its
 connections bound, the REST endpoint verified, the cloud flows on, and the
@@ -36,12 +37,27 @@ files you are reading. **Never** show internal variable names or IDs in chat.
 | S6.1 | `TOPIC-TRIGGER-*` — each new topic is a well-formed AdaptiveDialog with a trigger (and trigger phrases when intent-routed) | prog |
 | S6.2 | `TOPIC-INTEGRATION-*` — each new topic's integration wiring resolves (no unresolved tenant reference-ID placeholders) | prog (+ SME for ID values) |
 
+> **S6.3 is advisory — not a checkpoint.** After S6.1 and S6.2 pass, this skill
+> runs an advisory **topic review** over the finished topic (P6.5) and shows the
+> findings to the user. It has no flightcheck checkpoint and **never blocks** —
+> its row completes once the report has been shown. See
+> [`topics/review/SKILL.md`](../../topics/review/SKILL.md).
+
 Run either family with:
 
 ```
 python scripts/flightcheck/cli.py --checkpoint TOPIC-TRIGGER-*
 python scripts/flightcheck/cli.py --checkpoint TOPIC-INTEGRATION-*
 ```
+
+**After every checkpoint run, show its result in chat first.** As soon as a
+`--checkpoint` run returns, render the result to the user per
+[`shared/checklist-updater.md`](../shared/checklist-updater.md) §U.0–U.0a — the
+compact result table and, for any `MANUAL` (or `Warning` / `NotConfigured`) row,
+its full verification steps — **before** you show any later **Message** or ask any
+attestation question. Single-checkpoint runs never open the HTML report, so this
+in-chat render is the only place the user sees the manual steps; never ask a user
+to attest to steps they have not been shown.
 
 Each family expands to **one row per new/custom topic** found under the extracted
 agent — a topic is "new" when it differs from the OOTB `.baseline/` snapshot the
@@ -78,8 +94,14 @@ topic-authoring work, with:
   ```
 
   ```
-  az rest --method GET --resource "{ENV_URL}" --url "{ENV_URL}/api/data/v9.2/systemusers({USER_ID})/systemuserroles_association?%24select=name" --query "value[].name" -o json
+  az rest --method GET --resource "{ENV_URL}" --url "{ENV_URL}/api/data/v9.2/systemusers%28{USER_ID}%29/systemuserroles_association?%24select=name" --query "value[].name" -o json
   ```
+
+  (Percent-encode the key-lookup parentheses — `%28`/`%29`, not `(`/`)` — and the
+  OData `$` — `%24select`. On Windows the `az` launcher is a `cmd.exe` batch
+  wrapper: a raw `)` closes a batch block and the call fails with
+  `... was unexpected at this time`, so the encoded form runs first-try on every
+  shell.)
 
   The role is held if the returned role names include **`Environment Maker`**, or
   a superseding role (**`System Customizer`** or **`System Administrator`**).
@@ -120,6 +142,13 @@ The create-topic skill will select the Workday sample pattern, write
 template-config record in Dataverse, scan, dry-run, and push. When it returns,
 the new topic exists locally and in the environment. Continue to P6.2 to wire and
 verify the tenant reference IDs.
+
+**Do NOT run any topic review during this P6.1 authoring delegation** — the
+create-topic skill's own review sub-step (its step 6.5) must not fire here. The
+tenant reference IDs are not wired yet (P6.2 does that), so a review now would
+false-flag the unresolved placeholders. There is **no** review at S6.1/P6.1; the
+one and only topic review runs later at **P6.5 (row S6.3)**, once the integration
+wiring is verified.
 
 ---
 
@@ -270,7 +299,54 @@ wiring is a benign pass — there is nothing to resolve.)
 
 ---
 
-## P6.5 — Auto-generate a matching evaluation set *(delegated to the evaluate skill)*
+## P6.5 — Review the finished topic *(completes S6.3)*
+
+Now that the topic is authored, wired, and its trigger and integration are
+verified, run an **advisory** review over it to surface any remaining authoring
+issues before the user relies on it. This never blocks — it shows findings and
+lets the user decide.
+
+**Message:**
+
+Your topic is set up and verified. Let me do a quick review of it and flag
+anything worth tidying up before you rely on it.
+
+**End message.**
+
+Set **S6.3** `in-progress` via
+[`checklist-updater.md`](../shared/checklist-updater.md) with `STEP_ID="S6.3"`,
+`GATE="advisory"`, `NEW_STATE="in-progress"`.
+
+Invoke the review by calling `runSubagent` (the VS Code Copilot Chat tool),
+pointing the subagent to read
+[`src/skills/topics/review/SKILL.md`](../../topics/review/SKILL.md) as its first
+action — do not run its detectors yourself. Tell it this is a **single-topic**
+review of the topic just created (pass the agent slug from `.local/config.json`
+and the topic stem — the filename without `.mcs.yml`), and ask it to present the
+**maker-facing report** (its Step 9). Wait for the subagent to return, then
+**paste its full report into chat verbatim** — the verdict line, the findings
+table, and the close. Do NOT summarize or re-word it.
+
+- **If the report lists findings**, pause and ask the user how to proceed:
+  - **Fix now** → run [`topics/update`](../../topics/update/SKILL.md) (`/update`)
+    on the topic to apply the fixes, then re-run this review before completing
+    S6.3.
+  - **Continue** → the findings are advisory; leave them for later.
+- **If the report is clean**, say so briefly.
+
+Once the report has been shown and the user has chosen how to proceed, complete
+**S6.3** via [`checklist-updater.md`](../shared/checklist-updater.md) with
+`STEP_ID="S6.3"`, `GATE="advisory"`, `NEW_STATE="done"` — the review is advisory,
+so showing the report completes the row regardless of findings. Then continue to
+P6.6.
+
+**If the review can't run** (the subagent or its detector scripts fail), tell the
+user the review was skipped, complete **S6.3** as `done` (advisory rows never
+block the setup), and continue to P6.6.
+
+---
+
+## P6.6 — Auto-generate a matching evaluation set *(delegated to the evaluate skill)*
 
 Every new topic should ship with coverage, so generate a matching evaluation set
 automatically — the user should not have to run a separate step.
@@ -296,7 +372,7 @@ sanitized golden test user, not generic placeholders.
 
 ## Done
 
-When S6.1 and S6.2 are both `done`, return control to the setup router
+When S6.1, S6.2, and S6.3 are all `done`, return control to the setup router
 (`SKILL.md`).
 
 **Message:**

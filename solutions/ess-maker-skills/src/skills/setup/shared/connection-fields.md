@@ -25,9 +25,12 @@ not rephrase or narrate tool calls.
 
 ---
 
-## C.1 — App ID URI (Entra resource URL)
+## C.1 — Application ID URI
 
-The App ID URI is the Entra resource the connector requests a token for.
+The Application ID URI identifies the Entra app registration itself
+(`api://{entraAppId}`). skill-3 exposes it for the SAML token audience and the
+connector's API pre-authorization. It is **not** the connection's "Microsoft
+Entra resource URL" — see the note below.
 
 - Expected form: `api://{entraAppId}` (the GUID, not the object ID).
 - If `APP_ID_URI` is missing, derive it from `entraAppId`:
@@ -45,6 +48,13 @@ The App ID URI is the Entra resource the connector requests a token for.
 ```
 
 Save as `appIdUri`.
+
+> **Not the connection resource URL.** The Copilot Studio Workday connection
+> asks for a **Microsoft Entra resource URL** — the Workday SAML identifier
+> `http://www.workday.com/{tenant}` (matching the Entra app's Identifier /
+> Entity ID and Workday's SAML Service Provider ID), **not** this `api://…` App
+> ID URI. skill-5 builds it from `tenant`; see P5.1 in
+> `install-workday-extension-pack.md`.
 
 ---
 

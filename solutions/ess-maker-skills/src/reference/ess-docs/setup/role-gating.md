@@ -28,6 +28,7 @@ evidence** — a flightcheck pass alone never completes them.
 |------|---------------|-----------|
 | Power Platform Administrator | provision-power-platform-environment (skill-1) | programmatic |
 | Environment Maker | install-ess (skill-2), install-workday-extension-pack (skill-5), create-new-topic (skill-6) | programmatic |
+| Environment Maker | install-workday-ootb-topics (optional, between skill-5 and skill-6) | programmatic |
 | App / Cloud App Admin or App Owner | SSO gallery app + connector config (skill-3) | programmatic |
 | App Admin / Cloud App Admin / Priv Role Admin / Global Admin | admin consent (skill-3) | programmatic — attempt; escalate to **manual** if blocked |
 | Workday Administrator | configure-workday-tenant (skill-4) | attestation |

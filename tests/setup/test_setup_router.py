@@ -50,6 +50,10 @@ _SKILL6 = (
     _SOLUTION / "src" / "skills" / "setup" / "workday"
     / "create-new-topic.md"
 )
+_OOTB = (
+    _SOLUTION / "src" / "skills" / "setup" / "workday"
+    / "install-workday-ootb-topics.md"
+)
 
 # Backtick-quoted repo-relative markdown paths the router points at.
 _PATH_RE = re.compile(r"`(src/skills/[^`]+?\.md)`")
@@ -145,11 +149,62 @@ class TestSetupRouter:
         text = _ROUTER.read_text(encoding="utf-8")
         assert (
             "src/skills/setup/workday/create-new-topic.md" in text
-        ), "router must dispatch S6.1-S6.2 to the skill-6 create-new-topic playbook"
+        ), "router must dispatch S6.1-S6.3 to the skill-6 create-new-topic playbook"
         assert _SKILL6.is_file(), f"missing skill-6 playbook: {_SKILL6}"
         # skill-6 is the last skill: the not-available-yet stub must be gone.
         assert "not available yet" not in text, (
             "router must not carry a not-available-yet stub once skill-6 is wired"
+        )
+
+    def test_router_offers_optional_ootb_topics_between_skill5_and_skill6(self):
+        # The optional ready-made-topics installer is offered after skill-5 and
+        # before skill-6. It is an opt-in interstitial (not a tracked S-row),
+        # gated by ootbTopics.state so a resumed setup never re-prompts.
+        text = _ROUTER.read_text(encoding="utf-8")
+        assert (
+            "src/skills/setup/workday/install-workday-ootb-topics.md" in text
+        ), "router must offer the optional OOTB-topics installer playbook"
+        assert _OOTB.is_file(), f"missing OOTB installer playbook: {_OOTB}"
+        assert "ootbTopics" in text, (
+            "router must gate the optional offer on ootbTopics.state so it is "
+            "not re-prompted after install/decline"
+        )
+        # The offer must sit between the skill-5 and skill-6 dispatch blocks.
+        pack_idx = text.index("install-workday-extension-pack.md")
+        ootb_idx = text.index("install-workday-ootb-topics.md")
+        create_idx = text.index("create-new-topic.md")
+        assert pack_idx < ootb_idx < create_idx, (
+            "the OOTB-topics offer must appear after the skill-5 dispatch and "
+            "before the skill-6 dispatch"
+        )
+
+    def test_ootb_offer_gated_on_persistent_state_not_transient_resume(self):
+        # Regression: the offer used to be gated on the transient "first
+        # non-done row is S6.1" resume condition, so once S6 completed the
+        # offer was never shown again and was silently skipped in the S5->S6
+        # handoff. It must instead be anchored to the persistent
+        # ootbTopics.state flag in two places: (1) a gate at the S6 dispatch
+        # entry (runs before skill-6), and (2) an All-done safety net for a
+        # setup that reached S6 before the offer was ever shown.
+        text = _ROUTER.read_text(encoding="utf-8")
+
+        # (1) The S6 dispatch block gates on ootbTopics.state BEFORE it reads
+        # the skill-6 playbook.
+        s6_idx = text.index("### S6.1 through S6.3")
+        create_idx = text.index("create-new-topic.md")
+        s6_gate = text[s6_idx:create_idx]
+        assert "ootbTopics.state" in s6_gate, (
+            "the S6 dispatch block must run the OOTB offer gated on "
+            "ootbTopics.state BEFORE reading create-new-topic.md, so the offer "
+            "cannot be skipped in the S5->S6 handoff"
+        )
+
+        # (2) The All-done path rescues a setup that never saw the offer.
+        done_idx = text.index("If **every** item is `done`")
+        assert "ootbTopics" in text[done_idx:done_idx + 600], (
+            "the All-done path must run the OOTB offer as a safety net when "
+            "ootbTopics.state is unset, so a setup that reached S6 before the "
+            "offer was shown still gets it"
         )
 
     def test_router_renders_from_template(self):
@@ -192,8 +247,8 @@ class TestSetupRouter:
         titles = re.findall(
             r"^- \[[ xX]\]\s+\*\*(.+?)\*\*\s+\u2014", template, re.MULTILINE
         )
-        assert len(titles) == 24, (
-            f"expected 24 item titles in template, parsed {len(titles)}"
+        assert len(titles) == 25, (
+            f"expected 25 item titles in template, parsed {len(titles)}"
         )
         missing_titles = [t for t in titles if t not in router]
         assert not missing_titles, (
