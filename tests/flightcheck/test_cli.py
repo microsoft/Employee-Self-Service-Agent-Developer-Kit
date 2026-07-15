@@ -191,3 +191,30 @@ class TestInfrastructureScopeAuthGating:
 
         assert exc.value.code == 1
 
+
+class TestInvocationSourceDefault:
+    """cli._default_invocation_source resolves the --invocation-source default
+    from ESS_FLIGHTCHECK_INVOCATION_SOURCE so the /connect orchestrator can
+    attribute its FlightCheck runs without editing each call site. argparse
+    does not validate a default against choices, so the helper guards unknown
+    values back to 'cli'."""
+
+    def test_unset_env_defaults_to_cli(self, monkeypatch) -> None:
+        monkeypatch.delenv("ESS_FLIGHTCHECK_INVOCATION_SOURCE", raising=False)
+        assert cli._default_invocation_source() == "cli"
+
+    def test_connect_env_is_honored(self, monkeypatch) -> None:
+        monkeypatch.setenv("ESS_FLIGHTCHECK_INVOCATION_SOURCE", "connect")
+        assert cli._default_invocation_source() == "connect"
+
+    def test_env_is_case_insensitive_and_trimmed(self, monkeypatch) -> None:
+        monkeypatch.setenv("ESS_FLIGHTCHECK_INVOCATION_SOURCE", "  CONNECT  ")
+        assert cli._default_invocation_source() == "connect"
+
+    def test_unknown_env_falls_back_to_cli(self, monkeypatch) -> None:
+        monkeypatch.setenv("ESS_FLIGHTCHECK_INVOCATION_SOURCE", "bogus")
+        assert cli._default_invocation_source() == "cli"
+
+    def test_connect_is_a_valid_invocation_source(self) -> None:
+        assert "connect" in cli.INVOCATION_SOURCES
+

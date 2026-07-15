@@ -11,6 +11,17 @@ or what files you are reading.
 Record anonymous usage telemetry (best-effort, non-blocking — no user-facing
 message, and it never fails the step): `python scripts/emit_capability.py connect`
 
+Set the FlightCheck invocation source for this session so any readiness check
+run during connector setup is attributed to `connect` (not `cli`) on the
+dashboards. Best-effort — if the shell can't set it, continue anyway:
+
+- bash/zsh: `export ESS_FLIGHTCHECK_INVOCATION_SOURCE=connect`
+- PowerShell: `$env:ESS_FLIGHTCHECK_INVOCATION_SOURCE = "connect"`
+
+`scripts/flightcheck/cli.py` reads this env var as the default
+`--invocation-source`, so every FlightCheck the connect flow triggers inherits
+it without passing the flag explicitly.
+
 If the user specified an integration as an argument (e.g., the user said
 "servicenow" or "workday", or the prompt was invoked as `/connect servicenow`),
 pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the

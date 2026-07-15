@@ -265,3 +265,20 @@ python scripts/flightcheck/cli.py --scope prerequisites
 ```
 
 Or use the `/flightcheck` command in the Copilot Kit.
+
+### Invocation source (telemetry attribution)
+
+FlightCheck stamps an `invocationSource` on its telemetry so the dashboards
+can attribute runs to their entry point. Valid values:
+
+| Value | Set by | Meaning |
+|-------|--------|---------|
+| `adk` | `/flightcheck` slash-command (VS Code / ADK MCP) | Run from the kit's readiness-check command |
+| `installer` | Standalone installer telemetry | The installer's built-in readiness check |
+| `cli` | Default | A maker running `scripts/flightcheck/cli.py` directly |
+| `connect` | `/connect` connector-setup flow | A readiness check triggered during Workday/ServiceNow setup |
+
+Pass it explicitly with `--invocation-source <value>`, or set the
+`ESS_FLIGHTCHECK_INVOCATION_SOURCE` environment variable once for the session
+(the `/connect` flow sets `connect` this way) and every `cli.py` run inherits
+it as the default. Unknown values fall back to `cli`.
