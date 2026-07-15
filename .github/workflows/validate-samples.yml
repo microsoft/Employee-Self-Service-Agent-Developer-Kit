@@ -22,7 +22,7 @@ jobs:
     name: Validator unit tests
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - name: Set up Python
         uses: actions/setup-python@v6
@@ -41,7 +41,7 @@ jobs:
 
     steps:
       - name: Checkout PR
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha }}
@@ -116,7 +116,7 @@ jobs:
       - name: Post / update PR comment
         if: always() && steps.changed.outputs.has_samples == 'true' && steps.changed.outputs.self_edit != 'true'
         continue-on-error: true
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: samples-validation
           path: validation-comment.md
