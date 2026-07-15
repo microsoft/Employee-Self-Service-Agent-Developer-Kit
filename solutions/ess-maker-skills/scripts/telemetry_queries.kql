@@ -1,0 +1,176 @@
+// =============================================================================
+//  ESS ADK / FlightCheck — Asimov (Kusto) Self-Serve Query Pack
+//  For PMs & the broader team. Covers metrics that Aria dashboards can't express
+//  (sequential-run analytics) plus handy ad-hoc queries.
+//  ADO: 7590585 (self-serve), 7590586 (runs-to-fix), 7590588 (time-to-green)
+// =============================================================================
+//
+//  ACCESS PREREQUISITE (read this first):
+//    Running these raw-event queries requires the Aria **Event reader** role on
+//    the project. The **Metric reader** role (dashboard viewing) is NOT enough —
+//    it only exposes aggregated cube tables, not the raw event tables below.
+//    The `gooi-ecs` group and the PM alias set already hold Event reader on prod.
+//    Need access? Ask the project owner to add you (or your team AAD group) via
+//    Aria Project Manager -> Users -> Role -> Event reader.
+//
+//  HOW TO CONNECT (Azure Data Explorer / Kusto):
+//    Cluster : https://kusto.aria.microsoft.com
+//    Database: the Aria PROJECT ID (NOT a friendly name)
+//              dev  = 08e397b2c6c243eeaeb341e111c36167
+//              prod = 311254257bbc417e860c76781d4863c8
+//    Auth    : your corp AAD identity (interactive). For REST/scripts:
+//              az account get-access-token --resource https://kusto.aria.microsoft.com
+//    Web UI  : https://dataexplorer.azure.com  -> Add cluster -> paste cluster URL,
+//              then pick the project-id database from the left tree.
+//    NOTE    : Raw KQL access requires "Asimov routing" enabled on the project
+//              (already enabled for dev + prod). Routing is not retroactive.
+//
+//  TABLE NAMING: event name, lowercased, dots -> underscores. Key tables:
+//    essmakerkit_flightcheck_run    (1 per FlightCheck run; verdict + counts)
+//    essmakerkit_flightcheck_check  (1 per check; category + status)
+//    essmakerkit_installer_start / _complete
+//    adk_session_start, adk_capability_use, adk_agent_create, adk_agent_deploy,
+//    adk_build_complete, adk_api_call   (ADK platform family)
+//  Time column on every table: EventInfo_Time (UTC).
+// =============================================================================
+
+
+// -----------------------------------------------------------------------------
+// 1) USAGE — total runs, DAU/WAU/MAU, active tenants (last 30 days)
+// -----------------------------------------------------------------------------
+essmakerkit_flightcheck_run
+| where EventInfo_Time > ago(30d)
+| summarize TotalRuns = count(),
+            ActiveUsers = dcount(instanceId),
+            ActiveTenants = dcount(tenantId)
+
+// Daily active users (change 1d -> 7d / 30d for WAU / MAU):
+essmakerkit_flightcheck_run
+| where EventInfo_Time > ago(30d)
+| summarize DAU = dcount(instanceId) by bin(EventInfo_Time, 1d)
+| order by EventInfo_Time asc
+
+
+// -----------------------------------------------------------------------------
+// 2) RUN VERDICTS & SUCCESS RATE (last 30 days)
+// -----------------------------------------------------------------------------
+essmakerkit_flightcheck_run
+| where EventInfo_Time > ago(30d)
+| summarize Runs = count() by overall            // READY / READY_WITH_WARNINGS / NOT_READY
+| extend Pct = round(100.0 * Runs / toscalar(
+      essmakerkit_flightcheck_run | where EventInfo_Time > ago(30d) | count), 1)
+| order by Runs desc
+
+
+// -----------------------------------------------------------------------------
+// 3) CHECK SUCCESS RATE & FAILURES BY CATEGORY  (real per-check data)
+//    (This is the correct "errors by category" — uses REAL checks, not the
+//     retired synthetic adk.flightcheck.error stream.)
+// -----------------------------------------------------------------------------
+// Success rate across all checks:
+essmakerkit_flightcheck_check
+| where EventInfo_Time > ago(30d)
+| summarize Total = count(), Passed = countif(status == "Passed")
+| extend SuccessRatePct = round(100.0 * Passed / Total, 1)
+
+// Failed checks by checkpoint category (categorical stacked-bar friendly in ADX):
+essmakerkit_flightcheck_check
+| where EventInfo_Time > ago(30d)
+| summarize Checks = count() by category, status
+| order by category asc, status asc
+
+// Just failures, ranked by category:
+essmakerkit_flightcheck_check
+| where EventInfo_Time > ago(30d) and status == "Failed"
+| summarize Failures = count() by category
+| order by Failures desc
+
+
+// -----------------------------------------------------------------------------
+// 4) RUNS-TO-FIX  (ADO 7590586)
+//    On which sequential run does a previously-FAILING check first PASS,
+//    per (environment, agent, user)? Buckets: 2nd / 3rd / 4th / 5+ runs.
+// -----------------------------------------------------------------------------
+let runseq =
+    essmakerkit_flightcheck_run
+    | where EventInfo_Time > ago(90d)
+    | extend grp = strcat(env, "|", agentId, "|", instanceId)
+    | partition hint.strategy=native by grp ( order by EventInfo_Time asc | extend run_seq = row_number() )
+    | project runId, grp, run_seq;
+let chk =
+    essmakerkit_flightcheck_check
+    | where status in ("Passed", "Failed")
+    | join kind=inner runseq on runId
+    | extend ckey = strcat(grp, "|", checkpointId)
+    | project ckey, checkpointId, status, run_seq;
+let firstFail = chk | where status == "Failed" | summarize failSeq = min(run_seq) by ckey;
+chk
+| where status == "Passed"
+| join kind=inner firstFail on ckey
+| where run_seq > failSeq
+| summarize fixSeq = min(run_seq) by ckey, failSeq
+| extend attempts = fixSeq - failSeq + 1
+| extend bucket = case(attempts == 2, "2nd run", attempts == 3, "3rd run",
+                       attempts == 4, "4th run", "5+ runs")
+| summarize ChecksFixed = count() by bucket
+| order by bucket asc
+// Tip: add `, env` (and split grp) to the final summarize to break down per environment.
+
+
+// -----------------------------------------------------------------------------
+// 5) TIME-TO-GREEN, EXCLUDING WEEKENDS  (ADO 7590588)
+//    Median (and p90) hours from a series' first NOT_READY run to its first
+//    subsequent READY run, subtracting whole weekend days (Sat/Sun).
+// -----------------------------------------------------------------------------
+let runs = essmakerkit_flightcheck_run
+    | where EventInfo_Time > ago(90d)
+    | extend grp = strcat(env, "|", agentId, "|", instanceId)
+    | extend ready = overall in ("READY", "READY_WITH_WARNINGS")
+    | project grp, t = EventInfo_Time, ready;
+let firstFail = runs | where not(ready) | summarize failT = min(t) by grp;
+let pairs = runs
+    | join kind=inner firstFail on grp
+    | where ready and t > failT
+    | summarize greenT = min(t) by grp, failT;
+pairs
+| mv-expand d = range(bin(failT, 1d), bin(greenT, 1d), 1d) to typeof(datetime)
+| summarize weekendDays = countif(dayofweek(d) in (0d, 6d)) by grp, failT, greenT
+| extend calHours = datetime_diff("minute", greenT, failT) / 60.0
+| extend bizHours = max_of(calHours - weekendDays * 24.0, 0.0)   // subtract whole weekend days
+| summarize SeriesFixed = count(),
+            MedianBizHours = percentile(bizHours, 50),
+            P90BizHours   = percentile(bizHours, 90)
+// NOTE: dayofweek() Sunday=0d, Saturday=6d. Weekend exclusion is at whole-day
+//       granularity (subtracts 24h per weekend calendar day spanned).
+
+
+// -----------------------------------------------------------------------------
+// 6) PER-TENANT breakdown (ADO 7590589)
+//    tenantName is now emitted on run + check events (privacy-reviewed org
+//    display name). Falls back to "(unknown)" for events emitted before the
+//    tenant_name change shipped — those carry tenantId (GUID) only.
+// -----------------------------------------------------------------------------
+essmakerkit_flightcheck_run
+| where EventInfo_Time > ago(30d)
+| extend Tenant = iff(isempty(tenantName), "(unknown)", tenantName)
+| summarize Runs = count(), Users = dcount(instanceId),
+            ReadyRate = round(100.0 * countif(overall != "NOT_READY") / count(), 1)
+    by Tenant
+| order by Runs desc
+
+// Older rows (no tenantName) — resolve GUID -> name manually via Graph:
+//   findTenantInformationByTenantId(tenantId='<GUID>').
+essmakerkit_flightcheck_run
+| where EventInfo_Time > ago(30d) and isempty(tenantName)
+| summarize Runs = count() by tenantId
+| order by Runs desc
+
+
+// -----------------------------------------------------------------------------
+// 7) RUN DURATION percentiles (seconds)
+// -----------------------------------------------------------------------------
+essmakerkit_flightcheck_run
+| where EventInfo_Time > ago(30d)
+| summarize p50 = percentile(durationSecs, 50),
+            p95 = percentile(durationSecs, 95),
+            p99 = percentile(durationSecs, 99)
