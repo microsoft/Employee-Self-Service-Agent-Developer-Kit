@@ -95,12 +95,31 @@ get explicit consent before passing `--live-probe`. Ask using this exact wording
 swapping `<SYSTEM>` for the system being checked (Workday / ServiceNow /
 SuccessFactors / custom HTTP):
 
-> To check that your `<SYSTEM>` connection is whitelisted, I'll create a temporary
-> flow in your environment that sends a test network request, then delete it right
-> after. It won't touch any of your data. Okay to proceed?
+> To confirm your `<SYSTEM>` connection is whitelisted, I'll temporarily create a
+> Power Platform flow in your environment. It sends a network request from the same
+> service boundary as your agent to your `<SYSTEM>` endpoint, so I can verify the
+> connection is allowed through your network security rules.
+>
+> It only tests connectivity. No business data is read, written, or changed, and the
+> flow is deleted as soon as the check finishes.
+>
+> Okay to proceed?
 
-If the user declines, run without `--live-probe` (local probe only) and note in the
-summary that the egress-level probe was skipped by choice.
+The reassurance points (no data touched, auto-deleted) are what earn user trust.
+Keep them in whatever phrasing you use.
+
+**If the user declines**, run without `--live-probe` (local probe only), note in the
+summary that the egress-level probe was skipped by choice, and offer the manual
+verification path (again swapping `<SYSTEM>` for the selected system):
+
+> Prefer to verify manually? You can confirm the connection is whitelisted:
+>
+> 1. In the Power Platform admin center, note your environment's region.
+> 2. From Microsoft's [Managed connectors outbound IP addresses](https://learn.microsoft.com/en-us/connectors/common/outbound-ip-addresses)
+>    list, get the ranges for that region. For a custom HTTP endpoint, use the
+>    Power Automate service tags instead.
+> 3. Work with your InfoSec / network team to confirm those ranges are allowlisted
+>    in your `<SYSTEM>` firewall / WAF.
 
 > **Note:** `--live-probe` is the only FlightCheck path that writes to the tenant.
 > It creates one transient probe flow per run, always deletes it (even on failure),
