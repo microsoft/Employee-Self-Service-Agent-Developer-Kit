@@ -556,7 +556,7 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
     }
 
     # Preserve existing connections and other user-set fields
-    for key in ("connections", "workdayTestEmployeeId"):
+    for key in ("connections", "workdayTestEmployeeId", "referenceSource"):
         if key in existing and key not in config:
             config[key] = existing[key]
 

@@ -155,6 +155,168 @@ Test 'bootstraps read the fetched installer as UTF-8 explicitly' {
     }
 }
 
+# ---------------------------------------------------------------------------
+# Installer telemetry wiring (ADO 7557940)
+# ---------------------------------------------------------------------------
+Write-Host "`nInstaller telemetry wiring (Install-EssAdk.ps1):" -ForegroundColor Cyan
+
+Test 'initializes installer telemetry after locating the emitter' {
+    if ($src -notmatch 'Initialize-EssInstallTelemetry') { throw 'Initialize-EssInstallTelemetry call not found' }
+    if ($src -notmatch 'ESS_INSTALL_TELEMETRY_LIB') { throw 'ESS_INSTALL_TELEMETRY_LIB lookup not found' }
+}
+
+Test 'defines no-op telemetry stubs when the emitter is absent (fail-open)' {
+    if ($src -notmatch 'function Initialize-EssInstallTelemetry') { throw 'no-op stub fallback not found' }
+}
+
+Test 'derives installer mode (flightcheck | adk | lite)' {
+    if ($src -notmatch "FlightCheckOnly.*'flightcheck'") { throw 'flightcheck mode not derived' }
+    if ($src -notmatch "SkipMakerProfile.*'adk'") { throw 'adk mode not derived' }
+}
+
+Test 'Write-Step is hooked to emit a per-step telemetry event' {
+    if ($src -notmatch 'Write-EssInstallStep\s+-Step\s+\(Get-EssStepKey') { throw 'Write-Step does not emit a telemetry step' }
+}
+
+Test 'main body is wrapped so a completion event is always emitted' {
+    if ($src -notmatch "Complete-EssInstallTelemetry\s+-Outcome\s+'failure'") { throw 'failure completion not found' }
+    if ($src -notmatch "Complete-EssInstallTelemetry\s+-Outcome\s+'success'") { throw 'success completion not found' }
+    if ($src -notmatch '(?s)\btry\s*\{.*\}\s*catch\s*\{.*\}\s*finally\s*\{') { throw 'try/catch/finally wrapper not found' }
+}
+
+# --- Emitter files: existence, parse, and pure-function behaviour ----------
+Write-Host "`nInstaller telemetry emitters:" -ForegroundColor Cyan
+
+$psEmitter = Join-Path $PSScriptRoot 'telemetry/install-telemetry.ps1'
+$shEmitter = Join-Path $PSScriptRoot 'telemetry/install-telemetry.sh'
+
+Test 'PowerShell emitter exists and parses without errors' {
+    if (-not (Test-Path $psEmitter)) { throw 'telemetry/install-telemetry.ps1 missing' }
+    $errors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile($psEmitter, [ref]$null, [ref]$errors) | Out-Null
+    if ($errors.Count -gt 0) { throw "Parse errors: $($errors[0].Message)" }
+}
+
+Test 'bash emitter exists with a shebang' {
+    if (-not (Test-Path $shEmitter)) { throw 'telemetry/install-telemetry.sh missing' }
+    $first = (Get-Content $shEmitter -TotalCount 1)
+    if ($first -notmatch '^#!') { throw 'bash emitter missing shebang' }
+}
+
+# Dot-source the PS emitter and exercise its pure (no-network) functions.
+. $psEmitter
+
+Test 'installer telemetry emits no tenant dimension (unknowable pre-sign-in)' {
+    # The installer runs before sign-in, so the tenant is never known; emitting
+    # tenantId/tenantClass produced a meaningless 'unknown' on ~every event.
+    $data = Get-EssTelCommonData
+    if ($data.ContainsKey('tenantId'))    { throw 'tenantId should not be emitted by the installer' }
+    if ($data.ContainsKey('tenantClass')) { throw 'tenantClass should not be emitted by the installer' }
+    if (Get-Command -Name 'Get-EssTelTenantClass' -ErrorAction SilentlyContinue) { throw 'Get-EssTelTenantClass should be removed' }
+}
+Test 'scrub strips paths, urls, emails and guids' {
+    $s = ConvertTo-EssTelScrubbed -Text 'boom C:\Users\x https://a.com/b user@contoso.com 72f988bf-86f1-41af-91ab-2d7cd011db47'
+    if ($s -match 'C:\\Users' -or $s -match 'https://' -or $s -match '@contoso' -or $s -match '72f988bf') { throw "not scrubbed: $s" }
+}
+Test 'opt-out is honored via the ESS_ADK_TELEMETRY env var' {
+    $old = $env:ESS_ADK_TELEMETRY
+    try { $env:ESS_ADK_TELEMETRY = 'off'; if (Test-EssTelemetryEnabled) { throw 'should be disabled' } }
+    finally { $env:ESS_ADK_TELEMETRY = $old }
+}
+Test 'envelope iKey uses the o: prefix of the token before the first dash' {
+    if ((Get-EssTelEnvelopeIKey -FullIKey 'abc123-def-456') -ne 'o:abc123') { throw 'envelope ikey wrong' }
+}
+Test 'envelope time is culture-invariant ISO-8601 (non-colon-separator locales)' {
+    # Regression: a custom DateTime format string renders ':' as the current
+    # culture's TimeSeparator ('.' under fi-FI), which would corrupt the
+    # Common Schema time field. It must stay ISO-8601 regardless of locale.
+    $orig = [System.Threading.Thread]::CurrentThread.CurrentCulture
+    try {
+        [System.Threading.Thread]::CurrentThread.CurrentCulture = [System.Globalization.CultureInfo]::GetCultureInfo('fi-FI')
+        $envelope = New-EssTelEnvelope -Name 'ESSMakerKit.Installer.Start' -EnvelopeIKey 'o:abc' -Data @{}
+        if ($envelope.time -notmatch '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$') { throw "time not ISO-8601 under fi-FI: $($envelope.time)" }
+    } finally {
+        [System.Threading.Thread]::CurrentThread.CurrentCulture = $orig
+    }
+}
+Test 'lite installer is not instrumented (no telemetry ready, no events)' {
+    $old = $env:ESS_ADK_TELEMETRY
+    try {
+        $env:ESS_ADK_TELEMETRY = ''   # ensure telemetry is otherwise enabled
+        Initialize-EssInstallTelemetry -Installer 'lite'
+        if ($script:EssTel.Ready) { throw 'lite installer should not be telemetry-ready' }
+    } finally { $env:ESS_ADK_TELEMETRY = $old }
+}
+Test 'PowerShell emitter guards out the lite installer' {
+    $emitterSrc = Get-Content $psEmitter -Raw
+    if ($emitterSrc -notmatch "Installer\s+-eq\s+'lite'") { throw 'lite guard missing in PS emitter' }
+}
+Test 'bash emitter guards out the lite installer' {
+    $shSrc = Get-Content $shEmitter -Raw
+    if ($shSrc -notmatch 'ESS_TEL_INSTALLER.*==.*"lite"') { throw 'lite guard missing in bash emitter' }
+}
+
+# --- macOS installer + all bootstraps wiring -------------------------------
+Write-Host "`nmacOS installer + bootstrap telemetry wiring:" -ForegroundColor Cyan
+
+$macInstaller = Get-Content (Join-Path $PSScriptRoot 'install-ess-adk.sh') -Raw
+
+Test 'install-ess-adk.sh sources the emitter and initializes telemetry' {
+    if ($macInstaller -notmatch 'ESS_INSTALL_TELEMETRY_LIB') { throw 'lib lookup missing' }
+    if ($macInstaller -notmatch 'ess_tel_init') { throw 'ess_tel_init call missing' }
+}
+Test 'install-ess-adk.sh emits completion on exit via an EXIT trap' {
+    if ($macInstaller -notmatch 'ess_tel_on_exit' -or $macInstaller -notmatch 'trap .* EXIT') { throw 'EXIT trap missing' }
+}
+Test 'install-ess-adk.sh step() emits a per-step telemetry event' {
+    if ($macInstaller -notmatch 'ess_tel_step' -or $macInstaller -notmatch 'ess_step_key') { throw 'step hook missing' }
+}
+
+foreach ($bs in @('bootstrap.ps1', 'bootstrap-flightcheck.ps1', 'bootstrap-lite.ps1')) {
+    $bsSrc = Get-Content (Join-Path $PSScriptRoot $bs) -Raw
+    Test "$bs downloads the telemetry lib and sets ESS_INSTALL_TELEMETRY_LIB" {
+        if ($bsSrc -notmatch 'install-telemetry\.ps1') { throw 'telemetry lib not downloaded' }
+        if ($bsSrc -notmatch 'ESS_INSTALL_TELEMETRY_LIB') { throw 'env var not set' }
+    }
+}
+foreach ($bs in @('bootstrap-mac.sh', 'bootstrap-flightcheck-mac.sh', 'bootstrap-lite-mac.sh')) {
+    $bsSrc = Get-Content (Join-Path $PSScriptRoot $bs) -Raw
+    Test "$bs downloads the telemetry lib and sets ESS_INSTALL_TELEMETRY_LIB" {
+        if ($bsSrc -notmatch 'install-telemetry\.sh') { throw 'telemetry lib not downloaded' }
+        if ($bsSrc -notmatch 'ESS_INSTALL_TELEMETRY_LIB') { throw 'env var not set' }
+    }
+}
+
+Test 'install-ess-adk.sh maps SIGINT/SIGTERM (130/143) to a cancelled outcome' {
+    if ($macInstaller -notmatch 'ess_tel_complete cancelled') { throw 'cancelled outcome not emitted on interrupt' }
+    if ($macInstaller -notmatch '130' -or $macInstaller -notmatch '143') { throw 'SIGINT/SIGTERM codes not handled' }
+}
+Test 'Install-EssAdk.ps1 records success on the normal path, not in finally' {
+    # Regression: Ctrl+C bypasses catch, so success must be emitted at the end of
+    # try. finally must fall back to cancelled, never force success.
+    if ($src -notmatch "(?s)Done\. Workspace.*?Complete-EssInstallTelemetry -Outcome 'success'") {
+        throw "success not recorded at the end of the try block"
+    }
+    if ($src -notmatch "(?s)finally\s*\{[^}]*Complete-EssInstallTelemetry -Outcome 'cancelled'") {
+        throw "finally must record 'cancelled', not 'success'"
+    }
+    if ($src -match "(?s)finally\s*\{[^}]*Complete-EssInstallTelemetry -Outcome 'success'") {
+        throw "finally must not force a 'success' outcome (mislabels Ctrl+C)"
+    }
+}
+Test 'PS emitter uses a short send timeout and trips a circuit breaker on failure' {
+    $emitterSrc = Get-Content $psEmitter -Raw
+    if ($emitterSrc -notmatch 'TimeoutSec 3') { throw 'PS emitter should use a short (3s) send timeout' }
+    # The catch of the transport must disable further sends so an unreachable
+    # collector adds ~one timeout total, not one per step.
+    if ($emitterSrc -notmatch '(?s)catch\s*\{[^}]*EssTel\.Ready\s*=\s*\$false') { throw 'PS emitter missing circuit breaker' }
+}
+Test 'bash emitter uses a short send timeout and trips a circuit breaker on failure' {
+    $shSrc = Get-Content $shEmitter -Raw
+    if ($shSrc -notmatch 'curl -fsS -m 3') { throw 'bash emitter should use a short (3s) send timeout' }
+    if ($shSrc -notmatch 'ESS_TEL_READY=0') { throw 'bash emitter missing circuit breaker' }
+}
+
 # Summary
 Write-Host "`n$($passed + $failed) tests, $passed passed, $failed failed" -ForegroundColor $(if ($failed -gt 0) { 'Red' } else { 'Green' })
 exit $(if ($failed -gt 0) { 1 } else { 0 })
