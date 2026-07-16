@@ -196,9 +196,17 @@ class GraphClient:
         return self.get_all("/subscribedSkus")
 
     def get_organization(self) -> dict:
-        """Get tenant organization info."""
+        """Get tenant organization info.
+
+        Memoized per client instance: several call sites resolve the org
+        (auth flow + telemetry tenant_name), so the first successful lookup
+        is cached to avoid a redundant ``/organization`` round-trip.
+        """
+        if getattr(self, "_org_cache", None) is not None:
+            return self._org_cache
         orgs = self.get_all("/organization")
-        return orgs[0] if orgs else {}
+        self._org_cache = orgs[0] if orgs else {}
+        return self._org_cache
 
     def get_directory_roles(self) -> list:
         """List activated directory roles."""
