@@ -35,10 +35,10 @@ function _extractFn(name) {
 }
 const _updateHelpersSrc = [
     'parseLsRemoteSha', 'localIsBehind', 'compareVersions',
-    'extensionIsStale', 'classifyPullError',
+    'extensionIsStale', 'classifyPullError', 'parseCommitCount', 'formatUpdateMessage',
 ].map(_extractFn).join('\n\n');
-const { parseLsRemoteSha, localIsBehind, compareVersions, extensionIsStale, classifyPullError } =
-    eval(`(function () { ${_updateHelpersSrc}\n return { parseLsRemoteSha, localIsBehind, compareVersions, extensionIsStale, classifyPullError }; })()`);
+const { parseLsRemoteSha, localIsBehind, compareVersions, extensionIsStale, classifyPullError, parseCommitCount, formatUpdateMessage } =
+    eval(`(function () { ${_updateHelpersSrc}\n return { parseLsRemoteSha, localIsBehind, compareVersions, extensionIsStale, classifyPullError, parseCommitCount, formatUpdateMessage }; })()`);
 
 // --- Tests ---
 
@@ -270,6 +270,46 @@ test('falls back to unknown with actionable guidance', () => {
     const r = classifyPullError('some other git failure');
     assert.strictEqual(r.kind, 'unknown');
     assert.ok(/re-run the ESS installer/i.test(r.guidance));
+});
+
+console.log('\nauto-update: parseCommitCount:');
+
+test('parses a plain integer count', () => {
+    assert.strictEqual(parseCommitCount('3\n'), 3);
+    assert.strictEqual(parseCommitCount('  42 '), 42);
+    assert.strictEqual(parseCommitCount('0'), 0);
+});
+
+test('returns null for empty / non-numeric output', () => {
+    assert.strictEqual(parseCommitCount(''), null);
+    assert.strictEqual(parseCommitCount(null), null);
+    assert.strictEqual(parseCommitCount(undefined), null);
+    assert.strictEqual(parseCommitCount('fatal: bad revision'), null);
+    assert.strictEqual(parseCommitCount('3 extra'), null);
+});
+
+console.log('\nauto-update: formatUpdateMessage:');
+
+test('uses singular for one commit behind', () => {
+    assert.strictEqual(
+        formatUpdateMessage(1),
+        'Your ESS ADK is 1 commit behind. Please update now to get the latest.',
+    );
+});
+
+test('uses plural for multiple commits behind', () => {
+    assert.strictEqual(
+        formatUpdateMessage(5),
+        'Your ESS ADK is 5 commits behind. Please update now to get the latest.',
+    );
+});
+
+test('falls back to generic message when count is unknown / zero', () => {
+    const generic = 'A newer version of the ESS ADK is available.';
+    assert.strictEqual(formatUpdateMessage(null), generic);
+    assert.strictEqual(formatUpdateMessage(undefined), generic);
+    assert.strictEqual(formatUpdateMessage(0), generic);
+    assert.strictEqual(formatUpdateMessage(NaN), generic);
 });
 
 // --- Summary ---

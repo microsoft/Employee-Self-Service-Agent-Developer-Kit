@@ -5,8 +5,11 @@
 - **Auto-update nudge.** On VS Code startup, the extension now checks
   whether the local ESS ADK clone is behind `origin/main` (via
   `git ls-remote` vs the local `HEAD`) and, if so, shows a non-blocking
-  notification: "A newer version of the ESS ADK is available."
-  with **Update now** and **Later** actions.
+  notification. When the number of commits behind can be determined it
+  is shown ("Your ESS ADK is N commits behind. Please update now to get
+  the latest."); otherwise it falls back to a generic
+  "A newer version of the ESS ADK is available." message, always with
+  **Update now** and **Later** actions.
   - **Update now** runs `git pull --ff-only` and offers a window reload.
   - **Later** (or dismissing) re-asks on the next startup — there is
     intentionally no permanent per-user "don't ask again", so makers

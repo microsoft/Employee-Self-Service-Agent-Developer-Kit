@@ -1135,6 +1135,27 @@ function localIsBehind(localSha, remoteSha) {
     return String(localSha).trim().toLowerCase() !== String(remoteSha).trim().toLowerCase();
 }
 
+// Parse the output of `git rev-list --count <range>` into a non-negative
+// integer. Returns null if the output is empty/non-numeric so callers can
+// fall back to a generic message.
+function parseCommitCount(output) {
+    if (output === null || output === undefined) return null;
+    const trimmed = String(output).trim();
+    if (!/^\d+$/.test(trimmed)) return null;
+    return parseInt(trimmed, 10);
+}
+
+// Build the update-nudge notification text. When we know how many commits the
+// local clone is behind we say so (with correct singular/plural); otherwise we
+// fall back to a generic message.
+function formatUpdateMessage(behindCount) {
+    if (typeof behindCount === 'number' && Number.isFinite(behindCount) && behindCount > 0) {
+        const unit = behindCount === 1 ? 'commit' : 'commits';
+        return `Your ESS ADK is ${behindCount} ${unit} behind. Please update now to get the latest.`;
+    }
+    return 'A newer version of the ESS ADK is available.';
+}
+
 // Numeric-tuple version compare. Returns 1 if a>b, -1 if a<b, 0 if equal.
 function compareVersions(a, b) {
     const pa = String(a || '0').split('.').map((n) => parseInt(n, 10) || 0);
@@ -1272,9 +1293,27 @@ async function checkForUpdate(context) {
             _log('update: a nudge is already open — skipping this re-check');
             return;
         }
+
+        // Try to compute how many commits we're behind for a dynamic message.
+        // ls-remote gives us the remote SHA without fetching objects, so we
+        // fetch the branch (quietly) before counting. Any failure here is
+        // non-fatal — we simply fall back to the generic message.
+        let behindCount = null;
+        const fetchRes = await runGit(['fetch', '--quiet', 'origin', UPDATE_BRANCH], repoRoot);
+        if (fetchRes.ok) {
+            const countRes = await runGit(['rev-list', '--count', `HEAD..${remoteSha}`], repoRoot);
+            if (countRes.ok) {
+                behindCount = parseCommitCount(countRes.stdout);
+            } else {
+                _log(`update: rev-list count failed — ${countRes.stderr.trim()}`);
+            }
+        } else {
+            _log(`update: git fetch failed — ${fetchRes.stderr.trim()}`);
+        }
+
         _updateNudgeActive = true;
         try {
-            await promptUpdate(context, repoRoot);
+            await promptUpdate(context, repoRoot, behindCount);
         } finally {
             _updateNudgeActive = false;
         }
@@ -1286,11 +1325,11 @@ async function checkForUpdate(context) {
 // Non-blocking notification. Offers "Update now" or "Later" only — there is
 // deliberately no permanent per-user opt-out, so a maker who defers is asked
 // again on the next startup until they update (keeping everyone on latest).
-async function promptUpdate(context, repoRoot) {
+async function promptUpdate(context, repoRoot, behindCount) {
     const UPDATE = 'Update now';
     const LATER = 'Later';
     const sel = await vscode.window.showInformationMessage(
-        'A newer version of the ESS ADK is available.',
+        formatUpdateMessage(behindCount),
         UPDATE,
         LATER,
     );
