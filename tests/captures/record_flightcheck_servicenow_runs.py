@@ -4,14 +4,16 @@
 
 """
 Record a cassette covering the Power Automate *runtime* run-history
-endpoint used by SN-RUN-001 (ServiceNow shared-flow run health).
+endpoint used by SN-RUN-001 (ServiceNow flow run health).
 
 This is the ServiceNow twin of ``record_flightcheck_workday_runs.py``. It
-exists to VERIFY the grounding assumption behind SN-RUN-001: that the
-ServiceNow shared flow returns errors the SAME way the Workday shared flow
-does — i.e. it CATCHES faults and still reports ``status == "Succeeded"`` with
-a non-success Response action name, and the single success branch is
-``Respond_to_Copilot_with_Success``.
+exists to CONFIRM how the ServiceNow flows report success vs failure in run
+history. Confirmed live 2026-06 (see the CONFIRMED model below): ServiceNow is
+a MULTI-FLOW orchestration whose user-facing orchestrator run responds to
+Copilot with ``Respond_to_Copilot`` on success and
+``Respond_to_Copilot_-_Failure`` on failure. Orchestrator failures surface as
+``status=Failed`` (unlike Workday's caught ``status=Succeeded`` faults);
+child/utility flow runs respond to their parent and are non-scoring.
 
 Endpoint (runtime / maker scope — NOT /scopes/admin) — identical to the
 Workday recorder; only the flow display-name filter differs:
