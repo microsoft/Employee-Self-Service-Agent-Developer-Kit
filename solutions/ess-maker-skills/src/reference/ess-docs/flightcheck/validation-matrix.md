@@ -62,10 +62,11 @@ Workday → Entra Admin + Workday Admin).
 | ENV-001 | Power Platform environment exists | Critical | BAP Admin API | [prepare#set-up-your-power-platform-environment](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prepare#set-up-your-power-platform-environment) |
 | ENV-002 | Dataverse database provisioned | Critical | BAP Admin API | [prepare#set-up-your-power-platform-environment](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prepare#set-up-your-power-platform-environment) |
 | ENV-003 | Environment type | High | BAP Admin API | [prepare#set-up-your-power-platform-environment](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prepare#set-up-your-power-platform-environment) |
-| ENV-004 | Connections & connection references (binding + orphan detection) | High | BAP Admin API + Dataverse REST | [prepare#set-up-your-power-platform-environment](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prepare#set-up-your-power-platform-environment) |
-| ENV-004-OR-nnn | Orphan reference (points to missing connection) | High | — | — |
-| ENV-004-UR-nnn | Unbound reference (no connection bound) | High | — | — |
-| ENV-004-UC-nnn | Unbound connection (no reference uses it) | Medium | — | — |
+| ENV-004 | Connections & connection references — binding + orphan detection, scoped to the references the ESS agent's enabled topics actually use (resolved via topic InvokeFlowAction flowIds → cloud flow `connectionReferences`). Skips when that scope can't be resolved; warns on a flow-listing API error. | High | BAP Admin API + Dataverse REST | [prepare#set-up-your-power-platform-environment](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prepare#set-up-your-power-platform-environment) |
+| ENV-004-OR-nnn | Orphan reference (in-scope reference points to a missing connection) | High | — | — |
+| ENV-004-UR-nnn | Unbound reference (in-scope reference has no connection bound) | High | — | — |
+| ENV-004-MR-nnn | Missing reference (agent flow uses a connection reference that does not exist in the environment) | High | — | — |
+| ENV-004-UC-nnn | Unbound connection (no in-scope reference uses it; limited to the agent's connectors) | Medium | — | — |
 | ENV-008 | DLP policies configured | High | BAP Admin API | [prepare#allow-the-external-systems-connector](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prepare#allow-the-external-systems-connector) |
 
 ## 3. Authentication & Identity (AUTH-xxx)

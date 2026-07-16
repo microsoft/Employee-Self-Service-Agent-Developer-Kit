@@ -10,7 +10,8 @@ Checks Power Platform environment, Dataverse, DLP policies, and related config.
 import uuid
 
 from ..runner import CheckResult, Priority, Role, Status
-from ._dlp_utils import iter_effective_policies
+from ._agent_connection_refs import build_agent_ref_scope
+from ._dlp_utils import iter_effective_policies, normalize_connector_id
 from ._maker_urls import (
     maker_connections_url,
     maker_solution_url,
@@ -367,36 +368,55 @@ def run_environment_checks(runner) -> list[CheckResult]:
 # ---------------------------------------------------------------------------
 
 def _check_connections_and_refs(runner) -> list[CheckResult]:
-    """Report all connections and connection references with binding state.
+    """Report the agent's connection references with binding state.
 
-    Detects orphans in both directions:
+    Scope: only the connection references the ESS agent(s) under check
+    actually use are judged — resolved from each agent's enabled topics
+    -> InvokeFlowAction flowIds -> BAP flow ``connectionReferences``
+    (see ``_agent_connection_refs.build_agent_ref_scope``). References
+    belonging to other apps in the same environment, and the ESS-shipped
+    placeholder references that ship unbound-by-design on a Workday
+    simplified install, are excluded so they don't produce false FAILs.
+    When the agent's ref set can't be resolved, the check SKIPs rather
+    than judging environment-wide references.
+
+    Detects broken bindings in both directions:
       - Connection references pointing to a connection that doesn't exist
         (orphan reference).
-      - Connections with no corresponding connection reference
-        (unbound connection).
+      - Connection references the agent's flows expect that have no row in
+        the environment (missing reference).
+      - Connections (of a connector the agent uses) with no corresponding
+        in-scope connection reference (unbound connection).
 
     Terminology:
-      **Orphan reference** (FAIL) — A connection reference in the solution
-      points to a connection ID that no longer exists in the environment.
-      This occurs when a connection was deleted, the solution was imported
-      from another environment, or a connection was recreated with a new ID.
+      **Orphan reference** (FAIL) — An in-scope connection reference points
+      to a connection ID that no longer exists in the environment. This
+      occurs when a connection was deleted, the solution was imported from
+      another environment, or a connection was recreated with a new ID.
       Topics/flows using this reference will fail at runtime with auth errors.
 
-      **Unbound reference** (FAIL) — A connection reference exists in the
-      solution but has no connection ID set (empty ``connectionid`` field).
-      This occurs after a solution import where references were never
-      configured, or a new reference was added but not bound. Topics/flows
-      using this reference will fail immediately.
+      **Unbound reference** (FAIL) — An in-scope connection reference exists
+      but has no connection ID set (empty ``connectionid`` field). This
+      occurs after a solution import where references were never configured,
+      or a new reference was added but not bound. Topics/flows using this
+      reference will fail immediately.
 
-      **Unbound connection** (WARN) — A connection exists in the environment
-      but no connection reference points to it. Common after troubleshooting
-      (test connections), re-binding references to newer connections, or
-      manual connection creation. No runtime impact, but adds clutter.
+      **Missing reference** (FAIL) — The agent's flow references a connection
+      reference logical name that has no ``connectionreference`` row in this
+      environment at all. The flow fails at runtime with an unresolved
+      reference; re-importing the agent's solution recreates it.
+
+      **Unbound connection** (WARN) — A connection whose connector the agent
+      uses exists in the environment but no in-scope connection reference
+      points to it. Common after troubleshooting (test connections),
+      re-binding references to newer connections, or manual connection
+      creation. No runtime impact, but adds clutter.
 
     Signal:
-      PASS  — all references bound to existing, connected connections.
-      WARN  — unbound connections exist (may be intentional).
-      FAIL  — orphan or unbound references found (broken bindings).
+      SKIP  — the agent's connection-reference set could not be resolved.
+      PASS  — all in-scope references bound to existing connections.
+      WARN  — unbound connections of an agent connector exist (may be intentional).
+      FAIL  — orphan, unbound, or missing references found (broken bindings).
     """
 
     results: list[CheckResult] = []
@@ -470,6 +490,74 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
         ))
         return results
 
+    # --- Scope to the connection references THIS agent actually uses ---
+    #
+    # Judging every ref in the environment produces false FAILs on refs
+    # the ESS agent never touches (other apps' refs, and the ESS-shipped
+    # placeholder refs that ship unbound-by-design on a Workday
+    # simplified install). `build_agent_ref_scope` resolves the agent's
+    # used refs from its enabled topics -> InvokeFlowAction flowIds ->
+    # BAP flow connectionReferences. See _agent_connection_refs.py.
+    #
+    #   - None  -> we can't establish the agent's ref set. SKIP rather
+    #              than judge env-wide (a misleading FAIL is worse than
+    #              an honest SKIP).
+    #   - raise -> genuine API error; surface as WARNING (principle 3).
+    try:
+        ref_scope = build_agent_ref_scope(runner)
+    except Exception as e:
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+            checkpoint_id="ENV-004", category="Environment",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description="Connections & connection references",
+            result=f"Unable to determine which connection references this agent uses: {e}",
+            remediation=(
+                "Re-run FlightCheck with Power Platform Administrator access so the "
+                "agent's cloud flows can be listed and its connection references scoped."
+            ),
+        ))
+        return results
+
+    if ref_scope is None:
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+            checkpoint_id="ENV-004", category="Environment",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description="Connections & connection references",
+            result=(
+                "Could not determine which connection references belong to this agent "
+                "(no configured agent botId, or the agent's cloud flows could not be "
+                "resolved), so environment-wide references were not judged."
+            ),
+            remediation=(
+                "Ensure .local/config.json carries the agent's botId and that FlightCheck "
+                "is signed in with Power Platform Administrator access, then re-run so the "
+                "agent's flows (and their connection references) can be enumerated."
+            ),
+        ))
+        return results
+
+    # Keep only the Dataverse refs whose logical name is one the agent's
+    # flows bind to. Presence of the full env-wide set is retained
+    # separately so we can still detect references the flows expect but
+    # that don't exist in the environment at all (missing refs, below).
+    all_ref_logical_names = {
+        (r.get("connectionreferencelogicalname") or "").lower()
+        for r in conn_refs
+    }
+    in_scope_refs = [
+        r for r in conn_refs
+        if (r.get("connectionreferencelogicalname") or "").lower()
+        in ref_scope.logical_names
+    ]
+
+    # Missing references: a logical name the agent's flows reference but
+    # that has no `connectionreference` row anywhere in the environment.
+    # The flow will fail at runtime with an unresolved-reference error.
+    missing_ref_names = sorted(
+        name for name in ref_scope.logical_names
+        if name and name not in all_ref_logical_names
+    )
+
     # --- Build lookup: connection name (GUID) → connection object ---
     conn_map = {}
     for c in all_conns:
@@ -477,12 +565,12 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
         if conn_name:
             conn_map[conn_name] = c
 
-    # --- Analyze binding state ---
+    # --- Analyze binding state (agent-scoped refs only) ---
     bound_conn_ids = set()
     orphan_refs = []   # References pointing to non-existent connections
     unbound_refs = []  # References with no connectionid set
 
-    for ref in conn_refs:
+    for ref in in_scope_refs:
         conn_id = ref.get("connectionid") or ""
         if not conn_id:
             unbound_refs.append(ref)
@@ -491,14 +579,22 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
         else:
             orphan_refs.append(ref)
 
-    # Unbound connections: connections no reference points to
+    # Unbound connections: connections no in-scope reference points to.
+    # Scope this to connectors the agent actually uses so unrelated
+    # apps' connections in the same environment aren't flagged.
     unbound_conns = [
         c for c in all_conns
-        if c.get("name", "") and c.get("name", "") not in bound_conn_ids
+        if c.get("name", "")
+        and c.get("name", "") not in bound_conn_ids
+        and normalize_connector_id(
+            (c.get("properties", {}) or {}).get("apiId", "")
+        ) in ref_scope.connectors
     ]
 
     # --- Determine overall status ---
-    has_orphan_refs = len(orphan_refs) > 0 or len(unbound_refs) > 0
+    has_orphan_refs = (
+        len(orphan_refs) > 0 or len(unbound_refs) > 0 or len(missing_ref_names) > 0
+    )
     has_unbound_conns = len(unbound_conns) > 0
 
     if has_orphan_refs:
@@ -508,17 +604,19 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
     else:
         overall_status = Status.PASSED.value
 
-    # --- Summary ---
-    bound_refs = len(conn_refs) - len(orphan_refs) - len(unbound_refs)
+    # --- Summary (agent-scoped) ---
+    bound_refs = len(in_scope_refs) - len(orphan_refs) - len(unbound_refs)
     summary_parts = [
-        f"{len(all_conns)} connection(s)",
-        f"{len(conn_refs)} reference(s)",
+        f"{len(all_conns)} connection(s) in environment",
+        f"{len(in_scope_refs)} reference(s) used by this agent",
         f"{bound_refs} bound ({len(bound_conn_ids)} distinct conn(s))",
     ]
     if orphan_refs:
         summary_parts.append(f"{len(orphan_refs)} orphan ref(s)")
     if unbound_refs:
         summary_parts.append(f"{len(unbound_refs)} unbound ref(s)")
+    if missing_ref_names:
+        summary_parts.append(f"{len(missing_ref_names)} missing ref(s)")
     if unbound_conns:
         summary_parts.append(f"{len(unbound_conns)} unbound conn(s)")
 
@@ -646,6 +744,32 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
             remediation=(
                 f"Open [{sol_label}]({sol_url}) \u2192 in the left nav choose **Objects "
                 f"\u2192 Connection references** \u2192 bind '{ref_name}' to a valid connection."
+            ),
+            doc_link=conn_ref_doc,
+        ))
+
+    # --- Detail: missing references (agent flow references a connection
+    # reference logical name that has no row in this environment) ---
+    # The flow expects this reference to exist; without it the flow fails
+    # at runtime with an unresolved-connection-reference error. Unlike an
+    # unbound ref (row exists, no connection bound), here the row itself
+    # is absent — importing/re-deploying the agent's solution recreates it.
+    for i, logical_name in enumerate(missing_ref_names):
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+            checkpoint_id=f"ENV-004-MR-{i + 1:03d}", category="Environment",
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            description=f"Missing reference: {logical_name}",
+            result=(
+                f"An agent cloud flow references connection reference "
+                f"'{logical_name}', but no such reference exists in this environment"
+            ),
+            remediation=(
+                f"The agent's flow expects a connection reference named "
+                f"'{logical_name}' that is not present in this environment, so the flow "
+                f"fails at runtime with an unresolved-reference error. Re-import (or push) "
+                f"the agent's solution so the missing reference is recreated, then open "
+                f"[Power Apps \u2192 Solutions]({solutions_url}) \u2192 **Objects \u2192 "
+                f"Connection references** and bind it to a valid connection."
             ),
             doc_link=conn_ref_doc,
         ))
