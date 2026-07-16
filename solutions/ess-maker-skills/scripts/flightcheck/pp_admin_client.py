@@ -206,6 +206,40 @@ class PPAdminClient:
         self._flow_token = flow_token
         return self._token
 
+    def authenticate_silent(self) -> bool:
+        """Acquire a PowerApps/BAP token from cache WITHOUT prompting.
+
+        Unlike :meth:`authenticate`, this never opens a browser: it only
+        tries ``acquire_token_silent`` against the shared MSAL cache
+        (``.local/.token_cache.bin``). Intended for best-effort background
+        lookups (e.g. resolving an environment SKU during telemetry) that
+        must never block or interrupt the user. Returns True if a token was
+        obtained (``self._token`` set), False otherwise. Only the PowerApps
+        audience is acquired — callers needing flow endpoints must use the
+        interactive :meth:`authenticate`.
+        """
+        try:
+            authority = f"https://login.microsoftonline.com/{self.tenant_id}"
+            cache = msal.SerializableTokenCache()
+            cache_path = os.path.join(".local", ".token_cache.bin")
+            if not os.path.exists(cache_path):
+                return False
+            with open(cache_path, "r") as f:
+                cache.deserialize(f.read())
+            app = msal.PublicClientApplication(
+                CLIENT_ID, authority=authority, token_cache=cache
+            )
+            accounts = app.get_accounts()
+            if not accounts:
+                return False
+            result = app.acquire_token_silent([PP_SCOPE], account=accounts[0])
+            if not result or "access_token" not in result:
+                return False
+            self._token = result["access_token"]
+            return True
+        except Exception:  # noqa: BLE001 — best-effort, never raise to caller
+            return False
+
     @property
     def headers(self) -> dict:
         if not self._token:
@@ -316,6 +350,34 @@ class PPAdminClient:
                 candidate_host = (urlparse(candidate).hostname or "").lower()
                 if candidate_host == target_host:
                     return env.get("name")
+        return None
+
+    def get_environment_sku_by_dataverse_url(self, env_url: str) -> str | None:
+        """Return the ``environmentSku`` of the BAP environment whose linked
+        Dataverse instance matches ``env_url`` (host match against both
+        ``instanceUrl`` and ``instanceApiUrl``), or ``None`` if not found.
+
+        Mirrors :meth:`find_environment_id_by_dataverse_url` but returns the
+        SKU (e.g. Production/Default/Sandbox/Trial/Developer) rather than the
+        BAP env id — used to classify deploy telemetry into sandbox vs
+        production.
+        """
+        target_host = (urlparse(env_url.rstrip("/")).hostname or "").lower()
+        if not target_host:
+            return None
+        envs = self.get_environments()
+        if isinstance(envs, dict) and "_error" in envs:
+            return None
+        for env in envs:
+            props = env.get("properties", {})
+            linked = props.get("linkedEnvironmentMetadata", {})
+            for url_field in ("instanceUrl", "instanceApiUrl"):
+                candidate = linked.get(url_field, "")
+                if not candidate:
+                    continue
+                candidate_host = (urlparse(candidate).hostname or "").lower()
+                if candidate_host == target_host:
+                    return props.get("environmentSku") or props.get("environmentType")
         return None
 
     # ----- Flow APIs -----
