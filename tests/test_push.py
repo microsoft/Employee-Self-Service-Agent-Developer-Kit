@@ -27,17 +27,26 @@ import push
 
 
 class TestResolveDeployTarget:
-    def test_explicit_override_wins_verbatim(self, monkeypatch):
-        # Override is returned as-is (self-declared escape hatch) and short-
-        # circuits both the cached SKU and any lookup.
-        monkeypatch.setenv("ESS_ADK_DEPLOY_TARGET", "custom-label")
+    def test_valid_override_wins_and_skips_lookup(self, monkeypatch):
+        # A current-bucket override (case-insensitive) is honored and short-
+        # circuits both the cached SKU and any BAP lookup.
         monkeypatch.setattr(
             push, "_lookup_environment_sku_silent",
             lambda url: (_ for _ in ()).throw(AssertionError("must not be called")),
         )
-        assert push._resolve_deploy_target(
-            {"environmentSku": "Sandbox"}, "https://x.crm.dynamics.com"
-        ) == "custom-label"
+        for raw, expected in (("production", "production"), ("SANDBOX", "sandbox")):
+            monkeypatch.setenv("ESS_ADK_DEPLOY_TARGET", raw)
+            assert push._resolve_deploy_target(
+                {"environmentSku": "Sandbox"}, "https://x.crm.dynamics.com"
+            ) == expected
+
+    def test_retired_override_is_ignored(self, monkeypatch):
+        # Stale test/staging values must NOT resurface retired buckets — fall
+        # through to SKU classification instead.
+        for raw in ("test", "staging", "some-custom-label"):
+            monkeypatch.setenv("ESS_ADK_DEPLOY_TARGET", raw)
+            assert push._resolve_deploy_target({"environmentSku": "Sandbox"}, "url") == "sandbox"
+            assert push._resolve_deploy_target({"environmentSku": "Production"}, "url") == "production"
 
     def test_blank_override_is_ignored(self, monkeypatch):
         monkeypatch.setenv("ESS_ADK_DEPLOY_TARGET", "   ")

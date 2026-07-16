@@ -67,21 +67,28 @@ essmakerkit_flightcheck_run
 //    (This is the correct "errors by category" — uses REAL checks, not the
 //     retired synthetic adk.flightcheck.error stream.)
 // -----------------------------------------------------------------------------
-// Success rate across all checks:
+// Success rate across GATING checks only. Denominator excludes non-gating
+// statuses (Skipped / NotConfigured / Manual / Warning) which never fail
+// readiness — including them would deflate the rate. "Error" IS gating (a
+// check that broke at runtime failed to verify), so it stays in the denominator.
 essmakerkit_flightcheck_check
 | where EventInfo_Time > ago(30d)
+| where status in ("Passed", "Failed", "Error")
 | summarize Total = count(), Passed = countif(status == "Passed")
 | extend SuccessRatePct = round(100.0 * Passed / Total, 1)
 
-// Failed checks by checkpoint category (categorical stacked-bar friendly in ADX):
+// All check outcomes by checkpoint category (categorical stacked-bar friendly
+// in ADX) — keeps every status so you can see the full distribution:
 essmakerkit_flightcheck_check
 | where EventInfo_Time > ago(30d)
 | summarize Checks = count() by category, status
 | order by category asc, status asc
 
-// Just failures, ranked by category:
+// Just failures, ranked by category. Counts BOTH "Failed" (assertion failed)
+// and "Error" (check errored at runtime) — both are readiness blockers, matching
+// the runOutcome intent (change #2) of surfacing errored checks:
 essmakerkit_flightcheck_check
-| where EventInfo_Time > ago(30d) and status == "Failed"
+| where EventInfo_Time > ago(30d) and status in ("Failed", "Error")
 | summarize Failures = count() by category
 | order by Failures desc
 
@@ -99,11 +106,11 @@ let runseq =
     | project runId, grp, run_seq;
 let chk =
     essmakerkit_flightcheck_check
-    | where status in ("Passed", "Failed")
+    | where status in ("Passed", "Failed", "Error")   // Error is a failing outcome too
     | join kind=inner runseq on runId
     | extend ckey = strcat(grp, "|", checkpointId)
     | project ckey, checkpointId, status, run_seq;
-let firstFail = chk | where status == "Failed" | summarize failSeq = min(run_seq) by ckey;
+let firstFail = chk | where status in ("Failed", "Error") | summarize failSeq = min(run_seq) by ckey;
 chk
 | where status == "Passed"
 | join kind=inner firstFail on ckey

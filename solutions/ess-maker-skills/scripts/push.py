@@ -225,21 +225,27 @@ def _resolve_deploy_target(config, env_url):
     vs production — via the BAP ``environmentSku`` (there is no "staging"
     environment concept). Resolution priority:
 
-      1. Explicit ``ESS_ADK_DEPLOY_TARGET`` override (self-declared, trusted
-         as-is — an escape hatch for callers who want a custom label).
+      1. Explicit ``ESS_ADK_DEPLOY_TARGET`` override, but ONLY when it names a
+         current bucket (``sandbox``/``production``). A stale override naming a
+         retired bucket (``test``/``staging``) is ignored so it can't resurface
+         wedges the dashboards no longer model — we fall through to SKU
+         detection instead.
       2. ``environmentSku`` cached in .local/config.json from a prior push.
       3. Best-effort SILENT BAP lookup of the target env's SKU (never
          prompts); the result is cached back into config.json.
       4. Default ``production`` (real deploys are overwhelmingly prod, and
          this preserves the historical default).
     """
-    override = os.environ.get("ESS_ADK_DEPLOY_TARGET", "").strip()
-    if override:
-        return override
     try:
         import adk_telemetry
     except Exception:  # noqa: BLE001
         return "production"
+    override = os.environ.get("ESS_ADK_DEPLOY_TARGET", "").strip().lower()
+    if override in (
+        adk_telemetry.DEPLOY_TARGET_SANDBOX,
+        adk_telemetry.DEPLOY_TARGET_PRODUCTION,
+    ):
+        return override
     sku = (config.get("environmentSku") or "").strip()
     if not sku:
         sku = _lookup_environment_sku_silent(env_url) or ""

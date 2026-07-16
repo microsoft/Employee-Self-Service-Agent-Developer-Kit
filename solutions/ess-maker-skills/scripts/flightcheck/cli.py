@@ -87,30 +87,6 @@ SCOPE_MAP = {
     "cloudpolicy": [("Cloud Policies", run_cloud_policy_checks)],
 }
 
-# How FlightCheck was invoked. Feeds the `invocationSource` telemetry
-# dimension so the dashboards can attribute runs to their entry point:
-#   adk       — the /flightcheck slash-command (VS Code / ADK MCP)
-#   installer — the standalone installer's built-in readiness check
-#   cli       — a maker running scripts/flightcheck/cli.py directly
-#   connect   — a FlightCheck triggered by the /connect connector-setup flow
-# `connect` is kept distinct from `cli`/`adk` so connector-setup runs don't
-# swamp the direct-CLI bucket or skew the full-run pass-rate/duration tiles.
-INVOCATION_SOURCES = ["adk", "installer", "cli", "connect"]
-
-
-def _default_invocation_source():
-    """Resolve the default ``--invocation-source`` from the environment.
-
-    An orchestrator (e.g. the ``/connect`` guided setup) can export
-    ``ESS_FLIGHTCHECK_INVOCATION_SOURCE=connect`` once per session so every
-    FlightCheck it triggers is attributed correctly without editing each
-    call site. argparse does NOT validate a ``default`` against ``choices``,
-    so we guard here: an unknown/empty value falls back to ``"cli"``.
-    """
-    val = os.environ.get("ESS_FLIGHTCHECK_INVOCATION_SOURCE", "").strip().lower()
-    return val if val in INVOCATION_SOURCES else "cli"
-
-
 FULL_SCOPE = [
     ("Prerequisites", run_prerequisites_checks),
     ("Infrastructure", run_infrastructure_checks),
@@ -182,11 +158,9 @@ def main():
         help="Don't emit anonymous FlightCheck outcome telemetry",
     )
     parser.add_argument(
-        "--invocation-source", default=_default_invocation_source(),
-        choices=INVOCATION_SOURCES,
-        help="How FlightCheck was invoked (adk=slash-command, installer=standalone "
-             "installer, cli=direct Python CLI, connect=/connect connector setup). "
-             "Defaults to $ESS_FLIGHTCHECK_INVOCATION_SOURCE, else 'cli'.",
+        "--invocation-source", default="cli",
+        choices=["adk", "installer", "cli"],
+        help="How FlightCheck was invoked (adk=slash-command, installer=standalone installer, cli=direct Python CLI)",
     )
     args = parser.parse_args()
 
@@ -459,7 +433,7 @@ def main():
             import adk_telemetry as _adk
 
             _agent_id = active_agent.get("botId", "")
-            if tenant_id:
+            if tenant_id or tenant_name:
                 _adk.set_identity(tenant_id=tenant_id, tenant_name=tenant_name)
             _ridx = _adk.next_run_index(_agent_id)
             _adk.emit_flightcheck_run(agent_id=_agent_id, run_index=_ridx)
