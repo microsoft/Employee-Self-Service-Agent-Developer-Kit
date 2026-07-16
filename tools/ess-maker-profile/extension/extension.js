@@ -28,6 +28,13 @@ const SETTINGS_BACKUP_KEY = 'essMaker.settingsBackup.v1';
 // silently run stale code. On startup we compare the local clone to
 // origin/main and, when behind, offer a one-click `git pull --ff-only`.
 const UPDATE_BRANCH = 'main';
+// How often to re-run the check within a long-lived session. VS Code sessions
+// can stay open for days, so a single startup check isn't enough to keep
+// makers on latest — re-check every 4 hours (in addition to each startup).
+const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+// Guards against stacking notifications: true while a nudge (or the resulting
+// update) is already being shown, so the periodic timer doesn't open a second.
+let _updateNudgeActive = false;
 
 // Settings that strip developer chrome to the bone. Applied at GLOBAL (user)
 // scope because workspace-scope leaves menu/title-bar/activity-bar visible
@@ -1261,7 +1268,16 @@ async function checkForUpdate(context) {
         }
 
         _log(`update: behind origin/${UPDATE_BRANCH} (local=${localSha.slice(0, 8)} remote=${(remoteSha || '').slice(0, 8)}) — prompting`);
-        await promptUpdate(context, repoRoot);
+        if (_updateNudgeActive) {
+            _log('update: a nudge is already open — skipping this re-check');
+            return;
+        }
+        _updateNudgeActive = true;
+        try {
+            await promptUpdate(context, repoRoot);
+        } finally {
+            _updateNudgeActive = false;
+        }
     } catch (err) {
         _log(`update: checkForUpdate error: ${err && err.message}`);
     }
@@ -1457,6 +1473,16 @@ function activate(context) {
         // Fully async, fire-and-forget: never blocks activation, and any
         // failure is logged and swallowed inside checkForUpdate.
         checkForUpdate(context).catch((err) => _log(`activate: checkForUpdate rejected: ${err && err.message}`));
+
+        // Re-check periodically so long-lived sessions (VS Code left open for
+        // days) still get nudged after "Later" without needing a restart. The
+        // interval reuses every guard in checkForUpdate (only on main,
+        // offline-safe, respects essMaker.autoUpdateCheck, won't stack an open
+        // nudge). Disposed with the extension so it doesn't outlive it.
+        const _updateTimer = setInterval(() => {
+            checkForUpdate(context).catch((err) => _log(`update: periodic re-check rejected: ${err && err.message}`));
+        }, UPDATE_CHECK_INTERVAL_MS);
+        context.subscriptions.push({ dispose: () => clearInterval(_updateTimer) });
     }
 }
 

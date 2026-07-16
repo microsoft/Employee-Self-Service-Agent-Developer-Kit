@@ -10,7 +10,9 @@
   - **Update now** runs `git pull --ff-only` and offers a window reload.
   - **Later** (or dismissing) re-asks on the next startup — there is
     intentionally no permanent per-user "don't ask again", so makers
-    stay on the latest ADK.
+    stay on the latest ADK. The check also re-runs every 4 hours within
+    a long-lived session, so leaving VS Code open doesn't defer the
+    nudge indefinitely.
   - Only fires when the clone is on `main` (developers on feature
     branches are never nagged), and degrades gracefully when offline,
     on a dirty tree, or on a diverged (non-fast-forward) clone.
