@@ -268,6 +268,17 @@ REDACT_REGEX: list[tuple[re.Pattern[str], str]] = [
         re.compile(r"\beyJ[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\b"),
         "REDACTED_JWT",
     ),
+    # Shared Access Signature on Logic Apps / Power Automate trigger
+    # callback URLs (listCallbackUrl response + the triggered run URL).
+    # The `sig=` query param IS the bearer secret that authorizes anyone
+    # to invoke the flow trigger — it MUST be scrubbed. `sp=` (permission
+    # path) and `sv=` (sig version) are not secret and are left intact so
+    # the URL shape stays realistic for tests. Matches in URLs whether the
+    # value is raw or percent-encoded.
+    (
+        re.compile(r"([?&]sig=)[A-Za-z0-9._%\-]+"),
+        r"\1REDACTED_SAS_SIG",
+    ),
 ]
 
 

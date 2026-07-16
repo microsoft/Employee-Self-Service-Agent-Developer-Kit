@@ -82,6 +82,33 @@ explorer rather than spawning another tab from this skill.
 
 ---
 
+## Step 2b: Optional live egress probe (INFRA-003, consent required)
+
+INFRA-003 verifies the agent's external system endpoints (Workday, ServiceNow,
+SAP SuccessFactors, custom HTTP) are reachable. By default it runs a **read-only
+local probe** from the maker's machine — no permission needed, nothing created.
+
+There is also an opt-in **live egress probe** (`--live-probe`) that would confirm
+reachability from the Power Platform environment's own egress by briefly creating
+and then deleting a transient test flow. This mutates the environment, so you MUST
+get explicit consent before passing `--live-probe`. Ask using this exact wording,
+swapping `<SYSTEM>` for the system being checked (Workday / ServiceNow /
+SuccessFactors / custom HTTP):
+
+> To check that your `<SYSTEM>` connection is whitelisted, I'll create a temporary
+> flow in your environment that sends a test network request, then delete it right
+> after. It won't touch any of your data. Okay to proceed?
+
+If the user declines, run without `--live-probe` (local probe only) and note in the
+summary that the egress-level probe was skipped by choice.
+
+> **Note:** the live egress probe is not yet available in this build — the
+> underlying flow API is pending enablement. `--live-probe` currently falls back
+> to the local probe and flags that the egress probe is pending. Do not promise a
+> full egress result until the live path ships.
+
+---
+
 ## Step 3: Read results and present findings
 
 Read `workspace/flightcheck/results.json`. Build the output below using the data.

@@ -154,6 +154,15 @@ def main():
         help="Don't open the HTML report in a browser after running",
     )
     parser.add_argument(
+        "--live-probe", action="store_true",
+        help=(
+            "Opt in to the Power-Platform-egress reachability probe for INFRA-003 "
+            "(creates and deletes a transient test flow after explicit consent). "
+            "Not yet available — INFRA-003 currently always runs the read-only "
+            "local probe."
+        ),
+    )
+    parser.add_argument(
         "--no-telemetry", action="store_true",
         help="Don't emit anonymous FlightCheck outcome telemetry",
     )
@@ -363,6 +372,7 @@ def main():
     runner.pva = pva
     runner.powerplatform = powerplatform
     runner.azure_arm = azure_arm
+    runner.live_probe = args.live_probe
 
     # Register checks based on scope
     if args.scope == "full":

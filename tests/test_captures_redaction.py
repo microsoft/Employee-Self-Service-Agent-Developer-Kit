@@ -188,6 +188,21 @@ class TestRedactText:
         assert "SuperSecret123!" not in out
         assert "REDACTED_WSSE_PASSWORD" in out
 
+    def test_scrubs_sas_callback_signature(self) -> None:
+        # The listCallbackUrl / triggered-run URL carries a SAS `sig=`
+        # that authorizes invoking the flow trigger — it MUST be scrubbed,
+        # while the non-secret `sp=` / `sv=` params stay intact.
+        url = (
+            "https://prod-1.westus.logic.azure.com/workflows/abc/triggers/"
+            "manual/paths/invoke?api-version=2016-06-01"
+            "&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=AbC123_secret-Value%2Fxyz"
+        )
+        out = _redact_text(url)
+        assert "AbC123_secret-Value" not in out
+        assert "sig=REDACTED_SAS_SIG" in out
+        assert "sp=%2Ftriggers%2Fmanual%2Frun" in out
+        assert "sv=1.0" in out
+
     def test_scrubs_password_element_with_other_namespace_prefix(self) -> None:
         body = '<ns0:Password>SuperSecret123!</ns0:Password>'
         out = _redact_text(body)
