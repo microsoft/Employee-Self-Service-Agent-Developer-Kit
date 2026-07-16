@@ -1,0 +1,205 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+"""
+Integration tests for INFRA-003's opt-in ``--live-probe`` egress path.
+
+Unlike the default local probe (test_infra_003_reachability.py, stdlib
+only), the live path drives the real Power Automate transient-flow
+lifecycle over HTTP, so these tests replay the validated cassette shapes
+through the ``tests.mocks.power_automate`` builders (cardinal rule:
+validated-tier API => cassette-backed mock + a test that replays it).
+
+Covered:
+- egress-reachable  (invoke returns an int reachableStatusCode) -> PASS
+- egress-blocked    (invoke returns null)                       -> FAIL
+- indeterminate     (create fails)  -> per-endpoint fallback to local probe
+- guaranteed cleanup (the created flow is always DELETEd; orphan sweep runs)
+"""
+
+from __future__ import annotations
+
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import patch
+
+import responses
+
+from tests.conftest import require_validated_mock
+from tests.mocks import power_automate as pa
+
+from flightcheck.checks.infrastructure import (
+    ProbeResult,
+    check_external_endpoint_reachability,
+)
+from flightcheck.runner import Priority, Role, Status
+
+require_validated_mock(pa)
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Fixtures
+# ───────────────────────────────────────────────────────────────────────
+
+
+def _live_runner(connections: dict[str, Any], *, pp: Any = None) -> SimpleNamespace:
+    """A runner with --live-probe on and every egress prerequisite present."""
+    return SimpleNamespace(
+        config={"connections": connections},
+        live_probe=True,
+        pp_admin=pp if pp is not None else SimpleNamespace(
+            flow_headers={"Authorization": "Bearer flow-token"}
+        ),
+        env_id=pa.MOCK_ENV_ID,
+        env_url=pa.MOCK_ENV_URL,
+        dv_token="dv-token",
+    )
+
+
+def _register_lifecycle(*, reachable_status_code: int | None) -> None:
+    """Register one full create/activate/callback/invoke/delete lifecycle
+    plus the orphan-sweep GET (used for both the pre- and post-run sweep)."""
+    responses.add(**pa.find_workflows())            # orphan sweep (pre + post)
+    responses.add(**pa.create_workflow())
+    responses.add(**pa.activate_workflow())
+    responses.add(**pa.list_callback_url())
+    responses.add(**pa.invoke_probe(reachable_status_code=reachable_status_code))
+    responses.add(**pa.delete_workflow())
+
+
+def _reachable_local(host: str) -> ProbeResult:
+    return ProbeResult(
+        host=host, port=443, dns_ok=True, tcp_ok=True, tls_ok=True,
+        resolved_ip="203.0.113.10", dns_ms=5.0, tcp_ms=12.0, tls_ms=20.0,
+        tls_version="TLSv1.3",
+    )
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Reachable / blocked from the environment's own egress
+# ───────────────────────────────────────────────────────────────────────
+
+
+class TestLiveProbeOutcomes:
+    @responses.activate
+    def test_reachable_status_code_passes_with_egress_wording(self):
+        _register_lifecycle(reachable_status_code=302)
+        runner = _live_runner({"Workday": {"baseUrl": "https://wd.example.com"}})
+
+        results = check_external_endpoint_reachability(runner)
+
+        assert len(results) == 1
+        row = results[0]
+        assert row.status == Status.PASSED.value
+        assert row.checkpoint_id == "INFRA-003"
+        assert row.priority == Priority.CRITICAL.value
+        # Reachability came from the egress, not the local machine.
+        assert "Reachable from Power Platform egress (HTTP 302)" in row.result
+        assert "environment's own egress" in row.result
+        # The local "necessary but not sufficient" caveat must NOT apply.
+        assert "necessary but not sufficient" not in row.result
+        assert row.remediation == ""
+
+    @responses.activate
+    def test_null_status_code_fails_as_egress_blocked(self):
+        _register_lifecycle(reachable_status_code=None)
+        runner = _live_runner({"ServiceNow": {"instanceUrl": "https://sn.example.com"}})
+
+        results = check_external_endpoint_reachability(runner)
+
+        assert len(results) == 1
+        row = results[0]
+        assert row.status == Status.FAILED.value
+        assert "UNREACHABLE from Power Platform egress" in row.result
+        assert "DLP block" in row.result
+        # Five-field role-aware finding is still emitted (AC5).
+        assert "Impact:" in row.remediation
+        assert "Probable cause:" in row.remediation
+        assert "What it implies:" in row.remediation
+        assert "Next steps:" in row.remediation
+        assert Role.SERVICENOW_ADMIN.value in row.roles
+        assert Role.POWER_PLATFORM_ADMIN.value in row.roles
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Cleanup / idempotency (AC7) — the transient flow is always deleted
+# ───────────────────────────────────────────────────────────────────────
+
+
+class TestLiveProbeCleanup:
+    @responses.activate
+    def test_created_flow_is_deleted(self):
+        _register_lifecycle(reachable_status_code=200)
+        runner = _live_runner({"Workday": {"baseUrl": "https://wd.example.com"}})
+
+        check_external_endpoint_reachability(runner)
+
+        methods = [c.request.method for c in responses.calls]
+        assert "POST" in methods       # create
+        assert "DELETE" in methods     # cleanup of the transient flow
+        # Orphan sweep ran (the GET $filter) both before and after.
+        assert methods.count("GET") >= 2
+
+    @responses.activate
+    def test_pre_run_orphan_from_crashed_prior_run_is_swept(self):
+        # A leftover probe flow exists; the pre-run sweep must delete it.
+        responses.add(**pa.find_workflows(workflows=[pa.workflow_row()]))
+        responses.add(**pa.delete_workflow())       # sweep of the orphan
+        responses.add(**pa.create_workflow())
+        responses.add(**pa.activate_workflow())
+        responses.add(**pa.list_callback_url())
+        responses.add(**pa.invoke_probe(reachable_status_code=200))
+        # find is re-used for the post sweep (empty after orphan gone is not
+        # required — responses reuses the single GET registration).
+        runner = _live_runner({"Workday": {"baseUrl": "https://wd.example.com"}})
+
+        results = check_external_endpoint_reachability(runner)
+
+        assert results[0].status == Status.PASSED.value
+        assert sum(c.request.method == "DELETE" for c in responses.calls) >= 1
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Fallback — an endpoint the egress probe can't cover uses the local probe
+# ───────────────────────────────────────────────────────────────────────
+
+
+class TestLiveProbeFallback:
+    @responses.activate
+    def test_create_failure_falls_back_to_local_probe(self):
+        # Flow creation fails (500) -> live result is indeterminate for this
+        # endpoint -> the check falls back to the read-only local probe.
+        responses.add(**pa.find_workflows())
+        responses.add(**pa.create_workflow(status=500))
+        runner = _live_runner({"Workday": {"baseUrl": "https://wd.example.com"}})
+
+        with patch(
+            "flightcheck.checks.infrastructure.probe_endpoint",
+            side_effect=lambda host, port=443, timeout=10.0: _reachable_local(host),
+        ):
+            results = check_external_endpoint_reachability(runner)
+
+        assert len(results) == 1
+        row = results[0]
+        assert row.status == Status.PASSED.value
+        # The endpoint is tagged as local-only and the local caveat reattaches.
+        assert "[local only]" in row.result
+        assert "necessary but not sufficient" in row.result
+
+    def test_missing_prerequisites_uses_local_probe(self):
+        # --live-probe requested but no pp_admin / env / token on the runner.
+        runner = SimpleNamespace(
+            config={"connections": {"Workday": {"baseUrl": "https://wd.example.com"}}},
+            live_probe=True,
+        )
+        with patch(
+            "flightcheck.checks.infrastructure.probe_endpoint",
+            side_effect=lambda host, port=443, timeout=10.0: _reachable_local(host),
+        ):
+            results = check_external_endpoint_reachability(runner)
+
+        assert len(results) == 1
+        row = results[0]
+        assert row.status == Status.PASSED.value
+        assert "could not run" in row.result
+        assert "local probe only" in row.result

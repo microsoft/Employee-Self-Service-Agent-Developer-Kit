@@ -156,10 +156,11 @@ def main():
     parser.add_argument(
         "--live-probe", action="store_true",
         help=(
-            "Opt in to the Power-Platform-egress reachability probe for INFRA-003 "
-            "(creates and deletes a transient test flow after explicit consent). "
-            "Not yet available — INFRA-003 currently always runs the read-only "
-            "local probe."
+            "Opt in to the Power-Platform-egress reachability probe for INFRA-003. "
+            "Stands up a transient test flow, triggers it once to probe each "
+            "endpoint from the environment's own egress, then deletes it. This is "
+            "the only FlightCheck path that mutates the environment; without this "
+            "flag INFRA-003 runs the read-only local probe."
         ),
     )
     parser.add_argument(

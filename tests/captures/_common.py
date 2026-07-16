@@ -279,6 +279,22 @@ REDACT_REGEX: list[tuple[re.Pattern[str], str]] = [
         re.compile(r"([?&]sig=)[A-Za-z0-9._%\-]+"),
         r"\1REDACTED_SAS_SIG",
     ),
+    # Power Platform environment-specific hostnames on Logic Apps /
+    # Power Automate callback + run-content URLs, e.g.
+    #   f7962332f9b6e6ad8a727c3c4c78d7.0c.environment.api.powerplatform.com
+    #   <same>.environment.api.powerplatformusercontent.com
+    # The leading labels are the BAP environment GUID with dashes stripped
+    # and split (30 hex `.` 2 hex), so the dashed-GUID rule above never
+    # matches them. That GUID identifies the tenant's environment and MUST
+    # be scrubbed. `usercontent` is preserved so the URL shape stays real.
+    (
+        re.compile(
+            r"\b[0-9a-f]{16,32}\.[0-9a-f]{1,8}\.environment\.api\."
+            r"(powerplatformusercontent|powerplatform)\.com\b",
+            re.IGNORECASE,
+        ),
+        r"mockenv.00.environment.api.\1.com",
+    ),
 ]
 
 

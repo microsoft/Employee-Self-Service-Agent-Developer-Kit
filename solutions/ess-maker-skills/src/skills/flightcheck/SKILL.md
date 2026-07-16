@@ -88,7 +88,7 @@ INFRA-003 verifies the agent's external system endpoints (Workday, ServiceNow,
 SAP SuccessFactors, custom HTTP) are reachable. By default it runs a **read-only
 local probe** from the maker's machine — no permission needed, nothing created.
 
-There is also an opt-in **live egress probe** (`--live-probe`) that would confirm
+There is also an opt-in **live egress probe** (`--live-probe`) that confirms
 reachability from the Power Platform environment's own egress by briefly creating
 and then deleting a transient test flow. This mutates the environment, so you MUST
 get explicit consent before passing `--live-probe`. Ask using this exact wording,
@@ -102,10 +102,10 @@ SuccessFactors / custom HTTP):
 If the user declines, run without `--live-probe` (local probe only) and note in the
 summary that the egress-level probe was skipped by choice.
 
-> **Note:** the live egress probe is not yet available in this build — the
-> underlying flow API is pending enablement. `--live-probe` currently falls back
-> to the local probe and flags that the egress probe is pending. Do not promise a
-> full egress result until the live path ships.
+> **Note:** `--live-probe` is the only FlightCheck path that writes to the tenant.
+> It creates one transient probe flow per run, always deletes it (even on failure),
+> and sweeps any orphan left by a crashed prior run. If a prerequisite is missing
+> (no environment / Dataverse token), it degrades to the local probe and says so.
 
 ---
 

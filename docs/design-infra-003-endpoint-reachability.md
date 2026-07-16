@@ -75,19 +75,19 @@ Go with Option B, the HTTP probe via a transient test flow, structured per Apurv
 
 Reason: the check must prove reachability from the Power Platform environment's egress, not from the maker's local machine. A local probe tests the wrong network path. Only code running inside Power Platform (a flow) exercises the real egress route. Option B also reads HTTP status codes, which gives a true app-level signal.
 
-## Open tension: Option B vs AC7 (unresolved at work-item level)
+## Resolved: Option B vs AC7 (user-consent decision)
 
-This is not just a local concern. In the INFRA-002 thread, Apurva Banka stated that creating a temporary flow (Dataverse Option 2) "violates our AC7", and Senthil Mani replied he leans toward that option but wants more discussion. No decision has been recorded. Do not treat this as settled.
+Origin: in the INFRA-002 thread, Apurva Banka noted that creating a temporary flow (Dataverse Option 2) "violates our AC7", and Senthil Mani leaned toward the transient-flow option but wanted more discussion.
 
-AC7 requires the check to be idempotent and read-only. A transient flow creates and deletes a resource, which is a mutation. Our proposed reconciliation:
+Resolution: the AC7 / user-consent decision is **resolved**. The `--live-probe` egress path ships as an **opt-in, consent-gated, self-cleaning** mutation, and the default path stays fully read-only. AC7 is satisfied under this interpretation:
 
-- Scope of "read-only": no changes to the agent solution, connections, or business data. An ephemeral probe artifact is allowed if fully cleaned up.
-- Deterministic naming: the probe flow uses a fixed, recognizable name so reruns can detect and reuse or clean up leftovers.
-- Guaranteed cleanup: delete the probe flow on completion and on next run start, even after failure. Leave no residue.
+- Scope of "read-only": no changes to the agent solution, connections, or business data. One ephemeral probe artifact is allowed because it is fully cleaned up.
+- Deterministic naming: the probe flow uses a fixed display name (`flightcheck-infra003-probe`) so reruns detect and sweep leftovers via a `$filter` orphan scan.
+- Guaranteed cleanup: the created flow is deleted on completion (even on failure, in a `finally`), and an orphan sweep runs at the start and end of every live run. No residue.
 - Idempotent outcome: running twice yields the same result and the same final environment state.
-- Opt-in: the mutating path only runs under `--live-probe`. The default path stays fully read-only (local probe), which keeps AC7 intact by default.
+- Opt-in + consent: the mutating path only runs under `--live-probe`. The default path stays fully read-only (local probe), keeping AC7 intact by default.
 
-This keeps the spirit of AC7 (no lasting change, repeatable) while accepting one ephemeral, self-cleaning artifact. Whether the team accepts this interpretation is still open.
+Implementation: production `flightcheck/live_egress_probe.py` (isolated, the kit's only mutating path); wired into `check_external_endpoint_reachability` in `flightcheck/checks/infrastructure.py`; validated against cassette `tests/fixtures/cassettes/flightcheck_infra003_flow.yaml`.
 
 ## Output format contract (Shared Steps 7433818 / 7433819 / 7433820)
 
@@ -123,4 +123,4 @@ Note: this is a five-field per-finding schema. AC5 still says "4-field schema", 
 - AC4 WARN: timeout or unverifiable.
 - AC5 Schema: emit the five-field role-aware finding (Probable cause / Scope / What it implies / Next steps / Responsible role) per Shared Steps. AC5's "4-field" wording is stale.
 - AC6 Tests: all-reachable, one-blocked, dns-fail, cert-error, timeout.
-- AC7 Idempotent and read-only: default path (local probe) is fully read-only. The `--live-probe` path uses deterministic naming and guaranteed cleanup. Team acceptance of this interpretation is still open. See "Open tension" above.
+- AC7 Idempotent and read-only: default path (local probe) is fully read-only. The `--live-probe` path uses deterministic naming and guaranteed cleanup. The user-consent decision is resolved; see "Resolved: Option B vs AC7" above.

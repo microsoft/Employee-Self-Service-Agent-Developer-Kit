@@ -203,6 +203,20 @@ class TestRedactText:
         assert "sp=%2Ftriggers%2Fmanual%2Frun" in out
         assert "sv=1.0" in out
 
+    def test_scrubs_power_platform_environment_hostname(self) -> None:
+        # The listCallbackUrl / outputsLink runtime hosts embed the BAP
+        # environment id as a DASHLESS, split hostname (30hex.2hex), which
+        # the dashed-GUID rule misses. It MUST be redacted so the real
+        # environment can't be reconstructed from a committed cassette.
+        for domain in ("powerplatform", "powerplatformusercontent"):
+            url = (
+                f"https://f7962332f9b6e6ad8a727c3c4c78d7.0c.environment.api."
+                f"{domain}.com/powerautomate/automations/direct/cu/04/invoke"
+            )
+            out = _redact_text(url)
+            assert "f7962332f9b6e6ad8a727c3c4c78d7" not in out
+            assert f"mockenv.00.environment.api.{domain}.com" in out
+
     def test_scrubs_password_element_with_other_namespace_prefix(self) -> None:
         body = '<ns0:Password>SuperSecret123!</ns0:Password>'
         out = _redact_text(body)

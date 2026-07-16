@@ -313,7 +313,7 @@ class TestBucketingAndEdges:
             (r.status, r.result) for r in second
         ]
 
-    def test_live_probe_requested_notes_egress_probe_pending(self):
+    def test_live_probe_requested_but_prereqs_missing_falls_back_to_local(self):
         runner = _runner(
             {"Workday": {"baseUrl": "https://wd.example.com"}}, live_probe=True
         )
@@ -321,7 +321,10 @@ class TestBucketingAndEdges:
             results = check_external_endpoint_reachability(runner)
 
         assert results[0].status == Status.PASSED.value
-        assert "not yet available" in results[0].result
+        # No pp_admin / env / token on this runner, so the egress probe can't
+        # run; the check degrades to the local probe and says so.
+        assert "could not run" in results[0].result
+        assert "local probe only" in results[0].result
 
     def test_every_row_sets_roles(self):
         """test_check_roles.py enforces roles on every constructor."""
