@@ -313,3 +313,81 @@ class TestPolicyEnvScopeParsing:
         from flightcheck.pp_admin_client import _policy_env_scope
 
         assert _policy_env_scope(pp.dlp_policy_modern()) == (None, [])
+
+
+class TestGetEnvironmentSkuByDataverseUrl:
+    """Pins PPAdminClient.get_environment_sku_by_dataverse_url — the deploy
+    telemetry classifier resolves sandbox-vs-production from this SKU. Mirrors
+    the host-matching contract of find_environment_id_by_dataverse_url (matches
+    on both instanceUrl and instanceApiUrl), but returns the SKU string."""
+
+    def _make_client(self, envs):
+        from flightcheck.pp_admin_client import PPAdminClient
+
+        client = PPAdminClient(tenant_id="00000000-0000-0000-0000-000000001111")
+        client.get_environments = lambda: envs  # type: ignore[method-assign]
+        return client
+
+    def _env(self, *, sku=None, env_type=None, instance_url="", instance_api_url=""):
+        linked = {}
+        if instance_url:
+            linked["instanceUrl"] = instance_url
+        if instance_api_url:
+            linked["instanceApiUrl"] = instance_api_url
+        props = {"linkedEnvironmentMetadata": linked}
+        if sku is not None:
+            props["environmentSku"] = sku
+        if env_type is not None:
+            props["environmentType"] = env_type
+        return {"name": "bap-env-1", "properties": props}
+
+    def test_returns_sku_on_host_match(self):
+        client = self._make_client([
+            self._env(sku="Sandbox",
+                      instance_api_url="https://orgd98aef4a.api.crm12.dynamics.com"),
+        ])
+        assert client.get_environment_sku_by_dataverse_url(
+            "https://orgd98aef4a.api.crm12.dynamics.com"
+        ) == "Sandbox"
+
+    def test_falls_back_to_environment_type_when_no_sku(self):
+        client = self._make_client([
+            self._env(env_type="Production",
+                      instance_url="https://orgmocktenant.crm.dynamics.com/"),
+        ])
+        assert client.get_environment_sku_by_dataverse_url(
+            "https://orgmocktenant.crm.dynamics.com/"
+        ) == "Production"
+
+    def test_returns_none_when_no_env_matches(self):
+        client = self._make_client([
+            self._env(sku="Production",
+                      instance_url="https://otherorg.crm.dynamics.com/"),
+        ])
+        assert client.get_environment_sku_by_dataverse_url(
+            "https://orgd98aef4a.api.crm12.dynamics.com"
+        ) is None
+
+    def test_skips_envs_with_empty_url_fields(self):
+        client = self._make_client([
+            self._env(sku="ignored"),  # no linked URLs
+            self._env(sku="Trial",
+                      instance_api_url="https://orgd98aef4a.api.crm12.dynamics.com"),
+        ])
+        assert client.get_environment_sku_by_dataverse_url(
+            "https://orgd98aef4a.api.crm12.dynamics.com"
+        ) == "Trial"
+
+
+class TestAuthenticateSilent:
+    """authenticate_silent() must NEVER prompt interactively; when there is no
+    cached token it returns False so best-effort callers (push telemetry) fall
+    back cleanly instead of popping a browser."""
+
+    def test_returns_false_when_no_token_cache(self, chdir_kit_root):
+        from flightcheck.pp_admin_client import PPAdminClient
+
+        # chdir_kit_root created .local/ but no .token_cache.bin — the guard
+        # returns False before touching MSAL (no interactive prompt).
+        client = PPAdminClient(tenant_id="00000000-0000-0000-0000-000000001111")
+        assert client.authenticate_silent() is False
