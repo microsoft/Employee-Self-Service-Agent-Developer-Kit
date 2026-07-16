@@ -28,8 +28,6 @@ const SETTINGS_BACKUP_KEY = 'essMaker.settingsBackup.v1';
 // silently run stale code. On startup we compare the local clone to
 // origin/main and, when behind, offer a one-click `git pull --ff-only`.
 const UPDATE_BRANCH = 'main';
-// globalState flag set when the user picks "Don't ask again" (per-user opt-out).
-const UPDATE_OPT_OUT_KEY = 'essMaker.updateNudge.optOut.v1';
 
 // Settings that strip developer chrome to the bone. Applied at GLOBAL (user)
 // scope because workspace-scope leaves menu/title-bar/activity-bar visible
@@ -1219,12 +1217,9 @@ async function resolveRepoRoot() {
 // Startup entry point: async, never blocks activation, swallows all errors.
 async function checkForUpdate(context) {
     try {
-        // Per-user opt-out ("Don't ask again") wins.
-        if (context.globalState.get(UPDATE_OPT_OUT_KEY, false)) {
-            _log('update: opted out (Don\'t ask again)');
-            return;
-        }
         // Admin/IT-managed opt-out via settings (deployable through policy).
+        // There is intentionally no per-user "dismiss forever" — makers must
+        // stay on the latest ADK; only a managed policy can suppress the check.
         if (!vscode.workspace.getConfiguration().get('essMaker.autoUpdateCheck', true)) {
             _log('update: disabled via essMaker.autoUpdateCheck');
             return;
@@ -1272,22 +1267,17 @@ async function checkForUpdate(context) {
     }
 }
 
-// Non-blocking notification with the three required actions.
+// Non-blocking notification. Offers "Update now" or "Later" only — there is
+// deliberately no permanent per-user opt-out, so a maker who defers is asked
+// again on the next startup until they update (keeping everyone on latest).
 async function promptUpdate(context, repoRoot) {
     const UPDATE = 'Update now';
     const LATER = 'Later';
-    const NEVER = "Don't ask again";
     const sel = await vscode.window.showInformationMessage(
         'A newer version of the ESS ADK is available.',
         UPDATE,
         LATER,
-        NEVER,
     );
-    if (sel === NEVER) {
-        await context.globalState.update(UPDATE_OPT_OUT_KEY, true);
-        _log('update: user chose "Don\'t ask again"');
-        return;
-    }
     if (sel !== UPDATE) {
         // "Later" or dismissed — do nothing; ask again next startup.
         _log(`update: user chose ${sel ? `"${sel}"` : 'dismiss'} — will re-check next startup`);

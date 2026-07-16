@@ -6,16 +6,19 @@
   whether the local ESS ADK clone is behind `origin/main` (via
   `git ls-remote` vs the local `HEAD`) and, if so, shows a non-blocking
   notification: "A newer version of the ESS ADK is available."
-  with **Update now**, **Later**, and **Don't ask again** actions.
+  with **Update now** and **Later** actions.
   - **Update now** runs `git pull --ff-only` and offers a window reload.
+  - **Later** (or dismissing) re-asks on the next startup — there is
+    intentionally no permanent per-user "don't ask again", so makers
+    stay on the latest ADK.
   - Only fires when the clone is on `main` (developers on feature
     branches are never nagged), and degrades gracefully when offline,
     on a dirty tree, or on a diverged (non-fast-forward) clone.
   - Detects when the pulled repo ships a newer extension than the
     installed VSIX (a code pull doesn't refresh the extension) and
     prompts reinstall/reload instead.
-  - **Don't ask again** persists per-user; a new `essMaker.autoUpdateCheck`
-    setting (default `true`) lets IT disable the nudge on managed boxes.
+  - A new `essMaker.autoUpdateCheck` setting (default `true`) lets IT
+    disable the nudge on managed boxes (the only supported opt-out).
 
 ## 0.4.22 (POC)
 
