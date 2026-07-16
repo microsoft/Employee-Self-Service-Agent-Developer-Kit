@@ -2,7 +2,7 @@
   "name": "ess-maker-profile",
   "displayName": "ESS Maker",
   "description": "Chat-only, big-button experience for customizing your Employee Self-Service agent. POC.",
-  "version": "0.4.23",
+  "version": "0.4.24",
   "publisher": "microsoft-ess",
   "private": true,
   "engines": {
@@ -95,6 +95,11 @@
           "enum": ["lite", "standard", ""],
           "default": "",
           "description": "Install mode set by the ESS installer. 'lite' applies chat-first layout; 'standard' uses default VS Code layout with /setup injection only."
+        },
+        "essMaker.autoUpdateCheck": {
+          "type": "boolean",
+          "default": true,
+          "description": "On VS Code startup, check whether the local ESS ADK clone is behind origin/main and, if so, offer a one-click update. Set to false (e.g. via IT/Intune policy) to disable the nudge on managed machines."
         }
       }
     }
