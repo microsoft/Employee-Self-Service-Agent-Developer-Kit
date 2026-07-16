@@ -55,7 +55,7 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(adk, "BUFFER_PATH", str(cfg_dir / "telemetry-buffer.ndjson"))
     monkeypatch.setattr(adk, "RUNS_PATH", str(cfg_dir / "flightcheck-runs.json"))
     monkeypatch.setattr(adk, "_SYNC", True)
-    monkeypatch.setattr(adk, "_IDENTITY", {"instance_id": "", "tenant_id": ""})
+    monkeypatch.setattr(adk, "_IDENTITY", {"instance_id": "", "tenant_id": "", "tenant_name": ""})
 
     for var in (
         "ESS_ADK_TELEMETRY",
@@ -89,6 +89,18 @@ def test_set_identity_stores_instance_and_raw_tenant(monkeypatch):
     assert "developer_id" not in ident
     assert ident["instance_id"] == "install-guid-1"
     assert ident["tenant_id"] == "tenant-Z"
+
+
+def test_set_identity_stores_tenant_name(monkeypatch):
+    monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
+    ident = adk.set_identity(tenant_id="tenant-Z", tenant_name="Contoso")
+    assert ident["tenant_name"] == "Contoso"
+    # Flows into every event's common dimensions (OII; privacy-approved).
+    dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
+    assert dims["tenant_name"] == "Contoso"
+    # Defaults to "" when not provided.
+    adk.set_identity(tenant_id="tenant-Z")
+    assert adk.common_dimensions(adk.SURFACE_CLI)["tenant_name"] == ""
 
 
 def test_explicit_instance_id_overrides_persisted(monkeypatch):
@@ -156,6 +168,7 @@ def test_common_dimensions_shape():
     dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
     for key in (
         "schema_version", "instance_id", "tenant_id", "tenant_class",
+        "tenant_name",
         "session_id", "surface", "adk_version", "timestamp",
     ):
         assert key in dims
@@ -480,3 +493,25 @@ def test_shim_never_raises_even_if_post_fails(monkeypatch):
     monkeypatch.setattr(_fc, "_post", _boom)
     # Fail-open contract: a telemetry failure must never fail the skill step.
     assert emit_capability.main(["emit_capability.py", "troubleshoot"]) == 0
+
+
+# --- deploy-target classification (sandbox vs production) ------------------
+def test_classify_deploy_target_non_prod_skus_map_to_sandbox():
+    for sku in ("Sandbox", "Trial", "Developer", "Teams",
+                "SubscriptionBasedTrial", "Support", "Playground"):
+        assert adk.classify_deploy_target(sku) == "sandbox"
+
+
+def test_classify_deploy_target_prod_skus_map_to_production():
+    for sku in ("Production", "Default"):
+        assert adk.classify_deploy_target(sku) == "production"
+
+
+def test_classify_deploy_target_unknown_or_empty_defaults_to_production():
+    for sku in ("", None, "SomethingNew", "   "):
+        assert adk.classify_deploy_target(sku) == "production"
+
+
+def test_classify_deploy_target_is_case_and_whitespace_insensitive():
+    assert adk.classify_deploy_target("  sAnDbOx  ") == "sandbox"
+    assert adk.classify_deploy_target(" PRODUCTION ") == "production"
