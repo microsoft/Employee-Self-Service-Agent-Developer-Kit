@@ -184,7 +184,7 @@ _SYNC = os.environ.get("ESS_ADK_TELEMETRY_SYNC", "").strip().lower() in (
 # subsequent events inherit it so api.call / build / deploy don't each need
 # to re-derive it. We deliberately do NOT keep any developer/user identifier
 # here — only a random install ``instance_id`` and the raw tenant GUID.
-_IDENTITY: dict[str, str] = {"instance_id": "", "tenant_id": ""}
+_IDENTITY: dict[str, str] = {"instance_id": "", "tenant_id": "", "tenant_name": ""}
 
 # Track dispatched daemon threads so flush() can join them (tests / session end).
 _THREADS: list[threading.Thread] = []
@@ -198,7 +198,9 @@ _SESSION_LOCK = threading.Lock()
 
 
 # --- Identity model (spec) ------------------------------------------------
-def set_identity(tenant_id: str = "", instance_id: str | None = None) -> dict[str, str]:
+def set_identity(
+    tenant_id: str = "", instance_id: str | None = None, tenant_name: str = ""
+) -> dict[str, str]:
     """Record the install + tenant identity for all subsequent events.
 
     ``instance_id`` is a random GUID identifying the ADK installation (not a
@@ -206,12 +208,16 @@ def set_identity(tenant_id: str = "", instance_id: str | None = None) -> dict[st
     developer identifier. When omitted it defaults to the persisted per-install
     GUID (``flightcheck.telemetry.get_instance_id``). ``tenant_id`` is stored
     RAW (approved Data Profile: OII, no transformation) so dashboards can
-    filter by the literal Entra tenant GUID. No developer/user id is collected.
+    filter by the literal Entra tenant GUID. ``tenant_name`` is the tenant's
+    organization display name (OII identifying the enterprise tenant, not a
+    person; privacy-approved without a Data Profile update) — best-effort,
+    stored as ``""`` when unavailable. No developer/user id is collected.
     """
     _IDENTITY["instance_id"] = (
         _fc.get_instance_id() if instance_id is None else (instance_id or "")
     )
     _IDENTITY["tenant_id"] = tenant_id or ""
+    _IDENTITY["tenant_name"] = tenant_name or ""
     return dict(_IDENTITY)
 
 
@@ -357,9 +363,11 @@ def common_dimensions(
     session_id: str = "",
     instance_id: str | None = None,
     tenant_id: str | None = None,
+    tenant_name: str | None = None,
 ) -> dict[str, Any]:
     """Build the dimensions present on every event (spec Common Dimensions)."""
     tid = _IDENTITY["tenant_id"] if tenant_id is None else tenant_id
+    tname = _IDENTITY["tenant_name"] if tenant_name is None else tenant_name
     return {
         "schema_version": SCHEMA_VERSION,
         "instance_id": (
@@ -367,6 +375,7 @@ def common_dimensions(
         ) if instance_id is None else instance_id,
         "tenant_id": tid,
         "tenant_class": _fc.classify_tenant(tid),
+        "tenant_name": tname,
         "session_id": session_id,
         "surface": surface,
         "adk_version": _fc.get_adk_version(),
@@ -576,10 +585,39 @@ def emit_agent_create(
     return _emit(EVENT_AGENT_CREATE, data, block=block)
 
 
+# Power Platform BAP `environmentSku` values that denote a non-production
+# environment. Everything else (Production, Default, or unknown/empty) is
+# treated as production. Power Platform has no first-class "staging" concept —
+# a user-designated staging environment is just another Production-SKU env and
+# is indistinguishable from prod by any API field — so deploy telemetry only
+# distinguishes the two buckets we can actually detect: sandbox vs production.
+_NON_PRODUCTION_SKUS = frozenset({
+    "sandbox", "trial", "developer", "teams",
+    "subscriptionbasedtrial", "support", "playground",
+})
+
+DEPLOY_TARGET_SANDBOX = "sandbox"
+DEPLOY_TARGET_PRODUCTION = "production"
+
+
+def classify_deploy_target(environment_sku: str) -> str:
+    """Map a Power Platform environment SKU to a deploy-target bucket.
+
+    Returns ``"sandbox"`` for non-production SKUs (Sandbox/Trial/Developer/
+    Teams/...) and ``"production"`` for Production/Default or any
+    unknown/empty value (the safe default, since real deploys are
+    overwhelmingly against Production-SKU environments).
+    """
+    sku = (environment_sku or "").strip().lower()
+    if sku in _NON_PRODUCTION_SKUS:
+        return DEPLOY_TARGET_SANDBOX
+    return DEPLOY_TARGET_PRODUCTION
+
+
 def emit_agent_deploy(
     *,
     agent_id: str = "",
-    deploy_target: str = "test",
+    deploy_target: str = "production",
     adk_capability: str = "publishing",
     outcome: str = "success",
     duration_ms: int = 0,
@@ -741,7 +779,7 @@ def _emit_synthetic(n: int = 1) -> int:
     # the synthetic spread should mirror the whole value-list rather than only
     # the handful of originally-wired capabilities.
     capabilities = list(ADK_CAPABILITIES)
-    deploy_targets = ["test", "staging", "production"]
+    deploy_targets = ["sandbox", "production"]
     api_endpoints = ["dataverse/bots", "dataverse/botcomponents", "bap/environments"]
     # Fixed, recognizable demo tenant GUIDs so dashboards are filterable by a
     # known tenant_id (raw OII per approved Data Profile). Weighted so one
@@ -752,12 +790,25 @@ def _emit_synthetic(n: int = 1) -> int:
         + ["33333333-3333-3333-3333-333333333333"]      # Northwind (demo customer)
         + [_fc.MICROSOFT_CORP_TENANT_ID] * 2            # Microsoft corp (internal dogfood)
     )
+    # Friendly org display names for the demo tenants (OII; privacy-approved).
+    # Mirrors what cli.py resolves live from Graph /organization in real runs.
+    synth_tenant_names = {
+        "11111111-1111-1111-1111-111111111111": "Contoso",
+        "22222222-2222-2222-2222-222222222222": "Fabrikam",
+        "33333333-3333-3333-3333-333333333333": "Northwind Traders",
+        _fc.MICROSOFT_CORP_TENANT_ID: "Microsoft",
+    }
     bad = 0
     for _ in range(max(1, n)):
         # Random instance per iteration (so active-install / DAU counts vary),
         # but a fixed-pool tenant so per-tenant filtering returns meaningful
         # slices. No developer/user identifier is ever emitted.
-        set_identity(tenant_id=random.choice(synth_tenants), instance_id=str(uuid.uuid4()))
+        _tid = random.choice(synth_tenants)
+        set_identity(
+            tenant_id=_tid,
+            instance_id=str(uuid.uuid4()),
+            tenant_name=synth_tenant_names.get(_tid, ""),
+        )
         # Force a brand-new session each iteration; otherwise start_session
         # short-circuits as "existing-session" (30-min window) and only the
         # first loop emits adk.session.start, starving the Sessions cube.
