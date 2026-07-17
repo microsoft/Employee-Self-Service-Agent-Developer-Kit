@@ -269,6 +269,84 @@ def save_component_map(agent_dir, component_map):
     _atomic_write_text(map_path, json.dumps(component_map, indent=2))
 
 
+def _cache_environment_sku(sku):
+    """Persist the resolved environment SKU into .local/config.json so future
+    pushes can classify deploy telemetry without another BAP round-trip.
+
+    Best-effort and non-fatal — a failure here never affects the push.
+    """
+    if not sku:
+        return
+    try:
+        config_path = os.path.join(".local", "config.json")
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if data.get("environmentSku") == sku:
+            return
+        data["environmentSku"] = sku
+        _atomic_write_text(config_path, json.dumps(data, indent=2))
+    except Exception:  # noqa: BLE001 — caching is best-effort only
+        pass
+
+
+def _lookup_environment_sku_silent(env_url):
+    """Best-effort, SILENT lookup of the target environment's BAP SKU.
+
+    Never prompts for sign-in (uses only the cached MSAL token) and never
+    raises — returns the SKU string or None. Used purely for telemetry
+    attribution, so it must not add latency-blocking auth to /push.
+    """
+    if not env_url:
+        return None
+    try:
+        from auth import discover_tenant
+        from flightcheck.pp_admin_client import PPAdminClient
+
+        tenant_id = discover_tenant(env_url)
+        client = PPAdminClient(tenant_id)
+        if not client.authenticate_silent():
+            return None
+        return client.get_environment_sku_by_dataverse_url(env_url)
+    except Exception:  # noqa: BLE001 — best-effort telemetry attribution
+        return None
+
+
+def _resolve_deploy_target(config, env_url):
+    """Resolve the deploy-target bucket for agent.deploy telemetry.
+
+    Power Platform only lets us reliably distinguish two buckets — sandbox
+    vs production — via the BAP ``environmentSku`` (there is no "staging"
+    environment concept). Resolution priority:
+
+      1. Explicit ``ESS_ADK_DEPLOY_TARGET`` override, but ONLY when it names a
+         current bucket (``sandbox``/``production``). A stale override naming a
+         retired bucket (``test``/``staging``) is ignored so it can't resurface
+         wedges the dashboards no longer model — we fall through to SKU
+         detection instead.
+      2. ``environmentSku`` cached in .local/config.json from a prior push.
+      3. Best-effort SILENT BAP lookup of the target env's SKU (never
+         prompts); the result is cached back into config.json.
+      4. Default ``production`` (real deploys are overwhelmingly prod, and
+         this preserves the historical default).
+    """
+    try:
+        import adk_telemetry
+    except Exception:  # noqa: BLE001
+        return "production"
+    override = os.environ.get("ESS_ADK_DEPLOY_TARGET", "").strip().lower()
+    if override in (
+        adk_telemetry.DEPLOY_TARGET_SANDBOX,
+        adk_telemetry.DEPLOY_TARGET_PRODUCTION,
+    ):
+        return override
+    sku = (config.get("environmentSku") or "").strip()
+    if not sku:
+        sku = _lookup_environment_sku_silent(env_url) or ""
+        if sku:
+            _cache_environment_sku(sku)
+    return adk_telemetry.classify_deploy_target(sku)
+
+
 def run_checkpoint(reason):
     """Run checkpoint.py to save current state before pushing."""
     result = subprocess.run(
@@ -1192,7 +1270,7 @@ def main():
 
         _duration_ms = int((time.perf_counter() - _push_start) * 1000)
         _outcome = "failure" if errors else "success"
-        _deploy_target = os.environ.get("ESS_ADK_DEPLOY_TARGET", "production").strip() or "production"
+        _deploy_target = _resolve_deploy_target(config, env_url)
         _err_kwargs = {}
         if errors:
             _err_kwargs = {

@@ -651,12 +651,22 @@ def main():
             (a for a in agents if a.get("slug") == active),
             agents[0] if agents else {},
         )
+        # Best-effort tenant display name (OII; privacy-approved). Reuses the
+        # already-authenticated Graph client's /organization record — no extra
+        # auth. Falls back to "" on any error; never blocks the run.
+        tenant_name = ""
+        try:
+            if graph is not None:
+                tenant_name = (graph.get_organization() or {}).get("displayName", "") or ""
+        except Exception:  # noqa: BLE001 — telemetry name is best-effort
+            tenant_name = ""
         try:
             from flightcheck import telemetry
 
             _tele = telemetry.emit_flightcheck_telemetry(
                 result,
                 tenant_id=tenant_id,
+                tenant_name=tenant_name,
                 agent_id=active_agent.get("botId", ""),
                 scope=args.scope,
                 agent_count=len(agents),
@@ -678,8 +688,8 @@ def main():
             import adk_telemetry as _adk
 
             _agent_id = active_agent.get("botId", "")
-            if tenant_id:
-                _adk.set_identity(tenant_id=tenant_id)
+            if tenant_id or tenant_name:
+                _adk.set_identity(tenant_id=tenant_id, tenant_name=tenant_name)
             _ridx = _adk.next_run_index(_agent_id)
             _adk.emit_flightcheck_run(agent_id=_agent_id, run_index=_ridx)
             _result_map = {
