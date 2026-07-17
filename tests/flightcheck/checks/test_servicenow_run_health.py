@@ -154,7 +154,7 @@ class TestBadState:
         assert r.status == "Failed"
         assert "All 2 most recent ServiceNow flow run(s) FAILED" in r.result
         assert "deterministically broken" in r.result
-        assert "make.powerautomate.com" in r.remediation
+        assert "Power Automate (" in r.remediation
         assert "revoked" in r.remediation.lower()
 
     @responses.activate
