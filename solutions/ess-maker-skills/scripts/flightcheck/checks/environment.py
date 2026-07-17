@@ -503,9 +503,15 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
     #              than judge env-wide (a misleading FAIL is worse than
     #              an honest SKIP).
     #   - raise -> genuine API error; surface as WARNING (principle 3).
+    #
+    # Catch only RuntimeError: that's the exception type the builder
+    # raises for genuine API failures (see build_agent_ref_scope's
+    # contract). Letting any other exception type propagate means a
+    # future programming defect surfaces loudly as an ERROR (via the
+    # runner) instead of being disguised as a benign WARNING here.
     try:
         ref_scope = build_agent_ref_scope(runner)
-    except Exception as e:
+    except RuntimeError as e:
         results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
             checkpoint_id="ENV-004", category="Environment",
             priority=Priority.HIGH.value, status=Status.WARNING.value,
@@ -592,12 +598,12 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
     ]
 
     # --- Determine overall status ---
-    has_orphan_refs = (
+    has_failing_refs = (
         len(orphan_refs) > 0 or len(unbound_refs) > 0 or len(missing_ref_names) > 0
     )
     has_unbound_conns = len(unbound_conns) > 0
 
-    if has_orphan_refs:
+    if has_failing_refs:
         overall_status = Status.FAILED.value
     elif has_unbound_conns:
         overall_status = Status.WARNING.value
@@ -651,7 +657,7 @@ def _check_connections_and_refs(runner) -> list[CheckResult]:
         env_id=env_id, refs=problematic_refs,
     )
 
-    if has_orphan_refs:
+    if has_failing_refs:
         # Build the most specific summary remediation we can:
         #   - All broken refs in ONE resolved solution → deep-link to it
         #   - Broken refs span MULTIPLE resolved solutions → name them

@@ -354,7 +354,7 @@ def test_env_004_unbound_connection_scoped_to_agent_connectors(monkeypatch):
     assert not any("Other App" in r.description for r in uc_rows)
 
 
-
+def test_env_004_summary_orphan_remediation_links_to_solutions(monkeypatch):
     """The top-level ENV-004 row, when orphan refs are present, must
     point the operator at the Power Apps Solutions page where the
     Connection References pane lives."""
