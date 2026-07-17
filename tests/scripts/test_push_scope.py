@@ -47,6 +47,22 @@ class TestParseOnlyGlobs:
         globs = push.parse_only_globs(["--only-from", str(manifest)])
         assert globs == ["topics/A.mcs.yml", "template-configs/X.xml"]
 
+    def test_only_from_equals_form(self, tmp_path: Path):
+        # The `--only-from=FILE` equals form must resolve the same manifest
+        # as the space-separated form.
+        manifest = tmp_path / "m.txt"
+        manifest.write_text("topics/A.mcs.yml\n")
+        assert push.parse_only_globs([f"--only-from={manifest}"]) == [
+            "topics/A.mcs.yml"]
+
+    def test_mixed_only_and_only_from(self, tmp_path: Path):
+        # --only globs and --only-from manifest entries accumulate together.
+        manifest = tmp_path / "m.txt"
+        manifest.write_text("topics/B.mcs.yml\n")
+        globs = push.parse_only_globs(
+            ["--only", "topics/A.mcs.yml", "--only-from", str(manifest)])
+        assert globs == ["topics/A.mcs.yml", "topics/B.mcs.yml"]
+
 
 class TestMatchesOnly:
     def test_empty_globs_matches_everything(self):

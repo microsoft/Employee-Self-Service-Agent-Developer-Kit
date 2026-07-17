@@ -523,10 +523,43 @@ Use the `vscode_askQuestions` tool:
 
 ---
 
+## P5.9 — Full Workday readiness report (`--scope workday`, HTML) *(report only — no checklist row)*
+
+Once S5.1–S5.8 are all `done` (or S5.7 `Skipped` on the legacy path), run the
+**full Workday-scope** FlightCheck once. Unlike the per-row `--checkpoint` runs
+above — which never open a report — the full-scope run **writes and opens the
+consolidated HTML readiness report** at `workspace/flightcheck/`, so the maker has
+a single Workday summary to review and share.
+
+**Message:**
+
+Now I'll run a full Workday readiness check to bring all of these results together
+into one report you can review and share.
+
+**End message.**
+
+This run also exercises the Workday SOAP workflow tests, which need the Workday
+**password**. **Never** ask for it in chat — the CLI prompts for it securely in the
+terminal (masked `getpass`), or reads it from the `WORKDAY_PASSWORD` environment
+variable, so the secret never lands in the transcript. Run it in the terminal:
+
+```
+python scripts/flightcheck/cli.py --scope workday
+```
+
+The run writes the report to `workspace/flightcheck/` and opens it in the browser.
+This report is **advisory**: it never blocks setup and never changes any S5 row's
+state — rows S5.1–S5.8 were already completed by their own checkpoints above. If
+the report shows a row regressed, send the user back to the owning step to
+re-verify; do not silently flip its checklist state here.
+
+---
+
 ## Done
 
-When S5.1–S5.8 are all `done` (or S5.7 `Skipped` on the legacy path), return
-control to the setup router (`SKILL.md`) to resume at the next unverified row.
+When S5.1–S5.8 are all `done` (or S5.7 `Skipped` on the legacy path) and the P5.9
+Workday readiness report has been generated, return control to the setup router
+(`SKILL.md`) to resume at the next unverified row.
 
 **Message:**
 

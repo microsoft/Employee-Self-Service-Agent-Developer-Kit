@@ -134,6 +134,24 @@ def _fake_samples(root: Path):
     return root
 
 
+class TestPlan:
+    def test_marks_new_as_write_and_existing_as_skip(self, tmp_path: Path):
+        _fake_samples(tmp_path)
+        agent = tmp_path / "agent"
+        (agent / "topics").mkdir(parents=True)
+        selected = ioot.discover(str(tmp_path))
+
+        # Nothing installed yet -> planned as a write.
+        first = ioot.plan(selected, str(agent))
+        assert [a["status"] for a in first] == ["write"]
+        assert first[0]["dest_rel"] == "topics/WorkdayGetUserProfile.mcs.yml"
+
+        # Once the target exists, the same scenario is planned as skip-exists.
+        (agent / "topics" / "WorkdayGetUserProfile.mcs.yml").write_text("x")
+        again = ioot.plan(selected, str(agent))
+        assert [a["status"] for a in again] == ["skip-exists"]
+
+
 class TestInstall:
     def test_writes_topic_only_with_substitutions(self, tmp_path: Path):
         _fake_samples(tmp_path)
