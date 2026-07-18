@@ -90,3 +90,491 @@ class TestCacheEnvironmentSku:
         with open(os.path.join(".local", "config.json"), encoding="utf-8") as f:
             data = json.load(f)
         assert "environmentSku" not in data
+
+
+class _FakeStream:
+    """Minimal text-stream stand-in for _ensure_utf8_stdout tests.
+
+    Records a reconfigure(...) call so a test can assert both that it fired
+    and with which encoding/errors. Set ``supports_reconfigure=False`` to
+    model a stream (e.g. a pytest capture buffer) that has no reconfigure.
+    """
+
+    def __init__(self, encoding, *, supports_reconfigure=True):
+        self.encoding = encoding
+        self._supports_reconfigure = supports_reconfigure
+        self.reconfigure_calls = []
+        if supports_reconfigure:
+            self.reconfigure = self._reconfigure
+
+    def _reconfigure(self, *, encoding=None, errors=None):
+        self.reconfigure_calls.append({"encoding": encoding, "errors": errors})
+        self.encoding = encoding
+
+
+class TestEnsureUtf8Stdout:
+    """push.py prints emoji status glyphs (✅/❌/➕). On a legacy Windows
+    console (cp1252) those raise UnicodeEncodeError and abort the push
+    mid-run. Every sibling CLI script guards against this by reconfiguring
+    stdout to UTF-8; push.py was missing the guard (adk-gap-push-unicode).
+    """
+
+    def test_reconfigures_a_legacy_codepage_stream(self):
+        stream = _FakeStream("cp1252")
+        assert push._ensure_utf8_stdout(stream) is True
+        assert stream.reconfigure_calls == [
+            {"encoding": "utf-8", "errors": "replace"}
+        ]
+
+    def test_is_a_noop_when_already_utf8(self):
+        stream = _FakeStream("utf-8")
+        assert push._ensure_utf8_stdout(stream) is False
+        assert stream.reconfigure_calls == []
+
+    def test_is_case_insensitive_about_utf8(self):
+        stream = _FakeStream("UTF-8")
+        assert push._ensure_utf8_stdout(stream) is False
+        assert stream.reconfigure_calls == []
+
+    def test_handles_stream_without_encoding(self):
+        stream = _FakeStream(None)
+        assert push._ensure_utf8_stdout(stream) is False
+        assert stream.reconfigure_calls == []
+
+    def test_handles_stream_without_reconfigure(self):
+        # A capture buffer with a legacy encoding but no reconfigure() must
+        # not raise — the guard degrades to a no-op.
+        stream = _FakeStream("cp1252", supports_reconfigure=False)
+        assert push._ensure_utf8_stdout(stream) is False
+
+
+class TestWorkflowCreatePayload:
+    """The Dataverse ``workflows`` create payload for an agent flow.
+
+    A Copilot Studio agent flow must be created as ``modernflowtype=1``
+    (CopilotStudioFlow); the historical default of 0 (PowerAutomateFlow) is
+    the root cause of the runtime ``flowNotFound`` — the agent cannot resolve
+    a modernflowtype=0 workflow as one of its flows (adk-fix-2-modernflowtype).
+    The other attributes carry the modern-flow defaults, each overridable from
+    the flow's companion ``metadata.yml``.
+    """
+
+    def test_defaults_mark_it_a_copilot_studio_modern_flow(self):
+        payload = push._workflow_create_payload(
+            {}, name="Options flow", clientdata="{}", description="",
+        )
+        assert payload["modernflowtype"] == 1
+        assert payload["category"] == 5   # Modern Flow
+        assert payload["type"] == 1       # Definition
+        assert payload["primaryentity"] == "none"
+        assert payload["mode"] == 0
+        assert payload["scope"] == 4
+
+    def test_passes_through_name_clientdata_description(self):
+        payload = push._workflow_create_payload(
+            {}, name="My Flow", clientdata='{"x":1}', description="does a thing",
+        )
+        assert payload["name"] == "My Flow"
+        assert payload["clientdata"] == '{"x":1}'
+        assert payload["description"] == "does a thing"
+
+    def test_metadata_overrides_every_default(self):
+        meta = {
+            "modernflowtype": 0,
+            "category": 6,
+            "type": 2,
+            "primaryentity": "incident",
+            "mode": 1,
+            "scope": 1,
+        }
+        payload = push._workflow_create_payload(
+            meta, name="f", clientdata="{}", description="",
+        )
+        assert payload["modernflowtype"] == 0
+        assert payload["category"] == 6
+        assert payload["type"] == 2
+        assert payload["primaryentity"] == "incident"
+        assert payload["mode"] == 1
+        assert payload["scope"] == 1
+
+    def test_none_metadata_is_treated_as_empty(self):
+        payload = push._workflow_create_payload(
+            None, name="f", clientdata="{}", description="",
+        )
+        assert payload["modernflowtype"] == 1
+        assert payload["category"] == 5
+
+    def test_preserves_client_workflow_id_from_metadata(self):
+        # The maker authors one client GUID and uses it as BOTH the workflow's
+        # metadata.yml workflowId AND the topic's InvokeFlowAction flowId.
+        # Sending it as the created record's `workflowid` keeps the two in
+        # sync so the agent can resolve the flow (no flowNotFound) and the
+        # botcomponent_workflow link is derivable.
+        meta = {"workflowId": "d4e5f6a7-b8c9-4d0e-8f1a-2b3c4d5e6f7a"}
+        payload = push._workflow_create_payload(
+            meta, name="f", clientdata="{}", description="",
+        )
+        assert payload["workflowid"] == "d4e5f6a7-b8c9-4d0e-8f1a-2b3c4d5e6f7a"
+
+    def test_omits_workflowid_when_metadata_lacks_it(self):
+        # No client GUID → let Dataverse assign one (create_record reads it
+        # back from the OData-EntityId header).
+        payload = push._workflow_create_payload(
+            {}, name="f", clientdata="{}", description="",
+        )
+        assert "workflowid" not in payload
+
+
+class TestExtractFlowIds:
+    """push._extract_flow_ids parses a topic's clientdata (YAML) for the
+    flowId of every InvokeFlowAction. With the client GUID preserved on
+    workflow create (workflowid == flowId), these are exactly the workflow
+    records a system topic must be botcomponent_workflow-linked to.
+    """
+
+    def test_finds_single_invoke_flow_action_flow_id(self):
+        content = (
+            "kind: AdaptiveDialog\n"
+            "beginDialog:\n"
+            "  kind: OnRedirect\n"
+            "  actions:\n"
+            "    - kind: InvokeFlowAction\n"
+            "      id: invokeFlowAction_x\n"
+            "      flowId: 521ce2a6-daaa-f011-bbd2-0022480b25f5\n"
+        )
+        assert push._extract_flow_ids(content) == [
+            "521ce2a6-daaa-f011-bbd2-0022480b25f5"
+        ]
+
+    def test_finds_multiple_flow_ids(self):
+        content = (
+            "actions:\n"
+            "  - kind: InvokeFlowAction\n"
+            "    flowId: 11111111-1111-1111-1111-111111111111\n"
+            "  - kind: SendActivity\n"
+            "    activity: hi\n"
+            "  - kind: InvokeFlowAction\n"
+            "    flowId: 22222222-2222-2222-2222-222222222222\n"
+        )
+        assert push._extract_flow_ids(content) == [
+            "11111111-1111-1111-1111-111111111111",
+            "22222222-2222-2222-2222-222222222222",
+        ]
+
+    def test_returns_empty_for_topic_without_a_flow(self):
+        content = (
+            "kind: AdaptiveDialog\n"
+            "beginDialog:\n"
+            "  actions:\n"
+            "    - kind: SendActivity\n"
+            "      activity: hello\n"
+        )
+        assert push._extract_flow_ids(content) == []
+
+    def test_ignores_a_flow_id_key_not_under_invoke_flow_action(self):
+        # A stray flowId not attached to an InvokeFlowAction kind must not be
+        # treated as an invoked flow.
+        content = (
+            "someOtherBlock:\n"
+            "  kind: SendActivity\n"
+            "  flowId: 33333333-3333-3333-3333-333333333333\n"
+        )
+        assert push._extract_flow_ids(content) == []
+
+    def test_returns_empty_on_unparseable_yaml(self):
+        assert push._extract_flow_ids("{ this: is: not: valid") == []
+
+    def test_deduplicates_repeated_flow_ids(self):
+        content = (
+            "actions:\n"
+            "  - kind: InvokeFlowAction\n"
+            "    flowId: 44444444-4444-4444-4444-444444444444\n"
+            "elseActions:\n"
+            "  - kind: InvokeFlowAction\n"
+            "    flowId: 44444444-4444-4444-4444-444444444444\n"
+        )
+        assert push._extract_flow_ids(content) == [
+            "44444444-4444-4444-4444-444444444444"
+        ]
+
+
+class TestPlanTopicWorkflowLinks:
+    """push._plan_topic_workflow_links pairs each pushed system topic with the
+    workflow(s) it invokes, scoped to flows CREATED in this push. Scoping to
+    newly-created flows targets the new-flow-registration gap precisely: a
+    fresh flow has no pre-existing botcomponent_workflow link (so no
+    duplicate-link risk) and a link failure is a genuine error, while an
+    unchanged flow on a re-push is not re-linked.
+    """
+
+    @staticmethod
+    def _resolver(mapping):
+        return lambda fp: mapping.get(fp)
+
+    def test_pairs_topic_with_its_created_flow(self):
+        wf = "d4e5f6a7-b8c9-4d0e-8f1a-2b3c4d5e6f7a"
+        topic_items = [(
+            "topic.mcs.yml",
+            "actions:\n  - kind: InvokeFlowAction\n    flowId: " + wf + "\n",
+        )]
+        links = push._plan_topic_workflow_links(
+            topic_items, {wf}, self._resolver({"topic.mcs.yml": "bc-1"}),
+        )
+        assert links == [("bc-1", wf)]
+
+    def test_skips_flows_not_created_this_push(self):
+        wf_new = "11111111-1111-1111-1111-111111111111"
+        wf_existing = "22222222-2222-2222-2222-222222222222"
+        topic_items = [(
+            "topic.mcs.yml",
+            "actions:\n"
+            "  - kind: InvokeFlowAction\n    flowId: " + wf_new + "\n"
+            "  - kind: InvokeFlowAction\n    flowId: " + wf_existing + "\n",
+        )]
+        links = push._plan_topic_workflow_links(
+            topic_items, {wf_new}, self._resolver({"topic.mcs.yml": "bc-1"}),
+        )
+        assert links == [("bc-1", wf_new)]
+
+    def test_skips_topics_with_no_flow(self):
+        topic_items = [(
+            "plain.mcs.yml",
+            "actions:\n  - kind: SendActivity\n    activity: hi\n",
+        )]
+        links = push._plan_topic_workflow_links(
+            topic_items, {"any"}, self._resolver({"plain.mcs.yml": "bc-1"}),
+        )
+        assert links == []
+
+    def test_skips_when_botcomponentid_unresolvable(self):
+        wf = "d4e5f6a7-b8c9-4d0e-8f1a-2b3c4d5e6f7a"
+        topic_items = [(
+            "topic.mcs.yml",
+            "actions:\n  - kind: InvokeFlowAction\n    flowId: " + wf + "\n",
+        )]
+        links = push._plan_topic_workflow_links(
+            topic_items, {wf}, self._resolver({}),  # no botcomponentid
+        )
+        assert links == []
+
+    def test_deduplicates_pairs_across_topics(self):
+        wf = "d4e5f6a7-b8c9-4d0e-8f1a-2b3c4d5e6f7a"
+        block = "actions:\n  - kind: InvokeFlowAction\n    flowId: " + wf + "\n"
+        topic_items = [("t.mcs.yml", block), ("t.mcs.yml", block)]
+        links = push._plan_topic_workflow_links(
+            topic_items, {wf}, self._resolver({"t.mcs.yml": "bc-1"}),
+        )
+        assert links == [("bc-1", wf)]
+
+    def test_empty_created_set_yields_no_links(self):
+        wf = "d4e5f6a7-b8c9-4d0e-8f1a-2b3c4d5e6f7a"
+        topic_items = [(
+            "topic.mcs.yml",
+            "actions:\n  - kind: InvokeFlowAction\n    flowId: " + wf + "\n",
+        )]
+        links = push._plan_topic_workflow_links(
+            topic_items, set(), self._resolver({"topic.mcs.yml": "bc-1"}),
+        )
+        assert links == []
+
+
+class TestPlanFlowConnrefs:
+    """push._plan_flow_connrefs reads a flow's authored connectionReferences and
+    plans one flow-scoped connection reference per connector. Copilot Studio
+    resolves an agent flow's connection through a connref named
+    ``{agentSchema}.{workflowid}.{connector}``; the flow's workflow.json only
+    names the shared design connref, so push must mint the flow-scoped one.
+    """
+
+    AGENT = "msdyn_copilotforemployeeselfserviceit"
+    WF = "8e518921-4c1b-4c57-beb1-05c850e1f4c9"
+
+    def test_plans_one_connref_per_connector(self):
+        wf_json = {
+            "properties": {
+                "connectionReferences": {
+                    "shared_service-now": {
+                        "api": {"name": "shared_service-now"},
+                        "connection": {
+                            "connectionReferenceLogicalName":
+                                "msdyn_copilotforemployeeselfserviceit.cr.w2LCWZTZ"
+                        },
+                        "runtimeSource": "invoker",
+                    }
+                }
+            }
+        }
+        plan = push._plan_flow_connrefs(wf_json, self.AGENT, self.WF)
+        assert plan == [{
+            "connector_api_name": "shared_service-now",
+            "design_logical_name":
+                "msdyn_copilotforemployeeselfserviceit.cr.w2LCWZTZ",
+            "new_logical_name":
+                f"{self.AGENT}.{self.WF}.shared_service-now",
+        }]
+
+    def test_no_connection_references_yields_empty(self):
+        assert push._plan_flow_connrefs(
+            {"properties": {}}, self.AGENT, self.WF) == []
+        assert push._plan_flow_connrefs({}, self.AGENT, self.WF) == []
+
+    def test_skips_connector_without_a_design_connref(self):
+        wf_json = {
+            "properties": {
+                "connectionReferences": {
+                    "shared_service-now": {
+                        "api": {"name": "shared_service-now"},
+                        "runtimeSource": "invoker",
+                    }
+                }
+            }
+        }
+        assert push._plan_flow_connrefs(wf_json, self.AGENT, self.WF) == []
+
+
+class TestFlowConnrefPayload:
+    """push._flow_connref_payload mirrors an existing (design) connection
+    reference into the create body for a new flow-scoped connref: same
+    connector, connection, and parameter-set config, new logical name.
+    """
+
+    def test_mirrors_connection_fields(self):
+        mirror = {
+            "connectionid": "8be14999439f456898fb440f50628f52",
+            "connectorid": "/providers/Microsoft.PowerApps/apis/shared_service-now",
+            "connectionparametersetconfig":
+                '{"name":"entraIDUserLogin","values":{}}',
+        }
+        payload = push._flow_connref_payload("agent.wf.shared_service-now", mirror)
+        assert payload == {
+            "connectionreferencelogicalname": "agent.wf.shared_service-now",
+            "connectionreferencedisplayname": "agent.wf.shared_service-now",
+            "connectorid":
+                "/providers/Microsoft.PowerApps/apis/shared_service-now",
+            "connectionid": "8be14999439f456898fb440f50628f52",
+            "connectionparametersetconfig":
+                '{"name":"entraIDUserLogin","values":{}}',
+        }
+
+    def test_omits_parametersetconfig_when_mirror_lacks_it(self):
+        mirror = {
+            "connectionid": "conn-1",
+            "connectorid": "/providers/.../shared_service-now",
+            "connectionparametersetconfig": None,
+        }
+        payload = push._flow_connref_payload("agent.wf.shared_service-now", mirror)
+        assert "connectionparametersetconfig" not in payload
+        assert payload["connectionid"] == "conn-1"
+
+
+class TestBuildConnrefMirror:
+    """push._build_connref_mirror derives the connection fields for a new
+    flow-scoped connref. The design connref a flow names can lack the
+    parameter-set config (the shared `cr.*` connref does), while sibling
+    connrefs on the SAME connection carry it — so the mirror pulls the config
+    from a sibling when the design connref is missing it.
+    """
+
+    def _design(self, param):
+        return {
+            "connectionid": "conn-1",
+            "connectorid": "/providers/.../shared_service-now",
+            "connectionparametersetconfig": param,
+        }
+
+    def test_uses_design_parametersetconfig_when_present(self):
+        mirror = push._build_connref_mirror(
+            self._design('{"name":"entraIDUserLogin"}'), [])
+        assert mirror["connectionparametersetconfig"] == '{"name":"entraIDUserLogin"}'
+        assert mirror["connectionid"] == "conn-1"
+
+    def test_pulls_config_from_same_connection_sibling(self):
+        siblings = [
+            {"connectionid": "conn-OTHER",
+             "connectionparametersetconfig": '{"wrong":1}'},
+            {"connectionid": "conn-1",
+             "connectionparametersetconfig": '{"name":"entraIDUserLogin"}'},
+        ]
+        mirror = push._build_connref_mirror(self._design(None), siblings)
+        assert mirror["connectionparametersetconfig"] == '{"name":"entraIDUserLogin"}'
+
+    def test_ignores_sibling_config_on_a_different_connection(self):
+        siblings = [
+            {"connectionid": "conn-OTHER",
+             "connectionparametersetconfig": '{"wrong":1}'},
+        ]
+        mirror = push._build_connref_mirror(self._design(None), siblings)
+        assert mirror["connectionparametersetconfig"] is None
+
+    def test_returns_none_for_missing_design(self):
+        assert push._build_connref_mirror(None, []) is None
+
+
+class TestFlowConnrefDeleteFilter:
+    """push._flow_connref_delete_filter builds the OData filter that selects a
+    flow's flow-scoped connection references for cleanup on flow-delete. push
+    mints connrefs named `{schema}.{workflowid}.{connector}` on create; without
+    symmetric deletion they orphan when the flow is removed.
+    """
+
+    def test_matches_all_connrefs_for_the_workflow(self):
+        f = push._flow_connref_delete_filter(
+            "msdyn_copilotforemployeeselfserviceit",
+            "8e518921-4c1b-4c57-beb1-05c850e1f4c9",
+        )
+        assert f == (
+            "startswith(connectionreferencelogicalname,"
+            "'msdyn_copilotforemployeeselfserviceit."
+            "8e518921-4c1b-4c57-beb1-05c850e1f4c9.')"
+        )
+
+    def test_escapes_single_quotes(self):
+        f = push._flow_connref_delete_filter("a'b", "wf")
+        assert "a''b" in f
+
+
+class TestBotcomponentRecreatePayload:
+    """push._botcomponent_recreate_payload rebuilds a create body from the
+    component-map entry (stable identity) + current content, for the stale-id
+    self-heal recreate fallback.
+    """
+
+    BOT = "2d0b4b72-a2b4-42fc-8163-ec9a1890c8ae"
+
+    def test_rebuilds_from_entry_and_content(self):
+        entry = {
+            "botcomponentid": "old-stale",
+            "schemaname": "msdyn_x.topic.SystemGetCreateTicketOptions",
+            "componenttype": 0,
+            "name": "System Get Create Ticket Options",
+        }
+        payload = push._botcomponent_recreate_payload(
+            entry, "kind: AdaptiveDialog\n", self.BOT)
+        assert payload == {
+            "data": "kind: AdaptiveDialog\n",
+            "name": "System Get Create Ticket Options",
+            "schemaname": "msdyn_x.topic.SystemGetCreateTicketOptions",
+            "componenttype": 0,
+            "parentbotid@odata.bind": f"/bots({self.BOT})",
+        }
+
+    def test_includes_parent_botcomponent_when_present(self):
+        entry = {
+            "schemaname": "mspva_child",
+            "componenttype": 19,
+            "name": "Case 1",
+            "parentbotcomponentid": "parent-id",
+        }
+        payload = push._botcomponent_recreate_payload(entry, "data", self.BOT)
+        assert payload["ParentBotComponentId@odata.bind"] == \
+            "/botcomponents(parent-id)"
+
+    def test_returns_none_without_schemaname(self):
+        assert push._botcomponent_recreate_payload(
+            {"name": "x"}, "data", self.BOT) is None
+
+    def test_falls_back_to_schemaname_for_name(self):
+        entry = {"schemaname": "mspva_abc"}
+        payload = push._botcomponent_recreate_payload(entry, "data", self.BOT)
+        assert payload["name"] == "mspva_abc"
+        assert "componenttype" not in payload

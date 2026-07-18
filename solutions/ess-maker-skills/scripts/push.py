@@ -36,13 +36,263 @@ from auth import (
     authenticate,
     update_record,
     create_record,
+    associate_ref,
     delete_record,
+    query_all,
+    record_exists,
     load_config,
     AuthExpiredError,
 )
 
 EXCLUDE_DIRS = {".baseline", ".checkpoints"}
 EXCLUDE_FILES = {"snapshot.md", "_meta.json"}
+
+
+def _ensure_utf8_stdout(stream=None):
+    """Reconfigure a text stream to UTF-8 so the emoji status glyphs this
+    script prints (✅/❌/➕/✏️) don't raise ``UnicodeEncodeError`` and abort
+    the push on a legacy Windows console (cp1252). Mirrors the guard the
+    sibling CLI scripts (scan_config, merge_findings, check_isv_coverage, …)
+    apply at import.
+
+    No-op when the stream is already UTF-8, exposes no ``encoding``, or has no
+    ``reconfigure`` (e.g. a captured buffer). Returns ``True`` iff a
+    reconfigure was applied.
+    """
+    if stream is None:
+        stream = sys.stdout
+    encoding = getattr(stream, "encoding", None)
+    if (
+        encoding
+        and encoding.lower() != "utf-8"
+        and hasattr(stream, "reconfigure")
+    ):
+        stream.reconfigure(encoding="utf-8", errors="replace")
+        return True
+    return False
+
+
+_ensure_utf8_stdout()
+
+
+def _workflow_create_payload(parsed_wf_meta, *, name, clientdata, description):
+    """Build the Dataverse ``workflows`` create payload for an agent flow.
+
+    A Copilot Studio agent flow must be ``modernflowtype=1``
+    (CopilotStudioFlow); creating it as the default 0 (PowerAutomateFlow)
+    is why the agent later can't resolve it (``flowNotFound``). The modern-flow
+    attributes (category=5 Modern Flow, type=1 Definition, scope=4, etc.) each
+    default here and are overridable from the flow's companion ``metadata.yml``.
+    """
+    meta = parsed_wf_meta or {}
+    payload = {
+        "name": name,
+        "clientdata": clientdata,
+        "description": description,
+        "category": meta.get("category", 5),        # 5 = Modern Flow
+        "type": meta.get("type", 1),                 # 1 = Definition
+        "primaryentity": meta.get("primaryentity", "none"),
+        "mode": meta.get("mode", 0),
+        "scope": meta.get("scope", 4),
+        "modernflowtype": meta.get("modernflowtype", 1),  # 1 = CopilotStudioFlow
+    }
+    # Preserve the maker's client-generated GUID as the Dataverse primary key
+    # so it stays equal to the topic's InvokeFlowAction flowId. Dropping it
+    # (letting Dataverse assign a new GUID) desyncs the two → the agent can't
+    # resolve the flow (flowNotFound) and the botcomponent_workflow link is no
+    # longer derivable from the authored clientdata.
+    client_workflow_id = meta.get("workflowId")
+    if client_workflow_id:
+        payload["workflowid"] = str(client_workflow_id)
+    return payload
+
+
+def _extract_flow_ids(content):
+    """Return the flowId of every ``InvokeFlowAction`` in a topic's clientdata.
+
+    A system topic invokes a flow via an ``InvokeFlowAction`` node whose
+    ``flowId`` is the client-generated GUID (kept equal to the workflow's
+    Dataverse ``workflowid``). These are the workflows the topic's botcomponent
+    must be ``botcomponent_workflow``-linked to. Order-preserving and
+    de-duplicated; returns ``[]`` on unparseable YAML.
+    """
+    try:
+        data = yaml.safe_load(content)
+    except yaml.YAMLError:
+        return []
+
+    found = []
+
+    def walk(node):
+        if isinstance(node, dict):
+            if node.get("kind") == "InvokeFlowAction" and node.get("flowId"):
+                flow_id = str(node["flowId"])
+                if flow_id not in found:
+                    found.append(flow_id)
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(data)
+    return found
+
+
+def _plan_topic_workflow_links(topic_items, created_workflow_ids,
+                               resolve_botcomponentid):
+    """Plan the ``botcomponent_workflow`` links to create after a push.
+
+    ``topic_items`` is an iterable of ``(filepath, clientdata)`` for the system
+    topics pushed this run. ``created_workflow_ids`` is the set of workflow ids
+    created in this push. ``resolve_botcomponentid`` maps a topic filepath to
+    its Dataverse ``botcomponentid``. Returns an ordered, de-duplicated list of
+    ``(botcomponentid, workflowid)`` pairs — one per (topic, invoked flow) —
+    restricted to flows created this run.
+
+    Scoping to newly-created flows targets the new-flow-registration gap: a
+    fresh flow has no existing link (no duplicate-link risk) and a failed link
+    is a real error; an unchanged flow is not re-linked on a subsequent push.
+    """
+    links = []
+    seen = set()
+    for filepath, content in topic_items:
+        flow_ids = [
+            fid for fid in _extract_flow_ids(content)
+            if fid in created_workflow_ids
+        ]
+        if not flow_ids:
+            continue
+        botcomponentid = resolve_botcomponentid(filepath)
+        if not botcomponentid:
+            continue
+        for flow_id in flow_ids:
+            pair = (botcomponentid, flow_id)
+            if pair not in seen:
+                seen.add(pair)
+                links.append(pair)
+    return links
+
+
+def _plan_flow_connrefs(workflow_json, agent_schema, workflowid):
+    """Plan flow-scoped connection references for a created flow.
+
+    Copilot Studio resolves an agent flow's connection through a connref named
+    ``{agent_schema}.{workflowid}.{connector}``. The flow's ``workflow.json``
+    only names a shared *design* connref (under
+    ``properties.connectionReferences[*].connection.connectionReferenceLogicalName``),
+    so push must mint the flow-scoped one by mirroring that design connref.
+
+    Returns a list of dicts (one per connector that names a design connref):
+    ``{connector_api_name, design_logical_name, new_logical_name}``.
+    """
+    try:
+        conn_refs = workflow_json["properties"]["connectionReferences"]
+    except (KeyError, TypeError):
+        return []
+    if not isinstance(conn_refs, dict):
+        return []
+
+    plan = []
+    for key, entry in conn_refs.items():
+        if not isinstance(entry, dict):
+            continue
+        connector = (entry.get("api") or {}).get("name") or key
+        design_logical = (entry.get("connection") or {}).get(
+            "connectionReferenceLogicalName"
+        )
+        if not design_logical:
+            continue
+        plan.append({
+            "connector_api_name": connector,
+            "design_logical_name": design_logical,
+            "new_logical_name": f"{agent_schema}.{workflowid}.{connector}",
+        })
+    return plan
+
+
+def _flow_connref_payload(new_logical_name, mirror):
+    """Build the ``connectionreferences`` create body for a flow-scoped connref.
+
+    Mirrors a design connref record (``mirror``): same connector, connection,
+    and parameter-set config, under ``new_logical_name``. The parameter-set
+    config is copied only when present on the mirror.
+    """
+    payload = {
+        "connectionreferencelogicalname": new_logical_name,
+        "connectionreferencedisplayname": new_logical_name,
+        "connectorid": mirror.get("connectorid"),
+        "connectionid": mirror.get("connectionid"),
+    }
+    param_config = mirror.get("connectionparametersetconfig")
+    if param_config:
+        payload["connectionparametersetconfig"] = param_config
+    return payload
+
+
+def _build_connref_mirror(design_row, sibling_rows):
+    """Derive the connection fields for a new flow-scoped connref.
+
+    ``design_row`` is the design connref the flow's workflow.json names; it
+    supplies the ``connectionid`` and ``connectorid``. Its
+    ``connectionparametersetconfig`` may be empty (the shared ``cr.*`` connref
+    has none), in which case the config is taken from a sibling connref bound
+    to the SAME connection — matching the known-good flow-scoped connref shape.
+    Returns ``None`` if there is no design row.
+    """
+    if not design_row:
+        return None
+    conn_id = design_row.get("connectionid")
+    param = design_row.get("connectionparametersetconfig")
+    if not param:
+        for row in sibling_rows or []:
+            if (row.get("connectionid") == conn_id
+                    and row.get("connectionparametersetconfig")):
+                param = row["connectionparametersetconfig"]
+                break
+    return {
+        "connectionid": conn_id,
+        "connectorid": design_row.get("connectorid"),
+        "connectionparametersetconfig": param,
+    }
+
+
+def _flow_connref_delete_filter(agent_schema, workflowid):
+    """OData ``$filter`` selecting a flow's flow-scoped connection references.
+
+    push mints connrefs named ``{agent_schema}.{workflowid}.{connector}`` on
+    flow-create; this matches all of them for a workflow so they can be cleaned
+    up when the flow is deleted (otherwise they orphan).
+    """
+    prefix = f"{agent_schema}.{workflowid}.".replace("'", "''")
+    return f"startswith(connectionreferencelogicalname,'{prefix}')"
+
+
+def _botcomponent_recreate_payload(entry, content, bot_id):
+    """Rebuild the ``botcomponents`` create body for a stale-id self-heal.
+
+    When a botcomponent's mapped record was deleted out-of-band and no
+    same-``schemaname`` replacement exists to adopt, push recreates it. The
+    stable identity (``schemaname``, ``componenttype``, ``name``) comes from the
+    component-map ``entry``; the topic body is the current file ``content``. The
+    component is (re)parented to the bot. Returns ``None`` if the entry lacks a
+    ``schemaname`` (can't safely recreate without preserving identity).
+    """
+    schema = entry.get("schemaname")
+    if not schema:
+        return None
+    payload = {
+        "data": content,
+        "name": entry.get("name") or schema,
+        "schemaname": schema,
+        "parentbotid@odata.bind": f"/bots({bot_id})",
+    }
+    if entry.get("componenttype") is not None:
+        payload["componenttype"] = entry["componenttype"]
+    if entry.get("parentbotcomponentid"):
+        payload["ParentBotComponentId@odata.bind"] = \
+            f"/botcomponents({entry['parentbotcomponentid']})"
+    return payload
 
 
 class _AuthHolder:
@@ -475,11 +725,70 @@ def main():
                 print(f"  SKIP {filepath}: no component ID in map")
                 errors += 1
                 continue
+            # Self-heal a stale map id. If the mapped record was deleted +
+            # recreated out-of-band (ADK/canvas/manual churn), the map holds a
+            # dead id and a blind PATCH returns an opaque 400. Detect it with a
+            # clean GET; on a miss, adopt the current record by its stable
+            # schemaname (the recreate-with-new-id case — avoids a duplicate),
+            # else recreate it fresh. The repaired/new id is staged into the
+            # atomic gate via pending_creates.
+            target_id = entry["botcomponentid"]
+            healed = None
+            try:
+                exists = _call_with_refresh(
+                    auth, record_exists, env_url, auth.token,
+                    "botcomponents", target_id, "botcomponentid")
+            except Exception:  # noqa: BLE001 — treat probe failure as "assume present"
+                exists = True
+            if not exists:
+                schema = entry.get("schemaname")
+                adopted = None
+                if schema:
+                    try:
+                        rows = _call_with_refresh(
+                            auth, query_all, env_url, auth.token,
+                            "botcomponents", "botcomponentid",
+                            filter_expr=(
+                                f"schemaname eq '{schema.replace(chr(39), chr(39)*2)}'"
+                            ),
+                        )
+                        if rows:
+                            adopted = rows[0]["botcomponentid"]
+                    except Exception as e:  # noqa: BLE001
+                        print(f"  ! schemaname lookup failed for {filepath}: {e}")
+                if adopted:
+                    target_id = adopted
+                    healed = dict(entry, botcomponentid=adopted)
+                    print(f"  ↻ Adopted recreated component {filepath} "
+                          f"(id {adopted})")
+                else:
+                    payload = _botcomponent_recreate_payload(
+                        entry, content, bot_id)
+                    if payload is None:
+                        print(f"  ❌ Failed: {filepath}: mapped component is gone "
+                              f"and cannot be recreated (no schemaname in map). "
+                              f"Re-run /setup.")
+                        errors += 1
+                        continue
+                    try:
+                        new_id = _call_with_refresh(
+                            auth, create_record, env_url, auth.token,
+                            "botcomponents", payload)
+                        print(f"  ♻ Recreated: {filepath} (ID: {new_id})")
+                        pending_creates[filepath] = dict(
+                            entry, botcomponentid=new_id)
+                        success += 1
+                    except Exception as e:  # noqa: BLE001
+                        print(f"  ❌ Failed to recreate {filepath}: {e}")
+                        errors += 1
+                    continue  # recreate carries current content; no PATCH
             try:
                 _call_with_refresh(auth, update_record,
                                    env_url, auth.token, "botcomponents",
-                                   entry["botcomponentid"], {"data": content})
+                                   target_id, {"data": content})
                 print(f"  ✅ Updated: {filepath}")
+                if healed is not None:
+                    pending_creates[filepath] = healed
                 success += 1
             except Exception as e:
                 print(f"  ❌ Failed: {filepath}: {e}")
@@ -679,6 +988,7 @@ def main():
             meta_full = os.path.join(agent_dir, meta_rel)
             wf_name = "New Workflow"
             wf_desc = ""
+            parsed_wf_meta = {}
             if os.path.exists(meta_full):
                 with open(meta_full, "r", encoding="utf-8") as mf:
                     try:
@@ -691,13 +1001,12 @@ def main():
                     wf_name = str(parsed_wf_meta["name"])
                 if parsed_wf_meta.get("description"):
                     wf_desc = str(parsed_wf_meta["description"])
-            record_data = {
-                "name": wf_name,
-                "clientdata": content,
-                "category": 5,  # Modern Flow
-                "type": 1,      # Definition
-                "description": wf_desc,
-            }
+            record_data = _workflow_create_payload(
+                parsed_wf_meta,
+                name=wf_name,
+                clientdata=content,
+                description=wf_desc,
+            )
             try:
                 new_id = _call_with_refresh(auth, create_record,
                                             env_url, auth.token, "workflows",
@@ -966,6 +1275,149 @@ def main():
             except Exception as e:
                 print(f"  ❌ Failed: {filepath}: {e}")
                 errors += 1
+                continue
+            # Symmetric cleanup: remove the flow-scoped connection reference(s)
+            # push minted for this flow on create, so they don't orphan. Runs
+            # after the flow delete (dependency ordering) and is best-effort —
+            # a connref still pinned by an unresolved dependency warns rather
+            # than failing the delete.
+            try:
+                orphans = _call_with_refresh(
+                    auth, query_all, env_url, auth.token,
+                    "connectionreferences",
+                    "connectionreferenceid,connectionreferencelogicalname",
+                    filter_expr=_flow_connref_delete_filter(
+                        schema_name, entry["workflowid"]),
+                )
+                for row in orphans:
+                    try:
+                        _call_with_refresh(
+                            auth, delete_record, env_url, auth.token,
+                            "connectionreferences",
+                            row["connectionreferenceid"])
+                        print(f"  🔌 Removed connref: "
+                              f"{row['connectionreferencelogicalname']}")
+                    except Exception as e:
+                        print(f"  ! Could not remove connref "
+                              f"{row['connectionreferencelogicalname']}: {e}")
+            except Exception as e:
+                print(f"  ! Connref cleanup skipped for "
+                      f"{entry['workflowid']}: {e}")
+
+    # Wire newly-created flows to the system topics that invoke them. A flow
+    # created via the Web API lands as an orphan `workflows` record; Copilot
+    # Studio cannot resolve it as one of the agent's flows until a
+    # `botcomponent_workflow` association ties the invoking system topic to the
+    # workflow (missing link = CloudFlow-not-found at publish/runtime). Scoped
+    # to flows created in THIS push, and relies on the client `workflowId`
+    # being preserved on create so it equals the topic's InvokeFlowAction
+    # flowId.
+    created_workflow_ids = {
+        entry["workflowid"]
+        for entry in pending_creates.values()
+        if entry.get("entity_set") == "workflows" and entry.get("workflowid")
+    }
+    if created_workflow_ids:
+        def _resolve_botcomponentid(fp):
+            entry = pending_creates.get(fp) or component_map.get(fp) or {}
+            return entry.get("botcomponentid")
+
+        topic_items = [
+            (fp, working_files[fp])
+            for fp in changed + new
+            if classify_path(fp) == "botcomponent" and fp in working_files
+        ]
+        for bc_id, wf_id in _plan_topic_workflow_links(
+            topic_items, created_workflow_ids, _resolve_botcomponentid
+        ):
+            try:
+                _call_with_refresh(
+                    auth, associate_ref, env_url, auth.token,
+                    "botcomponents", bc_id, "botcomponent_workflow",
+                    "workflows", wf_id,
+                )
+                print(f"  🔗 Linked: topic {bc_id} → flow {wf_id}")
+                success += 1
+            except Exception as e:
+                print(f"  ❌ Failed to link topic {bc_id} → flow {wf_id}: {e}")
+                errors += 1
+
+    # Register each newly-created flow: mint its flow-scoped connection
+    # reference(s) and activate it. A flow created via the Web API is Draft with
+    # no runtime connection; Copilot Studio resolves the connection through a
+    # connref named `{schema}.{workflowid}.{connector}`, mirrored from the design
+    # connref the flow's workflow.json names. Activation triggers live
+    # connector-schema validation, so it runs last.
+    #
+    # Both steps are BEST-EFFORT (warn, never increment `errors`): the flow
+    # record and its id are already persisted this run, so failing the push here
+    # would block the atomic map save and cause a duplicate create on the next
+    # push (same client workflowid). A warning lets the maker finish/retry
+    # registration without corrupting local state.
+    created_flows = [
+        (fp, entry["workflowid"])
+        for fp, entry in pending_creates.items()
+        if entry.get("entity_set") == "workflows" and entry.get("workflowid")
+    ]
+    for fp, wf_id in created_flows:
+        try:
+            wf_json = json.loads(working_files[fp])
+        except (KeyError, ValueError):
+            wf_json = {}
+        for cr in _plan_flow_connrefs(wf_json, schema_name, wf_id):
+            try:
+                design = cr["design_logical_name"].replace("'", "''")
+                design_rows = _call_with_refresh(
+                    auth, query_all, env_url, auth.token,
+                    "connectionreferences",
+                    "connectionid,connectorid,connectionparametersetconfig",
+                    filter_expr=(
+                        f"connectionreferencelogicalname eq '{design}'"
+                    ),
+                )
+                if not design_rows:
+                    print(
+                        f"  ! No design connref '{cr['design_logical_name']}' "
+                        f"to mirror; flow {wf_id} left unconnected"
+                    )
+                    continue
+                design_row = design_rows[0]
+                # The shared design connref may lack the parameter-set config;
+                # pull it from a sibling connref on the same connection.
+                sibling_rows = []
+                if not design_row.get("connectionparametersetconfig"):
+                    conn_id = (design_row.get("connectionid") or "").replace(
+                        "'", "''")
+                    if conn_id:
+                        sibling_rows = _call_with_refresh(
+                            auth, query_all, env_url, auth.token,
+                            "connectionreferences",
+                            "connectionid,connectionparametersetconfig",
+                            filter_expr=f"connectionid eq '{conn_id}'",
+                        )
+                mirror = _build_connref_mirror(design_row, sibling_rows)
+                payload = _flow_connref_payload(
+                    cr["new_logical_name"], mirror)
+                _call_with_refresh(
+                    auth, create_record, env_url, auth.token,
+                    "connectionreferences", payload)
+                print(f"  🔌 Connref: {cr['new_logical_name']}")
+            except Exception as e:
+                print(
+                    f"  ! Connref failed for flow {wf_id} "
+                    f"({cr['connector_api_name']}): {e}"
+                )
+        try:
+            _call_with_refresh(
+                auth, update_record, env_url, auth.token, "workflows", wf_id,
+                {"statecode": 1, "statuscode": 2})
+            print(f"  ▶ Activated flow {wf_id}")
+        except Exception as e:
+            print(
+                f"  ! Activation failed for flow {wf_id} "
+                f"(activate manually or re-run once the connector is reachable):"
+                f" {e}"
+            )
 
     # Apply pending state mutations atomically with the baseline + map save.
     # The full-success gate is the contract: if everything pushed, persist
