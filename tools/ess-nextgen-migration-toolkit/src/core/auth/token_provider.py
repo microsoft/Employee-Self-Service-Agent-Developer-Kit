@@ -146,19 +146,19 @@ def _default_now() -> float:
 def _normalize_scopes(
     requested_scopes: str | Sequence[str] | None,
     default_scopes: tuple[str, ...],
-) -> tuple[str, ...]:
+) -> list[str]:
     scopes = default_scopes if requested_scopes is None else _coerce_scopes(requested_scopes)
     if not scopes:
         raise ValueError("at least one scope must be provided.")
     for scope in scopes:
         _validate_https_url(scope, "scope")
-    return tuple(scopes)
+    return list(scopes)
 
 
-def _coerce_scopes(scopes: str | Sequence[str]) -> tuple[str, ...]:
+def _coerce_scopes(scopes: str | Sequence[str]) -> list[str]:
     if isinstance(scopes, str):
-        return (_resource_to_default_scope(scopes),)
-    return tuple(_resource_to_default_scope(scope) for scope in scopes)
+        return [_resource_to_default_scope(scopes)]
+    return [_resource_to_default_scope(scope) for scope in scopes]
 
 
 def _resource_to_default_scope(scope_or_resource: str) -> str:
