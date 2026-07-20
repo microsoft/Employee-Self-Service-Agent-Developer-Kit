@@ -229,6 +229,13 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
   section 5 + section 12; also added the `core/auth/` package to the tree),
   `03_ENGINEERING/IMPLEMENTATION_GUIDE.md`, and the toolkit `README.md`.
 
+- **TASK-004 — Typed Dataverse Web API client.** Implemented
+  `src/core/outbound/dataverse_client.py` with per-request token acquisition,
+  required OData headers, GET-only retry/backoff, `@odata.nextLink`
+  pagination, HTTPS validation, and typed outbound exceptions. Added unit tests
+  for token acquisition, pagination, retry behavior, non-retried writes, and
+  error mapping. (`TASK-004`)
+
 ### Changed
 
 - (nothing yet)
