@@ -12,7 +12,7 @@ from types import TracebackType
 from typing import TextIO
 
 from core.logging.session_manager import SessionManager
-from core.models.migration_context import ChangeEntry, DiagnosticEntry, MigrationContext
+from core.models.execution_context import ChangeEntry, DiagnosticEntry, ExecutionContext
 
 
 class LogLevel(IntEnum):
@@ -60,19 +60,19 @@ class Logger:
 
     Inputs:
         session_manager: Owner of the session bundle folder and file paths.
-        context: MigrationContext report-model collectors for customer output.
+        context: ExecutionContext report-model collectors for customer output.
         level: Minimum engineer-channel level written to the CLI.
 
     Outputs:
         Engineer-channel messages are written to the CLI and mirrored into
         ``session.log`` by the installed tee. Customer-channel messages update
-        the MigrationContext collectors only.
+        the ExecutionContext collectors only.
     """
 
     def __init__(
         self,
         session_manager: SessionManager,
-        context: MigrationContext,
+        context: ExecutionContext,
         *,
         level: LogLevel = LogLevel.INFO,
         clock: Callable[[], datetime] | None = None,
@@ -90,7 +90,7 @@ class Logger:
     def start_session(
         cls,
         output_root: Path,
-        context: MigrationContext,
+        context: ExecutionContext,
         *,
         level: LogLevel = LogLevel.INFO,
         clock: Callable[[], datetime] | None = None,

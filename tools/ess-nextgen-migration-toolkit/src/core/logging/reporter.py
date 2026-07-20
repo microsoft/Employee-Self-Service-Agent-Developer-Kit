@@ -3,21 +3,21 @@
 from __future__ import annotations
 
 from core.logging.session_manager import SessionManager
-from core.models.migration_context import ChangeEntry, DiagnosticEntry, MigrationContext
+from core.models.execution_context import ChangeEntry, DiagnosticEntry, ExecutionContext
 
 
 class Reporter:
-    """Render ``migration_report.md`` from MigrationContext collectors."""
+    """Render ``migration_report.md`` from ExecutionContext collectors."""
 
     def __init__(self, session_manager: SessionManager) -> None:
         self._session_manager = session_manager
 
-    def render(self, context: MigrationContext) -> None:
+    def render(self, context: ExecutionContext) -> None:
         """Write the customer-facing report into the active session bundle."""
         report = "\n".join(self._build_lines(context)) + "\n"
         self._session_manager.paths.report_path.write_text(report, encoding="utf-8")
 
-    def _build_lines(self, context: MigrationContext) -> list[str]:
+    def _build_lines(self, context: ExecutionContext) -> list[str]:
         mode = context.ExecutionMode.upper()
         title = self._title_for_mode(mode)
         return [
@@ -45,10 +45,8 @@ class Reporter:
         ]
 
     def _title_for_mode(self, mode: str) -> str:
-        if mode == "DISCOVER":
+        if mode == "READONLY":
             return "Migration Readiness Report"
-        if mode == "PREVIEW":
-            return "Migration Preview Report"
         return "Migration Report"
 
     def _format_changes(self, changes: list[ChangeEntry]) -> list[str]:

@@ -1,15 +1,30 @@
-"""Canonical migration context models used by diagnostics.
+"""Pipeline execution context — base model for all toolkit contexts.
 
-The migration context is the shared execution state passed through the toolkit.
-This module intentionally defines only the diagnostic collectors required by
-the diagnostics framework; later pipeline tasks can extend the same canonical
-model with additional domain state.
+This module defines ``ExecutionContext``, the base dataclass that any
+toolkit context must extend.  It carries the execution mode and diagnostic
+collectors that ``core/logging`` (Logger, Reporter) depend on.
+
+Domain-specific state (e.g. ComponentSet, agent metadata for ESS migrations)
+belongs in subclass contexts defined in the modules layer.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import StrEnum
+
+
+class ExecutionMode(StrEnum):
+    """Toolkit execution modes — intent-revealing, not domain-specific.
+
+    Extensible: future consumers can subclass to add modes.
+    Being a StrEnum, values compare equal to their string form
+    (e.g. ``ExecutionMode.READONLY == "READONLY"``).
+    """
+
+    READONLY = "READONLY"
+    WRITEBACK = "WRITEBACK"
 
 
 @dataclass(frozen=True)
@@ -38,20 +53,23 @@ class ChangeEntry:
 
 
 @dataclass
-class MigrationContext:
-    """Shared execution context with diagnostics report-model collectors.
+class ExecutionContext:
+    """Base execution context with mode and diagnostic collectors.
+
+    All toolkit contexts must extend this class so that the Logger and
+    Reporter (in ``core/logging``) can operate generically.
 
     Inputs:
         ExecutionMode: Current toolkit mode, such as DISCOVER, PREVIEW, or MIGRATE.
         Logs, Warnings, Errors, Changes: Mutable collectors populated by
-            diagnostics and migration steps.
+            diagnostics and pipeline steps.
 
     Outputs:
         The same context instance is rendered by the Reporter into
         ``migration_report.md``.
     """
 
-    ExecutionMode: str = "DISCOVER"
+    ExecutionMode: ExecutionMode = field(default=ExecutionMode.READONLY)
     Logs: list[DiagnosticEntry] = field(default_factory=list)
     Warnings: list[DiagnosticEntry] = field(default_factory=list)
     Errors: list[DiagnosticEntry] = field(default_factory=list)

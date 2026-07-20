@@ -1,10 +1,10 @@
-"""Unit tests for the generic StagedPipeline composition."""
+"""Unit tests for the generic ChainedPipeline composition."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from core.pipeline import Pipeline, PipelineStep, StagedPipeline
+from core.pipelines import ChainedPipeline, Pipeline, PipelineStep
 
 
 @dataclass
@@ -34,7 +34,7 @@ def _stage(event: str) -> Pipeline[ExampleContext, ExampleContext]:
 
 
 def test_add_appends_stages_in_declaration_order() -> None:
-    staged = StagedPipeline[ExampleContext]().add(_stage("first")).add(_stage("second"))
+    staged = ChainedPipeline[ExampleContext]().add(_stage("first")).add(_stage("second"))
 
     assert [stage.name for stage in staged.stages] == ["first", "second"]
 
@@ -43,7 +43,7 @@ def test_run_threads_context_through_every_stage_in_order() -> None:
     context = ExampleContext()
 
     result = (
-        StagedPipeline[ExampleContext]()
+        ChainedPipeline[ExampleContext]()
         .add(_stage("first"))
         .add(_stage("second"))
         .add(_stage("third"))
@@ -57,14 +57,14 @@ def test_run_threads_context_through_every_stage_in_order() -> None:
 def test_empty_staged_pipeline_returns_context_unchanged() -> None:
     context = ExampleContext()
 
-    result = StagedPipeline[ExampleContext]().run(context)
+    result = ChainedPipeline[ExampleContext]().run(context)
 
     assert result is context
     assert result.events == []
 
 
 def test_add_returns_new_instance_without_mutating_original() -> None:
-    base = StagedPipeline[ExampleContext]()
+    base = ChainedPipeline[ExampleContext]()
     extended = base.add(_stage("first"))
 
     assert base.stages == ()

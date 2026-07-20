@@ -30,7 +30,7 @@
 >
 > The composition is expressed fluently through `EssMigrationToolkit` (the ESS
 > product super-pipeline in `service/`, inheriting the generic
-> `StagedPipeline[TContext]` composition in `core/pipeline/`):
+> `ChainedPipeline[TContext]` composition in `core/pipelines/`):
 >
 > ```python
 > EssMigrationToolkit[MigrationContext]()
@@ -56,10 +56,10 @@
 > `Pipeline[TInput, TOutput]` and `PipelineStep[TInput, TOutput]` — so the
 > Builder can type-thread steps and support type-changing steps where genuinely
 > needed. The generic super-pipeline composition is likewise framework, not
-> product: `StagedPipeline[TContext]` (in `core/pipeline/`) composes an ordered
+> product: `ChainedPipeline[TContext]` (in `core/pipelines/`) composes an ordered
 > sequence of context-preserving stage pipelines and runs them left to right,
 > with no ESS or domain naming. The ESS product super-pipeline
-> `EssMigrationToolkit` (in `service/`) **inherits** `StagedPipeline`,
+> `EssMigrationToolkit` (in `service/`) **inherits** `ChainedPipeline`,
 > binding the three named stages (`.input()`/`.migrate()`/`.output()`) and the
 > "all three stages required" rule while reusing the inherited `run()`. The
 > three ESS stage pipelines instantiate the generic `Pipeline` foundation over
@@ -327,13 +327,13 @@ output_pipeline = (
 The product itself is a single fluent super-pipeline that composes the three
 stages. Each stage receives the output of the previous stage over the shared
 `MigrationContext`. `EssMigrationToolkit` (in `service/`) is the ESS product
-super-pipeline; it **inherits** the generic `StagedPipeline[TContext]` composition
-(in `core/pipeline/`) and adds the three named stages plus the "all three stages
+super-pipeline; it **inherits** the generic `ChainedPipeline[TContext]` composition
+(in `core/pipelines/`) and adds the three named stages plus the "all three stages
 required" rule:
 
 ```python
 toolkit = (
-    EssMigrationToolkit[MigrationContext]()   # inherits StagedPipeline
+    EssMigrationToolkit[MigrationContext]()   # inherits ChainedPipeline
         .input(input_pipeline)
         .migrate(migration_pipeline)
         .output(output_pipeline)
@@ -423,7 +423,7 @@ performed inside `can_execute(context)`:
 ```python
 class HandleOnActivityTopicStep(PipelineStep):
 
-    supported_modes = [PREVIEW, MIGRATE]
+    supported_modes = ("READONLY", "WRITEBACK")
 
     def can_execute(self, context):
         return any(
@@ -530,11 +530,7 @@ Example
 ```python
 class DiscoverComponents(PipelineStep):
 
-    supported_modes = [
-        DISCOVER,
-        PREVIEW,
-        MIGRATE
-    ]
+    supported_modes = ("READONLY", "WRITEBACK")
 ```
 
 Example
@@ -542,9 +538,7 @@ Example
 ```python
 class Writeback(PipelineStep):
 
-    supported_modes = [
-        MIGRATE
-    ]
+    supported_modes = ("WRITEBACK",)
 ```
 
 The Pipeline Engine automatically skips unsupported steps.
@@ -723,10 +717,10 @@ The Migration Orchestrator (`src/service/mtk_orchestrator.py`) is the
 **composition root** only. It assembles the three stages into the fluent
 super-pipeline, configures the execution mode, executes it, and returns the
 reports and diagnostics. `EssMigrationToolkit` (in `service/`) inherits the
-generic `StagedPipeline[TContext]` composition (in `core/pipeline/`):
+generic `ChainedPipeline[TContext]` composition (in `core/pipelines/`):
 
 ```python
-EssMigrationToolkit[MigrationContext]()   # inherits StagedPipeline
+EssMigrationToolkit[MigrationContext]()   # inherits ChainedPipeline
     .input(input_pipeline)
     .migrate(migration_pipeline)
     .output(output_pipeline)

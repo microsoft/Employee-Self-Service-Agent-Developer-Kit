@@ -30,8 +30,8 @@ registered Pipeline Steps may initially be no-op implementations.
 - [ ] A stage pipeline runs end-to-end with no-op steps and is deterministic
   (identical inputs produce identical ordering and output).
 - [ ] The framework supports composing stage pipelines into a generic
-  super-pipeline (`StagedPipeline[TContext]` in `core/pipeline/`). The ESS
-  product super-pipeline (`EssMigrationToolkit`, `service/`) inherits this base
+  chained pipeline (`ChainedPipeline[TContext]` in `core/pipelines/`). The ESS
+  product chained pipeline (`EssMigrationToolkit`, `service/`) inherits this base
   but is business/product code delivered separately by **TASK-014** — it is
   **not** part of this framework task.
 
@@ -41,7 +41,7 @@ registered Pipeline Steps may initially be no-op implementations.
 - Fluent, type-threading Pipeline Builder
 - Pipeline Registry
 - Pipeline Context contract
-- Generic super-pipeline composition (`StagedPipeline[TContext]`, `core/pipeline/`)
+- Generic chained pipeline composition (`ChainedPipeline[TContext]`, `core/pipelines/`)
   — the reusable, product-agnostic base (the ESS `EssMigrationToolkit` subclass
   in `service/` is delivered by TASK-014, not here)
 

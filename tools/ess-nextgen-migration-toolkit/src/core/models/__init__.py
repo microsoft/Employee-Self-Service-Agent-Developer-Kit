@@ -1,5 +1,10 @@
 """Canonical domain models."""
 
-from core.models.migration_context import ChangeEntry, DiagnosticEntry, MigrationContext
+from core.models.execution_context import (
+    ChangeEntry,
+    DiagnosticEntry,
+    ExecutionContext,
+    ExecutionMode,
+)
 
-__all__ = ["ChangeEntry", "DiagnosticEntry", "MigrationContext"]
+__all__ = ["ChangeEntry", "DiagnosticEntry", "ExecutionContext", "ExecutionMode"]

@@ -5,13 +5,13 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Generic, TypeVar
 
-from core.pipeline.pipeline import Pipeline
+from core.pipelines.pipeline import Pipeline
 
 TContext = TypeVar("TContext")
 
 
 @dataclass(frozen=True)
-class StagedPipeline(Generic[TContext]):
+class ChainedPipeline(Generic[TContext]):
     """Generic ordered composition of context-preserving stage pipelines.
 
     Purpose:
@@ -34,9 +34,9 @@ class StagedPipeline(Generic[TContext]):
         """Return the ordered configured stages."""
         return self._stages
 
-    def add(self, stage: Pipeline[TContext, TContext]) -> StagedPipeline[TContext]:
+    def add(self, stage: Pipeline[TContext, TContext]) -> ChainedPipeline[TContext]:
         """Return a new staged pipeline with ``stage`` appended after the rest."""
-        return StagedPipeline(_stages=(*self._stages, stage))
+        return ChainedPipeline(_stages=(*self._stages, stage))
 
     def _ordered_stages(self) -> tuple[Pipeline[TContext, TContext], ...]:
         """Return the stages to execute, in order.
