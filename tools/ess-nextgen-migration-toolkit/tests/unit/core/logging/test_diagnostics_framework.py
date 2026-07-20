@@ -107,7 +107,7 @@ def test_customer_channel_updates_report_model_only(
         clock=lambda: FIXED_TIME,
     )
     try:
-        logger.LogAdvisory("Customer note", category="Summary")
+        logger.LogAdvisory("Customer note", severity="INFO", category="Summary")
         logger.LogAdvisory(
             "Manual review needed",
             severity="WARNING",
@@ -202,3 +202,56 @@ def test_logger_and_reporter_leave_exactly_two_bundle_files(workspace: Path) -> 
 
     bundle_files = sorted(path.name for path in logger.session_manager.paths.session_dir.iterdir())
     assert bundle_files == ["migration_report.md", "session.log"]
+
+
+def test_tee_stream_survives_log_file_write_failure(
+    workspace: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """TeeStream must never abort migration work if session.log write fails (DIAG-001)."""
+    context = MigrationContext()
+    logger = Logger.start_session(
+        workspace, context, level=LogLevel.DEBUG, clock=lambda: FIXED_TIME
+    )
+    try:
+        # Force-close the log file to simulate disk/handle failure
+        logger.session_manager.paths.log_path.open("w").close()
+        log_handle = logger._log_file  # noqa: SLF001
+        log_handle.close()
+        # This must NOT raise — console output should still work
+        sys.stdout.write("after-close output\n")
+    finally:
+        logger.close()
+
+    captured = capsys.readouterr()
+    assert "after-close output" in captured.out
+
+
+def test_log_advisory_default_severity_routes_to_warnings(workspace: Path) -> None:
+    """A plain LogAdvisory() must default to WARNING so it appears in the report."""
+    context = MigrationContext()
+    logger = Logger.start_session(workspace, context, clock=lambda: FIXED_TIME)
+    try:
+        logger.LogAdvisory("Needs manual review")
+    finally:
+        logger.close()
+
+    assert len(context.Warnings) == 1
+    assert context.Warnings[0].message == "Needs manual review"
+    assert context.Warnings[0].severity == "WARNING"
+    assert context.Logs == []
+
+
+def test_session_manager_prunes_old_sessions(workspace: Path) -> None:
+    """SessionManager should keep at most max_sessions bundles."""
+    times = [datetime(2026, 7, 18, 10, 0, s) for s in range(8)]
+    for t in times[:7]:
+        mgr = SessionManager(workspace, clock=lambda _t=t: _t, max_sessions=5)
+        mgr.create_session()
+
+    session_dirs = sorted(d.name for d in workspace.iterdir() if d.is_dir())
+    # 7 created, max_sessions=5 → oldest 2 pruned, 5 remain
+    assert len(session_dirs) == 5
+    assert "session-2026-07-18_10-00-00" not in session_dirs
+    assert "session-2026-07-18_10-00-01" not in session_dirs
+    assert "session-2026-07-18_10-00-06" in session_dirs
