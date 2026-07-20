@@ -1,96 +1,117 @@
-# TASK-015 — Input Pipeline: Authentication + Agent Discovery
+# TASK-015 — Input Pipeline: Authentication + Agent Discovery + Orchestrator Wiring
 
 | Field      | Value                                                          |
 | ---------- | -------------------------------------------------------------- |
 | ID         | TASK-015                                                       |
-| Workstream | 1 — First Vertical Slice                                       |
+| Workstream | 0 — Repository Foundation                                      |
 | Status     | TODO                                                           |
-| Consumes   | TASK-002 (pipeline framework), TASK-005 (diagnostics), TASK-008 (token provider), TASK-014 (InputPipeline) |
+| Consumes   | TASK-002 (pipeline framework), TASK-005 (diagnostics), TASK-008 (token provider) |
 
 ## Description
 
-Implement the first real steps in the **Input Pipeline**
-(`src/modules/preprocessing/`). This is the entry point of every migration
-session — it authenticates the user, gathers session inputs from the CLI, calls
-Dataverse to discover ESS agents in the target environment, and lets the user
-select which agent to operate on.
+Implement the first **end-to-end vertical slice**: the orchestrator composes a
+`ChainedPipeline[MigrationContext]` with three stages (Input → Migration →
+Output), the Input Pipeline authenticates and discovers agents, and the
+Migration/Output stages are empty pass-throughs until their tasks land.
 
-The Input Pipeline supports both `READONLY` and `WRITEBACK` modes (the
-discovery flow is identical in both — mode-gating only matters for downstream
-writeback steps).
+This task delivers:
 
-### Flow
+1. **Orchestrator wiring** (`src/service/mtk_orchestrator.py`) — the composition
+   root that builds the three stage pipelines, chains them via
+   `ChainedPipeline`, manages the diagnostics session lifecycle
+   (`Logger.start_session` / `close()`), and surfaces the bundle path.
+2. **Input Pipeline steps** (`src/modules/preprocessing/`) — real steps that
+   authenticate, gather CLI inputs, and discover ESS agents.
+3. **Migration + Output empty pass-throughs** — one no-op
+   `MigrationPipelineStep` each so the chained pipeline runs end-to-end.
 
-1. **Authenticate** — use the existing `MsalTokenProvider` (TASK-008) to acquire
-   a Dataverse bearer token. Token refresh is handled automatically by the
-   provider (proactive silent refresh before expiry).
-2. **Gather session inputs via CLI** — prompt the user for:
-   - Tenant ID
-   - Environment ID
-   - (optional: Environment URL — can be derived from env ID)
-   
-   Populate these on the `MigrationContext` so downstream steps have them.
+### Input Pipeline Flow
+
+1. **Authenticate** — use `MsalTokenProvider` (TASK-008) to acquire a Dataverse
+   bearer token. Proactive refresh is handled automatically.
+2. **Gather session inputs via CLI** — prompt for Tenant ID and Environment ID.
+   Populate on `MigrationContext`.
 3. **Discover ESS agents** — call Dataverse (`GET /bots`) scoped to the
-   environment to retrieve the list of ESS agents (Copilot Studio bots).
-4. **Present agent list** — display the discovered agents to the user in a
-   numbered list (name, bot ID, status).
-5. **User selects agent** — the user picks one agent by number. Store the
-   selected agent's bot ID and metadata on the `MigrationContext`.
+   environment, display the list (name, bot ID, status), let the user select one.
+   Store selected agent on `MigrationContext`.
 
-After this pipeline stage completes, `MigrationContext` is hydrated with:
-- `tenant_id`, `environment_id`
-- `selected_agent` (bot ID, name, metadata)
-- A valid bearer token (via the injected token provider)
+### Orchestrator Shape
+
+```python
+from core.pipelines import ChainedPipeline, Pipeline
+from core.logging import Logger
+from core.models import ExecutionMode
+from modules.migration.models import MigrationContext
+
+def main() -> None:
+    ctx = MigrationContext(ExecutionMode=ExecutionMode.READONLY)
+    logger = Logger.start_session(OUTPUT_ROOT, ctx)
+    try:
+        input_pipeline = build_input_pipeline(logger)
+        migration_pipeline = build_migration_pipeline(logger)  # pass-through
+        output_pipeline = build_output_pipeline(logger)        # pass-through
+
+        toolkit = (
+            ChainedPipeline[MigrationContext]()
+            .add(input_pipeline)
+            .add(migration_pipeline)
+            .add(output_pipeline)
+        )
+        toolkit.run(ctx)
+    finally:
+        logger.close()
+```
 
 ### Architecture notes
 
-- Steps in this pipeline are `MigrationPipelineStep` subclasses (inherit
-  mode-gating). All steps here declare
-  `supported_modes=("READONLY", "WRITEBACK")` since discovery runs in both modes.
-- CLI prompting is the responsibility of a dedicated step (e.g.
-  `GatherSessionInputsStep`). The step uses Python's `input()` — this is the
-  one sanctioned place for direct user interaction. The Logger's stdout tee
-  captures the interaction in `session.log`.
-- Dataverse calls go through the `DataverseClient` (TASK-004) if available, or
-  a minimal HTTP helper if TASK-004 hasn't landed yet (note: TASK-004 is TODO,
-  so this task may need a thin adapter or a direct `httpx`/`requests` call with
-  the token provider — keep it behind an interface so TASK-004 can replace it).
+- All steps are `MigrationPipelineStep` subclasses.
+- Input steps declare `supported_modes=("READONLY", "WRITEBACK")` (discovery
+  runs in both modes).
+- CLI prompting uses Python `input()` — captured by Logger's stdout tee.
+- Dataverse calls use the token provider directly with `httpx` (TASK-004 not
+  landed yet — keep behind an interface so it can be swapped later).
+- No `EssMigrationToolkit` class — the orchestrator composes `ChainedPipeline`
+  directly with `.add()`.
+- After this task, `./mtk.sh start` runs the full pipeline end-to-end and
+  produces a session bundle.
 
 ## Acceptance Criteria
 
-- [ ] `MsalTokenProvider` is instantiated and used for Dataverse auth (reuse
-  TASK-008's implementation).
-- [ ] The user is prompted for Tenant ID and Environment ID via CLI input.
-- [ ] A Dataverse call retrieves the list of ESS agents (bots) in the given
-  environment.
-- [ ] The agent list is displayed to the user with name, bot ID, and status.
-- [ ] The user selects one agent; the selection is stored on `MigrationContext`.
-- [ ] `MigrationContext` is extended with fields: `tenant_id`, `environment_id`,
-  `selected_agent` (or equivalent structured data).
-- [ ] All steps are `MigrationPipelineStep` subclasses with
-  `supported_modes=("READONLY", "WRITEBACK")`.
-- [ ] The input pipeline runs end-to-end via `InputPipeline` (TASK-014) with
-  these steps wired in.
+- [ ] `mtk_orchestrator.py` composes a `ChainedPipeline[MigrationContext]` with
+  three stages and runs end-to-end via `./mtk.sh start`.
+- [ ] Logger session lifecycle: `start_session` before pipeline, `close()` in
+  `finally`, produces `output/session-<timestamp>/` with two files.
+- [ ] `MsalTokenProvider` is instantiated and used for Dataverse auth.
+- [ ] User is prompted for Tenant ID and Environment ID via CLI.
+- [ ] Dataverse call retrieves ESS agents in the environment.
+- [ ] Agent list displayed; user selects one; stored on `MigrationContext`.
+- [ ] `MigrationContext` extended with: `tenant_id`, `environment_id`,
+  `selected_agent`.
+- [ ] Migration and Output stages are pass-through (one no-op step each).
+- [ ] All steps are `MigrationPipelineStep` subclasses with `supported_modes`.
 - [ ] Quality gates pass: `uv run ruff check .`, `uv run mypy src`,
   `uv run pytest -q`.
 
 ## Deliverables
 
-- `src/modules/preprocessing/steps/authenticate_step.py` — acquire token
-- `src/modules/preprocessing/steps/gather_inputs_step.py` — CLI prompts for
-  tenant/env
-- `src/modules/preprocessing/steps/discover_agents_step.py` — Dataverse call +
-  display + user selection
-- `MigrationContext` extended with session input fields (`tenant_id`,
-  `environment_id`, `selected_agent`)
-- Unit tests under `tests/unit/modules/preprocessing/`
-- Integration test (optional, if Dataverse fixture available)
+- `src/service/mtk_orchestrator.py` — composition root (ChainedPipeline wiring
+  + Logger lifecycle)
+- `src/modules/preprocessing/steps/authenticate_step.py`
+- `src/modules/preprocessing/steps/gather_inputs_step.py`
+- `src/modules/preprocessing/steps/discover_agents_step.py`
+- `src/modules/migration/migration_pipeline.py` — builder returning pass-through
+- `src/modules/postprocessing/output_pipeline.py` — builder returning pass-through
+- `MigrationContext` extended with session input fields
+- Unit tests under `tests/unit/service/` and `tests/unit/modules/preprocessing/`
 
 ## References
 
-- 02_ARCHITECTURE/PIPELINES.md — Input Pipeline responsibilities
+- 02_ARCHITECTURE/PIPELINES.md — stage responsibilities, ChainedPipeline
 - 02_ARCHITECTURE/DATAVERSE_CLIENT.md — bot listing API
+- 03_ENGINEERING/DIAGNOSTICS.md — session bundle, Logger lifecycle
 - 01_PRODUCT/CUSTOMER_JOURNEY.md — user interaction flow
-- src/core/auth/token_provider.py — TASK-008 MsalTokenProvider
-- src/modules/migration/migration_step.py — MigrationPipelineStep base
-- src/modules/migration/models/migration_context.py — MigrationContext to extend
+- src/core/auth/token_provider.py — MsalTokenProvider (TASK-008)
+- src/core/pipelines/ — ChainedPipeline, Pipeline, PipelineStep
+- src/modules/migration/migration_step.py — MigrationPipelineStep
+- src/modules/migration/models/migration_context.py — MigrationContext
+- src/core/models/execution_context.py — ExecutionContext, ExecutionMode

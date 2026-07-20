@@ -28,15 +28,14 @@
 > Output Pipeline     (src/modules/postprocessing/)
 > ```
 >
-> The composition is expressed fluently through `EssMigrationToolkit` (the ESS
-> product super-pipeline in `service/`, inheriting the generic
-> `ChainedPipeline[TContext]` composition in `core/pipelines/`):
+> The composition is expressed fluently through `ChainedPipeline` (the generic
+> super-pipeline in `core/pipelines/`), composed directly by the orchestrator:
 >
 > ```python
-> EssMigrationToolkit[MigrationContext]()
->     .input(InputPipeline().use(...).use(...))
->     .migrate(MigrationPipeline().use(...).use(...))
->     .output(OutputPipeline().use(...).use(...))
+> ChainedPipeline[MigrationContext]()
+>     .add(build_input_pipeline(logger))
+>     .add(build_migration_pipeline(logger))
+>     .add(build_output_pipeline(logger))
 > ```
 >
 > **Each stage receives the output of the previous stage and operates over the
@@ -47,10 +46,10 @@
 > it.
 >
 > **The Migration Orchestrator is only the composition root.** It builds the
-> super-pipeline, configures the execution mode (Discover / Preview / Migrate),
+> chained pipeline, configures the execution mode (READONLY / WRITEBACK),
 > executes it, and returns the resulting reports and diagnostics. Orchestration
 > concerns are kept strictly separate from pipeline behaviour — the orchestrator
-> is *not* the primary abstraction; the super-pipeline is.
+> is *not* the primary abstraction; the chained pipeline is.
 >
 > **Typed framework foundation.** The reusable framework is generic —
 > `Pipeline[TInput, TOutput]` and `PipelineStep[TInput, TOutput]` — so the
@@ -58,13 +57,11 @@
 > needed. The generic super-pipeline composition is likewise framework, not
 > product: `ChainedPipeline[TContext]` (in `core/pipelines/`) composes an ordered
 > sequence of context-preserving stage pipelines and runs them left to right,
-> with no ESS or domain naming. The ESS product super-pipeline
-> `EssMigrationToolkit` (in `service/`) **inherits** `ChainedPipeline`,
-> binding the three named stages (`.input()`/`.migrate()`/`.output()`) and the
-> "all three stages required" rule while reusing the inherited `run()`. The
+> with no ESS or domain naming. The orchestrator composes `ChainedPipeline`
+> directly with `.add()` — no subclass needed. The
 > three ESS stage pipelines instantiate the generic `Pipeline` foundation over
 > the shared `MigrationContext` (`Pipeline[MigrationContext, MigrationContext]`),
-> which threads through the whole super-pipeline. (The generic `TInput, TOutput`
+> which threads through the whole chained pipeline. (The generic `TInput, TOutput`
 > signature is the analogue of the C# `HeterogenousPipelineStepComputeUnitBase
 > <TInput, TOutput>`; a stage pipeline is the analogue of
 > `KeyedComputeUnitBase<...>`. C# runtime concerns — Autofac keyed registration,
@@ -324,22 +321,20 @@ output_pipeline = (
 
 ### The super-pipeline
 
-The product itself is a single fluent super-pipeline that composes the three
+The product itself is a single fluent chained pipeline that composes the three
 stages. Each stage receives the output of the previous stage over the shared
-`MigrationContext`. `EssMigrationToolkit` (in `service/`) is the ESS product
-super-pipeline; it **inherits** the generic `ChainedPipeline[TContext]` composition
-(in `core/pipelines/`) and adds the three named stages plus the "all three stages
-required" rule:
+`MigrationContext`. The orchestrator composes `ChainedPipeline` directly — no
+subclass needed:
 
 ```python
 toolkit = (
-    EssMigrationToolkit[MigrationContext]()   # inherits ChainedPipeline
-        .input(input_pipeline)
-        .migrate(migration_pipeline)
-        .output(output_pipeline)
+    ChainedPipeline[MigrationContext]()
+        .add(input_pipeline)
+        .add(migration_pipeline)
+        .add(output_pipeline)
 )
 
-result = toolkit.run(context)   # ExecutionMode set on the context (Discover | Preview | Migrate)
+result = toolkit.run(context)   # ExecutionMode set on the context (READONLY | WRITEBACK)
 ```
 
 The Builder creates immutable executable pipelines. The **Migration Orchestrator
@@ -714,16 +709,15 @@ Responsibilities
 ## The Super-Pipeline
 
 The Migration Orchestrator (`src/service/mtk_orchestrator.py`) is the
-**composition root** only. It assembles the three stages into the fluent
-super-pipeline, configures the execution mode, executes it, and returns the
-reports and diagnostics. `EssMigrationToolkit` (in `service/`) inherits the
-generic `ChainedPipeline[TContext]` composition (in `core/pipelines/`):
+**composition root** only. It assembles the three stages into the chained
+pipeline, configures the execution mode, executes it, and returns the
+reports and diagnostics. The orchestrator composes `ChainedPipeline` directly:
 
 ```python
-EssMigrationToolkit[MigrationContext]()   # inherits ChainedPipeline
-    .input(input_pipeline)
-    .migrate(migration_pipeline)
-    .output(output_pipeline)
+ChainedPipeline[MigrationContext]()
+    .add(input_pipeline)
+    .add(migration_pipeline)
+    .add(output_pipeline)
 ```
 
 The final outputs of the toolkit are the two files of the session bundle:
