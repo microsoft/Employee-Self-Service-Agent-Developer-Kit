@@ -19,7 +19,10 @@ maker (or the agent, on their behalf) invokes it to confirm a deployment is
 runtime-ready.
 
 Usage:
-    python scripts/validate.py
+    python scripts/validate.py            # maker-authored flows, informational
+    python scripts/validate.py <name>     # one flow by name/workflowid (gates)
+    python scripts/validate.py --all      # every mapped flow, informational
+    python scripts/validate.py --all --strict   # gate on any NOT READY
 """
 
 import os
@@ -84,8 +87,55 @@ def _gather_flow_facts(env_url, token, schema_name, workflowid):
     }
 
 
+def _select_validate_flows(component_map, on_disk_paths, name_filter=None,
+                           include_all=False):
+    """Choose which mapped flows to validate + how many were scoped out.
+
+    Returns ``(flows, skipped)`` where ``flows`` is a list of
+    ``(path, workflowid, name)`` (name falls back to path). An explicit
+    ``name_filter`` or ``include_all`` validates across ALL mapped flows;
+    otherwise the default scopes to maker-authored flows (those with a local
+    ``workflow.json`` on disk) so pack/solution-installed orchestrators — which
+    register their connection differently and would spuriously show NOT READY —
+    don't fail the run. ``skipped`` counts flows excluded by the default scoping.
+    """
+    all_flows = [
+        (path, entry["workflowid"], entry.get("name", path))
+        for path, entry in (component_map or {}).items()
+        if entry.get("workflowid")
+    ]
+    if name_filter:
+        nf = name_filter.lower()
+        flows = [
+            f for f in all_flows
+            if nf in f[2].lower() or nf in f[1].lower()
+        ]
+        return flows, 0
+    if include_all:
+        return all_flows, 0
+    authored = [f for f in all_flows if f[0] in on_disk_paths]
+    return authored, len(all_flows) - len(authored)
+
+
+def _validate_is_gating(name_filter, strict):
+    """Whether a NOT-READY result should fail the run (non-zero exit).
+
+    A no-arg / ``--all`` overview is informational (exit 0): validate cannot
+    reliably tell a maker-pushed flow from a solution-installed one, and the
+    push-style checks yield false negatives for the latter (a solution flow
+    registers its connection via a shared design connref, not a flow-scoped one).
+    Gating therefore requires the user to scope explicitly — name a flow (their
+    own gate) or pass ``--strict``.
+    """
+    return bool(name_filter) or bool(strict)
+
+
 def main():
-    name_filter = sys.argv[1].lower() if len(sys.argv) > 1 else None
+    args = [a for a in sys.argv[1:] if not a.startswith("-")]
+    flags = {a for a in sys.argv[1:] if a.startswith("-")}
+    include_all = "--all" in flags
+    strict = "--strict" in flags
+    name_filter = args[0].lower() if args else None
 
     config = load_config()
     env_url = config["dataverseEndpoint"]
@@ -93,28 +143,30 @@ def main():
     schema_name = config["agent"]["schemaName"]
 
     component_map = load_component_map(agent_dir)
-    flows = [
-        (path, entry["workflowid"], entry.get("name", path))
-        for path, entry in component_map.items()
-        if entry.get("workflowid")
-    ]
-    if name_filter:
-        flows = [
-            f for f in flows
-            if name_filter in f[2].lower() or name_filter in f[1].lower()
-        ]
+    on_disk_paths = {
+        path for path in component_map
+        if os.path.exists(os.path.join(agent_dir, path))
+    }
+    flows, skipped = _select_validate_flows(
+        component_map, on_disk_paths, name_filter=name_filter,
+        include_all=include_all)
     if not flows:
         print("No matching flows found in the component map.")
         return
 
     print(f"Validating {len(flows)} flow(s) in {config['agent']['name']}...")
-    print(
-        "Note: these checks reflect ADK push-style registration. Flows "
-        "installed via a solution / extension pack (e.g. the shared "
-        "orchestrators) register their connection differently and may show "
-        "NOT READY here without being broken. This check is for flows you "
-        "authored and pushed.\n"
-    )
+    if skipped:
+        print(
+            f"Skipped {skipped} pack/solution-installed flow(s) (no local "
+            "workflow.json); pass --all to include them.\n"
+        )
+    else:
+        print(
+            "Note: these checks reflect ADK push-style registration. Flows "
+            "installed via a solution / extension pack register their "
+            "connection differently and may show NOT READY here without being "
+            "broken.\n"
+        )
     print("Authenticating to Dataverse...")
     token = authenticate(env_url)
     print("Authenticated.\n")
@@ -145,7 +197,15 @@ def main():
         print("Some flows are not fully registered. If you authored + pushed "
               "the flow, run `python push.py --repair` (optionally pass a flow "
               "name) once the connector is reachable to complete registration.")
-        sys.exit(1)
+        if _validate_is_gating(name_filter, strict):
+            sys.exit(1)
+        print(
+            "\n(Informational run — exit 0. A ❌ can also mean the flow is "
+            "registered via an installed solution rather than ADK push. To gate "
+            "a specific flow you authored, run: python validate.py <flow name>, "
+            "or `--all --strict` to fail on any NOT READY.)"
+        )
+        return
     print("All matching flows are registered and agent-invocable.")
 
 
