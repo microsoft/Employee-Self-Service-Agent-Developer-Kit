@@ -143,8 +143,8 @@ def main():
 
     if not all_ready:
         print("Some flows are not fully registered. If you authored + pushed "
-              "the flow, re-run /push (or activate once the connector is "
-              "reachable) to complete registration.")
+              "the flow, run `python push.py --repair` (optionally pass a flow "
+              "name) once the connector is reachable to complete registration.")
         sys.exit(1)
     print("All matching flows are registered and agent-invocable.")
 

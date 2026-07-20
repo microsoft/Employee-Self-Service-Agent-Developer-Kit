@@ -749,3 +749,182 @@ class TestFlowResponseKinds:
         import json
         assert push._flow_response_kinds(
             json.dumps({"properties": {"definition": {"actions": {}}}})) == []
+
+
+class TestConnrefNeedsCreate:
+    """push._connref_needs_create guards connref-create idempotency: when
+    re-driving registration (adopt-on-existing / --repair) the flow-scoped
+    connref may already exist, and a blind create would 400 on duplicate key.
+    """
+
+    def _rows(self, *names):
+        return [{"connectionreferencelogicalname": n} for n in names]
+
+    def test_true_when_absent(self):
+        assert push._connref_needs_create(
+            "schema.wf.shared_service-now", self._rows("other.name")) is True
+
+    def test_false_when_present(self):
+        assert push._connref_needs_create(
+            "schema.wf.shared_service-now",
+            self._rows("schema.wf.shared_service-now")) is False
+
+    def test_match_is_case_insensitive(self):
+        assert push._connref_needs_create(
+            "Schema.WF.Shared_Service-Now",
+            self._rows("schema.wf.shared_service-now")) is False
+
+    def test_true_on_empty_rows(self):
+        assert push._connref_needs_create("schema.wf.conn", []) is True
+
+
+class TestIsBenignDuplicateError:
+    """push._is_benign_duplicate_error recognizes a Dataverse
+    already-exists/duplicate-key error so a re-driven link or connref can be
+    treated as already-registered rather than a failure.
+    """
+
+    def test_matches_duplicate_key_text(self):
+        assert push._is_benign_duplicate_error(
+            Exception("Cannot insert duplicate key")) is True
+
+    def test_matches_already_exists_text(self):
+        assert push._is_benign_duplicate_error(
+            Exception("A record with matching key values already exists")) is True
+
+    def test_matches_dataverse_duplicate_code(self):
+        assert push._is_benign_duplicate_error(
+            Exception("error 0x80040237: duplicate record")) is True
+
+    def test_false_on_unrelated_error(self):
+        assert push._is_benign_duplicate_error(
+            Exception("500 internal server error")) is False
+
+    def test_false_on_none(self):
+        assert push._is_benign_duplicate_error(None) is False
+
+
+class TestRegistrationReport:
+    """push._registration_report turns the best-effort registration failures
+    into an honest terminal signal: a banner naming each flow + failed step and
+    a non-zero exit, so a flow that was created but is NOT agent-invocable is
+    never reported as a silent green success.
+    """
+
+    def test_empty_is_success(self):
+        r = push._registration_report([])
+        assert r["lines"] == []
+        assert r["exit_code"] == 0
+        assert r["telemetry_outcome"] == "success"
+
+    def test_nonempty_is_failure_with_repair_guidance(self):
+        r = push._registration_report([
+            {"flow": "wf-123", "step": "activate", "detail": "ARM 500"},
+        ])
+        assert r["exit_code"] != 0
+        assert r["telemetry_outcome"] == "failure"
+        blob = "\n".join(r["lines"])
+        assert "wf-123" in blob
+        assert "activate" in blob
+        assert "--repair" in blob
+
+    def test_lists_every_incomplete_flow(self):
+        r = push._registration_report([
+            {"flow": "wf-1", "step": "connref", "detail": "x"},
+            {"flow": "wf-2", "step": "link", "detail": "y"},
+        ])
+        blob = "\n".join(r["lines"])
+        assert "wf-1" in blob and "wf-2" in blob
+
+
+class TestPlanRepairFlows:
+    """push._plan_repair_flows selects the flows --repair re-drives from the
+    component map: workflow entries only, optional case-insensitive name/id
+    filter, deterministic order. Bounded so --repair never fans out over the
+    pack orchestrators the way an unfiltered validate would.
+    """
+
+    MAP = {
+        "workflows/get-options/workflow.json": {
+            "entity_set": "workflows", "workflowid": "aaa", "name": "Get Options"},
+        "workflows/create-ticket/workflow.json": {
+            "entity_set": "workflows", "workflowid": "bbb", "name": "Create Ticket"},
+        "botcomponents/Foo/data": {"botcomponentid": "ccc", "schemaname": "Foo"},
+    }
+
+    def test_selects_only_workflow_entries(self):
+        got = push._plan_repair_flows(self.MAP)
+        assert ("workflows/get-options/workflow.json", "aaa") in got
+        assert ("workflows/create-ticket/workflow.json", "bbb") in got
+        assert all(wid in ("aaa", "bbb") for _, wid in got)
+        assert len(got) == 2
+
+    def test_deterministic_order(self):
+        assert push._plan_repair_flows(self.MAP) == sorted(
+            push._plan_repair_flows(self.MAP))
+
+    def test_name_filter_matches_name_substring_ci(self):
+        got = push._plan_repair_flows(self.MAP, name_filter="create")
+        assert got == [("workflows/create-ticket/workflow.json", "bbb")]
+
+    def test_filter_matches_workflowid(self):
+        got = push._plan_repair_flows(self.MAP, name_filter="aaa")
+        assert got == [("workflows/get-options/workflow.json", "aaa")]
+
+    def test_filter_no_match_is_empty(self):
+        assert push._plan_repair_flows(self.MAP, name_filter="zzz") == []
+
+
+class TestRunRepairNoop:
+    """push._run_repair returns 0 without authenticating when there are no
+    mapped flows to repair — the early-return branch, exercisable without network.
+    """
+
+    def test_empty_map_returns_zero_without_auth(self, monkeypatch):
+        monkeypatch.setattr(
+            push, "_AuthHolder",
+            lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("must not authenticate when nothing to repair")),
+        )
+        assert push._run_repair(
+            "https://x.crm.dynamics.com", "schema", "/agent", {}, None) == 0
+
+    def test_no_filter_match_returns_zero_without_auth(self, monkeypatch):
+        monkeypatch.setattr(
+            push, "_AuthHolder",
+            lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("must not authenticate when nothing matches")),
+        )
+        cmap = {"workflows/a/workflow.json": {
+            "entity_set": "workflows", "workflowid": "aaa", "name": "Alpha"}}
+        assert push._run_repair(
+            "https://x.crm.dynamics.com", "schema", "/agent", cmap, "zzz") == 0
+
+    def test_flow_not_on_disk_is_scoped_out_without_auth(self, monkeypatch):
+        # A mapped workflow whose workflow.json is absent on disk (e.g. a
+        # solution/pack-installed orchestrator) must not be repaired.
+        monkeypatch.setattr(
+            push, "_AuthHolder",
+            lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("must not authenticate for a pack flow")),
+        )
+        cmap = {"workflows/pack/workflow.json": {
+            "entity_set": "workflows", "workflowid": "aaa", "name": "Pack"}}
+        assert push._run_repair(
+            "https://x.crm.dynamics.com", "schema",
+            "/nonexistent-agent-dir", cmap, None) == 0
+
+    def test_dry_run_lists_plan_without_auth(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(
+            push, "_AuthHolder",
+            lambda *a, **k: (_ for _ in ()).throw(
+                AssertionError("dry-run must not authenticate")),
+        )
+        wf_dir = tmp_path / "workflows" / "a"
+        wf_dir.mkdir(parents=True)
+        (wf_dir / "workflow.json").write_text("{}", encoding="utf-8")
+        cmap = {"workflows/a/workflow.json": {
+            "entity_set": "workflows", "workflowid": "aaa", "name": "Alpha"}}
+        assert push._run_repair(
+            "https://x.crm.dynamics.com", "schema", str(tmp_path), cmap,
+            None, dry_run=True) == 0

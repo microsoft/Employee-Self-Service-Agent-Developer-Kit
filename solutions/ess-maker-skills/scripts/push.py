@@ -268,6 +268,100 @@ def _flow_connref_delete_filter(agent_schema, workflowid):
     return f"startswith(connectionreferencelogicalname,'{prefix}')"
 
 
+def _connref_needs_create(target_logical_name, existing_rows):
+    """Return whether a flow-scoped connref must be created.
+
+    Guards connref-create idempotency. When registration is re-driven — an
+    adopt-on-existing flow or an explicit ``--repair`` — the flow-scoped connref
+    may already exist, and a blind create would 400 on a duplicate key. Returns
+    ``False`` when ``target_logical_name`` already appears in ``existing_rows``
+    (matched case-insensitively on ``connectionreferencelogicalname``).
+    """
+    target = (target_logical_name or "").casefold()
+    for row in existing_rows or []:
+        if (row.get("connectionreferencelogicalname") or "").casefold() == target:
+            return False
+    return True
+
+
+_DUPLICATE_ERROR_MARKERS = (
+    "already exists",
+    "duplicate",
+    "0x80040237",  # duplicate lookup / cannot insert duplicate key
+    "0x80060891",  # duplicate record
+)
+
+
+def _is_benign_duplicate_error(exc):
+    """Return whether an exception is a Dataverse already-exists/duplicate error.
+
+    Lets a re-driven link or connref treat an already-registered record as
+    success rather than a failure, so re-running registration (adopt / repair)
+    reports the true state instead of a spurious "incomplete". Matches on the
+    error text/code, which is stable across the API error envelope.
+    """
+    if exc is None:
+        return False
+    text = str(exc).casefold()
+    return any(marker in text for marker in _DUPLICATE_ERROR_MARKERS)
+
+
+def _registration_report(incomplete):
+    """Compose the honest terminal signal for best-effort registration failures.
+
+    ``incomplete`` is a list of ``{"flow", "step", "detail"}`` records, one per
+    registration step (connref/link/activate) that failed for a created flow.
+    Registration is best-effort so these never poison the atomic map save, but a
+    flow that was created yet left non-invocable must NOT be reported as a silent
+    green success. Returns ``{"lines", "exit_code", "telemetry_outcome"}``: an
+    empty input is a clean success; otherwise a banner naming each flow + failed
+    step, a non-zero exit code, and a ``failure`` telemetry outcome.
+    """
+    if not incomplete:
+        return {"lines": [], "exit_code": 0, "telemetry_outcome": "success"}
+    lines = [
+        "WARNING: flow(s) created but NOT yet agent-invocable "
+        "(registration incomplete):",
+    ]
+    for item in incomplete:
+        lines.append(
+            f"  - flow {item.get('flow')}: {item.get('step')} step failed"
+            f" ({item.get('detail')})"
+        )
+    lines.append(
+        "Complete registration by re-running: python push.py --repair"
+        " (optionally pass a flow name to scope it)."
+    )
+    return {"lines": lines, "exit_code": 2, "telemetry_outcome": "failure"}
+
+
+def _plan_repair_flows(component_map, name_filter=None):
+    """Select the flows ``--repair`` re-drives from the component map.
+
+    Workflow entries only (an entry with a ``workflowid``), with an optional
+    case-insensitive filter matched against the entry's ``name``, its
+    ``workflowid``, or its file path. Deterministic order. Bounded by design so
+    ``--repair`` never fans out over the pre-installed pack orchestrators the way
+    an unfiltered readiness scan would.
+    """
+    needle = (name_filter or "").casefold()
+    selected = []
+    for filepath, entry in (component_map or {}).items():
+        wf_id = entry.get("workflowid")
+        if not wf_id:
+            continue
+        if needle:
+            haystack = " ".join([
+                str(entry.get("name") or ""),
+                str(wf_id),
+                str(filepath),
+            ]).casefold()
+            if needle not in haystack:
+                continue
+        selected.append((filepath, wf_id))
+    return sorted(selected)
+
+
 def _schemaname_looks_kebab(schemaname):
     """Return True if a schemaname's final segment is hyphenated (kebab).
 
@@ -642,10 +736,196 @@ def update_baseline(agent_dir):
                     dirs_exist_ok=True)
 
 
+def _register_flow(auth, env_url, schema_name, wf_id, wf_json):
+    """Mint a created flow's flow-scoped connref(s) and activate it.
+
+    Idempotent so it is safe to re-drive (adopt-on-existing create or an
+    explicit ``--repair``): an already-present connref is skipped, an
+    already-active flow re-PATCHes harmlessly, and a benign duplicate error is
+    treated as already-registered. Best-effort — it never raises for a step
+    failure; instead it returns a list of ``{"flow", "step", "detail"}`` for the
+    steps that genuinely failed (connector unreachable, design connref missing,
+    etc.) so the caller can surface an honest 'not yet agent-invocable' signal.
+    """
+    incomplete = []
+    for cr in _plan_flow_connrefs(wf_json, schema_name, wf_id):
+        target = cr["new_logical_name"]
+        try:
+            existing = _call_with_refresh(
+                auth, query_all, env_url, auth.token,
+                "connectionreferences", "connectionreferencelogicalname",
+                filter_expr=(
+                    "connectionreferencelogicalname eq "
+                    f"'{target.replace(chr(39), chr(39) * 2)}'"),
+            )
+            if not _connref_needs_create(target, existing):
+                print(f"  🔌 Connref exists: {target}")
+                continue
+            design = cr["design_logical_name"].replace("'", "''")
+            design_rows = _call_with_refresh(
+                auth, query_all, env_url, auth.token,
+                "connectionreferences",
+                "connectionid,connectorid,connectionparametersetconfig",
+                filter_expr=f"connectionreferencelogicalname eq '{design}'",
+            )
+            if not design_rows:
+                print(
+                    f"  ! No design connref '{cr['design_logical_name']}' "
+                    f"to mirror; flow {wf_id} left unconnected"
+                )
+                incomplete.append({"flow": wf_id, "step": "connref",
+                                   "detail": "design connref not found"})
+                continue
+            design_row = design_rows[0]
+            # The shared design connref may lack the parameter-set config; pull
+            # it from a sibling connref on the same connection.
+            sibling_rows = []
+            if not design_row.get("connectionparametersetconfig"):
+                conn_id = (design_row.get("connectionid") or "").replace(
+                    "'", "''")
+                if conn_id:
+                    sibling_rows = _call_with_refresh(
+                        auth, query_all, env_url, auth.token,
+                        "connectionreferences",
+                        "connectionid,connectionparametersetconfig",
+                        filter_expr=f"connectionid eq '{conn_id}'",
+                    )
+            mirror = _build_connref_mirror(design_row, sibling_rows)
+            payload = _flow_connref_payload(target, mirror)
+            _call_with_refresh(
+                auth, create_record, env_url, auth.token,
+                "connectionreferences", payload)
+            print(f"  🔌 Connref: {target}")
+        except Exception as e:  # noqa: BLE001 — best-effort registration
+            if _is_benign_duplicate_error(e):
+                print(f"  🔌 Connref exists: {target}")
+            else:
+                print(
+                    f"  ! Connref failed for flow {wf_id} "
+                    f"({cr['connector_api_name']}): {e}"
+                )
+                incomplete.append({"flow": wf_id, "step": "connref",
+                                   "detail": str(e)})
+    try:
+        _call_with_refresh(
+            auth, update_record, env_url, auth.token, "workflows", wf_id,
+            {"statecode": 1, "statuscode": 2})
+        print(f"  ▶ Activated flow {wf_id}")
+    except Exception as e:  # noqa: BLE001 — best-effort registration
+        print(
+            f"  ! Activation failed for flow {wf_id} "
+            f"(run: python push.py --repair once the connector is reachable):"
+            f" {e}"
+        )
+        incomplete.append({"flow": wf_id, "step": "activate", "detail": str(e)})
+    return incomplete
+
+
+def _run_repair(env_url, schema_name, agent_dir, component_map, name_filter,
+                dry_run=False):
+    """Re-drive registration for already-created flows (the ``--repair`` path).
+
+    Closes the gap where a flow was created but a best-effort registration step
+    (connref/link/activation) failed: because the flow is already in the map, a
+    plain re-push sees no diff and never re-enters registration. ``--repair``
+    re-runs the idempotent link + connref + activation for the selected mapped
+    flow(s). Isolated from the atomic map save — link/connref/activation live in
+    Dataverse, not the component map, so no local state changes. Returns the
+    process exit code (0 all-registered, non-zero if any step is still failing).
+    """
+    flows = _plan_repair_flows(component_map, name_filter)
+    # Scope to maker-authored flows only: a flow whose workflow.json is present
+    # on disk. This keeps --repair from re-driving registration (and toggling
+    # activation) on solution/pack-installed orchestrators that happen to be in
+    # the component map but register their connection differently.
+    flows = [
+        (fp, wf_id) for fp, wf_id in flows
+        if os.path.exists(os.path.join(agent_dir, fp))
+    ]
+    if not flows:
+        scope = f" matching '{name_filter}'" if name_filter else ""
+        print(f"No maker-authored flows{scope} to repair.")
+        return 0
+
+    if dry_run:
+        print("(Dry run) --repair would re-drive registration for:")
+        for filepath, wf_id in flows:
+            print(f"  - {wf_id} ({filepath})")
+        return 0
+
+    print("\nAuthenticating to Dataverse...")
+    auth = _AuthHolder(env_url)
+    auth.acquire()
+    print("Authenticated.\n")
+
+    incomplete = []
+    target_ids = {wf_id for _, wf_id in flows}
+
+    # Re-drive topic -> flow links for the selected flows, reconstructing the
+    # topic/flow pairing from the system topics on disk (the same derivation the
+    # normal push uses, minus the "created this run" scoping).
+    topic_items = []
+    for filepath in component_map:
+        if classify_path(filepath) != "botcomponent":
+            continue
+        try:
+            with open(os.path.join(agent_dir, filepath), "r",
+                      encoding="utf-8") as fh:
+                topic_items.append((filepath, fh.read()))
+        except OSError:
+            continue
+
+    def _resolve_botcomponentid(fp):
+        return (component_map.get(fp) or {}).get("botcomponentid")
+
+    for bc_id, wf_id in _plan_topic_workflow_links(
+        topic_items, target_ids, _resolve_botcomponentid
+    ):
+        try:
+            _call_with_refresh(
+                auth, associate_ref, env_url, auth.token,
+                "botcomponents", bc_id, "botcomponent_workflow",
+                "workflows", wf_id,
+            )
+            print(f"  🔗 Linked: topic {bc_id} → flow {wf_id}")
+        except Exception as e:  # noqa: BLE001
+            if _is_benign_duplicate_error(e):
+                print(f"  🔗 Link already present: topic {bc_id} → flow {wf_id}")
+            else:
+                print(f"  ! Link failed: topic {bc_id} → flow {wf_id}: {e}")
+                incomplete.append({"flow": wf_id, "step": "link",
+                                   "detail": str(e)})
+
+    for filepath, wf_id in flows:
+        try:
+            with open(os.path.join(agent_dir, filepath), "r",
+                      encoding="utf-8") as fh:
+                wf_json = json.loads(fh.read())
+        except (OSError, ValueError) as e:
+            print(f"  ! Could not read {filepath}: {e}")
+            wf_json = {}
+        print(f"Repairing flow {wf_id} ({filepath})...")
+        incomplete.extend(
+            _register_flow(auth, env_url, schema_name, wf_id, wf_json))
+
+    report = _registration_report(incomplete)
+    for line in report["lines"]:
+        print(line)
+    if not incomplete:
+        print(f"\nRepair complete: {len(flows)} flow(s) registered.")
+    return report["exit_code"]
+
+
 def main():
     dry_run = "--dry-run" in sys.argv
     auto_yes = "--yes" in sys.argv
     force_delete = "--force-delete" in sys.argv
+    repair_mode = "--repair" in sys.argv
+    repair_name = None
+    if repair_mode:
+        _idx = sys.argv.index("--repair")
+        if _idx + 1 < len(sys.argv) and not sys.argv[_idx + 1].startswith("-"):
+            repair_name = sys.argv[_idx + 1]
 
     config = load_config()
     agent_dir = config["agent"]["folder"]
@@ -667,6 +947,11 @@ def main():
     baseline_files = collect_files(baseline_dir)
     working_files = collect_files(agent_dir)
     component_map = load_component_map(agent_dir)
+
+    if repair_mode:
+        sys.exit(_run_repair(
+            env_url, schema_name, agent_dir, component_map, repair_name,
+            dry_run=dry_run))
 
     # Compute diff
     changed, new, deleted = compute_diff(baseline_files, working_files)
@@ -1122,11 +1407,39 @@ def main():
                 clientdata=content,
                 description=wf_desc,
             )
+            client_wf_id = record_data.get("workflowid")
             try:
-                new_id = _call_with_refresh(auth, create_record,
-                                            env_url, auth.token, "workflows",
-                                            record_data)
-                print(f"  ✅ Created: {filepath} (ID: {new_id})")
+                adopted_id = None
+                if client_wf_id:
+                    # Idempotent create: a prior push may have committed this
+                    # flow row (the client workflowId is preserved as the PK)
+                    # but failed to save the component map — a blind re-create
+                    # with the same id would 400 on a duplicate key and wedge the
+                    # maker. Probe first; on a hit, adopt the existing row
+                    # (best-effort definition refresh) instead of re-creating.
+                    try:
+                        if _call_with_refresh(
+                                auth, record_exists, env_url, auth.token,
+                                "workflows", client_wf_id, "workflowid"):
+                            adopted_id = client_wf_id
+                    except Exception:  # noqa: BLE001 — probe failed; try create
+                        adopted_id = None
+                if adopted_id:
+                    try:
+                        _call_with_refresh(
+                            auth, update_record, env_url, auth.token,
+                            "workflows", adopted_id, {"clientdata": content})
+                    except Exception as ue:  # noqa: BLE001
+                        print(f"  ! Adopted flow {adopted_id} but could not "
+                              f"refresh its definition: {ue}")
+                    new_id = adopted_id
+                    print(f"  ↻ Adopted existing flow: {filepath} "
+                          f"(ID: {new_id})")
+                else:
+                    new_id = _call_with_refresh(auth, create_record,
+                                                env_url, auth.token,
+                                                "workflows", record_data)
+                    print(f"  ✅ Created: {filepath} (ID: {new_id})")
                 pending_creates[filepath] = {
                     "workflowid": new_id,
                     "entity_set": "workflows",
@@ -1419,6 +1732,13 @@ def main():
                 print(f"  ! Connref cleanup skipped for "
                       f"{entry['workflowid']}: {e}")
 
+    # Best-effort registration steps (link + connref + activation) append here
+    # instead of incrementing `errors`, so a transient registration failure
+    # never poisons the atomic map save (which would discard the created flow's
+    # map entry and force a duplicate-key re-create next push). The list drives
+    # an honest 'not yet agent-invocable' terminal signal + a `--repair` hint.
+    registration_incomplete = []
+
     # Wire newly-created flows to the system topics that invoke them. A flow
     # created via the Web API lands as an orphan `workflows` record; Copilot
     # Studio cannot resolve it as one of the agent's flows until a
@@ -1454,8 +1774,17 @@ def main():
                 print(f"  🔗 Linked: topic {bc_id} → flow {wf_id}")
                 success += 1
             except Exception as e:
-                print(f"  ❌ Failed to link topic {bc_id} → flow {wf_id}: {e}")
-                errors += 1
+                if _is_benign_duplicate_error(e):
+                    print(f"  🔗 Link already present: topic {bc_id} → "
+                          f"flow {wf_id}")
+                else:
+                    # Best-effort like connref/activation: a link failure must
+                    # not increment `errors`, else the atomic gate discards the
+                    # created flow's map entry and the next push re-creates it
+                    # with the same client id -> duplicate-key 400.
+                    print(f"  ! Link failed: topic {bc_id} → flow {wf_id}: {e}")
+                    registration_incomplete.append(
+                        {"flow": wf_id, "step": "link", "detail": str(e)})
 
     # Register each newly-created flow: mint its flow-scoped connection
     # reference(s) and activate it. A flow created via the Web API is Draft with
@@ -1464,11 +1793,11 @@ def main():
     # connref the flow's workflow.json names. Activation triggers live
     # connector-schema validation, so it runs last.
     #
-    # Both steps are BEST-EFFORT (warn, never increment `errors`): the flow
-    # record and its id are already persisted this run, so failing the push here
-    # would block the atomic map save and cause a duplicate create on the next
-    # push (same client workflowid). A warning lets the maker finish/retry
-    # registration without corrupting local state.
+    # BEST-EFFORT (see `registration_incomplete` above): the flow record and its
+    # id are already persisted this run, so failing the push here would block the
+    # atomic map save and force a duplicate create on the next push (same client
+    # workflowid). `_register_flow` is idempotent, so `--repair` (or a later
+    # edit+push) can finish registration without corrupting local state.
     created_flows = [
         (fp, entry["workflowid"])
         for fp, entry in pending_creates.items()
@@ -1479,60 +1808,8 @@ def main():
             wf_json = json.loads(working_files[fp])
         except (KeyError, ValueError):
             wf_json = {}
-        for cr in _plan_flow_connrefs(wf_json, schema_name, wf_id):
-            try:
-                design = cr["design_logical_name"].replace("'", "''")
-                design_rows = _call_with_refresh(
-                    auth, query_all, env_url, auth.token,
-                    "connectionreferences",
-                    "connectionid,connectorid,connectionparametersetconfig",
-                    filter_expr=(
-                        f"connectionreferencelogicalname eq '{design}'"
-                    ),
-                )
-                if not design_rows:
-                    print(
-                        f"  ! No design connref '{cr['design_logical_name']}' "
-                        f"to mirror; flow {wf_id} left unconnected"
-                    )
-                    continue
-                design_row = design_rows[0]
-                # The shared design connref may lack the parameter-set config;
-                # pull it from a sibling connref on the same connection.
-                sibling_rows = []
-                if not design_row.get("connectionparametersetconfig"):
-                    conn_id = (design_row.get("connectionid") or "").replace(
-                        "'", "''")
-                    if conn_id:
-                        sibling_rows = _call_with_refresh(
-                            auth, query_all, env_url, auth.token,
-                            "connectionreferences",
-                            "connectionid,connectionparametersetconfig",
-                            filter_expr=f"connectionid eq '{conn_id}'",
-                        )
-                mirror = _build_connref_mirror(design_row, sibling_rows)
-                payload = _flow_connref_payload(
-                    cr["new_logical_name"], mirror)
-                _call_with_refresh(
-                    auth, create_record, env_url, auth.token,
-                    "connectionreferences", payload)
-                print(f"  🔌 Connref: {cr['new_logical_name']}")
-            except Exception as e:
-                print(
-                    f"  ! Connref failed for flow {wf_id} "
-                    f"({cr['connector_api_name']}): {e}"
-                )
-        try:
-            _call_with_refresh(
-                auth, update_record, env_url, auth.token, "workflows", wf_id,
-                {"statecode": 1, "statuscode": 2})
-            print(f"  ▶ Activated flow {wf_id}")
-        except Exception as e:
-            print(
-                f"  ! Activation failed for flow {wf_id} "
-                f"(activate manually or re-run once the connector is reachable):"
-                f" {e}"
-            )
+        registration_incomplete.extend(
+            _register_flow(auth, env_url, schema_name, wf_id, wf_json))
 
     # Apply pending state mutations atomically with the baseline + map save.
     # The full-success gate is the contract: if everything pushed, persist
@@ -1673,20 +1950,40 @@ def main():
     print(f"{'=' * 50}")
     print(f"Success: {success}")
 
+    # Honest terminal signal: best-effort registration failures do not increment
+    # `errors` (so the atomic map save is preserved), but a flow that was created
+    # yet left non-invocable must NOT be reported as a silent green success.
+    _reg = _registration_report(registration_incomplete)
+    if _reg["lines"]:
+        print("")
+        for _line in _reg["lines"]:
+            print(_line)
+
     # Telemetry: emit build.complete + agent.deploy with the push outcome.
     # Best-effort, synchronous flush so the events make it out before exit.
     try:
         import adk_telemetry
 
         _duration_ms = int((time.perf_counter() - _push_start) * 1000)
-        _outcome = "failure" if errors else "success"
+        _failed = bool(errors) or bool(registration_incomplete)
+        _outcome = "failure" if _failed else "success"
         _deploy_target = _resolve_deploy_target(config, env_url)
-        _err_kwargs = {}
         if errors:
+            _error_message = f"{errors} component(s) failed"
+        elif registration_incomplete:
+            _error_message = (
+                f"{len(registration_incomplete)} flow registration step(s) "
+                "incomplete"
+            )
+        else:
+            _error_message = ""
+        _err_kwargs = {}
+        if _failed:
             _err_kwargs = {
-                "error_code": "PUSH_PARTIAL_FAILURE",
+                "error_code": ("PUSH_PARTIAL_FAILURE" if errors
+                               else "REGISTRATION_INCOMPLETE"),
                 "error_category": "runtime",
-                "error_message": f"{errors} component(s) failed",
+                "error_message": _error_message,
             }
         adk_telemetry.emit_build_complete(
             agent_id=bot_id, adk_capability="publishing",
@@ -1694,10 +1991,12 @@ def main():
         )
         adk_telemetry.emit_agent_deploy(
             agent_id=bot_id, deploy_target=_deploy_target, adk_capability="publishing",
-            outcome=("server_error" if errors else "success"),
+            outcome=("server_error" if _failed else "success"),
             duration_ms=_duration_ms,
-            **({"error_code": "DEPLOY_PARTIAL_FAILURE", "error_category": "runtime",
-                "error_message": f"{errors} component(s) failed"} if errors else {}),
+            **({"error_code": ("DEPLOY_PARTIAL_FAILURE" if errors
+                               else "REGISTRATION_INCOMPLETE"),
+                "error_category": "runtime",
+                "error_message": _error_message} if _failed else {}),
         )
         adk_telemetry.flush(timeout=5)
     except Exception:  # noqa: BLE001 — telemetry must never break push
@@ -1706,6 +2005,8 @@ def main():
     if errors:
         print(f"Errors:  {errors}")
         sys.exit(1)
+    if _reg["exit_code"]:
+        sys.exit(_reg["exit_code"])
     print("")
 
 
