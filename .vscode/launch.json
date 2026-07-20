@@ -1,0 +1,32 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "MTK: Start (debug)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "service.mtk_orchestrator",
+      "cwd": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit/src"
+      },
+      "python": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit/.venv/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    },
+    {
+      "name": "MTK: Run Tests (debug)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "pytest",
+      "args": ["-q"],
+      "cwd": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit/src"
+      },
+      "python": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit/.venv/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": false
+    }
+  ]
+}
