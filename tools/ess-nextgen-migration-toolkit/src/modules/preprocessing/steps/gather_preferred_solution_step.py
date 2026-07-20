@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from constants import SUPPORTED_MODES
 from core.logging import Logger
 from modules.migration.migration_step import MigrationPipelineStep
 from modules.migration.models import MigrationContext
@@ -11,10 +10,10 @@ from modules.migration.models import MigrationContext
 class GatherPreferredSolutionStep(MigrationPipelineStep):
     """Prompt for the optional preferred solution unique name."""
 
-    def __init__(self, logger: Logger) -> None:
+    def __init__(self, logger: Logger, supported_modes: tuple[str, ...]) -> None:
         super().__init__(
             description="Capture the optional preferred solution for writeback.",
-            supported_modes=SUPPORTED_MODES,
+            supported_modes=supported_modes,
         )
         self._logger = logger
 

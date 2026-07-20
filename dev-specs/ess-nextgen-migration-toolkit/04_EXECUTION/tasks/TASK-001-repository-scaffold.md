@@ -17,7 +17,7 @@ logic is introduced.
 ## Acceptance Criteria
 
 - [ ] The `src/` layout exists exactly as specified in
-  `03_ENGINEERING/REPOSITORY_STRUCTURE.md` (`constants/`, `core/`, `modules/`,
+  `03_ENGINEERING/REPOSITORY_STRUCTURE.md` (`core/`, `modules/`,
   `service/`, `output/`, and `service/mtk_orchestrator.py`).
 - [ ] The `tests/` layout exists (`unit/`, `integration/`, `golden/`, `e2e/`).
 - [ ] The toolkit-root `output/` folder is present (generated, gitignored, kept

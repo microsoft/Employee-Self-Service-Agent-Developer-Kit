@@ -441,7 +441,7 @@ If `can_execute(context)` returns `False`, the Pipeline Engine skips the Step.
 This keeps the framework open for extension (new Steps filter on existing
 canonical models) and closed for modification (the `Component` model and
 Pipeline Engine remain unchanged when new Steps are added). Component type and
-trigger type constants are defined under `constants/`.
+trigger type constants are defined in `service/constants.py`.
 
 ---
 
