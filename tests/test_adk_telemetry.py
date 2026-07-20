@@ -164,6 +164,15 @@ def test_cache_tenant_name_round_trip_and_guards(tmp_path):
     assert _fc.get_cached_tenant_name("tenant-Y", local_dir=d) == ""
     # Missing dir/file -> "".
     assert _fc.get_cached_tenant_name("tenant-Z", local_dir=str(tmp_path / "nope")) == ""
+    # Malformed / non-dict cache content -> "" (defensive; never raises).
+    import os as _os
+    _os.makedirs(str(tmp_path / "bad"), exist_ok=True)
+    with open(str(tmp_path / "bad" / _fc._TENANT_NAME_FILE), "w", encoding="utf-8") as _f:
+        _f.write("not-json{{")
+    assert _fc.get_cached_tenant_name("tenant-Z", local_dir=str(tmp_path / "bad")) == ""
+    with open(str(tmp_path / "bad" / _fc._TENANT_NAME_FILE), "w", encoding="utf-8") as _f:
+        _f.write("[1, 2, 3]")
+    assert _fc.get_cached_tenant_name("tenant-Z", local_dir=str(tmp_path / "bad")) == ""
     # Empty inputs are no-ops (nothing cached, nothing returned).
     _fc.cache_tenant_name("", "Contoso", local_dir=d)
     _fc.cache_tenant_name("tenant-W", "", local_dir=d)
