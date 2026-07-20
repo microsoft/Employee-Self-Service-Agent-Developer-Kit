@@ -1,25 +1,42 @@
-"""ESS NextGen Migration Toolkit — orchestration entry point.
-
-This is the single entry point for the toolkit and the top of the dependency
-graph (the Application / Orchestration layer). It composes and drives the lower
-layers — the Pipeline Engine (``core.pipelines``), the pipeline-stage business
-logic (``modules`` — preprocessing, migration, postprocessing), and the
-Dataverse Client (``core.outbound``). For now it is a silent placeholder;
-orchestration logic and any command surface are added by later tasks.
-
-Run it via the ``mtk`` dispatcher (``./mtk.sh start``), which provisions the
-environment and then launches this module.
-"""
+"""ESS NextGen Migration Toolkit — orchestration entry point."""
 
 from __future__ import annotations
 
-import logging
+from pathlib import Path
 
-logger = logging.getLogger(__name__)
+from core.logging import Logger, Reporter
+from core.models import ExecutionMode
+from core.pipelines import ChainedPipeline
+from modules.migration import MigrationContext
+from modules.migration.migration_pipeline import build_migration_pipeline
+from modules.postprocessing import build_output_pipeline
+from modules.preprocessing import build_input_pipeline
+
+OUTPUT_ROOT = Path(__file__).resolve().parents[2] / "output"
 
 
 def main() -> None:
-    """Toolkit orchestration entry point. Placeholder until wired up."""
+    """Build and run the ESS migration super-pipeline."""
+    context = MigrationContext(ExecutionMode=ExecutionMode.READONLY)
+    logger = Logger.start_session(OUTPUT_ROOT, context)
+    try:
+        toolkit = (
+            ChainedPipeline[MigrationContext]()
+            .add(build_input_pipeline(logger))
+            .add(build_migration_pipeline(logger))
+            .add(build_output_pipeline(logger))
+        )
+        toolkit.run(context)
+    finally:
+        try:
+            Reporter(logger.session_manager).render(context)
+            logger.LogInfo(
+                f"Session bundle written to {logger.session_manager.paths.session_dir}",
+                pipeline_stage="Output",
+                pipeline_step="Reporter",
+            )
+        finally:
+            logger.close()
 
 
 if __name__ == "__main__":

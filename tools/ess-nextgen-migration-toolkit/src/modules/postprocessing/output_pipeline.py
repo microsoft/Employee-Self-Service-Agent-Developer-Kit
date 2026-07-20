@@ -1,4 +1,4 @@
-"""Migration Pipeline builder."""
+"""Output Pipeline builder."""
 
 from __future__ import annotations
 
@@ -10,29 +10,29 @@ from modules.migration.models import MigrationContext
 _SUPPORTED_MODES = ("READONLY", "WRITEBACK")
 
 
-class _MigrationPassthroughStep(MigrationPipelineStep):
-    """Temporary pass-through until migration-rule steps land."""
+class _OutputPassthroughStep(MigrationPipelineStep):
+    """Temporary pass-through until output behaviors land."""
 
     def __init__(self, logger: Logger) -> None:
         super().__init__(
-            description="Pass through the shared context until migration rules are implemented.",
+            description="Pass through the shared context until output behaviors are implemented.",
             supported_modes=_SUPPORTED_MODES,
         )
         self._logger = logger
 
     def execute(self, context: MigrationContext) -> MigrationContext:
         self._logger.LogDebug(
-            "Migration stage is currently a no-op.",
-            pipeline_stage="Migration",
+            "Output stage is currently a no-op.",
+            pipeline_stage="Output",
             pipeline_step=self.name(),
         )
         return context
 
 
-def build_migration_pipeline(logger: Logger) -> Pipeline[MigrationContext, MigrationContext]:
-    """Build the migration stage pipeline."""
+def build_output_pipeline(logger: Logger) -> Pipeline[MigrationContext, MigrationContext]:
+    """Build the output stage pipeline."""
     return (
-        Pipeline.builder("Migration Pipeline", input_type=MigrationContext)
-        .use(_MigrationPassthroughStep(logger))
+        Pipeline.builder("Output Pipeline", input_type=MigrationContext)
+        .use(_OutputPassthroughStep(logger))
         .build()
     )

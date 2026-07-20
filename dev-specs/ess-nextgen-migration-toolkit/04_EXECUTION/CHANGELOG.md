@@ -12,6 +12,12 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 
 ## [Unreleased]
 
+- **TASK-015 input-pipeline review refinements.** Consolidated environment
+  prompting + MSAL authentication into `GatherInputWithAuthStep`, renamed agent
+  discovery to `AgentSelectionStep`, added `GatherPreferredSolutionStep`, and
+  moved shared auth/input step constants into `src/constants/auth.py`. The
+  toolkit now clearly prompts for the full Dataverse environment URL and records
+  the optional preferred solution up front for later writeback scenarios.
 - **Super-pipeline base/product split (framework vs ESS product).** Split the
   fluent super-pipeline into a generic, product-agnostic base and the ESS
   product subclass: `StagedPipeline[TContext]` now lives in `core/pipeline/`

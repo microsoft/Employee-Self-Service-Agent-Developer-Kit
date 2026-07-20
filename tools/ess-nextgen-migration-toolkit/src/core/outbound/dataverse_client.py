@@ -75,6 +75,19 @@ class DataverseClient:
             )
         )
 
+    @property
+    def environment_url(self) -> str:
+        """Return the normalized Dataverse environment URL bound to this client."""
+        return self.__env_url
+
+    def with_environment(self, env_url: str) -> DataverseClient:
+        """Return a client rebound to ``env_url`` with the same token provider."""
+        return DataverseClient(
+            env_url,
+            self.__token_provider,
+            sleep=self.__sleep,
+        )
+
     def query_all(
         self,
         entity_set: str,
