@@ -138,10 +138,20 @@ python scripts/push.py --yes
 After a successful push, tell the user:
 
 > ✅ **{TopicName}** has been updated in Copilot Studio.
->
-> Remember to **Publish** your agent to make the change live.
->
-> [Open Copilot Studio](https://copilotstudio.microsoft.com/)
+
+Topic (botcomponent) changes only go live once the agent is **published** (flow `clientdata` edits are live immediately). Offer to publish for them:
+
+```
+python scripts/publish.py
+```
+
+If the change added or modified a ServiceNow ITSM flow (e.g. the runtime dependent-dropdowns options flow), also offer to confirm the flow is agent-invocable — this verifies it is activated, `modernflowtype=1`, has kind:Skills Response actions, a bound flow-scoped connection reference, and a system-topic link:
+
+```
+python scripts/validate.py "<flow name>"
+```
+
+If the user prefers to publish manually instead, point them at [Copilot Studio](https://copilotstudio.microsoft.com/).
 
 ## Step 9: Offer Next Steps
 

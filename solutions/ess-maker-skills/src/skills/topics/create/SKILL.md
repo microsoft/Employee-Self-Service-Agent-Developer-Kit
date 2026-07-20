@@ -268,9 +268,21 @@ After a successful push, show the user what was created:
 - If template config was created: the scenario name
 - If workflow was created: the workflow file path
 
+A new **topic** only goes live once the agent is **published** (a new flow's `clientdata` is live immediately, but its registration still needs the push, which is done). Offer to publish for them:
+
+```
+python scripts/publish.py
+```
+
+If a **workflow** was created (e.g. a ServiceNow options flow for runtime dependent dropdowns), also offer to confirm it is agent-invocable — this verifies it is activated, `modernflowtype=1`, has kind:Skills Response actions, a bound flow-scoped connection reference, and a system-topic link:
+
+```
+python scripts/validate.py "<flow name>"
+```
+
 Then show:
 
-> Your topic is live! Test it here:
+> Your topic is ready. After publishing, test it here:
 > [Open Copilot Studio](https://copilotstudio.microsoft.com/)
 
 ## Step 7: Offer Next Steps
