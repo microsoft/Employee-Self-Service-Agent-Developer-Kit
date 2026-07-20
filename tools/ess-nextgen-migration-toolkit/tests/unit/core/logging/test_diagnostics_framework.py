@@ -92,8 +92,8 @@ def test_engineer_channel_writes_console_and_session_log(
     captured = capsys.readouterr()
     session_log = logger.session_manager.paths.log_path.read_text(encoding="utf-8")
 
-    assert "2026-07-18 14:32:05 DEBUG Migration DiagnosticsStep Debug detail" in captured.out
-    assert "2026-07-18 14:32:05 DEBUG Migration DiagnosticsStep Debug detail" in session_log
+    assert "[2026-07-18 14:32:05] [DEBUG] [Migration/DiagnosticsStep] Debug detail" in captured.out
+    assert "[2026-07-18 14:32:05] [DEBUG] [Migration/DiagnosticsStep] Debug detail" in session_log
 
 
 def test_customer_channel_updates_report_model_only(
