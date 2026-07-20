@@ -268,6 +268,54 @@ def _flow_connref_delete_filter(agent_schema, workflowid):
     return f"startswith(connectionreferencelogicalname,'{prefix}')"
 
 
+def _schemaname_looks_kebab(schemaname):
+    """Return True if a schemaname's final segment is hyphenated (kebab).
+
+    A system topic's schemaname must be PascalCase to match the caller's
+    ``BeginDialog`` reference. A hyphen in the last segment means the topic
+    file was kebab-named (e.g. a fetched file pushed as new) and the reference
+    will dangle. Only hyphenation is the tell — a single lowercase word is a
+    valid schemaname.
+    """
+    segment = schemaname.rsplit(".", 1)[-1]
+    return "-" in segment
+
+
+def _ensure_skills_response(clientdata):
+    """Coerce every Response action in a flow's clientdata to kind:Skills.
+
+    A Copilot Studio agent flow (Skills trigger) requires its Response actions
+    ("Respond to Copilot") to be ``kind: Skills``; a ``kind: PowerApp`` (or
+    missing kind) yields an empty output picker and InvalidBindingInvokeAction
+    at publish. push creates only agent flows (modernflowtype=1), so this is a
+    safe, deterministic correction. Returns ``(clientdata, num_fixed)``; the
+    original string is returned unchanged when nothing needed fixing.
+    """
+    try:
+        data = json.loads(clientdata)
+    except (ValueError, TypeError):
+        return clientdata, 0
+
+    fixed = 0
+
+    def walk(node):
+        nonlocal fixed
+        if isinstance(node, dict):
+            if node.get("type") == "Response" and node.get("kind") != "Skills":
+                node["kind"] = "Skills"
+                fixed += 1
+            for value in node.values():
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(data)
+    if fixed == 0:
+        return clientdata, 0
+    return json.dumps(data), fixed
+
+
 def _botcomponent_recreate_payload(entry, content, bot_id):
     """Rebuild the ``botcomponents`` create body for a stale-id self-heal.
 
@@ -828,6 +876,10 @@ def main():
                 print(f"  SKIP {filepath}: no workflow ID in map")
                 errors += 1
                 continue
+            content, _skills_fixed = _ensure_skills_response(content)
+            if _skills_fixed:
+                print(f"  ⚙ {filepath}: set {_skills_fixed} Response action(s) "
+                      f"to kind:Skills for agent-flow compatibility")
             try:
                 _call_with_refresh(auth, update_record,
                                    env_url, auth.token, "workflows",
@@ -920,6 +972,15 @@ def main():
                 "schemaname": schema,
                 "parentbotid@odata.bind": f"/bots({bot_id})",
             }
+            if comp_type == 9 and _schemaname_looks_kebab(schema):
+                print(
+                    f"  ⚠ {filepath}: created with kebab schemaname "
+                    f"'{schema.rsplit('.', 1)[-1]}'. Topics are referenced by "
+                    f"PascalCase schemaname in BeginDialog — if another topic "
+                    f"calls this one, that reference will dangle. Rename the "
+                    f"file to PascalCase (e.g. ServiceNowITSMSystemGetOptions"
+                    f".mcs.yml) and re-push. schemaname is immutable once set."
+                )
             try:
                 new_id = _call_with_refresh(auth, create_record,
                                             env_url, auth.token,
@@ -1001,6 +1062,10 @@ def main():
                     wf_name = str(parsed_wf_meta["name"])
                 if parsed_wf_meta.get("description"):
                     wf_desc = str(parsed_wf_meta["description"])
+            content, _skills_fixed = _ensure_skills_response(content)
+            if _skills_fixed:
+                print(f"  ⚙ {filepath}: set {_skills_fixed} Response action(s) "
+                      f"to kind:Skills for agent-flow compatibility")
             record_data = _workflow_create_payload(
                 parsed_wf_meta,
                 name=wf_name,

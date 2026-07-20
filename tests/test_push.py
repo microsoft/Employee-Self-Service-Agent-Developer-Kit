@@ -578,3 +578,91 @@ class TestBotcomponentRecreatePayload:
         payload = push._botcomponent_recreate_payload(entry, "data", self.BOT)
         assert payload["name"] == "mspva_abc"
         assert "componenttype" not in payload
+
+
+class TestSchemanameLooksKebab:
+    """push._schemaname_looks_kebab flags a derived botcomponent schemaname
+    that came from a kebab filename. A system topic must have a PascalCase
+    schemaname to match the caller's BeginDialog reference; a hyphenated
+    (kebab) segment means the topic file was misnamed (e.g. a fetched file
+    pushed as new) and the reference will dangle. Can't auto-fix (itsm→ITSM
+    is unguessable), so push warns.
+    """
+
+    def test_flags_kebab_segment(self):
+        assert push._schemaname_looks_kebab(
+            "msdyn_x.topic.ess-it-servicenow-itsm-system-get-options") is True
+
+    def test_passes_pascalcase_segment(self):
+        assert push._schemaname_looks_kebab(
+            "msdyn_x.topic.ServiceNowITSMSystemGetCreateTicketOptions") is False
+
+    def test_passes_single_lowercase_word(self):
+        # A one-word lowercase segment (e.g. a simple topic) is a valid
+        # schemaname and must not warn — only hyphenation is the kebab tell.
+        assert push._schemaname_looks_kebab("msdyn_x.topic.conversation") is False
+
+    def test_handles_no_dot(self):
+        assert push._schemaname_looks_kebab("a-b") is True
+        assert push._schemaname_looks_kebab("Ab") is False
+
+
+class TestEnsureSkillsResponse:
+    """push._ensure_skills_response coerces every Response action in an agent
+    flow's clientdata to kind:Skills ("Respond to Copilot"). A Copilot Studio
+    agent flow with a kind:PowerApp Response yields an empty output picker and
+    InvalidBindingInvokeAction at publish; push creates only agent flows
+    (modernflowtype=1), so coercing is safe.
+    """
+
+    def _wf(self, *response_kinds):
+        actions = {}
+        for i, kind in enumerate(response_kinds):
+            a = {"type": "Response"}
+            if kind is not None:
+                a["kind"] = kind
+            actions[f"Respond_{i}"] = a
+        return {"properties": {"definition": {"actions": actions}}}
+
+    def test_coerces_powerapp_response_to_skills(self):
+        import json
+        content = json.dumps(self._wf("PowerApp"))
+        fixed, n = push._ensure_skills_response(content)
+        assert n == 1
+        assert json.loads(fixed)["properties"]["definition"]["actions"][
+            "Respond_0"]["kind"] == "Skills"
+
+    def test_coerces_missing_kind(self):
+        import json
+        fixed, n = push._ensure_skills_response(json.dumps(self._wf(None)))
+        assert n == 1
+        assert json.loads(fixed)["properties"]["definition"]["actions"][
+            "Respond_0"]["kind"] == "Skills"
+
+    def test_noop_when_already_skills(self):
+        import json
+        content = json.dumps(self._wf("Skills", "Skills"))
+        fixed, n = push._ensure_skills_response(content)
+        assert n == 0
+        assert fixed == content
+
+    def test_handles_nested_response_actions(self):
+        import json
+        wf = {"properties": {"definition": {"actions": {
+            "If1": {"type": "If",
+                    "actions": {"R1": {"type": "Response", "kind": "PowerApp"}},
+                    "else": {"actions": {
+                        "R2": {"type": "Response", "kind": "Skills"}}}},
+            "R3": {"type": "Response"},
+        }}}}
+        fixed, n = push._ensure_skills_response(json.dumps(wf))
+        assert n == 2  # R1 (PowerApp) + R3 (missing)
+        d = json.loads(fixed)
+        acts = d["properties"]["definition"]["actions"]
+        assert acts["If1"]["actions"]["R1"]["kind"] == "Skills"
+        assert acts["R3"]["kind"] == "Skills"
+
+    def test_returns_unchanged_on_invalid_json(self):
+        fixed, n = push._ensure_skills_response("{not valid")
+        assert n == 0
+        assert fixed == "{not valid"
