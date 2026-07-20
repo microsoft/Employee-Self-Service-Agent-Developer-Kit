@@ -57,6 +57,20 @@ def _isolate(monkeypatch, tmp_path):
     monkeypatch.setattr(adk, "_SYNC", True)
     monkeypatch.setattr(adk, "_IDENTITY", {"instance_id": "", "tenant_id": "", "tenant_name": ""})
 
+    # Isolate the persisted tenant-name cache (.local/.tenant_name) to tmp so
+    # tests never read/write the repo's real .local dir. adk_telemetry calls
+    # these on _fc at runtime, so patching them here redirects the cache dir.
+    _cache_dir = str(tmp_path / ".local")
+    _real_cache, _real_get = _fc.cache_tenant_name, _fc.get_cached_tenant_name
+    monkeypatch.setattr(
+        _fc, "cache_tenant_name",
+        lambda tid, name, local_dir=_cache_dir: _real_cache(tid, name, local_dir=local_dir),
+    )
+    monkeypatch.setattr(
+        _fc, "get_cached_tenant_name",
+        lambda tid, local_dir=_cache_dir: _real_get(tid, local_dir=local_dir),
+    )
+
     for var in (
         "ESS_ADK_TELEMETRY",
         "ESS_ADK_TELEMETRY_SYNC",
@@ -98,9 +112,63 @@ def test_set_identity_stores_tenant_name(monkeypatch):
     # Flows into every event's common dimensions (OII; privacy-approved).
     dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
     assert dims["tenant_name"] == "Contoso"
-    # Defaults to "" when not provided.
+    # Once resolved, the name is cached per-tenant and reused by later ADK
+    # events that lack a Graph token to resolve it live (persist-and-reuse),
+    # even when set_identity is later called for the same tenant without it.
     adk.set_identity(tenant_id="tenant-Z")
-    assert adk.common_dimensions(adk.SURFACE_CLI)["tenant_name"] == ""
+    assert adk.common_dimensions(adk.SURFACE_CLI)["tenant_name"] == "Contoso"
+
+
+def test_tenant_name_empty_when_never_resolved(monkeypatch):
+    # No Graph-capable flow ever resolved a name for this tenant -> stays "".
+    monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
+    adk.set_identity(tenant_id="tenant-Z")
+    assert adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")["tenant_name"] == ""
+
+
+def test_tenant_name_cache_not_reused_across_tenants(monkeypatch):
+    # A name cached for tenant-Z must never be stamped on a different tenant's
+    # events (the cache is keyed by tenant_id). Simulates a maker who resolved
+    # tenant-Z via FlightCheck, then runs an ADK flow authenticated as tenant-Y.
+    monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
+    adk.set_identity(tenant_id="tenant-Z", tenant_name="Contoso")  # seeds cache
+    monkeypatch.setattr(
+        adk, "_IDENTITY", {"instance_id": "", "tenant_id": "", "tenant_name": ""}
+    )
+    adk.set_identity(tenant_id="tenant-Y")  # different tenant, no name available
+    dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
+    assert dims["tenant_id"] == "tenant-Y"
+    assert dims["tenant_name"] == ""
+
+
+def test_tenant_name_reused_by_later_process_without_identity(monkeypatch):
+    # An ADK emit path (e.g. setup.py -> emit_agent_create) that never calls
+    # set_identity should still pick up a name a prior FlightCheck run cached
+    # for the same tenant, via the common_dimensions fallback.
+    monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
+    adk.set_identity(tenant_id="tenant-Z", tenant_name="Contoso")  # FlightCheck run
+    # Later process: fresh identity, no set_identity call, but tenant_id known.
+    monkeypatch.setattr(
+        adk, "_IDENTITY", {"instance_id": "", "tenant_id": "", "tenant_name": ""}
+    )
+    dims = adk.common_dimensions(adk.SURFACE_CLI, tenant_id="tenant-Z")
+    assert dims["tenant_name"] == "Contoso"
+
+
+def test_cache_tenant_name_round_trip_and_guards(tmp_path):
+    d = str(tmp_path / "state")
+    # Round-trip for a matching tenant.
+    _fc.cache_tenant_name("tenant-Z", "Contoso", local_dir=d)
+    assert _fc.get_cached_tenant_name("tenant-Z", local_dir=d) == "Contoso"
+    # Mismatched tenant never inherits the cached name.
+    assert _fc.get_cached_tenant_name("tenant-Y", local_dir=d) == ""
+    # Missing dir/file -> "".
+    assert _fc.get_cached_tenant_name("tenant-Z", local_dir=str(tmp_path / "nope")) == ""
+    # Empty inputs are no-ops (nothing cached, nothing returned).
+    _fc.cache_tenant_name("", "Contoso", local_dir=d)
+    _fc.cache_tenant_name("tenant-W", "", local_dir=d)
+    assert _fc.get_cached_tenant_name("tenant-W", local_dir=d) == ""
+    assert _fc.get_cached_tenant_name("", local_dir=d) == ""
 
 
 def test_explicit_instance_id_overrides_persisted(monkeypatch):
