@@ -38,6 +38,10 @@ class Reporter:
             "",
             *self._format_diagnostics(context.Warnings),
             "",
+            "## Errors",
+            "",
+            *self._format_errors(context.Errors),
+            "",
         ]
 
     def _title_for_mode(self, mode: str) -> str:
@@ -74,5 +78,19 @@ class Reporter:
             lines.append(f"Reason             {diagnostic.message}")
             if diagnostic.recommendation:
                 lines.append(f"Recommendation     {diagnostic.recommendation}")
+            lines.append("")
+        return lines[:-1] if lines and lines[-1] == "" else lines
+
+    def _format_errors(self, errors: list[DiagnosticEntry]) -> list[str]:
+        if not errors:
+            return ["No errors recorded."]
+
+        lines: list[str] = []
+        for error in errors:
+            if error.component:
+                lines.append(f"Component          {error.component}")
+            lines.append(f"Error              {error.message}")
+            if error.recommendation:
+                lines.append(f"Recommendation     {error.recommendation}")
             lines.append("")
         return lines[:-1] if lines and lines[-1] == "" else lines

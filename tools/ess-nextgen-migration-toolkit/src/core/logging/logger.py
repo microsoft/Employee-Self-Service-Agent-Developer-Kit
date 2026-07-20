@@ -36,13 +36,19 @@ class TeeStream(TextIOBase):
     def write(self, text: str) -> int:
         """Write text to the original stream and mirror it to the session log."""
         chars_written = self._original.write(text)
-        self._log_file.write(text)
+        try:
+            self._log_file.write(text)
+        except Exception:  # noqa: BLE001 — DIAG-001: diagnostics must never abort execution
+            pass
         return chars_written
 
     def flush(self) -> None:
         """Flush both the original stream and the mirrored session log."""
         self._original.flush()
-        self._log_file.flush()
+        try:
+            self._log_file.flush()
+        except Exception:  # noqa: BLE001 — DIAG-001: diagnostics must never abort execution
+            pass
 
     def isatty(self) -> bool:
         """Delegate terminal detection to the original stream."""
@@ -123,8 +129,11 @@ class Logger:
         if self._stderr is not None:
             sys.stderr = self._stderr
         if self._log_file is not None:
-            self._log_file.flush()
-            self._log_file.close()
+            try:
+                self._log_file.flush()
+                self._log_file.close()
+            except Exception:  # noqa: BLE001 — DIAG-001: safe teardown
+                pass
         self._started = False
 
     def __enter__(self) -> Logger:
@@ -185,7 +194,7 @@ class Logger:
         self,
         message: str,
         *,
-        severity: str = "INFO",
+        severity: str = "WARNING",
         category: str = "General",
         component: str | None = None,
         recommendation: str | None = None,
