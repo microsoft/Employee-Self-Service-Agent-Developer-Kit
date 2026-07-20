@@ -247,7 +247,7 @@ class Logger:
             return
 
         timestamp = self._clock().strftime("%Y-%m-%d %H:%M:%S")
-        line = f"{timestamp} {level.name} {pipeline_stage} {pipeline_step} {message}\n"
+        line = f"[{timestamp}] [{level.name}] [{pipeline_stage}/{pipeline_step}] {message}\n"
         stream = sys.stderr if level >= LogLevel.ERROR else sys.stdout
         stream.write(line)
         stream.flush()
