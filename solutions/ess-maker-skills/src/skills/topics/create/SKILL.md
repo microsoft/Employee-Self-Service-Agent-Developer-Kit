@@ -42,7 +42,7 @@ Based on the user's description, select a starting template:
 
 **Decision rule**: If the scenario involves ServiceNow or Workday, ALWAYS use the template config pattern with the shared system topic. Do NOT create standalone flows for these connectors — that bypasses the ESS orchestrator.
 
-If the topic involves ServiceNow, also read `src/reference/ess-docs/integrations/servicenow.md` and `src/reference/ess-docs/integrations/servicenow-hrsd-itsm.md` for integration-specific guidance.
+If the topic involves ServiceNow, also read `src/reference/ess-docs/integrations/servicenow.md` and `src/reference/ess-docs/integrations/servicenow-hrsd-itsm.md` for integration-specific guidance. If the ServiceNow ITSM topic needs **runtime dependent dropdowns** (e.g. a Create Ticket topic with live Category → Subcategory and Configuration Item pickers), also read `src/reference/ess-docs/integrations/servicenow-itsm-create-ticket-dependent-dropdowns.md` for the required flow/system-topic/template-config architecture and pitfalls.
 If the topic involves Workday, also read `src/reference/ess-docs/integrations/workday.md` and `src/reference/ess-docs/integrations/workday-extensibility.md` for integration-specific guidance.
 
 **Official samples**: Before generating YAML, read a relevant sample from `src/examples/ess-samples/` to use as a real-world reference:
