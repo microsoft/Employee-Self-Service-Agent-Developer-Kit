@@ -63,20 +63,28 @@ tools/
         core/
             auth/
                 token_provider.py
-            pipeline/
+            pipelines/
+                pipeline.py
+                pipeline_step.py
+                chained_pipeline.py
             logging/
             models/
+                execution_context.py
             outbound/
                 dataverse_client.py
             utils/
         modules/
             preprocessing/
             migration/
+                migration_step.py
                 migration_pipeline.py
+                models/
+                    migration_context.py
                 steps/
             postprocessing/
         service/
             mtk_orchestrator.py
+            toolkit.py
 
     output/
         session-YYYY-MM-DD_HH-MM-SS/

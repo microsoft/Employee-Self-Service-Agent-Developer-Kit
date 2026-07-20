@@ -17,6 +17,7 @@ Usage:
     python scripts/push.py --dry-run — Show what would be pushed without pushing
 """
 
+import fnmatch
 import json
 import os
 import subprocess
@@ -37,6 +38,7 @@ from auth import (
     update_record,
     create_record,
     delete_record,
+    dataverse_get,
     load_config,
     AuthExpiredError,
 )
@@ -80,6 +82,39 @@ def _call_with_refresh(auth, fn, *args, **kwargs):
         return fn(*new_args, **kwargs)
 
 
+def _verify_bot_exists(auth, env_url, bot_id):
+    """Fail fast if the configured agent bot is missing from this environment.
+
+    A stale/mismatched ``botId`` (the agent was deleted and recreated, or the
+    config points at a different environment) otherwise makes EVERY component
+    create/update fail with Dataverse's misleading 404 ("bot ... Does Not
+    Exist"), which the friendly error layer renders as "Could not find agent
+    components / solution may not be deployed" — a dead end that sends users
+    chasing a solution-install problem that isn't real. Surface the true
+    cause once, up front, instead.
+
+    Exits the process with status 2 when the bot cannot be resolved (404).
+    Other errors propagate unchanged so genuine transient failures are not
+    masked as a stale-config problem.
+    """
+    try:
+        _call_with_refresh(auth, dataverse_get, env_url, auth.token,
+                           f"bots({bot_id})", {"$select": "botid"})
+    except Exception as exc:  # noqa: BLE001 — surface the real cause below
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status == 404:
+            print(
+                f"ERROR: The configured agent (botId {bot_id}) does not exist "
+                f"in this environment ({env_url}).\n"
+                "This usually means the agent was deleted and recreated, or the "
+                "config points at a different environment.\n"
+                "Fix: re-run /setup (or update agent.botId in .local/config.json) "
+                "so it matches the current agent, then push again."
+            )
+            sys.exit(2)
+        raise
+
+
 def classify_path(filepath):
     """Determine the component type from a file's relative path.
 
@@ -114,8 +149,12 @@ def collect_files(root_dir):
                 continue
             full = os.path.join(dirpath, fname)
             rel = os.path.relpath(full, root_dir).replace("\\", "/")
-            with open(full, "r", encoding="utf-8") as f:
-                files[rel] = f.read()
+            # OneDrive placeholders can occasionally enumerate but be unreadable.
+            try:
+                with open(full, "r", encoding="utf-8") as f:
+                    files[rel] = f.read()
+            except FileNotFoundError:
+                continue
     return files
 
 
@@ -139,6 +178,60 @@ def compute_diff(baseline_files, working_files):
             deleted.append(path)
 
     return changed, new, deleted
+
+
+def _read_only_manifest(path):
+    """Read a push scope manifest: one relative path/glob per line.
+
+    Blank lines and lines starting with '#' are ignored. Backslashes are
+    normalized to forward slashes so entries match the forward-slash
+    relative paths compute_diff produces.
+    """
+    globs = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith("#"):
+                globs.append(line.replace("\\", "/"))
+    return globs
+
+
+def parse_only_globs(argv):
+    """Collect --only GLOB / --only=GLOB (repeatable) and --only-from FILE.
+
+    Returns a list of glob patterns. An empty list means "no scoping" —
+    push behaves exactly as before and touches every changed file.
+    """
+    globs = []
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--only" and i + 1 < len(argv):
+            globs.append(argv[i + 1].replace("\\", "/"))
+            i += 2
+            continue
+        if arg.startswith("--only="):
+            globs.append(arg.split("=", 1)[1].replace("\\", "/"))
+            i += 1
+            continue
+        if arg == "--only-from" and i + 1 < len(argv):
+            globs.extend(_read_only_manifest(argv[i + 1]))
+            i += 2
+            continue
+        if arg.startswith("--only-from="):
+            globs.extend(_read_only_manifest(arg.split("=", 1)[1]))
+            i += 1
+            continue
+        i += 1
+    return globs
+
+
+def matches_only(filepath, only_globs):
+    """True if filepath matches any scope glob (or scoping is disabled)."""
+    if not only_globs:
+        return True
+    fn = filepath.replace("\\", "/")
+    return any(fnmatch.fnmatch(fn, g) for g in only_globs)
 
 
 def load_component_map(agent_dir):
@@ -294,10 +387,54 @@ def update_baseline(agent_dir):
                     dirs_exist_ok=True)
 
 
+def update_baseline_scoped(agent_dir, only_globs):
+    """Refresh ONLY the scoped subset of the baseline after a scoped push.
+
+    A scoped push (--only / --only-from) sends just the matching files to
+    Dataverse. If we then ran the full update_baseline(), every OTHER
+    changed/new file in the working tree would get copied into the baseline
+    too — silently marking files that were never pushed as "pushed", so the
+    next /push would not retry them. That is a correctness bug, so scoped
+    pushes must refresh the baseline for the scoped files only and leave all
+    other pending working-tree changes still pending.
+
+    For each working file matching a scope glob, copy it (exact bytes) into
+    the baseline. Template-config .xml files also drag in their .meta.json
+    companion. Baseline files that match a scope glob but no longer exist in
+    the working tree are removed (a scoped delete).
+    """
+    import shutil
+
+    baseline_dir = os.path.join(agent_dir, ".baseline")
+    working = collect_files(agent_dir)
+
+    scoped = {rel for rel in working if matches_only(rel, only_globs)}
+    for rel in list(scoped):
+        if rel.startswith("template-configs/") and rel.endswith(".xml"):
+            meta = rel[:-4] + ".meta.json"
+            if meta in working:
+                scoped.add(meta)
+
+    for rel in scoped:
+        src = os.path.join(agent_dir, *rel.split("/"))
+        dst = os.path.join(baseline_dir, *rel.split("/"))
+        os.makedirs(os.path.dirname(dst), exist_ok=True)
+        shutil.copy2(src, dst)
+
+    # Scoped deletions: drop baseline files matching the scope that are gone.
+    for rel in collect_files(baseline_dir):
+        if matches_only(rel, only_globs) and rel not in working:
+            try:
+                os.remove(os.path.join(baseline_dir, *rel.split("/")))
+            except OSError:
+                pass
+
+
 def main():
     dry_run = "--dry-run" in sys.argv
     auto_yes = "--yes" in sys.argv
     force_delete = "--force-delete" in sys.argv
+    only_globs = parse_only_globs(sys.argv[1:])
 
     config = load_config()
     agent_dir = config["agent"]["folder"]
@@ -331,14 +468,27 @@ def main():
     new = [f for f in new if is_pushable(f)]
     deleted = [f for f in deleted if is_pushable(f)]
 
+    # Optional scoping: --only / --only-from restrict the push (and the
+    # baseline refresh) to files matching the given globs. Applied AFTER the
+    # pushable filter so scope patterns match the same relative paths shown.
+    if only_globs:
+        changed = [f for f in changed if matches_only(f, only_globs)]
+        new = [f for f in new if matches_only(f, only_globs)]
+        deleted = [f for f in deleted if matches_only(f, only_globs)]
+
     if not changed and not new and not deleted:
-        print("Nothing to push. Working files match the baseline.")
+        if only_globs:
+            print("Nothing to push in the selected scope.")
+        else:
+            print("Nothing to push. Working files match the baseline.")
         return
 
     # Show summary
     print("\n" + "=" * 50)
     print("PUSH SUMMARY")
     print("=" * 50)
+    if only_globs:
+        print(f"\n(Scoped push — {len(only_globs)} filter(s) active)")
 
     if changed:
         print(f"\nModified ({len(changed)}):")
@@ -438,6 +588,10 @@ def main():
     auth = _AuthHolder(env_url)
     auth.acquire()
     print("Authenticated.\n")
+
+    # Pre-flight: verify the configured agent bot still exists in this
+    # environment (see _verify_bot_exists for why this matters).
+    _verify_bot_exists(auth, env_url, bot_id)
 
     # Telemetry: a push is the ADK "build" of an agent's components into
     # Copilot Studio. Best-effort; never affects the push.
@@ -1085,7 +1239,10 @@ def main():
         # Phase 4: refresh baseline. Directory copy isn't atomic; failure
         # here only causes the next diff to over-report (false changes).
         try:
-            update_baseline(agent_dir)
+            if only_globs:
+                update_baseline_scoped(agent_dir, only_globs)
+            else:
+                update_baseline(agent_dir)
         except OSError as exc:
             print(
                 "\nWARNING: baseline refresh failed; component map and"

@@ -14,7 +14,12 @@ Scopes:
     prerequisites   — Licenses, roles only
     infrastructure  — Network connectivity probes
     environment     — PP environment, Dataverse, DLP
+    solution        — ESS base agent solution installed (ESS-SOLN-*)
     authentication  — Entra ID, SSO, CA policies
+    entraapp        — Workday Entra app: scope, consent, assignment (WD-ENTRA-*, WD-ASSIGN-001)
+    workdaytenant   — Workday tenant config: API client, Tenant Security (WD-API-CLIENT-001, WD-TENANT-001)
+    workdayextension — Workday extension pack: connection auth, Dataverse conn, REST URL, user-context redirect, firewall (WD-CONN-AUTH-001, DV-CONN-001, WD-REST-*, WD-NET-001)
+    topics          — New-topic validation: trigger phrases + definition, integration wiring (TOPIC-TRIGGER-*, TOPIC-INTEGRATION-*)
     external        — Integration discovery (flows)
     workday         — Workday deep validation
     servicenow      — ServiceNow deep validation
@@ -53,8 +58,13 @@ from flightcheck.checks.prerequisites import run_prerequisites_checks
 from flightcheck.checks.environment import run_environment_checks
 from flightcheck.checks.authentication import run_authentication_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
+from flightcheck.checks.solution import run_solution_checks
+from flightcheck.checks.entra_app import run_entra_app_checks
 from flightcheck.checks.graph_connector_kb import run_graph_connector_kb_checks
 from flightcheck.checks.workday import run_workday_checks
+from flightcheck.checks.workday_tenant import run_workday_tenant_checks
+from flightcheck.checks.workday_extension import run_workday_extension_checks
+from flightcheck.checks.topics import run_topic_checks
 from flightcheck.checks.servicenow import run_servicenow_checks
 from flightcheck.checks.local_files import run_local_file_checks
 from flightcheck.checks.publishing import run_publishing_checks
@@ -67,12 +77,21 @@ SCOPE_MAP = {
     "prerequisites": [("Prerequisites", run_prerequisites_checks)],
     "infrastructure": [("Infrastructure", run_infrastructure_checks)],
     "environment": [("Environment", run_environment_checks)],
+    "solution": [("Solution", run_solution_checks)],
     "authentication": [("Authentication", run_authentication_checks)],
+    "entraapp": [("Entra App", run_entra_app_checks)],
+    "workdaytenant": [("Workday Tenant", run_workday_tenant_checks)],
     "external": [("External Systems", run_external_systems_checks)],
     "workday": [
         ("External Systems", run_external_systems_checks),
         ("Workday", run_workday_checks),
     ],
+    "workdayextension": [
+        ("External Systems", run_external_systems_checks),
+        ("Workday", run_workday_checks),
+        ("Workday Extension", run_workday_extension_checks),
+    ],
+    "topics": [("Workday Topics", run_topic_checks)],
     "graphconnector": [
         ("External Systems", run_external_systems_checks),
         ("Graph Connector KB", run_graph_connector_kb_checks),
@@ -91,9 +110,14 @@ FULL_SCOPE = [
     ("Prerequisites", run_prerequisites_checks),
     ("Infrastructure", run_infrastructure_checks),
     ("Environment", run_environment_checks),
+    ("Solution", run_solution_checks),
     ("Authentication", run_authentication_checks),
+    ("Entra App", run_entra_app_checks),
+    ("Workday Tenant", run_workday_tenant_checks),
     ("External Systems", run_external_systems_checks),
     ("Workday", run_workday_checks),
+    ("Workday Extension", run_workday_extension_checks),
+    ("Workday Topics", run_topic_checks),
     ("Graph Connector KB", run_graph_connector_kb_checks),
     ("ServiceNow", run_servicenow_checks),
     ("Local Files", run_local_file_checks),
@@ -122,6 +146,208 @@ def open_report_in_browser(output_dir):
     return webbrowser.open(report_path.resolve().as_uri())
 
 
+def _print_checkpoint_list():
+    """Print the registered setup checkpoints/families for --list-checkpoints.
+
+    Reads the static registry only — no broad run, no auth. Dynamic families
+    print with a ``-*`` suffix (e.g. ``WD-FLOW-*``); fixed checkpoints print as
+    their literal ID.
+    """
+    from flightcheck import registry
+
+    specs = registry.list_checkpoints()
+    print("Registered setup checkpoints (run one with --checkpoint <ID>):")
+    print()
+    print(f"  {'CHECKPOINT':<16} {'PRIORITY':<10} {'CATEGORY':<20} ROLES")
+    print("  " + "-" * 76)
+    for spec in specs:
+        key = f"{spec.key}-*" if spec.is_family else spec.key
+        roles = ", ".join(spec.roles) if spec.roles else "-"
+        print(f"  {key:<16} {spec.priority:<10} {spec.category_label:<20} {roles}")
+    print()
+    print("Families (-*) run every emitted member; an exact dynamic ID "
+          "(e.g. WD-FLOW-002) runs the family and reports just that row.")
+
+
+def _print_unknown_checkpoint(target):
+    """Print a clear error naming the valid checkpoint IDs/families."""
+    from flightcheck import registry
+
+    print(f"ERROR: unknown checkpoint '{target}'.")
+    print("Valid checkpoints (use --list-checkpoints for full detail):")
+    for spec in registry.list_checkpoints():
+        key = f"{spec.key}-*" if spec.is_family else spec.key
+        print(f"  {key}")
+
+
+def _run_single_checkpoint(args):
+    """Run exactly one checkpoint (or family) by ID and report only its result.
+
+    Resolves the target via the registry, initialises ONLY the clients/config
+    its transitive prerequisite closure declares (so an Entra-only checkpoint
+    runs with no Dataverse endpoint configured), registers the prerequisite +
+    owning category functions in canonical order to hydrate shared state, then
+    relies on the runner's target filter to keep just the requested rows.
+
+    Always calls sys.exit(): 0 when the checkpoint passes / is manual /
+    not-configured, 1 when it fails, 2 for an unknown ID.
+    """
+    from flightcheck import registry
+
+    target = args.checkpoint
+    spec = registry.resolve(target)
+    if spec is None:
+        _print_unknown_checkpoint(target)
+        sys.exit(2)
+
+    plan = registry.transitive_requirements(target)
+    needed = plan.clients
+
+    # --- Per-checkpoint config / Dataverse-endpoint gate (not the global one) ---
+    config = {}
+    config_path = os.path.join(".local", "config.json")
+    if os.path.exists(config_path):
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+    elif plan.requires_config:
+        print("ERROR: .local/config.json not found. Run /setup first.")
+        sys.exit(1)
+
+    env_url = args.environment_url or config.get("dataverseEndpoint", "")
+    if plan.requires_dataverse_endpoint and not env_url:
+        print("ERROR: No dataverseEndpoint in .local/config.json.")
+        sys.exit(1)
+
+    # --- Banner ---
+    print()
+    print("=" * 64)
+    print("  ESS FLIGHTCHECK — Single Checkpoint")
+    print("=" * 64)
+    print(f"  Checkpoint:  {target}")
+    print(f"  Category:    {spec.category_label}")
+    if env_url:
+        print(f"  Environment: {env_url}")
+    print(f"  Clients:     {', '.join(sorted(needed)) or '(none)'}")
+    print("=" * 64)
+    print()
+
+    dv_token = None
+    tenant_id = None
+    graph = None
+    pp_admin = None
+    pva = None
+    powerplatform = None
+
+    # Tenant discovery feeds Graph / Power Platform / PVA auth. Normally read
+    # from the Dataverse environment's auth challenge; when this checkpoint
+    # needs no Dataverse endpoint (Entra-only), fall back to the multi-tenant
+    # "organizations" authority so interactive sign-in resolves the operator's
+    # home tenant.
+    if needed & {registry.GRAPH, registry.PP_ADMIN, registry.PVA, registry.DATAVERSE, registry.POWERPLATFORM}:
+        from auth import discover_tenant
+        if env_url:
+            try:
+                tenant_id = discover_tenant(env_url)
+            except Exception as e:
+                print(f"  Tenant discovery: WARNING — {e}")
+                tenant_id = "organizations"
+        else:
+            tenant_id = "organizations"
+
+    if registry.DATAVERSE in needed and env_url:
+        from auth import authenticate
+        print("Authenticating to Dataverse...")
+        try:
+            dv_token = authenticate(env_url)
+            print("  Dataverse: OK")
+        except Exception as e:
+            print(f"  Dataverse: WARNING — {e}")
+            dv_token = None
+
+    if registry.GRAPH in needed:
+        print("Authenticating to Microsoft Graph...")
+        graph = GraphClient(tenant_id)
+        try:
+            graph.authenticate()
+            print("  Graph: OK")
+        except Exception as e:
+            print(f"  Graph: WARNING — {e}")
+            graph = None
+
+    if registry.PP_ADMIN in needed:
+        print("Authenticating to Power Platform Admin API...")
+        pp_admin = PPAdminClient(tenant_id)
+        try:
+            pp_admin.authenticate()
+            print("  Power Platform: OK")
+        except Exception as e:
+            print(f"  Power Platform: WARNING — {e}")
+            pp_admin = None
+
+    env_id = None
+    if registry.PP_ADMIN in needed:
+        if args.environment_id:
+            env_id = args.environment_id
+        elif env_url:
+            env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
+
+    if registry.PVA in needed:
+        print("Authenticating to Copilot Studio (Island Gateway)...")
+        pva = PVAClient(tenant_id, env_url)
+        try:
+            pva.authenticate()
+            print("  Copilot Studio: OK")
+        except Exception as e:
+            print(f"  Copilot Studio: WARNING — {e}")
+            pva = None
+
+    if registry.POWERPLATFORM in needed:
+        print("Authenticating to Power Platform API (capacity allocation)...")
+        powerplatform = PowerPlatformClient(tenant_id)
+        try:
+            powerplatform.authenticate()
+            print("  Power Platform API: OK")
+        except Exception as e:
+            print(f"  Power Platform API: WARNING — {e}")
+            powerplatform = None
+
+    # --- Build runner with the target filter (hydrate-then-filter) ---
+    runner = FlightCheckRunner(
+        scope=f"checkpoint:{target}",
+        target_matcher=lambda cid: registry.matches(target, cid),
+    )
+    runner.config = config
+    runner.env_url = env_url
+    runner.dv_token = dv_token
+    runner.env_id = env_id
+    runner.graph = graph
+    runner.pp_admin = pp_admin
+    runner.pva = pva
+    runner.powerplatform = powerplatform
+    runner.azure_arm = None
+
+    for label, fn in plan.ordered_fns:
+        runner.register(label, fn)
+
+    print("\nRunning checkpoint...\n")
+    result = runner.run()
+
+    _print_prioritized_summary(result, verbose_manual=True)
+    save_results(result, args.output)
+
+    if not result.results:
+        print(f"\nNOTE: checkpoint {target} produced no result rows (the owning "
+              "check may have skipped it for this tenant state).")
+
+    # Single-checkpoint mode never auto-opens the HTML report. Programmatic
+    # pass/fail rows AND MANUAL verification steps are both printed in full in
+    # the terminal above (see verbose_manual), so they surface directly in
+    # Copilot chat instead of a browser popup. results.json / report.html are
+    # still written to args.output for anyone who wants them.
+
+    sys.exit(1 if result.failed > 0 else 0)
+
+
 def main():
     # Force UTF-8 console output so summary glyphs (→, •) don't crash on
     # Windows cp1252 terminals. Without this, _print_prioritized_summary
@@ -133,9 +359,9 @@ def main():
             pass
     parser = argparse.ArgumentParser(description="ESS FlightCheck — Pre-deployment Validator")
     parser.add_argument(
-        "--scope", default="full",
+        "--scope", default=None,
         choices=["full"] + list(SCOPE_MAP.keys()),
-        help="Validation scope (default: full)",
+        help="Validation scope (default: full). Mutually exclusive with --checkpoint.",
     )
     parser.add_argument(
         "--output", default="workspace/flightcheck",
@@ -154,14 +380,16 @@ def main():
         help="Don't open the HTML report in a browser after running",
     )
     parser.add_argument(
-        "--live-probe", action="store_true",
-        help=(
-            "Opt in to the Power-Platform-egress reachability probe for INFRA-003. "
-            "Stands up a transient test flow, triggers it once to probe each "
-            "endpoint from the environment's own egress, then deletes it. This is "
-            "the only FlightCheck path that mutates the environment; without this "
-            "flag INFRA-003 runs the read-only local probe."
-        ),
+        "--checkpoint",
+        help="Run exactly one checkpoint (or a family, e.g. WD-FLOW-*) by ID and "
+             "report only its result. Hydrates the checkpoint's declared "
+             "prerequisites and initialises only the clients it needs. Mutually "
+             "exclusive with --scope.",
+    )
+    parser.add_argument(
+        "--list-checkpoints", action="store_true",
+        help="List the registered setup checkpoint IDs and families (no broad "
+             "run), then exit.",
     )
     parser.add_argument(
         "--no-telemetry", action="store_true",
@@ -173,6 +401,23 @@ def main():
         help="How FlightCheck was invoked (adk=slash-command, installer=standalone installer, cli=direct Python CLI)",
     )
     args = parser.parse_args()
+
+    # --- Single-checkpoint mode (additive; leaves all --scope behavior intact) ---
+    if args.list_checkpoints:
+        _print_checkpoint_list()
+        sys.exit(0)
+
+    if args.checkpoint:
+        if args.scope is not None:
+            print("ERROR: --checkpoint and --scope are mutually exclusive.")
+            sys.exit(2)
+        _run_single_checkpoint(args)
+        return  # _run_single_checkpoint always exits; defensive only.
+
+    # Normal scope mode: --scope defaults to "full" when omitted. (Default is
+    # None on the parser so checkpoint-mode can detect an explicit --scope.)
+    if args.scope is None:
+        args.scope = "full"
 
     # Load config
     config_path = os.path.join(".local", "config.json")
@@ -468,15 +713,17 @@ def main():
         ).strip().lower() in ("1", "on", "true", "yes"):
             print("[telemetry] disabled via --no-telemetry")
 
-    # Open HTML report in browser (skip with --no-open for CI / headless runs)
-    if not args.no_open:
+    # Open the HTML report only when the run includes a MANUAL check — those
+    # need the browser's rich remediation view. Runs with no manual items are
+    # fully covered by the compact chat table (skip with --no-open too).
+    if not args.no_open and result.manual > 0:
         open_report_in_browser(args.output)
 
     # Exit code
     sys.exit(1 if result.failed > 0 else 0)
 
 
-def _print_prioritized_summary(result):
+def _print_prioritized_summary(result, *, verbose_manual=False):
     """Print a triage-first summary that mirrors the HTML layout.
 
     Three sections, biggest signal first:
@@ -551,8 +798,11 @@ def _print_prioritized_summary(result):
                     print(f"          {cont}")
             print()
 
-    # Section 2 — NEEDS MANUAL VERIFICATION (one-liner per row;
-    # full prose is in report.html so the terminal stays scannable).
+    # Section 2 — NEEDS MANUAL VERIFICATION. In scope runs this stays a
+    # one-liner per row (the full prose lives in report.html so the terminal
+    # stays scannable). In single-checkpoint mode (verbose_manual) we print
+    # the full result + verification steps inline so the manual steps surface
+    # directly in Copilot chat — no HTML popup needed.
     if manual:
         print()
         print(f"  NEEDS MANUAL VERIFICATION ({len(manual)})")
@@ -560,10 +810,24 @@ def _print_prioritized_summary(result):
         for r in manual:
             tag = _status_tag(r.status)
             role_text = f" | {', '.join(r.roles)}" if r.roles else ""
-            print(f"  {tag} {r.checkpoint_id} [{r.priority}{role_text}]: "
-                  f"{r.description}")
-        print("  (Open report.html for the full result + verification "
-              "steps.)")
+            if verbose_manual:
+                print(f"  {tag} {r.checkpoint_id} [{r.priority}{role_text}]: "
+                      f"{r.result}")
+                if r.remediation:
+                    # Indent multi-line remediation under the arrow so the
+                    # verification steps stay grouped with their finding
+                    # (mirrors the ACTION REQUIRED section).
+                    lines = r.remediation.splitlines()
+                    print(f"       -> {lines[0]}")
+                    for cont in lines[1:]:
+                        print(f"          {cont}")
+                print()
+            else:
+                print(f"  {tag} {r.checkpoint_id} [{r.priority}{role_text}]: "
+                      f"{r.description}")
+        if not verbose_manual:
+            print("  (Open report.html for the full result + verification "
+                  "steps.)")
 
     # Section 3 — PASSED (count only; the operator doesn't need to
     # scroll past 200+ green rows to find what needs their attention).

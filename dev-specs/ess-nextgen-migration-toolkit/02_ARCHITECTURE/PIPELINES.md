@@ -28,13 +28,14 @@
 > Output Pipeline     (src/modules/postprocessing/)
 > ```
 >
-> The composition is expressed fluently:
+> The composition is expressed fluently through `ChainedPipeline` (the generic
+> super-pipeline in `core/pipelines/`), composed directly by the orchestrator:
 >
 > ```python
-> EssMigrationToolkit()
->     .input(InputPipeline().use(...).use(...))
->     .migrate(MigrationPipeline().use(...).use(...))
->     .output(OutputPipeline().use(...).use(...))
+> ChainedPipeline[MigrationContext]()
+>     .add(build_input_pipeline(logger))
+>     .add(build_migration_pipeline(logger))
+>     .add(build_output_pipeline(logger))
 > ```
 >
 > **Each stage receives the output of the previous stage and operates over the
@@ -45,17 +46,22 @@
 > it.
 >
 > **The Migration Orchestrator is only the composition root.** It builds the
-> super-pipeline, configures the execution mode (Discover / Preview / Migrate),
+> chained pipeline, configures the execution mode (READONLY / WRITEBACK),
 > executes it, and returns the resulting reports and diagnostics. Orchestration
 > concerns are kept strictly separate from pipeline behaviour — the orchestrator
-> is *not* the primary abstraction; the super-pipeline is.
+> is *not* the primary abstraction; the chained pipeline is.
 >
 > **Typed framework foundation.** The reusable framework is generic —
 > `Pipeline[TInput, TOutput]` and `PipelineStep[TInput, TOutput]` — so the
 > Builder can type-thread steps and support type-changing steps where genuinely
-> needed. The three ESS stage pipelines instantiate this foundation over the
-> shared `MigrationContext` (`Pipeline[MigrationContext, MigrationContext]`),
-> which threads through the whole super-pipeline. (The generic `TInput, TOutput`
+> needed. The generic super-pipeline composition is likewise framework, not
+> product: `ChainedPipeline[TContext]` (in `core/pipelines/`) composes an ordered
+> sequence of context-preserving stage pipelines and runs them left to right,
+> with no ESS or domain naming. The orchestrator composes `ChainedPipeline`
+> directly with `.add()` — no subclass needed. The
+> three ESS stage pipelines instantiate the generic `Pipeline` foundation over
+> the shared `MigrationContext` (`Pipeline[MigrationContext, MigrationContext]`),
+> which threads through the whole chained pipeline. (The generic `TInput, TOutput`
 > signature is the analogue of the C# `HeterogenousPipelineStepComputeUnitBase
 > <TInput, TOutput>`; a stage pipeline is the analogue of
 > `KeyedComputeUnitBase<...>`. C# runtime concerns — Autofac keyed registration,
@@ -315,19 +321,20 @@ output_pipeline = (
 
 ### The super-pipeline
 
-The product itself is a single fluent super-pipeline that composes the three
+The product itself is a single fluent chained pipeline that composes the three
 stages. Each stage receives the output of the previous stage over the shared
-`MigrationContext`:
+`MigrationContext`. The orchestrator composes `ChainedPipeline` directly — no
+subclass needed:
 
 ```python
 toolkit = (
-    EssMigrationToolkit()
-        .input(input_pipeline)
-        .migrate(migration_pipeline)
-        .output(output_pipeline)
+    ChainedPipeline[MigrationContext]()
+        .add(input_pipeline)
+        .add(migration_pipeline)
+        .add(output_pipeline)
 )
 
-result = toolkit.run(mode=ExecutionMode.PREVIEW)   # Discover | Preview | Migrate
+result = toolkit.run(context)   # ExecutionMode set on the context (READONLY | WRITEBACK)
 ```
 
 The Builder creates immutable executable pipelines. The **Migration Orchestrator
@@ -411,7 +418,7 @@ performed inside `can_execute(context)`:
 ```python
 class HandleOnActivityTopicStep(PipelineStep):
 
-    supported_modes = [PREVIEW, MIGRATE]
+    supported_modes = ("READONLY", "WRITEBACK")
 
     def can_execute(self, context):
         return any(
@@ -518,11 +525,7 @@ Example
 ```python
 class DiscoverComponents(PipelineStep):
 
-    supported_modes = [
-        DISCOVER,
-        PREVIEW,
-        MIGRATE
-    ]
+    supported_modes = ("READONLY", "WRITEBACK")
 ```
 
 Example
@@ -530,9 +533,7 @@ Example
 ```python
 class Writeback(PipelineStep):
 
-    supported_modes = [
-        MIGRATE
-    ]
+    supported_modes = ("WRITEBACK",)
 ```
 
 The Pipeline Engine automatically skips unsupported steps.
@@ -708,15 +709,15 @@ Responsibilities
 ## The Super-Pipeline
 
 The Migration Orchestrator (`src/service/mtk_orchestrator.py`) is the
-**composition root** only. It assembles the three stages into the fluent
-super-pipeline, configures the execution mode, executes it, and returns the
-reports and diagnostics:
+**composition root** only. It assembles the three stages into the chained
+pipeline, configures the execution mode, executes it, and returns the
+reports and diagnostics. The orchestrator composes `ChainedPipeline` directly:
 
 ```python
-EssMigrationToolkit()
-    .input(input_pipeline)
-    .migrate(migration_pipeline)
-    .output(output_pipeline)
+ChainedPipeline[MigrationContext]()
+    .add(input_pipeline)
+    .add(migration_pipeline)
+    .add(output_pipeline)
 ```
 
 The final outputs of the toolkit are the two files of the session bundle:

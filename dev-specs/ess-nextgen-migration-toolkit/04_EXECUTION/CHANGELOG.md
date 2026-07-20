@@ -12,6 +12,17 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 
 ## [Unreleased]
 
+- **Super-pipeline base/product split (framework vs ESS product).** Split the
+  fluent super-pipeline into a generic, product-agnostic base and the ESS
+  product subclass: `StagedPipeline[TContext]` now lives in `core/pipeline/`
+  (`staged.py`) as the reusable append-only N-stage composition, and
+  `EssMigrationToolkit` moved to `service/` (`toolkit.py`) where it **inherits**
+  `StagedPipeline` and adds the named `.input()/.migrate()/.output()` stages plus
+  the "all three stages required" rule (via the `_ordered_stages()` hook).
+  Consumers now import `from service import EssMigrationToolkit`. Keeps
+  domain-flavoured composition out of `core/`. Updated
+  `02_ARCHITECTURE/PIPELINES.md`, `03_ENGINEERING/REPOSITORY_STRUCTURE.md`, and
+  TASK-002/003. (TASK-002)
 - **Customer-channel method rename (clarity).** Renamed the two customer-channel
   Logger methods to be intent-revealing: `LogFancy` → **`LogChange`** (records a
   successful transformation → `context.Changes` → `## Changes`) and

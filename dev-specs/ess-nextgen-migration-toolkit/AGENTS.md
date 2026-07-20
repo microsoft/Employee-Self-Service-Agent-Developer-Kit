@@ -315,6 +315,10 @@ Business transformations should remain identical between Preview and Migrate.
 
 Preview should always represent exactly what Migrate would execute.
 
+At the framework level, these map to two `ExecutionMode` values:
+- DISCOVER / PREVIEW → `ExecutionMode.READONLY` (no writes to Dataverse)
+- MIGRATE → `ExecutionMode.WRITEBACK` (persists transformations)
+
 ---
 
 # 10. Determinism

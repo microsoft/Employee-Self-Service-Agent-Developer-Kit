@@ -14,6 +14,18 @@ display text like "APP_CLIENT_ID = ..." or "APP_OBJECT_ID = ..." in chat.
 - TENANT_ID — from `azure/login.md`
 - APP_DISPLAY_NAME — set by the calling file (e.g.,
   `"ESS Copilot - ServiceNow OIDC (dev352928)"`)
+- CONNECTOR_APP_ID — the first-party Power Platform **connector** app ID to
+  pre-authorize (B.5). This is integration-specific:
+  - ServiceNow → `c26b24aa-7874-4e06-ad55-7d06b1f79b63`
+  - Workday → `4e4707ca-5f53-46a6-a819-f7765446e6ff`
+
+  If the calling file does not pass this, default to the ServiceNow connector
+  `c26b24aa-7874-4e06-ad55-7d06b1f79b63`.
+- SCOPE_RESOURCE_LABEL — the human-readable resource name used in the exposed
+  scope's consent text (B.4c), e.g. `ServiceNow` or `Workday`. Defaults to
+  `ServiceNow` if not passed.
+- CONFIG_PATH — the calling file's config.json to persist the created app IDs
+  to (B.2). Defaults to `.local/connect/servicenow/config.json` if not passed.
 
 **Outputs to the calling file:**
 - APP_CLIENT_ID — the app (client) ID
@@ -125,10 +137,12 @@ Stop here. Do not proceed.
 
 For any other error, retry once. If still fails, show the error and stop.
 
-**Immediately save APP_CLIENT_ID and APP_OBJECT_ID** to
-`.local/connect/servicenow/config.json` under the relevant auth section
-(e.g., `entra.appClientId`, `entra.appObjectId`). This preserves state
-if the session breaks before the calling file's final config save.
+**Immediately save APP_CLIENT_ID and APP_OBJECT_ID** to `{CONFIG_PATH}`
+under the section the calling file uses for the Entra app IDs (e.g.,
+`entra.appClientId` / `entra.appObjectId` for ServiceNow, or
+`entraAppId` / `entraAppObjectId` for Workday — see the calling file's
+schema). This preserves state if the session breaks before the calling
+file's final config save.
 
 ---
 
@@ -228,13 +242,13 @@ Save the output as SCOPE_GUID.
 
 ```powershell
 $body = @{api=@{oauth2PermissionScopes=@(@{
-  adminConsentDescription="Access ServiceNow on behalf of the user"
-  adminConsentDisplayName="Access ServiceNow"
+  adminConsentDescription="Access {SCOPE_RESOURCE_LABEL} on behalf of the user"
+  adminConsentDisplayName="Access {SCOPE_RESOURCE_LABEL}"
   id="{SCOPE_GUID}"
   isEnabled=$true
   type="User"
-  userConsentDescription="Access ServiceNow on your behalf"
-  userConsentDisplayName="Access ServiceNow"
+  userConsentDescription="Access {SCOPE_RESOURCE_LABEL} on your behalf"
+  userConsentDisplayName="Access {SCOPE_RESOURCE_LABEL}"
   value="user_impersonation"
 })}} | ConvertTo-Json -Depth 5
 $body | Out-File "$env:TEMP\ess-scope.json" -Encoding utf8
@@ -273,15 +287,18 @@ Wait for the user, then re-verify.
 
 ## B.5 — Pre-authorize the Power Platform connector
 
-The Power Platform ServiceNow (and Workday) connector uses the first-party
-app `c26b24aa-7874-4e06-ad55-7d06b1f79b63`. Pre-authorizing it allows
-token requests without additional consent prompts.
+The Power Platform connector to pre-authorize is **passed in as
+CONNECTOR_APP_ID** — each integration uses its own first-party connector app
+(ServiceNow `c26b24aa-7874-4e06-ad55-7d06b1f79b63`, Workday
+`4e4707ca-5f53-46a6-a819-f7765446e6ff`); they are **not** the same app and one
+does not serve the other. Pre-authorizing the correct connector allows token
+requests without additional consent prompts.
 
 Run in the terminal:
 
 ```powershell
 $body = @{api=@{preAuthorizedApplications=@(@{
-  appId="c26b24aa-7874-4e06-ad55-7d06b1f79b63"
+  appId="{CONNECTOR_APP_ID}"
   delegatedPermissionIds=@("{SCOPE_GUID}")
 })}} | ConvertTo-Json -Depth 5
 $body | Out-File "$env:TEMP\ess-preauth.json" -Encoding utf8
@@ -296,7 +313,7 @@ Replace `{APP_OBJECT_ID}` and `{SCOPE_GUID}` with the actual values.
 az ad app show --id {APP_OBJECT_ID} --query "api.preAuthorizedApplications[0].appId" -o tsv
 ```
 
-Expected output: `c26b24aa-7874-4e06-ad55-7d06b1f79b63`
+Expected output: `{CONNECTOR_APP_ID}`
 
 **If verification fails**: retry the PATCH once. If still fails:
 
@@ -308,7 +325,7 @@ manually:
 1. Open https://entra.microsoft.com
 2. Go to **App registrations** → find your app → **Expose an API**
 3. Click **Add a client application**
-4. Enter Client ID: `c26b24aa-7874-4e06-ad55-7d06b1f79b63`
+4. Enter Client ID: `{CONNECTOR_APP_ID}`
 5. Check the `user_impersonation` scope → **Add application**
 
 Type **done** when you're finished.

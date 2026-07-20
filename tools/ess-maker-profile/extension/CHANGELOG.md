@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.4.24 (POC)
+
+- **Auto-update nudge.** On VS Code startup, the extension now checks
+  whether the local ESS ADK clone is behind `origin/main` (via
+  `git ls-remote` vs the local `HEAD`) and, if so, shows a non-blocking
+  notification. When the number of commits behind can be determined it
+  is shown ("Your ESS ADK is N commits behind. Please update now to get
+  the latest."); otherwise it falls back to a generic
+  "A newer version of the ESS ADK is available." message, always with
+  **Update now** and **Later** actions.
+  - **Update now** runs `git pull --ff-only` and offers a window reload.
+  - **Later** (or dismissing) re-asks on the next startup — there is
+    intentionally no permanent per-user "don't ask again", so makers
+    stay on the latest ADK. The check also re-runs every 4 hours within
+    a long-lived session, so leaving VS Code open doesn't defer the
+    nudge indefinitely.
+  - Only fires when the clone is on `main` (developers on feature
+    branches are never nagged), and degrades gracefully when offline,
+    on a dirty tree, or on a diverged (non-fast-forward) clone.
+  - Detects when the pulled repo ships a newer extension than the
+    installed VSIX (a code pull doesn't refresh the extension) and
+    prompts reinstall/reload instead.
+  - A new `essMaker.autoUpdateCheck` setting (default `true`) lets IT
+    disable the nudge on managed boxes (the only supported opt-out).
+
 ## 0.4.22 (POC)
 
 - **Tutorial is now a custom webview panel** — no checkboxes, no step
