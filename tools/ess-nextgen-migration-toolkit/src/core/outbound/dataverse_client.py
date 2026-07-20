@@ -63,14 +63,14 @@ class DataverseClient:
         Output:
         - initialized client ready for Dataverse Web API calls.
         """
-        self._env_url = _normalize_env_url(env_url)
-        self._token_provider = token_provider
-        self._sleep = sleep if sleep is not None else time.sleep
-        self._client = (
+        self.__env_url = _normalize_env_url(env_url)
+        self.__token_provider = token_provider
+        self.__sleep = sleep if sleep is not None else time.sleep
+        self.__client = (
             client
             if client is not None
             else httpx.Client(
-                base_url=f"{self._env_url}{_API_PATH}",
+                base_url=f"{self.__env_url}{_API_PATH}",
                 timeout=_DEFAULT_TIMEOUT_SECONDS,
             )
         )
@@ -100,7 +100,7 @@ class DataverseClient:
 
     def get(self, path: str, *, params: dict[str, str] | None = None) -> JsonDict:
         """Execute one Dataverse GET request and return the JSON payload."""
-        response = self._request(
+        response = self.__request(
             "GET",
             path,
             params=params,
@@ -111,7 +111,7 @@ class DataverseClient:
 
     def create(self, entity_set: str, data: JsonDict) -> str:
         """Create one Dataverse record and return its Dataverse record ID."""
-        response = self._request(
+        response = self.__request(
             "POST",
             entity_set,
             json=data,
@@ -125,7 +125,7 @@ class DataverseClient:
 
     def update(self, entity_set: str, record_id: str, data: JsonDict) -> None:
         """Update one Dataverse record without returning a payload."""
-        self._request(
+        self.__request(
             "PATCH",
             f"{entity_set}({record_id})",
             json=data,
@@ -135,14 +135,14 @@ class DataverseClient:
 
     def delete(self, entity_set: str, record_id: str) -> None:
         """Delete one Dataverse record without returning a payload."""
-        self._request(
+        self.__request(
             "DELETE",
             f"{entity_set}({record_id})",
             operation="delete",
             entity_set=entity_set,
         )
 
-    def _request(
+    def __request(
         self,
         method: str,
         path: str,
@@ -153,19 +153,19 @@ class DataverseClient:
         entity_set: str | None,
     ) -> httpx.Response:
         if method == "GET":
-            response = self._request_with_get_retry(
+            response = self.__request_with_get_retry(
                 path,
                 params=params,
                 operation=operation,
                 entity_set=entity_set,
             )
         else:
-            response = self._send_once(method, path, params=params, json=json)
+            response = self.__send_once(method, path, params=params, json=json)
 
-        self._raise_for_status(response, operation=operation, entity_set=entity_set)
+        self.__raise_for_status(response, operation=operation, entity_set=entity_set)
         return response
 
-    def _request_with_get_retry(
+    def __request_with_get_retry(
         self,
         path: str,
         *,
@@ -175,21 +175,21 @@ class DataverseClient:
     ) -> httpx.Response:
         last_response: httpx.Response | None = None
         for attempt in range(1, _GET_ATTEMPTS + 1):
-            response = self._send_once("GET", path, params=params)
+            response = self.__send_once("GET", path, params=params)
             last_response = response
             if response.status_code not in _RETRY_STATUS_CODES or attempt == _GET_ATTEMPTS:
                 return response
 
             delay_seconds = _retry_delay_seconds(response, attempt)
             if delay_seconds > 0:
-                self._sleep(delay_seconds)
+                self.__sleep(delay_seconds)
 
         if last_response is None:
             raise RuntimeError("GET retry loop completed without a response.")
-        self._raise_for_status(last_response, operation=operation, entity_set=entity_set)
+        self.__raise_for_status(last_response, operation=operation, entity_set=entity_set)
         return last_response
 
-    def _send_once(
+    def __send_once(
         self,
         method: str,
         path: str,
@@ -197,25 +197,25 @@ class DataverseClient:
         params: dict[str, str] | None = None,
         json: JsonDict | None = None,
     ) -> httpx.Response:
-        token = self._token_provider.get_token()
+        token = self.__token_provider.get_token()
         headers = {**_O_DATA_HEADERS, "Authorization": f"Bearer {token}"}
-        return self._client.request(
+        return self.__client.request(
             method,
-            self._request_url(path),
+            self.__request_url(path),
             headers=headers,
             params=params,
             json=json,
         )
 
-    def _request_url(self, path: str) -> str:
+    def __request_url(self, path: str) -> str:
         parsed = urlparse(path)
         if parsed.scheme and parsed.netloc:
             return path
         if path.startswith("/"):
-            return urljoin(f"{self._env_url}/", path.lstrip("/"))
+            return urljoin(f"{self.__env_url}/", path.lstrip("/"))
         return path
 
-    def _raise_for_status(
+    def __raise_for_status(
         self,
         response: httpx.Response,
         *,
