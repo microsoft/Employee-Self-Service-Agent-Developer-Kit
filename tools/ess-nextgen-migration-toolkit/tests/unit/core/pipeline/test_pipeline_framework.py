@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 
 import pytest
 
-from core.pipeline import (
+from core.pipelines import (
     Pipeline,
     PipelineConfigurationError,
     PipelineExecutionError,

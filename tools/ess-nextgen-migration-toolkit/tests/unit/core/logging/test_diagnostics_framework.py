@@ -12,7 +12,8 @@ from pathlib import Path
 import pytest
 
 from core.logging import Logger, LogLevel, Reporter, SessionManager
-from core.models import ChangeEntry, DiagnosticEntry, MigrationContext
+from core.models import ChangeEntry, DiagnosticEntry
+from modules.migration.models import MigrationContext
 
 FIXED_TIME = datetime(2026, 7, 18, 14, 32, 5)
 
@@ -158,7 +159,7 @@ def test_customer_channel_updates_report_model_only(
 
 def test_reporter_renders_customer_report_from_context_collectors(workspace: Path) -> None:
     context = MigrationContext(
-        ExecutionMode="PREVIEW",
+        ExecutionMode="WRITEBACK",
         Changes=[
             ChangeEntry(
                 message="Runtime Provider CA → DA",
@@ -183,9 +184,9 @@ def test_reporter_renders_customer_report_from_context_collectors(workspace: Pat
     Reporter(manager).render(context)
 
     report = manager.paths.report_path.read_text(encoding="utf-8")
-    assert "# Migration Preview Report" in report
+    assert "# Migration Report" in report
     assert "## Summary" in report
-    assert "- Execution Mode: PREVIEW" in report
+    assert "- Execution Mode: WRITEBACK" in report
     assert "## Changes" in report
     assert "### RULE-001 — Updated Agent Metadata" in report
     assert "Template           CA → DA" in report
