@@ -72,6 +72,84 @@ _SESSION = requests.Session()
 _SESSION.mount("https://", HTTPAdapter(max_retries=_RETRY))
 
 
+def _persist_token_cache(cache: "msal.SerializableTokenCache", cache_path: str) -> None:
+    """Write the MSAL cache back to disk with strict 0o600 permissions.
+
+    The cache holds MSAL refresh tokens; default umask (0o644) would expose
+    them to other users on shared dev VMs. No-op when nothing changed.
+    """
+    if not cache.has_state_changed:
+        return
+    os.makedirs(".local", exist_ok=True)
+    try:
+        os.chmod(".local", 0o700)
+    except OSError:
+        pass  # Windows ignores chmod for directories
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    fd = os.open(cache_path, flags, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(cache.serialize())
+
+
+# Minimal scope for a silent-only org-name lookup. Requesting just this one
+# read scope (rather than the full GRAPH_SCOPES set) maximizes the chance a
+# token already cached from a prior first-party (FOCI) sign-in — e.g. the
+# Dataverse login in auth.py — silently satisfies it with no prompt.
+_ORG_READ_SCOPE = ["https://graph.microsoft.com/Organization.Read.All"]
+
+
+def resolve_tenant_display_name_silent(tenant_id: str) -> str:
+    """Return the tenant's org displayName via a SILENT-ONLY Graph token.
+
+    Best-effort and strictly non-interactive: if the shared MSAL cache
+    (``.local/.token_cache.bin``) holds no token that silently satisfies
+    ``Organization.Read.All`` for this tenant, returns ``""`` instead of
+    prompting. Because the Graph CLI Tools app and the Power Platform CLI app
+    (auth.py) are first-party FOCI apps sharing that cache, a prior Dataverse
+    sign-in is usually enough for this to succeed with no second prompt.
+
+    Used by the ADK auth bootstrap so ``tenant_name`` is populated for ADK
+    telemetry even when the maker never runs FlightCheck. Returns ``""`` on any
+    error, missing account, non-200 response, or empty result.
+    """
+    if not tenant_id:
+        return ""
+    try:
+        authority = f"https://login.microsoftonline.com/{tenant_id}"
+        cache = msal.SerializableTokenCache()
+        cache_path = os.path.join(".local", ".token_cache.bin")
+        if os.path.exists(cache_path):
+            with open(cache_path, "r", encoding="utf-8") as f:
+                cache.deserialize(f.read())
+        app = msal.PublicClientApplication(
+            GRAPH_CLIENT_ID, authority=authority, token_cache=cache
+        )
+        accounts = app.get_accounts()
+        if not accounts:
+            return ""
+        result = app.acquire_token_silent(_ORG_READ_SCOPE, account=accounts[0])
+        if not result or "access_token" not in result:
+            return ""
+        # Persist any silently-refreshed token so later processes stay silent.
+        _persist_token_cache(cache, cache_path)
+        resp = _SESSION.get(
+            f"{GRAPH_BASE}/organization",
+            headers={
+                "Authorization": f"Bearer {result['access_token']}",
+                "Accept": "application/json",
+            },
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return ""
+        orgs = (resp.json() or {}).get("value", []) or []
+        return (orgs[0].get("displayName", "") if orgs else "") or ""
+    except Exception:  # noqa: BLE001 — name resolution is strictly best-effort
+        return ""
+
+
 class GraphClient:
     """Lightweight Microsoft Graph client with MSAL interactive auth."""
 
@@ -114,18 +192,7 @@ class GraphClient:
         # Persist cache with strict 0o600 permissions on POSIX. The cache
         # holds MSAL refresh tokens; default umask (0o644) would expose them
         # to other users on shared dev VMs.
-        if cache.has_state_changed:
-            os.makedirs(".local", exist_ok=True)
-            try:
-                os.chmod(".local", 0o700)
-            except OSError:
-                pass  # Windows ignores chmod for directories
-            flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-            if hasattr(os, "O_BINARY"):
-                flags |= os.O_BINARY
-            fd = os.open(cache_path, flags, 0o600)
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(cache.serialize())
+        _persist_token_cache(cache, cache_path)
 
         self._token = result["access_token"]
         return self._token
