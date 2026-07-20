@@ -16,9 +16,11 @@ class FakeTokenProvider:
     def __init__(self, tokens: list[str] | None = None) -> None:
         self._tokens = tokens or ["token-1"]
         self.calls = 0
+        self.requested_scopes: list[str | None] = []
 
-    def get_token(self) -> str:
+    def get_token(self, scopes: str | None = None) -> str:
         self.calls += 1
+        self.requested_scopes.append(scopes)
         if self.calls <= len(self._tokens):
             return self._tokens[self.calls - 1]
         return self._tokens[-1]
@@ -65,6 +67,7 @@ def test_query_all_acquires_a_fresh_token_and_applies_odata_headers_per_request(
 
     assert records == [{"id": 1}, {"id": 2}]
     assert provider.calls == 2
+    assert provider.requested_scopes == [None, None]
     assert seen_tokens == ["Bearer token-1", "Bearer token-2"]
 
 
@@ -188,6 +191,16 @@ def test_non_auth_http_errors_raise_dataverse_api_error_with_context() -> None:
 def test_constructor_rejects_non_https_environment_urls() -> None:
     with pytest.raises(ValueError, match="env_url must be an HTTPS URL"):
         DataverseClient("http://contoso.crm.dynamics.com", FakeTokenProvider())
+
+
+def test_with_environment_rebinds_client_to_new_environment() -> None:
+    provider = FakeTokenProvider()
+    original = DataverseClient(ENV_URL, provider)
+
+    rebound = original.with_environment("https://fabrikam.crm.dynamics.com")
+
+    assert original.environment_url == ENV_URL
+    assert rebound.environment_url == "https://fabrikam.crm.dynamics.com"
 
 
 def test_create_returns_record_id_from_odata_entity_id_header() -> None:

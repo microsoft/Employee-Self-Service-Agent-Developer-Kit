@@ -132,7 +132,7 @@ Instead, it establishes the complete framework, wiring, and developer experience
 | [TASK-007](tasks/TASK-007-postprocessing-pipeline.md)    | Postprocessing Pipeline        | BLOCKED | TASK-015, TASK-004, TASK-005 |
 | [TASK-008](tasks/TASK-008-authentication-token-provider.md) | Authentication Token Provider | DONE   | —        |
 | [TASK-009](tasks/TASK-009-end-to-end-framework-validation.md) | End-to-End Framework Validation | BLOCKED | TASK-003, TASK-006, TASK-007 |
-| [TASK-015](tasks/TASK-015-input-pipeline-auth-discovery.md) | Input Pipeline: Auth + Agent Discovery + Orchestrator Wiring | TODO | TASK-002, TASK-005, TASK-008 |
+| [TASK-015](tasks/TASK-015-input-pipeline-auth-discovery.md) | Input Pipeline: Auth + Agent Discovery + Orchestrator Wiring | DONE | TASK-002, TASK-005, TASK-008 |
 
 ---
 
