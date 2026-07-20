@@ -666,3 +666,86 @@ class TestEnsureSkillsResponse:
         fixed, n = push._ensure_skills_response("{not valid")
         assert n == 0
         assert fixed == "{not valid"
+
+
+class TestEvaluateFlowRegistration:
+    """push._evaluate_flow_registration composes the agent-invocability checks
+    for a created flow into a readiness report (the post-push validation that
+    mirrors the manual 5-step check).
+    """
+
+    def _ready_facts(self):
+        return dict(
+            statecode=1, statuscode=2, modernflowtype=1,
+            response_kinds=["Skills", "Skills"],
+            connref_bound_count=1, link_count=1,
+        )
+
+    def test_all_checks_pass_is_ready(self):
+        r = push._evaluate_flow_registration(**self._ready_facts())
+        assert r["ready"] is True
+        assert all(r["checks"].values())
+
+    def test_not_activated_fails(self):
+        f = self._ready_facts()
+        f["statecode"], f["statuscode"] = 0, 1  # Draft
+        r = push._evaluate_flow_registration(**f)
+        assert r["ready"] is False
+        assert r["checks"]["activated"] is False
+
+    def test_wrong_modernflowtype_fails(self):
+        f = self._ready_facts()
+        f["modernflowtype"] = 0
+        r = push._evaluate_flow_registration(**f)
+        assert r["checks"]["modern_flow"] is False
+        assert r["ready"] is False
+
+    def test_non_skills_response_fails(self):
+        f = self._ready_facts()
+        f["response_kinds"] = ["Skills", "PowerApp"]
+        r = push._evaluate_flow_registration(**f)
+        assert r["checks"]["response_skills"] is False
+
+    def test_no_response_actions_fails(self):
+        f = self._ready_facts()
+        f["response_kinds"] = []
+        r = push._evaluate_flow_registration(**f)
+        assert r["checks"]["response_skills"] is False
+
+    def test_missing_connref_fails(self):
+        f = self._ready_facts()
+        f["connref_bound_count"] = 0
+        r = push._evaluate_flow_registration(**f)
+        assert r["checks"]["flow_scoped_connref"] is False
+
+    def test_missing_link_fails(self):
+        f = self._ready_facts()
+        f["link_count"] = 0
+        r = push._evaluate_flow_registration(**f)
+        assert r["checks"]["botcomponent_workflow_link"] is False
+
+
+class TestFlowResponseKinds:
+    """push._flow_response_kinds lists the kind of every Response action in a
+    flow's clientdata (for the readiness report). Empty list on invalid JSON."""
+
+    def test_lists_all_response_kinds(self):
+        import json
+        wf = {"properties": {"definition": {"actions": {
+            "If1": {"type": "If",
+                    "actions": {"R1": {"type": "Response", "kind": "Skills"}},
+                    "else": {"actions": {
+                        "R2": {"type": "Response", "kind": "PowerApp"}}}},
+            "R3": {"type": "Response"},  # missing kind
+            "X": {"type": "Compose"},
+        }}}}
+        kinds = push._flow_response_kinds(json.dumps(wf))
+        assert sorted(k or "" for k in kinds) == ["", "PowerApp", "Skills"]
+
+    def test_empty_on_invalid_json(self):
+        assert push._flow_response_kinds("{nope") == []
+
+    def test_empty_when_no_responses(self):
+        import json
+        assert push._flow_response_kinds(
+            json.dumps({"properties": {"definition": {"actions": {}}}})) == []
