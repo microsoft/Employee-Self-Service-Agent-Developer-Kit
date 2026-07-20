@@ -7,7 +7,7 @@ name = "ess-nextgen-migration-toolkit"
 version = "0.1.0"
 description = "Migrates ESS Custom Engine Agents (CA) to Declarative Agents (DA)."
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Anil Kumar Adepu" }]
 dependencies = [
@@ -40,7 +40,7 @@ packages = [
 [tool.ruff]
 src = ["src", "tests"]
 line-length = 100
-target-version = "py310"
+target-version = "py311"
 
 [tool.ruff.lint]
 # Includes flake8-print (T20) to enforce the "no direct print()" rule from
@@ -52,7 +52,7 @@ select = ["E", "F", "I", "UP", "B", "T20"]
 "tests/**" = ["T20"]
 
 [tool.mypy]
-python_version = "3.10"
+python_version = "3.11"
 mypy_path = "src"
 strict = true
 warn_unused_configs = true
