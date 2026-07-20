@@ -15,7 +15,8 @@ is fully automatable). It then emits one of:
   * WARNING — active cert expiring within CERT_EXPIRY_WARN_DAYS or
     NotBefore is still in the future.
   * MANUAL — active cert is healthy; operator must compare the
-    thumbprint against Workday's "Edit Tenant Setup - Security ->
+    certificate (validity dates, or an externally-computed SHA-1
+    thumbprint) against Workday's "Edit Tenant Setup - Security ->
     SAML Identity Providers" row because that is not exposed via any
     Workday API the kit talks to.
 
@@ -176,8 +177,9 @@ class TestHealthyCertManual:
 
         assert r.status == "Manual"
         assert r.priority == "High"
-        # Result text should surface the colon-hex thumbprint so the
-        # operator can compare it byte-for-byte against Workday's view.
+        # Result text should surface the colon-hex Entra thumbprint
+        # so the operator can compute the Workday cert's SHA-1 and
+        # compare against it (Workday itself shows no thumbprint).
         assert _expected_thumbprint_for("cert-healthy-1") in r.result
         # SAML entity ID (Workday "Service Provider ID" join key) is
         # what lets the operator pick the right Entra app.
@@ -187,7 +189,12 @@ class TestHealthyCertManual:
         assert "Service Provider ID" in r.remediation
         assert "Step 2" in r.remediation
         assert "X509 Certificate" in r.remediation
-        assert "match exactly" in r.remediation
+        # Workday exposes no thumbprint — the compare must be by
+        # validity dates or an externally-computed SHA-1, NOT by a
+        # thumbprint Workday supposedly displays.
+        assert "Valid From" in r.remediation
+        assert "SHA-1" in r.remediation
+        assert "does NOT" in r.remediation
 
 
 class TestSignVerifyCoalescing:
@@ -668,3 +675,84 @@ class TestWireup:
         # emitting WD-FLOW-* results for tenants that have nothing
         # Workday-related installed.
         assert not any(i.startswith("WD-FLOW-") for i in ids)
+
+
+class TestSkippedFlavorStaysNonInteractive:
+    """Regression: the WD-CONN-102 setup-flow freeze.
+
+    A Graph-only single-checkpoint run — ``--checkpoint WD-CONN-102`` /
+    ``WD-CONN-010``, driven by skill-3
+    (src/skills/setup/workday/provision-workday-entra-app.md) — authenticates
+    ONLY Microsoft Graph, so ``_check_package_flavor`` (WD-PKG-001) has no
+    Dataverse token and sets ``runner._workday_package_flavor = "skipped"``.
+
+    The early-return guard in ``run_workday_checks`` must treat ``"skipped"``
+    like ``None``/``"none"`` and stop before the deep Workday block. That block
+    includes ``_check_workflows`` / ``_check_personal_data_write_permission``,
+    which resolve a Test Employee ID and ISU username/password via
+    ``input()`` / ``getpass.getpass()`` (gated only on ``sys.stdin.isatty()``).
+    In VS Code's integrated terminal (a pty, so ``isatty()`` is True) those raw
+    prompts never surface as pop-ups and nothing feeds stdin, so the headless,
+    skill-launched process blocks forever — the reported "chat freeze".
+
+    TODO: when the guard is fixed, this test stays green. If someone narrows
+    the guard back to ``(None, "none")``, the ``input``/``getpass`` sentinels
+    below fire and this test goes red.
+    """
+
+    def test_skipped_flavor_early_returns_without_prompting(self) -> None:
+        from flightcheck.checks.workday import run_workday_checks
+
+        @dataclass
+        class _Bare:
+            graph: Any = None
+            pp_admin: Any = None
+            env_url: str | None = None
+            dv_token: str | None = None
+            env_id: str | None = None
+            _workday_flows: list | None = None
+            config: dict | None = None
+
+        # No env_url / dv_token => the REAL _check_package_flavor takes its
+        # no-token branch and sets flavor="skipped" (no network call). This is
+        # exactly the state a Graph-only single-checkpoint run produces.
+        bare = _Bare(_workday_flows=[], config={})
+
+        def _fail_on_prompt(*_args, **_kwargs):
+            raise AssertionError(
+                "run_workday_checks prompted for input on a Graph-only "
+                "(flavor='skipped') run — the WD-CONN-102 freeze regressed. "
+                "The deep Workday block must early-return when Dataverse is "
+                "unavailable."
+            )
+
+        # Simulate the VS Code pty (isatty True) so the interactive prompt
+        # guards WOULD fire if the deep block ran, and turn any prompt attempt
+        # into a loud failure instead of a hang on stdin.
+        with patch("sys.stdin.isatty", return_value=True), \
+                patch("builtins.input", _fail_on_prompt), \
+                patch(
+                    "flightcheck.checks.workday.getpass.getpass",
+                    _fail_on_prompt,
+                ):
+            results = run_workday_checks(bare)
+
+        ids = [r.checkpoint_id for r in results]
+
+        # WD-PKG-001 ran and recorded the no-Dataverse "skipped" state.
+        pkg = _result_by_id(results, "WD-PKG-001")
+        assert pkg.status == "Skipped"
+        assert "Dataverse token not available" in pkg.result
+
+        # The Graph-only pre-early-return checks still run: WD-CONN-102 is the
+        # checkpoint the setup flow actually asked for (graph=None => Skipped).
+        assert "WD-CONN-102" in ids
+
+        # The deep Workday block must NOT run — none of the checks that need
+        # Dataverse/ISU creds. Their presence would mean the guard let a
+        # headless run reach the interactive credential prompts.
+        assert not any(i.startswith("WD-WF-") for i in ids)
+        assert not any(i.startswith("WD-FLOW-") for i in ids)
+        assert not any(i.startswith("WD-ENV-") for i in ids)
+        assert "WD-SEC-003" not in ids
+        assert "WD-CONN-013" not in ids

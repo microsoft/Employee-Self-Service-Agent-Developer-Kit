@@ -7,10 +7,13 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 
 ## 1.1 — Check what's already connected
 
-Check which folders exist under `.local/connect/`. For each folder that has a
-`tasks.md` where all items are checked, that integration is connected.
+Build a list of connected integrations (if any):
 
-Build a list of connected integrations (if any).
+- **ServiceNow** — connected if `.local/connect/servicenow/tasks.md` exists and
+  all items are checked.
+- **Workday** — connected if `.local/connect/workday/config.json` exists and its
+  `setupStatus` shows every setup row (`S1.1` … `S6.2`) in state `done` (the
+  setup orchestrator owns this state).
 
 ---
 
@@ -203,78 +206,14 @@ Now read `src/skills/connect/servicenow/step1.md` and follow it.
 
 ### If the user chose Workday (2 or "workday")
 
-Check if `.local/connect/workday/tasks.md` exists.
+Workday connection is handled by the **setup orchestrator**, which provisions
+the Power Platform environment, installs the ESS base agent, provisions the
+Entra app, configures the Workday tenant, installs the extension pack, and
+verifies the connection. It is resume-aware: if setup was already started it
+picks up at the first unverified step, and it fast-forwards steps that are
+already done.
 
-**If it exists and all items are checked:**
-
-Read `.local/connect/workday/config.json` to get the current tenant name.
-
-**Message:**
-
-Workday is already connected (tenant: **{tenant}**).
-
-1. **Keep current setup** — run `/create` to start building topics
-2. **Reconnect from scratch** — reset everything and start over
-
-**End message.**
-
-Wait for the user.
-
-**If the user chose 1 (keep):** Stop here.
-
-**If the user chose 2 (reconnect):**
-
-Reset `.local/connect/workday/tasks.md` — all steps to `- [ ]`.
-
-Delete `.local/connect/workday/config.json`.
-
-Copy `src/skills/connect/workday/tasks.md` to
-`.local/connect/workday/tasks.md`.
-
-**Message:**
-
-| # | Task | Status |
-|---|------|--------|
-| 1 | Environment configured | ⬜ |
-| 2 | Admin setup complete | ⬜ |
-| 3 | Connection verified | ⬜ |
-
-Starting fresh. Let's reconnect Workday to your agent.
-
-**End message.**
-
-Now read `src/skills/connect/workday/step1.md` and follow it.
-
-**If it exists and some items are unchecked:**
-
-Show the checklist from `.local/connect/workday/tasks.md` (✅ for checked,
-⬜ for unchecked) followed by "Picking up where we left off."
-
-Read `.local/connect/workday/config.json` to restore saved values. Then
-find the first unchecked step and route:
-
-- **Step 1 unchecked** → read `src/skills/connect/workday/step1.md`
-- **Step 2 unchecked** → read `src/skills/connect/workday/step2.md`
-- **Step 3 unchecked** → read `src/skills/connect/workday/step3.md`
-
-**If it does not exist:**
-
-Copy `src/skills/connect/workday/tasks.md` to
-`.local/connect/workday/tasks.md`.
-
-**Message:**
-
-| # | Task | Status |
-|---|------|--------|
-| 1 | Environment configured | ⬜ |
-| 2 | Admin setup complete | ⬜ |
-| 3 | Connection verified | ⬜ |
-
-Let's connect Workday to your agent.
-
-**End message.**
-
-Now read `src/skills/connect/workday/step1.md` and follow it.
+Now read `src/skills/setup/SKILL.md` and follow it.
 
 ### If the user said something else
 
