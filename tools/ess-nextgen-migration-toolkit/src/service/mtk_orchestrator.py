@@ -28,6 +28,12 @@ def main() -> None:
             .add(build_output_pipeline(logger, SUPPORTED_MODES))
         )
         toolkit.run(context)
+    except Exception:
+        # Print traceback while tee is still active so it lands in session.log
+        import traceback
+
+        traceback.print_exc()
+        raise
     finally:
         try:
             Reporter(logger.session_manager).render(context)
