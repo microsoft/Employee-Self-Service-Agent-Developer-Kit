@@ -384,6 +384,12 @@ def _ensure_skills_response(clientdata):
     at publish. push creates only agent flows (modernflowtype=1), so this is a
     safe, deterministic correction. Returns ``(clientdata, num_fixed)``; the
     original string is returned unchanged when nothing needed fixing.
+
+    Intentionally corrects only the pushed payload, not the on-disk
+    ``workflow.json``: push is otherwise read-only w.r.t. the maker's source, so
+    rewriting their file on every push would be surprising. The source may keep
+    ``kind: PowerApp``; a later ``fetch`` converges it to the server's Skills
+    copy.
     """
     try:
         data = json.loads(clientdata)
@@ -810,7 +816,11 @@ def _register_flow(auth, env_url, schema_name, wf_id, wf_json):
         _call_with_refresh(
             auth, update_record, env_url, auth.token, "workflows", wf_id,
             {"statecode": 1, "statuscode": 2})
-        print(f"  ▶ Activated flow {wf_id}")
+        # The PATCH was accepted; `validate.py` re-reads statecode/statuscode to
+        # confirm the flow held activation (a flow can revert to Draft if a later
+        # connector-schema check fails), so this line reports the request, not a
+        # verified end state.
+        print(f"  ▶ Activation requested for flow {wf_id}")
     except Exception as e:  # noqa: BLE001 — best-effort registration
         print(
             f"  ! Activation failed for flow {wf_id} "
@@ -1121,7 +1131,13 @@ def main():
                 exists = _call_with_refresh(
                     auth, record_exists, env_url, auth.token,
                     "botcomponents", target_id, "botcomponentid")
-            except Exception:  # noqa: BLE001 — treat probe failure as "assume present"
+            except Exception:  # noqa: BLE001 — probe failed; proceed but warn
+                # The stale-id self-heal (adopt/recreate) only runs on a clean
+                # 404. A transient probe failure (5xx/network) is treated as
+                # "assume present" and falls through to a blind PATCH; surface it
+                # so an opaque 400 that follows is traceable to the skipped probe.
+                print(f"  ! Existence probe failed for {filepath}; assuming the "
+                      f"mapped record is present and updating in place.")
                 exists = True
             if not exists:
                 schema = entry.get("schemaname")
@@ -1215,6 +1231,12 @@ def main():
             if _skills_fixed:
                 print(f"  ⚙ {filepath}: set {_skills_fixed} Response action(s) "
                       f"to kind:Skills for agent-flow compatibility")
+            # No stale-id self-heal here (unlike botcomponents above): workflows
+            # are keyed by the maker's preserved client GUID, which is stable and
+            # not subject to the out-of-band delete+recreate churn that motivated
+            # the botcomponent probe. A stale id would surface an opaque 400 via
+            # the except below; extend the record_exists pattern here if that is
+            # ever observed in practice.
             try:
                 _call_with_refresh(auth, update_record,
                                    env_url, auth.token, "workflows",
