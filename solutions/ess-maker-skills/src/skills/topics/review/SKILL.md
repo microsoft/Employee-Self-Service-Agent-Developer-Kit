@@ -261,6 +261,11 @@ the **Issue detail view**. Follow those templates verbatim and apply the **Speak
 instead return the **structured** findings — rule IDs, severity, reachability, and sites from the analysis
 guidance — so the parent can consume them programmatically. Do not prompt the maker directly.
 
+**When the parent wants the report shown to the maker** (e.g. the `/create` flow's post-write review at its
+step 6.5): present the normal **maker-facing report** (Step 9) instead of structured findings, so the parent
+can display it verbatim. The parent signals which output it needs when it invokes you; default to the
+maker-facing report when it is unspecified but the review is scoped to a single just-authored topic.
+
 ## Scoped review (a whole module)
 
 If Step 1 resolved to a **module scope** (all topics for a backend), follow

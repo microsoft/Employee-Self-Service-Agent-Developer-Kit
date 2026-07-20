@@ -67,7 +67,14 @@ Workday → Entra Admin + Workday Admin).
 | ENV-004-UR-nnn | Unbound reference (in-scope reference has no connection bound) | High | — | — |
 | ENV-004-MR-nnn | Missing reference (agent flow uses a connection reference that does not exist in the environment) | High | — | — |
 | ENV-004-UC-nnn | Unbound connection (no in-scope reference uses it; limited to the agent's connectors) | Medium | — | — |
+| ENV-CAPACITY-001 | Copilot Studio message capacity provisioned | Critical | Power Platform Licensing API | [requirements-messages-management#prepaid-capacity](https://learn.microsoft.com/en-us/microsoft-copilot-studio/requirements-messages-management?tabs=new#prepaid-capacity) |
 | ENV-008 | DLP policies configured | High | BAP Admin API | [prepare#allow-the-external-systems-connector](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prepare#allow-the-external-systems-connector) |
+
+## 2b. ESS Solution Installation (ESS-SOLN-xxx)
+
+| ID | Check | Priority | Role | Gate | Method | Doc Link |
+|----|-------|----------|------|------|--------|----------|
+| ESS-SOLN-001 | ESS base agent solution (`msdyn_copilotforemployeeselfservice*`) installed | Critical | Environment Maker | prog | Dataverse REST (`solutions`) | [install](https://learn.microsoft.com/en-us/microsoft-365/copilot/employee-self-service/install) |
 
 ## 3. Authentication & Identity (AUTH-xxx)
 
@@ -76,6 +83,112 @@ Workday → Entra Admin + Workday Admin).
 | AUTH-001 | Microsoft Entra ID configured | Critical | Graph API `/organization` | [prerequisites#identity-authentication-and-single-sign-on-sso](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prerequisites#identity-authentication-and-single-sign-on-sso) |
 | AUTH-002 | Conditional Access policies | High | Graph API `/identity/conditionalAccess/policies` | [prerequisites#identity-authentication-and-single-sign-on-sso](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prerequisites#identity-authentication-and-single-sign-on-sso) |
 | AUTH-004 | User identity synchronization | High | Graph API `/users` | [prerequisites#identity-authentication-and-single-sign-on-sso](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/prerequisites#identity-authentication-and-single-sign-on-sso) |
+
+## 3b. Entra App Provisioning (WD-ENTRA-xxx / WD-ASSIGN-xxx)
+
+Minted by **skill-3** (`provision-workday-entra-app`) and runnable in isolation
+via `--checkpoint`. These configure the Workday SSO/OBO Entra app; the app is
+discovered by its gallery `applicationTemplateId` (rename-proof), so the config
+`entraAppId` / `entraAppObjectId` are optional hints only. All are Entra-only
+(Microsoft Graph) — none needs a Dataverse endpoint. See the setup catalog below
+for the owning checklist rows (S3.1–S3.7).
+
+| ID | Check | Priority | Method | Doc Link |
+|----|-------|----------|--------|----------|
+| WD-ENTRA-SCOPE-001 | `user_impersonation` exposed, Workday connector (`4e4707ca`) pre-authorized, Graph delegated perms (openid/profile/User.Read) requested | Critical | Graph `/applications` (`api.oauth2PermissionScopes`, `api.preAuthorizedApplications`, `requiredResourceAccess`) | [workday-tutorial](https://learn.microsoft.com/en-us/entra/identity/saas-apps/workday-tutorial) |
+| WD-ENTRA-CONSENT-001 | Tenant-wide admin consent (`AllPrincipals` grant) covers the Graph delegated perms | Critical | Graph `/oauth2PermissionGrants` | [workday-tutorial](https://learn.microsoft.com/en-us/entra/identity/saas-apps/workday-tutorial) |
+| WD-ASSIGN-001 | Enterprise-app user/group assignment (or confirmed not required). Shares logic with `AUTH-005`. | Critical | Graph `/servicePrincipals/{id}/appRoleAssignedTo` | [workday-tutorial](https://learn.microsoft.com/en-us/entra/identity/saas-apps/workday-tutorial) |
+| WD-ENTRA-NAMEID-001 | `claimsMappingPolicy` overriding the SAML NameID claim is assigned (degrades to `MANUAL` when the policy route is unreadable) | High | Graph `/servicePrincipals/{id}/claimsMappingPolicies` | [workday-tutorial](https://learn.microsoft.com/en-us/entra/identity/saas-apps/workday-tutorial) |
+| WD-ENTRA-SIGNOPT-001 | "Sign SAML response and assertion" signing option — portal-only, always returns `MANUAL` | High | None (portal attestation; no Graph property) | [workday-tutorial](https://learn.microsoft.com/en-us/entra/identity/saas-apps/workday-tutorial) |
+
+## 3c. Workday Tenant Configuration (WD-API-CLIENT-xxx / WD-TENANT-xxx)
+
+Minted by **skill-4** (`configure-workday-tenant`) and runnable in isolation via
+`--checkpoint`. These attest the Workday-tenant-side configuration (API client,
+Tenant Setup – Security, authentication policy). Workday exposes **no queryable
+admin API** the kit can reach, and self-verifying through a Workday connection
+would be circular, so both are **always `MANUAL`**: they read only
+`.local/connect/workday/config.json`, echo the captured values, and name the
+Workday screen to verify. Neither needs a client or a Dataverse endpoint. The
+signing-cert parity (S4.4) reuses `WD-CONN-102` — it is **not** minted
+here. See the setup catalog below for the owning checklist rows (S4.1–S4.4).
+
+| ID | Check | Priority | Method | Doc Link |
+|----|-------|----------|--------|----------|
+| WD-API-CLIENT-001 | Workday API client registered — SAML ****** grant, functional areas (Core Payroll, Organizations and Roles, Staffing, Time Off and Leave), Include Workday Owned Scope = Yes. Echoes captured `oauthClientId` / `tokenEndpoint`. | Critical | None (attestation; echoes captured config) | [workday-tutorial](https://learn.microsoft.com/en-us/entra/identity/saas-apps/workday-tutorial) |
+| WD-TENANT-001 | Tenant Setup – Security (redirect URL, OAuth 2.0 Clients + SAML enabled, Service Provider ID matches Entra Identifier) and authentication policy scoped to the OAuth client + activated. Echoes captured `restBaseUrl` / `soapBaseUrl` / `tenant` / `appIdUri`. | High | None (attestation; echoes captured config) | [workday-tutorial](https://learn.microsoft.com/en-us/entra/identity/saas-apps/workday-tutorial) |
+
+## 3d. Workday Extension Pack (WD-CONN-AUTH-xxx / DV-CONN-xxx / WD-REST-xxx / WD-NET-xxx)
+
+Minted by **skill-5** (`install-workday-extension-pack`) and runnable in isolation
+via `--checkpoint`. All five share
+`checks/workday_extension.run_workday_extension_checks` (category **Workday
+Extension**, ordered **after** Workday so `WD-PKG-001` hydrates the cached
+connection references and install-flavor verdict first). Three are programmatic
+(one Dataverse read, two pure-local checks); two are **always `MANUAL`** because
+the kit has no verifiable signal for them. Skill-5 also **reuses** `WD-PKG-001`
+(S5.1), `WD-CONN-012` (S5.2), and `WD-FLOW-*` (S5.6) from `checks/workday.py` — those
+are **not** minted here. See the setup catalog below for the owning checklist rows
+(S5.1–S5.8).
+
+| ID | Check | Priority | Method | Doc Link |
+|----|-------|----------|--------|----------|
+| WD-CONN-AUTH-001 | Workday connection authentication is **Microsoft Entra ID Integrated**. Reads the cached Workday (`ff0df`) reference and echoes the observed `connectionParametersSet.name` + owner from the Power Platform admin connection. **Always `MANUAL`** — the admin API exposes no kit-verifiable fingerprint for the "Microsoft Entra ID Integrated" auth type, so this echoes for operator confirmation rather than PASS/FAIL (see reconciliation note below). | High | Power Platform admin connections (echo only) | [workday-simplified-setup](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-simplified-setup) |
+| DV-CONN-001 | ESS Dataverse connection reference (`…_92b66`, connector `shared_commondataserviceforapps`) bound to an **active** connection; echoes the owner so the operator can confirm it is their own account. Programmatic PASS/FAIL on a documented-tier Dataverse `connectionreferences` read. **Non-`WD` family.** | High | Dataverse `connectionreferences` (+ PP admin owner echo) | [workday-simplified-setup](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-simplified-setup) |
+| WD-REST-001 | Captured `restBaseUrl` is present and **trimmed to** `/api`. Pure-config check — no client. | High | None (reads captured config) | [workday-simplified-setup](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-simplified-setup) |
+| WD-REST-002 | Agent's `user-context-setup.mcs.yml` topic contains a `BeginDialog` redirect to the Workday user-context system topic (`WorkdaySystemGetUserContextV2` on the simplified pack). Pure local-file check; `SKIPPED` on the legacy install path. | High | None (reads local agent YAML) | [workday-simplified-setup](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-simplified-setup) |
+| WD-NET-001 | Workday REST + SOAP endpoints allowlisted at the corporate firewall for the Power Platform managed connectors. **Always `MANUAL`** — the kit has no reliable probe (a local reachability test proves only the dev machine's egress, not the managed-connector outbound path), so it echoes the endpoints InfoSec/IT must allowlist. | High | None (InfoSec/IT attestation; echoes captured hosts) | [workday-simplified-setup](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday-simplified-setup) |
+
+> **Gate reconciliation (S5.3).** The master checklist historically tagged S5.3 as
+> `prog`, but the shipped `WD-CONN-AUTH-001` is **always `MANUAL`** (v1 compromise):
+> the Power Platform admin API exposes no documented, kit-verifiable fingerprint for
+> the `shared_workdaysoap` "Microsoft Entra ID Integrated" auth type, and the
+> validated `flightcheck_pp_admin.yaml` cassette contains no Workday connection to
+> confirm one. Per the cardinal rule in
+> [`scripts/flightcheck/AGENTS.md`](../../../../scripts/flightcheck/AGENTS.md)
+> (never assert a verdict from an unconfirmed API response shape), S5.3 is therefore
+> gated **`attest`** — the checkpoint echoes the observed auth parameter set for the
+> operator to confirm, and the row completes only on explicit acknowledgement. If a
+> cassette capturing a Workday connection's `connectionParametersSet.name` is added
+> later, this can be promoted to a programmatic PASS/FAIL and the gate flipped back
+> to `prog`.
+
+## 3e. Workday Topics (TOPIC-TRIGGER-xxx / TOPIC-INTEGRATION-xxx)
+
+Minted by **skill-6** (`create-new-topic`) and runnable in isolation via
+`--checkpoint`. Both are **family** checkpoints that share
+`checks/topics.run_topic_checks` (category **Workday Topics**, ordered **after**
+Workday Extension) and expand to **one row per new/custom topic** — a topic is
+"new" when its `topics/*.mcs.yml` differs from the OOTB `.baseline/topics/`
+snapshot the extension-pack push mirrored (so OOTB pack topics never emit rows).
+Both are **pure local-file** checks (they read only the extracted working copy —
+no client, no config, no Dataverse endpoint, no cassette). When no custom topic
+exists yet, each family returns a single `NotConfigured` "nothing to verify yet"
+row (id `…-001`) so the wildcard always resolves. See the setup catalog below for
+the owning checklist rows (S6.1–S6.2).
+
+> **Advisory review (S6.3).** After both checkpoints pass, skill-6 runs an
+> advisory **topic review** over the finished topic (checklist row S6.3, `advisory`
+> gate). It is **not** a flightcheck checkpoint — it surfaces authoring findings
+> and never blocks; the row completes once the report is shown. See
+> `src/skills/topics/review/SKILL.md`.
+
+| ID | Check | Priority | Method | Doc Link |
+|----|-------|----------|--------|----------|
+| TOPIC-TRIGGER-* | Each new topic is a well-formed `kind: AdaptiveDialog` **and** has a trigger (a `beginDialog` with `OnRecognizedIntent`/`OnRedirect`/…); an intent-routed topic additionally needs trigger phrases (`modelDescription` content or `triggerQueries`). Programmatic PASS/FAIL per topic. | High | None (reads local agent topic YAML vs `.baseline/`) | [workday#topics](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday#topics) |
+| TOPIC-INTEGRATION-* | Each new topic's integration wiring resolves — no unresolved `{{PLACEHOLDER}}` scaffolding or `<UPPERCASE>` tenant reference-ID tokens (e.g. `<TENANT_NAME>`) remain. A topic with no external wiring is a benign PASS. Programmatic PASS/FAIL on placeholder resolution only. | High | None (reads local agent topic YAML vs `.baseline/`) | [workday#topics](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/workday#topics) |
+
+> **Gate note (S6.2).** `TOPIC-INTEGRATION-*` is a `prog (+ SME for IDs)` row.
+> The checkpoint proves the placeholder tokens were **resolved**, but the kit
+> cannot validate that each wired tenant reference-ID *value* (e.g. the Time Off
+> Type ID) is correct against the live Workday instance — that would require a
+> Workday API read the check deliberately avoids (pure local-file). Per the
+> cardinal rule in
+> [`scripts/flightcheck/AGENTS.md`](../../../../scripts/flightcheck/AGENTS.md),
+> the checkpoint asserts only what it can prove; S6.2 therefore also carries a
+> **Workday SME attestation** that the reference-ID values are correct, captured
+> in the skill-6 playbook (P6.4). A checkpoint PASS is necessary but not
+> sufficient for the row to complete.
 
 ## 4. External Systems Discovery
 
@@ -266,3 +379,102 @@ python scripts/flightcheck/cli.py --scope prerequisites
 ```
 
 Or use the `/flightcheck` command in the Copilot Kit.
+
+### Single-checkpoint invocation
+
+In addition to broad `--scope` runs, FlightCheck can run **exactly one
+checkpoint** (or one dynamic family) so a setup skill can verify just the
+atomic outcome it produced, immediately after the step that produces it.
+
+```bash
+# List the setup checkpoints/families available for single-checkpoint runs
+python scripts/flightcheck/cli.py --list-checkpoints
+
+# Run one checkpoint (plus only the prerequisites needed to hydrate it)
+python scripts/flightcheck/cli.py --checkpoint WD-CONN-102
+
+# Run a dynamic family (every emitted ID under the prefix)
+python scripts/flightcheck/cli.py --checkpoint WD-FLOW
+```
+
+Behavior:
+
+- **`--list-checkpoints`** prints the registered, listable checkpoint IDs and
+  families (families shown with a trailing `*`, e.g. `WD-FLOW-*`) with their
+  category, priority, and role(s), then exits without running anything.
+- **`--checkpoint <ID>`** resolves the ID (exact entry first, otherwise the
+  longest-matching family prefix), runs the owning category function plus the
+  transitive prerequisites required to hydrate shared runner state, then
+  reports **only** the target result. It initializes **only** the clients the
+  checkpoint declares — an Entra-only checkpoint such as `WD-CONN-102` runs
+  with Microsoft Graph alone and needs no Dataverse endpoint configured, while
+  a Dataverse-backed checkpoint such as `WD-PKG-001` requires it.
+- A checkpoint that is `Manual` reports `MANUAL` and exits `0` (manual results
+  never count as failures).
+- An unknown ID exits non-zero and prints the list of valid checkpoint IDs.
+- `--checkpoint` and `--scope` are **mutually exclusive**; passing both is an
+  error. Omitting both runs the full scope, exactly as before (additive — no
+  existing `--scope` behavior changes).
+
+The set of selectable checkpoint IDs is defined by the FlightCheck registry
+(`scripts/flightcheck/registry.py`). Integration-specific IDs (the Workday
+families above, and the IDs minted by the per-skill setup plans and the
+master checklist) are added there as each skill begins emitting them.
+
+---
+
+## Workday Simplified Setup Checkpoints (skills 1–6)
+
+The Workday simplified-setup flow is decomposed into six atomic skills, each
+verified by one or more checkpoints. This catalog is the **single declaration**
+of those checkpoint IDs, owned by the master setup checklist
+(`src/skills/setup/workday/tasks.md`) — the `Step` column below is its row ID.
+
+> **Status of this section.** Each ID's actual `CheckResult` emitter and its
+> `registry.py` entry land **with the owning skill** (skills 1–6), not here.
+> Until a skill ships, its **minted** IDs are declared (and their prefixes are in
+> the registry's `OWNED_PREFIXES` drift allow-list) but not yet runnable via
+> `--checkpoint`. **Reuse** IDs already exist and are runnable today.
+
+`Origin`: **reuse** = the checkpoint predates this flow and is simplified-aware;
+**mint** = new, owned by the named skill. `Gate`: see
+[`role-gating.md`](../setup/role-gating.md).
+
+| Checkpoint | Origin | Skill | Step(s) | Gate | What it verifies |
+|------------|--------|-------|---------|------|------------------|
+| `ENV-001` | reuse | skill-1 | S1.1 | prog | Power Platform environment exists |
+| `ENV-002` | reuse | skill-1 | S1.1 | prog | Dataverse database provisioned |
+| `ENV-CAPACITY-001` | mint | skill-1 | S1.2 | prog, else attest | Copilot Studio capacity available |
+| `ESS-SOLN-001` | mint | skill-2 | S2.1 | prog | ESS base solution (`msdyn_copilotforemployeeselfservice*`) installed |
+| `WD-ENTRA-SCOPE-001` | mint | skill-3 | S3.2 | prog | `user_impersonation` exposed, `4e4707ca` pre-authorized, Graph perms granted |
+| `WD-ENTRA-CONSENT-001` | mint | skill-3 | S3.3 | prog → manual if blocked | Admin consent on the Graph delegated perms |
+| `WD-ASSIGN-001` | mint | skill-3 | S3.4 | prog | Enterprise-app user/group assignment (or confirmed not required) |
+| `WD-CONN-102` | reuse | skill-3, skill-4 | S3.1, S4.4 | manual/attest | SAML signing-certificate health / certificate parity (returns `MANUAL`) |
+| `WD-ENTRA-NAMEID-001` | mint | skill-3 | S3.5 | prog → manual if brittle | NameID claim mapping (`claimsMappingPolicy`) |
+| `WD-ENTRA-SIGNOPT-001` | mint | skill-3 | S3.6 | manual | "Sign SAML response and assertion" signing option (portal-only) |
+| `WD-CONN-010` | reuse | skill-3 | S3.7 | attest | Single-Entra-tenant federation alignment |
+| `WD-API-CLIENT-001` | mint | skill-4 | S4.1 | attest | Workday API client registered (functional areas + Workday-owned scope) |
+| `WD-TENANT-001` | mint | skill-4 | S4.2, S4.3 | attest | Connection fields captured; auth policies scoped to the OAuth client |
+| `WD-PKG-001` | reuse | skill-5 | S5.1 | manual | Extension-pack flavor = `simplified` (exact `ff0df` match) |
+| `WD-CONN-012` | reuse | skill-5 | S5.2 | prog | Workday connection ref (`ff0df`) bound, own account |
+| `WD-CONN-AUTH-001` | mint | skill-5 | S5.3 | attest | Connection auth type = Entra ID Integrated (echoes `MANUAL`; see §3d reconciliation) |
+| `DV-CONN-001` | mint | skill-5 | S5.4 | prog | Dataverse connection (`92b66`) bound — **non-`WD` family** |
+| `WD-REST-001` | mint | skill-5 | S5.5 | prog | REST base URL present and trimmed to `/api` |
+| `WD-FLOW-*` | reuse | skill-5 | S5.6 | prog | Cloud flows on (one row per discovered flow) |
+| `WD-REST-002` | mint | skill-5 | S5.7 | prog w/ rollback | User-context redirect pushed → REST resolves `/workers/me` |
+| `WD-NET-001` | mint | skill-5 | S5.8 | attest | Firewall allowlisting (REST + SOAP) — InfoSec attestation |
+| `TOPIC-TRIGGER-*` | mint | skill-6 | S6.1 | prog | New-topic trigger phrases + definition (one row per topic) |
+| `TOPIC-INTEGRATION-*` | mint | skill-6 | S6.2 | prog | New-topic integration wiring (one row per topic) |
+
+**Notes**
+
+- **`92b66` is the Dataverse connector, not a Workday ref.** The simplified
+  Workday family fingerprints a single `ff0df` connection ref; the `92b66` binding
+  is verified under the non-`WD` ID `DV-CONN-001`, never as a second `WD-CONN` ref.
+- **Legacy `WD-ENV-*` / `WD-WF-*` are not reused for simplified.** They test
+  ISU/RaaS artifacts that simplified setup removes (reusing them yields false
+  failures / N/A noise); the families are registered only so the registry resolves
+  them. The new simplified-only IDs above are used instead.
+- **Reuse before minting.** New IDs are minted only for outputs no existing
+  simplified-aware checkpoint covers.
+
