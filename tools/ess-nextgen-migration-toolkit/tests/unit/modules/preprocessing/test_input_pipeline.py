@@ -70,7 +70,7 @@ def test_gather_input_with_auth_step_populates_identity_and_bootstraps_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     logger = FakeLogger()
-    step = GatherInputWithAuthStep(logger)  # type: ignore[arg-type]
+    step = GatherInputWithAuthStep(logger, ("READONLY", "WRITEBACK"))  # type: ignore[arg-type]
     StubMsalTokenProvider.instances.clear()
     discovered_authority = "https://login.microsoftonline.com/tenant-123"
     monkeypatch.setattr(
@@ -88,9 +88,9 @@ def test_gather_input_with_auth_step_populates_identity_and_bootstraps_client(
 
     context = step.execute(MigrationContext())
 
-    assert context.tenant_id == "tenant-123"
-    assert context.user_id == "user-456"
-    assert context.user_email == "maker@contoso.com"
+    assert context.tid == "tenant-123"
+    assert context.oid == "user-456"
+    assert context.upn == "maker@contoso.com"
     assert context.environment_url == "https://fabrikam.crm.dynamics.com"
     assert context.dataverse_client is not None
     assert context.dataverse_client.environment_url == "https://fabrikam.crm.dynamics.com"
@@ -135,7 +135,7 @@ def test_gather_preferred_solution_step_stores_solution_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     logger = FakeLogger()
-    step = GatherPreferredSolutionStep(logger)  # type: ignore[arg-type]
+    step = GatherPreferredSolutionStep(logger, ("READONLY", "WRITEBACK"))  # type: ignore[arg-type]
     monkeypatch.setattr("builtins.input", lambda _: "ess_customizations")
 
     result = step.execute(MigrationContext())
@@ -147,7 +147,7 @@ def test_gather_preferred_solution_step_leaves_solution_empty_when_skipped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     logger = FakeLogger()
-    step = GatherPreferredSolutionStep(logger)  # type: ignore[arg-type]
+    step = GatherPreferredSolutionStep(logger, ("READONLY", "WRITEBACK"))  # type: ignore[arg-type]
     monkeypatch.setattr("builtins.input", lambda _: "   ")
 
     result = step.execute(MigrationContext())
@@ -159,7 +159,7 @@ def test_agent_selection_step_queries_agents_and_stores_selected_agent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     logger = FakeLogger()
-    step = AgentSelectionStep(logger)  # type: ignore[arg-type]
+    step = AgentSelectionStep(logger, ("READONLY", "WRITEBACK"))  # type: ignore[arg-type]
     fake_client = FakeDataverseClient(
         [
             {"name": "Zebra Agent", "botid": "bot-z", "statecode": 1},
@@ -179,7 +179,7 @@ def test_agent_selection_step_queries_agents_and_stores_selected_agent(
 
 
 def test_build_input_pipeline_wires_steps_in_order() -> None:
-    pipeline = build_input_pipeline(FakeLogger())  # type: ignore[arg-type]
+    pipeline = build_input_pipeline(FakeLogger(), ("READONLY", "WRITEBACK"))  # type: ignore[arg-type]
 
     assert [step.name() for step in pipeline.steps] == [
         "GatherInputWithAuthStep",

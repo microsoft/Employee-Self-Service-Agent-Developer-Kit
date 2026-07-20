@@ -32,7 +32,6 @@ dev = [
 # places top-level packages directly under src/. The build maps them explicitly.
 [tool.hatch.build.targets.wheel]
 packages = [
-    "src/constants",
     "src/core",
     "src/modules",
     "src/service",

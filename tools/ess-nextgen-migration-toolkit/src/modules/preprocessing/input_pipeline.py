@@ -12,12 +12,14 @@ from modules.preprocessing.steps import (
 )
 
 
-def build_input_pipeline(logger: Logger) -> Pipeline[MigrationContext, MigrationContext]:
+def build_input_pipeline(
+    logger: Logger, supported_modes: tuple[str, ...]
+) -> Pipeline[MigrationContext, MigrationContext]:
     """Build the input stage pipeline."""
     return (
         Pipeline.builder("Input Pipeline", input_type=MigrationContext)
-        .use(GatherInputWithAuthStep(logger))
-        .use(AgentSelectionStep(logger))
-        .use(GatherPreferredSolutionStep(logger))
+        .use(GatherInputWithAuthStep(logger, supported_modes))
+        .use(AgentSelectionStep(logger, supported_modes))
+        .use(GatherPreferredSolutionStep(logger, supported_modes))
         .build()
     )

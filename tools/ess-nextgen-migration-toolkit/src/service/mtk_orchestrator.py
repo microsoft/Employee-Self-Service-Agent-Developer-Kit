@@ -11,6 +11,7 @@ from modules.migration import MigrationContext
 from modules.migration.migration_pipeline import build_migration_pipeline
 from modules.postprocessing import build_output_pipeline
 from modules.preprocessing import build_input_pipeline
+from service.constants import SUPPORTED_MODES
 
 OUTPUT_ROOT = Path(__file__).resolve().parents[2] / "output"
 
@@ -22,9 +23,9 @@ def main() -> None:
     try:
         toolkit = (
             ChainedPipeline[MigrationContext]()
-            .add(build_input_pipeline(logger))
-            .add(build_migration_pipeline(logger))
-            .add(build_output_pipeline(logger))
+            .add(build_input_pipeline(logger, SUPPORTED_MODES))
+            .add(build_migration_pipeline(logger, SUPPORTED_MODES))
+            .add(build_output_pipeline(logger, SUPPORTED_MODES))
         )
         toolkit.run(context)
     finally:

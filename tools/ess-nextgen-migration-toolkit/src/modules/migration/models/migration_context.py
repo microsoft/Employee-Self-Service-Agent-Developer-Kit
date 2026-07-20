@@ -19,9 +19,9 @@ class MigrationContext(ExecutionContext):
     All ESS migration steps operate on this type via ``MigrationPipelineStep``.
     """
 
-    tenant_id: str | None = None
-    user_id: str | None = None
-    user_email: str | None = None
+    tid: str | None = None
+    oid: str | None = None
+    upn: str | None = None
     environment_url: str | None = None
     preferred_solution: str | None = None
     selected_agent_id: str | None = None
