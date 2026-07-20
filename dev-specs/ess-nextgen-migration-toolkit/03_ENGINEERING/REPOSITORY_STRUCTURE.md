@@ -59,7 +59,6 @@ tools/
     AGENTS.md
 
     src/
-        constants/
         core/
             auth/
                 token_provider.py
@@ -75,6 +74,7 @@ tools/
             utils/
         modules/
             preprocessing/
+                steps/
             migration/
                 migration_step.py
                 migration_pipeline.py
@@ -82,8 +82,10 @@ tools/
                     migration_context.py
                 steps/
             postprocessing/
+                steps/
         service/
             mtk_orchestrator.py
+            constants.py
             toolkit.py
 
     output/
@@ -164,16 +166,10 @@ Never contains:
 
 ---
 
-## constants/
+## service/constants.py
 
-Owns shared constants.
-
-Examples:
-
-* Execution Modes
-* Component Types
-* Solution Component Types
-* Configuration Keys
+Owns shared constants used across the pipeline (e.g. `SUPPORTED_MODES`).
+Imported by the orchestrator and passed to pipeline builders.
 
 Contains no executable logic.
 

@@ -52,13 +52,17 @@ def test_main_runs_stage_pipelines_and_writes_two_bundle_files(
 
     monkeypatch.setattr(mtk_orchestrator, "OUTPUT_ROOT", tmp_path)
     monkeypatch.setattr(mtk_orchestrator, "MigrationContext", build_context)
-    monkeypatch.setattr(mtk_orchestrator, "build_input_pipeline", lambda logger: _stage("input"))
+    monkeypatch.setattr(
+        mtk_orchestrator, "build_input_pipeline", lambda logger, modes: _stage("input")
+    )
     monkeypatch.setattr(
         mtk_orchestrator,
         "build_migration_pipeline",
-        lambda logger: _stage("migration"),
+        lambda logger, modes: _stage("migration"),
     )
-    monkeypatch.setattr(mtk_orchestrator, "build_output_pipeline", lambda logger: _stage("output"))
+    monkeypatch.setattr(
+        mtk_orchestrator, "build_output_pipeline", lambda logger, modes: _stage("output")
+    )
 
     mtk_orchestrator.main()
 
@@ -90,7 +94,9 @@ def test_main_closes_logger_when_pipeline_execution_fails(
             nonlocal closed
             closed = True
 
-    def fail_stage(logger: object) -> Pipeline[MigrationContext, MigrationContext]:
+    def fail_stage(
+        logger: object, modes: object = None
+    ) -> Pipeline[MigrationContext, MigrationContext]:
         del logger
 
         class FailingStep(PipelineStep[MigrationContext, MigrationContext]):
@@ -113,8 +119,12 @@ def test_main_closes_logger_when_pipeline_execution_fails(
     )
     monkeypatch.setattr(mtk_orchestrator.Reporter, "render", lambda self, context: None)
     monkeypatch.setattr(mtk_orchestrator, "build_input_pipeline", fail_stage)
-    monkeypatch.setattr(mtk_orchestrator, "build_migration_pipeline", lambda logger: _stage("m"))
-    monkeypatch.setattr(mtk_orchestrator, "build_output_pipeline", lambda logger: _stage("o"))
+    monkeypatch.setattr(
+        mtk_orchestrator, "build_migration_pipeline", lambda logger, modes: _stage("m")
+    )
+    monkeypatch.setattr(
+        mtk_orchestrator, "build_output_pipeline", lambda logger, modes: _stage("o")
+    )
 
     with pytest.raises(RuntimeError, match="boom"):
         mtk_orchestrator.main()

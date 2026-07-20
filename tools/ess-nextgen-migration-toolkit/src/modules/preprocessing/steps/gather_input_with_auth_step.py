@@ -11,12 +11,15 @@ from urllib.parse import urlparse
 
 import httpx
 
-from constants import DATAVERSE_CLIENT_ID, SUPPORTED_MODES
 from core.auth import AuthenticationException, MsalTokenProvider, MsalTokenProviderConfig
 from core.logging import Logger
 from core.outbound import DataverseClient
 from modules.migration.migration_step import MigrationPipelineStep
 from modules.migration.models import MigrationContext
+
+# Microsoft public client ID for Power Platform CLI / Dataverse delegated access.
+# Source: https://learn.microsoft.com/power-platform/admin/programmability-authentication-v2
+DATAVERSE_CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d"
 
 _DEFAULT_TENANT = "organizations"
 _DEFAULT_SCOPE_SUFFIX = "/user_impersonation"
@@ -26,12 +29,12 @@ _TENANT_PATTERN = re.compile(r"login\.microsoftonline\.com/([^/]+)")
 class GatherInputWithAuthStep(MigrationPipelineStep):
     """Prompt for the Dataverse URL, authenticate, and initialize context access."""
 
-    def __init__(self, logger: Logger) -> None:
+    def __init__(self, logger: Logger, supported_modes: tuple[str, ...]) -> None:
         super().__init__(
             description=(
                 "Gather the target Dataverse environment and authenticate the current user."
             ),
-            supported_modes=SUPPORTED_MODES,
+            supported_modes=supported_modes,
         )
         self._logger = logger
 
@@ -54,9 +57,9 @@ class GatherInputWithAuthStep(MigrationPipelineStep):
         token = token_provider.get_token()
         claims = _decode_claims(token)
 
-        context.tenant_id = _as_string(claims.get("tid"))
-        context.user_id = _as_string(claims.get("oid"))
-        context.user_email = _as_string(claims.get("upn")) or _as_string(
+        context.tid = _as_string(claims.get("tid"))
+        context.oid = _as_string(claims.get("oid"))
+        context.upn = _as_string(claims.get("upn")) or _as_string(
             claims.get("preferred_username"),
         )
         context.dataverse_client = DataverseClient(environment_url, token_provider)
