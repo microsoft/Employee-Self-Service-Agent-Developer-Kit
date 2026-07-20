@@ -12,7 +12,7 @@
 Implement the **Input Pipeline** (`src/modules/preprocessing/`) — the stage
 pipeline that discovers customer-owned artifacts and prepares the canonical
 `MigrationContext` consumed by the migration engine. It is built fluently over
-the shared `MigrationContext` and composed into the super-pipeline by the
+the shared `MigrationContext` and composed into the chained pipeline by the
 orchestrator. No migration transformations occur here.
 
 ## Acceptance Criteria

@@ -70,13 +70,13 @@ the PIPE-008/009 open/closed guarantee at the composition level).
 
 Framework surface actually available (do not re-derive):
 
-- `from core.models import MigrationContext` — `@dataclass` with
-  `ExecutionMode: str = "DISCOVER"` and mutable collectors `Logs`, `Warnings`,
+- `from modules.migration.models import MigrationContext` — `@dataclass` with
+  `ExecutionMode: ExecutionMode = ExecutionMode.READONLY` and mutable collectors `Logs`, `Warnings`,
   `Errors` (`list[DiagnosticEntry]`), `Changes` (`list[ChangeEntry]`). This IS
   the shared context threaded as `Pipeline[MigrationContext, MigrationContext]`.
 - `from service import EssMigrationToolkit` (the ESS product super-pipeline,
-  inheriting the generic `StagedPipeline[TContext]` from `core.pipeline`) and
-  `from core.pipeline import Pipeline, PipelineStep` —
+  inheriting the generic `ChainedPipeline[TContext]` from `core.pipelines`) and
+  `from core.pipelines import Pipeline, PipelineStep` —
   `EssMigrationToolkit` is **immutable/fluent**: `.input(p)`, `.migrate(p)`,
   `.output(p)` each return a NEW toolkit; `.run(ctx)` executes Input → Migration
   → Output threading the SAME context and raises `PipelineConfigurationError`
@@ -93,14 +93,14 @@ Reference composition-root shape (skeleton — not the final code):
 
 ```python
 from pathlib import Path
-from core.models import MigrationContext
+from modules.migration.models import MigrationContext
 from service import EssMigrationToolkit
 from core.logging import Logger
 
 _OUTPUT_ROOT = Path(__file__).resolve().parents[2] / "output"  # <toolkit>/output
 
 def main() -> None:
-    mode = _select_mode()                       # default "DISCOVER" for now
+    mode = _select_mode()                       # default READONLY for now
     context = MigrationContext(ExecutionMode=mode)
     logger = Logger.start_session(_OUTPUT_ROOT, context)
     try:
@@ -122,17 +122,17 @@ if __name__ == "__main__":
 Verified in the spike: stages execute in order over one shared context;
 `session.log` captures the full CLI transcript (engineer channel); the customer
 channel (`LogChange`/`LogAdvisory`) lands only in `migration_report.md`; and the
-report title is mode-aware ("Migration Readiness Report" for DISCOVER).
+report title is mode-aware ("Migration Readiness Report" for READONLY).
 
 ## Execution-mode selection
 
-- `ExecutionMode` is currently a plain `str` on `MigrationContext` with values
-  `DISCOVER` / `PREVIEW` / `MIGRATE`; there is no enum yet. Introducing a small
-  mode constant/enum (e.g. in `src/constants/`) is permitted and encouraged, but
-  keep the on-context value a `str` so the Reporter's mode check keeps working.
+- `ExecutionMode` is a `StrEnum` on `ExecutionContext` (base class of `MigrationContext`) with values
+  `READONLY` / `WRITEBACK`. The enum lives in `core.models.execution_context`. No
+  additional enum or constant module is needed —
+  the `StrEnum` compares equal to plain strings (`ExecutionMode.READONLY == "READONLY"`).
 - `scripts/mtk.sh` presently forwards **no arguments** to the orchestrator
   (`exec uv run python src/service/mtk_orchestrator.py`). For this task, default
-  the mode to `DISCOVER`. Wiring a real CLI surface (e.g. `--mode`, and updating
+  the mode to `READONLY`. Wiring a real CLI surface (e.g. `--mode`, and updating
   `mtk.sh` to forward `"$@"`) is an allowed minimal extension **only if** it does
   not add migration logic; otherwise leave it to a follow-up and keep the default.
 
@@ -140,7 +140,7 @@ report title is mode-aware ("Migration Readiness Report" for DISCOVER).
 
 - [ ] `main()` in `src/service/mtk_orchestrator.py` is the composition root and
   the module runs via `scripts/mtk.sh start` (both `--dev` and default paths).
-- [ ] The orchestrator selects the execution mode (default `DISCOVER`) and
+- [ ] The orchestrator selects the execution mode (default `READONLY`) and
   constructs a single shared `MigrationContext(ExecutionMode=...)`.
 - [ ] The orchestrator opens the diagnostics session with
   `Logger.start_session(output_root, context)` where `output_root` resolves to
@@ -177,7 +177,6 @@ report title is mode-aware ("Migration Readiness Report" for DISCOVER).
 - The stage-builder seam consumed from the modules packages (with minimal
   pass-through stage pipelines if TASK-006/007 have not yet landed, so the entry
   point runs end-to-end).
-- Optional: a small `ExecutionMode` constant/enum in `src/constants/`.
 - Optional-minimal: `mtk.sh` argument forwarding + `--mode` parsing (only if it
   introduces no business logic).
 - Unit tests under `tests/unit/service/` covering the criteria above.

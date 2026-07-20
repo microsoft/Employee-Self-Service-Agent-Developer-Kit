@@ -6,7 +6,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from typing import Generic, TypeVar
 
-from core.pipeline.typing import PipelineTypeSpec, normalize_type_spec
+from core.pipelines.typing import PipelineTypeSpec, normalize_type_spec
 
 TInput = TypeVar("TInput")
 TOutput = TypeVar("TOutput")

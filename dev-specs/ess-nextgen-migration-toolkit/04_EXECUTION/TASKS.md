@@ -132,6 +132,7 @@ Instead, it establishes the complete framework, wiring, and developer experience
 | [TASK-007](tasks/TASK-007-postprocessing-pipeline.md)    | Postprocessing Pipeline        | TODO   | —        |
 | [TASK-008](tasks/TASK-008-authentication-token-provider.md) | Authentication Token Provider | ACTIVE | —   |
 | [TASK-009](tasks/TASK-009-end-to-end-framework-validation.md) | End-to-End Framework Validation | TODO | —      |
+| [TASK-014](tasks/TASK-014-stage-pipeline-definitions.md) | ESS Product Pipeline (EssMigrationToolkit) | ACTIVE | TASK-002 |
 
 ---
 

@@ -12,7 +12,7 @@
 Implement the **Output Pipeline** (`src/modules/postprocessing/`) — the stage
 pipeline that runs after migration transformations to validate, persist, and
 render the session bundle. It is built fluently over the shared
-`MigrationContext` and composed into the super-pipeline by the orchestrator.
+`MigrationContext` and composed into the chained pipeline by the orchestrator.
 Migration logic is out of scope.
 
 ## Acceptance Criteria
