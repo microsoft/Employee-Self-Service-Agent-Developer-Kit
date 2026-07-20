@@ -495,7 +495,7 @@ class TestPublishBot:
     ) -> None:
         import auth
 
-        bot_id = "2d0b4b72-a2b4-42fc-8163-ec9a1890c8ae"
+        bot_id = "00000000-0000-0000-0000-0000000b0771"
         responses.add(**dv.pva_publish_response(
             base_url=dataverse_url, bot_id=bot_id))
 
@@ -548,7 +548,7 @@ class TestRecordExists:
     ) -> None:
         import auth
 
-        wf_id = "7536348b-3981-f111-a35c-000d3a3558a6"
+        wf_id = "11111111-2222-3333-4444-555566667777"
         responses.add(**dv.record_get(
             base_url=dataverse_url, entity_set="workflows",
             record_id=wf_id, id_key="workflowid", exists=True))

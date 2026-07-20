@@ -397,7 +397,7 @@ class TestPlanFlowConnrefs:
                         "api": {"name": "shared_service-now"},
                         "connection": {
                             "connectionReferenceLogicalName":
-                                "msdyn_copilotforemployeeselfserviceit.cr.w2LCWZTZ"
+                                "msdyn_copilotforemployeeselfserviceit.cr.EXAMPLE1"
                         },
                         "runtimeSource": "invoker",
                     }
@@ -408,7 +408,7 @@ class TestPlanFlowConnrefs:
         assert plan == [{
             "connector_api_name": "shared_service-now",
             "design_logical_name":
-                "msdyn_copilotforemployeeselfserviceit.cr.w2LCWZTZ",
+                "msdyn_copilotforemployeeselfserviceit.cr.EXAMPLE1",
             "new_logical_name":
                 f"{self.AGENT}.{self.WF}.shared_service-now",
         }]
@@ -440,7 +440,7 @@ class TestFlowConnrefPayload:
 
     def test_mirrors_connection_fields(self):
         mirror = {
-            "connectionid": "8be14999439f456898fb440f50628f52",
+            "connectionid": "00000000000000000000000000000001",
             "connectorid": "/providers/Microsoft.PowerApps/apis/shared_service-now",
             "connectionparametersetconfig":
                 '{"name":"entraIDUserLogin","values":{}}',
@@ -451,7 +451,7 @@ class TestFlowConnrefPayload:
             "connectionreferencedisplayname": "agent.wf.shared_service-now",
             "connectorid":
                 "/providers/Microsoft.PowerApps/apis/shared_service-now",
-            "connectionid": "8be14999439f456898fb440f50628f52",
+            "connectionid": "00000000000000000000000000000001",
             "connectionparametersetconfig":
                 '{"name":"entraIDUserLogin","values":{}}',
         }
@@ -539,7 +539,7 @@ class TestBotcomponentRecreatePayload:
     self-heal recreate fallback.
     """
 
-    BOT = "2d0b4b72-a2b4-42fc-8163-ec9a1890c8ae"
+    BOT = "00000000-0000-0000-0000-0000000b0771"
 
     def test_rebuilds_from_entry_and_content(self):
         entry = {
