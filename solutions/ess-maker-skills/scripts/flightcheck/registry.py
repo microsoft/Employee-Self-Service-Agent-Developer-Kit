@@ -79,6 +79,7 @@ CATEGORY_ORDER = [
     "Prerequisites",
     "Infrastructure",
     "Environment",
+    "Solution",
     "Authentication",
     "Entra App",
     "Workday Tenant",

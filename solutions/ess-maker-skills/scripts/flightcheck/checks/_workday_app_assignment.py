@@ -462,7 +462,7 @@ def build_assignment_results(
     #     by indexing by checkpoint_id.
     #   * ``cli.py`` prints summaries by iteration.
     # The regression guard for the renderer side lives in
-    # ``tests/flightcheck/test_runner.py`` —
+    # ``tests/flightcheck/test_runner_manual_status.py`` —
     # ``test_html_report_preserves_multiple_results_with_same_checkpoint_id``.
     # If you change either the renderer keying or the buckets here,
     # update both ends together.
