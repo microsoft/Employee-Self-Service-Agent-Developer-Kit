@@ -51,7 +51,7 @@ already clear. Common modifications:
 Show the user the relevant section of the current topic and propose the
 specific edit. Explain what will change and why.
 
-**ServiceNow ITSM runtime dependent dropdowns.** If the change adds or modifies live, dependent option lists on a ServiceNow ITSM topic — e.g. a Create Ticket topic with Category → Subcategory (filtered) and a Configuration Item picker sourced from ServiceNow — read `src/reference/ess-docs/integrations/servicenow-itsm-create-ticket-dependent-dropdowns.md` first. It defines the non-negotiable architecture (options flow → system-style topic → typed `ParseValue`, `number` not `integer` status codes, template-config field mapping, PascalCase system-topic schemaname) and the deploy/verify steps. Skipping these causes silently dropped fields or non-functional dropdowns.
+**Power Fx + Power Automate (flow-backed data).** If the change makes a topic **consume a custom Power Automate flow's output in Power Fx** — typed tables, dynamic/dependent option lists, or status/success handling — read `src/reference/ess-docs/customization/powerfx-and-power-automate-authoring.md` first. It defines the type-safety constraints (untyped flow output → stringify → `ParseValue` into a typed table, `number` not `integer` status codes, `kind:Skills` flow Response, PascalCase system-topic schemaname) and the deploy/verify loop (`push` registration, `publish`, `validate`, `--repair`). Skipping these causes silently dropped fields or a non-functional topic.
 
 **Acting on a `/review` finding.** If the change comes from a `/review` finding, prefer the structured
 findings catalog `/review` writes at `.local/review-findings/{topic-stem}-catalog.json` — it survives
