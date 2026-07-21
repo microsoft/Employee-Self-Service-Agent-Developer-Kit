@@ -4,7 +4,7 @@
 | ---------- | ------------------------- |
 | ID         | TASK-002                  |
 | Workstream | 0 — Repository Foundation |
-| Status     | ACTIVE                      |
+| Status     | DONE                      |
 | Consumes   | —                         |
 
 ## Description
@@ -29,8 +29,9 @@ registered Pipeline Steps may initially be no-op implementations.
   type).
 - [ ] A stage pipeline runs end-to-end with no-op steps and is deterministic
   (identical inputs produce identical ordering and output).
-- [ ] The framework supports composing stage pipelines into the super-pipeline
-  (`EssMigrationToolkit().input(...).migrate(...).output(...)`).
+- [ ] The framework supports composing stage pipelines into a generic
+  chained pipeline (`ChainedPipeline[TContext]` in `core/pipelines/`). The
+  orchestrator composes it directly with `.add()` — no subclass needed.
 
 ## Deliverables
 
@@ -38,7 +39,8 @@ registered Pipeline Steps may initially be no-op implementations.
 - Fluent, type-threading Pipeline Builder
 - Pipeline Registry
 - Pipeline Context contract
-- Super-pipeline composition (`EssMigrationToolkit`)
+- Generic chained pipeline composition (`ChainedPipeline[TContext]`, `core/pipelines/`)
+  — the reusable, product-agnostic base composed directly by the orchestrator
 
 ## References
 

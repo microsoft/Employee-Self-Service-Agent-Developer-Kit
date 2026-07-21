@@ -18,8 +18,10 @@ import json
 import os
 from typing import Optional
 
-# Use defusedxml for parsing untrusted XML coming back from Workday tools.
-from defusedxml import ElementTree as ET
+# Use the stdlib ElementTree only for the Element type hint below. Parsing of
+# untrusted XML from Workday happens in client.py via defusedxml; this module
+# never parses, so importing the stdlib here is safe.
+from xml.etree import ElementTree as ET
 
 from mcp.server.fastmcp import FastMCP
 

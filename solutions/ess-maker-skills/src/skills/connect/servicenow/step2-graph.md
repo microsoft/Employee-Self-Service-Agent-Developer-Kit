@@ -37,7 +37,7 @@ object ID in the user's tenant.
 Run in the terminal:
 
 ```
-az rest --method GET --url "https://graph.microsoft.com/v1.0/servicePrincipals?$filter=appId eq '933838e2-bec1-440f-a634-9363c82e5b6d'" --query "value[0].id" -o tsv
+az rest --method GET --url "https://graph.microsoft.com/v1.0/servicePrincipals?%24filter=appId eq '933838e2-bec1-440f-a634-9363c82e5b6d'" --query "value[0].id" -o tsv
 ```
 
 Save the output as SP_OBJECT_ID.

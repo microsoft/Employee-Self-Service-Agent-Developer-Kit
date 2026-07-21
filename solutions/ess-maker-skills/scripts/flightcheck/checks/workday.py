@@ -146,13 +146,14 @@ _REF_SUFFIX_ROLES = {
 #     }
 #
 #   The ``ff0df`` connection is configured with Power Platform's
-#   "Microsoft Entra ID Integrated" authentication type (per
-#   src/skills/connect/workday/step3.md lines 155-166), not Basic
-#   auth. That auth type authenticates the signed-in employee against
-#   a federated Workday enterprise app in Entra (Application ID URI
-#   ``http://www.workday.com/{WD_TENANT}``), which is the same
-#   enterprise app the connect skill provisions in step2.md lines
-#   191-264. The X.509 signing certificate WD-CONN-102 inspects lives
+#   "Microsoft Entra ID Integrated" authentication type (per skill-5,
+#   src/skills/setup/workday/install-workday-extension-pack.md S5.3), not
+#   Basic auth. That auth type authenticates the signed-in employee
+#   against a federated Workday enterprise app in Entra (Application ID
+#   URI ``http://www.workday.com/{WD_TENANT}``), which is the same
+#   enterprise app the setup flow provisions in skill-3,
+#   src/skills/setup/workday/provision-workday-entra-app.md. The X.509
+#   signing certificate WD-CONN-102 inspects lives
 #   on that enterprise app as a keyCredential. It is the most visible
 #   expiry-driven health signal on the federation app that the
 #   user-context SOAP/REST runtime path depends on.
@@ -192,7 +193,7 @@ _REF_SUFFIX_ROLES = {
 #     SAML Identity Providers". This is NOT reachable via any public
 #     Workday API the kit talks to (the SOAP RaaS / Worker services
 #     don't expose tenant security configuration). Comparison of the
-#     two thumbprints is therefore an operator step.
+#     two certificates is therefore an operator step.
 #
 # WD-CONN-102 reads the Entra side automatically, surfaces the
 # current active-cert thumbprint and NotAfter date, and emits a
@@ -637,7 +638,19 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # present, this tenant has no Workday integration. Skip the
     # downstream Workday-specific checks (preserves the pre-existing
     # behavior of returning early when there's no Workday signal).
-    if not wd_flows and flavor in (None, "none"):
+    #
+    # `"skipped"` is folded in alongside `None`/`"none"` because it means
+    # WD-PKG-001 had no Dataverse token to detect the install flavor — the
+    # case for a Graph-only single-checkpoint run (e.g.
+    # `--checkpoint WD-CONN-102` / `WD-CONN-010`, both of which run above
+    # this guard). Without Dataverse the deep block below can only SKIP, but
+    # `_check_workflows` / `_check_personal_data_write_permission` would first
+    # prompt interactively for a Test Employee ID and ISU username/password
+    # (`input()` / `getpass`) — raw stdin prompts that hang a headless,
+    # skill-launched run forever. Returning here keeps those Graph-only
+    # invocations non-interactive. Full-scope runs authenticate Dataverse, so
+    # `flavor` is never `"skipped"` there and this branch is a no-op for them.
+    if not wd_flows and flavor in (None, "none", "skipped"):
         return results
 
     print("\n  Running Workday deep validation...")
@@ -2710,7 +2723,8 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
         ``CERT_EXPIRY_WARN_DAYS`` days, OR its NotBefore is in the
         future (not yet valid).
       * MANUAL — active cert is healthy. The operator must compare
-        its thumbprint against the row in Workday's "Edit Tenant
+        its certificate (validity dates, or an externally-computed
+        SHA-1 thumbprint) against the row in Workday's "Edit Tenant
         Setup - Security -> SAML Identity Providers" because that
         is not reachable from any Workday API the kit talks to.
       * NOT_CONFIGURED — no federated Workday SAML enterprise app
@@ -3060,7 +3074,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.MANUAL.value,
             description=description,
             result=(
-                f"{intro}. Manual thumbprint comparison required "
+                f"{intro}. Manual certificate comparison required "
                 "against Workday — the Workday 'X509 Certificate' "
                 "field is not exposed via any Workday API the kit "
                 "talks to (the SOAP RaaS / Worker services don't "
@@ -3073,7 +3087,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
                 "Workday has on file for the same Service Provider ID. "
                 "ESS uses exactly one of the federated apps listed "
                 "above; identify it via Workday first, then verify "
-                "only that app's thumbprint.\n"
+                "only that app's certificate.\n"
                 "\n"
                 "Step 1 — Identify the active Entra app from inside "
                 "Workday:\n"
@@ -3091,15 +3105,28 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
                 "listed above — the matching row is the active "
                 "Entra app.\n"
                 "\n"
-                "Step 2 — Compare the thumbprints:\n"
-                "  a. In Workday, in that same row, open the 'X509 "
-                "Certificate' value and view its details — Workday "
-                "displays the SHA-1 thumbprint in colon-separated "
-                "uppercase hex (matches the format shown above).\n"
-                "  b. Compare it byte-for-byte against the active "
-                "thumbprint listed for that app above. They MUST "
-                "match exactly.\n"
-                "  c. If they differ, end-user browser-based SAML "
+                "Step 2 — Compare the certificate. Workday does NOT "
+                "display a thumbprint anywhere; its 'X509 Certificate' "
+                "object shows only Name, Valid From, Valid To, and the "
+                "Base64 certificate body. Verify parity one of two "
+                "ways:\n"
+                "  a. Quick check (no tooling) — open the 'X509 "
+                "Certificate' value on that row and confirm its "
+                "'Valid From' / 'Valid To' match the Entra cert's "
+                "NotBefore / NotAfter shown above.\n"
+                "  b. Definitive check — copy the Base64 certificate "
+                "body from Workday, wrap it between "
+                "'-----BEGIN CERTIFICATE-----' and "
+                "'-----END CERTIFICATE-----' markers, save it as a "
+                "PEM file (e.g. workday.cer), then compute its SHA-1 "
+                "thumbprint and confirm it equals the active Entra "
+                "thumbprint above (ignore ':' separators and case):\n"
+                "       PowerShell: [System.Security.Cryptography."
+                "X509Certificates.X509Certificate2]::"
+                "new(\"$PWD\\workday.cer\").Thumbprint\n"
+                "       openssl:    openssl x509 -in workday.cer "
+                "-noout -fingerprint -sha1\n"
+                "  If they differ, end-user browser-based SAML "
                 "SSO into Workday is broken. The OAuth-routed "
                 "``new_sharedworkdaysoap_ff0df`` connection used by "
                 "the ``ESS HR Workday`` and ``WorkdayRESTExecution`` "
