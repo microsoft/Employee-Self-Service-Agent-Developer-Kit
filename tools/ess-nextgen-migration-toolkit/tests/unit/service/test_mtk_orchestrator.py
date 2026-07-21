@@ -53,15 +53,15 @@ def test_main_runs_stage_pipelines_and_writes_two_bundle_files(
     monkeypatch.setattr(mtk_orchestrator, "OUTPUT_ROOT", tmp_path)
     monkeypatch.setattr(mtk_orchestrator, "MigrationContext", build_context)
     monkeypatch.setattr(
-        mtk_orchestrator, "build_input_pipeline", lambda logger, modes: _stage("input")
+        mtk_orchestrator, "build_input_pipeline", lambda logger, modes, **kw: _stage("input")
     )
     monkeypatch.setattr(
         mtk_orchestrator,
         "build_migration_pipeline",
-        lambda logger, modes: _stage("migration"),
+        lambda logger, modes, **kw: _stage("migration"),
     )
     monkeypatch.setattr(
-        mtk_orchestrator, "build_output_pipeline", lambda logger, modes: _stage("output")
+        mtk_orchestrator, "build_output_pipeline", lambda logger, modes, **kw: _stage("output")
     )
 
     mtk_orchestrator.main()
@@ -95,7 +95,7 @@ def test_main_closes_logger_when_pipeline_execution_fails(
             closed = True
 
     def fail_stage(
-        logger: object, modes: object = None
+        logger: object, modes: object = None, **kw: object
     ) -> Pipeline[MigrationContext, MigrationContext]:
         del logger
 
@@ -120,10 +120,10 @@ def test_main_closes_logger_when_pipeline_execution_fails(
     monkeypatch.setattr(mtk_orchestrator.Reporter, "render", lambda self, context: None)
     monkeypatch.setattr(mtk_orchestrator, "build_input_pipeline", fail_stage)
     monkeypatch.setattr(
-        mtk_orchestrator, "build_migration_pipeline", lambda logger, modes: _stage("m")
+        mtk_orchestrator, "build_migration_pipeline", lambda logger, modes, **kw: _stage("m")
     )
     monkeypatch.setattr(
-        mtk_orchestrator, "build_output_pipeline", lambda logger, modes: _stage("o")
+        mtk_orchestrator, "build_output_pipeline", lambda logger, modes, **kw: _stage("o")
     )
 
     with pytest.raises(RuntimeError, match="boom"):

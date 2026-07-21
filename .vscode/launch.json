@@ -6,6 +6,7 @@
       "type": "debugpy",
       "request": "launch",
       "module": "service.mtk_orchestrator",
+      "args": ["--dev"],
       "cwd": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit",
       "env": {
         "PYTHONPATH": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit/src"
