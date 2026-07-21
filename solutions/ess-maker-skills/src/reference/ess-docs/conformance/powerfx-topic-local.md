@@ -82,7 +82,9 @@ source, so classify the value **before** applying any string heuristic below:
   informational; optionally gate the parse on `isSuccess = true` for clarity, but do **not** add a local error
   handler (that duplicates the shared path — see `../customization/authoring-invariants.md`). For the
   **direct**-call case, move the parse inside an `isSuccess = true` branch or add an `isSuccess = false`
-  ConditionGroup before it.
+  ConditionGroup before it. For the authoring-side type-safety rules behind a correct parse (untyped flow
+  output → stringify → `ParseValue` into a typed table, and `number` not `integer` for the status code), see
+  `../customization/powerfx-and-power-automate-authoring.md`.
 - **Flow failure-branch gaps (structural half).** A `BeginDialog`/`InvokeFlowAction` call site whose
   result path has **no `isSuccess = false` (or equivalent failure) branch** — the topic continues with
   empty data on failure. Flag the missing failure branch, but **score on structure**: if the call is a

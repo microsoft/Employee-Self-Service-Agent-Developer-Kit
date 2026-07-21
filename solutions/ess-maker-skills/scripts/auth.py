@@ -407,8 +407,48 @@ def update_record(env_url, token, entity_set, record_id, data):
     return True
 
 
+_ENTITY_ID_RE = re.compile(r"\(([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+                           r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12})\)\s*$")
+
+
+def _entity_id_from_header(entity_id_header):
+    """Parse the record GUID from a Dataverse ``OData-EntityId`` header.
+
+    The header is the created record's canonical URL, e.g.
+    ``https://org.crm.dynamics.com/api/data/v9.2/workflows(<guid>)``. Returns
+    the GUID string, or ``None`` if the header is missing/unparseable.
+    """
+    if not entity_id_header:
+        return None
+    match = _ENTITY_ID_RE.search(entity_id_header)
+    return match.group(1) if match else None
+
+
+def _primary_id_key(entity_set):
+    """Derive a Dataverse primary-key column name from an entity-set name.
+
+    Dataverse entity sets are the plural logical name and the primary key is
+    ``{logicalname}id`` (``workflows`` → ``workflowid``, ``botcomponents`` →
+    ``botcomponentid``, ``connectionreferences`` → ``connectionreferenceid``).
+    """
+    singular = entity_set[:-1] if entity_set.endswith("s") else entity_set
+    return f"{singular}id"
+
+
 def create_record(env_url, token, entity_set, data):
-    """Create a new Dataverse record via POST. Returns the new record ID."""
+    """Create a new Dataverse record via POST. Returns the new record ID.
+
+    The new record's GUID is read from the ``OData-EntityId`` response header
+    (``{env}/api/data/v9.2/{entity_set}({guid})``), which Dataverse returns on
+    every create regardless of entity set or ``Prefer`` header. This is the
+    entity-agnostic source: a ``workflows`` create has primary key
+    ``workflowid``, ``botcomponents`` has ``botcomponentid``,
+    ``connectionreferences`` has ``connectionreferenceid`` — reading a single
+    hard-coded body column silently returned ``None`` for every entity set
+    except botcomponents. If the header is absent, fall back to the
+    representation body, trying the entity-specific primary-key column (derived
+    from ``entity_set``) and then the generic ``id``.
+    """
     _validate_https_url(env_url)
     headers = {
         **HEADERS_BASE,
@@ -423,8 +463,109 @@ def create_record(env_url, token, entity_set, data):
     if resp.status_code == 401:
         raise AuthExpiredError(response=resp)
     raise_api_error(resp, resource_name=entity_set, operation="create")
-    result = resp.json()
-    return result.get("botcomponentid", result.get("id"))
+
+    header_id = _entity_id_from_header(resp.headers.get("OData-EntityId"))
+    if header_id:
+        return header_id
+
+    try:
+        result = resp.json()
+    except ValueError:
+        return None
+    return result.get(
+        _primary_id_key(entity_set),
+        result.get("botcomponentid", result.get("id")),
+    )
+
+
+def associate_ref(env_url, token, entity_set, record_id, nav_property,
+                  target_entity_set, target_id):
+    """Create a Dataverse N:N association via a ``/$ref`` POST.
+
+    Links ``{entity_set}({record_id})`` to ``{target_entity_set}({target_id})``
+    through the collection-valued navigation property ``nav_property`` by
+    POSTing an ``@odata.id`` pointer. Dataverse returns ``204 No Content`` on
+    success. The ADK use is ``botcomponent_workflow`` — associating a
+    system-topic botcomponent with the workflow it invokes so Copilot Studio's
+    publish validator can resolve the flow reference. Returns ``True``.
+
+    A raw create against the intersect entity set fails; the association must
+    go through ``/$ref``.
+    """
+    _validate_https_url(env_url)
+    headers = {
+        **HEADERS_BASE,
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    url = f"{env_url}/api/data/v9.2/{entity_set}({record_id})/{nav_property}/$ref"
+    body = {
+        "@odata.id": f"{env_url}/api/data/v9.2/{target_entity_set}({target_id})",
+    }
+    _start = time.perf_counter()
+    resp = _SESSION.post(url, headers=headers, json=body, timeout=60, verify=True)
+    _emit_api_call(f"{entity_set}/{nav_property}", "associate", _start,
+                   status=resp.status_code)
+    if resp.status_code == 401:
+        raise AuthExpiredError(response=resp)
+    raise_api_error(resp, resource_name=f"{entity_set}/{nav_property}",
+                    operation="associate")
+    return True
+
+
+def publish_bot(env_url, token, bot_id):
+    """Publish a Copilot Studio bot via the ``PvaPublish`` bound action.
+
+    Pushed botcomponent (topic) changes only go live in the test pane and
+    runtime after the bot is published — Dataverse writes alone don't take
+    effect. (Flow ``clientdata`` edits are live immediately and don't need
+    this.) ``PvaPublish`` is bound to the ``bot`` entity, so the bot is
+    addressed via the URL binding rather than a body parameter. Returns
+    ``True``.
+    """
+    _validate_https_url(env_url)
+    headers = {
+        **HEADERS_BASE,
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    url = (
+        f"{env_url}/api/data/v9.2/bots({bot_id})"
+        "/Microsoft.Dynamics.CRM.PvaPublish"
+    )
+    _start = time.perf_counter()
+    resp = _SESSION.post(url, headers=headers, json={}, timeout=300, verify=True)
+    _emit_api_call("PvaPublish", "publish", _start, status=resp.status_code)
+    if resp.status_code == 401:
+        raise AuthExpiredError(response=resp)
+    raise_api_error(resp, resource_name="bot", operation="publish")
+    return True
+
+
+def record_exists(env_url, token, entity_set, record_id, id_key):
+    """Return whether a Dataverse record exists, via a lightweight GET.
+
+    A GET on a missing record returns a clean ``404`` (``0x80040217`` "Entity …
+    Does Not Exist"), so existence can be probed unambiguously — unlike a PATCH
+    against a missing id, which returns an opaque ``400``. Used to detect a
+    stale component-map id before attempting an update. Any non-404 error
+    (other than ``401`` → :class:`AuthExpiredError`) propagates.
+    """
+    _validate_https_url(env_url)
+    headers = {
+        **HEADERS_BASE,
+        "Authorization": f"Bearer {token}",
+    }
+    url = f"{env_url}/api/data/v9.2/{entity_set}({record_id})?$select={id_key}"
+    _start = time.perf_counter()
+    resp = _SESSION.get(url, headers=headers, timeout=60, verify=True)
+    _emit_api_call(entity_set, "exists", _start, status=resp.status_code)
+    if resp.status_code == 404:
+        return False
+    if resp.status_code == 401:
+        raise AuthExpiredError(response=resp)
+    raise_api_error(resp, resource_name=entity_set, operation="read")
+    return True
 
 
 def delete_record(env_url, token, entity_set, record_id):

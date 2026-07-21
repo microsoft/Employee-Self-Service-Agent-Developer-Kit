@@ -51,6 +51,8 @@ already clear. Common modifications:
 Show the user the relevant section of the current topic and propose the
 specific edit. Explain what will change and why.
 
+**Power Fx + Power Automate (flow-backed data).** If the change makes a topic **consume a custom Power Automate flow's output in Power Fx** — typed tables, dynamic/dependent option lists, or status/success handling — read `src/reference/ess-docs/customization/powerfx-and-power-automate-authoring.md` first. It defines the type-safety constraints (untyped flow output → stringify → `ParseValue` into a typed table, `number` not `integer` status codes, `kind:Skills` flow Response, PascalCase system-topic schemaname) and the deploy/verify loop (`push` registration, `publish`, `validate`, `--repair`). Skipping these causes silently dropped fields or a non-functional topic.
+
 **Acting on a `/review` finding.** If the change comes from a `/review` finding, prefer the structured
 findings catalog `/review` writes at `.local/review-findings/{topic-stem}-catalog.json` — it survives
 across sessions and gives each finding a stable `id`, its `files[]`, and a `concrete_fix`. List it with
@@ -136,10 +138,20 @@ python scripts/push.py --yes
 After a successful push, tell the user:
 
 > ✅ **{TopicName}** has been updated in Copilot Studio.
->
-> Remember to **Publish** your agent to make the change live.
->
-> [Open Copilot Studio](https://copilotstudio.microsoft.com/)
+
+Topic (botcomponent) changes only go live once the agent is **published** (flow `clientdata` edits are live immediately). Offer to publish for them:
+
+```
+python scripts/publish.py
+```
+
+If the change added or modified a ServiceNow ITSM flow (e.g. the runtime dependent-dropdowns options flow), also offer to confirm the flow is agent-invocable — this verifies it is activated, `modernflowtype=1`, has kind:Skills Response actions, a bound flow-scoped connection reference, and a system-topic link:
+
+```
+python scripts/validate.py "<flow name>"
+```
+
+If the user prefers to publish manually instead, point them at [Copilot Studio](https://copilotstudio.microsoft.com/).
 
 ## Step 9: Offer Next Steps
 
