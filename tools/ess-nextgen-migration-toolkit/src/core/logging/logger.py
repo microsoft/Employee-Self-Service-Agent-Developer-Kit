@@ -243,11 +243,18 @@ class Logger:
         pipeline_stage: str,
         pipeline_step: str,
     ) -> None:
-        if level < self._level:
-            return
-
         timestamp = self._clock().strftime("%Y-%m-%d %H:%M:%S")
         line = f"[{timestamp}] [{level.name}] [{pipeline_stage}/{pipeline_step}] {message}\n"
-        stream = sys.stderr if level >= LogLevel.ERROR else sys.stdout
-        stream.write(line)
-        stream.flush()
+
+        if level >= self._level:
+            # Above console threshold — write to console (TeeStream mirrors to session.log)
+            stream = sys.stderr if level >= LogLevel.ERROR else sys.stdout
+            stream.write(line)
+            stream.flush()
+        elif self._log_file is not None:
+            # Below console threshold — write directly to session.log only
+            try:
+                self._log_file.write(line)
+                self._log_file.flush()
+            except Exception:  # noqa: BLE001 — DIAG-001
+                pass
