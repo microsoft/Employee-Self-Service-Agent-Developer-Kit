@@ -245,17 +245,26 @@ def _normalize_env_url(env_url: str) -> str:
     parsed = urlparse(env_url)
     if parsed.scheme.lower() != "https" or not parsed.netloc:
         raise ValueError("env_url must be an HTTPS URL.")
-    return env_url.rstrip("/")
+    if parsed.path.strip("/") or parsed.query or parsed.fragment:
+        raise ValueError("env_url must be the Dataverse root (no path, query, or fragment).")
+    return f"{parsed.scheme}://{parsed.netloc}"
 
 
 def _coerce_records(payload: JsonDict, entity_set: str) -> list[JsonDict]:
-    value = payload.get("value", [])
+    if "value" not in payload:
+        raise DataverseApiError(
+            status=200,
+            operation="read",
+            entity_set=entity_set,
+            message="Dataverse query response is missing the required 'value' key.",
+        )
+    value = payload["value"]
     if not isinstance(value, list):
         raise DataverseApiError(
             status=200,
             operation="read",
             entity_set=entity_set,
-            message="Dataverse query response did not include a record list.",
+            message="Dataverse query response 'value' is not a list.",
         )
     records: list[JsonDict] = []
     for item in value:
@@ -309,8 +318,9 @@ def _entity_from_path(path: str) -> str | None:
     parsed = urlparse(path)
     relative_path = parsed.path if parsed.scheme and parsed.netloc else path
     trimmed = relative_path.lstrip("/")
-    if trimmed.startswith("api/data/v9.2/"):
-        trimmed = trimmed[len("api/data/v9.2/") :]
+    api_prefix = _API_PATH.lstrip("/")
+    if trimmed.startswith(api_prefix):
+        trimmed = trimmed[len(api_prefix) :]
     return trimmed.split("?", maxsplit=1)[0] or None
 
 
