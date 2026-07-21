@@ -158,6 +158,62 @@ class TestLiveProbeCleanup:
         assert results[0].status == Status.PASSED.value
         assert sum(c.request.method == "DELETE" for c in responses.calls) >= 1
 
+    @responses.activate
+    def test_delete_failure_keeps_result_and_never_raises(self):
+        # The probe answered (reachable) but the cleanup DELETE is refused (403,
+        # e.g. insufficient rights). The run must still return the valid PASS
+        # result and never raise; the residue is left for the orphan sweep to
+        # reap on this or the next run.
+        responses.add(**pa.find_workflows())            # orphan sweep (pre + post)
+        responses.add(**pa.create_workflow())
+        responses.add(**pa.activate_workflow())
+        responses.add(**pa.list_callback_url())
+        responses.add(**pa.invoke_probe(reachable_status_code=200))
+        responses.add(**pa.delete_workflow(status=403))  # cleanup refused
+        runner = _live_runner({"Workday": {"baseUrl": "https://wd.example.com"}})
+
+        results = check_external_endpoint_reachability(runner)
+
+        row = results[0]
+        assert row.status == Status.PASSED.value
+        assert "Reachable from Power Platform egress" in row.result
+        # Cleanup was still attempted despite the refusal.
+        assert any(c.request.method == "DELETE" for c in responses.calls)
+
+
+# ───────────────────────────────────────────────────────────────────────
+# delete_probe_flow — cleanup is best-effort, retries once, never raises
+# ───────────────────────────────────────────────────────────────────────
+
+
+class TestDeleteProbeFlow:
+    @responses.activate
+    def test_403_is_non_retryable_and_returns_false(self):
+        from flightcheck.live_egress_probe import delete_probe_flow
+
+        responses.add(**pa.delete_workflow(status=403))
+
+        ok = delete_probe_flow(pa.MOCK_ENV_URL, "dv-token", pa.MOCK_WORKFLOW_ID)
+
+        assert ok is False
+        # 403 is non-retryable: no PATCH deactivate + retry, just the one DELETE.
+        assert [c.request.method for c in responses.calls] == ["DELETE"]
+
+    @responses.activate
+    def test_409_deactivates_then_deletes_successfully(self):
+        from flightcheck.live_egress_probe import delete_probe_flow
+
+        # An active flow refuses deletion (409) -> deactivate (PATCH) -> retry
+        # DELETE succeeds (204).
+        responses.add(**pa.delete_workflow(status=409))
+        responses.add(**pa.activate_workflow())          # PATCH statecode (deactivate)
+        responses.add(**pa.delete_workflow(status=204))
+
+        ok = delete_probe_flow(pa.MOCK_ENV_URL, "dv-token", pa.MOCK_WORKFLOW_ID)
+
+        assert ok is True
+        assert [c.request.method for c in responses.calls] == ["DELETE", "PATCH", "DELETE"]
+
 
 # ───────────────────────────────────────────────────────────────────────
 # Fallback — an endpoint the egress probe can't cover uses the local probe

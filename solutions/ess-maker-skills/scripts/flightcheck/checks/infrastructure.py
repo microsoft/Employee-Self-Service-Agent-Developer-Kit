@@ -614,11 +614,14 @@ def _infra_003_probe_layer_note(ctx: _ProbeContext) -> str:
 
     note = _INFRA_003_LOCAL_PROBE_CAVEAT
     if ctx.declined_by_user:
+        # Only the plain caveat here; the clickable manual-verification links go
+        # in the row's remediation ("Next step"), which the report linkifies.
+        # result is HTML-escaped but NOT linkified, so markdown links placed in
+        # it would leak as raw text (runner._render_check_card).
         note += (
             "\n\nThe runtime-reachability egress probe was skipped by choice, so "
             "reachability from the Power Platform egress — including firewall / "
-            "IP allowlisting — was NOT confirmed. "
-            + _infra_003_manual_verification()
+            "IP allowlisting — was NOT confirmed."
         )
     elif ctx.live_requested:
         note += (
@@ -917,6 +920,12 @@ def check_external_endpoint_reachability(runner: Any) -> list[CheckResult]:
         )
 
     if reachable:
+        # A declined egress probe still needs the manual-verification links to be
+        # clickable. They go in remediation (linkified) rather than result (only
+        # escaped), even on a PASSED row, so the maker can self-verify allowlisting.
+        reachable_remediation = (
+            _infra_003_manual_verification() if ctx.declined_by_user else ""
+        )
         results.append(
             _infra_003_row(
                 status=Status.PASSED.value,
@@ -925,7 +934,7 @@ def check_external_endpoint_reachability(runner: Any) -> list[CheckResult]:
                     + "\n\n"
                     + probe_layer_note
                 ),
-                remediation="",
+                remediation=reachable_remediation,
                 roles=sorted(reachable_roles | {Role.POWER_PLATFORM_ADMIN.value}),
             )
         )

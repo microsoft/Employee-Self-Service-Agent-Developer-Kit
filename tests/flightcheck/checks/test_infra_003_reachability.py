@@ -17,8 +17,6 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import patch
 
-import pytest
-
 from flightcheck.checks.infrastructure import (
     ProbeResult,
     _discover_external_endpoints,
@@ -328,9 +326,11 @@ class TestBucketingAndEdges:
 
     def test_declined_egress_probe_surfaces_manual_ip_ranges_link(self):
         """When the operator declines the runtime-reachability probe, INFRA-003
-        notes the skip and links the outbound-IP article + service-tags JSON so
-        the maker can self-verify allowlisting."""
+        notes the skip in the result and puts the outbound-IP article +
+        service-tags JSON links in the remediation so they render CLICKABLE in
+        report.html (result is escaped but not linkified)."""
         from flightcheck import consent
+        from flightcheck.runner import _render_check_card
 
         runner = SimpleNamespace(
             config={"connections": {"Workday": {"baseUrl": "https://wd.example.com"}}},
@@ -342,9 +342,18 @@ class TestBucketingAndEdges:
 
         passed = results[0]
         assert passed.status == Status.PASSED.value
+        # The skip caveat stays in result...
         assert "skipped by choice" in passed.result
-        assert consent.OUTBOUND_IP_ARTICLE_URL in passed.result
-        assert consent.SERVICE_TAGS_JSON_URL in passed.result
+        # ...but the clickable links live in remediation (the linkified channel),
+        # never as raw markdown in result.
+        assert consent.OUTBOUND_IP_ARTICLE_URL in passed.remediation
+        assert consent.SERVICE_TAGS_JSON_URL in passed.remediation
+        assert "](http" not in passed.result  # no raw markdown link leaked
+        # And they actually render as clickable anchors in the report card.
+        card = _render_check_card(passed)
+        assert card.count("<a href=") >= 2
+        assert consent.OUTBOUND_IP_ARTICLE_URL in card
+        assert consent.SERVICE_TAGS_JSON_URL in card
 
     def test_every_row_sets_roles(self):
         """test_check_roles.py enforces roles on every constructor."""
