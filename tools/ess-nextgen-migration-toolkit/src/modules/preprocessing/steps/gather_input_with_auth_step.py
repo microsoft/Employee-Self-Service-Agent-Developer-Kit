@@ -78,7 +78,7 @@ class GatherInputWithAuthStep(MigrationPipelineStep):
             )
             # Create a token provider that always returns the hardcoded token
             config = _build_provider_config(environment_url)
-            token_provider = MsalTokenProvider(config)
+            token_provider = MsalTokenProvider(config, self._logger)
             # Monkey-patch get_token to return the static token for dev
             token_provider.get_token = lambda *_a, **_kw: token  # type: ignore[method-assign]
             context.dataverse_client = DataverseClient(environment_url, token_provider)
@@ -88,7 +88,9 @@ class GatherInputWithAuthStep(MigrationPipelineStep):
                 pipeline_stage="Input",
                 pipeline_step=self.name(),
             )
-            token_provider = MsalTokenProvider(_build_provider_config(environment_url))
+            token_provider = MsalTokenProvider(
+                _build_provider_config(environment_url), self._logger
+            )
             token = token_provider.get_token()
             claims = _decode_claims(token)
             context.tid = _as_string(claims.get("tid"))
