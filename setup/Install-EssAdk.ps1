@@ -1101,6 +1101,16 @@ if ($FlightCheckOnly) {
         Write-Warn2 "  cd $workspace"
         Write-Warn2 '  python scripts/flightcheck/cli.py --scope full'
     }
+    # Record the FlightCheck-only install as a success HERE, before the early
+    # return below. This branch returns from inside the top-level try well
+    # before the normal-path success emit at the end, so without this the run
+    # has no completion event and the finally net mislabels a successful
+    # FlightCheck-only install as 'cancelled' -- leaving the Installer Outcomes
+    # / by-Platform tiles (both Complete-fed) empty while Attempts (Start-fed)
+    # keeps climbing. Idempotent: the finally's 'cancelled' is a no-op once any
+    # outcome has been emitted. (The FlightCheck run's own pass/fail verdict is
+    # separate telemetry emitted by cli.py; this outcome is the install's.)
+    Complete-EssInstallTelemetry -Outcome 'success'
     # ``return`` (not ``exit 0``) so the script ends without terminating
     # the PowerShell host. When this installer is invoked via
     # ``iex (irm .../bootstrap-flightcheck.ps1)`` from an interactive
