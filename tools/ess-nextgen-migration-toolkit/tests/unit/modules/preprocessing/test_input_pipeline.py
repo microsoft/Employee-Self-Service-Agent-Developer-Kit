@@ -48,7 +48,7 @@ class StubMsalTokenProvider:
     token = _make_token({"tid": "tenant-123", "oid": "user-456", "upn": "maker@contoso.com"})
     instances: list[StubMsalTokenProvider] = []
 
-    def __init__(self, config: object) -> None:
+    def __init__(self, config: object, *args: object, **kwargs: object) -> None:
         self.config = config
         self.instances.append(self)
 
