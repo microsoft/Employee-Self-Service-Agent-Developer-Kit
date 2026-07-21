@@ -1474,16 +1474,74 @@ def _html_escape(text: str) -> str:
 
 
 def _md_links_to_html(text: str) -> str:
-    """Convert markdown links [text](url) to HTML <a> tags with target=_blank."""
+    """Escape text, then render BOTH markdown links and bare URLs as
+    clickable ``<a target="_blank">`` anchors.
+
+    Two link forms reach the report from check ``remediation`` strings:
+    markdown ``[label](url)`` and bare ``https://…`` URLs. Only the
+    markdown form used to be linkified, so a check that pasted a raw URL
+    produced a non-clickable link. That inconsistency surfaced as "the
+    link works sometimes but not others" on MANUAL / NotConfigured rows,
+    where remediation URLs are the operator's only path to the fix. Both
+    forms are now anchored so the operator can always click through,
+    regardless of how the check authored the URL.
+    """
     import re
     escaped = _html_escape(text)
-    # Now convert markdown links (which got escaped) back to real HTML links
-    # The escaping turned [text](url) into [text](url) since [] and () aren't escaped
-    return re.sub(
+    # Markdown links first. Escaping left [] and () intact, so the raw
+    # [label](url) survives to here; turn it into a real anchor.
+    with_md = re.sub(
         r'\[([^\]]+)\]\(([^)]+)\)',
         r'<a href="\2" target="_blank">\1</a>',
         escaped,
     )
+    # Then autolink any remaining bare URLs, skipping the anchors we just
+    # created so their href/label URLs aren't wrapped a second time.
+    return _autolink_bare_urls(with_md)
+
+
+def _autolink_bare_urls(html: str) -> str:
+    """Wrap bare ``http(s)://…`` URLs in ``html`` as clickable anchors.
+
+    Operates on text that has already been HTML-escaped and had its
+    markdown links converted to ``<a>…</a>``. Those existing anchors are
+    stepped over untouched (matched by ``anchor_re``) so a URL inside an
+    ``href`` or an anchor label is never double-wrapped. Only the plain
+    text between anchors is scanned for bare URLs.
+    """
+    import re
+    # A bare URL: scheme + run of non-space, non-quote, non-bracket chars.
+    # Trailing sentence punctuation is trimmed in the replacer so
+    # "see https://aka.ms/x." keeps the period outside the link.
+    bare_url_re = re.compile(r'https?://[^\s<>"\')\]]+')
+    # An anchor already emitted by the markdown pass; keep it verbatim.
+    anchor_re = re.compile(r'<a\b[^>]*>.*?</a>', re.IGNORECASE | re.DOTALL)
+
+    def _wrap(segment: str) -> str:
+        def repl(m: "re.Match[str]") -> str:
+            url = m.group(0)
+            trail = ""
+            # Peel trailing sentence punctuation off the link target.
+            while url and url[-1] in ".,;:!?":
+                trail = url[-1] + trail
+                url = url[:-1]
+            # Peel an unbalanced closing paren (e.g. "(see https://x)").
+            if url.endswith(")") and url.count("(") < url.count(")"):
+                trail = ")" + trail
+                url = url[:-1]
+            if not url:
+                return m.group(0)
+            return f'<a href="{url}" target="_blank">{url}</a>{trail}'
+        return bare_url_re.sub(repl, segment)
+
+    out: list[str] = []
+    last = 0
+    for m in anchor_re.finditer(html):
+        out.append(_wrap(html[last:m.start()]))
+        out.append(m.group(0))
+        last = m.end()
+    out.append(_wrap(html[last:]))
+    return "".join(out)
 
 
 def _multiline_html(text: str) -> str:
