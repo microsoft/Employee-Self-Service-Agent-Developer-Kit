@@ -67,7 +67,7 @@ Cons:
 
 Go with Option B, the HTTP probe via a transient test flow, structured per Apurva Banka's INFRA-002 thread approach:
 
-- Opt-in behind a `--live-probe` CLI flag. The live flow is not the silent default.
+- Opt-in behind a `--runtime-reachability` CLI flag. The live flow is not the silent default.
 - Transient cloud flow with a single HTTP HEAD action to the target endpoint. No credentials sent, no body.
 - Lifecycle: create, activate, get callback URL, trigger, poll result, delete.
 - Fallback to INFRA-002's local TCP/TLS probe if flow creation, activation, or run fails (insufficient role, DLP blocking the HTTP connector). Fallback emits WARN with the caveat that it tested the maker's path, not Power Platform's.
@@ -79,13 +79,23 @@ Reason: the check must prove reachability from the Power Platform environment's 
 
 Origin: in the INFRA-002 thread, Apurva Banka noted that creating a temporary flow (Dataverse Option 2) "violates our AC7", and Senthil Mani leaned toward the transient-flow option but wanted more discussion.
 
-Resolution: the AC7 / user-consent decision is **resolved**. The `--live-probe` egress path ships as an **opt-in, consent-gated, self-cleaning** mutation, and the default path stays fully read-only. AC7 is satisfied under this interpretation:
+Resolution: the AC7 / user-consent decision is **resolved**. The `--runtime-reachability` egress path ships as an **opt-in, consent-gated, self-cleaning** mutation, and the default path stays fully read-only. AC7 is satisfied under this interpretation:
 
 - Scope of "read-only": no changes to the agent solution, connections, or business data. One ephemeral probe artifact is allowed because it is fully cleaned up.
 - Deterministic naming: the probe flow uses a fixed display name (`flightcheck-infra003-probe`) so reruns detect and sweep leftovers via a `$filter` orphan scan.
 - Guaranteed cleanup: the created flow is deleted on completion (even on failure, in a `finally`), and an orphan sweep runs at the start and end of every live run. No residue.
 - Idempotent outcome: running twice yields the same result and the same final environment state.
-- Opt-in + consent: the mutating path only runs under `--live-probe`. The default path stays fully read-only (local probe), keeping AC7 intact by default.
+- Opt-in + consent: the mutating path only runs under `--runtime-reachability`. The default path stays fully read-only (local probe), keeping AC7 intact by default.
+
+### Consent model (Approach C: proactive offer)
+
+The `--runtime-reachability` flag is tri-state so every run path can get consent the right way:
+
+- `--runtime-reachability` (True): forced on. Consent already given (chat asked, or operator opted in explicitly). Prints a one-line transparency notice before mutating.
+- `--no-runtime-reachability` (False): forced off. Never mutates. Used by CI and anyone who wants the local probe only.
+- omitted (None): **proactive offer**. On a normal interactive terminal run, if endpoints exist and INFRA-003 is in scope, FlightCheck asks Y/N inline before creating the flow. Non-TTY / CI defaults to decline (safe, read-only). The ADK/chat path (`--invocation-source adk`) never prompts here because the skill already owns consent conversationally and passes the flag.
+
+On decline (either an explicit `--no-runtime-reachability` or a "No" at the prompt), the reachable/failed rows note the egress probe was **skipped by choice** and surface the manual-verification links (outbound-IP article + Azure service-tags JSON) so the maker can self-verify allowlisting.
 
 Implementation: production `flightcheck/live_egress_probe.py` (isolated, the kit's only mutating path); wired into `check_external_endpoint_reachability` in `flightcheck/checks/infrastructure.py`; validated against cassette `tests/fixtures/cassettes/flightcheck_infra003_flow.yaml`.
 
@@ -123,4 +133,4 @@ Note: this is a five-field per-finding schema. AC5 still says "4-field schema", 
 - AC4 WARN: timeout or unverifiable.
 - AC5 Schema: emit the five-field role-aware finding (Probable cause / Scope / What it implies / Next steps / Responsible role) per Shared Steps. AC5's "4-field" wording is stale.
 - AC6 Tests: all-reachable, one-blocked, dns-fail, cert-error, timeout.
-- AC7 Idempotent and read-only: default path (local probe) is fully read-only. The `--live-probe` path uses deterministic naming and guaranteed cleanup. The user-consent decision is resolved; see "Resolved: Option B vs AC7" above.
+- AC7 Idempotent and read-only: default path (local probe) is fully read-only. The `--runtime-reachability` path uses deterministic naming and guaranteed cleanup. The user-consent decision is resolved; see "Resolved: Option B vs AC7" above.

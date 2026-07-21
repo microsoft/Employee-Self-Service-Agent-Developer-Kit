@@ -9,7 +9,7 @@ implements:
   - INFRA-001: Inbound connectivity to Microsoft services
   - INFRA-003: External endpoint reachability (Workday / ServiceNow / SAP /
     custom HTTP) — read-only local probe by default, opt-in Power-Platform
-    egress probe via --live-probe (the kit's only mutating path)
+    egress probe via --runtime-reachability (the kit's only mutating path)
 
 Adding a new INFRA-xxx check:
   1. Define a target discovery function or whatever inputs your check needs.
@@ -42,6 +42,7 @@ from urllib.parse import urlparse
 
 from ..runner import CheckResult, Priority, Role, Status
 from .. import live_egress_probe
+from .. import consent
 from ._dlp_utils import (
     agent_connector_ids,
     evaluate_connector_classification,
@@ -424,12 +425,12 @@ def check_microsoft_service_reachability(runner: Any) -> list[CheckResult]:
 #     "necessary but not sufficient" — the maker's network path differs
 #     from Power Platform's egress, so a PASS here does NOT prove the
 #     agent runtime can reach the endpoint.
-#   - Live egress probe (opt-in, --live-probe): a transient cloud flow
+#   - Live egress probe (opt-in, --runtime-reachability): a transient cloud flow
 #     that probes from Power Platform's own egress. NOT YET IMPLEMENTED —
 #     blocked on the Power Automate flow create/activate/trigger/delete
 #     API being added to the tier registry (see the design doc and
 #     tests/fixtures/cassettes/INDEX.md). Until then the check always
-#     runs the local probe and, when --live-probe is requested, notes
+#     runs the local probe and, when --runtime-reachability is requested, notes
 #     that the egress-level probe is pending.
 # ───────────────────────────────────────────────────────────────────────
 
@@ -535,19 +536,25 @@ _INFRA_003_LOCAL_PROBE_CAVEAT = (
     "not from the Power Platform environment's egress. A local PASS is "
     "necessary but not sufficient — the agent runtime reaches these endpoints "
     "from Power Platform's outbound IP ranges, which may differ from the "
-    "maker's network path. Use --live-probe (when available) to probe from "
+    "maker's network path. Use --runtime-reachability (when available) to probe from "
     "Power Platform's egress."
 )
 
 
 def _infra_003_manual_verification() -> str:
-    """The manual allowlist-verification path (design Step G)."""
+    """The manual allowlist-verification path (design Step G).
+
+    Includes direct links to the official 'Managed connectors outbound IP
+    addresses' article and the Azure service-tags / IP-ranges JSON download, so
+    an operator who declines the egress probe can self-serve. Markdown link
+    syntax renders clickable in report.html (runner._md_links_to_html)."""
     return (
         "Prefer to verify allowlisting manually:\n"
         "1. In the Power Platform admin center, note your environment's region.\n"
-        "2. From Microsoft's 'Managed connectors outbound IP addresses' list, "
-        "get the ranges for that region. For a custom HTTP endpoint, use the "
-        "Power Automate / Azure service tags instead.\n"
+        "2. From Microsoft's [Managed connectors outbound IP addresses]"
+        f"({consent.OUTBOUND_IP_ARTICLE_URL}) list, get the ranges for that "
+        "region. For a custom HTTP endpoint, use the [Azure service tags / IP "
+        f"ranges JSON]({consent.SERVICE_TAGS_JSON_URL}) instead.\n"
         "3. Work with your InfoSec / network team to confirm those ranges are "
         "allowlisted in the target system's firewall / WAF."
     )
@@ -573,12 +580,13 @@ def _infra_003_directive(
 class _ProbeContext:
     """Describes which probe layer produced the INFRA-003 findings, so the
     result text can state whether reachability was confirmed from the Power
-    Platform egress (--live-probe) or only from the local machine."""
+    Platform egress (--runtime-reachability) or only from the local machine."""
 
-    live_requested: bool = False   # --live-probe flag was set
+    live_requested: bool = False   # --runtime-reachability flag was set
     live_ran: bool = False         # egress probe actually executed
     used_local_fallback: bool = False  # >=1 endpoint fell back to local
     unavailable_reason: str = ""   # why live did not run (when requested)
+    declined_by_user: bool = False  # operator declined the egress probe
 
 
 def _infra_003_probe_layer_note(ctx: _ProbeContext) -> str:
@@ -587,13 +595,13 @@ def _infra_003_probe_layer_note(ctx: _ProbeContext) -> str:
     Live run  -> reachability came from the environment's own egress (the
                  authoritative runtime path); the local caveat only re-attaches
                  to any endpoint that fell back to the local probe.
-    Local run -> the local caveat applies; if --live-probe was requested but
+    Local run -> the local caveat applies; if --runtime-reachability was requested but
                  could not run, explain why.
     """
     if ctx.live_ran:
         note = (
             "Probe layer: reachability was tested from the Power Platform "
-            "environment's own egress via a transient probe flow (--live-probe) "
+            "environment's own egress via a transient probe flow (--runtime-reachability) "
             "— the authoritative runtime path the agent actually uses."
         )
         if ctx.used_local_fallback:
@@ -605,9 +613,16 @@ def _infra_003_probe_layer_note(ctx: _ProbeContext) -> str:
         return note
 
     note = _INFRA_003_LOCAL_PROBE_CAVEAT
-    if ctx.live_requested:
+    if ctx.declined_by_user:
         note += (
-            "\n\nNote: --live-probe was requested but could not run "
+            "\n\nThe runtime-reachability egress probe was skipped by choice, so "
+            "reachability from the Power Platform egress — including firewall / "
+            "IP allowlisting — was NOT confirmed. "
+            + _infra_003_manual_verification()
+        )
+    elif ctx.live_requested:
+        note += (
+            "\n\nNote: --runtime-reachability was requested but could not run "
             f"({ctx.unavailable_reason}); the results above are from the local "
             "probe only."
         )
@@ -681,14 +696,17 @@ def _live_finding(
 
 
 def _live_probe_context(runner: Any) -> tuple[_ProbeContext, dict | None]:
-    """Resolve --live-probe prerequisites off the runner.
+    """Resolve --runtime-reachability prerequisites off the runner.
 
     Returns ``(ctx, live_env)`` where ``live_env`` is a dict of the resolved
     egress-probe inputs (or ``None`` when the live probe cannot run). Never
     raises: a missing prerequisite or token-acquisition failure degrades to
     the local probe with an explanatory reason on ``ctx``.
     """
-    ctx = _ProbeContext(live_requested=bool(getattr(runner, "live_probe", False)))
+    ctx = _ProbeContext(
+        live_requested=bool(getattr(runner, "runtime_reachability", False)),
+        declined_by_user=bool(getattr(runner, "runtime_reachability_declined", False)),
+    )
     if not ctx.live_requested:
         return ctx, None
 
@@ -756,7 +774,7 @@ def check_external_endpoint_reachability(runner: Any) -> list[CheckResult]:
     """Verify the agent's external system endpoints are reachable (INFRA-003).
 
     Default path: read-only local TCP/TLS probe (DNS → TCP → TLS) per
-    endpoint, reusing probe_endpoint(). Opt-in path (``--live-probe``):
+    endpoint, reusing probe_endpoint(). Opt-in path (``--runtime-reachability``):
     stand up a transient Power Automate probe flow and trigger it once so the
     request leaves from the Power Platform environment's OWN egress — the
     authoritative runtime path — then delete the flow. Endpoints the egress

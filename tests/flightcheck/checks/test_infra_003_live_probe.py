@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 
 """
-Integration tests for INFRA-003's opt-in ``--live-probe`` egress path.
+Integration tests for INFRA-003's opt-in ``--runtime-reachability`` egress path.
 
 Unlike the default local probe (test_infra_003_reachability.py, stdlib
 only), the live path drives the real Power Automate transient-flow
@@ -43,10 +43,10 @@ require_validated_mock(pa)
 
 
 def _live_runner(connections: dict[str, Any], *, pp: Any = None) -> SimpleNamespace:
-    """A runner with --live-probe on and every egress prerequisite present."""
+    """A runner with --runtime-reachability on and every egress prerequisite present."""
     return SimpleNamespace(
         config={"connections": connections},
-        live_probe=True,
+        runtime_reachability=True,
         pp_admin=pp if pp is not None else SimpleNamespace(
             flow_headers={"Authorization": "Bearer flow-token"}
         ),
@@ -187,10 +187,10 @@ class TestLiveProbeFallback:
         assert "necessary but not sufficient" in row.result
 
     def test_missing_prerequisites_uses_local_probe(self):
-        # --live-probe requested but no pp_admin / env / token on the runner.
+        # --runtime-reachability requested but no pp_admin / env / token on the runner.
         runner = SimpleNamespace(
             config={"connections": {"Workday": {"baseUrl": "https://wd.example.com"}}},
-            live_probe=True,
+            runtime_reachability=True,
         )
         with patch(
             "flightcheck.checks.infrastructure.probe_endpoint",

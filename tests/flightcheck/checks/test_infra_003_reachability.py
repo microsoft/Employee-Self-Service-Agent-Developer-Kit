@@ -78,8 +78,8 @@ def _tls_fail(host: str) -> ProbeResult:
     )
 
 
-def _runner(connections: dict[str, Any], *, live_probe: bool = False) -> SimpleNamespace:
-    return SimpleNamespace(config={"connections": connections}, live_probe=live_probe)
+def _runner(connections: dict[str, Any], *, runtime_reachability: bool = False) -> SimpleNamespace:
+    return SimpleNamespace(config={"connections": connections}, runtime_reachability=runtime_reachability)
 
 
 def _patch_probe(mapping: dict[str, ProbeResult]):
@@ -315,7 +315,7 @@ class TestBucketingAndEdges:
 
     def test_live_probe_requested_but_prereqs_missing_falls_back_to_local(self):
         runner = _runner(
-            {"Workday": {"baseUrl": "https://wd.example.com"}}, live_probe=True
+            {"Workday": {"baseUrl": "https://wd.example.com"}}, runtime_reachability=True
         )
         with _patch_probe({"wd.example.com": _reachable("wd.example.com")}):
             results = check_external_endpoint_reachability(runner)
@@ -325,6 +325,26 @@ class TestBucketingAndEdges:
         # run; the check degrades to the local probe and says so.
         assert "could not run" in results[0].result
         assert "local probe only" in results[0].result
+
+    def test_declined_egress_probe_surfaces_manual_ip_ranges_link(self):
+        """When the operator declines the runtime-reachability probe, INFRA-003
+        notes the skip and links the outbound-IP article + service-tags JSON so
+        the maker can self-verify allowlisting."""
+        from flightcheck import consent
+
+        runner = SimpleNamespace(
+            config={"connections": {"Workday": {"baseUrl": "https://wd.example.com"}}},
+            runtime_reachability=False,
+            runtime_reachability_declined=True,
+        )
+        with _patch_probe({"wd.example.com": _reachable("wd.example.com")}):
+            results = check_external_endpoint_reachability(runner)
+
+        passed = results[0]
+        assert passed.status == Status.PASSED.value
+        assert "skipped by choice" in passed.result
+        assert consent.OUTBOUND_IP_ARTICLE_URL in passed.result
+        assert consent.SERVICE_TAGS_JSON_URL in passed.result
 
     def test_every_row_sets_roles(self):
         """test_check_roles.py enforces roles on every constructor."""

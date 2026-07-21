@@ -4,7 +4,7 @@
 
 """
 Record the cassette that backs the INFRA-003 live egress probe
-(--live-probe). It captures the flow lifecycle the transient-flow probe
+(--runtime-reachability). It captures the flow lifecycle the transient-flow probe
 uses to make ONE outbound HTTP request from the Power Platform
 environment's own egress and read the result.
 

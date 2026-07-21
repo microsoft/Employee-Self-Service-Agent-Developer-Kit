@@ -16,7 +16,7 @@ Mock response builders for the Power Automate transient-flow lifecycle.
 #   "Power Automate flow lifecycle" row + confirmed-endpoints rows.
 # ─────────────────────────────────────────────────────────────────
 
-Backs INFRA-003's opt-in ``--live-probe`` egress path (the kit's only
+Backs INFRA-003's opt-in ``--runtime-reachability`` egress path (the kit's only
 mutating path). A cloud flow is a Dataverse ``workflow`` row (category 5),
 so create / activate / find / delete are Dataverse Web API calls; the
 trigger callback URL comes from the Power Automate API; the trigger itself

@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 
 """
-Live egress probe for INFRA-003 (opt-in ``--live-probe``).
+Live egress probe for INFRA-003 (opt-in ``--runtime-reachability``).
 
 WHAT THIS IS
 ------------
@@ -15,7 +15,7 @@ answer INFRA-003's real question -- "can the agent runtime reach this
 endpoint?" -- because the maker's laptop sits on a different network path
 than Power Platform's outbound IP ranges.
 
-It is opt-in (``/flightcheck --live-probe``) precisely because it mutates
+It is opt-in (``/flightcheck --runtime-reachability``) precisely because it mutates
 the environment. The default INFRA-003 path stays a read-only local TCP
 probe (see ``checks/infrastructure.py``).
 
