@@ -29,7 +29,9 @@ _TENANT_PATTERN = re.compile(r"login\.microsoftonline\.com/([^/]+)")
 class GatherInputWithAuthStep(MigrationPipelineStep):
     """Prompt for the Dataverse URL, authenticate, and initialize context access."""
 
-    def __init__(self, logger: Logger, supported_modes: tuple[str, ...]) -> None:
+    def __init__(
+        self, logger: Logger, supported_modes: tuple[str, ...], *, dev_mode: bool = False
+    ) -> None:
         super().__init__(
             description=(
                 "Gather the target Dataverse environment and authenticate the current user."
@@ -37,9 +39,21 @@ class GatherInputWithAuthStep(MigrationPipelineStep):
             supported_modes=supported_modes,
         )
         self._logger = logger
+        self._dev_mode = dev_mode
 
     def execute(self, context: MigrationContext) -> MigrationContext:
-        environment_url = _prompt_for_environment_url()
+        dev_config = _load_dev_config() if self._dev_mode else None
+
+        if dev_config and dev_config.get("environment_url"):
+            environment_url = dev_config["environment_url"]
+            self._logger.LogInfo(
+                f"[dev] Using environment from .local/dev-config.json: {environment_url}",
+                pipeline_stage="Input",
+                pipeline_step=self.name(),
+            )
+        else:
+            environment_url = _prompt_for_environment_url()
+
         context.environment_url = environment_url
 
         self._logger.LogInfo(
@@ -47,22 +61,42 @@ class GatherInputWithAuthStep(MigrationPipelineStep):
             pipeline_stage="Input",
             pipeline_step=self.name(),
         )
-        self._logger.LogInfo(
-            f"Discovering tenant and authenticating with MSAL for {environment_url}.",
-            pipeline_stage="Input",
-            pipeline_step=self.name(),
-        )
 
-        token_provider = MsalTokenProvider(_build_provider_config(environment_url))
-        token = token_provider.get_token()
-        claims = _decode_claims(token)
-
-        context.tid = _as_string(claims.get("tid"))
-        context.oid = _as_string(claims.get("oid"))
-        context.upn = _as_string(claims.get("upn")) or _as_string(
-            claims.get("preferred_username"),
-        )
-        context.dataverse_client = DataverseClient(environment_url, token_provider)
+        # Dev shortcut: if token is provided in dev-config, skip interactive auth
+        if dev_config and dev_config.get("token"):
+            token = dev_config["token"]
+            self._logger.LogInfo(
+                "[dev] Using hardcoded token from .local/dev-config.json (skipping MSAL).",
+                pipeline_stage="Input",
+                pipeline_step=self.name(),
+            )
+            claims = _decode_claims(token)
+            context.tid = _as_string(claims.get("tid"))
+            context.oid = _as_string(claims.get("oid"))
+            context.upn = _as_string(claims.get("upn")) or _as_string(
+                claims.get("preferred_username"),
+            )
+            # Create a token provider that always returns the hardcoded token
+            config = _build_provider_config(environment_url)
+            token_provider = MsalTokenProvider(config)
+            # Monkey-patch get_token to return the static token for dev
+            token_provider.get_token = lambda *_a, **_kw: token  # type: ignore[method-assign]
+            context.dataverse_client = DataverseClient(environment_url, token_provider)
+        else:
+            self._logger.LogInfo(
+                f"Discovering tenant and authenticating with MSAL for {environment_url}.",
+                pipeline_stage="Input",
+                pipeline_step=self.name(),
+            )
+            token_provider = MsalTokenProvider(_build_provider_config(environment_url))
+            token = token_provider.get_token()
+            claims = _decode_claims(token)
+            context.tid = _as_string(claims.get("tid"))
+            context.oid = _as_string(claims.get("oid"))
+            context.upn = _as_string(claims.get("upn")) or _as_string(
+                claims.get("preferred_username"),
+            )
+            context.dataverse_client = DataverseClient(environment_url, token_provider)
 
         self._logger.LogInfo(
             "Authentication completed.",
@@ -143,3 +177,17 @@ def _decode_claims(token: str) -> dict[str, Any]:
 
 def _as_string(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _load_dev_config() -> dict[str, str] | None:
+    """Load .local/dev-config.json if it exists. Returns None if missing."""
+    from pathlib import Path
+
+    config_path = Path(__file__).resolve().parents[4] / ".local" / "dev-config.json"
+    if not config_path.is_file():
+        return None
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+        return data if isinstance(data, dict) else None
+    except (json.JSONDecodeError, OSError):
+        return None
