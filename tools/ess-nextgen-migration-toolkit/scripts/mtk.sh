@@ -124,7 +124,7 @@ cmd_run() {
   echo ""
   echo "==> Starting the toolkit CLI..."
   if [[ "$dev" == "1" ]]; then
-    exec "$UV" run python src/service/mtk_orchestrator.py
+    exec "$UV" run python src/service/mtk_orchestrator.py --dev
   else
     exec "$UV" run --no-dev python src/service/mtk_orchestrator.py
   fi
