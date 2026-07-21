@@ -21,6 +21,22 @@ CLIENT_ID = "client-id"
 NOW = 1_000.0
 
 
+class FakeLogger:
+    """No-op logger for unit tests."""
+
+    def LogDebug(self, *a: object, **kw: object) -> None:
+        pass
+
+    def LogInfo(self, *a: object, **kw: object) -> None:
+        pass
+
+    def LogWarning(self, *a: object, **kw: object) -> None:
+        pass
+
+    def LogError(self, *a: object, **kw: object) -> None:
+        pass
+
+
 class FakeMsalApplication:
     def __init__(
         self,
@@ -69,7 +85,7 @@ def config(
 
 def test_cold_start_uses_interactive_acquisition_only_when_no_account_exists() -> None:
     app = FakeMsalApplication()
-    provider = MsalTokenProvider(config(), app=app, now=lambda: NOW)
+    provider = MsalTokenProvider(config(), FakeLogger(), app=app, now=lambda: NOW)
 
     token = provider.get_token()
 
@@ -84,7 +100,7 @@ def test_existing_account_uses_silent_acquisition_without_interactive_fallback()
         accounts=[account],
         silent_results=[{"access_token": "silent-token", "expires_on": NOW + 3_600}],
     )
-    provider = MsalTokenProvider(config(), app=app, now=lambda: NOW)
+    provider = MsalTokenProvider(config(), FakeLogger(), app=app, now=lambda: NOW)
 
     token = provider.get_token("https://contoso.crm.dynamics.com")
 
@@ -102,7 +118,7 @@ def test_near_expiry_token_forces_silent_refresh_before_returning() -> None:
             {"access_token": "refreshed-token", "expires_on": NOW + 3_600},
         ],
     )
-    provider = MsalTokenProvider(config(), app=app, now=lambda: NOW)
+    provider = MsalTokenProvider(config(), FakeLogger(), app=app, now=lambda: NOW)
 
     token = provider.get_token()
 
@@ -121,7 +137,7 @@ def test_rejects_non_https_authority_and_scopes() -> None:
     with pytest.raises(ValueError, match="scope must be an HTTPS URL"):
         config(scopes=("http://contoso.crm.dynamics.com/.default",))
 
-    provider = MsalTokenProvider(config(), app=FakeMsalApplication(), now=lambda: NOW)
+    provider = MsalTokenProvider(config(), FakeLogger(), app=FakeMsalApplication(), now=lambda: NOW)
     with pytest.raises(ValueError, match="scope must be an HTTPS URL"):
         provider.get_token("http://contoso.crm.dynamics.com")
 
@@ -132,7 +148,7 @@ def test_acquisition_failure_raises_sanitized_authentication_exception() -> None
         accounts=[account],
         silent_results=[{"error": "invalid_grant", "error_description": "secret provider detail"}],
     )
-    provider = MsalTokenProvider(config(), app=app, now=lambda: NOW)
+    provider = MsalTokenProvider(config(), FakeLogger(), app=app, now=lambda: NOW)
 
     with pytest.raises(AuthenticationException) as exc_info:
         provider.get_token()
@@ -154,7 +170,7 @@ def test_default_msal_application_uses_in_memory_cache_only(
     fake_msal = SimpleNamespace(PublicClientApplication=CapturingPublicClientApplication)
     monkeypatch.setattr("core.auth.token_provider.import_module", lambda name: fake_msal)
 
-    MsalTokenProvider(config())
+    MsalTokenProvider(config(), FakeLogger())
 
     assert calls == [{"client_id": CLIENT_ID, "authority": AUTHORITY}]
     assert "token_cache" not in calls[0]
