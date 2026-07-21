@@ -155,13 +155,25 @@ def _plan_topic_workflow_links(topic_items, created_workflow_ids,
     Scoping to newly-created flows targets the new-flow-registration gap: a
     fresh flow has no existing link (no duplicate-link risk) and a failed link
     is a real error; an unchanged flow is not re-linked on a subsequent push.
+
+    The authored ``flowId`` and the created ``workflowid`` are matched
+    case-insensitively: the topic carries the maker's authored-case GUID while
+    the created id is whatever ``create_record`` returned (Dataverse emits the
+    ``OData-EntityId`` GUID canonical/lowercase), so a case-sensitive test would
+    silently skip the link. The emitted pair uses the id from
+    ``created_workflow_ids`` so the ``botcomponent_workflow`` ``/$ref`` targets
+    the actual record.
     """
+    canonical_by_fold = {
+        str(wid).casefold(): wid for wid in created_workflow_ids
+    }
     links = []
     seen = set()
     for filepath, content in topic_items:
         flow_ids = [
-            fid for fid in _extract_flow_ids(content)
-            if fid in created_workflow_ids
+            canonical_by_fold[fid.casefold()]
+            for fid in _extract_flow_ids(content)
+            if fid.casefold() in canonical_by_fold
         ]
         if not flow_ids:
             continue

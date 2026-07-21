@@ -377,6 +377,24 @@ class TestPlanTopicWorkflowLinks:
         )
         assert links == []
 
+    def test_matches_created_flow_case_insensitively(self):
+        # The topic authors flowId in one case; the created-workflow id can come
+        # back in another (Dataverse returns the OData-EntityId GUID canonical /
+        # lowercase). A case-sensitive membership test would skip the link with
+        # no error, leaving the flow non-invocable but reported as success.
+        authored = "D4E5F6A7-B8C9-4D0E-8F1A-2B3C4D5E6F7A"  # topic, upper
+        canonical = "d4e5f6a7-b8c9-4d0e-8f1a-2b3c4d5e6f7a"  # created, lower
+        topic_items = [(
+            "topic.mcs.yml",
+            "actions:\n  - kind: InvokeFlowAction\n    flowId: " + authored + "\n",
+        )]
+        links = push._plan_topic_workflow_links(
+            topic_items, {canonical}, self._resolver({"topic.mcs.yml": "bc-1"}),
+        )
+        # Link is planned despite the case delta, and targets the canonical id
+        # (the actual Dataverse record) rather than the authored-case value.
+        assert links == [("bc-1", canonical)]
+
 
 class TestPlanFlowConnrefs:
     """push._plan_flow_connrefs reads a flow's authored connectionReferences and
