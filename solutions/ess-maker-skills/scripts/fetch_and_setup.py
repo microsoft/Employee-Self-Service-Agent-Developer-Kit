@@ -226,6 +226,28 @@ def save_temp_files(components, template_configs, workflows):
     return paths
 
 
+def _resolve_refresh_target(args, config):
+    """Resolve the (env, bot, name, schema, managed) target for a refresh.
+
+    Explicit CLI overrides win over the stored config so ``--refresh`` can
+    retarget an agent to a second environment. Without ``--url`` this is a
+    plain refresh of the configured env (fully backward compatible).
+
+    ``--managed`` is a ``store_true`` flag (can't express "false"), so it is
+    honored literally only when retargeting (``--url`` given); on a plain
+    refresh the configured ``isManaged`` is kept so a refresh never silently
+    downgrades a managed agent.
+    """
+    agent = config.get("agent", {})
+    retargeting = bool(args.url)
+    env_url = args.url.rstrip("/") if args.url else config["dataverseEndpoint"]
+    bot_id = args.bot_id or agent.get("botId")
+    name = args.name or agent.get("name")
+    schema = args.schema or agent.get("schemaName")
+    managed = args.managed if retargeting else agent.get("isManaged", False)
+    return env_url, bot_id, name, schema, managed
+
+
 def run_setup(env_url, args_bot_id, args_name, args_schema, args_managed,
               paths, extra_flags=None):
     """Run setup.py with the given temp file paths."""
@@ -269,14 +291,15 @@ def main():
                         help="Re-fetch from existing config (no full setup)")
     args = parser.parse_args()
 
-    # --- Refresh mode: read config for existing agent details ---
+    # --- Refresh mode: reuse stored config, but let explicit CLI overrides
+    # retarget to a different env/bot (see _resolve_refresh_target) ---
     if args.refresh:
         config = load_config()
-        env_url = config["dataverseEndpoint"]
-        bot_id = config["agent"]["botId"]
-        name = config["agent"]["name"]
-        schema = config["agent"]["schemaName"]
-        managed = config["agent"].get("isManaged", False)
+        env_url, bot_id, name, schema, managed = _resolve_refresh_target(
+            args, config)
+
+        if args.url:
+            print(f"Retargeting refresh to {env_url} (bot {bot_id})")
 
         print("Authenticating to Dataverse...")
         token = authenticate(env_url)
