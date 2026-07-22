@@ -477,3 +477,148 @@ def auth_expired(
         },
         "status": 401,
     }
+
+
+def create_record_response(
+    *,
+    base_url: str,
+    entity_set: str,
+    record_id: str,
+    id_key: str | None = None,
+    return_representation: bool = True,
+    include_entity_id_header: bool = True,
+    status: int = 201,
+) -> dict[str, Any]:
+    """Mock a POST create against ``{base}/api/data/v9.2/{entity_set}``.
+
+    Models the two ways Dataverse communicates the new record's key back to
+    the client on create, so tests can pin that ``auth.create_record`` reads
+    the id for ANY entity set (not just ``botcomponents``):
+
+      1. The ``OData-EntityId`` response header — returned on every create,
+         shaped ``{base}/api/data/v9.2/{entity_set}({record_id})``. This is
+         the entity-agnostic source and is present even on a ``204`` create
+         with no ``Prefer: return=representation``.
+      2. The representation body (only when the client sends
+         ``Prefer: return=representation``, which ``create_record`` does),
+         whose primary-key column is entity-specific:
+         ``workflows`` → ``workflowid``, ``botcomponents`` → ``botcomponentid``,
+         ``connectionreferences`` → ``connectionreferenceid``.
+
+    ``id_key`` overrides the derived body primary-key column; when omitted it
+    is derived by singularising ``entity_set`` (strip a trailing ``s``) and
+    appending ``id`` — the Dataverse convention for these entities. Pass
+    ``return_representation=False`` (typically with ``status=204``) to model a
+    header-only create, and ``include_entity_id_header=False`` to force the
+    body-only fallback path.
+
+    Web API create reference:
+      https://learn.microsoft.com/power-apps/developer/data-platform/webapi/create-entity-web-api
+    """
+    kwargs: dict[str, Any] = {
+        "method": "POST",
+        "url": _api(base_url, entity_set),
+        "status": status,
+    }
+    if include_entity_id_header:
+        kwargs["headers"] = {
+            "OData-EntityId": _api(base_url, f"{entity_set}({record_id})"),
+        }
+    if return_representation:
+        key = id_key or (
+            entity_set[:-1] + "id" if entity_set.endswith("s") else entity_set + "id"
+        )
+        kwargs["json"] = {
+            "@odata.context": _api(base_url, f"$metadata#{entity_set}/$entity"),
+            key: record_id,
+        }
+    return kwargs
+
+
+def associate_ref_response(
+    *,
+    base_url: str,
+    entity_set: str,
+    record_id: str,
+    nav_property: str,
+    status: int = 204,
+) -> dict[str, Any]:
+    """Mock an N:N associate via ``POST {entity_set}({id})/{nav}/$ref``.
+
+    Dataverse creates a many-to-many link by POSTing an ``@odata.id`` pointer
+    to the collection-valued navigation property's ``/$ref`` endpoint and
+    returns ``204 No Content`` on success. Used to test the
+    ``botcomponent_workflow`` link that wires a system-topic botcomponent to
+    the workflow it invokes.
+
+    Web API associate reference:
+      https://learn.microsoft.com/power-apps/developer/data-platform/webapi/associate-disassociate-entities-using-web-api
+    """
+    return {
+        "method": "POST",
+        "url": _api(base_url, f"{entity_set}({record_id})/{nav_property}/$ref"),
+        "status": status,
+    }
+
+
+def pva_publish_response(
+    *,
+    base_url: str,
+    bot_id: str,
+    status: int = 200,
+) -> dict[str, Any]:
+    """Mock the ``PvaPublish`` bound action (publish a Copilot Studio bot).
+
+    ``PvaPublish`` is bound to the ``bot`` entity, so the bot is addressed via
+    the URL binding — ``POST {base}/api/data/v9.2/bots({bot_id})/
+    Microsoft.Dynamics.CRM.PvaPublish`` — not an unbound action with a
+    ``botid`` body. Publishing makes pushed botcomponent changes go live.
+    """
+    return {
+        "method": "POST",
+        "url": _api(base_url, f"bots({bot_id})/Microsoft.Dynamics.CRM.PvaPublish"),
+        "status": status,
+        "json": {},
+    }
+
+
+def record_get(
+    *,
+    base_url: str,
+    entity_set: str,
+    record_id: str,
+    id_key: str,
+    exists: bool = True,
+) -> dict[str, Any]:
+    """Mock ``GET {entity_set}({record_id})?$select={id_key}``.
+
+    Used to test existence checks. Dataverse returns a clean ``404`` with the
+    ``0x80040217`` "Entity … Does Not Exist" error when the record is gone —
+    unlike a PATCH against a missing record, which returns an ambiguous
+    ``400``. ``exists=False`` models that 404.
+    """
+    url = _api(base_url, f"{entity_set}({record_id})") + f"?$select={id_key}"
+    if exists:
+        return {
+            "method": "GET",
+            "url": url,
+            "status": 200,
+            "json": {
+                "@odata.context": _api(base_url, f"$metadata#{entity_set}/$entity"),
+                id_key: record_id,
+            },
+        }
+    return {
+        "method": "GET",
+        "url": url,
+        "status": 404,
+        "json": {
+            "error": {
+                "code": "0x80040217",
+                "message": (
+                    f"Entity '{entity_set[:-1]}' With Id = {record_id} "
+                    f"Does Not Exist"
+                ),
+            }
+        },
+    }

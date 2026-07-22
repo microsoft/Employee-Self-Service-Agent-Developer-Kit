@@ -12,6 +12,12 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 
 ## [Unreleased]
 
+- **TASK-015 input-pipeline review refinements.** Consolidated environment
+  prompting + MSAL authentication into `GatherInputWithAuthStep`, renamed agent
+  discovery to `AgentSelectionStep`, added `GatherPreferredSolutionStep`, and
+  moved shared auth/input step constants into `src/constants/auth.py`. The
+  toolkit now clearly prompts for the full Dataverse environment URL and records
+  the optional preferred solution up front for later writeback scenarios.
 - **Super-pipeline base/product split (framework vs ESS product).** Split the
   fluent super-pipeline into a generic, product-agnostic base and the ESS
   product subclass: `StagedPipeline[TContext]` now lives in `core/pipeline/`
@@ -228,6 +234,13 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
   across the stub (`git mv`), `03_ENGINEERING/REPOSITORY_STRUCTURE.md` (tree +
   section 5 + section 12; also added the `core/auth/` package to the tree),
   `03_ENGINEERING/IMPLEMENTATION_GUIDE.md`, and the toolkit `README.md`.
+
+- **TASK-004 — Typed Dataverse Web API client.** Implemented
+  `src/core/outbound/dataverse_client.py` with per-request token acquisition,
+  required OData headers, GET-only retry/backoff, `@odata.nextLink`
+  pagination, HTTPS validation, and typed outbound exceptions. Added unit tests
+  for token acquisition, pagination, retry behavior, non-retried writes, and
+  error mapping. (`TASK-004`)
 
 ### Changed
 

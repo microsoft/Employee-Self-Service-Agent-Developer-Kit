@@ -218,6 +218,12 @@ def set_identity(
     )
     _IDENTITY["tenant_id"] = tenant_id or ""
     _IDENTITY["tenant_name"] = tenant_name or ""
+    # When a Graph-capable flow (FlightCheck) resolves the org display name,
+    # persist it so ADK events emitted later in a *different* process (which
+    # only has a Dataverse/BAP token and can't resolve it) can reuse it. The
+    # cache is keyed by tenant_id in flightcheck.telemetry.cache_tenant_name.
+    if tenant_name:
+        _fc.cache_tenant_name(_IDENTITY["tenant_id"], tenant_name)
     return dict(_IDENTITY)
 
 
@@ -368,6 +374,12 @@ def common_dimensions(
     """Build the dimensions present on every event (spec Common Dimensions)."""
     tid = _IDENTITY["tenant_id"] if tenant_id is None else tenant_id
     tname = _IDENTITY["tenant_name"] if tenant_name is None else tenant_name
+    # Fall back to the org display name a prior Graph-capable run (FlightCheck)
+    # cached for THIS tenant, so pure-ADK events (session/build/deploy/
+    # capability/api) — which can't resolve it live — still carry it. Keyed by
+    # tenant_id, so a name cached for another tenant is never reused here.
+    if not tname:
+        tname = _fc.get_cached_tenant_name(tid or "")
     return {
         "schema_version": SCHEMA_VERSION,
         "instance_id": (

@@ -42,7 +42,7 @@ Based on the user's description, select a starting template:
 
 **Decision rule**: If the scenario involves ServiceNow or Workday, ALWAYS use the template config pattern with the shared system topic. Do NOT create standalone flows for these connectors — that bypasses the ESS orchestrator.
 
-If the topic involves ServiceNow, also read `src/reference/ess-docs/integrations/servicenow.md` and `src/reference/ess-docs/integrations/servicenow-hrsd-itsm.md` for integration-specific guidance.
+If the topic involves ServiceNow, also read `src/reference/ess-docs/integrations/servicenow.md` and `src/reference/ess-docs/integrations/servicenow-hrsd-itsm.md` for integration-specific guidance. If the topic **consumes a custom Power Automate flow's output in Power Fx** — typed tables, dynamic option lists, or status/success handling — also read `src/reference/ess-docs/customization/powerfx-and-power-automate-authoring.md` for the type-safety constraints and the deploy/verify loop.
 If the topic involves Workday, also read `src/reference/ess-docs/integrations/workday.md` and `src/reference/ess-docs/integrations/workday-extensibility.md` for integration-specific guidance.
 
 **Official samples**: Before generating YAML, read a relevant sample from `src/examples/ess-samples/` to use as a real-world reference:
@@ -314,9 +314,21 @@ After a successful push, show the user what was created:
 - If template config was created: the scenario name
 - If workflow was created: the workflow file path
 
+A new **topic** only goes live once the agent is **published** (a new flow's `clientdata` is live immediately, but its registration still needs the push, which is done). Offer to publish for them:
+
+```
+python scripts/publish.py
+```
+
+If a **workflow** was created (e.g. a ServiceNow options flow for runtime dependent dropdowns), also offer to confirm it is agent-invocable — this verifies it is activated, `modernflowtype=1`, has kind:Skills Response actions, a bound flow-scoped connection reference, and a system-topic link:
+
+```
+python scripts/validate.py "<flow name>"
+```
+
 Then show:
 
-> Your topic is live! Test it here:
+> Your topic is ready. After publishing, test it here:
 > [Open Copilot Studio](https://copilotstudio.microsoft.com/)
 
 ## Step 7: Offer Next Steps
