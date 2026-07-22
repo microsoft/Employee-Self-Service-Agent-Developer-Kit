@@ -38,7 +38,7 @@ class TeeStream(TextIOBase):
         chars_written = self._original.write(text)
         try:
             self._log_file.write(text)
-        except Exception:  # noqa: BLE001 — DIAG-001: diagnostics must never abort execution
+        except (OSError, ValueError):  # DIAG-001: diagnostics must never abort execution
             pass
         return chars_written
 
@@ -47,7 +47,7 @@ class TeeStream(TextIOBase):
         self._original.flush()
         try:
             self._log_file.flush()
-        except Exception:  # noqa: BLE001 — DIAG-001: diagnostics must never abort execution
+        except (OSError, ValueError):  # DIAG-001: diagnostics must never abort execution
             pass
 
     def isatty(self) -> bool:
@@ -132,7 +132,7 @@ class Logger:
             try:
                 self._log_file.flush()
                 self._log_file.close()
-            except Exception:  # noqa: BLE001 — DIAG-001: safe teardown
+            except (OSError, ValueError):  # DIAG-001: safe teardown
                 pass
         self._started = False
 
@@ -256,5 +256,5 @@ class Logger:
             try:
                 self._log_file.write(line)
                 self._log_file.flush()
-            except Exception:  # noqa: BLE001 — DIAG-001
+            except OSError:  # DIAG-001: diagnostics file write failure
                 pass

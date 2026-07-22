@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from core.logging import Logger, LogLevel, Reporter, SessionManager
-from core.models import ChangeEntry, DiagnosticEntry
+from core.models import ChangeEntry, DiagnosticEntry, ExecutionMode
 from modules.migration.models import MigrationContext
 
 FIXED_TIME = datetime(2026, 7, 18, 14, 32, 5)
@@ -159,7 +159,7 @@ def test_customer_channel_updates_report_model_only(
 
 def test_reporter_renders_customer_report_from_context_collectors(workspace: Path) -> None:
     context = MigrationContext(
-        ExecutionMode="WRITEBACK",
+        ExecutionMode=ExecutionMode.WRITEBACK,
         Changes=[
             ChangeEntry(
                 message="Runtime Provider CA → DA",
@@ -217,8 +217,8 @@ def test_tee_stream_survives_log_file_write_failure(
     try:
         # Force-close the log file to simulate disk/handle failure
         logger.session_manager.paths.log_path.open("w").close()
-        log_handle = logger._log_file  # noqa: SLF001
-        log_handle.close()
+        log_handle = logger._log_file  # noqa: SLF001  # type: ignore[union-attr]
+        log_handle.close()  # type: ignore[union-attr]
         # This must NOT raise — console output should still work
         sys.stdout.write("after-close output\n")
     finally:
@@ -247,7 +247,7 @@ def test_session_manager_prunes_old_sessions(workspace: Path) -> None:
     """SessionManager should keep at most max_sessions bundles."""
     times = [datetime(2026, 7, 18, 10, 0, s) for s in range(8)]
     for t in times[:7]:
-        mgr = SessionManager(workspace, clock=lambda _t=t: _t, max_sessions=5)
+        mgr = SessionManager(workspace, clock=lambda _t=t: _t, max_sessions=5)  # type: ignore[misc]
         mgr.create_session()
 
     session_dirs = sorted(d.name for d in workspace.iterdir() if d.is_dir())

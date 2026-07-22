@@ -13,7 +13,16 @@
       },
       "python": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit/.venv/bin/python",
       "console": "integratedTerminal",
-      "justMyCode": false
+      "justMyCode": false,
+      "osx": {
+        "python": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit/.venv/bin/python"
+      },
+      "linux": {
+        "python": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit/.venv/bin/python"
+      },
+      "windows": {
+        "python": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit/.venv/Scripts/python.exe"
+      }
     },
     {
       "name": "MTK: Run Tests (debug)",
@@ -27,7 +36,16 @@
       },
       "python": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit/.venv/bin/python",
       "console": "integratedTerminal",
-      "justMyCode": false
+      "justMyCode": false,
+      "osx": {
+        "python": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit/.venv/bin/python"
+      },
+      "linux": {
+        "python": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit/.venv/bin/python"
+      },
+      "windows": {
+        "python": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit/.venv/Scripts/python.exe"
+      }
     }
   ]
 }

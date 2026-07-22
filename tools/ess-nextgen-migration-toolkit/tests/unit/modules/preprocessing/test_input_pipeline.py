@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import base64
 import json
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
 
+from core.logging import Logger
 from modules.migration.models import MigrationContext
 from modules.preprocessing.input_pipeline import build_input_pipeline
 from modules.preprocessing.steps.agent_selection_step import AgentSelectionStep
@@ -48,7 +49,7 @@ class StubMsalTokenProvider:
     token = _make_token({"tid": "tenant-123", "oid": "user-456", "upn": "maker@contoso.com"})
     instances: list[StubMsalTokenProvider] = []
 
-    def __init__(self, config: object, *args: object, **kwargs: object) -> None:
+    def __init__(self, config: Any, *args: Any, **kwargs: Any) -> None:
         self.config = config
         self.instances.append(self)
 
@@ -69,8 +70,8 @@ class FakeDataverseClient:
 def test_gather_input_with_auth_step_populates_identity_and_bootstraps_client(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    logger = FakeLogger()
-    step = GatherInputWithAuthStep(logger, ("READONLY", "WRITEBACK"))  # type: ignore[arg-type]
+    logger = cast(Logger, FakeLogger())
+    step = GatherInputWithAuthStep(logger, ("READONLY", "WRITEBACK"))
     StubMsalTokenProvider.instances.clear()
     discovered_authority = "https://login.microsoftonline.com/tenant-123"
     monkeypatch.setattr(
@@ -134,8 +135,8 @@ def test_discover_tenant_defaults_to_organizations_when_header_missing(
 def test_gather_preferred_solution_step_stores_solution_name(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    logger = FakeLogger()
-    step = GatherPreferredSolutionStep(logger, ("READONLY", "WRITEBACK"))  # type: ignore[arg-type]
+    logger = cast(Logger, FakeLogger())
+    step = GatherPreferredSolutionStep(logger, ("READONLY", "WRITEBACK"))
     monkeypatch.setattr("builtins.input", lambda _: "ess_customizations")
 
     result = step.execute(MigrationContext())
@@ -146,8 +147,8 @@ def test_gather_preferred_solution_step_stores_solution_name(
 def test_gather_preferred_solution_step_leaves_solution_empty_when_skipped(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    logger = FakeLogger()
-    step = GatherPreferredSolutionStep(logger, ("READONLY", "WRITEBACK"))  # type: ignore[arg-type]
+    logger = cast(Logger, FakeLogger())
+    step = GatherPreferredSolutionStep(logger, ("READONLY", "WRITEBACK"))
     monkeypatch.setattr("builtins.input", lambda _: "   ")
 
     result = step.execute(MigrationContext())
@@ -158,8 +159,8 @@ def test_gather_preferred_solution_step_leaves_solution_empty_when_skipped(
 def test_agent_selection_step_queries_agents_and_stores_selected_agent(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    logger = FakeLogger()
-    step = AgentSelectionStep(logger, ("READONLY", "WRITEBACK"))  # type: ignore[arg-type]
+    logger = cast(Logger, FakeLogger())
+    step = AgentSelectionStep(logger, ("READONLY", "WRITEBACK"))
     fake_client = FakeDataverseClient(
         [
             {"name": "Zebra Agent", "botid": "bot-z", "statecode": 1},
@@ -174,12 +175,12 @@ def test_agent_selection_step_queries_agents_and_stores_selected_agent(
     assert fake_client.calls == [("bots", "name,botid,statecode")]
     assert result.selected_agent_id == "bot-a"
     assert result.selected_agent_name == "Alpha Agent"
-    assert ("INFO", "1. Alpha Agent [bot-a] state=0") in logger.messages
-    assert ("INFO", "2. Zebra Agent [bot-z] state=1") in logger.messages
+    assert ("INFO", "1. Alpha Agent [bot-a] state=0") in logger.messages  # type: ignore[attr-defined]
+    assert ("INFO", "2. Zebra Agent [bot-z] state=1") in logger.messages  # type: ignore[attr-defined]
 
 
 def test_build_input_pipeline_wires_steps_in_order() -> None:
-    pipeline = build_input_pipeline(FakeLogger(), ("READONLY", "WRITEBACK"))  # type: ignore[arg-type]
+    pipeline = build_input_pipeline(cast(Logger, FakeLogger()), ("READONLY", "WRITEBACK"))
 
     assert [step.name() for step in pipeline.steps] == [
         "GatherInputWithAuthStep",
