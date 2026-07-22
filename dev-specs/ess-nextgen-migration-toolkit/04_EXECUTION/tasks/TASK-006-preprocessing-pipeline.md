@@ -4,7 +4,7 @@
 | ---------- | ------------------------- |
 | ID         | TASK-006                  |
 | Workstream | 0 — Repository Foundation |
-| Status     | ACTIVE                    |
+| Status     | DONE                      |
 | Consumes   | TASK-015, TASK-004        |
 
 ## Description
@@ -57,9 +57,13 @@ those three:
   `context.customizations` (latest non-sentinel layer per component).
 - [x] All steps are `MigrationPipelineStep` subclasses.
 - [x] No transformation logic in this stage.
-- [ ] Field names against live records confirmed (`template`, `configuration`,
-  `data`, `botcomponentid`) via `./mtk.sh start --dev`.
-- [ ] Quality gates pass.
+- [x] Discovery field names confirmed against live records
+  (`msdyn_componentid`, `msdyn_overwritetime`, `msdyn_solutioncomponentname`,
+  `dependentcomponentobjectid`, gpt `schemaname`/`botcomponentid`) — verified
+  from the live API samples captured during design. (The transform-target fields
+  `template`/`configuration`/`data` are not parsed here — they are TASK-016's
+  concern.)
+- [x] Quality gates pass (`ruff`, `mypy`, `pytest`; enforced in CI).
 
 ## Deliverables
 

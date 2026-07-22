@@ -61,9 +61,11 @@ write. See `02_ARCHITECTURE/CUSTOMIZATION_DISCOVERY.md` section 6.
 - [x] Step is a `MigrationPipelineStep` and performs no Dataverse I/O.
 - [x] Unit tests cover each transform + the step's pending-write assembly.
 - [ ] Field names against live records confirmed (`template`, `configuration`,
-  `data`, `botcomponentid`) via `./mtk.sh start --dev`.
-- [ ] Registered as the first step of `build_transformation_pipeline`.
-- [ ] Quality gates pass.
+  `data`, `botcomponentid`) via `./mtk.sh start --dev`. **(open — blocks DONE;
+  the transforms read/write these fields, so they must be verified against a live
+  record before writeback in TASK-007 can be trusted.)**
+- [x] Registered as the first step of `build_transformation_pipeline`.
+- [x] Quality gates pass (`ruff`, `mypy`, `pytest`; enforced in CI).
 
 ## Deliverables
 
