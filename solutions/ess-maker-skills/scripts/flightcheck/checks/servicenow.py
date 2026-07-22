@@ -2,15 +2,17 @@
 # Licensed under the MIT License.
 
 """
-ESS FlightCheck — ServiceNow Deep Validation (SN-CONN-xxx, SN-FLOW-xxx, SN-CFG-xxx, SN-LOCAL-xxx)
+ESS FlightCheck — ServiceNow Deep Validation (SN-CONN-xxx, SN-FLOW-xxx, SN-CFG-xxx, SN-URL-xxx, SN-LOCAL-xxx)
 
 Validates ServiceNow connection references, flow status, template configurations
-in Dataverse, and local agent topic files for ServiceNow HRSD/ITSM scenarios.
+in Dataverse, portal base URL environment variables, and local agent topic files
+for ServiceNow HRSD/ITSM scenarios.
 """
 
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 from ..runner import CheckResult, Priority, Role, Status
 from .connections import check_connector_connections
@@ -83,6 +85,9 @@ def run_servicenow_checks(runner) -> list[CheckResult]:
 
     # --- Template Configurations (Dataverse) ---
     results.extend(_check_template_configs(runner))
+
+    # --- Portal Base URL environment variables (Dataverse) ---
+    results.extend(_check_base_url(runner))
 
     # --- Local Topic Files ---
     results.extend(_check_local_topics(runner))
@@ -557,6 +562,167 @@ def _validate_expected_configs(
             roles=[Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
         ))
     # If none found, the pack likely isn't installed — don't flag as error
+
+
+# Portal base URL environment variables — one per independently-installable
+# extension pack so the value survives managed-solution updates (US 7535608).
+# These supersede the template-config base URI, which ships empty and is reset
+# on every package update (root cause of ICM 820635151).
+PORTAL_BASE_URI_ENV_VARS = {
+    "hrsd": {
+        "id": "SN-URL-001",
+        "schema": "msdyn_ServiceNowHRSDPortalBaseURI",
+        "label": "ServiceNow HRSD portal base URL",
+    },
+    "itsm": {
+        "id": "SN-URL-002",
+        "schema": "msdyn_ServiceNowITSMPortalBaseURI",
+        "label": "ServiceNow ITSM portal base URL",
+    },
+}
+
+_SET_ENV_VAR_STEPS = (
+    "Set this environment variable's current value in the "
+    "[Power Platform admin center](https://admin.powerplatform.microsoft.com) "
+    "(Environments > Settings > Environment variables) to your ServiceNow portal "
+    "URL, e.g. https://<instance>.service-now.com/sp."
+)
+
+
+def _is_well_formed_portal_url(value: str) -> bool:
+    """A portal base URL must be an absolute http(s) URL with a host."""
+    try:
+        parsed = urlparse(value)
+    except (ValueError, TypeError):
+        return False
+    return parsed.scheme in ("http", "https") and bool(parsed.netloc)
+
+
+def _evaluate_base_url(cfg: dict, def_present: bool, value) -> CheckResult:
+    """Map the observed env-var state to a CheckResult for one extension pack."""
+    roles = [Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value]
+    doc = f"{DOC_BASE}/servicenow"
+
+    if value and value.strip():
+        trimmed = value.strip()
+        if _is_well_formed_portal_url(trimmed):
+            return CheckResult(
+                roles=roles, checkpoint_id=cfg["id"], category="ServiceNow",
+                priority=Priority.HIGH.value, status=Status.PASSED.value,
+                description=cfg["label"],
+                result=f"Set to: {trimmed}",
+                doc_link=doc,
+            )
+        return CheckResult(
+            roles=roles, checkpoint_id=cfg["id"], category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=cfg["label"],
+            result=f"Set to a value that is not a valid absolute URL: {trimmed}",
+            remediation=(
+                "ServiceNow record hyperlinks may render incorrectly until this "
+                "is a valid absolute URL. " + _SET_ENV_VAR_STEPS
+            ),
+            doc_link=doc,
+        )
+
+    if not def_present:
+        return CheckResult(
+            roles=roles, checkpoint_id=cfg["id"], category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            description=cfg["label"],
+            result="Portal base URL environment variable not found in Dataverse",
+            remediation=(
+                "Install the matching ServiceNow extension pack, then set the "
+                "portal base URL. " + _SET_ENV_VAR_STEPS
+            ),
+            doc_link=doc,
+        )
+
+    return CheckResult(
+        roles=roles, checkpoint_id=cfg["id"], category="ServiceNow",
+        priority=Priority.HIGH.value, status=Status.FAILED.value,
+        description=cfg["label"],
+        result="Environment variable exists but has no value set",
+        remediation=(
+            "ServiceNow record hyperlinks will not render until this is set. "
+            + _SET_ENV_VAR_STEPS
+        ),
+        doc_link=doc,
+    )
+
+
+def _check_base_url(runner) -> list[CheckResult]:
+    """Validate the ServiceNow portal base URL env vars are set and well-formed.
+
+    Each extension pack (HRSD, ITSM) carries its own update-safe Dataverse
+    environment variable (msdyn_ServiceNow{HRSD,ITSM}PortalBaseURI) whose value
+    the orchestrator stamps onto every case/ticket record so the agent can return
+    a clickable portal hyperlink. An empty value is the root cause of
+    ICM 820635151 (hyperlinks only returned when explicitly requested).
+    """
+    results: list[CheckResult] = []
+    env_url = runner.env_url
+    dv_token = runner.dv_token
+
+    if not env_url or not dv_token:
+        for cfg in PORTAL_BASE_URI_ENV_VARS.values():
+            results.append(CheckResult(
+                roles=[Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
+                checkpoint_id=cfg["id"], category="ServiceNow",
+                priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+                description=cfg["label"],
+                result="Dataverse token not available — skipping base URL check",
+            ))
+        return results
+
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+        from auth import query_all
+
+        defs = query_all(
+            env_url, dv_token,
+            "environmentvariabledefinitions",
+            "displayname,schemaname,environmentvariabledefinitionid",
+            filter_expr="contains(schemaname,'PortalBaseURI')",
+        )
+        vals = query_all(
+            env_url, dv_token,
+            "environmentvariablevalues",
+            "value,schemaname,_environmentvariabledefinitionid_value",
+        )
+
+        def_map = {d["environmentvariabledefinitionid"]: d for d in defs}
+        val_map = {}
+        for v in vals:
+            def_id = v.get("_environmentvariabledefinitionid_value")
+            if def_id in def_map:
+                schema = def_map[def_id].get("schemaname", "")
+                val_map[schema] = v.get("value", "")
+
+        def_schemas = [d.get("schemaname", "") for d in defs]
+
+        for cfg in PORTAL_BASE_URI_ENV_VARS.values():
+            # Match on the publisher-agnostic core (drop the msdyn_ prefix).
+            core = cfg["schema"].split("_", 1)[-1].lower()
+            def_present = any(core in s.lower() for s in def_schemas)
+            value = None
+            for schema, val in val_map.items():
+                if core in schema.lower():
+                    value = val
+                    break
+            results.append(_evaluate_base_url(cfg, def_present, value))
+
+    except Exception as e:
+        for cfg in PORTAL_BASE_URI_ENV_VARS.values():
+            results.append(CheckResult(
+                roles=[Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
+                checkpoint_id=cfg["id"], category="ServiceNow",
+                priority=Priority.HIGH.value, status=Status.WARNING.value,
+                description=cfg["label"],
+                result=f"Unable to check base URL env var: {e}",
+            ))
+
+    return results
 
 
 def _check_local_topics(runner) -> list[CheckResult]:
