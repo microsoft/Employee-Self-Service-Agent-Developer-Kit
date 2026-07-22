@@ -140,10 +140,14 @@ References
 
 # 6. Pipeline Mapping
 
-Every Migration Rule maps directly to one Pipeline Step.
+Every Migration Rule maps directly to one Pipeline Step. The rule steps run in
+the **Transformation Pipeline** (`build_transformation_pipeline`,
+`src/modules/transformation/`), after the foundational DA-compatibility rewrite:
 
 ```python
-MigrationPipeline()
+TransformationPipeline()
+
+    .use(ApplyDaCompatibilityStep())        # foundational CA→DA rewrite (TASK-016)
 
     .use(OverrideAgentMetadataStep())
 
@@ -157,6 +161,11 @@ MigrationPipeline()
 
     .use(...)
 ```
+
+`ApplyDaCompatibilityStep` is not a numbered business rule — it is the
+prerequisite that makes a CA agent DA-compatible (template + AI model kind +
+configuration) before the rule steps run. See
+`02_ARCHITECTURE/CUSTOMIZATION_DISCOVERY.md` and TASK-016.
 
 Adding a new migration capability should normally require:
 
@@ -213,6 +222,13 @@ Override the following metadata using the Declarative Agent package values:
 * Template
 * AI Model Kind
 * Agent Instructions (Overview Page)
+
+> **Note.** The **Template** and **AI Model Kind** overrides are performed
+> up-front by the foundational `ApplyDaCompatibilityStep` (TASK-016) so a stale
+> customer overlay cannot block the CA→DA transition; `OverrideAgentMetadataStep`
+> is the authoritative rule that owns the full agent-metadata override set
+> (including Runtime Provider and Agent Instructions). Both are idempotent, so
+> the overlap is safe.
 
 The current implementation intentionally replaces existing Agent Instructions with the Declarative Agent instructions.
 

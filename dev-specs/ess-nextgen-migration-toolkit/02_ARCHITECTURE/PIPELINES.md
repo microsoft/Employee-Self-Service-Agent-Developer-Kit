@@ -21,11 +21,11 @@
 > single concern:
 >
 > ```
-> Input Pipeline      (src/modules/preprocessing/)
+> Input Pipeline          (src/modules/preprocessing/)
 >       ↓
-> Migration Pipeline  (src/modules/migration/)
+> Transformation Pipeline (src/modules/transformation/)
 >       ↓
-> Output Pipeline     (src/modules/postprocessing/)
+> Output Pipeline         (src/modules/postprocessing/)
 > ```
 >
 > The composition is expressed fluently through `ChainedPipeline` (the generic
@@ -34,14 +34,14 @@
 > ```python
 > ChainedPipeline[MigrationContext]()
 >     .add(build_input_pipeline(logger))
->     .add(build_migration_pipeline(logger))
+>     .add(build_transformation_pipeline(logger))
 >     .add(build_output_pipeline(logger))
 > ```
 >
 > **Each stage receives the output of the previous stage and operates over the
 > shared `MigrationContext`.** The Input Pipeline builds and enriches the
 > context (including the homogeneous keyed `ComponentSet` of customer-owned
-> components); the Migration Pipeline applies deterministic business
+> components); the Transformation Pipeline applies deterministic business
 > transformations to it; the Output Pipeline validates, persists, and reports on
 > it.
 >
@@ -287,20 +287,22 @@ type-threads every `.use(step)`; the ESS stages instantiate it as
 produced by the prior step and returns the enriched context.
 
 ```python
-# Input Pipeline (src/modules/preprocessing/) — discovers artifacts and
-# builds the canonical MigrationContext, including the keyed ComponentSet.
+# Input Pipeline (src/modules/preprocessing/) — authenticates, selects the ESS
+# Agent, verifies the ALM preferred solution, and discovers customer
+# customizations, enriching the canonical MigrationContext.
 input_pipeline = (
     InputPipeline()
-        .use(DiscoverAgent())
-        .use(LoadDependencies())
-        .use(RetrieveSolutionComponentLayers())
-        .use(ResolveCustomizationOwnership())
-        .use(LoadCanonicalComponents())      # populates context.ComponentSet
+        .use(GatherInputWithAuthStep())          # first 3 steps are fixed-order
+        .use(AgentSelectionStep())
+        .use(GatherALMCustomerInputStep())       # GetPreferredSolution cross-check
+        .use(RetrieveAgentConfigurationStep())   # bot record + gpt.default component
+        .use(RetrieveCustomizationsStep())       # deps + componentlayers classification
 )
 
-# Migration Pipeline (src/modules/migration/) — one Step per Migration Rule.
-migration_pipeline = (
-    MigrationPipeline()
+# Transformation Pipeline (src/modules/transformation/) — one Step per rule.
+transformation_pipeline = (
+    TransformationPipeline()
+        .use(ApplyDaCompatibilityStep())         # CA→DA model/template/config rewrite
         .use(OverrideAgentMetadataStep())        # RULE-001
         .use(ReplaceEndConversationStep())       # RULE-002
         .use(HandleOnActivityTopicStep())        # RULE-003
@@ -312,7 +314,7 @@ migration_pipeline = (
 output_pipeline = (
     OutputPipeline()
         .use(ValidateMigration())
-        .use(Writeback())                    # Migrate mode only
+        .use(Writeback())                    # WRITEBACK mode only
         .use(GenerateMigrationReport())      # renders customer-facing migration_report.md
 )
 # session.log is streamed live by the framework Logger across all stages —
@@ -330,11 +332,11 @@ subclass needed:
 toolkit = (
     ChainedPipeline[MigrationContext]()
         .add(input_pipeline)
-        .add(migration_pipeline)
+        .add(transformation_pipeline)
         .add(output_pipeline)
 )
 
-result = toolkit.run(context)   # ExecutionMode set on the context (READONLY | WRITEBACK)
+result = toolkit.run(context)   # context.mode set (READONLY | WRITEBACK)
 ```
 
 The Builder creates immutable executable pipelines. The **Migration Orchestrator
@@ -342,7 +344,7 @@ is only the composition root** — it assembles the super-pipeline above,
 configures the execution mode, executes it, and returns the reports and
 diagnostics (see section 16). Adding a future migration capability normally
 requires only a new Migration Rule, a new Pipeline Step, and its registration in
-the Migration Pipeline — the surrounding framework is unchanged.
+the Transformation Pipeline — the surrounding framework is unchanged.
 
 > **Note — where the C# reference maps.** A stage pipeline
 > (`Pipeline[TInput, TOutput]`) is the analogue of the C#
@@ -690,19 +692,21 @@ Responsibilities
 - Load canonical Domain Models and build the keyed `ComponentSet`
 - Produce the enriched `MigrationContext`
 
-## Migration Pipeline (`src/modules/migration/`)
+## Transformation Pipeline (`src/modules/transformation/`)
 
 Responsibilities
 
-- Execute Migration Steps (one Step per Migration Rule) — deterministic business
-  transformations only
+- Execute Transformation Steps (one Step per rule) — deterministic business
+  transformations only. The first Step, `ApplyDaCompatibilityStep`, performs the
+  CA→DA model/template/config rewrite; the remaining Steps implement the
+  Migration Rules (RULE-001..004).
 
 ## Output Pipeline (`src/modules/postprocessing/`)
 
 Responsibilities
 
 - Validate migrated artifacts
-- Persist supported transformations to Dataverse (Migrate mode only)
+- Persist supported transformations to Dataverse (WRITEBACK mode only)
 - Render the customer-facing `migration_report.md`
 - (The engineering `session.log` is streamed by the Logger, not a step)
 
@@ -716,7 +720,7 @@ reports and diagnostics. The orchestrator composes `ChainedPipeline` directly:
 ```python
 ChainedPipeline[MigrationContext]()
     .add(input_pipeline)
-    .add(migration_pipeline)
+    .add(transformation_pipeline)
     .add(output_pipeline)
 ```
 

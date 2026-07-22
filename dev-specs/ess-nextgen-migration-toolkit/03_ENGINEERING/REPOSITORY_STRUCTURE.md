@@ -75,10 +75,11 @@ tools/
         modules/
             preprocessing/
                 steps/
-            migration/
+            transformation/
                 migration_step.py
-                migration_pipeline.py
+                transformation_pipeline.py
                 models/
+                    execution_mode.py
                     migration_context.py
                 steps/
             postprocessing/
@@ -86,7 +87,8 @@ tools/
         service/
             mtk_orchestrator.py
             constants.py
-            toolkit.py
+            utils.py
+            reporter.py
 
     output/
         session-YYYY-MM-DD_HH-MM-SS/
@@ -145,24 +147,23 @@ Never contains:
 
 ## core/models/
 
-Owns canonical domain models.
+Owns the **generic, product-agnostic** base models the framework depends on.
 
-Contains only business entities shared across the framework.
+Contains only framework-level entities — no ESS/domain vocabulary:
 
-Examples:
+* `ExecutionContext` — base context with an opaque `mode: str` and the
+  diagnostic collectors (`Logs`, `Warnings`, `Errors`, `Changes`)
+* `DiagnosticEntry`, `ChangeEntry`
 
-* MigrationContext
-* MigrationSession
-* Component
-* ComponentLayer
-* MigrationCandidate
-* ValidationResult
-* MigrationReport
+Domain entities (e.g. `MigrationContext`, the `ExecutionMode` READONLY/WRITEBACK
+vocabulary) live in `modules/transformation/models/`, not here — this keeps
+`core/` extractable as a standalone framework.
 
 Never contains:
 
 * REST payloads
 * Business logic
+* Domain-specific vocabulary (e.g. concrete execution-mode values)
 
 ---
 
@@ -205,12 +206,17 @@ toolkit's entry point.
 Contains:
 
 * `mtk_orchestrator.py`
+* `constants.py`
+* `utils.py`
+* `reporter.py` — renders the customer-facing `migration_report.md` (moved out
+  of `core/logging` so the framework stays product-agnostic)
 
 Responsibilities include:
 
 * Initialize and coordinate a migration session
 * Build the MigrationContext and select the Execution Mode
 * Drive the Pipeline Engine over the pipeline-stage modules
+* Render the customer-facing report (Reporter)
 * Coordinate progress, failures, and final results
 
 The service layer never performs business transformations (those belong to
@@ -239,48 +245,56 @@ Owns pipeline-stage business logic grouped by execution phase.
 Contains:
 
 * `preprocessing/`
-* `migration/`
+* `transformation/`
 * `postprocessing/`
 
 Reusable service helpers outside this grouping must not contain migration rules.
 
 ---
 
-## modules/migration/
+## modules/transformation/
 
-Owns business transformations.
+Owns business transformations (the middle pipeline stage). Also hosts the
+shared domain types used by every stage — ``MigrationContext``
+(``models/migration_context.py``) and ``MigrationPipelineStep``
+(``migration_step.py``) — whose names are retained even though the stage was
+renamed from *migration* to *transformation*.
 
 Contains:
 
-* Migration Pipeline
-* Pipeline Step implementations
+* Transformation Pipeline (``transformation_pipeline.py``)
+* Pipeline Step implementations (``steps/``)
+* Shared domain types (``MigrationContext``, ``MigrationPipelineStep``)
 
 Every Pipeline Step performs one logical transformation.
 
 Examples:
 
-* Runtime Provider transformation
-* Template transformation
-* Model Kind transformation
-* Conversation Node transformation
+* DA-compatibility rewrite (Model Kind `PreviewModels` -> `MicrosoftCopilotModels`,
+  template `default-*` -> `gptagent-1.0.0`, add config model block)
+* Conversation Node transformation (e.g. `EndConversation` -> `EndAllTopics`)
+* Unsupported-trigger sanitization
 
 Migration rules live exclusively in
-`src/modules/migration/steps/`. Migration Steps never call Dataverse
+`src/modules/transformation/steps/`. Transformation Steps never call Dataverse
 directly.
 
 ---
 
 ## modules/preprocessing/
 
-Owns discovery and preparation.
+Owns discovery and preparation (the Input pipeline stage).
 
 Responsibilities include:
 
-* Discover ESS Agents
-* Retrieve Dependencies For Uninstall
-* Retrieve Solution Component Layers
-* Determine migration candidates
-* Load canonical components
+* Authenticate and resolve the target environment
+* Discover and select the ESS Agent (filtered by ESS schemaname)
+* Capture + verify the ALM customer's preferred solution
+  (`GetPreferredSolution` cross-check)
+* Retrieve the agent's configuration and metadata (bot record + gpt.default)
+* Retrieve customizations via `RetrieveDependenciesForUninstallWithMetadata`
+  and classify them from `msdyn_componentlayers` (see
+  `02_ARCHITECTURE/CUSTOMIZATION_DISCOVERY.md`)
 
 No transformations occur here.
 
@@ -288,12 +302,13 @@ No transformations occur here.
 
 ## modules/postprocessing/
 
-Owns execution after transformation.
+Owns execution after transformation (the Output pipeline stage).
 
 Responsibilities include:
 
 * Validation
-* Writeback
+* Writeback (applies the transformation module's `pending_writes`, WRITEBACK
+  mode only, into the preferred solution when set)
 * Report generation
 
 No migration rules belong here.
@@ -370,9 +385,9 @@ No layer may bypass another layer.
 | service                            | Application orchestration and entry point |
 | service/mtk_orchestrator.py        | Orchestration entry point              |
 | modules                    | Pipeline-stage business logic          |
-| modules/preprocessing      | Discovery pipeline                     |
-| modules/migration          | Business transformations               |
-| modules/postprocessing     | Validation and persistence             |
+| modules/preprocessing      | Discovery pipeline (Input)             |
+| modules/transformation     | Business transformations               |
+| modules/postprocessing     | Validation and persistence (Output)    |
 | debug                              | Generated logs and reports             |
 
 ---
@@ -386,8 +401,8 @@ No layer may bypass another layer.
 | SERVICES.md             | service                       |
 | DATAVERSE_CLIENT.md    | core/outbound                 |
 | PIPELINES.md            | core + modules        |
-| MIGRATION_RULES.md      | modules/migration     |
-| DIAGNOSTICS.md          | core/logging + debug          |
+| MIGRATION_RULES.md      | modules/transformation |
+| DIAGNOSTICS.md          | core/logging + service (Reporter) |
 | IMPLEMENTATION_GUIDE.md | Entire repository             |
 
 ---

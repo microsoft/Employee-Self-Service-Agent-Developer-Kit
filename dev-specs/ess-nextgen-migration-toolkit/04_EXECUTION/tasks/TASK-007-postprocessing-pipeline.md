@@ -4,22 +4,27 @@
 | ---------- | ------------------------- |
 | ID         | TASK-007                  |
 | Workstream | 0 — Repository Foundation |
-| Status     | BLOCKED                      |
-| Consumes   | TASK-015, TASK-004, TASK-005 |
+| Status     | TODO                      |
+| Consumes   | TASK-015, TASK-004, TASK-005, TASK-016 |
 
 ## Description
 
 Implement the **Output Pipeline** (`src/modules/postprocessing/`) — the stage
-pipeline that runs after migration transformations to validate, persist, and
-render the session bundle.
+pipeline that runs after transformations to validate, persist, and render the
+session bundle.
 
 TASK-015 delivers an empty pass-through output stage. This task replaces it with
 the real steps:
 
 1. **ValidateMigration** — verify migrated components meet post-conditions
    (runs in both modes).
-2. **Writeback** — persist transformed components back to Dataverse via the
-   DataverseClient (TASK-004). **WRITEBACK mode only** —
+2. **Writeback** — apply `context.pending_writes` (produced by the
+   Transformation stage, TASK-016) back to Dataverse via the DataverseClient
+   (TASK-004). Each pending write is
+   `{"entity_set", "record_id", "changes"}` → `update(f"{entity_set}({record_id})", changes)`.
+   When `context.preferred_solution` is set (ALM customers, verified in
+   `GatherALMCustomerInputStep`), the writes target that solution via the
+   `MSCRM.SolutionUniqueName` request header. **WRITEBACK mode only** —
    `supported_modes=("WRITEBACK",)`, auto-skipped in READONLY.
 3. **GenerateMigrationReport** — terminal step that renders the customer-facing
    `migration_report.md` from `MigrationContext` collectors via the Reporter
@@ -40,13 +45,16 @@ the real steps:
 ## Acceptance Criteria
 
 - [ ] `ValidateMigration` step verifies post-conditions on migrated components.
-- [ ] `Writeback` step persists results via DataverseClient — **WRITEBACK only**.
+- [ ] `Writeback` step applies `context.pending_writes` via DataverseClient —
+  **WRITEBACK only**.
+- [ ] Writeback targets `context.preferred_solution` (when set) via the
+  `MSCRM.SolutionUniqueName` header.
 - [ ] `Writeback` is auto-skipped in READONLY mode (mode-gating via
   `MigrationPipelineStep.can_execute`).
 - [ ] `GenerateMigrationReport` renders `migration_report.md` via Reporter.
 - [ ] Output bundle contains exactly `migration_report.md` + `session.log`.
 - [ ] All steps are `MigrationPipelineStep` subclasses with `supported_modes`.
-- [ ] No migration transformation logic in this stage.
+- [ ] No transformation logic in this stage.
 - [ ] Quality gates pass.
 
 ## Deliverables
@@ -61,6 +69,7 @@ the real steps:
 - 02_ARCHITECTURE/PIPELINES.md — Output Pipeline responsibilities
 - 03_ENGINEERING/DIAGNOSTICS.md — Reporter, session bundle
 - 02_ARCHITECTURE/DATAVERSE_CLIENT.md — writeback API
-- src/core/logging/reporter.py — Reporter.render()
-- src/modules/migration/migration_step.py — MigrationPipelineStep (mode-gating)
-- src/core/models/execution_context.py — ExecutionMode (READONLY/WRITEBACK)
+- src/service/reporter.py — Reporter.render()
+- src/modules/transformation/migration_step.py — MigrationPipelineStep (mode-gating)
+- src/modules/transformation/models/execution_mode.py — ExecutionMode (READONLY/WRITEBACK)
+- src/modules/transformation/models/migration_context.py — `pending_writes` contract

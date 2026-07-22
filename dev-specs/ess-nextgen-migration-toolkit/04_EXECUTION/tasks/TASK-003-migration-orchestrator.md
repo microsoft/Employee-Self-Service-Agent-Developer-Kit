@@ -34,14 +34,15 @@ Logger lifecycle, default READONLY mode). This task extends it with:
 - No migration-transformation logic, no pipeline-step behaviour, and no direct
   file I/O or `print()` from business paths (DIAG-005 / PIPE-006).
 - `ExecutionMode` is a StrEnum (`READONLY` / `WRITEBACK`) from
-  `core.models.execution_context`.
+  `modules.transformation.models`. The generic base `ExecutionContext` stores it
+  as an opaque `mode: str`; set it via `MigrationContext(mode=ExecutionMode.…)`.
 - Logger, Reporter, MigrationContext, ChainedPipeline are already wired by
   TASK-015 — this task extends, not rewrites.
 
 ## Acceptance Criteria
 
 - [ ] `--mode readonly|writeback` CLI argument parsed and applied to
-  `MigrationContext.ExecutionMode`.
+  `MigrationContext.mode`.
 - [ ] `mtk.sh start --mode writeback` forwards the argument to the orchestrator.
 - [ ] Default mode is `READONLY` when no argument supplied.
 - [ ] Pipeline exceptions are caught, a user-friendly message is printed, and
@@ -64,7 +65,8 @@ Logger lifecycle, default READONLY mode). This task extends it with:
 - 02_ARCHITECTURE/ARCHITECTURE.md — orchestrator = composition root
 - 02_ARCHITECTURE/PIPELINES.md — ChainedPipeline composition
 - 03_ENGINEERING/DIAGNOSTICS.md — Logger session lifecycle
-- src/core/models/execution_context.py — ExecutionMode StrEnum
+- src/modules/transformation/models/execution_mode.py — ExecutionMode StrEnum
+- src/core/models/execution_context.py — ExecutionContext (generic `mode: str`)
 - src/core/pipelines/ — ChainedPipeline, Pipeline
 - 04_EXECUTION/tasks/TASK-015-input-pipeline-auth-discovery.md — base wiring
   this task extends

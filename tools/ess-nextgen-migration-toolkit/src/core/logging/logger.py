@@ -11,7 +11,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import TextIO
 
-from core.logging.session_manager import SessionManager
+from core.logging.session_manager import DEFAULT_REPORT_FILENAME, SessionManager
 from core.models.execution_context import ChangeEntry, DiagnosticEntry, ExecutionContext
 
 
@@ -92,11 +92,12 @@ class Logger:
         output_root: Path,
         context: ExecutionContext,
         *,
+        report_filename: str = DEFAULT_REPORT_FILENAME,
         level: LogLevel = LogLevel.INFO,
         clock: Callable[[], datetime] | None = None,
     ) -> Logger:
         """Create a session bundle, install the transcript tee, and return Logger."""
-        session_manager = SessionManager(output_root, clock=clock)
+        session_manager = SessionManager(output_root, report_filename=report_filename, clock=clock)
         logger = cls(session_manager, context, level=level, clock=clock)
         logger.start()
         return logger

@@ -91,15 +91,22 @@ class DataverseClient:
         self,
         entity_set: str,
         *,
-        select: str,
+        select: str | None = None,
         filter: str | None = None,
     ) -> list[JsonDict]:
-        """Return all records for an entity-set query across all pages."""
-        params: dict[str, str] = {"$select": select}
+        """Return all records for an entity-set query across all pages.
+
+        ``select`` limits the returned columns. Pass ``None`` (the default) or
+        ``"*"`` to return all fields — Dataverse has no ``$select=*``; the
+        parameter is simply omitted, which yields the full default projection.
+        """
+        params: dict[str, str] = {}
+        if select is not None and select != "*":
+            params["$select"] = select
         if filter is not None:
             params["$filter"] = filter
 
-        payload = self.get(entity_set, params=params)
+        payload = self.get(entity_set, params=params or None)
         records = list(_coerce_records(payload, entity_set))
         next_link = _coerce_next_link(payload)
 
@@ -121,6 +128,16 @@ class DataverseClient:
             entity_set=_entity_from_path(path),
         )
         return _json_payload(response)
+
+    def call_function(self, function_name: str, **params: str) -> JsonDict:
+        """Invoke an unbound Dataverse Web API function and return the JSON payload.
+
+        String parameters are inlined as single-quoted OData literals, e.g.
+        ``RetrieveDependenciesForUninstall(SolutionUniqueName='msdyn_...')``.
+        """
+        inner = ",".join(f"{key}='{value}'" for key, value in params.items())
+        path = f"{function_name}({inner})"
+        return self.get(path)
 
     def create(self, entity_set: str, data: JsonDict) -> str:
         """Create one Dataverse record and return its Dataverse record ID."""

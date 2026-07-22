@@ -1,4 +1,12 @@
-"""Customer-facing migration report rendering."""
+"""Customer-facing migration report rendering (ESS service layer).
+
+This is ESS-specific output: it renders the customer-facing
+``migration_report.md`` (titles, sections, mode line) from the generic
+``ExecutionContext`` collectors. It lives in ``service/`` — not ``core/`` — so
+the framework's diagnostics infrastructure (Logger, SessionManager) stays
+product-agnostic while the migration-flavoured report shape is owned by the
+domain.
+"""
 
 from __future__ import annotations
 
@@ -18,7 +26,7 @@ class Reporter:
         self._session_manager.paths.report_path.write_text(report, encoding="utf-8")
 
     def _build_lines(self, context: ExecutionContext) -> list[str]:
-        mode = context.ExecutionMode.upper()
+        mode = context.mode.upper()
         title = self._title_for_mode(mode)
         return [
             f"# {title}",

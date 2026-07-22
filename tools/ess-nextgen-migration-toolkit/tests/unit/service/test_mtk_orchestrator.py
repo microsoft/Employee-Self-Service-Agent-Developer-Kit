@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.pipelines import Pipeline, PipelineStep
-from modules.migration.models import MigrationContext
+from modules.transformation.models import MigrationContext
 from service import mtk_orchestrator
 
 
@@ -45,8 +45,8 @@ def test_main_runs_stage_pipelines_and_writes_two_bundle_files(
 ) -> None:
     created_contexts: list[MigrationContext] = []
 
-    def build_context(*, ExecutionMode: object) -> StageContext:
-        context = StageContext(ExecutionMode=ExecutionMode)  # type: ignore[arg-type]
+    def build_context(*, mode: object) -> StageContext:
+        context = StageContext(mode=mode)  # type: ignore[arg-type]
         created_contexts.append(context)
         return context
 
@@ -57,7 +57,7 @@ def test_main_runs_stage_pipelines_and_writes_two_bundle_files(
     )
     monkeypatch.setattr(
         mtk_orchestrator,
-        "build_migration_pipeline",
+        "build_transformation_pipeline",
         lambda logger, modes, **kw: _stage("migration"),
     )
     monkeypatch.setattr(
@@ -67,7 +67,7 @@ def test_main_runs_stage_pipelines_and_writes_two_bundle_files(
     mtk_orchestrator.main()
 
     assert len(created_contexts) == 1
-    assert created_contexts[0].ExecutionMode == "READONLY"
+    assert created_contexts[0].mode == "READONLY"
     assert created_contexts[0].events == ["input", "migration", "output"]  # type: ignore[attr-defined]
 
     session_dirs = sorted(path for path in tmp_path.iterdir() if path.is_dir())
@@ -115,12 +115,12 @@ def test_main_closes_logger_when_pipeline_execution_fails(
     monkeypatch.setattr(
         mtk_orchestrator.Logger,  # type: ignore[attr-defined]
         "start_session",
-        lambda output_root, context: FakeLogger(),
+        lambda output_root, context, **kwargs: FakeLogger(),
     )
     monkeypatch.setattr(mtk_orchestrator.Reporter, "render", lambda self, context: None)  # type: ignore[attr-defined]
     monkeypatch.setattr(mtk_orchestrator, "build_input_pipeline", fail_stage)
     monkeypatch.setattr(
-        mtk_orchestrator, "build_migration_pipeline", lambda logger, modes, **kw: _stage("m")
+        mtk_orchestrator, "build_transformation_pipeline", lambda logger, modes, **kw: _stage("m")
     )
     monkeypatch.setattr(
         mtk_orchestrator, "build_output_pipeline", lambda logger, modes, **kw: _stage("o")

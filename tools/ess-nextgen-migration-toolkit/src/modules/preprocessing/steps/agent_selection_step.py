@@ -5,12 +5,22 @@ from __future__ import annotations
 from typing import Any
 
 from core.logging import Logger
-from modules.migration.migration_step import MigrationPipelineStep
-from modules.migration.models import MigrationContext
+from modules.transformation.migration_step import MigrationPipelineStep
+from modules.transformation.models import MigrationContext
+
+# ESS Copilot agents (Employee Self Service) are identified by their Dataverse
+# ``schemaname``. Only the HR and IT ESS agents are valid migration targets, so
+# discovery filters to these exact schema names server-side.
+_ESS_AGENT_SCHEMA_NAMES = (
+    "msdyn_copilotforemployeeselfservicehr",
+    "msdyn_copilotforemployeeselfserviceit",
+)
+_AGENT_SELECT = "name,botid,statecode,schemaname"
+_AGENT_FILTER = " or ".join(f"schemaname eq '{name}'" for name in _ESS_AGENT_SCHEMA_NAMES)
 
 
 class AgentSelectionStep(MigrationPipelineStep):
-    """Query Dataverse for agents, prompt for a selection, and store it."""
+    """Query Dataverse for ESS agents, prompt for a selection, and store it."""
 
     def __init__(self, logger: Logger, supported_modes: tuple[str, ...]) -> None:
         super().__init__(
@@ -24,11 +34,19 @@ class AgentSelectionStep(MigrationPipelineStep):
             raise RuntimeError("Dataverse client is not initialized.")
 
         agents = sorted(
-            context.dataverse_client.query_all("bots", select="name,botid,statecode"),
+            context.dataverse_client.query_all(
+                "bots",
+                select=_AGENT_SELECT,
+                filter=_AGENT_FILTER,
+            ),
             key=_agent_sort_key,
         )
         if not agents:
-            raise RuntimeError("No ESS agents were found in the selected environment.")
+            raise RuntimeError(
+                "No ESS agents (schemaname "
+                f"{' or '.join(_ESS_AGENT_SCHEMA_NAMES)}) "
+                "were found in the selected environment."
+            )
 
         self._logger.LogInfo(
             "Available ESS agents:",
@@ -46,6 +64,7 @@ class AgentSelectionStep(MigrationPipelineStep):
         selected = agents[selection - 1]
         context.selected_agent_id = _string_field(selected, "botid")
         context.selected_agent_name = _string_field(selected, "name")
+        context.selected_agent_schemaname = _string_field(selected, "schemaname")
 
         self._logger.LogInfo(
             f"Selected agent {context.selected_agent_name or '(unnamed agent)'}.",

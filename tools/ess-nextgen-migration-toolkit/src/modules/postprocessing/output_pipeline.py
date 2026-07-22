@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from core.logging import Logger
 from core.pipelines import Pipeline
-from modules.migration.migration_step import MigrationPipelineStep
-from modules.migration.models import MigrationContext
+from modules.transformation.migration_step import MigrationPipelineStep
+from modules.transformation.models import MigrationContext
 
 
 class _OutputPassthroughStep(MigrationPipelineStep):

@@ -79,7 +79,7 @@ rather than reading every specification on every task.
 | 1     | Execution     | `04_EXECUTION/TASKS.md` |
 | 2     | Business Rules| `01_PRODUCT/MIGRATION_RULES.md` |
 | 3     | Constitution  | `00_META/PROJECT.md`, `00_META/INVARIANTS.md`, `00_META/VOCABULARY.md` |
-| 4     | Architecture  | `02_ARCHITECTURE/ARCHITECTURE.md`, `DOMAIN_MODEL.md`, `SERVICES.md`, `PIPELINES.md`, `DATAVERSE_CLIENT.md` |
+| 4     | Architecture  | `02_ARCHITECTURE/ARCHITECTURE.md`, `DOMAIN_MODEL.md`, `SERVICES.md`, `PIPELINES.md`, `DATAVERSE_CLIENT.md`, `CUSTOMIZATION_DISCOVERY.md` |
 | 5     | Engineering   | `03_ENGINEERING/REPOSITORY_STRUCTURE.md`, `CODING_STANDARDS.md`, `IMPLEMENTATION_GUIDE.md`, `DIAGNOSTICS.md`, `TESTING.md` |
 | 6     | Context       | `01_PRODUCT/CUSTOMER_JOURNEY.md`, `01_PRODUCT/MIGRATION_MODES.md`, `00_META/ROADMAP.md` |
 
@@ -117,6 +117,7 @@ Phase 4 — Architecture (read once per work session)
     SERVICES.md
     PIPELINES.md
     DATAVERSE_CLIENT.md
+    CUSTOMIZATION_DISCOVERY.md
         ↓
 Phase 5 — Engineering (read once per work session)
     03_ENGINEERING/REPOSITORY_STRUCTURE.md
@@ -252,8 +253,8 @@ Always respect module ownership.
 | --------------------- | ----------------------------------------------- |
 | Dataverse APIs        | `src/core/outbound/`                            |
 | Domain Models         | `src/core/models/`                              |
-| Migration Rules       | `src/modules/migration/steps/`          |
-| Pipeline Registration | `src/modules/migration/`                |
+| Migration Rules       | `src/modules/transformation/steps/`     |
+| Pipeline Registration | `src/modules/transformation/`           |
 | Orchestration entry   | `src/service/mtk_orchestrator.py`               |
 | Utilities             | `src/core/utils/`                               |
 | Diagnostics code      | `src/core/logging/`                             |
@@ -295,29 +296,27 @@ Keep responsibilities isolated.
 
 # 9. Migration Philosophy
 
-The toolkit implements three execution modes.
+The toolkit implements **two technical execution modes** (`ExecutionMode`):
 
 ```
-DISCOVER
-
-↓
-
-PREVIEW
-
-↓
-
-MIGRATE
+READONLY   →   WRITEBACK
 ```
 
-Execution modes differ only in **how far the pipeline progresses**.
+The customer journey has three progressive *intents* — Discover, Preview,
+Migrate — which map onto these two modes:
 
-Business transformations should remain identical between Preview and Migrate.
+- Discover / Preview → `ExecutionMode.READONLY` (no writes to Dataverse)
+- Migrate → `ExecutionMode.WRITEBACK` (persists transformations)
 
-Preview should always represent exactly what Migrate would execute.
+Execution modes differ only in **whether the pipeline persists**. Business
+transformations run identically in both modes; a `READONLY` run always
+represents exactly what `WRITEBACK` would execute. See
+`01_PRODUCT/MIGRATION_MODES.md`.
 
-At the framework level, these map to two `ExecutionMode` values:
-- DISCOVER / PREVIEW → `ExecutionMode.READONLY` (no writes to Dataverse)
-- MIGRATE → `ExecutionMode.WRITEBACK` (persists transformations)
+`ExecutionMode` is ESS-domain vocabulary
+(`src/modules/transformation/models/execution_mode.py`). The generic framework
+base `ExecutionContext` (`src/core/models/`) is product-agnostic and stores the
+mode only as an opaque `mode: str`, so `core/` stays extractable.
 
 ---
 

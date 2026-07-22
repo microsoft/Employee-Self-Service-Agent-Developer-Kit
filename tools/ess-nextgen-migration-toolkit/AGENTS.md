@@ -41,9 +41,9 @@
 | --------------------- | ----------------------------------------------- |
 | Pipeline framework    | `src/core/pipelines/`                           |
 | Dataverse APIs        | `src/core/outbound/`                            |
-| Domain Models         | `src/core/models/` + `src/modules/migration/models/` |
-| Migration Rules       | `src/modules/migration/steps/`                  |
-| Migration Step base   | `src/modules/migration/migration_step.py`       |
+| Domain Models         | `src/core/models/` + `src/modules/transformation/models/` |
+| Migration Rules       | `src/modules/transformation/steps/`             |
+| Migration Step base   | `src/modules/transformation/migration_step.py`  |
 | Input Pipeline        | `src/modules/preprocessing/`                    |
 | Output Pipeline       | `src/modules/postprocessing/`                   |
 | Orchestrator          | `src/service/mtk_orchestrator.py`               |

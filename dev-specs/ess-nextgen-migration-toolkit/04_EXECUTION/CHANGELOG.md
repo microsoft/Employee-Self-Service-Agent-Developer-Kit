@@ -12,6 +12,65 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 
 ## [Unreleased]
 
+- **Report filename is now a `SessionManager` constructor arg; core default is
+  neutral.** `core/logging/session_manager.py` no longer hardcodes
+  `migration_report.md` — it takes `report_filename` (default the neutral
+  `telemetry_report.md`) so the generic framework carries no product vocabulary.
+  `Logger.start_session` forwards the name; the ESS orchestrator passes
+  `service.constants.REPORT_FILENAME = "migration_report.md"`. The `output_root`
+  base folder handling is unchanged. Gates green.
+- **Reporter moved out of `core/` into the service layer.** The customer-facing
+  report renderer (`Reporter`) — which hardcodes ESS report titles and the
+  `migration_report.md` shape — moved from `src/core/logging/reporter.py` to
+  `src/service/reporter.py`. `core/logging` now contains only the generic
+  streaming Logger + SessionManager, so the framework carries no migration
+  vocabulary. Updated `mtk_orchestrator.py` (imports Reporter from
+  `service.reporter`), `service/__init__.py` (re-exports it), moved the Reporter
+  unit tests to `tests/unit/service/test_reporter.py`, and synced the specs
+  (`DIAGNOSTICS.md`, `REPOSITORY_STRUCTURE.md`, TASK-005/007). No behavioural
+  change; gates green.
+- **Generalized the framework base context; `ExecutionMode` moved to the domain.**
+  To keep `core/` product-agnostic and extractable, the base
+  `ExecutionContext` (`src/core/models/execution_context.py`) no longer defines
+  or holds the migration-specific `ExecutionMode` enum — it now carries only a
+  generic opaque `mode: str` plus the diagnostic collectors. The
+  `ExecutionMode` StrEnum (READONLY/WRITEBACK) moved to the ESS domain at
+  `src/modules/transformation/models/execution_mode.py`; `MigrationContext`
+  supplies it and defaults `mode` to `READONLY`. Updated the three readers
+  (`reporter.py`, `migration_step.py`, `mtk_orchestrator.py`) to read
+  `context.mode`, plus tests and the specs that cited the old location
+  (`REPOSITORY_STRUCTURE.md` core/models section, `DOMAIN_MODEL.md`,
+  `MIGRATION_MODES.md`, `PIPELINES.md`, `AGENTS.md`, TASK-003/007/009/015). No
+  behavioural change; gates green.
+- **Modes model sanitized to the two technical `ExecutionMode` values
+  (READONLY / WRITEBACK).** `01_PRODUCT/MIGRATION_MODES.md` is now authoritative
+  on the two modes the code actually implements; the three customer-journey
+  *intents* (Discover / Preview / Migrate) are kept only as journey language that
+  maps onto them (Discover + Preview → `READONLY`, Migrate → `WRITEBACK`). The
+  sole behavioural difference is the persistence step (`supported_modes=("WRITEBACK",)`).
+  Removed the stale `DISCOVER/PREVIEW/MIGRATE` execution-mode nomenclature from
+  `MIGRATION_MODES.md`, `AGENTS.md` §9, `DIAGNOSTICS.md` §10-12, `ROADMAP.md`
+  stages, `PROJECT.md` §7, `CUSTOMER_JOURNEY.md`, and two code docstrings
+  (`execution_context.py`, `migration_step.py`). Also sanitized
+  `01_PRODUCT/MIGRATION_RULES.md` §6 (`MigrationPipeline()` →
+  `TransformationPipeline()`, added the foundational `ApplyDaCompatibilityStep`
+  ahead of the rule steps, cross-referenced RULE-001's template/model overlap).
+- **Module rename: `migration/` → `transformation/`, plus customization-discovery
+  specs.** Renamed the middle pipeline stage folder `src/modules/migration/` →
+  `src/modules/transformation/` (builder `build_migration_pipeline` →
+  `build_transformation_pipeline`, `migration_pipeline.py` →
+  `transformation_pipeline.py`); the `MigrationContext` and `MigrationPipelineStep`
+  type/file names are intentionally retained. Added a new architecture spec
+  `02_ARCHITECTURE/CUSTOMIZATION_DISCOVERY.md` documenting solution resolution by
+  vertical → `RetrieveDependenciesForUninstallWithMetadata` → `msdyn_componentlayers`
+  → the ~1900 sentinel classification rule → the three idempotent DA-compatibility
+  transforms. Synced `PIPELINES.md`, `REPOSITORY_STRUCTURE.md`, `SERVICES.md`,
+  `INVARIANTS.md`, `VOCABULARY.md`, `IMPLEMENTATION_GUIDE.md`, both `AGENTS.md`
+  nav tables, and the toolkit `README.md`. Reframed **TASK-006** (Input: agent
+  config + customization discovery, ACTIVE), unblocked **TASK-007** (Output:
+  applies `pending_writes`, WRITEBACK + preferred-solution targeting, TODO), and
+  added **TASK-016** (Transformation: DA-compatibility rewrite / `ApplyDaCompatibilityStep`,
+  ACTIVE). (TASK-006, TASK-007, TASK-016)
 - **TASK-015 input-pipeline review refinements.** Consolidated environment
   prompting + MSAL authentication into `GatherInputWithAuthStep`, renamed agent
   discovery to `AgentSelectionStep`, added `GatherPreferredSolutionStep`, and

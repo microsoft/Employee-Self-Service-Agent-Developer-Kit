@@ -25,7 +25,7 @@ src/
         utils/       Generic helpers
     modules/
         preprocessing/   Input pipeline steps
-        migration/       Migration step base, models, migration_pipeline.py, steps/
+        transformation/  Transformation step base, models, transformation_pipeline.py, steps/
         postprocessing/  Output pipeline steps
     service/         Orchestration (mtk_orchestrator.py, constants.py)
 output/              Generated, gitignored output

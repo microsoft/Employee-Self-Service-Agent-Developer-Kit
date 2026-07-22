@@ -14,8 +14,8 @@ import httpx
 from core.auth import AuthenticationException, MsalTokenProvider, MsalTokenProviderConfig
 from core.logging import Logger
 from core.outbound import DataverseClient
-from modules.migration.migration_step import MigrationPipelineStep
-from modules.migration.models import MigrationContext
+from modules.transformation.migration_step import MigrationPipelineStep
+from modules.transformation.models import MigrationContext
 
 # Microsoft public client ID for Power Platform CLI / Dataverse delegated access.
 # Source: https://learn.microsoft.com/power-platform/admin/programmability-authentication-v2
@@ -30,7 +30,7 @@ class GatherInputWithAuthStep(MigrationPipelineStep):
     """Prompt for the Dataverse URL, authenticate, and initialize context access."""
 
     def __init__(
-        self, logger: Logger, supported_modes: tuple[str, ...], *, dev_mode: bool = False
+        self, logger: Logger, supported_modes: tuple[str, ...], *, is_dev_mode: bool = False
     ) -> None:
         super().__init__(
             description=(
@@ -39,10 +39,10 @@ class GatherInputWithAuthStep(MigrationPipelineStep):
             supported_modes=supported_modes,
         )
         self._logger = logger
-        self._dev_mode = dev_mode
+        self._is_dev_mode = is_dev_mode
 
     def execute(self, context: MigrationContext) -> MigrationContext:
-        dev_config = _load_dev_config() if self._dev_mode else None
+        dev_config = _load_dev_config() if self._is_dev_mode else None
 
         if dev_config and dev_config.get("environment_url"):
             environment_url = dev_config["environment_url"]

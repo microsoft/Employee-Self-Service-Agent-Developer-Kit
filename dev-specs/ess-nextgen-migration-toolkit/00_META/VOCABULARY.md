@@ -358,7 +358,7 @@ The application orchestration layer (`service/mtk_orchestrator.py`), responsible
 for coordinating a migration session — composing the lower layers and driving
 the pipeline.
 
-Migration rules live exclusively in `src/modules/migration/steps/`.
+Migration rules live exclusively in `src/modules/transformation/steps/`.
 The service layer never contains migration rules.
 
 ---

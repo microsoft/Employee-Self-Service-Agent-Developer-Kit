@@ -71,6 +71,43 @@ def test_query_all_acquires_a_fresh_token_and_applies_odata_headers_per_request(
     assert seen_tokens == ["Bearer token-1", "Bearer token-2"]
 
 
+def test_call_function_builds_unbound_function_url_with_alias_params() -> None:
+    seen_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_urls.append(str(request.url))
+        return httpx.Response(200, json={"value": [{"schemaname": "custom.topic.Foo"}]})
+
+    client, _ = make_client(handler)
+
+    payload = client.call_function(
+        "RetrieveDependenciesForUninstall",
+        SolutionUniqueName="msdyn_CopilotForEmployeeSelfServiceIT",
+    )
+
+    assert payload == {"value": [{"schemaname": "custom.topic.Foo"}]}
+    assert seen_urls == [
+        f"{ENV_URL}/api/data/v9.2/RetrieveDependenciesForUninstall"
+        "(SolutionUniqueName='msdyn_CopilotForEmployeeSelfServiceIT')"
+    ]
+
+
+def test_query_all_omits_select_when_requesting_all_fields() -> None:
+    requests_seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(str(request.url))
+        return httpx.Response(200, json={"value": [{"id": 1}]})
+
+    client, _ = make_client(handler)
+
+    for all_fields in (None, "*"):
+        requests_seen.clear()
+        records = client.query_all("bots", select=all_fields)
+        assert records == [{"id": 1}]
+        assert requests_seen == [f"{ENV_URL}/api/data/v9.2/bots"]
+
+
 def test_query_all_follows_odata_next_link_until_all_pages_are_returned() -> None:
     requests_seen: list[str] = []
 

@@ -54,4 +54,4 @@ Workstream 1.
 - 02_ARCHITECTURE/PIPELINES.md — ChainedPipeline, stage ordering
 - 03_ENGINEERING/DIAGNOSTICS.md — session bundle contract
 - 03_ENGINEERING/TESTING.md — integration/e2e test strategy
-- src/core/models/execution_context.py — ExecutionMode (READONLY/WRITEBACK)
+- src/modules/transformation/models/execution_mode.py — ExecutionMode (READONLY/WRITEBACK)

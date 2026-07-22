@@ -5,14 +5,15 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from core.logging import Logger, Reporter
-from core.models import ExecutionMode
+from core.logging import Logger
 from core.pipelines import ChainedPipeline
-from modules.migration import MigrationContext
-from modules.migration.migration_pipeline import build_migration_pipeline
 from modules.postprocessing import build_output_pipeline
 from modules.preprocessing import build_input_pipeline
-from service.constants import SUPPORTED_MODES
+from modules.transformation import MigrationContext
+from modules.transformation.models import ExecutionMode
+from modules.transformation.transformation_pipeline import build_transformation_pipeline
+from service.constants import REPORT_FILENAME, SUPPORTED_MODES
+from service.reporter import Reporter
 
 TOOLKIT_ROOT = Path(__file__).resolve().parents[2]
 OUTPUT_ROOT = TOOLKIT_ROOT / "output"
@@ -24,14 +25,14 @@ def _is_dev_mode() -> bool:
 
 def main() -> None:
     """Build and run the ESS migration super-pipeline."""
-    dev_mode = _is_dev_mode()
-    context = MigrationContext(ExecutionMode=ExecutionMode.READONLY)
-    logger = Logger.start_session(OUTPUT_ROOT, context)
+    is_dev_mode = _is_dev_mode()
+    context = MigrationContext(mode=ExecutionMode.READONLY)
+    logger = Logger.start_session(OUTPUT_ROOT, context, report_filename=REPORT_FILENAME)
     try:
         toolkit = (
             ChainedPipeline[MigrationContext]()
-            .add(build_input_pipeline(logger, SUPPORTED_MODES, dev_mode=dev_mode))
-            .add(build_migration_pipeline(logger, SUPPORTED_MODES))
+            .add(build_input_pipeline(logger, SUPPORTED_MODES, is_dev_mode=is_dev_mode))
+            .add(build_transformation_pipeline(logger, SUPPORTED_MODES))
             .add(build_output_pipeline(logger, SUPPORTED_MODES))
         )
         toolkit.run(context)

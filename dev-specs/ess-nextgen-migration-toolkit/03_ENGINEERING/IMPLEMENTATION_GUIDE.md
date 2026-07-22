@@ -204,7 +204,7 @@ Services should remain:
 * Reusable
 * Independently testable
 
-Migration rules live exclusively in `src/modules/migration/steps/`.
+Migration rules live exclusively in `src/modules/transformation/steps/`.
 Reusable service capabilities outside `modules/` shall not contain
 migration rules.
 

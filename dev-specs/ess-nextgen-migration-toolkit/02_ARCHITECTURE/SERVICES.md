@@ -56,7 +56,7 @@ Transformation belongs exclusively to Migration Steps.
 
 ## SERVICE-003
 
-Migration rules live exclusively in `src/modules/migration/steps/`.
+Migration rules live exclusively in `src/modules/transformation/steps/`.
 The Service layer never contains migration rules.
 
 ---
