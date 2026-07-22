@@ -136,7 +136,7 @@ def test_incompatible_adjacent_step_types_fail_during_construction() -> None:
     builder = Pipeline.builder("invalid", input_type=int).use(IntToStringStep())
 
     with pytest.raises(PipelineConfigurationError, match="expects float"):
-        builder.use(FloatToStringStep())
+        builder.use(FloatToStringStep())  # type: ignore[arg-type]
 
 
 def test_pipeline_registry_rejects_duplicate_step_names() -> None:

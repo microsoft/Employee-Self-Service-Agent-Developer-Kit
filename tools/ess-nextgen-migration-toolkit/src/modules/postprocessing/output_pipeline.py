@@ -1,4 +1,4 @@
-"""Migration Pipeline builder."""
+"""Output Pipeline builder."""
 
 from __future__ import annotations
 
@@ -8,32 +8,33 @@ from modules.migration.migration_step import MigrationPipelineStep
 from modules.migration.models import MigrationContext
 
 
-class _MigrationPassthroughStep(MigrationPipelineStep):
-    """Placeholder: migration-rule steps (TASK-010+) will replace this."""
+class _OutputPassthroughStep(MigrationPipelineStep):
+    """Placeholder: validation/writeback/report steps (TASK-007) will replace this."""
 
     def __init__(self, logger: Logger, supported_modes: tuple[str, ...]) -> None:
         super().__init__(
-            description="No-op placeholder until migration rules are implemented.",
+            description="No-op placeholder until output behaviors are implemented.",
             supported_modes=supported_modes,
         )
         self._logger = logger
 
     def execute(self, context: MigrationContext) -> MigrationContext:
-        # TODO: Migration-rule steps will replace this pass-through.
+        # TODO: ValidateMigration, Writeback (WRITEBACK-only), and
+        # GenerateMigrationReport steps will replace this once TASK-007 lands.
         self._logger.LogDebug(
-            "Migration stage is currently a no-op.",
-            pipeline_stage="Migration",
+            "Output stage is currently a no-op.",
+            pipeline_stage="Output",
             pipeline_step=self.name(),
         )
         return context
 
 
-def build_migration_pipeline(
+def build_output_pipeline(
     logger: Logger, supported_modes: tuple[str, ...]
 ) -> Pipeline[MigrationContext, MigrationContext]:
-    """Build the migration stage pipeline."""
+    """Build the output stage pipeline."""
     return (
-        Pipeline.builder("Migration Pipeline", input_type=MigrationContext)
-        .use(_MigrationPassthroughStep(logger, supported_modes))
+        Pipeline.builder("Output Pipeline", input_type=MigrationContext)
+        .use(_OutputPassthroughStep(logger, supported_modes))
         .build()
     )
