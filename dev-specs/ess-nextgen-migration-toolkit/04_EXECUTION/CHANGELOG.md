@@ -12,6 +12,12 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 
 ## [Unreleased]
 
+- **CI: run the toolkit gates + unit tests on GitHub Actions.** Added
+  `.github/workflows/mtk-toolkit-ci.yml`, a dedicated workflow (path-filtered to
+  `tools/ess-nextgen-migration-toolkit/**`) that runs `uv sync --frozen`, then
+  `ruff check`, `ruff format --check`, `mypy src`, and `pytest` on push/PR to
+  `main`. Mirrors the local pre-commit gates and adds unit-test execution in CI.
+  Updated `REPOSITORY_STRUCTURE.md` §11 (Quality Gates: Pre-Commit + CI).
 - **Report filename is now a `SessionManager` constructor arg; core default is
   neutral.** `core/logging/session_manager.py` no longer hardcodes
   `migration_report.md` — it takes `report_filename` (default the neutral

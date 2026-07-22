@@ -475,20 +475,33 @@ Business logic must never write files directly.
 
 ---
 
-# 11. Pre-Commit Requirements
+# 11. Quality Gates (Pre-Commit + CI)
 
-The repository shall enforce quality gates through pre-commit hooks.
+The repository shall enforce quality gates both **locally** (pre-commit hooks)
+and in **continuous integration** (GitHub Actions).
 
-Examples include:
+Pre-commit hooks (`.pre-commit-config.yaml`, scoped to the toolkit) run on every
+commit and enforce:
 
-* Formatting
-* Linting
-* Type checking
-* Unit test execution
-* Prevention of direct `print()` statements
-* Prevention of accidental debug artifacts
+* Formatting (`ruff format`)
+* Linting (`ruff check`), including prevention of direct `print()` statements
+  (flake8-print / `T20`) and prevention of accidental debug artifacts
+* Type checking (`mypy`, strict)
 
-Logging must always use the framework logging abstraction.
+Continuous integration (`.github/workflows/mtk-toolkit-ci.yml`) runs on push and
+pull requests to `main` — path-filtered to `tools/ess-nextgen-migration-toolkit/**`
+so it only runs when the toolkit changes — and enforces the **same** gates plus
+**unit test execution**:
+
+* `uv sync --frozen` (locked deps, pinned Python)
+* `uv run ruff check .`
+* `uv run ruff format --check .`
+* `uv run mypy src`
+* `uv run pytest`
+
+Because the hooks and CI use the same locked tool versions (`uv.lock`), there is
+no version drift between local and CI enforcement. Logging must always use the
+framework logging abstraction.
 
 ---
 
