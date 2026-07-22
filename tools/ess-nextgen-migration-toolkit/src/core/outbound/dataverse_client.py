@@ -12,20 +12,27 @@ import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from email.utils import parsedate_to_datetime
-from typing import Any, Final
+from typing import Any, Final, Protocol
 from urllib.parse import urljoin, urlparse
 
 import httpx
 
-from core.auth.token_provider import MsalTokenProvider
 from core.outbound.exceptions import AuthenticationExpiredError, DataverseApiError
 
 JsonDict = dict[str, Any]
 Sleep = Callable[[float], None]
 
+
+class TokenProvider(Protocol):
+    """Any object that can provide a bearer token."""
+
+    def get_token(self) -> str: ...
+
+
 _API_PATH: Final[str] = "/api/data/v9.2/"
 _DEFAULT_TIMEOUT_SECONDS: Final[float] = 120.0
 _GET_ATTEMPTS: Final[int] = 3
+_MAX_RETRY_DELAY_SECONDS: Final[float] = 60.0
 _RETRY_STATUS_CODES: Final[frozenset[int]] = frozenset({429, 500, 502, 503, 504})
 _RECORD_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"\(([^()]+)\)")
 _O_DATA_HEADERS: Final[dict[str, str]] = {
@@ -49,7 +56,7 @@ class DataverseClient:
     def __init__(
         self,
         env_url: str,
-        token_provider: MsalTokenProvider,
+        token_provider: TokenProvider,
         *,
         client: httpx.Client | None = None,
         sleep: Sleep | None = None,
@@ -80,14 +87,6 @@ class DataverseClient:
         """Return the normalized Dataverse environment URL bound to this client."""
         return self.__env_url
 
-    def with_environment(self, env_url: str) -> DataverseClient:
-        """Return a client rebound to ``env_url`` with the same token provider."""
-        return DataverseClient(
-            env_url,
-            self.__token_provider,
-            sleep=self.__sleep,
-        )
-
     def query_all(
         self,
         entity_set: str,
@@ -105,6 +104,7 @@ class DataverseClient:
         next_link = _coerce_next_link(payload)
 
         while next_link is not None:
+            _validate_next_link(next_link, self.__env_url)
             payload = self.get(next_link)
             records.extend(_coerce_records(payload, entity_set))
             next_link = _coerce_next_link(payload)
@@ -133,7 +133,12 @@ class DataverseClient:
         )
         record_id = _extract_record_id(response)
         if record_id is None:
-            raise RuntimeError("Dataverse create response did not include a record ID.")
+            raise DataverseApiError(
+                status=response.status_code,
+                operation="create",
+                entity_set=entity_set,
+                message="Dataverse create response did not include a record ID.",
+            )
         return record_id
 
     def update(self, entity_set: str, record_id: str, data: JsonDict) -> None:
@@ -169,8 +174,6 @@ class DataverseClient:
             response = self.__request_with_get_retry(
                 path,
                 params=params,
-                operation=operation,
-                entity_set=entity_set,
             )
         else:
             response = self.__send_once(method, path, params=params, json=json)
@@ -183,24 +186,18 @@ class DataverseClient:
         path: str,
         *,
         params: dict[str, str] | None,
-        operation: str,
-        entity_set: str | None,
     ) -> httpx.Response:
-        last_response: httpx.Response | None = None
-        for attempt in range(1, _GET_ATTEMPTS + 1):
-            response = self.__send_once("GET", path, params=params)
-            last_response = response
-            if response.status_code not in _RETRY_STATUS_CODES or attempt == _GET_ATTEMPTS:
+        response = self.__send_once("GET", path, params=params)
+        for attempt in range(1, _GET_ATTEMPTS):
+            if response.status_code not in _RETRY_STATUS_CODES:
                 return response
 
             delay_seconds = _retry_delay_seconds(response, attempt)
             if delay_seconds > 0:
                 self.__sleep(delay_seconds)
+            response = self.__send_once("GET", path, params=params)
 
-        if last_response is None:
-            raise RuntimeError("GET retry loop completed without a response.")
-        self.__raise_for_status(last_response, operation=operation, entity_set=entity_set)
-        return last_response
+        return response
 
     def __send_once(
         self,
@@ -291,12 +288,35 @@ def _coerce_next_link(payload: JsonDict) -> str | None:
     return next_link if isinstance(next_link, str) and next_link else None
 
 
+def _validate_next_link(next_link: str, env_url: str) -> None:
+    """Reject nextLinks that point to a different host (token exfiltration guard)."""
+    parsed = urlparse(next_link)
+    env_parsed = urlparse(env_url)
+    if parsed.scheme and parsed.netloc:
+        if parsed.scheme.lower() != "https" or parsed.netloc.lower() != env_parsed.netloc.lower():
+            raise DataverseApiError(
+                status=0,
+                operation="read",
+                entity_set=None,
+                message=(
+                    f"@odata.nextLink points to a different host ({parsed.netloc}) "
+                    f"than the configured environment ({env_parsed.netloc}). "
+                    "Refusing to follow — possible token exfiltration."
+                ),
+            )
+
+
 def _json_payload(response: httpx.Response) -> JsonDict:
     if not response.content:
         return {}
     payload = response.json()
     if not isinstance(payload, dict):
-        raise RuntimeError("Dataverse response payload must be a JSON object.")
+        raise DataverseApiError(
+            status=response.status_code,
+            operation="read",
+            entity_set=None,
+            message="Dataverse response payload must be a JSON object.",
+        )
     return payload
 
 
@@ -306,17 +326,6 @@ def _extract_record_id(response: httpx.Response) -> str | None:
         match = _RECORD_ID_PATTERN.search(header_value)
         if match is not None:
             return match.group(1)
-
-    if response.content:
-        payload = response.json()
-        if isinstance(payload, dict):
-            string_ids = [
-                value
-                for key, value in payload.items()
-                if key.lower().endswith("id") and isinstance(value, str)
-            ]
-            if len(string_ids) == 1:
-                return string_ids[0]
     return None
 
 
@@ -341,8 +350,8 @@ def _retry_delay_seconds(response: httpx.Response, attempt: int) -> float:
     retry_after_header = response.headers.get("Retry-After")
     retry_after_seconds = _parse_retry_after_seconds(retry_after_header)
     if retry_after_seconds is not None:
-        return retry_after_seconds
-    return float(2 ** (attempt - 1))
+        return min(retry_after_seconds, _MAX_RETRY_DELAY_SECONDS)
+    return min(float(2 ** (attempt - 1)), _MAX_RETRY_DELAY_SECONDS)
 
 
 def _parse_retry_after_seconds(header_value: str | None) -> float | None:

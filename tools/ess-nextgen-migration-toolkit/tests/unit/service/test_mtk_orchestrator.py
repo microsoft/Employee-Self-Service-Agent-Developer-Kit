@@ -46,7 +46,7 @@ def test_main_runs_stage_pipelines_and_writes_two_bundle_files(
     created_contexts: list[MigrationContext] = []
 
     def build_context(*, ExecutionMode: object) -> StageContext:
-        context = StageContext(ExecutionMode=ExecutionMode)
+        context = StageContext(ExecutionMode=ExecutionMode)  # type: ignore[arg-type]
         created_contexts.append(context)
         return context
 
@@ -68,7 +68,7 @@ def test_main_runs_stage_pipelines_and_writes_two_bundle_files(
 
     assert len(created_contexts) == 1
     assert created_contexts[0].ExecutionMode == "READONLY"
-    assert created_contexts[0].events == ["input", "migration", "output"]
+    assert created_contexts[0].events == ["input", "migration", "output"]  # type: ignore[attr-defined]
 
     session_dirs = sorted(path for path in tmp_path.iterdir() if path.is_dir())
     assert len(session_dirs) == 1
@@ -113,11 +113,11 @@ def test_main_closes_logger_when_pipeline_execution_fails(
         return Pipeline.builder("failing", input_type=MigrationContext).use(FailingStep()).build()
 
     monkeypatch.setattr(
-        mtk_orchestrator.Logger,
+        mtk_orchestrator.Logger,  # type: ignore[attr-defined]
         "start_session",
         lambda output_root, context: FakeLogger(),
     )
-    monkeypatch.setattr(mtk_orchestrator.Reporter, "render", lambda self, context: None)
+    monkeypatch.setattr(mtk_orchestrator.Reporter, "render", lambda self, context: None)  # type: ignore[attr-defined]
     monkeypatch.setattr(mtk_orchestrator, "build_input_pipeline", fail_stage)
     monkeypatch.setattr(
         mtk_orchestrator, "build_migration_pipeline", lambda logger, modes, **kw: _stage("m")

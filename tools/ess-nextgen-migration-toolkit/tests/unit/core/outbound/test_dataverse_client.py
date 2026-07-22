@@ -193,16 +193,6 @@ def test_constructor_rejects_non_https_environment_urls() -> None:
         DataverseClient("http://contoso.crm.dynamics.com", FakeTokenProvider())
 
 
-def test_with_environment_rebinds_client_to_new_environment() -> None:
-    provider = FakeTokenProvider()
-    original = DataverseClient(ENV_URL, provider)
-
-    rebound = original.with_environment("https://fabrikam.crm.dynamics.com")
-
-    assert original.environment_url == ENV_URL
-    assert rebound.environment_url == "https://fabrikam.crm.dynamics.com"
-
-
 def test_create_returns_record_id_from_odata_entity_id_header() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(

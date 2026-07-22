@@ -76,12 +76,7 @@ class GatherInputWithAuthStep(MigrationPipelineStep):
             context.upn = _as_string(claims.get("upn")) or _as_string(
                 claims.get("preferred_username"),
             )
-            # Create a token provider that always returns the hardcoded token
-            config = _build_provider_config(environment_url)
-            token_provider = MsalTokenProvider(config, self._logger)
-            # Monkey-patch get_token to return the static token for dev
-            token_provider.get_token = lambda *_a, **_kw: token  # type: ignore[method-assign]
-            context.dataverse_client = DataverseClient(environment_url, token_provider)
+            context.dataverse_client = DataverseClient(environment_url, _StaticTokenProvider(token))
         else:
             self._logger.LogInfo(
                 f"Discovering tenant and authenticating with MSAL for {environment_url}.",
@@ -193,3 +188,13 @@ def _load_dev_config() -> dict[str, str] | None:
         return data if isinstance(data, dict) else None
     except (json.JSONDecodeError, OSError):
         return None
+
+
+class _StaticTokenProvider:
+    """Dev-only token provider that returns a hardcoded token (no MSAL, no network)."""
+
+    def __init__(self, token: str) -> None:
+        self.__token = token
+
+    def get_token(self, *_args: object, **_kwargs: object) -> str:
+        return self.__token
