@@ -9,14 +9,15 @@
 
 ## Description
 
-Validate that the entire framework executes end-to-end with real pipeline wiring
-but no-op Migration Steps (the migration stage has pass-through steps only).
-This proves the foundation is sound before any Migration Rule is implemented in
-Workstream 1.
+Validate that the entire framework executes end-to-end with real pipeline wiring.
+The Input and Transformation stages now carry real steps (auth + discovery, and
+`ApplyDaCompatibilityStep`); the remaining Migration Rules (RULE-001..004) may
+still be pending. This proves the assembled framework — composition, mode-gating,
+diagnostics, and writeback — is sound end-to-end.
 
 ### What this validates
 
-- `./mtk.sh start` runs the full ChainedPipeline (Input → Migration → Output).
+- `./mtk.sh run` runs the full ChainedPipeline (Input → Transformation → Output).
 - READONLY mode: all stages run, Writeback is auto-skipped (mode-gating works).
 - WRITEBACK mode: Writeback step executes (persists via DataverseClient).
 - Diagnostics: session bundle produced with `migration_report.md` + `session.log`.
@@ -24,7 +25,7 @@ Workstream 1.
 - Logger session lifecycle: `start_session` → pipeline → `close()` in all paths.
 - **Live Dataverse field names**: confirm the DA-compat read/write fields
   (`template`, `configuration`, `data`, `botcomponentid`) match a real record when
-  run under `./mtk.sh start --dev` in WRITEBACK mode — verifying the fields that
+  run under `./mtk.sh run --dev` in WRITEBACK mode — verifying the fields that
   TASK-016 reads and TASK-007 persists. (Moved here from TASK-016 so the live
   check lives once, at the end-to-end boundary.)
 
@@ -37,11 +38,11 @@ Workstream 1.
 
 ## Acceptance Criteria
 
-- [ ] The framework runs end-to-end with no-op Migration Steps via
-  `./mtk.sh start`.
+- [ ] The framework runs end-to-end (Input → Transformation → Output) via
+  `./mtk.sh run`.
 - [ ] READONLY mode executes without writeback (Writeback step skipped).
 - [ ] WRITEBACK mode persists results through the DataverseClient.
-- [ ] Under `./mtk.sh start --dev` (WRITEBACK), the DA-compat field names
+- [ ] Under `./mtk.sh run --dev` (WRITEBACK), the DA-compat field names
   (`template`, `configuration`, `data`, `botcomponentid`) are confirmed against a
   live record — the transform produces a non-empty `pending_writes` and the PATCH
   succeeds.
@@ -55,7 +56,7 @@ Workstream 1.
 ## Deliverables
 
 - Integration tests under `tests/integration/` exercising the full pipeline
-- E2E test under `tests/e2e/` running `mtk.sh start` as a subprocess
+- E2E test under `tests/e2e/` running `mtk.sh run` as a subprocess
 - Dataverse fixture/cassette for writeback mode
 
 ## References

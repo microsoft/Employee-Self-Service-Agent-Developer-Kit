@@ -27,7 +27,7 @@ It consumes the agent artifacts hydrated by TASK-006
 is the *consumer* that validates and persists them. Confirming the DA-compat
 field names (`template` / `configuration` / `data` / `botcomponentid`) against a
 **live** record is an end-to-end concern owned by TASK-009 (run under
-`./mtk.sh start --dev` in WRITEBACK mode) — it is not a per-step blocker here.
+`./mtk.sh run --dev` in WRITEBACK mode) — it is not a per-step blocker here.
 
 **Relationship to RULE-001.** This foundational step delivers the DA-compat
 *nomenclature* portion of the agent-metadata migration — Template, AI Model Kind,

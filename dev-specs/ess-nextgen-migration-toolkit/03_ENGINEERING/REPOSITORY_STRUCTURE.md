@@ -527,19 +527,24 @@ The toolkit shall use:
 * **`.python-version`** — the pinned interpreter version used to resolve and run
   the toolkit.
 * **`scripts/mtk.{sh,ps1}`** — the single `mtk` command dispatcher. It is
-  self-sufficient and **pip-free**: `mtk start` installs `uv` if missing (its
+  self-sufficient and **pip-free**: `mtk run` installs `uv` if missing (its
   standalone installer requires no Python), has `uv` provision the pinned Python
   (a managed, standalone CPython — no system Python or admin rights), runs
   `uv sync` (which creates `.venv` automatically), then runs the toolkit. `pip`
-  is never used. `mtk refresh` fast-forwards the current branch from its remote,
-  then runs `start` (re-provision runtime — it is the customer update path, so it
-  does not accept `--dev` — and launch). New operational commands are added as
+  is never used. There is **one** command, `mtk run`, with two modes selected by
+  `--dev`: **customer** (no `--dev`) first **resets the checkout to pristine
+  `origin/main`** (`git checkout -f -B main origin/main` + `git clean -fd`,
+  discarding any local branch/commits/uncommitted/untracked changes so the tool
+  only ever runs from reviewed `main`; gitignored runtime state is preserved),
+  then provisions a runtime-only env and runs; **contributor** (`--dev`) adds the
+  dev dependency-group, installs the commit hooks, and **skips** the reset
+  (contributors manage their own branches). New operational commands are added as
   **new `mtk` subcommands**, never as new top-level scripts.
 * **`mtk.sh` / `mtk.ps1`** (at the **monorepo root**, not the toolkit root) —
   the single logic-free forwarders that `exec`/invoke
   `tools/ess-nextgen-migration-toolkit/scripts/mtk.*`. They exist only so the
   command can be invoked ergonomically from the top of the monorepo
-  (`./mtk.sh start`), mirroring the `./gradlew` / `./mvnw` Dataverse client convention.
+  (`./mtk.sh run`), mirroring the `./gradlew` / `./mvnw` Dataverse client convention.
   The dispatcher changes into the toolkit directory itself, so these forwarders
   need no logic. There is intentionally no second forwarder at the toolkit root.
 
@@ -560,8 +565,8 @@ constraint that every contributor shall follow.
 The convention has two layers:
 
 1. **One dispatcher** — `scripts/mtk.{sh,ps1}` (`mtk` = *migration tool kit*).
-   It parses a subcommand (`start`, `refresh`, `help`, …) plus shared options
-   (e.g. position-independent `--dev`) and routes to the matching handler. All
+   It parses a subcommand (`run`, `help`) plus shared options (position-independent
+   `--dev` and `--mode readonly|writeback`) and routes to the matching handler. All
    real logic lives here. It also **changes the working directory into the
    toolkit root** (`cd "$(dirname "$0")/.."`) before doing anything, so every
    command operates on the toolkit regardless of where it was invoked from.
@@ -569,7 +574,7 @@ The convention has two layers:
    root** `exec`/invoke `tools/ess-nextgen-migration-toolkit/scripts/mtk.*`,
    forwarding all arguments. They contain no logic and exist only for ergonomics
    (mirroring the `./gradlew` / `./mvnw` Dataverse client pattern), letting the toolkit be
-   driven from the top of the monorepo (`./mtk.sh start`). Because the dispatcher
+   driven from the top of the monorepo (`./mtk.sh run`). Because the dispatcher
    changes into the toolkit directory implicitly, invocation is cwd-independent.
    These two files are the **only sanctioned toolkit artifacts outside
    `tools/ess-nextgen-migration-toolkit/`** — a deliberate, documented exception

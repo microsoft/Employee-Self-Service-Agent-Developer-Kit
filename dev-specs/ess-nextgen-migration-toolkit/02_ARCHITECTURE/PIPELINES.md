@@ -166,7 +166,7 @@ state outside it. The context is the only object shared between steps.
 
 The toolkit is a super-pipeline of three stages.
 
-Migration executes as **Input → Migration → Output**, each a stage pipeline over
+Migration executes as **Input → Transformation → Output**, each a stage pipeline over
 the shared `MigrationContext`. The Migration Orchestrator is only the
 composition root: it builds the super-pipeline, configures the execution mode,
 executes it, and returns reports and diagnostics. A stage never reaches into

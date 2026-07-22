@@ -78,13 +78,13 @@ def main() -> None:
   discovery before the Dataverse client is initialized.
 - No `EssMigrationToolkit` class — the orchestrator composes `ChainedPipeline`
   directly with `.add()`.
-- After this task, `./mtk.sh start` runs the full pipeline end-to-end and
+- After this task, `./mtk.sh run` runs the full pipeline end-to-end and
   produces a session bundle.
 
 ## Acceptance Criteria
 
 - [ ] `mtk_orchestrator.py` composes a `ChainedPipeline[MigrationContext]` with
-  three stages and runs end-to-end via `./mtk.sh start`.
+  three stages and runs end-to-end via `./mtk.sh run`.
 - [ ] Logger session lifecycle: `start_session` before pipeline, `close()` in
   `finally`, produces `output/session-<timestamp>/` with two files.
 - [ ] `MsalTokenProvider` is instantiated and used for Dataverse auth.

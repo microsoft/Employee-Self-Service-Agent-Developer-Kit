@@ -303,7 +303,7 @@ update `pyproject.toml` and `uv.lock` together. See
 section 11a.
 
 Operational commands are exposed through the single `mtk` dispatcher
-(`./mtk.sh <subcommand>`, e.g. `mtk start --dev`, `mtk refresh`); new commands
+(`./mtk.sh <subcommand>`, e.g. `mtk run`, `mtk run --dev`); new commands
 are added as subcommands, never as new top-level scripts. See
 `dev-specs/ess-nextgen-migration-toolkit/03_ENGINEERING/REPOSITORY_STRUCTURE.md`
 section 11b.

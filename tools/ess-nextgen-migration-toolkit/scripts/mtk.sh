@@ -9,11 +9,13 @@
 #
 # This file is the real implementation and lives in <toolkit-root>/scripts/.
 # A single forwarder at the repository root (./mtk.sh) execs this file, so it
-# can be run as `./mtk.sh start` from the top of the monorepo.
+# can be run as `./mtk.sh run` from the top of the monorepo.
 #
 # Usage:
-#   mtk start [--dev]     Provision a pip-free, locked environment, then run the toolkit
-#   mtk refresh           Pull latest code, then start (re-provision runtime env + run)
+#   mtk run [--dev]       Run the toolkit. Customers (no --dev) reset to pristine
+#                         origin/main first (local changes discarded); contributors
+#                         (--dev) add dev tooling and skip the reset. Add
+#                         --mode readonly|writeback.
 #   mtk help              Show this help
 #
 # Everything is pip-free: uv is a self-contained binary that provisions both the
@@ -113,11 +115,11 @@ cmd_provision() {
   fi
 }
 
-# Run the toolkit. Launches the orchestration entry point (src/service/mtk_orchestrator.py), replacing the
-# current process. The dev flag selects the matching run env: customers use
-# --no-dev so `uv run` does not implicitly re-add the dev dependency-group to a
-# runtime-only .venv.
-cmd_run() {
+# Launch the toolkit. Execs the orchestration entry point
+# (src/service/mtk_orchestrator.py), replacing the current process. The dev flag
+# selects the matching run env: customers use --no-dev so `uv run` does not
+# implicitly re-add the dev dependency-group to a runtime-only .venv.
+launch_toolkit() {
   local dev="$1"
   local mode="$2"
   local UV
@@ -135,32 +137,34 @@ cmd_run() {
   fi
 }
 
-# start = provision (idempotent) + run. The everyday command.
-cmd_start() {
-  local dev="$1"
-  local mode="$2"
-  cmd_provision "$dev"
-  cmd_run "$dev" "$mode"
+# Reset the checkout to pristine origin/main. Customer update path: force-switch
+# to main pointed at origin/main and DISCARD any local branch position,
+# uncommitted changes, and untracked files, so the tool only ever runs from the
+# latest reviewed main — never from unreviewed local modifications. Contributors
+# (--dev) skip this and manage their own git. Gitignored runtime state (.venv,
+# .local, output/) is preserved (clean respects .gitignore).
+sync_to_main() {
+  echo "==> Customer mode: resetting to pristine origin/main."
+  echo "    Local branch position and uncommitted/untracked changes will be discarded"
+  echo "    so the tool runs only from the latest reviewed main."
+  echo "    (Contributors: use 'mtk run --dev' to keep your work and skip this.)"
+  git fetch --prune origin
+  git checkout -f -B main origin/main
+  git clean -fd
 }
 
-# refresh = pull latest code, then start (provision + run). It is the customer
-# update path, so it always provisions a runtime-only environment (no --dev).
-cmd_refresh() {
-  local mode="$1"
-  # 1. Pull the latest code (fast-forward only; never rewrites local work).
-  local branch
-  branch="$(git rev-parse --abbrev-ref HEAD)"
-  echo "==> Updating '$branch' from origin (fast-forward only)..."
-  git fetch --prune origin
-  if git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
-    git pull --ff-only
-  else
-    echo "    '$branch' has no upstream; pulling origin/main..."
-    git pull --ff-only origin main
+# run = the single everyday command. Without --dev (customer) it first resets to
+# pristine origin/main (discarding local changes), then provisions (idempotent)
+# and runs. With --dev (contributor) it provisions runtime + dev tooling and runs
+# WITHOUT touching git — contributors manage their own branches.
+cmd_run() {
+  local dev="$1"
+  local mode="$2"
+  if [[ "$dev" != "1" ]]; then
+    sync_to_main
   fi
-
-  # 2. Start: re-provision from the (updated) lockfile, then run (runtime only).
-  cmd_start "0" "$mode"
+  cmd_provision "$dev"
+  launch_toolkit "$dev" "$mode"
 }
 
 usage() {
@@ -168,14 +172,17 @@ usage() {
 mtk — ESS NextGen Migration Toolkit
 
 Usage:
-  mtk start [--dev] [--mode readonly|writeback]
-                        Provision a pip-free, locked environment (uv + Python + .venv), then run the toolkit
-  mtk refresh [--mode readonly|writeback]
-                        Pull latest code, then start (re-provision runtime env + run)
+  mtk run [--dev] [--mode readonly|writeback]
+                        Run the toolkit. Without --dev (customer), first resets to
+                        pristine origin/main (discarding any local changes), then
+                        provisions a locked runtime env and runs. With --dev
+                        (contributor), provisions runtime + dev tooling and runs
+                        WITHOUT touching git.
   mtk help              Show this help
 
 Options:
-  --dev                 (start only) Include developer tooling (ruff, mypy, pytest, pre-commit)
+  --dev                 Include developer tooling (ruff, mypy, pytest, pre-commit);
+                        also skips the reset-to-main (contributors manage their git)
   --mode <mode>         Execution mode: readonly (default, no writes) or writeback (persist changes)
 EOF
 }
@@ -189,7 +196,7 @@ DEV=0
 MODE=""
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    start|refresh)  CMD="$1"; shift ;;
+    run)            CMD="run"; shift ;;
     help|-h|--help) CMD="help"; shift ;;
     --dev)          DEV=1; shift ;;
     --mode)         MODE="${2:-}"; shift 2 || shift ;;
@@ -199,15 +206,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$CMD" in
-  start)   cmd_start "$DEV" "$MODE" ;;
-  refresh)
-    if [[ "$DEV" == "1" ]]; then
-      echo "ERROR: '--dev' is only valid with 'start'. 'refresh' is the customer" >&2
-      echo "       update path and always provisions a runtime-only environment." >&2
-      echo "       Contributors: run 'mtk start --dev' to (re)add dev tooling." >&2
-      exit 2
-    fi
-    cmd_refresh "$MODE" ;;
+  run)     cmd_run "$DEV" "$MODE" ;;
   help)    usage ;;
   "")      echo "ERROR: no command given." >&2; usage; exit 2 ;;
 esac

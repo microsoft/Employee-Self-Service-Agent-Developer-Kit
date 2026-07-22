@@ -14,7 +14,7 @@
 >
 > Field names marked **UNCONFIRMED** below are isolated as module-level
 > constants and treated tolerantly (no crash on mismatch). They must be verified
-> against a live environment (`./mtk.sh start --dev`) before writeback is trusted.
+> against a live environment (`./mtk.sh run --dev`) before writeback is trusted.
 
 ---
 

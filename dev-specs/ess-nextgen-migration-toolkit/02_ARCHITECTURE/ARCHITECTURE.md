@@ -93,7 +93,7 @@ The Dataverse client, orchestrator, and persistence mechanisms can evolve indepe
                       │
       ┌───────────────┼────────────────┐
       ▼               ▼                ▼
-Preprocessing   Migration Pipeline   Postprocessing
+Preprocessing    Transformation    Postprocessing
                       │
                       ▼
                 Diagnostics
@@ -241,7 +241,7 @@ Canonical Models
 
 ---
 
-## 5.4 Migration Pipeline
+## 5.4 Transformation Pipeline
 
 ### Purpose
 

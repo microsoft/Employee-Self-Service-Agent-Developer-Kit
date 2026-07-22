@@ -12,6 +12,23 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 
 ## [Unreleased]
 
+- **CLI: consolidated `mtk start` + `mtk refresh` into a single `mtk run`.**
+  Removes the start/refresh confusion. One command, two modes selected by `--dev`:
+  - **customer** (`mtk run`, no `--dev`): **resets the checkout to pristine
+    `origin/main`** before running — `git fetch` + `git checkout -f -B main
+    origin/main` + `git clean -fd` — discarding any local branch/commits/
+    uncommitted/untracked changes so the tool only ever runs from reviewed `main`
+    (gitignored runtime state `.venv`/`.local`/`output/` preserved), then
+    provisions runtime-only and runs.
+  - **contributor** (`mtk run --dev`): provisions runtime + dev tooling, installs
+    hooks, and **skips** the reset (contributors manage their own branches).
+  `--mode readonly|writeback` works with both. Updated `scripts/mtk.sh`,
+  `scripts/mtk.ps1`, the monorepo-root forwarders, `.pre-commit-config.yaml`,
+  the toolkit `README`,
+  `REPOSITORY_STRUCTURE.md` §11a/§11b, `CODING_STANDARDS.md`, and TASK-003/009/015/016.
+  Also reconciled remaining middle-stage naming "Migration Pipeline" →
+  "Transformation Pipeline" across `ARCHITECTURE.md`, `PIPELINES.md`,
+  `VOCABULARY.md`, `IMPLEMENTATION_GUIDE.md`.
 - **TASK-003 DONE — orchestrator execution-mode selection + summary + error
   handling.** `mtk_orchestrator.main()` now parses `--mode readonly|writeback`
   (`_resolve_mode`; accepts `--mode X` / `--mode=X`, case-insensitive; invalid →

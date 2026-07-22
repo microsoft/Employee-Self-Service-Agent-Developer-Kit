@@ -239,7 +239,7 @@ MIGRATION_RULES.md
 
 The implementation of a single Migration Rule.
 
-Migration Steps execute within the Migration Pipeline.
+Migration Steps execute within the Transformation Pipeline.
 
 Each Migration Step performs exactly one logical transformation.
 
@@ -321,16 +321,17 @@ Examples
 
 * Discovery Pipeline
 * Analysis Pipeline
-* Migration Pipeline
+* Transformation Pipeline
 * Validation Pipeline
 
 ---
 
-## Migration Pipeline
+## Transformation Pipeline
 
 ### Definition
 
-The pipeline responsible for executing Migration Steps.
+The pipeline responsible for executing Migration Steps (`build_transformation_pipeline`,
+`src/modules/transformation/`).
 
 ---
 

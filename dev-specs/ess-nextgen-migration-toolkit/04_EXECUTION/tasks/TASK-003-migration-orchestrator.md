@@ -18,10 +18,11 @@ TASK-015 delivers the initial orchestrator wiring (ChainedPipeline composition,
 Logger lifecycle, default READONLY mode). This task extends it with:
 
 1. **Execution-mode selection** — parse `--mode readonly|writeback` from the CLI
-   (forwarded by `mtk.sh start`). Default remains `READONLY`.
+   (forwarded by `mtk.sh run`). Default remains `READONLY`.
 2. **CLI command surface** — wire `mtk.sh` argument forwarding so
-   `./mtk.sh start --mode writeback` propagates to the orchestrator. Future
-   subcommands (e.g. `mtk discover`, `mtk migrate`) may be added here.
+   `./mtk.sh run --mode writeback` propagates to the orchestrator. The toolkit
+   exposes a single `run` command; behaviour is selected by flags (`--mode`,
+   `--dev`), not additional subcommands.
 3. **Graceful error handling** — catch pipeline exceptions, surface user-friendly
    messages, and ensure `logger.close()` runs in all paths.
 4. **Session summary** — after pipeline completes, print the bundle path and a
@@ -44,7 +45,7 @@ Logger lifecycle, default READONLY mode). This task extends it with:
 - [x] `--mode readonly|writeback` CLI argument parsed and applied to
   `MigrationContext.mode` (`_resolve_mode`; accepts `--mode X` and `--mode=X`,
   case-insensitive; invalid value → friendly `SystemExit`).
-- [x] `mtk.sh start --mode writeback` forwards the argument to the orchestrator
+- [x] `mtk.sh run --mode writeback` forwards the argument to the orchestrator
   (and `mtk.ps1 -Mode writeback` on Windows).
 - [x] Default mode is `READONLY` when no argument supplied.
 - [x] Pipeline exceptions are caught, a user-friendly message is logged

@@ -190,7 +190,7 @@ Pipeline Steps should remain:
 * Independent
 * Testable
 
-Pipeline composition occurs within the Migration Pipeline.
+Pipeline composition occurs within the Transformation Pipeline.
 
 ---
 
@@ -323,7 +323,7 @@ Avoid modifying framework infrastructure unless explicitly required.
 
 1. Read relevant Migration Rule.
 2. Create a new Pipeline Step.
-3. Register the step in the Migration Pipeline.
+3. Register the step in the Transformation Pipeline.
 4. Add unit tests.
 5. Update TASKS.md.
 6. Update CHANGELOG.md.

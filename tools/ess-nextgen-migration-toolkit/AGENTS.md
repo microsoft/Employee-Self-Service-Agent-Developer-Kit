@@ -49,7 +49,10 @@
 | Orchestrator          | `src/service/mtk_orchestrator.py`               |
 | Constants             | `src/service/constants.py`                      |
 | Utilities             | `src/core/utils/`                               |
-| Diagnostics code      | `src/core/logging/`                             |
+| Diagnostics (Logger, sessions) | `src/core/logging/`                    |
+| Report renderer       | `src/service/reporter.py`                       |
+| Execution modes       | `src/modules/transformation/models/execution_mode.py` |
+| CLI dispatcher        | `scripts/mtk.sh` / `scripts/mtk.ps1` (`mtk run`) |
 | Generated output      | `output/session-<timestamp>/`                   |
 
 ---
