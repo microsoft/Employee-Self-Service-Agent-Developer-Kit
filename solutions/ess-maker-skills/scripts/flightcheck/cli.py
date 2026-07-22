@@ -339,11 +339,86 @@ def _run_single_checkpoint(args):
         print(f"\nNOTE: checkpoint {target} produced no result rows (the owning "
               "check may have skipped it for this tenant state).")
 
-    # Single-checkpoint mode never auto-opens the HTML report. Programmatic
-    # pass/fail rows AND MANUAL verification steps are both printed in full in
-    # the terminal above (see verbose_manual), so they surface directly in
-    # Copilot chat instead of a browser popup. results.json / report.html are
-    # still written to args.output for anyone who wants them.
+    # --- Emit anonymous outcome telemetry (best-effort; never affects exit) ---
+    # Single-checkpoint mode never auto-opens the HTML report; results.json /
+    # report.html are still written to args.output for anyone who wants them.
+    # Single-checkpoint runs are the "connect" invocation source: incremental
+    # FlightChecks that gate individual setup/connect steps (ADO 7587431).
+    # Without this, checkpoint runs were invisible to the Aria dashboards even
+    # though they exercise the same checks a full run does.
+    if not getattr(args, "no_telemetry", False):
+        # Explicit --invocation-source wins; otherwise checkpoint mode attributes
+        # the run to "connect" (vs "cli"/"adk"/"installer" for --scope runs).
+        _inv_source = getattr(args, "invocation_source", None) or "connect"
+        _tele_debug = os.environ.get(
+            "ESS_FLIGHTCHECK_TELEMETRY_DEBUG", ""
+        ).strip().lower() in ("1", "on", "true", "yes")
+        # Resolve the active agent from config (may be empty for Entra-only
+        # checkpoints run before /setup writes a full config).
+        _agents = config.get("agents", [])
+        if not _agents:
+            _agent_entry = config.get("agent", {})
+            if _agent_entry:
+                _agents = [_agent_entry]
+        _active = config.get("activeAgent", config.get("agent", {}).get("slug", ""))
+        _active_agent = next(
+            (a for a in _agents if a.get("slug") == _active),
+            _agents[0] if _agents else {},
+        )
+        # Best-effort tenant display name (OII; privacy-approved). Reuses the
+        # already-authenticated Graph client when one was needed; never re-auths.
+        tenant_name = ""
+        try:
+            if graph is not None:
+                tenant_name = (graph.get_organization() or {}).get("displayName", "") or ""
+        except Exception:  # noqa: BLE001 — telemetry name is best-effort
+            tenant_name = ""
+        try:
+            from flightcheck import telemetry
+
+            _tele = telemetry.emit_flightcheck_telemetry(
+                result,
+                tenant_id=tenant_id or "",
+                tenant_name=tenant_name,
+                agent_id=_active_agent.get("botId", ""),
+                scope=f"checkpoint:{target}",
+                agent_count=len(_agents),
+                invocation_source=_inv_source,
+            )
+            if _tele_debug:
+                print(
+                    f"[telemetry] env={_tele.get('env')} sent={_tele.get('sent')} "
+                    f"events={_tele.get('events')} status={_tele.get('status')} "
+                    f"reason={_tele.get('reason')}"
+                )
+        except Exception as _tele_err:  # never break the run
+            if _tele_debug:
+                print(f"[telemetry] skipped — {type(_tele_err).__name__}: {_tele_err}")
+
+        # Additive adk.* event family (spec Feature #7403772), mirroring the
+        # --scope emit so checkpoint runs also count toward the adk.* cubes.
+        try:
+            import adk_telemetry as _adk
+
+            _agent_id = _active_agent.get("botId", "")
+            if tenant_id or tenant_name:
+                _adk.set_identity(tenant_id=tenant_id or "", tenant_name=tenant_name)
+            _ridx = _adk.next_run_index(_agent_id)
+            _adk.emit_flightcheck_run(agent_id=_agent_id, run_index=_ridx)
+            _result_map = {
+                "READY": "pass",
+                "READY_WITH_WARNINGS": "partial",
+                "NOT_READY": "fail",
+            }
+            _adk.emit_flightcheck_result(
+                agent_id=_agent_id,
+                run_index=_ridx,
+                result=_result_map.get(result.overall, "fail"),
+                duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
+            )
+            _adk.flush(timeout=3)
+        except Exception:  # noqa: BLE001 — adk telemetry must never break the run
+            pass
 
     sys.exit(1 if result.failed > 0 else 0)
 
@@ -396,9 +471,12 @@ def main():
         help="Don't emit anonymous FlightCheck outcome telemetry",
     )
     parser.add_argument(
-        "--invocation-source", default="cli",
-        choices=["adk", "installer", "cli"],
-        help="How FlightCheck was invoked (adk=slash-command, installer=standalone installer, cli=direct Python CLI)",
+        "--invocation-source", default=None,
+        choices=["adk", "installer", "cli", "connect"],
+        help="How FlightCheck was invoked (adk=slash-command, installer=standalone "
+             "installer, cli=direct Python CLI, connect=incremental single-checkpoint "
+             "run from a connect/setup skill). Default: cli for --scope runs, connect "
+             "for --checkpoint runs.",
     )
     args = parser.parse_args()
 
@@ -418,6 +496,12 @@ def main():
     # None on the parser so checkpoint-mode can detect an explicit --scope.)
     if args.scope is None:
         args.scope = "full"
+
+    # --invocation-source defaults to "cli" for scope-mode runs. (Default is
+    # None on the parser so checkpoint-mode can default it to "connect" instead
+    # while still honouring an explicit --invocation-source.)
+    if args.invocation_source is None:
+        args.invocation_source = "cli"
 
     # Load config
     config_path = os.path.join(".local", "config.json")
