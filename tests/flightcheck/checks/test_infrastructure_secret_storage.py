@@ -564,3 +564,97 @@ class TestMissingCredentials:
 
         assert len(results) == 1
         assert results[0].status == Status.SKIPPED.value
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Effective-value evaluation — a secret can live in a definition's
+# defaultvalue with NO environmentvariablevalue override row. Iterating
+# value rows alone would miss it (solution-imported vars commonly ship
+# default-only), so the check evaluates the effective value: current
+# override if set, otherwise the definition's defaultvalue.
+# ───────────────────────────────────────────────────────────────────────
+
+
+class TestEffectiveValueDefaultScan:
+    @responses.activate
+    def test_plaintext_secret_in_default_value_only_fails(self, runner):
+        # High-confidence-name Text var whose secret sits in the definition's
+        # defaultvalue with no override row → still FAILED, not a false PASS.
+        _register_state(
+            base_url=runner.env_url,
+            definitions=[
+                dv.env_var_def(
+                    definition_id=_DEF_ID,
+                    schema_name="new_ClientSecret",
+                    type_value=100000000,  # String / Text
+                    default_value="s3cr3t-in-default-not-key-vault",
+                )
+            ],
+            values=[],  # no override row — the secret lives in defaultvalue
+            connection_refs=[],
+        )
+
+        results = check_connector_secret_storage(runner)
+
+        assert len(results) == 1
+        r = results[0]
+        assert r.status == Status.FAILED.value
+        assert "new_ClientSecret" in r.result
+        assert "inline" in r.result.lower()
+        assert "Rotate the exposed secret" in r.remediation
+        assert "Key Vault" in r.remediation
+
+    @responses.activate
+    def test_kv_reference_in_default_value_only_not_flagged(self, runner):
+        # A Key Vault reference stored in defaultvalue is safe storage, not
+        # inline plaintext → informational PASSED (Outcome A), no FAILED.
+        _register_state(
+            base_url=runner.env_url,
+            definitions=[
+                dv.env_var_def(
+                    definition_id=_DEF_ID,
+                    schema_name="new_ClientSecret",
+                    type_value=100000000,  # String / Text
+                    default_value=(
+                        "@Microsoft.KeyVault(SecretUri=https://ess-kv.vault.azure."
+                        "net/secrets/workday-client/)"
+                    ),
+                )
+            ],
+            values=[],
+            connection_refs=[],
+        )
+
+        results = check_connector_secret_storage(runner)
+
+        assert len(results) == 1
+        assert results[0].status == Status.PASSED.value
+        assert "No inline connector secrets detected" in results[0].result
+
+    @responses.activate
+    def test_unbound_secret_type_var_not_reported_stored(self, runner):
+        # A Secret-type definition with neither an override row nor a
+        # defaultvalue holds nothing — it must NOT be asserted as safely
+        # stored (no PASSED-storage row, no MANUAL hardening row). The run
+        # collapses to Outcome A informational PASSED.
+        _register_state(
+            base_url=runner.env_url,
+            definitions=[
+                dv.env_var_def(
+                    definition_id=_DEF_ID,
+                    schema_name="new_WorkdayClientSecret",
+                    type_value=100000005,  # Secret
+                    # no default_value, and no override row below
+                )
+            ],
+            values=[],
+            connection_refs=[],
+        )
+
+        results = check_connector_secret_storage(runner)
+
+        assert len(results) == 1
+        assert results[0].status == Status.PASSED.value
+        assert "No inline connector secrets detected" in results[0].result
+        assert Status.MANUAL.value not in [r.status for r in results]
+        assert "Key Vault-backed" not in results[0].result

@@ -117,14 +117,21 @@ def env_var_def(
     schema_name: str = "EmployeeContextRequestAccountName",
     display_name: str = "Mock Env Var",
     type_value: int = 100000000,  # String
+    default_value: str | None = None,
 ) -> dict[str, Any]:
     """Build a single environmentvariabledefinitions record.
+
+    ``default_value`` populates the definition's ``defaultvalue`` attribute
+    (the value used at runtime when no environmentvariablevalue override
+    exists). Omitted by default so existing callers keep the prior shape.
 
     Cited consumers:
       - flightcheck/checks/workday.py — reads schemaname, definitionid
         to look up matching environmentvariablevalues
+      - flightcheck/checks/infrastructure.py — INFRA-011 reads type and
+        defaultvalue to evaluate the effective value of each definition
     """
-    return {
+    record = {
         "@odata.etag": 'W/"1"',
         "environmentvariabledefinitionid": definition_id
         or "00000000-0000-0000-0000-000000006001",
@@ -132,6 +139,9 @@ def env_var_def(
         "displayname": display_name,
         "type": type_value,
     }
+    if default_value is not None:
+        record["defaultvalue"] = default_value
+    return record
 
 
 def env_var_value(

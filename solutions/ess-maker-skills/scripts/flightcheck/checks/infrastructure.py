@@ -825,7 +825,7 @@ def check_connector_secret_storage(runner: Any) -> list[CheckResult]:
             env_url,
             dv_token,
             "environmentvariabledefinitions",
-            "schemaname,displayname,type,environmentvariabledefinitionid",
+            "schemaname,displayname,type,defaultvalue,environmentvariabledefinitionid",
         )
         vals = query_all(
             env_url,
@@ -863,34 +863,47 @@ def check_connector_secret_storage(runner: Any) -> list[CheckResult]:
             )
         ]
 
-    # Join value records to their definitions to recover each value's type.
-    def_by_id = {d.get("environmentvariabledefinitionid"): d for d in defs}
+    # Index each definition's current-value override by definition id. An
+    # environmentvariablevalue row exists only when a current value is set;
+    # it holds the override, never the default.
+    override_by_def_id: dict[Any, str] = {}
+    for val in vals:
+        def_id = val.get("_environmentvariabledefinitionid_value")
+        if def_id is not None:
+            override_by_def_id[def_id] = val.get("value") or ""
 
     secret_env_vars: list[str] = []      # Secret-type (B1, safe storage)
     plaintext_env_vars: list[str] = []   # high-confidence name (B2a, FAILED)
     suspect_env_vars: list[str] = []     # broad/ambiguous name (B2b, WARNING)
 
-    for val in vals:
-        def_id = val.get("_environmentvariabledefinitionid_value")
-        definition = def_by_id.get(def_id, {})
+    # Iterate definitions (not value rows) and evaluate the *effective*
+    # value: the current-value override when set and non-empty, otherwise
+    # the definition's defaultvalue. A secret pasted into a definition's
+    # defaultvalue produces NO environmentvariablevalue row, so a value-only
+    # scan would miss it entirely — and solution-imported vars commonly ship
+    # default-only, which is a primary inline-secret path this check exists
+    # to catch.
+    for definition in defs:
+        def_id = definition.get("environmentvariabledefinitionid")
         var_type = definition.get("type")
-        schema = (
-            definition.get("schemaname")
-            or val.get("schemaname")
-            or "(unknown env var)"
-        )
-        raw_value = val.get("value") or ""
+        schema = definition.get("schemaname") or "(unknown env var)"
+        override = override_by_def_id.get(def_id, "")
+        default = definition.get("defaultvalue") or ""
+        effective_value = override or default
 
         if var_type == _ENV_VAR_TYPE_SECRET:
-            secret_env_vars.append(schema)
-        # `var_type is None` means the value could not be joined back to a
-        # definition (or the definition omitted its type). Treat it as Text
-        # so a secret-named value is still evaluated: a genuinely KV-backed
-        # secret carries a Key Vault reference in its value, which
+            # A Secret-type var is asserted as safely stored only when it
+            # actually holds a value (an override or a default Key Vault
+            # reference). An unbound Secret-type definition proves nothing.
+            if effective_value:
+                secret_env_vars.append(schema)
+        # `var_type is None` means the definition omitted its type. Treat it
+        # as Text so a secret-named value is still evaluated: a genuinely
+        # KV-backed secret carries a Key Vault reference in its value, which
         # `_is_kv_reference` filters out below, so this defensive default
         # cannot fail a correctly stored secret.
         elif var_type == _ENV_VAR_TYPE_STRING or var_type is None:
-            if raw_value and not _is_kv_reference(raw_value):
+            if effective_value and not _is_kv_reference(effective_value):
                 tier = _classify_secret_name(schema)
                 if tier == "high":
                     plaintext_env_vars.append(schema)
