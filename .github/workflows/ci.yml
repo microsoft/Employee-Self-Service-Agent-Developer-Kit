@@ -75,3 +75,27 @@ jobs:
     - name: Run installer smoke tests
       shell: pwsh
       run: ./setup/Install-EssAdk.Tests.ps1
+
+  flightcheck-url-hygiene:
+    name: FlightCheck URL host hygiene
+    runs-on: ubuntu-latest
+
+    # Deterministic, offline gate: asserts every URL host emitted by
+    # FlightCheck source is registered in tests/flightcheck/url_registry.py
+    # and that portal/API hosts use https. No network, so it is safe to
+    # gate every PR on. It does NOT verify a path is live (that a
+    # learn.microsoft.com article still exists) — stale-path detection is a
+    # separate, networked concern kept out of this deterministic job.
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.11'
+
+    - name: Install pytest
+      run: pip install "pytest>=8,<9"
+
+    - name: Run URL host hygiene test
+      run: python -m pytest tests/flightcheck/test_url_hygiene.py -q
