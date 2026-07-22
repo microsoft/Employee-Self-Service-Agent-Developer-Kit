@@ -246,6 +246,59 @@ def get_instance_id(local_dir: str = ".local") -> str:
         return str(uuid.uuid4())
 
 
+# Persisted tenant display name ({tenant_id, tenant_name}) so ADK events that
+# run in a *later* process without a Microsoft Graph token (session start,
+# build, deploy, capability, api — see adk_telemetry.py) can still stamp the
+# org name. Only a Graph-capable flow (FlightCheck) can resolve it live; it
+# caches the result here and the pure-ADK paths read it back. The cache is
+# keyed by tenant_id so a name resolved for one tenant is never reused for a
+# different tenant (e.g. a maker who switches tenants between runs).
+_TENANT_NAME_FILE = ".tenant_name"
+
+
+def cache_tenant_name(
+    tenant_id: str, tenant_name: str, local_dir: str = ".local"
+) -> None:
+    """Persist the resolved org display name for reuse by later ADK events.
+
+    Best-effort: any IO error is swallowed (telemetry must never break a
+    flow). No-op when either value is empty — we only cache a real, resolved
+    ``(tenant_id, tenant_name)`` pair. ``tenant_name`` is OII (org display
+    name); it is written under the gitignored ``.local/`` dir on the maker's
+    own machine, mirroring how ``.instance_id`` is persisted.
+    """
+    if not tenant_id or not tenant_name:
+        return
+    path = os.path.join(local_dir, _TENANT_NAME_FILE)
+    try:
+        os.makedirs(local_dir, exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump({"tenant_id": tenant_id, "tenant_name": tenant_name}, f)
+    except OSError:
+        pass
+
+
+def get_cached_tenant_name(tenant_id: str, local_dir: str = ".local") -> str:
+    """Return the cached org display name IFF it matches ``tenant_id``.
+
+    Returns ``""`` when there is no cache, the cache is unreadable/malformed,
+    or the cached tenant_id doesn't match the current one (so a name resolved
+    for a different tenant is never leaked onto this tenant's events).
+    """
+    if not tenant_id:
+        return ""
+    path = os.path.join(local_dir, _TENANT_NAME_FILE)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return ""
+    if not isinstance(data, dict) or data.get("tenant_id") != tenant_id:
+        return ""
+    name = data.get("tenant_name")
+    return name if isinstance(name, str) else ""
+
+
 def get_adk_version() -> str:
     """Best-effort ADK version string (System Metadata).
 
