@@ -125,7 +125,7 @@ Instead, it establishes the complete framework, wiring, and developer experience
 | -------------------------------------------------------- | ------------------------------ | ------ | -------- |
 | [TASK-001](tasks/TASK-001-repository-scaffold.md)        | Repository Scaffold            | DONE   | —        |
 | [TASK-002](tasks/TASK-002-pipeline-framework.md)         | Pipeline Framework             | DONE   | —        |
-| [TASK-003](tasks/TASK-003-migration-orchestrator.md)     | Migration Orchestrator         | TODO   | TASK-002, TASK-005, TASK-015 |
+| [TASK-003](tasks/TASK-003-migration-orchestrator.md)     | Migration Orchestrator         | DONE   | TASK-002, TASK-005, TASK-015 |
 | [TASK-004](tasks/TASK-004-dataverse-client.md)           | Dataverse Client               | DONE   | —        |
 | [TASK-005](tasks/TASK-005-diagnostics-framework.md)      | Diagnostics Framework          | DONE   | —        |
 | [TASK-006](tasks/TASK-006-preprocessing-pipeline.md)     | Preprocessing: Agent Config + Customization Discovery | DONE | TASK-015, TASK-004 |

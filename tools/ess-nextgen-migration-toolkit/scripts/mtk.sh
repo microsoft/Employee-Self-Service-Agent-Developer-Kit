@@ -119,27 +119,34 @@ cmd_provision() {
 # runtime-only .venv.
 cmd_run() {
   local dev="$1"
+  local mode="$2"
   local UV
   UV="$(find_uv || true)"
   echo ""
   echo "==> Starting the toolkit CLI..."
+  # Build the orchestrator argument list safely (bash 3.2 + set -u friendly).
+  set -- src/service/mtk_orchestrator.py
+  [[ "$dev" == "1" ]] && set -- "$@" --dev
+  [[ -n "$mode" ]] && set -- "$@" --mode "$mode"
   if [[ "$dev" == "1" ]]; then
-    exec "$UV" run python src/service/mtk_orchestrator.py --dev
+    exec "$UV" run python "$@"
   else
-    exec "$UV" run --no-dev python src/service/mtk_orchestrator.py
+    exec "$UV" run --no-dev python "$@"
   fi
 }
 
 # start = provision (idempotent) + run. The everyday command.
 cmd_start() {
   local dev="$1"
+  local mode="$2"
   cmd_provision "$dev"
-  cmd_run "$dev"
+  cmd_run "$dev" "$mode"
 }
 
 # refresh = pull latest code, then start (provision + run). It is the customer
 # update path, so it always provisions a runtime-only environment (no --dev).
 cmd_refresh() {
+  local mode="$1"
   # 1. Pull the latest code (fast-forward only; never rewrites local work).
   local branch
   branch="$(git rev-parse --abbrev-ref HEAD)"
@@ -153,7 +160,7 @@ cmd_refresh() {
   fi
 
   # 2. Start: re-provision from the (updated) lockfile, then run (runtime only).
-  cmd_start "0"
+  cmd_start "0" "$mode"
 }
 
 usage() {
@@ -161,31 +168,38 @@ usage() {
 mtk — ESS NextGen Migration Toolkit
 
 Usage:
-  mtk start [--dev]     Provision a pip-free, locked environment (uv + Python + .venv), then run the toolkit
-  mtk refresh           Pull latest code, then start (re-provision runtime env + run)
+  mtk start [--dev] [--mode readonly|writeback]
+                        Provision a pip-free, locked environment (uv + Python + .venv), then run the toolkit
+  mtk refresh [--mode readonly|writeback]
+                        Pull latest code, then start (re-provision runtime env + run)
   mtk help              Show this help
 
 Options:
   --dev                 (start only) Include developer tooling (ruff, mypy, pytest, pre-commit)
+  --mode <mode>         Execution mode: readonly (default, no writes) or writeback (persist changes)
 EOF
 }
 
 # ---------------------------------------------------------------------------
 # Argument parsing — subcommand plus an optional, position-independent --dev
+# and --mode readonly|writeback (accepts `--mode X` and `--mode=X`).
 # ---------------------------------------------------------------------------
 CMD=""
 DEV=0
-for arg in "$@"; do
-  case "$arg" in
-    start|refresh)  CMD="$arg" ;;
-    help|-h|--help) CMD="help" ;;
-    --dev)          DEV=1 ;;
-    *) echo "ERROR: unknown argument '$arg'" >&2; usage; exit 2 ;;
+MODE=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    start|refresh)  CMD="$1"; shift ;;
+    help|-h|--help) CMD="help"; shift ;;
+    --dev)          DEV=1; shift ;;
+    --mode)         MODE="${2:-}"; shift 2 || shift ;;
+    --mode=*)       MODE="${1#--mode=}"; shift ;;
+    *) echo "ERROR: unknown argument '$1'" >&2; usage; exit 2 ;;
   esac
 done
 
 case "$CMD" in
-  start)   cmd_start "$DEV" ;;
+  start)   cmd_start "$DEV" "$MODE" ;;
   refresh)
     if [[ "$DEV" == "1" ]]; then
       echo "ERROR: '--dev' is only valid with 'start'. 'refresh' is the customer" >&2
@@ -193,7 +207,7 @@ case "$CMD" in
       echo "       Contributors: run 'mtk start --dev' to (re)add dev tooling." >&2
       exit 2
     fi
-    cmd_refresh ;;
+    cmd_refresh "$MODE" ;;
   help)    usage ;;
   "")      echo "ERROR: no command given." >&2; usage; exit 2 ;;
 esac

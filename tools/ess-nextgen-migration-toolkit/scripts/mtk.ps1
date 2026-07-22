@@ -18,17 +18,23 @@
 .PARAMETER Dev
     Include developer tooling (ruff, mypy, pytest, pre-commit).
 
+.PARAMETER Mode
+    Execution mode: readonly (default, no writes) or writeback (persist changes).
+
 .EXAMPLE
-    mtk start            # provision runtime environment, then run (customers)
-    mtk start -Dev       # provision runtime + dev tooling, then run (contributors)
-    mtk refresh          # pull latest, then start (re-provision runtime + run)
+    mtk start                    # provision runtime environment, then run (customers)
+    mtk start -Dev               # provision runtime + dev tooling, then run (contributors)
+    mtk start -Mode writeback    # run in writeback mode (persist changes)
+    mtk refresh                  # pull latest, then start (re-provision runtime + run)
 #>
 param(
     [Parameter(Position = 0)]
     [ValidateSet("start", "refresh", "help")]
     [string]$Command = "help",
 
-    [switch]$Dev
+    [switch]$Dev,
+
+    [string]$Mode = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -117,24 +123,28 @@ function Invoke-Provision {
 # selects the matching run env: customers use --no-dev so `uv run` does not
 # implicitly re-add the dev dependency-group to a runtime-only .venv.
 function Invoke-Run {
-    param([bool]$DevMode)
+    param([bool]$DevMode, [string]$Mode)
 
     $UV = Find-Uv
     Write-Host ""
     Write-Host "==> Starting the toolkit CLI..."
-    if ($DevMode) { & $UV run python src/service/mtk_orchestrator.py --dev } else { & $UV run --no-dev python src/service/mtk_orchestrator.py }
+    $pyArgs = @("src/service/mtk_orchestrator.py")
+    if ($DevMode) { $pyArgs += "--dev" }
+    if ($Mode) { $pyArgs += @("--mode", $Mode) }
+    if ($DevMode) { & $UV run python @pyArgs } else { & $UV run --no-dev python @pyArgs }
 }
 
 # start = provision (idempotent) + run. The everyday command.
 function Invoke-Start {
-    param([bool]$DevMode)
+    param([bool]$DevMode, [string]$Mode)
     Invoke-Provision -DevMode:$DevMode
-    Invoke-Run -DevMode:$DevMode
+    Invoke-Run -DevMode:$DevMode -Mode:$Mode
 }
 
 # refresh = pull latest code, then start (provision + run). It is the customer
 # update path, so it always provisions a runtime-only environment (no -Dev).
 function Invoke-Refresh {
+    param([string]$Mode)
     $branch = (git rev-parse --abbrev-ref HEAD).Trim()
     Write-Host "==> Updating '$branch' from origin (fast-forward only)..."
     git fetch --prune origin
@@ -146,7 +156,7 @@ function Invoke-Refresh {
         git pull --ff-only origin main
     }
 
-    Invoke-Start -DevMode:$false
+    Invoke-Start -DevMode:$false -Mode:$Mode
 }
 
 function Show-Usage {
@@ -154,12 +164,15 @@ function Show-Usage {
 mtk - ESS NextGen Migration Toolkit
 
 Usage:
-  mtk start [-Dev]      Provision a pip-free, locked environment (uv + Python + .venv), then run the toolkit
-  mtk refresh           Pull latest code, then start (re-provision runtime env + run)
+  mtk start [-Dev] [-Mode readonly|writeback]
+                        Provision a pip-free, locked environment (uv + Python + .venv), then run the toolkit
+  mtk refresh [-Mode readonly|writeback]
+                        Pull latest code, then start (re-provision runtime env + run)
   mtk help              Show this help
 
 Options:
   -Dev                  (start only) Include developer tooling (ruff, mypy, pytest, pre-commit)
+  -Mode <mode>          Execution mode: readonly (default, no writes) or writeback (persist changes)
 "@ | Write-Host
 }
 
@@ -167,7 +180,7 @@ Options:
 # Dispatch
 # ---------------------------------------------------------------------------
 switch ($Command) {
-    "start"   { Invoke-Start -DevMode:$Dev.IsPresent }
+    "start"   { Invoke-Start -DevMode:$Dev.IsPresent -Mode:$Mode }
     "refresh" {
         if ($Dev.IsPresent) {
             Write-Error ("'-Dev' is only valid with 'start'. 'refresh' is the customer " +
@@ -175,7 +188,7 @@ switch ($Command) {
                 "Contributors: run 'mtk start -Dev' to (re)add dev tooling.")
             exit 2
         }
-        Invoke-Refresh
+        Invoke-Refresh -Mode:$Mode
     }
     default   { Show-Usage }
 }

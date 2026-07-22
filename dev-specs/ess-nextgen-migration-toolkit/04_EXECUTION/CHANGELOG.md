@@ -12,6 +12,15 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 
 ## [Unreleased]
 
+- **TASK-003 DONE — orchestrator execution-mode selection + summary + error
+  handling.** `mtk_orchestrator.main()` now parses `--mode readonly|writeback`
+  (`_resolve_mode`; accepts `--mode X` / `--mode=X`, case-insensitive; invalid →
+  friendly `SystemExit`) and applies it to `MigrationContext.mode` (default
+  `READONLY`). On success it logs a one-line summary (mode, agent, changes/
+  warnings/errors, bundle path); on failure it logs a user-friendly `LogError`
+  (with the session-log path) and always closes the logger. The `mtk.sh` and
+  `mtk.ps1` dispatchers parse and forward `--mode` (and `-Mode`). Added
+  `_resolve_mode` / `_log_summary` unit tests.
 - **Consolidated the RULE-001 / DA-compat overlap.** `ApplyDaCompatibilityStep`
   (TASK-016) and RULE-001 (TASK-010) overlapped on Template + Model Kind. Split
   them cleanly: TASK-016 keeps the foundational DA-compat *nomenclature* rewrite

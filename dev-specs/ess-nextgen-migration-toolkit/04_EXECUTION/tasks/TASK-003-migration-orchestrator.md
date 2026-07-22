@@ -4,7 +4,7 @@
 | ---------- | ------------------------------------------------------------------ |
 | ID         | TASK-003                                                           |
 | Workstream | 0 — Repository Foundation                                          |
-| Status     | TODO                                                               |
+| Status     | DONE                                                              |
 | Consumes   | TASK-002, TASK-005, TASK-015                                       |
 
 ## Description
@@ -41,23 +41,26 @@ Logger lifecycle, default READONLY mode). This task extends it with:
 
 ## Acceptance Criteria
 
-- [ ] `--mode readonly|writeback` CLI argument parsed and applied to
-  `MigrationContext.mode`.
-- [ ] `mtk.sh start --mode writeback` forwards the argument to the orchestrator.
-- [ ] Default mode is `READONLY` when no argument supplied.
-- [ ] Pipeline exceptions are caught, a user-friendly message is printed, and
-  `logger.close()` always runs.
-- [ ] After successful run, the orchestrator prints the bundle path and a summary
-  line (mode, agent name, changes count, warnings count).
-- [ ] No migration logic in the orchestrator (PIPE-006).
-- [ ] Quality gates pass: `uv run ruff check .`, `uv run mypy src`,
+- [x] `--mode readonly|writeback` CLI argument parsed and applied to
+  `MigrationContext.mode` (`_resolve_mode`; accepts `--mode X` and `--mode=X`,
+  case-insensitive; invalid value → friendly `SystemExit`).
+- [x] `mtk.sh start --mode writeback` forwards the argument to the orchestrator
+  (and `mtk.ps1 -Mode writeback` on Windows).
+- [x] Default mode is `READONLY` when no argument supplied.
+- [x] Pipeline exceptions are caught, a user-friendly message is logged
+  (`LogError` with the session-log path), and `logger.close()` always runs.
+- [x] After a successful run, the orchestrator logs a summary line (mode, agent
+  name, changes/warnings/errors counts, bundle path).
+- [x] No migration logic in the orchestrator (PIPE-006).
+- [x] Quality gates pass: `uv run ruff check .`, `uv run mypy .`,
   `uv run pytest -q`.
 
 ## Deliverables
 
 - `src/service/mtk_orchestrator.py` — extended with mode parsing, error
   handling, session summary
-- `scripts/mtk.sh` / `scripts/mtk.ps1` — argument forwarding (`"$@"`)
+- `scripts/mtk.sh` / `scripts/mtk.ps1` — parse and forward `--dev` and
+  `--mode readonly|writeback` to the orchestrator
 - Unit tests under `tests/unit/service/`
 
 ## References
