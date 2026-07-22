@@ -5,7 +5,7 @@
 | ID         | TASK-009                  |
 | Workstream | 0 — Repository Foundation |
 | Status     | BLOCKED                      |
-| Consumes   | TASK-003, TASK-006, TASK-007 |
+| Consumes   | TASK-003, TASK-006, TASK-007, TASK-016 |
 
 ## Description
 
@@ -22,6 +22,11 @@ Workstream 1.
 - Diagnostics: session bundle produced with `migration_report.md` + `session.log`.
 - Determinism: identical inputs produce identical ordering and output.
 - Logger session lifecycle: `start_session` → pipeline → `close()` in all paths.
+- **Live Dataverse field names**: confirm the DA-compat read/write fields
+  (`template`, `configuration`, `data`, `botcomponentid`) match a real record when
+  run under `./mtk.sh start --dev` in WRITEBACK mode — verifying the fields that
+  TASK-016 reads and TASK-007 persists. (Moved here from TASK-016 so the live
+  check lives once, at the end-to-end boundary.)
 
 ### Architecture constraints
 
@@ -36,6 +41,10 @@ Workstream 1.
   `./mtk.sh start`.
 - [ ] READONLY mode executes without writeback (Writeback step skipped).
 - [ ] WRITEBACK mode persists results through the DataverseClient.
+- [ ] Under `./mtk.sh start --dev` (WRITEBACK), the DA-compat field names
+  (`template`, `configuration`, `data`, `botcomponentid`) are confirmed against a
+  live record — the transform produces a non-empty `pending_writes` and the PATCH
+  succeeds.
 - [ ] Session bundle produced: `output/session-<timestamp>/` with exactly two
   files.
 - [ ] `migration_report.md` contains Summary, Changes, Warnings, Errors sections.

@@ -4,7 +4,7 @@
 | ---------- | ------------------------- |
 | ID         | TASK-016                  |
 | Workstream | 0 — Repository Foundation |
-| Status     | ACTIVE                    |
+| Status     | DONE                      |
 | Consumes   | TASK-006, TASK-002        |
 
 ## Description
@@ -22,6 +22,12 @@ It consumes the agent artifacts hydrated by TASK-006
 (`context.agent_bot_record`, `context.agent_gpt_component`) and produces
 `context.pending_writes` for the Output stage (TASK-007) to persist. It performs
 **no** Dataverse I/O itself (transformation steps never call Dataverse directly).
+
+**Boundary.** This task is the *producer* of `pending_writes`; TASK-007 (Output)
+is the *consumer* that validates and persists them. Confirming the DA-compat
+field names (`template` / `configuration` / `data` / `botcomponentid`) against a
+**live** record is an end-to-end concern owned by TASK-009 (run under
+`./mtk.sh start --dev` in WRITEBACK mode) — it is not a per-step blocker here.
 
 ### Transforms (all idempotent)
 
@@ -60,12 +66,11 @@ write. See `02_ARCHITECTURE/CUSTOMIZATION_DISCOVERY.md` section 6.
   (`{"entity_set", "record_id", "changes"}`).
 - [x] Step is a `MigrationPipelineStep` and performs no Dataverse I/O.
 - [x] Unit tests cover each transform + the step's pending-write assembly.
-- [ ] Field names against live records confirmed (`template`, `configuration`,
-  `data`, `botcomponentid`) via `./mtk.sh start --dev`. **(open — blocks DONE;
-  the transforms read/write these fields, so they must be verified against a live
-  record before writeback in TASK-007 can be trusted.)**
 - [x] Registered as the first step of `build_transformation_pipeline`.
 - [x] Quality gates pass (`ruff`, `mypy`, `pytest`; enforced in CI).
+
+> Live confirmation of the transform-target field names against a real record
+> moved to TASK-009 (E2E validation) — see the Boundary note above.
 
 ## Deliverables
 

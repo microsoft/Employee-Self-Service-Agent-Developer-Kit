@@ -30,6 +30,11 @@ the real steps:
    `migration_report.md` from `MigrationContext` collectors via the Reporter
    service (runs in both modes).
 
+**Boundary.** This task is the *consumer* of the `pending_writes` produced by
+TASK-016 (Transformation) — it validates and persists them; it never computes
+transformations itself. The live confirmation that the persisted field names are
+correct is owned by TASK-009 (E2E, `--dev` WRITEBACK).
+
 ### Architecture constraints
 
 - All steps are `MigrationPipelineStep` subclasses.

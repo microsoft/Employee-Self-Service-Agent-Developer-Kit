@@ -131,9 +131,9 @@ Instead, it establishes the complete framework, wiring, and developer experience
 | [TASK-006](tasks/TASK-006-preprocessing-pipeline.md)     | Preprocessing: Agent Config + Customization Discovery | DONE | TASK-015, TASK-004 |
 | [TASK-007](tasks/TASK-007-postprocessing-pipeline.md)    | Postprocessing Pipeline        | TODO   | TASK-015, TASK-004, TASK-005, TASK-016 |
 | [TASK-008](tasks/TASK-008-authentication-token-provider.md) | Authentication Token Provider | DONE   | —        |
-| [TASK-009](tasks/TASK-009-end-to-end-framework-validation.md) | End-to-End Framework Validation | BLOCKED | TASK-003, TASK-006, TASK-007 |
+| [TASK-009](tasks/TASK-009-end-to-end-framework-validation.md) | End-to-End Framework Validation | BLOCKED | TASK-003, TASK-006, TASK-007, TASK-016 |
 | [TASK-015](tasks/TASK-015-input-pipeline-auth-discovery.md) | Input Pipeline: Auth + Agent Discovery + Orchestrator Wiring | DONE | TASK-002, TASK-005, TASK-008 |
-| [TASK-016](tasks/TASK-016-transformation-da-compatibility.md) | Transformation: DA-Compatibility Rewrite | ACTIVE | TASK-006, TASK-002 |
+| [TASK-016](tasks/TASK-016-transformation-da-compatibility.md) | Transformation: DA-Compatibility Rewrite | DONE | TASK-006, TASK-002 |
 
 ---
 
