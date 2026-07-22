@@ -82,6 +82,54 @@ explorer rather than spawning another tab from this skill.
 
 ---
 
+## Step 2b: Optional live egress probe (INFRA-003, consent required)
+
+INFRA-003 verifies the agent's external system endpoints (Workday, ServiceNow,
+SAP SuccessFactors, custom HTTP) are reachable. By default it runs a **read-only
+local probe** from the maker's machine — no permission needed, nothing created.
+
+There is also an opt-in **live egress probe** (`--runtime-reachability`) that confirms
+reachability from the Power Platform environment's own egress by briefly creating
+and then deleting a transient test flow. This mutates the environment, so you MUST
+get explicit consent before passing `--runtime-reachability`. (A normal terminal run
+proactively offers this same probe with an inline Y/N prompt; in chat, you own the
+consent, so ask using this exact wording, swapping `<SYSTEM>` for the system being
+checked, one of Workday / ServiceNow / SuccessFactors / custom HTTP):
+
+> To confirm your `<SYSTEM>` connection is whitelisted, I'll temporarily create a
+> Power Platform flow in your environment. It sends a network request from the same
+> service boundary as your agent to your `<SYSTEM>` endpoint, so I can verify the
+> connection is allowed through your network security rules.
+>
+> It only tests connectivity. No business data is read, written, or changed, and the
+> flow is deleted as soon as the check finishes.
+>
+> Okay to proceed?
+
+The reassurance points (no data touched, auto-deleted) are what earn user trust.
+Keep them in whatever phrasing you use.
+
+**If the user declines**, run without `--runtime-reachability` (local probe only), note in the
+summary that the egress-level probe was skipped by choice, and offer the manual
+verification path (again swapping `<SYSTEM>` for the selected system):
+
+> Prefer to verify manually? You can confirm the connection is whitelisted:
+>
+> 1. In the Power Platform admin center, note your environment's region.
+> 2. From Microsoft's [Managed connectors outbound IP addresses](https://learn.microsoft.com/en-us/connectors/common/outbound-ip-addresses)
+>    list, get the ranges for that region. For a custom HTTP endpoint, use the
+>    Power Automate service tags instead (the machine-readable ranges are in the
+>    [Azure IP Ranges and Service Tags JSON](https://www.microsoft.com/en-us/download/details.aspx?id=56519)).
+> 3. Work with your InfoSec / network team to confirm those ranges are allowlisted
+>    in your `<SYSTEM>` firewall / WAF.
+
+> **Note:** `--runtime-reachability` is the only FlightCheck path that writes to the tenant.
+> It creates one transient probe flow per run, always deletes it (even on failure),
+> and sweeps any orphan left by a crashed prior run. If a prerequisite is missing
+> (no environment / Dataverse token), it degrades to the local probe and says so.
+
+---
+
 ## Step 3: Read results and present findings
 
 Read `workspace/flightcheck/results.json`. Build the output below using the data.
