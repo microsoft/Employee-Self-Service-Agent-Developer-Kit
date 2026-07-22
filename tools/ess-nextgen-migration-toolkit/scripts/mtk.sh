@@ -137,31 +137,73 @@ launch_toolkit() {
   fi
 }
 
-# Reset the checkout to pristine origin/main. Customer update path: force-switch
-# to main pointed at origin/main and DISCARD any local branch position,
-# uncommitted changes, and untracked files, so the tool only ever runs from the
-# latest reviewed main — never from unreviewed local modifications. Contributors
-# (--dev) skip this and manage their own git. Gitignored runtime state (.venv,
-# .local, output/) is preserved (clean respects .gitignore).
+# Confirm before discarding local WORK-TREE changes. Only uncommitted changes and
+# untracked files are ever discarded — local commits and branches are never
+# touched (we check out origin/main detached, without moving any branch pointer).
+# Skips the prompt when the work tree is already clean (nothing to lose). `--yes`
+# bypasses the prompt; a non-interactive shell REFUSES rather than silently
+# destroying work.
+confirm_reset_or_abort() {
+  local force="$1"
+  # Only uncommitted tracked changes + untracked files are at risk. `git status
+  # --porcelain` lists exactly those (and respects .gitignore, so runtime state
+  # is not counted). Empty → nothing to lose, proceed silently.
+  if [[ -z "$(git status --porcelain 2>/dev/null || true)" ]]; then
+    return 0
+  fi
+  {
+    echo ""
+    echo "WARNING: 'mtk run' (customer mode) runs from a pristine checkout of origin/main."
+    echo "  This DISCARDS your uncommitted changes and untracked files (git checkout -f + git clean -fd)."
+    echo "  Your local commits and branches are PRESERVED (no branch is reset or deleted)."
+    echo "  Contributors: re-run with '--dev' to keep everything and skip this."
+  } >&2
+  if [[ "$force" == "1" ]]; then
+    echo "  --yes given; discarding uncommitted/untracked changes and continuing." >&2
+    return 0
+  fi
+  if [[ ! -t 0 ]]; then
+    echo "ERROR: refusing to discard uncommitted changes in a non-interactive shell." >&2
+    echo "       Re-run with '--dev' (keep work) or '--yes' (discard uncommitted/untracked)." >&2
+    exit 3
+  fi
+  printf "  Type 'yes' to discard uncommitted/untracked changes and continue: " >&2
+  local reply=""
+  read -r reply || true
+  if [[ "$reply" != "yes" ]]; then
+    echo "Aborted — nothing was changed." >&2
+    exit 3
+  fi
+}
+
+# Run from a pristine checkout of origin/main. Customer update path: check out
+# origin/main **detached** (never moving/resetting any branch pointer) and clean
+# untracked files, so the working tree exactly matches the latest reviewed main —
+# discarding only uncommitted changes + untracked files. Local commits and
+# branches are fully preserved. Guarded by confirm_reset_or_abort so it never
+# silently destroys uncommitted work. Contributors (--dev) skip this entirely.
+# Gitignored runtime state (.venv, .local, output/) is preserved (clean respects
+# .gitignore).
 sync_to_main() {
-  echo "==> Customer mode: resetting to pristine origin/main."
-  echo "    Local branch position and uncommitted/untracked changes will be discarded"
-  echo "    so the tool runs only from the latest reviewed main."
-  echo "    (Contributors: use 'mtk run --dev' to keep your work and skip this.)"
+  local force="$1"
   git fetch --prune origin
-  git checkout -f -B main origin/main
+  confirm_reset_or_abort "$force"
+  echo "==> Checking out pristine origin/main (local commits and branches preserved)..."
+  git -c advice.detachedHead=false checkout -f origin/main
   git clean -fd
 }
 
 # run = the single everyday command. Without --dev (customer) it first resets to
-# pristine origin/main (discarding local changes), then provisions (idempotent)
-# and runs. With --dev (contributor) it provisions runtime + dev tooling and runs
-# WITHOUT touching git — contributors manage their own branches.
+# pristine origin/main (discarding local changes, after confirmation), then
+# provisions (idempotent) and runs. With --dev (contributor) it provisions
+# runtime + dev tooling and runs WITHOUT touching git — contributors manage their
+# own branches.
 cmd_run() {
   local dev="$1"
   local mode="$2"
+  local force="$3"
   if [[ "$dev" != "1" ]]; then
-    sync_to_main
+    sync_to_main "$force"
   fi
   cmd_provision "$dev"
   launch_toolkit "$dev" "$mode"
@@ -172,7 +214,7 @@ usage() {
 mtk — ESS NextGen Migration Toolkit
 
 Usage:
-  mtk run [--dev] [--mode readonly|writeback]
+  mtk run [--dev] [--mode readonly|writeback] [--yes]
                         Run the toolkit. Without --dev (customer), first resets to
                         pristine origin/main (discarding any local changes), then
                         provisions a locked runtime env and runs. With --dev
@@ -184,21 +226,25 @@ Options:
   --dev                 Include developer tooling (ruff, mypy, pytest, pre-commit);
                         also skips the reset-to-main (contributors manage their git)
   --mode <mode>         Execution mode: readonly (default, no writes) or writeback (persist changes)
+  --yes                 Skip the confirmation prompt before the customer reset-to-main
+                        (required to reset non-interactively; ignored with --dev)
 EOF
 }
 
 # ---------------------------------------------------------------------------
-# Argument parsing — subcommand plus an optional, position-independent --dev
-# and --mode readonly|writeback (accepts `--mode X` and `--mode=X`).
+# Argument parsing — subcommand plus optional, position-independent --dev,
+# --mode readonly|writeback (accepts `--mode X` and `--mode=X`), and --yes.
 # ---------------------------------------------------------------------------
 CMD=""
 DEV=0
 MODE=""
+FORCE=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     run)            CMD="run"; shift ;;
     help|-h|--help) CMD="help"; shift ;;
     --dev)          DEV=1; shift ;;
+    --yes|-y)       FORCE=1; shift ;;
     --mode)         MODE="${2:-}"; shift 2 || shift ;;
     --mode=*)       MODE="${1#--mode=}"; shift ;;
     *) echo "ERROR: unknown argument '$1'" >&2; usage; exit 2 ;;
@@ -206,7 +252,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 case "$CMD" in
-  run)     cmd_run "$DEV" "$MODE" ;;
+  run)     cmd_run "$DEV" "$MODE" "$FORCE" ;;
   help)    usage ;;
   "")      echo "ERROR: no command given." >&2; usage; exit 2 ;;
 esac

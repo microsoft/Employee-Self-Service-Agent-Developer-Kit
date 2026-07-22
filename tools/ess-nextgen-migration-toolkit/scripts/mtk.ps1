@@ -22,9 +22,13 @@
 .PARAMETER Mode
     Execution mode: readonly (default, no writes) or writeback (persist changes).
 
+.PARAMETER Yes
+    Skip the confirmation prompt before the customer reset-to-main (required to
+    reset non-interactively; ignored with -Dev).
+
 .EXAMPLE
-    mtk run                      # customer: pull latest, provision runtime, then run
-    mtk run -Dev                 # contributor: provision runtime + dev tooling, run (no git pull)
+    mtk run                      # customer: reset to pristine origin/main, provision, then run
+    mtk run -Dev                 # contributor: provision runtime + dev tooling, run (no git reset)
     mtk run -Mode writeback      # run in writeback mode (persist changes)
 #>
 param(
@@ -34,7 +38,9 @@ param(
 
     [switch]$Dev,
 
-    [string]$Mode = ""
+    [string]$Mode = "",
+
+    [switch]$Yes
 )
 
 $ErrorActionPreference = "Stop"
@@ -135,28 +141,54 @@ function Invoke-Launch {
     if ($DevMode) { & $UV run python @pyArgs } else { & $UV run --no-dev python @pyArgs }
 }
 
-# Reset the checkout to pristine origin/main. Customer update path: force-switch
-# to main pointed at origin/main and DISCARD any local branch position,
-# uncommitted changes, and untracked files, so the tool only ever runs from the
-# latest reviewed main. Contributors (-Dev) manage their own git. Gitignored
+# Confirm before discarding local WORK-TREE changes. Only uncommitted changes and
+# untracked files are ever discarded — local commits and branches are never
+# touched (we check out origin/main detached, without moving any branch pointer).
+# Skips the prompt when the work tree is already clean. -Yes bypasses the prompt;
+# a non-interactive session REFUSES rather than silently destroying work.
+function Confirm-ResetOrAbort {
+    param([bool]$Force)
+    $dirty = [bool](git status --porcelain 2>$null)
+    if (-not $dirty) { return }  # clean work tree → nothing to lose
+
+    Write-Host ""
+    Write-Host "WARNING: 'mtk run' (customer mode) runs from a pristine checkout of origin/main."
+    Write-Host "  This DISCARDS your uncommitted changes and untracked files (git checkout -f + git clean -fd)."
+    Write-Host "  Your local commits and branches are PRESERVED (no branch is reset or deleted)."
+    Write-Host "  Contributors: re-run with '-Dev' to keep everything and skip this."
+    if ($Force) { Write-Host "  -Yes given; discarding uncommitted/untracked changes and continuing."; return }
+    if (-not [Environment]::UserInteractive) {
+        Write-Error ("Refusing to discard uncommitted changes in a non-interactive session. " +
+            "Re-run with '-Dev' (keep work) or '-Yes' (discard uncommitted/untracked).")
+        exit 3
+    }
+    $reply = Read-Host "  Type 'yes' to discard uncommitted/untracked changes and continue"
+    if ($reply -ne "yes") { Write-Error "Aborted - nothing was changed."; exit 3 }
+}
+
+# Run from a pristine checkout of origin/main. Customer update path: check out
+# origin/main DETACHED (never moving/resetting any branch pointer) and clean
+# untracked files, so the working tree exactly matches the latest reviewed main —
+# discarding only uncommitted changes + untracked files. Local commits and
+# branches are fully preserved. Guarded by Confirm-ResetOrAbort so it never
+# silently destroys uncommitted work. Contributors (-Dev) skip this. Gitignored
 # runtime state (.venv, .local, output/) is preserved (clean respects .gitignore).
 function Sync-ToMain {
-    Write-Host "==> Customer mode: resetting to pristine origin/main."
-    Write-Host "    Local branch position and uncommitted/untracked changes will be discarded"
-    Write-Host "    so the tool runs only from the latest reviewed main."
-    Write-Host "    (Contributors: use 'mtk run -Dev' to keep your work and skip this.)"
+    param([bool]$Force)
     git fetch --prune origin
-    git checkout -f -B main origin/main
+    Confirm-ResetOrAbort -Force:$Force
+    Write-Host "==> Checking out pristine origin/main (local commits and branches preserved)..."
+    git -c advice.detachedHead=false checkout -f origin/main
     git clean -fd
 }
 
 # run = the single everyday command. Without -Dev (customer) it first resets to
-# pristine origin/main (discarding local changes), then provisions (idempotent)
-# and runs. With -Dev (contributor) it provisions runtime + dev tooling and runs
-# WITHOUT touching git.
+# pristine origin/main (discarding local changes, after confirmation), then
+# provisions (idempotent) and runs. With -Dev (contributor) it provisions runtime
+# + dev tooling and runs WITHOUT touching git.
 function Invoke-Run {
-    param([bool]$DevMode, [string]$Mode)
-    if (-not $DevMode) { Sync-ToMain }
+    param([bool]$DevMode, [string]$Mode, [bool]$Force)
+    if (-not $DevMode) { Sync-ToMain -Force:$Force }
     Invoke-Provision -DevMode:$DevMode
     Invoke-Launch -DevMode:$DevMode -Mode:$Mode
 }
@@ -166,7 +198,7 @@ function Show-Usage {
 mtk - ESS NextGen Migration Toolkit
 
 Usage:
-  mtk run [-Dev] [-Mode readonly|writeback]
+  mtk run [-Dev] [-Mode readonly|writeback] [-Yes]
                         Run the toolkit. Without -Dev (customer), first resets to
                         pristine origin/main (discarding any local changes), then
                         provisions a locked runtime env and runs. With -Dev
@@ -178,6 +210,8 @@ Options:
   -Dev                  Include developer tooling (ruff, mypy, pytest, pre-commit);
                         also skips the reset-to-main (contributors manage their git)
   -Mode <mode>          Execution mode: readonly (default, no writes) or writeback (persist changes)
+  -Yes                  Skip the confirmation prompt before the customer reset-to-main
+                        (required to reset non-interactively; ignored with -Dev)
 "@ | Write-Host
 }
 
@@ -185,6 +219,6 @@ Options:
 # Dispatch
 # ---------------------------------------------------------------------------
 switch ($Command) {
-    "run"   { Invoke-Run -DevMode:$Dev.IsPresent -Mode:$Mode }
+    "run"   { Invoke-Run -DevMode:$Dev.IsPresent -Mode:$Mode -Force:$Yes.IsPresent }
     default { Show-Usage }
 }

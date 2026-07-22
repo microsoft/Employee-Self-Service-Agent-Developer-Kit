@@ -104,23 +104,26 @@ uv run pytest         # run anything inside the locked env, no activation needed
 
 ### Staying up to date
 
-`mtk run` (customer mode, no `--dev`) **resets to pristine `origin/main` before
-running**: it fetches, force-switches to `main` at `origin/main`, and discards
-any local branch position, uncommitted changes, and untracked files — so the
-tool only ever runs from the latest **reviewed** `main`, never from local
-modifications. It then re-provisions the runtime environment to the updated
-lockfile and launches:
+`mtk run` (customer mode, no `--dev`) **runs from a pristine checkout of
+`origin/main`**: it fetches, checks out `origin/main` **detached** (without moving
+any branch pointer), and removes untracked files — so the working tree exactly
+matches the latest **reviewed** `main`, never local modifications. **Your local
+commits and branches are preserved**; only *uncommitted changes* and *untracked
+files* are discarded. It then re-provisions the runtime environment and launches:
 
 ```bash
-./mtk.sh run              # customer: reset to pristine origin/main, provision, run
+./mtk.sh run              # customer: pristine origin/main checkout, provision, run
 ```
 
-> **Heads up — customer `run` is destructive to local changes.** It runs
-> `git checkout -f -B main origin/main` + `git clean -fd`, discarding uncommitted
-> work and untracked files (gitignored runtime state — `.venv`, `.local`,
-> `output/` — is preserved). Contributors must use **`--dev`**, which **skips**
-> the reset entirely: `./mtk.sh run --dev` provisions (with dev tooling) and runs
-> without touching git.
+> **Heads up — customer `run` discards uncommitted work.** It runs
+> `git checkout -f origin/main` (detached) + `git clean -fd`, discarding your
+> uncommitted changes and untracked files (gitignored runtime state — `.venv`,
+> `.local`, `output/` — is preserved). **Local commits and branches are never
+> touched.** It **asks for confirmation** whenever the work tree is dirty, and
+> **refuses in a non-interactive shell** rather than silently destroying work —
+> pass `--yes` to skip the prompt (e.g. automation). Contributors should use
+> **`--dev`**, which **skips** this entirely: `./mtk.sh run --dev` provisions
+> (with dev tooling) and runs without touching git.
 
 > **Dependency hygiene:** `uv.lock` is the single source of truth. After
 > changing dependencies in `pyproject.toml`, run `uv lock` and commit the

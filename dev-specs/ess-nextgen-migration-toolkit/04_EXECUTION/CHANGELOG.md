@@ -14,12 +14,18 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 
 - **CLI: consolidated `mtk start` + `mtk refresh` into a single `mtk run`.**
   Removes the start/refresh confusion. One command, two modes selected by `--dev`:
-  - **customer** (`mtk run`, no `--dev`): **resets the checkout to pristine
-    `origin/main`** before running — `git fetch` + `git checkout -f -B main
-    origin/main` + `git clean -fd` — discarding any local branch/commits/
-    uncommitted/untracked changes so the tool only ever runs from reviewed `main`
+  - **customer** (`mtk run`, no `--dev`): **runs from a pristine checkout of
+    `origin/main`** — `git fetch` + `git checkout -f origin/main` (detached) +
+    `git clean -fd` — so the working tree exactly matches reviewed `main`
     (gitignored runtime state `.venv`/`.local`/`output/` preserved), then
-    provisions runtime-only and runs.
+    provisions runtime-only and runs. **Local commits and branches are never
+    touched** (no branch is reset or deleted — earlier iterations used
+    `checkout -f -B main`, which could orphan local `main` commits; the detached
+    checkout fixes that). **Guarded against silent data loss:** only *uncommitted
+    changes* + *untracked files* are ever discarded — it proceeds without asking
+    only when the work tree is clean, otherwise it prints exactly what it will
+    discard and requires an interactive `yes` (or `--yes`), and **refuses in a
+    non-interactive shell**.
   - **contributor** (`mtk run --dev`): provisions runtime + dev tooling, installs
     hooks, and **skips** the reset (contributors manage their own branches).
   `--mode readonly|writeback` works with both. Updated `scripts/mtk.sh`,

@@ -532,14 +532,16 @@ The toolkit shall use:
   (a managed, standalone CPython — no system Python or admin rights), runs
   `uv sync` (which creates `.venv` automatically), then runs the toolkit. `pip`
   is never used. There is **one** command, `mtk run`, with two modes selected by
-  `--dev`: **customer** (no `--dev`) first **resets the checkout to pristine
-  `origin/main`** (`git checkout -f -B main origin/main` + `git clean -fd`,
-  discarding any local branch/commits/uncommitted/untracked changes so the tool
-  only ever runs from reviewed `main`; gitignored runtime state is preserved),
-  then provisions a runtime-only env and runs; **contributor** (`--dev`) adds the
-  dev dependency-group, installs the commit hooks, and **skips** the reset
-  (contributors manage their own branches). New operational commands are added as
-  **new `mtk` subcommands**, never as new top-level scripts.
+  `--dev`: **customer** (no `--dev`) first **checks out pristine `origin/main`
+  detached** (`git checkout -f origin/main` + `git clean -fd`, discarding only
+  uncommitted changes + untracked files — local commits and branches are never
+  moved or deleted — so the tool only ever runs from reviewed `main`; gitignored
+  runtime state is preserved), **guarded by a confirmation prompt** whenever the
+  work tree is dirty, which refuses in a non-interactive shell unless `--yes` is
+  given — then provisions a runtime-only env and runs; **contributor** (`--dev`)
+  adds the dev dependency-group, installs the commit hooks, and **skips** the
+  checkout (contributors manage their own branches). New operational commands are
+  added as **new `mtk` subcommands**, never as new top-level scripts.
 * **`mtk.sh` / `mtk.ps1`** (at the **monorepo root**, not the toolkit root) —
   the single logic-free forwarders that `exec`/invoke
   `tools/ess-nextgen-migration-toolkit/scripts/mtk.*`. They exist only so the
