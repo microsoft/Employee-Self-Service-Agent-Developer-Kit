@@ -149,7 +149,7 @@ TransformationPipeline()
 
     .use(ApplyDaCompatibilityStep())        # foundational CA→DA rewrite (TASK-016)
 
-    .use(OverrideAgentMetadataStep())
+    .use(OverrideAgentInstructionsStep())   # RULE-001 (TASK-010)
 
     .use(ReplaceEndConversationStep())
 
@@ -182,7 +182,7 @@ Framework modifications should rarely be required.
 
 ## Name
 
-Override Agent Metadata
+Override Agent Instructions
 
 ### Category
 
@@ -202,13 +202,14 @@ P0
 
 ### Pipeline Step
 
-`OverrideAgentMetadataStep`
+`OverrideAgentInstructionsStep`
 
 ### Motivation
 
-Declarative Agents require updated metadata and configuration compared to Custom Engine Agents.
+Declarative Agents require updated agent instructions (the Overview-page system
+prompt) compared to Custom Engine Agents.
 
-These updates are deterministic and can safely overwrite package metadata.
+These updates are deterministic and can safely overwrite the instructions.
 
 ### Preconditions
 
@@ -216,29 +217,24 @@ These updates are deterministic and can safely overwrite package metadata.
 
 ### Transformation
 
-Override the following metadata using the Declarative Agent package values:
+Override the **Agent Instructions (Overview Page)** using the Declarative Agent
+package values.
 
-* Runtime Provider
-* Template
-* AI Model Kind
-* Agent Instructions (Overview Page)
+> **Scope note — DA-compatibility nomenclature is a *foundational* step, not this
+> rule.** The Template, AI Model Kind, and configuration model block (and thus the
+> Runtime Provider switch, which the template change effects) are rewritten
+> up-front by `ApplyDaCompatibilityStep` (TASK-016, DONE) so a stale customer
+> overlay cannot block the CA→DA transition. This rule (RULE-001, TASK-010) owns
+> only the **Agent Instructions** override and is delivered later by a dedicated
+> `OverrideAgentInstructionsStep`.
 
-> **Note.** The **Template** and **AI Model Kind** overrides are performed
-> up-front by the foundational `ApplyDaCompatibilityStep` (TASK-016) so a stale
-> customer overlay cannot block the CA→DA transition; `OverrideAgentMetadataStep`
-> is the authoritative rule that owns the full agent-metadata override set
-> (including Runtime Provider and Agent Instructions). Both are idempotent, so
-> the overlap is safe.
-
-The current implementation intentionally replaces existing Agent Instructions with the Declarative Agent instructions.
+The intended implementation replaces existing Agent Instructions with the
+Declarative Agent instructions.
 
 Future enhancements may introduce semantic merge capabilities when supported.
 
 ### Validation
 
-* Runtime Provider updated.
-* Template updated.
-* AI Model Kind updated.
 * Agent Instructions updated.
 * Agent remains valid.
 

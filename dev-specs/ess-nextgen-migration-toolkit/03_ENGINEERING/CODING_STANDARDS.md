@@ -96,7 +96,7 @@ Every migration transformation shall be implemented as a dedicated Pipeline Step
 Example:
 
 ```
-OverrideAgentMetadataStep
+OverrideAgentInstructionsStep
 
 ReplaceEndConversationStep
 

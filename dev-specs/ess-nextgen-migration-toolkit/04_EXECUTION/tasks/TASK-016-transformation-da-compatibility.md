@@ -29,6 +29,13 @@ field names (`template` / `configuration` / `data` / `botcomponentid`) against a
 **live** record is an end-to-end concern owned by TASK-009 (run under
 `./mtk.sh start --dev` in WRITEBACK mode) — it is not a per-step blocker here.
 
+**Relationship to RULE-001.** This foundational step delivers the DA-compat
+*nomenclature* portion of the agent-metadata migration — Template, AI Model Kind,
+and the configuration model block (and thus the Runtime Provider switch the
+template change effects). It is **not** itself a numbered rule. RULE-001
+(TASK-010) is scoped to the remaining piece — the **Agent Instructions** override —
+delivered later by a dedicated `OverrideAgentInstructionsStep`.
+
 ### Transforms (all idempotent)
 
 1. **gpt.default `data` (YAML)** — `kind: PreviewModels` (+ the now-orphaned

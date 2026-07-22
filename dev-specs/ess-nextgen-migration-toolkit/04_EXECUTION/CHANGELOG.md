@@ -12,6 +12,16 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 
 ## [Unreleased]
 
+- **Consolidated the RULE-001 / DA-compat overlap.** `ApplyDaCompatibilityStep`
+  (TASK-016) and RULE-001 (TASK-010) overlapped on Template + Model Kind. Split
+  them cleanly: TASK-016 keeps the foundational DA-compat *nomenclature* rewrite
+  (Template, Model Kind, config — DONE); RULE-001 / TASK-010 is re-scoped to
+  **only** the Agent Instructions override (TODO, future
+  `OverrideAgentInstructionsStep`). Renamed RULE-001 "Override Agent Metadata" →
+  "Override Agent Instructions" and its step `OverrideAgentMetadataStep` →
+  `OverrideAgentInstructionsStep`; updated `MIGRATION_RULES.md`, `PIPELINES.md`,
+  `DIAGNOSTICS.md`, `CODING_STANDARDS.md`, `IMPLEMENTATION_GUIDE.md`, and the
+  TASKS.md index.
 - **CI: run the toolkit gates + unit tests on GitHub Actions.** Added
   `.github/workflows/mtk-toolkit-ci.yml`, a dedicated workflow (path-filtered to
   `tools/ess-nextgen-migration-toolkit/**`) that runs `uv sync --frozen`, then

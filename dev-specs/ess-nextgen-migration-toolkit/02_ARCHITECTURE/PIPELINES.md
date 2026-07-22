@@ -302,8 +302,8 @@ input_pipeline = (
 # Transformation Pipeline (src/modules/transformation/) — one Step per rule.
 transformation_pipeline = (
     TransformationPipeline()
-        .use(ApplyDaCompatibilityStep())         # CA→DA model/template/config rewrite
-        .use(OverrideAgentMetadataStep())        # RULE-001
+        .use(ApplyDaCompatibilityStep())         # CA→DA model/template/config rewrite (TASK-016)
+        .use(OverrideAgentInstructionsStep())    # RULE-001 (TASK-010)
         .use(ReplaceEndConversationStep())       # RULE-002
         .use(HandleOnActivityTopicStep())        # RULE-003
         .use(HandleGeneratedResponseTopicStep()) # RULE-004
@@ -467,7 +467,7 @@ Maintain registered Pipeline Steps.
 ## Registration Example
 
 ```python
-registry.register(OverrideAgentMetadataStep())
+registry.register(OverrideAgentInstructionsStep())
 
 registry.register(ReplaceEndConversationStep())
 

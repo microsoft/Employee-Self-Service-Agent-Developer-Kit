@@ -298,11 +298,11 @@ Example:
 
 INFO
 
-Migration
+Transformation
 
-OverrideAgentMetadataStep
+ApplyDaCompatibilityStep
 
-Overrode agent metadata.
+Applied DA-compatibility rewrite (template, model kind).
 ```
 
 ---
@@ -333,9 +333,9 @@ The heart of the report: what changed, grouped by Migration Rule.
 ```
 ## Changes
 
-### RULE-001 — Updated Agent Metadata
-Runtime Provider   CA → DA
+### DA Compatibility — Model & Template
 Template           CA → DA
+Model Kind         PreviewModels → MicrosoftCopilotModels
 
 ### RULE-002 — Replaced EndConversation
 Topic              Employee Leave

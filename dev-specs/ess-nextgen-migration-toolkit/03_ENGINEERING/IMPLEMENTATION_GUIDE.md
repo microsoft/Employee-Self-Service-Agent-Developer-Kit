@@ -175,7 +175,7 @@ Every new migration capability should normally be implemented as a new Pipeline 
 Example:
 
 ```
-OverrideAgentMetadataStep
+OverrideAgentInstructionsStep
 
 ReplaceEndConversationStep
 
