@@ -1,0 +1,56 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+name: MTK Toolkit CI
+
+# Scoped to the ESS NextGen Migration Toolkit: only runs when the toolkit (or
+# this workflow) changes, so unrelated PRs don't pay for it.
+on:
+  push:
+    branches: [ "main" ]
+    paths:
+      - 'tools/ess-nextgen-migration-toolkit/**'
+      - '.github/workflows/mtk-toolkit-ci.yml'
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'tools/ess-nextgen-migration-toolkit/**'
+      - '.github/workflows/mtk-toolkit-ci.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  mtk-toolkit:
+    name: MTK toolkit (lint, types, unit tests)
+    runs-on: ubuntu-latest
+
+    defaults:
+      run:
+        working-directory: tools/ess-nextgen-migration-toolkit
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.11'
+
+    - name: Install uv
+      run: pip install uv
+
+    - name: Install dependencies (locked)
+      run: uv sync --frozen
+
+    - name: Ruff lint
+      run: uv run ruff check .
+
+    - name: Ruff format check
+      run: uv run ruff format --check .
+
+    - name: Mypy (strict)
+      run: uv run mypy src
+
+    - name: Unit tests
+      run: uv run pytest
