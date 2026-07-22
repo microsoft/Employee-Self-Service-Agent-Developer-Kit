@@ -37,6 +37,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 from urllib.parse import urlparse
 
+from auth import query_all  # scripts/auth.py, on path via cli.py
 from ..runner import CheckResult, Priority, Role, Status
 from ._dlp_utils import (
     agent_connector_ids,
@@ -629,6 +630,478 @@ def check_dlp_connector_classification(runner: Any) -> list[CheckResult]:
 
 
 # ───────────────────────────────────────────────────────────────────────
+# INFRA-011: Connector secret storage safety
+#
+# Verifies that connector credentials (secrets) are stored safely — in a
+# platform-managed secret store (a Secret-type Power Platform environment
+# variable, which is Azure Key Vault-backed) — and never pasted inline as
+# plaintext into a Text environment variable.
+#
+# Detect-first gate (three outcomes, per the INFRA-011 design agreed with
+# PM Senthil):
+#   A. No secret-bearing auth present            → informational PASSED
+#   B. Secret lives in a Power Platform env var:
+#        B1. Secret-type env var (platform-managed / Key Vault-backed)
+#            → PASSED for storage, plus a MANUAL vault-hardening directive
+#        B2. Raw secret pasted into a Text env var → FAILED
+#   C. Secret lives inside a connection (Workday legacy ISU, ServiceNow)
+#      — the platform never returns connection secrets via any API
+#            → MANUAL ("verify handling yourself")
+#
+# API tier: Dataverse Web API v9.2 (documented). Reads
+# environmentvariabledefinitions / environmentvariablevalues /
+# connectionreferences via auth.query_all — the same documented tier the
+# Workday env var and package-flavor checks already use.
+#
+# No Azure Key Vault API is called. Vault hardening (soft-delete / purge /
+# RBAC) degrades to MANUAL: the maker running FlightCheck rarely holds
+# vault-plane RBAC, the Key Vault properties API is not in the kit's API
+# tier registry, and no supported ESS connector ships a Key Vault-backed
+# env var to probe (all real secrets live inside connections). Emitting a
+# MANUAL directive is honest; a "cannot determine" WARNING would be noise.
+# ───────────────────────────────────────────────────────────────────────
+
+# environmentvariabledefinition.type option-set codes.
+# Source: Dataverse environmentvariabledefinition entity reference.
+_ENV_VAR_TYPE_STRING = 100000000
+_ENV_VAR_TYPE_SECRET = 100000005
+
+# Marker present in a Key Vault-backed environment variable value.
+_KV_REFERENCE_MARKER = "/providers/Microsoft.KeyVault/vaults/"
+
+# Schema-name substrings that mark an env var as *intended* to hold a
+# secret. Used only to flag a secret pasted into a Text env var (B2).
+#
+# SCOPE (AC2): detection is by env var NAME, not by scanning the value
+# for secret-shaped patterns. A secret pasted into a blandly named Text
+# var (e.g. "new_Config1") is intentionally NOT flagged — value-based
+# pattern matching is out of scope for v1 to keep the readiness-failing
+# FAIL bucket free of false positives.
+#
+# The keyword list is split into two confidence tiers so a broad name
+# never fails readiness on name evidence alone:
+#
+#   * HIGH — a Text env var whose name contains one of these almost
+#     certainly holds a real secret. An inline (non-Key-Vault) value is
+#     a readiness-blocking FAILED (B2a).
+#   * BROAD — the name *may* indicate a secret, but also matches
+#     ordinary config (e.g. "TokenEndpointUrl", "ApiKeyName"). Name-only
+#     evidence is too weak to fail readiness, so an inline value is
+#     surfaced as WARNING for the operator to confirm (B2b). This keeps
+#     the FAILED bucket free of the "TokenEndpointUrl"-style false
+#     positives while still surfacing the ambiguous case.
+_SECRET_NAME_KEYWORDS_HIGH = (
+    "secret",
+    "password",
+    "pwd",
+    "clientsecret",
+)
+
+_SECRET_NAME_KEYWORDS_BROAD = (
+    "apikey",
+    "api_key",
+    "token",
+    "credential",
+)
+
+# Workday connection-reference suffixes that fingerprint the legacy ISU
+# (Basic-auth service account) install. These connections carry a secret
+# the platform never exposes. Simplified-install SSO (ff0df) is secretless.
+_WORKDAY_ISU_SUFFIXES = ("0786a", "d6081")
+
+# ServiceNow connector id markers. ServiceNow auth type (OAuth2 / Basic vs
+# OIDC / certificate) is not readable from Dataverse, so any ServiceNow
+# connection is surfaced as MANUAL for the operator to confirm.
+_SERVICENOW_CONNECTOR_MARKERS = ("shared_service-now", "shared_servicenow")
+
+_DOC_LINK_INFRA_011 = (
+    "https://learn.microsoft.com/en-us/power-apps/maker/data-platform/"
+    "environmentvariables-azure-key-vault-secrets"
+)
+
+
+def _is_kv_reference(value: str | None) -> bool:
+    """True if an env var value is an Azure Key Vault reference, not a literal."""
+    if not value:
+        return False
+    return _KV_REFERENCE_MARKER in value or value.startswith("@Microsoft.KeyVault(")
+
+
+def _classify_secret_name(schema_name: str | None) -> str | None:
+    """Classify how strongly an env var's schema name implies a secret.
+
+    Returns ``"high"`` for names that almost certainly hold a secret
+    (secret / password / ...), ``"broad"`` for ambiguous names that also
+    match ordinary config (token / apikey / ...), or ``None`` when nothing
+    matches. High-confidence names fail readiness (B2a); broad names only
+    warn (B2b), so the readiness-blocking FAIL bucket stays free of
+    "TokenEndpointUrl"-style false positives.
+    """
+    if not schema_name:
+        return None
+    lowered = schema_name.lower()
+    if any(keyword in lowered for keyword in _SECRET_NAME_KEYWORDS_HIGH):
+        return "high"
+    if any(keyword in lowered for keyword in _SECRET_NAME_KEYWORDS_BROAD):
+        return "broad"
+    return None
+
+
+def _classify_secret_connections(conn_refs: list[dict[str, Any]]) -> list[str]:
+    """Return display strings for connections that carry a secret the
+    platform never exposes via API (Workday legacy ISU, ServiceNow)."""
+    findings: list[str] = []
+    for ref in conn_refs:
+        logical = (ref.get("connectionreferencelogicalname") or "").lower()
+        connector = (ref.get("connectorid") or "").lower()
+        display = ref.get("connectionreferencedisplayname") or logical or "(unnamed)"
+
+        if any(logical.endswith(suffix) for suffix in _WORKDAY_ISU_SUFFIXES):
+            findings.append(
+                f"Workday legacy ISU connection '{display}' (Basic-auth service "
+                f"account — secret stored inside the connection)"
+            )
+        elif any(marker in connector for marker in _SERVICENOW_CONNECTOR_MARKERS):
+            findings.append(
+                f"ServiceNow connection '{display}' (auth type not readable from "
+                f"Dataverse — may store an OAuth2 / Basic secret in the connection)"
+            )
+    return findings
+
+
+def check_connector_secret_storage(runner: Any) -> list[CheckResult]:
+    """Verify connector secrets are stored safely, not inline (INFRA-011).
+
+    Detect-first gate over Power Platform environment variables and
+    connection references (read via the documented Dataverse Web API):
+
+      * Secret-type env var → platform-managed / Key Vault-backed storage.
+        PASSED for storage, plus a MANUAL directive to verify vault
+        hardening (soft-delete / purge / RBAC) — the kit does not hold
+        vault-plane rights to check those directly.
+      * A high-confidence secret name (secret / password / ...) in a plain
+        Text env var → FAILED. This is the inline-plaintext anti-pattern
+        INFRA-011 exists to catch.
+      * A broad/ambiguous secret name (token / apikey / credential) in a
+        plain Text env var → WARNING. The name also fits ordinary config
+        (e.g. "TokenEndpointUrl"), so name-only evidence warns for
+        operator confirmation rather than failing readiness.
+      * A secret-bearing connection (Workday legacy ISU, ServiceNow) →
+        MANUAL. Connection secrets are never returned by any API, so the
+        operator must confirm handling themselves.
+      * None of the above → informational PASSED (no inline secrets).
+
+    Read-only and idempotent. WARNING, MANUAL, and PASSED never fail
+    readiness; only the high-confidence FAILED does.
+    """
+    roles_ppa = [Role.POWER_PLATFORM_ADMIN.value]
+    env_url = getattr(runner, "env_url", "") or ""
+    dv_token = getattr(runner, "dv_token", "") or ""
+
+    if not env_url or not dv_token:
+        return [
+            CheckResult(
+                checkpoint_id="INFRA-011",
+                category="Infrastructure",
+                priority=Priority.HIGH.value,
+                status=Status.SKIPPED.value,
+                description="Connector secret storage safety",
+                result=(
+                    "Dataverse environment URL or token not available — could not "
+                    "read environment variables or connection references."
+                ),
+                remediation=(
+                    "Run /flightcheck against a configured Dataverse environment "
+                    "(set dataverseEndpoint in .local/config.json) with a valid "
+                    "sign-in so INFRA-011 can inspect where connector secrets live."
+                ),
+                doc_link=_DOC_LINK_INFRA_011,
+                roles=roles_ppa,
+            )
+        ]
+
+    try:
+        defs = query_all(
+            env_url,
+            dv_token,
+            "environmentvariabledefinitions",
+            "schemaname,displayname,type,defaultvalue,environmentvariabledefinitionid",
+        )
+        vals = query_all(
+            env_url,
+            dv_token,
+            "environmentvariablevalues",
+            "value,schemaname,_environmentvariabledefinitionid_value",
+        )
+        conn_refs = query_all(
+            env_url,
+            dv_token,
+            "connectionreferences",
+            "connectionreferencelogicalname,connectionreferencedisplayname,"
+            "connectorid,connectionid,statuscode",
+        )
+    except Exception as exc:  # surface API failure as WARNING (principle 3)
+        return [
+            CheckResult(
+                checkpoint_id="INFRA-011",
+                category="Infrastructure",
+                priority=Priority.HIGH.value,
+                status=Status.WARNING.value,
+                description="Connector secret storage safety",
+                result=(
+                    f"Could not read Dataverse environment variables or connection "
+                    f"references: {exc}"
+                ),
+                remediation=(
+                    "Impact: secret-storage safety could not be verified, so an "
+                    "inline-plaintext secret would go undetected.\n\n"
+                    "Next steps: re-run /flightcheck once Dataverse is reachable "
+                    "and the sign-in is valid."
+                ),
+                doc_link=_DOC_LINK_INFRA_011,
+                roles=roles_ppa,
+            )
+        ]
+
+    # Index each definition's current-value override by definition id. An
+    # environmentvariablevalue row exists only when a current value is set;
+    # it holds the override, never the default.
+    override_by_def_id: dict[Any, str] = {}
+    for val in vals:
+        def_id = val.get("_environmentvariabledefinitionid_value")
+        if def_id is not None:
+            override_by_def_id[def_id] = val.get("value") or ""
+
+    secret_env_vars: list[str] = []      # Secret-type (B1, safe storage)
+    plaintext_env_vars: list[str] = []   # high-confidence name (B2a, FAILED)
+    suspect_env_vars: list[str] = []     # broad/ambiguous name (B2b, WARNING)
+
+    # Iterate definitions (not value rows) and evaluate the *effective*
+    # value: the current-value override when set and non-empty, otherwise
+    # the definition's defaultvalue. A secret pasted into a definition's
+    # defaultvalue produces NO environmentvariablevalue row, so a value-only
+    # scan would miss it entirely — and solution-imported vars commonly ship
+    # default-only, which is a primary inline-secret path this check exists
+    # to catch.
+    for definition in defs:
+        def_id = definition.get("environmentvariabledefinitionid")
+        var_type = definition.get("type")
+        schema = definition.get("schemaname") or "(unknown env var)"
+        override = override_by_def_id.get(def_id, "")
+        default = definition.get("defaultvalue") or ""
+        effective_value = override or default
+
+        if var_type == _ENV_VAR_TYPE_SECRET:
+            # A Secret-type var is asserted as safely stored only when it
+            # actually holds a value (an override or a default Key Vault
+            # reference). An unbound Secret-type definition proves nothing.
+            if effective_value:
+                secret_env_vars.append(schema)
+        # `var_type is None` means the definition omitted its type. Treat it
+        # as Text so a secret-named value is still evaluated: a genuinely
+        # KV-backed secret carries a Key Vault reference in its value, which
+        # `_is_kv_reference` filters out below, so this defensive default
+        # cannot fail a correctly stored secret.
+        elif var_type == _ENV_VAR_TYPE_STRING or var_type is None:
+            if effective_value and not _is_kv_reference(effective_value):
+                tier = _classify_secret_name(schema)
+                if tier == "high":
+                    plaintext_env_vars.append(schema)
+                elif tier == "broad":
+                    suspect_env_vars.append(schema)
+
+    secret_connections = _classify_secret_connections(conn_refs)
+
+    results: list[CheckResult] = []
+
+    # ── B2a: high-confidence secret name in a Text env var → FAILED ─────
+    if plaintext_env_vars:
+        listed = "\n".join(f"  - {name}" for name in plaintext_env_vars)
+        results.append(
+            CheckResult(
+                checkpoint_id="INFRA-011",
+                category="Infrastructure",
+                priority=Priority.CRITICAL.value,
+                status=Status.FAILED.value,
+                description="Connector secret storage safety",
+                result=(
+                    "Secret-looking value stored inline in a plain Text "
+                    "environment variable (not a Key Vault reference):\n"
+                    f"{listed}"
+                ),
+                remediation=(
+                    "Impact: a plaintext secret in a Text environment variable is "
+                    "readable by anyone with maker access to the solution and is "
+                    "carried in solution exports — treat it as compromised.\n\n"
+                    "Next steps:\n"
+                    "1. Rotate the exposed secret at its source system.\n"
+                    "2. Store the new secret in Azure Key Vault.\n"
+                    "3. Recreate the environment variable(s) above as the Secret "
+                    "type, referencing the Key Vault secret.\n"
+                    "4. Re-run /flightcheck --scope infrastructure."
+                ),
+                doc_link=_DOC_LINK_INFRA_011,
+                roles=roles_ppa,
+            )
+        )
+
+    # ── B2b: broad/ambiguous secret name in a Text env var → WARNING ────
+    #
+    # The name matches a broad keyword (token / apikey / credential) that
+    # also fits ordinary config such as "TokenEndpointUrl" or "ApiKeyName".
+    # Name-only evidence is too weak to fail readiness, so surface it for
+    # the operator to confirm instead of blocking deployment (per the B2
+    # tiering in _classify_secret_name).
+    if suspect_env_vars:
+        listed = "\n".join(f"  - {name}" for name in suspect_env_vars)
+        results.append(
+            CheckResult(
+                checkpoint_id="INFRA-011",
+                category="Infrastructure",
+                priority=Priority.MEDIUM.value,
+                status=Status.WARNING.value,
+                description="Connector secret storage safety",
+                result=(
+                    "Text environment variable(s) whose name suggests a secret "
+                    "but whose value could not be confirmed as one (value is not "
+                    "a Key Vault reference):\n"
+                    f"{listed}"
+                ),
+                remediation=(
+                    "Impact: if any value above is a real secret, a plaintext "
+                    "secret in a Text environment variable is readable by anyone "
+                    "with maker access and travels in solution exports. The name "
+                    "alone is not conclusive, so this is flagged for confirmation "
+                    "rather than as a hard failure.\n\n"
+                    "Next steps:\n"
+                    "1. Inspect each variable above. If it holds non-sensitive "
+                    "config (e.g. an endpoint URL or a display name), no action "
+                    "is needed.\n"
+                    "2. If it holds a real secret, rotate it at the source, store "
+                    "it in Azure Key Vault, and recreate the variable as the "
+                    "Secret type referencing the vault.\n"
+                    "3. Re-run /flightcheck --scope infrastructure."
+                ),
+                doc_link=_DOC_LINK_INFRA_011,
+                roles=roles_ppa,
+            )
+        )
+
+    # ── B1: Secret-type env var → PASSED for storage + MANUAL hardening ──
+    #
+    # FAST-FOLLOW (AC1/AC5): v1 degrades vault hardening to MANUAL for
+    # everyone. A future revision may probe the backing vault via Azure
+    # ARM (soft-delete / purge / RBAC) and emit WARNING when a property
+    # is provably disabled, falling back to MANUAL only on 401/403/no
+    # token. That requires registering the Azure Key Vault vault-
+    # properties API in tests/fixtures/cassettes/INDEX.md first, plus an
+    # Azure rights grant most makers running FlightCheck do not hold.
+    if secret_env_vars:
+        listed = "\n".join(f"  - {name}" for name in secret_env_vars)
+        results.append(
+            CheckResult(
+                checkpoint_id="INFRA-011",
+                category="Infrastructure",
+                priority=Priority.HIGH.value,
+                status=Status.PASSED.value,
+                description="Connector secret storage safety",
+                result=(
+                    "Secret stored as a Key Vault-backed Secret-type environment "
+                    "variable (not inline plaintext):\n"
+                    f"{listed}"
+                ),
+                doc_link=_DOC_LINK_INFRA_011,
+                roles=roles_ppa,
+            )
+        )
+        results.append(
+            CheckResult(
+                checkpoint_id="INFRA-011",
+                category="Infrastructure",
+                priority=Priority.MEDIUM.value,
+                status=Status.MANUAL.value,
+                description="Key Vault hardening for connector secrets",
+                result=(
+                    "The environment variable(s) above reference an Azure Key "
+                    "Vault. FlightCheck does not hold vault-plane rights, so vault "
+                    "hardening (soft-delete, purge protection, RBAC) was not read."
+                ),
+                remediation=(
+                    "Hardening recommendation (not a functional blocker): a "
+                    "hardened vault prevents accidental or malicious secret "
+                    "deletion and limits who can read the secret.\n\n"
+                    "Verify in the Azure portal, on the backing Key Vault:\n"
+                    "1. Soft-delete is enabled (default 90-day retention).\n"
+                    "2. Purge protection is enabled.\n"
+                    "3. Access uses Azure RBAC (not legacy access policies), "
+                    "scoped to the minimum principals."
+                ),
+                doc_link=_DOC_LINK_INFRA_011,
+                roles=roles_ppa,
+            )
+        )
+
+    # ── C: secret inside a connection → MANUAL ──────────────────────────
+    if secret_connections:
+        listed = "\n".join(f"  - {finding}" for finding in secret_connections)
+        conn_roles = list(roles_ppa)
+        joined = " ".join(secret_connections).lower()
+        if "workday" in joined:
+            conn_roles.append(Role.WORKDAY_ADMIN.value)
+        if "servicenow" in joined:
+            conn_roles.append(Role.SERVICENOW_ADMIN.value)
+        results.append(
+            CheckResult(
+                checkpoint_id="INFRA-011",
+                category="Infrastructure",
+                priority=Priority.HIGH.value,
+                status=Status.MANUAL.value,
+                description="Connector secret storage safety",
+                result=(
+                    "Secret-bearing connection(s) detected. The credential lives "
+                    "inside the connection, which no API exposes, so the kit "
+                    "cannot verify where or how it is stored:\n"
+                    f"{listed}"
+                ),
+                remediation=(
+                    "Impact: a credential stored inside a connection cannot be "
+                    "auto-validated, so its handling must be confirmed manually.\n\n"
+                    "Next steps for the connection(s) above:\n"
+                    "1. Confirm the underlying secret was sourced from an approved "
+                    "secret store (e.g. Azure Key Vault), not a shared document.\n"
+                    "2. Confirm the secret is rotated on the source system's "
+                    "schedule.\n"
+                    "3. Confirm only the intended service account owns the "
+                    "connection."
+                ),
+                doc_link=_DOC_LINK_INFRA_011,
+                roles=conn_roles,
+            )
+        )
+
+    # ── A: no secret-bearing auth anywhere → informational PASSED ───────
+    if not results:
+        results.append(
+            CheckResult(
+                checkpoint_id="INFRA-011",
+                category="Infrastructure",
+                priority=Priority.HIGH.value,
+                status=Status.PASSED.value,
+                description="Connector secret storage safety",
+                result=(
+                    "No inline connector secrets detected. No Secret-type or "
+                    "plaintext-secret environment variables and no secret-bearing "
+                    "connections (Workday legacy ISU, ServiceNow) are present."
+                ),
+                doc_link=_DOC_LINK_INFRA_011,
+                roles=roles_ppa,
+            )
+        )
+
+    return results
+
+
+# ───────────────────────────────────────────────────────────────────────
 # Check registry — add new INFRA-xxx orchestrators here
 #
 # Each entry is a callable (runner) -> list[CheckResult]. The public
@@ -639,6 +1112,7 @@ def check_dlp_connector_classification(runner: Any) -> list[CheckResult]:
 _INFRA_CHECKS: list[Callable[[Any], list[CheckResult]]] = [
     check_microsoft_service_reachability,
     check_dlp_connector_classification,
+    check_connector_secret_storage,
     # Future checks — add here:
     # check_hr_system_reachability,
 ]
