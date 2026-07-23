@@ -160,7 +160,7 @@ The framework architecture should remain unchanged.
 
 | Task                                                                   | Title                                       | Status | Consumes |
 | ---------------------------------------------------------------------- | ------------------------------------------- | ------ | -------- |
-| [TASK-011](tasks/TASK-011-rule-002-replace-endconversation-node.md)    | Implement RULE-002 — Replace EndConversation Node | TODO | RULE-002, TASK-006, TASK-016, TASK-017 |
+| [TASK-011](tasks/TASK-011-rule-002-replace-endconversation-node.md)    | Implement RULE-002 — Replace EndConversation Node | DONE | RULE-002, TASK-006, TASK-016, TASK-017 |
 | [TASK-012](tasks/TASK-012-rule-003-handle-onactivity-topic.md)         | Implement RULE-003 — Handle OnActivity Topic | TODO  | RULE-003, TASK-006, TASK-016, TASK-017 |
 | [TASK-013](tasks/TASK-013-rule-004-handle-ongeneratedresponse-topic.md) | Implement RULE-004 — Handle OnGeneratedResponse Topic | TODO | RULE-004, TASK-006, TASK-016, TASK-017 |
 

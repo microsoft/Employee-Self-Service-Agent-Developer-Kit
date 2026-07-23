@@ -17,18 +17,38 @@ the `WritebackPlan` (TASK-017) — no Dataverse I/O, never appends to
 `pending_writes`.
 
 **Input.** Iterate `context.customizations`
-(`dict[str, CustomizationComponent]`, Topic V2 topics). A topic's definition is
-`component.data` (YAML); an OnGeneratedResponse topic is identified from that YAML.
-Its record is `botcomponents({component_id})`.
+(`dict[str, CustomizationComponent]`, Topic V2 topics). The OnGeneratedResponse
+trigger is identified from the topic's `data` YAML
+(`beginDialog.kind == "OnGeneratedResponse"`), but the **title and disabled state
+are record fields, NOT in the `data` YAML** (see bring-up findings below). Its
+record is `botcomponents({component_id})`.
 
-**Staging (chaining- and no-op-safe).**
+**Staging (chaining- and no-op-safe).** Detect the trigger from `component.data`,
+then stage the record-field edits (title + disabled state) — NOT `data`:
 
 ```python
+if not is_generated_response_topic(component.data):
+    continue
 target = context.writeback.target(
-    "botcomponents", component.component_id, original={"data": component.data}
+    "botcomponents",
+    component.component_id,
+    original={"name": component.name, "statecode": ..., "statuscode": ...},
 )
-target.set("data", deprecate_generated_response_topic(target.get("data")))
+target.set("name", deprecate_title(target.get("name")))   # "[DEPRECATED] " once
+target.set("statecode", _INACTIVE_STATECODE)              # disable
+target.set("statuscode", _INACTIVE_STATUSCODE)
 ```
+
+### Bring-up findings (from RULE-002, TASK-011)
+
+Identical mechanism to RULE-003 (TASK-012) — see its "Bring-up findings" section:
+the topic title/enabled state are the botcomponent `name` + `statecode`/`statuscode`
+record fields (not the `data` YAML); the trigger type is `beginDialog.kind` in
+`data`; the Inactive `statecode`/`statuscode` values are **UNCONFIRMED** and must
+be isolated as constants + confirmed live under TASK-009; idempotency (MIG-005)
+skips a topic already Inactive with a `[DEPRECATED]`-prefixed `name`. Consider a
+shared `_deprecate_topic` helper so RULE-003 and RULE-004 share the disable +
+title-prefix logic and differ only in the trigger they match.
 
 ## Acceptance Criteria
 
