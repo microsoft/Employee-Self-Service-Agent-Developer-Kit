@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from core.models import ExecutionContext
+from modules.transformation.models.customization_component import CustomizationComponent
 from modules.transformation.models.execution_mode import ExecutionMode
 
 
@@ -41,11 +42,19 @@ class MigrationContext(ExecutionContext):
     agent_gpt_component: dict[str, Any] | None = field(default=None, repr=False)
     # Raw dependencies-for-uninstall response captured during discovery.
     raw_dependencies: Any = field(default=None, repr=False)
-    # All component layers fetched for the dependent components (raw).
-    component_layers: list[dict[str, Any]] = field(default_factory=list, repr=False)
-    # Filtered customization layers (one winning layer per truly-customized
-    # component) that propagate to the migration/output modules.
-    customizations: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    # All component layers fetched for the dependent components, keyed by
+    # msdyn_componentid -> that component's list of layer records (raw).
+    component_layers: dict[str, list[dict[str, Any]]] = field(default_factory=dict, repr=False)
+    # Customized components the toolkit migrates — the subset of component_layers
+    # that are customer changes (>1 layer, or a single non-OOB layer) of a migrated
+    # sub-type (Topic V2) owned by an ESS HR/IT agent. Keyed by msdyn_componentid
+    # -> a hydrated CustomizationComponent (top-level schemaname/name/type/data plus
+    # its raw layers). Propagates to the migration/output modules.
+    customizations: dict[str, CustomizationComponent] = field(default_factory=dict, repr=False)
+    # The raw_dependencies metadata infos for the customized components only —
+    # each DependencyMetadataInfoCollection entry whose dependentcomponentobjectid
+    # is a customization. Carries the richer dependency metadata for those.
+    customized_dependencies: list[dict[str, Any]] = field(default_factory=list, repr=False)
     # Writeback payloads produced by the transformation module and applied by the
     # output module. Each entry: {"entity_set", "record_id", "changes"}.
     pending_writes: list[dict[str, Any]] = field(default_factory=list, repr=False)

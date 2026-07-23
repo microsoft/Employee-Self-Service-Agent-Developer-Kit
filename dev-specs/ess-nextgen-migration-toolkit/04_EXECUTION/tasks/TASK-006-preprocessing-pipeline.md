@@ -27,11 +27,13 @@ those three:
    `{schemaname}.gpt.default` botcomponent (carries the model-kind YAML). Stored
    raw on the context for the Transformation stage.
 2. **Retrieve customizations** (`RetrieveCustomizationsStep`) — resolve the ESS
-   base solution for the agent's vertical, call
-   `RetrieveDependenciesForUninstallWithMetadata`, bulk-fetch
-   `msdyn_componentlayers` for the dependent components (chunked + paginated),
-   and classify each component's layers via the **~1900 sentinel** rule to keep
-   only genuine customizations. See
+   base solution for the agent's vertical (and its `solutionid` GUID), call
+   `RetrieveDependenciesForUninstallWithMetadata(SolutionId=<guid>)`, fetch
+   `msdyn_componentlayers` **one component at a time** (the virtual table needs
+   `msdyn_solutioncomponentname` and won't OR ids), then **classify + filter +
+   hydrate**: keep customer changes (multi-layer, or a lone non-OOB-solution
+   layer) that are a migrated sub-type (Topic V2) owned by an ESS HR/IT agent,
+   hydrated into `CustomizationComponent`s. See
    `02_ARCHITECTURE/CUSTOMIZATION_DISCOVERY.md` for the full algorithm.
 
 ### Architecture constraints
@@ -48,39 +50,50 @@ those three:
 - [x] Agent `bots({botid})` record fetched onto `context.agent_bot_record`.
 - [x] `{schemaname}.gpt.default` botcomponent fetched onto
   `context.agent_gpt_component` (missing component warns, does not fail).
-- [x] ESS base solution resolved from the agent schemaname vertical.
-- [x] `RetrieveDependenciesForUninstallWithMetadata` retrieved onto
-  `context.raw_dependencies`.
-- [x] `msdyn_componentlayers` bulk-fetched (chunked + fully paginated) onto
-  `context.component_layers`.
-- [x] Customizations classified by the ~1900 sentinel rule onto
-  `context.customizations` (latest non-sentinel layer per component).
+- [x] ESS base solution resolved from the agent schemaname vertical, and its
+  `solutionid` GUID resolved via a `solutions` query.
+- [x] `RetrieveDependenciesForUninstallWithMetadata(SolutionId=<guid>)` retrieved
+  onto `context.raw_dependencies` (GUID inlined unquoted by `call_function`).
+- [x] `msdyn_componentlayers` fetched **per component** (paired with
+  `msdyn_solutioncomponentname`, fully paginated) onto `context.component_layers`
+  (`{componentId -> [layer, …]}`).
+- [x] Customizations classified onto `context.customizations`
+  (`{componentId -> CustomizationComponent}`): kept when customized (multi-layer,
+  or a lone non-OOB-solution layer) AND migratable (componenttype in
+  `ALLOWED_BOT_COMPONENT_TYPES`, schemaname matches `ESS_AGENT_SCHEMANAMES`),
+  hydrated with `schemaname`/`name`/`component_type`/`component_type_label`/`data`.
+  `context.customized_dependencies` holds the matching raw dependency infos.
 - [x] All steps are `MigrationPipelineStep` subclasses.
 - [x] No transformation logic in this stage.
 - [x] Discovery field names confirmed against live records
-  (`msdyn_componentid`, `msdyn_overwritetime`, `msdyn_solutioncomponentname`,
-  `dependentcomponentobjectid`, gpt `schemaname`/`botcomponentid`) — verified
-  from the live API samples captured during design. (The transform-target fields
-  `template`/`configuration`/`data` are not parsed here — they are TASK-016's
-  concern.)
+  (`msdyn_componentid`, `msdyn_solutionname`, `msdyn_solutioncomponentname`,
+  `msdyn_componentjson` → `componenttype`/`schemaname`/`name`/`data`,
+  `dependentcomponentobjectid`, `dependentcomponententitylogicalname`, gpt
+  `schemaname`/`botcomponentid`) — verified from live API samples during the
+  discovery bring-up. (The transform-target fields
+  `template`/`configuration`/`data` writeback is TASK-016's concern.)
 - [x] Quality gates pass (`ruff`, `mypy`, `pytest`; enforced in CI).
 
 ## Deliverables
 
 - `src/modules/preprocessing/steps/retrieve_agent_configuration_step.py`
 - `src/modules/preprocessing/steps/retrieve_customizations_step.py`
+- `src/modules/transformation/models/customization_component.py` —
+  `CustomizationComponent` hydrated model
 - `src/service/utils.py` — `resolve_ess_solution(agent_schemaname)`
-- `src/service/constants.py` — `ESS_SOLUTION_BY_VERTICAL`
+- `src/service/constants.py` — `ESS_SOLUTION_BY_VERTICAL`, `OOB_ESS_SOLUTIONS`,
+  `BOT_COMPONENT_TYPE_LABELS`, `ALLOWED_BOT_COMPONENT_TYPES`,
+  `ESS_AGENT_SCHEMANAMES`
 - `MigrationContext` extended with `agent_bot_record`, `agent_gpt_component`,
   `ess_solution_unique_name`, `raw_dependencies`, `component_layers`,
-  `customizations`
+  `customizations`, `customized_dependencies`
 - Unit tests under `tests/unit/modules/preprocessing/`
 
 ## References
 
 - 02_ARCHITECTURE/PIPELINES.md — Input Pipeline responsibilities
 - 02_ARCHITECTURE/CUSTOMIZATION_DISCOVERY.md — solution resolution, dependencies,
-  component-layer classification (~1900 sentinel rule)
+  component-layer classification, filtering & hydration
 - 02_ARCHITECTURE/DATAVERSE_CLIENT.md — dependency, layer, function/query APIs
 - src/modules/transformation/migration_step.py — MigrationPipelineStep
 - src/modules/transformation/models/migration_context.py — MigrationContext

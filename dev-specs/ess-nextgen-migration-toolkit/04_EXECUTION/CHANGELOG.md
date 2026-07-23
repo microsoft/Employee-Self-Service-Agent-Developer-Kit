@@ -12,6 +12,37 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 
 ## [Unreleased]
 
+- **Customization discovery: corrected the live Dataverse calls + rewrote the
+  classifier (TASK-006).** Brought `RetrieveCustomizationsStep` in line with the
+  live API after end-to-end bring-up:
+  - **`RetrieveDependenciesForUninstallWithMetadata` takes `SolutionId` (GUID),
+    not `SolutionUniqueName`** — the base solution's unique name is resolved to
+    its `solutionid` first, and `DataverseClient.call_function` now inlines a
+    GUID-shaped value as an unquoted `Edm.Guid` literal (other values stay
+    single-quoted strings).
+  - **`msdyn_componentlayers` is fetched one component at a time**, pairing
+    `msdyn_componentid` with `msdyn_solutioncomponentname` (from the dependency's
+    `dependentcomponententitylogicalname`). The virtual table needs the
+    solutioncomponentname and silently drops all-but-a-couple rows when ids are
+    OR-ed, so the earlier chunked-OR bulk fetch was replaced with sequential
+    per-id reads (each retriable on 429 via `Retry-After`).
+  - **Dropped the ~1900 `msdyn_overwritetime` sentinel rule** (net-new topics read
+    ~1900 too, so it was unreliable). Classification now keeps a component when it
+    is **customized** (more than one layer, or a lone layer in a non-OOB solution)
+    AND **migratable** (componenttype in `ALLOWED_BOT_COMPONENT_TYPES` = Topic V2,
+    schemaname matches an `ESS_AGENT_SCHEMANAMES` HR/IT prefix). Added
+    `OOB_ESS_SOLUTIONS` (base HR/IT + 11 extension packs), `BOT_COMPONENT_TYPE_LABELS`
+    (full option-set catalog), `ALLOWED_BOT_COMPONENT_TYPES`, and
+    `ESS_AGENT_SCHEMANAMES` to `service/constants.py`.
+  - **Hydrated model:** kept components become `CustomizationComponent`
+    (`modules/transformation/models/`) with top-level `component_id`,
+    `schemaname`, `name`, `component_type`, `component_type_label`, `data`, and raw
+    `layers`, so Transformation/Output consume the fields without re-parsing
+    `msdyn_componentjson`. `context.component_layers` and `context.customizations`
+    are now keyed by component id; added `context.customized_dependencies` (the
+    raw dependency infos for the kept components).
+  - Updated `02_ARCHITECTURE/CUSTOMIZATION_DISCOVERY.md` §3–4 and TASK-006.
+
 - **CLI: consolidated `mtk start` + `mtk refresh` into a single `mtk run`.**
   Removes the start/refresh confusion. One command, two modes selected by `--dev`:
   - **customer** (`mtk run`, no `--dev`): **runs from a pristine checkout of

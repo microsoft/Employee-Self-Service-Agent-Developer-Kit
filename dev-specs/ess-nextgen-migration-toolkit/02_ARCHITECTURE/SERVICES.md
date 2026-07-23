@@ -224,12 +224,11 @@ Customer customization exists.
 Net New Component
 
 ```
-Customer Layer
+Customer Layer (non-OOB solution, e.g. Active)
 ```
 
-CreatedTime != 1900
-
-Customer owned.
+Single layer in a non-OOB solution (not an OOB ESS managed solution). Customer
+owned.
 
 ---
 

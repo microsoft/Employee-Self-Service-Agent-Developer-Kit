@@ -22,6 +22,19 @@ from core.outbound.exceptions import AuthenticationExpiredError, DataverseApiErr
 JsonDict = dict[str, Any]
 Sleep = Callable[[float], None]
 
+# A GUID-shaped value is an OData ``Edm.Guid`` literal (unquoted) in a Web API
+# function call; anything else is a single-quoted ``Edm.String`` literal.
+_GUID_LITERAL_RE: Final = re.compile(
+    r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z"
+)
+
+
+def _format_function_param(key: str, value: str) -> str:
+    """Format one unbound-function parameter as an OData literal."""
+    if _GUID_LITERAL_RE.match(value):
+        return f"{key}={value}"
+    return f"{key}='{value}'"
+
 
 class TokenProvider(Protocol):
     """Any object that can provide a bearer token."""
@@ -132,10 +145,13 @@ class DataverseClient:
     def call_function(self, function_name: str, **params: str) -> JsonDict:
         """Invoke an unbound Dataverse Web API function and return the JSON payload.
 
-        String parameters are inlined as single-quoted OData literals, e.g.
-        ``RetrieveDependenciesForUninstall(SolutionUniqueName='msdyn_...')``.
+        Parameters are inlined as OData literals: a GUID value becomes an unquoted
+        ``Edm.Guid`` literal (e.g.
+        ``RetrieveDependenciesForUninstallWithMetadata(SolutionId=<guid>)``); any
+        other value becomes a single-quoted ``Edm.String`` literal. Functions with
+        no parameters (e.g. ``GetPreferredSolution()``) pass none.
         """
-        inner = ",".join(f"{key}='{value}'" for key, value in params.items())
+        inner = ",".join(_format_function_param(key, value) for key, value in params.items())
         path = f"{function_name}({inner})"
         return self.get(path)
 

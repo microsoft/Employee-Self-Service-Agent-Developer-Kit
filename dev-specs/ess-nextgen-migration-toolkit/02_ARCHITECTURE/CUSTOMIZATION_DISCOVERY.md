@@ -57,66 +57,113 @@ base solution to diff against.
 ```text
 resolve_ess_solution(agent.schemaname)          # -> base solution unique name
         ↓
-call_function RetrieveDependenciesForUninstallWithMetadata(SolutionUniqueName=…)
+solutions?$select=solutionid&$filter=uniquename eq '<base>'   # -> solutionid (GUID)
+        ↓
+call_function RetrieveDependenciesForUninstallWithMetadata(SolutionId=<guid>)
         ↓  DependencyMetadataCollection.DependencyMetadataInfoCollection[]
-extract unique dependentcomponentobjectid (skip empty GUID)
+extract (dependentcomponentobjectid, dependentcomponententitylogicalname) pairs
+        ↓  (skip empty GUID + entries missing either field; dedupe by object id)
+per-component fetch msdyn_componentlayers      # one query per id, NOT a bulk OR
+        ↓  context.component_layers : {componentId -> [layer, …]}
+classify + filter + hydrate  → context.customizations : {componentId -> CustomizationComponent}
         ↓
-bulk-fetch msdyn_componentlayers for those ids   # chunked (≤20 ids/$filter) + paginated
-        ↓
-classify layers by msdyn_componentid group  → customizations[]
+context.customized_dependencies : the raw_dependencies infos for the kept components
 ```
 
 ### 3.1 Dependencies for uninstall
 
-`RetrieveDependenciesForUninstallWithMetadata` returns the components that are
-layered on top of the base solution — i.e. the customer's customization
-candidates. Response shape (verified from a live sample):
+`RetrieveDependenciesForUninstallWithMetadata` takes a **`SolutionId`** (an
+`Edm.Guid`, inlined **unquoted** in the URL), not the unique name — so the base
+solution's unique name is first resolved to its `solutionid` via a `solutions`
+query. (The documented `RetrieveDependenciesForUninstall` variant takes
+`SolutionUniqueName`; the `WithMetadata` variant used here takes `SolutionId` and
+returns richer per-component metadata.) `DataverseClient.call_function` inlines a
+GUID-shaped value as an unquoted `Edm.Guid` literal and any other value as a
+single-quoted string. Response shape (verified live):
 
 ```jsonc
 {
   "DependencyMetadataCollection": {
     "DependencyMetadataInfoCollection": [
-      { "dependentcomponentobjectid": "ec1a5183-…", "dependentcomponenttype": 10213, … }
+      { "dependentcomponentobjectid": "ec1a5183-…",
+        "dependentcomponententitylogicalname": "botcomponent", … }
     ]
   }
 }
 ```
 
-The step collects the unique, non-empty `dependentcomponentobjectid` values. The
-all-zero GUID `00000000-0000-0000-0000-000000000000` is skipped.
+The step collects unique
+`(dependentcomponentobjectid, dependentcomponententitylogicalname)` pairs,
+skipping the all-zero GUID `00000000-0000-0000-0000-000000000000` and any entry
+missing either field. The entity logical name is **required** for the
+component-layers query below.
 
-### 3.2 Component layers
+### 3.2 Component layers (per-component, virtual table)
 
-For each dependent component id, the toolkit reads
-`msdyn_componentlayers` (a **virtual** table) filtered by
-`msdyn_componentid eq '<id>'`. Because `raw_dependencies` can be large, ids are
-**chunked** (≤ 20 per `$filter`, OR-joined) and each query is **fully paginated**
-via `query_all` (`@odata.nextLink` followed to exhaustion). All fields are
-selected (`select=None`) so the full `msdyn_componentjson` payload is available
-downstream.
+`msdyn_componentlayers` is a **virtual** table that resolves **one component at a
+time**: the `$filter` must pair `msdyn_componentid eq '<id>'` with
+`msdyn_solutioncomponentname eq '<entitylogicalname>'` (from the dependency's
+`dependentcomponententitylogicalname`). Without the `solutioncomponentname` the
+query returns empty, and OR-ing multiple `msdyn_componentid`s in one query
+silently returns only a couple of rows — so the toolkit issues **one query per
+component** (not a chunked-OR bulk fetch) and keys the results by component id
+(`context.component_layers : {componentId -> [layer, …]}`). Each query selects all
+fields (`select=None`) so the full `msdyn_componentjson` payload is available, and
+is fully paginated via `query_all`. Reads are sequential; `DataverseClient` retries
+each GET on 429 honoring `Retry-After`.
 
 ---
 
-## 4. The ~1900 sentinel classification rule
+## 4. Classification, filtering & hydration
 
-Each managed base layer carries a **sentinel** `msdyn_overwritetime` of
-`1900-01-01T00:00:00Z`; a customer edit/overlay carries a **recent** time. The
-classifier groups layers by `msdyn_componentid` and, per group, keeps the
-**latest non-sentinel** layer:
+`msdyn_overwritetime` is **not** a reliable signal — a net-new unmanaged topic
+reads the same `1900-01-01T00:00:00Z` value as an untouched managed base. The
+classifier instead keys off the **solution each layer belongs to**
+(`msdyn_solutionname`), then the component's **sub-type** and **schemaname**.
 
-| Case          | Layers in the group                          | Verdict                          |
-| ------------- | -------------------------------------------- | -------------------------------- |
-| Untouched OOB | single ~1900 sentinel layer                  | **drop** (nothing customized)    |
-| Customized OOB| ~1900 base **+** one or more recent overlays | **keep** latest non-sentinel overlay |
-| Net-new       | single recent (non-1900) layer               | **keep** (customer-authored)     |
+### 4.1 Customized? (per component, keyed by `msdyn_componentid`)
 
-These three cases collapse into one rule: *keep the latest non-sentinel layer
-per component; if every layer is a ~1900 sentinel, drop the component.* Only the
-kept layers (`context.customizations`) propagate to the Transformation/Output
-modules.
+| Case          | Layers                                                   | Verdict |
+| ------------- | -------------------------------------------------------- | ------- |
+| Customized OOB| more than one layer (managed base + an overlay)          | **keep** |
+| Net-new       | a single layer in a **non-OOB** solution (e.g. `Active`) | **keep** |
+| Untouched OOB | a single layer in an OOB ESS managed solution            | **drop** |
 
-Sentinel test: a parsed `msdyn_overwritetime` with `year <= 1900`. Unparseable
-or missing times sort as the minimum datetime and never win over a real overlay.
+Rule: keep if `len(layers) > 1`, **or** a lone layer whose `msdyn_solutionname` is
+**not** in `OOB_ESS_SOLUTIONS` (`service/constants.py` — the base HR/IT solutions
+plus the 11 vertical extension packs, e.g. `msdyn_EssHRServiceNowHRSD`). Every
+unmanaged customer change lands in the `Active` (or a custom unmanaged) solution,
+so a lone OOB-solution layer is the untouched base.
+
+### 4.2 Migratable? (sub-type + owning agent)
+
+Kept components are then narrowed to the ones the toolkit migrates today. The
+component's attributes are parsed **once** from `msdyn_componentjson` (a JSON
+string with an `Attributes` list — the `componenttype` value is `{"Value": <int>}`,
+while `schemaname` / `name` / `data` are plain strings):
+
+- **componenttype** must be in `ALLOWED_BOT_COMPONENT_TYPES` (`{9}` — Topic V2 for
+  now; the full option-set catalog is `BOT_COMPONENT_TYPE_LABELS`). Other types
+  (Test Case = 19, Knowledge Source = 16, …) are dropped.
+- **schemaname** must contain an ESS HR/IT agent prefix (`ESS_AGENT_SCHEMANAMES`,
+  case-insensitive partial match), so components owned by other agents (e.g. the
+  shared `…core` agent) are dropped.
+
+### 4.3 Hydration
+
+Each kept component is hydrated into a `CustomizationComponent`
+(`modules/transformation/models/customization_component.py`) — top-level
+`component_id`, `schemaname`, `name`, `component_type`, `component_type_label`
+(e.g. "Topic (V2)"), `data` (the topic YAML), plus its raw `layers` — so the
+Transformation/Output modules consume the fields directly without re-parsing
+`msdyn_componentjson`.
+
+- `context.component_layers` — `{componentId -> [layer, …]}`, every dependent
+  component's raw layers.
+- `context.customizations` — `{componentId -> CustomizationComponent}`, the kept
+  (customized + migratable) subset, hydrated.
+- `context.customized_dependencies` — the `raw_dependencies` infos whose
+  `dependentcomponentobjectid` is a kept component.
 
 ---
 

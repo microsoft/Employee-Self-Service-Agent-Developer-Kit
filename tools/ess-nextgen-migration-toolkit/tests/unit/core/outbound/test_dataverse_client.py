@@ -92,6 +92,27 @@ def test_call_function_builds_unbound_function_url_with_alias_params() -> None:
     ]
 
 
+def test_call_function_inlines_guid_params_unquoted() -> None:
+    seen_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_urls.append(str(request.url))
+        return httpx.Response(200, json={"DependencyMetadataCollection": {}})
+
+    client, _ = make_client(handler)
+
+    client.call_function(
+        "RetrieveDependenciesForUninstallWithMetadata",
+        SolutionId="1147da21-3698-415c-9477-61d6186ca6ab",
+    )
+
+    # GUID params are Edm.Guid literals — unquoted, unlike string params.
+    assert seen_urls == [
+        f"{ENV_URL}/api/data/v9.2/RetrieveDependenciesForUninstallWithMetadata"
+        "(SolutionId=1147da21-3698-415c-9477-61d6186ca6ab)"
+    ]
+
+
 def test_query_all_omits_select_when_requesting_all_fields() -> None:
     requests_seen: list[str] = []
 
