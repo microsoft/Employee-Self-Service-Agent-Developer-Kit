@@ -14,6 +14,10 @@ class HandleOnActivityTopicStep(DeprecateTriggerTopicStep):
             logger,
             name="HandleOnActivityTopic",
             description="Disable + deprecate OnActivity topics (RULE-003).",
-            trigger_kind="OnActivity",
             rule_id="RULE-003",
+            rule_name="Handle OnActivity Topic",
+            triggers={
+                "OnActivity": "Move its logic under an OnConversationStart topic, "
+                "or discard it if no longer needed.",
+            },
         )

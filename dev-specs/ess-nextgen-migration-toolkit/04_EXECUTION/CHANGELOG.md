@@ -12,6 +12,27 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 
 ## [Unreleased]
 
+- **RULE-006 / RULE-007 + per-topic migration report (TASK-018/019/020).** Handled
+  the rest of the CA→DA *unsupported* constructs from the component-support analysis
+  with a uniform disable-but-preserve mitigation, and gave the report a per-topic view.
+  - **RULE-006 — Disable Unsupported-Trigger Topics** (`DisableUnsupportedTriggerTopicsStep`):
+    disables + `[DEPRECATED]`-prefixes topics whose trigger is `OnUnknownIntent`,
+    `OnPlanComplete`, `OnSystemRedirect`, `OnSelectIntent`, or `OnEscalate`. The shared
+    `DeprecateTriggerTopicStep` base was generalized to a `{trigger: guidance}` mapping.
+  - **RULE-007 — Disable Topics With Unsupported Nodes** (`DisableUnsupportedNodeTopicsStep`):
+    disables + deprecates any topic whose `data` uses an unsupported node kind
+    (`service.constants.UNSUPPORTED_TOPIC_NODES` — AnswerQuestionWithAI, RecognizeIntent,
+    SearchAndSummarizeContent, TransferConversationV2, ConversationHistory,
+    InvokeAIBuilderModelAction, IncludeSelectedTopics), naming the found node(s) in the
+    report. `data` is never rewritten (no partial-node mitigation).
+  - Both reuse a shared `deprecate_topic` action (disable state + `[DEPRECATED]` name +
+    preserve logic + warn + record), so a topic disabled by multiple reasons coalesces to
+    one PATCH while recording each reason.
+  - **Per-topic report (TASK-020):** every topic rule (RULE-002/003/004/006/007) records a
+    structured `Change` via `record_topic_change`; the Reporter adds a **"Per-Topic Migration
+    Summary"** grouping changes by topic (rendered in READONLY previews too).
+  - Node `kind:` tokens are analysis-sourced; confirm live under TASK-009.
+
 - **TASK-009 (End-to-End Framework Validation) → TODO (unblocked).** Its
   dependencies (TASK-003/006/007/016) are all DONE, so it is no longer BLOCKED;
   added the shipped rule tasks (TASK-011/012/013/017) to its `Consumes`. Enriched

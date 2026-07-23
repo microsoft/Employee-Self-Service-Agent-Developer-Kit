@@ -80,3 +80,20 @@ ESS_AGENT_SCHEMANAMES = (
     "msdyn_copilotforemployeeselfservicehr",
     "msdyn_copilotforemployeeselfserviceit",
 )
+
+# Conversational-node kinds with no Declarative Agent equivalent today (per the
+# CA->DA component support analysis). A topic whose `data` uses any of these is
+# disabled + deprecated (RULE-007) and flagged for manual review — there is no
+# automatic in-place mitigation (tracked for later MCS waves). The exact YAML
+# `kind:` tokens are taken from the analysis and confirmed live under TASK-009.
+UNSUPPORTED_TOPIC_NODES = frozenset(
+    {
+        "IncludeSelectedTopics",
+        "InvokeAIBuilderModelAction",
+        "ConversationHistory",
+        "RecognizeIntent",
+        "TransferConversationV2",
+        "SearchAndSummarizeContent",
+        "AnswerQuestionWithAI",
+    }
+)

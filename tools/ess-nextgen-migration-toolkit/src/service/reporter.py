@@ -38,6 +38,10 @@ class Reporter:
             f"- Warnings: {len(context.Warnings)}",
             f"- Errors: {len(context.Errors)}",
             "",
+            "## Per-Topic Migration Summary",
+            "",
+            *self._format_per_topic_summary(context.Changes),
+            "",
             "## Changes",
             "",
             *self._format_changes(context.Changes),
@@ -56,6 +60,31 @@ class Reporter:
         if mode == "READONLY":
             return "Migration Readiness Report"
         return "Migration Report"
+
+    def _format_per_topic_summary(self, changes: list[ChangeEntry]) -> list[str]:
+        """Group changes by component (topic) → the rules that acted + mitigations.
+
+        Answers, per topic, "which rules acted and what mitigation/transformation
+        was applied" — the migration report's per-topic view (rendered in READONLY
+        previews too).
+        """
+        if not changes:
+            return ["No topic transformations recorded."]
+
+        by_topic: dict[str, list[ChangeEntry]] = {}
+        for change in changes:
+            key = change.component or "(agent-level)"
+            by_topic.setdefault(key, []).append(change)
+
+        lines: list[str] = []
+        for topic, entries in by_topic.items():
+            lines.append(f"### {topic}")
+            for entry in entries:
+                parts = [part for part in (entry.rule_id, entry.title) if part]
+                label = " — ".join(parts) or "Change"
+                lines.append(f"- {label}: {entry.message}")
+            lines.append("")
+        return lines[:-1] if lines and lines[-1] == "" else lines
 
     def _format_changes(self, changes: list[ChangeEntry]) -> list[str]:
         if not changes:

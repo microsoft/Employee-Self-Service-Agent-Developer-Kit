@@ -48,6 +48,10 @@ def test_reporter_renders_customer_report_from_context_collectors(tmp_path: Path
     assert "Template           CA → DA" in report
     assert "## Warnings — Manual Review Required" in report
     assert "Recommendation     Move logic into OnConversationStart." in report
+    # Per-topic summary groups changes by component (topic).
+    assert "## Per-Topic Migration Summary" in report
+    assert "### ESS HR Agent" in report
+    assert "- RULE-001 — Updated Agent Metadata: Runtime Provider CA → DA" in report
 
 
 def test_logger_and_reporter_leave_exactly_two_bundle_files(tmp_path: Path) -> None:

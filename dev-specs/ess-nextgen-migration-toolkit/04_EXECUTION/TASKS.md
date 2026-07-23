@@ -135,6 +135,7 @@ Instead, it establishes the complete framework, wiring, and developer experience
 | [TASK-015](tasks/TASK-015-input-pipeline-auth-discovery.md) | Input Pipeline: Auth + Agent Discovery + Orchestrator Wiring | DONE | TASK-002, TASK-005, TASK-008 |
 | [TASK-016](tasks/TASK-016-transformation-da-compatibility.md) | Transformation: DA-Compatibility Rewrite | DONE | TASK-006, TASK-002, TASK-017 |
 | [TASK-017](tasks/TASK-017-writeback-plan.md)             | Writeback Plan (coalescing + meaningful-change guard) | DONE | TASK-002 |
+| [TASK-020](tasks/TASK-020-per-topic-migration-report.md) | Per-Topic Migration Report     | DONE   | TASK-016, TASK-005 |
 
 ---
 
@@ -163,6 +164,8 @@ The framework architecture should remain unchanged.
 | [TASK-011](tasks/TASK-011-rule-002-replace-endconversation-node.md)    | Implement RULE-002 — Replace EndConversation Node | DONE | RULE-002, TASK-006, TASK-016, TASK-017 |
 | [TASK-012](tasks/TASK-012-rule-003-handle-onactivity-topic.md)         | Implement RULE-003 — Handle OnActivity Topic | DONE  | RULE-003, TASK-006, TASK-016, TASK-017 |
 | [TASK-013](tasks/TASK-013-rule-004-handle-ongeneratedresponse-topic.md) | Implement RULE-004 — Handle OnGeneratedResponse Topic | DONE | RULE-004, TASK-006, TASK-016, TASK-017 |
+| [TASK-018](tasks/TASK-018-rule-006-disable-unsupported-trigger-topics.md) | Implement RULE-006 — Disable Unsupported-Trigger Topics | DONE | RULE-006, TASK-012, TASK-020 |
+| [TASK-019](tasks/TASK-019-rule-007-disable-unsupported-node-topics.md) | Implement RULE-007 — Disable Topics With Unsupported Nodes | DONE | RULE-007, TASK-012, TASK-020 |
 
 ---
 

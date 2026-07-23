@@ -7,6 +7,8 @@ from core.pipelines import Pipeline
 from modules.transformation.models import MigrationContext
 from modules.transformation.steps import (
     ApplyDaCompatibilityStep,
+    DisableUnsupportedNodeTopicsStep,
+    DisableUnsupportedTriggerTopicsStep,
     HandleGeneratedResponseTopicStep,
     HandleOnActivityTopicStep,
     ReplaceEndConversationStep,
@@ -23,5 +25,7 @@ def build_transformation_pipeline(
         .use(ReplaceEndConversationStep(logger))
         .use(HandleOnActivityTopicStep(logger))
         .use(HandleGeneratedResponseTopicStep(logger))
+        .use(DisableUnsupportedTriggerTopicsStep(logger))
+        .use(DisableUnsupportedNodeTopicsStep(logger))
         .build()
     )

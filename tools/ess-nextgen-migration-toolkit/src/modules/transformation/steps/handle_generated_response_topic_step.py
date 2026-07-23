@@ -14,6 +14,10 @@ class HandleGeneratedResponseTopicStep(DeprecateTriggerTopicStep):
             logger,
             name="HandleGeneratedResponseTopic",
             description="Disable + deprecate OnGeneratedResponse topics (RULE-004).",
-            trigger_kind="OnGeneratedResponse",
             rule_id="RULE-004",
+            rule_name="Handle OnGeneratedResponse Topic",
+            triggers={
+                "OnGeneratedResponse": "Re-implement any needed behavior (e.g. badges "
+                "or disclaimers) with supported Declarative Agent constructs.",
+            },
         )

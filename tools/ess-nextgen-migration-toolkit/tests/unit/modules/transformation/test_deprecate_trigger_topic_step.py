@@ -7,6 +7,9 @@ from typing import cast
 from core.logging import Logger
 from modules.transformation.models import CustomizationComponent, MigrationContext
 from modules.transformation.steps.deprecate_trigger_topic_step import topic_trigger_kind
+from modules.transformation.steps.disable_unsupported_trigger_topics_step import (
+    DisableUnsupportedTriggerTopicsStep,
+)
 from modules.transformation.steps.handle_generated_response_topic_step import (
     HandleGeneratedResponseTopicStep,
 )
@@ -16,12 +19,24 @@ from modules.transformation.steps.handle_on_activity_topic_step import HandleOnA
 class FakeLogger:
     def __init__(self) -> None:
         self.warnings: list[str] = []
+        self.changes: list[dict[str, object]] = []
 
     def LogInfo(self, *_: object, **__: object) -> None: ...
     def LogDebug(self, *_: object, **__: object) -> None: ...
 
     def LogWarning(self, message: str, **__: object) -> None:
         self.warnings.append(message)
+
+    def LogChange(
+        self,
+        message: str,
+        *,
+        rule_id: str | None = None,
+        title: str | None = None,
+        component: str | None = None,
+        details: tuple[str, ...] = (),
+    ) -> None:
+        self.changes.append({"rule_id": rule_id, "component": component, "message": message})
 
 
 def _topic(
@@ -79,6 +94,13 @@ def test_on_activity_topic_is_disabled_and_deprecated() -> None:
         "statuscode": 2,
     }
     assert len(logger.warnings) == 1 and "OnActivity" in logger.warnings[0]
+    # Per-topic report change recorded for the topic.
+    assert len(logger.changes) == 1
+    assert logger.changes[0]["rule_id"] == "RULE-003"
+    assert (
+        logger.changes[0]["component"]
+        == "Greeting [msdyn_copilotforemployeeselfservicehr.topic.t1]"
+    )
 
 
 def test_already_migrated_on_activity_topic_is_skipped() -> None:
@@ -128,3 +150,29 @@ def test_generated_response_topic_is_disabled_and_deprecated() -> None:
         "statecode": 1,
         "statuscode": 2,
     }
+
+
+# --- RULE-006: additional unsupported triggers ---
+
+
+def test_rule_006_disables_additional_unsupported_trigger_topics() -> None:
+    logger = FakeLogger()
+    context = MigrationContext(
+        customizations={
+            "t1": _topic("t1", "OnUnknownIntent", "Fallback"),
+            "t2": _topic("t2", "OnEscalate", "Escalate"),
+            "t3": _topic("t3", "OnSystemRedirect", "Reset"),
+            "keep": _topic("keep", "OnRecognizedIntent", "Vacation"),  # supported -> ignored
+        }
+    )
+
+    result = DisableUnsupportedTriggerTopicsStep(cast(Logger, logger)).execute(context)
+
+    writes = {w["record_id"]: w for w in result.pending_writes}
+    assert set(writes) == {"t1", "t2", "t3"}
+    for rid in ("t1", "t2", "t3"):
+        assert writes[rid]["changes"]["statecode"] == 1
+        assert writes[rid]["changes"]["statuscode"] == 2
+        assert writes[rid]["changes"]["name"].startswith("[DEPRECATED] ")
+    assert {c["rule_id"] for c in logger.changes} == {"RULE-006"}
+    assert len(logger.changes) == 3

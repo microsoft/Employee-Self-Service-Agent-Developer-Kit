@@ -307,6 +307,8 @@ transformation_pipeline = (
         .use(ReplaceEndConversationStep())       # RULE-002 (TASK-011)
         .use(HandleOnActivityTopicStep())        # RULE-003 (TASK-012)
         .use(HandleGeneratedResponseTopicStep()) # RULE-004 (TASK-013)
+        .use(DisableUnsupportedTriggerTopicsStep()) # RULE-006 (TASK-018) — additional triggers
+        .use(DisableUnsupportedNodeTopicsStep())    # RULE-007 (TASK-019) — unsupported nodes
 )
 
 # Output Pipeline (src/modules/postprocessing/) — validate, persist, and render

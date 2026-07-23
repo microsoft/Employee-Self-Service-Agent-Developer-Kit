@@ -532,6 +532,138 @@ Abort migration if validation fails.
 
 ---
 
+# RULE-006
+
+## Name
+
+Disable Unsupported-Trigger Topics
+
+### Category
+
+Topic Trigger
+
+### Migration Strategy
+
+Disable
+
+### Status
+
+Ready
+
+### Priority
+
+P1
+
+### Source Component
+
+Topics with an unsupported trigger: `OnUnknownIntent`, `OnPlanComplete`,
+`OnSystemRedirect`, `OnSelectIntent`, `OnEscalate`.
+
+### Target Component
+
+Disabled Topic
+
+### Pipeline Step
+
+`DisableUnsupportedTriggerTopicsStep`
+
+### Motivation
+
+Beyond OnActivity (RULE-003) and OnGeneratedResponse (RULE-004), several other
+topic triggers have no Declarative Agent equivalent (per the CA→DA component
+support analysis — cut/unsupported triggers). These appear only in customer
+customizations / C0 implementations, never in ESS OOB packages.
+
+### Preconditions
+
+* Topic trigger (`beginDialog.kind`) is one of the unsupported kinds above.
+* Not already migrated (disabled AND `[DEPRECATED]`-prefixed) — MIG-005.
+
+### Transformation
+
+Same disable-but-preserve mitigation as RULE-003/004, via the shared
+`deprecate_topic` action: disable the topic (`statecode`=1/`statuscode`=2), prefix
+`name` with `[DEPRECATED]` once, preserve all logic, emit a manual-review warning,
+and record a per-topic change (each trigger carries its own customer guidance).
+
+### Failure Handling
+
+Continue migration. Generate warning.
+
+### User Guidance
+
+Review each disabled topic and re-implement its behavior with supported
+Declarative Agent capabilities (guidance is trigger-specific).
+
+---
+
+# RULE-007
+
+## Name
+
+Disable Topics With Unsupported Nodes
+
+### Category
+
+Conversation Node
+
+### Migration Strategy
+
+Disable
+
+### Status
+
+Ready
+
+### Priority
+
+P1
+
+### Source Component
+
+Any topic whose `data` uses an unsupported conversational node:
+`IncludeSelectedTopics`, `InvokeAIBuilderModelAction`, `ConversationHistory`,
+`RecognizeIntent`, `TransferConversationV2`, `SearchAndSummarizeContent`,
+`AnswerQuestionWithAI` (`service.constants.UNSUPPORTED_TOPIC_NODES`).
+
+### Target Component
+
+Disabled Topic
+
+### Pipeline Step
+
+`DisableUnsupportedNodeTopicsStep`
+
+### Motivation
+
+These node kinds have no Declarative Agent equivalent today and no automatic
+in-place mitigation (tracked for later MCS waves). A topic that uses any of them
+will not function in DA, so — consistent with unsupported triggers — the whole
+topic is disabled and flagged, rather than partially/unsafely transformed.
+
+### Preconditions
+
+* The topic's `data` contains at least one unsupported node kind.
+* Not already migrated (disabled AND `[DEPRECATED]`-prefixed) — MIG-005.
+
+### Transformation
+
+Disable-but-preserve via the shared `deprecate_topic` action (same as the trigger
+rules): disable + `[DEPRECATED]`-prefix + preserve logic + warn + record a
+per-topic change that names the specific unsupported node(s) found. The topic
+`data` is **not** rewritten (no partial-node mitigation exists).
+
+### Failure Handling
+
+Continue migration. Generate warning.
+
+### User Guidance
+
+Review each disabled topic and re-implement the unsupported node(s) with supported
+Declarative Agent constructs, or wait for MCS platform support in a later wave.
+
+---
+
 # 7. Future Rules
 
 Additional Migration Rules will be introduced as platform support evolves.

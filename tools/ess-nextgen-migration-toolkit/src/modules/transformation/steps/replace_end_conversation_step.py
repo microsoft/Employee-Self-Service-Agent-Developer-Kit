@@ -19,6 +19,7 @@ from typing import Any
 from core.logging import Logger
 from modules.transformation.migration_step import MigrationPipelineStep
 from modules.transformation.models import MigrationContext
+from modules.transformation.steps.topic_change_log import record_topic_change
 
 _BOTCOMPONENTS_ENTITY = "botcomponents"
 _DATA_FIELD = "data"
@@ -61,6 +62,14 @@ class ReplaceEndConversationStep(MigrationPipelineStep):
                 original={_DATA_FIELD: component.data},
             )
             target.set(_DATA_FIELD, replaced)
+            record_topic_change(
+                self._logger,
+                component,
+                rule_id="RULE-002",
+                rule_name="Replace EndConversation Node",
+                message="Replaced EndConversation node(s) with CancelAllDialogs "
+                "(End All Topics); node connectivity and all other logic preserved.",
+            )
             rewritten += 1
 
         self._logger.LogInfo(
