@@ -71,6 +71,64 @@ def test_query_all_acquires_a_fresh_token_and_applies_odata_headers_per_request(
     assert seen_tokens == ["Bearer token-1", "Bearer token-2"]
 
 
+def test_call_function_builds_unbound_function_url_with_alias_params() -> None:
+    seen_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_urls.append(str(request.url))
+        return httpx.Response(200, json={"value": [{"schemaname": "custom.topic.Foo"}]})
+
+    client, _ = make_client(handler)
+
+    payload = client.call_function(
+        "RetrieveDependenciesForUninstall",
+        SolutionUniqueName="msdyn_CopilotForEmployeeSelfServiceIT",
+    )
+
+    assert payload == {"value": [{"schemaname": "custom.topic.Foo"}]}
+    assert seen_urls == [
+        f"{ENV_URL}/api/data/v9.2/RetrieveDependenciesForUninstall"
+        "(SolutionUniqueName='msdyn_CopilotForEmployeeSelfServiceIT')"
+    ]
+
+
+def test_call_function_inlines_guid_params_unquoted() -> None:
+    seen_urls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_urls.append(str(request.url))
+        return httpx.Response(200, json={"DependencyMetadataCollection": {}})
+
+    client, _ = make_client(handler)
+
+    client.call_function(
+        "RetrieveDependenciesForUninstallWithMetadata",
+        SolutionId="1147da21-3698-415c-9477-61d6186ca6ab",
+    )
+
+    # GUID params are Edm.Guid literals — unquoted, unlike string params.
+    assert seen_urls == [
+        f"{ENV_URL}/api/data/v9.2/RetrieveDependenciesForUninstallWithMetadata"
+        "(SolutionId=1147da21-3698-415c-9477-61d6186ca6ab)"
+    ]
+
+
+def test_query_all_omits_select_when_requesting_all_fields() -> None:
+    requests_seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests_seen.append(str(request.url))
+        return httpx.Response(200, json={"value": [{"id": 1}]})
+
+    client, _ = make_client(handler)
+
+    for all_fields in (None, "*"):
+        requests_seen.clear()
+        records = client.query_all("bots", select=all_fields)
+        assert records == [{"id": 1}]
+        assert requests_seen == [f"{ENV_URL}/api/data/v9.2/bots"]
+
+
 def test_query_all_follows_odata_next_link_until_all_pages_are_returned() -> None:
     requests_seen: list[str] = []
 
@@ -205,3 +263,28 @@ def test_create_returns_record_id_from_odata_entity_id_header() -> None:
     record_id = client.create("bots", {"name": "Created"})
 
     assert record_id == "12345"
+
+
+def test_update_merges_per_request_headers_without_replacing_odata_headers() -> None:
+    seen_headers: list[httpx.Headers] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_headers.append(request.headers)
+        return httpx.Response(204)
+
+    client, _ = make_client(handler)
+
+    client.update(
+        "bots",
+        "record-id",
+        {"name": "Updated"},
+        headers={"MSCRM.SolutionUniqueName": "contoso_preferred"},
+    )
+
+    assert len(seen_headers) == 1
+    assert seen_headers[0]["MSCRM.SolutionUniqueName"] == "contoso_preferred"
+    assert seen_headers[0]["Accept"] == "application/json"
+    assert seen_headers[0]["OData-MaxVersion"] == "4.0"
+    assert seen_headers[0]["OData-Version"] == "4.0"
+    assert seen_headers[0]["Prefer"] == "odata.include-annotations=*"
+    assert seen_headers[0]["Authorization"] == "Bearer token-1"

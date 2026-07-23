@@ -21,14 +21,17 @@ The migration toolkit enables existing ESS customers to safely transition custom
 The customer experience follows a progressive confidence model:
 
 ```text
-DISCOVER
+Discover
     ↓
-PREVIEW
+Preview
     ↓
-MIGRATE
+Migrate
 ```
 
-Each stage builds confidence before customer environments are modified.
+Each stage builds confidence before customer environments are modified. These
+are customer-journey *intents*; technically they run in one of two execution
+modes — Discover and Preview in `READONLY`, Migrate in `WRITEBACK`
+(see `01_PRODUCT/MIGRATION_MODES.md`).
 
 ---
 
@@ -95,13 +98,13 @@ Select Environment
 Select ESS Agent
       │
       ▼
-DISCOVER
+Discover
       │
       ▼
 Review Readiness Report
       │
       ▼
-PREVIEW
+Preview
       │
       ▼
 Review Preview Report
@@ -110,7 +113,7 @@ Review Preview Report
 Approve Migration
       │
       ▼
-MIGRATE
+Migrate
       │
       ▼
 Review Migration Summary

@@ -142,6 +142,13 @@ Yes
 `EndTime` and `Status` are updated by the Migration Orchestrator as the session
 progresses and completes.
 
+> **Implementation note.** `ExecutionMode` is the ESS-domain vocabulary
+> (`READONLY` / `WRITEBACK`) defined in
+> `src/modules/transformation/models/execution_mode.py`. The generic framework
+> base `ExecutionContext` (`src/core/models/`) stays product-agnostic and stores
+> it as an opaque `mode: str`; `MigrationContext` supplies the enum and defaults
+> it to `READONLY`.
+
 ---
 
 # MigrationContext

@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from core.models import ExecutionMode
 from core.pipelines import Pipeline
-from modules.migration.migration_step import MigrationPipelineStep
-from modules.migration.models import MigrationContext
+from modules.transformation.migration_step import MigrationPipelineStep
+from modules.transformation.models import ExecutionMode, MigrationContext
 
 
 class DiscoverOnlyStep(MigrationPipelineStep):
@@ -45,12 +44,12 @@ def test_mode_gated_step_runs_only_in_declared_mode() -> None:
         .build()
     )
 
-    discover_ctx = MigrationContext(ExecutionMode=ExecutionMode.READONLY)
+    discover_ctx = MigrationContext(mode=ExecutionMode.READONLY)
     result = pipeline.run(discover_ctx)
     assert len(result.Logs) == 1  # discover-only ran
     assert len(result.Warnings) == 0  # migrate-only skipped
 
-    migrate_ctx = MigrationContext(ExecutionMode=ExecutionMode.WRITEBACK)
+    migrate_ctx = MigrationContext(mode=ExecutionMode.WRITEBACK)
     result = pipeline.run(migrate_ctx)
     assert len(result.Logs) == 0  # discover-only skipped
     assert len(result.Warnings) == 1  # migrate-only ran
@@ -60,7 +59,7 @@ def test_empty_supported_modes_runs_in_all_modes() -> None:
     pipeline = Pipeline.builder("always", input_type=MigrationContext).use(AllModesStep()).build()
 
     for mode in (ExecutionMode.READONLY, ExecutionMode.WRITEBACK):
-        ctx = MigrationContext(ExecutionMode=mode)
+        ctx = MigrationContext(mode=mode)
         result = pipeline.run(ctx)
         assert len(result.Changes) == 1
 
@@ -84,16 +83,16 @@ def test_subclass_can_override_can_execute_with_super() -> None:
     pipeline = Pipeline.builder("cond", input_type=MigrationContext).use(ConditionalStep()).build()
 
     # Right mode but no changes — skipped by subclass condition
-    ctx = MigrationContext(ExecutionMode=ExecutionMode.WRITEBACK)
+    ctx = MigrationContext(mode=ExecutionMode.WRITEBACK)
     result = pipeline.run(ctx)
     assert len(result.Logs) == 0
 
     # Right mode AND has changes — runs
-    ctx = MigrationContext(ExecutionMode=ExecutionMode.WRITEBACK, Changes=[None])  # type: ignore[list-item]
+    ctx = MigrationContext(mode=ExecutionMode.WRITEBACK, Changes=[None])  # type: ignore[list-item]
     result = pipeline.run(ctx)
     assert len(result.Logs) == 1
 
     # Wrong mode — skipped by super() mode gate
-    ctx = MigrationContext(ExecutionMode=ExecutionMode.READONLY, Changes=[None])  # type: ignore[list-item]
+    ctx = MigrationContext(mode=ExecutionMode.READONLY, Changes=[None])  # type: ignore[list-item]
     result = pipeline.run(ctx)
     assert len(result.Logs) == 0

@@ -25,7 +25,7 @@ src/
         utils/       Generic helpers
     modules/
         preprocessing/   Input pipeline steps
-        migration/       Migration step base, models, migration_pipeline.py, steps/
+        transformation/  Transformation step base, models, transformation_pipeline.py, steps/
         postprocessing/  Output pipeline steps
     service/         Orchestration (mtk_orchestrator.py, constants.py)
 output/              Generated, gitignored output
@@ -62,7 +62,7 @@ pinned interpreter (`.python-version`) and the locked dependency graph
 The toolkit exposes a **single command, `mtk`** (migration tool kit). Run it
 from the **monorepo root** via the forwarder (`./mtk.sh`, or `.\mtk.ps1` on
 Windows); the dispatcher changes into the toolkit directory implicitly, so it is
-cwd-independent and all logic lives in `scripts/mtk.*`. `mtk start` is fully
+cwd-independent and all logic lives in `scripts/mtk.*`. `mtk run` is fully
 self-sufficient: it installs `uv` if missing, has `uv` download the pinned
 Python (a managed, standalone CPython — no admin rights, no system Python),
 creates the project virtual environment (`.venv`) with the exact locked
@@ -71,15 +71,17 @@ is no manual venv step.
 
 ```bash
 # From the monorepo root — no prerequisites:
-./mtk.sh start          # provision runtime env + run (what customers run)
-./mtk.sh start --dev    # provision runtime + dev tooling, then run (contributors)
+./mtk.sh run          # customer: pull latest, provision runtime env, then run
+./mtk.sh run --dev    # contributor: provision runtime + dev tooling, then run (no git pull)
 ```
 
-On Windows use `.\mtk.ps1 start` (add `-Dev` for tooling).
+On Windows use `.\mtk.ps1 run` (add `-Dev` for tooling).
 
-> **Contributors:** use `--dev`. Plain start provisions a *runtime-only*
-> environment (no `ruff`/`mypy`/`pytest`), so `uv run ruff` will fail after it.
-> Run `./mtk.sh start --dev` to get the quality-gate tooling.
+> **Contributors:** use `--dev`. Plain `run` provisions a *runtime-only*
+> environment (no `ruff`/`mypy`/`pytest`) **and resets to pristine `origin/main`
+> (discarding local changes)**, so `uv run ruff` will fail after it and any local
+> edits are lost. Run `./mtk.sh run --dev` to get the quality-gate tooling (and
+> skip the reset — contributors manage their own branches).
 
 > **`uv: command not found`?** After a fresh install `uv` lives in
 > `~/.local/bin`, which may not be on your shell `PATH` yet. Add it with
@@ -100,22 +102,28 @@ uv run pytest         # run anything inside the locked env, no activation needed
 > for both `uv sync` and `uv run`. If it were an optional *extra* instead,
 > `uv run ruff` would re-sync without the extra and prune the tool first.
 
-### Staying up to date: `mtk refresh`
+### Staying up to date
 
-`mtk refresh` fast-forwards your branch from the remote (customers run this on
-`main`), then runs `start` — re-provisioning the **runtime** environment to the
-updated lockfile and launching the toolkit. In other words, `refresh` = `git
-pull` then `start`:
+`mtk run` (customer mode, no `--dev`) **runs from a pristine checkout of
+`origin/main`**: it fetches, checks out `origin/main` **detached** (without moving
+any branch pointer), and removes untracked files — so the working tree exactly
+matches the latest **reviewed** `main`, never local modifications. **Your local
+commits and branches are preserved**; only *uncommitted changes* and *untracked
+files* are discarded. It then re-provisions the runtime environment and launches:
 
 ```bash
-./mtk.sh refresh          # pull latest, then start (re-provision runtime + run)
+./mtk.sh run              # customer: pristine origin/main checkout, provision, run
 ```
 
-`refresh` is the customer update path, so it always provisions a runtime-only
-environment. Contributors who want their dev tooling back after a refresh run
-`./mtk.sh start --dev`.
-
-It pulls fast-forward-only, so it never rewrites local work.
+> **Heads up — customer `run` discards uncommitted work.** It runs
+> `git checkout -f origin/main` (detached) + `git clean -fd`, discarding your
+> uncommitted changes and untracked files (gitignored runtime state — `.venv`,
+> `.local`, `output/` — is preserved). **Local commits and branches are never
+> touched.** It **asks for confirmation** whenever the work tree is dirty, and
+> **refuses in a non-interactive shell** rather than silently destroying work —
+> pass `--yes` to skip the prompt (e.g. automation). Contributors should use
+> **`--dev`**, which **skips** this entirely: `./mtk.sh run --dev` provisions
+> (with dev tooling) and runs without touching git.
 
 > **Dependency hygiene:** `uv.lock` is the single source of truth. After
 > changing dependencies in `pyproject.toml`, run `uv lock` and commit the
@@ -138,7 +146,7 @@ uv run mypy src        # Type-check
 
 ### Quality gates run automatically on commit (toolkit-scoped)
 
-`mtk start --dev` installs a **pre-commit git hook for you** (one-time, per
+`mtk run --dev` installs a **pre-commit git hook for you** (one-time, per
 clone). After that, `ruff` + `mypy` run **automatically on every `git commit`**
 — you don't run anything by hand. A commit that fails lint or type-checking is
 blocked.

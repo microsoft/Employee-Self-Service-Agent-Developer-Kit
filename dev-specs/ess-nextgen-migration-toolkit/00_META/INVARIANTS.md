@@ -225,7 +225,7 @@ returns. Pipeline behaviour never lives in the orchestrator.
 
 The service layer coordinates application behavior (orchestration).
 
-Migration rules live exclusively in `src/modules/migration/steps/`.
+Migration rules live exclusively in `src/modules/transformation/steps/`.
 The service layer never contains migration rules.
 
 ---

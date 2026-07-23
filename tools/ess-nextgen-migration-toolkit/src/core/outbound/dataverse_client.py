@@ -22,6 +22,19 @@ from core.outbound.exceptions import AuthenticationExpiredError, DataverseApiErr
 JsonDict = dict[str, Any]
 Sleep = Callable[[float], None]
 
+# A GUID-shaped value is an OData ``Edm.Guid`` literal (unquoted) in a Web API
+# function call; anything else is a single-quoted ``Edm.String`` literal.
+_GUID_LITERAL_RE: Final = re.compile(
+    r"\A[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\Z"
+)
+
+
+def _format_function_param(key: str, value: str) -> str:
+    """Format one unbound-function parameter as an OData literal."""
+    if _GUID_LITERAL_RE.match(value):
+        return f"{key}={value}"
+    return f"{key}='{value}'"
+
 
 class TokenProvider(Protocol):
     """Any object that can provide a bearer token."""
@@ -91,15 +104,22 @@ class DataverseClient:
         self,
         entity_set: str,
         *,
-        select: str,
+        select: str | None = None,
         filter: str | None = None,
     ) -> list[JsonDict]:
-        """Return all records for an entity-set query across all pages."""
-        params: dict[str, str] = {"$select": select}
+        """Return all records for an entity-set query across all pages.
+
+        ``select`` limits the returned columns. Pass ``None`` (the default) or
+        ``"*"`` to return all fields — Dataverse has no ``$select=*``; the
+        parameter is simply omitted, which yields the full default projection.
+        """
+        params: dict[str, str] = {}
+        if select is not None and select != "*":
+            params["$select"] = select
         if filter is not None:
             params["$filter"] = filter
 
-        payload = self.get(entity_set, params=params)
+        payload = self.get(entity_set, params=params or None)
         records = list(_coerce_records(payload, entity_set))
         next_link = _coerce_next_link(payload)
 
@@ -122,6 +142,19 @@ class DataverseClient:
         )
         return _json_payload(response)
 
+    def call_function(self, function_name: str, **params: str) -> JsonDict:
+        """Invoke an unbound Dataverse Web API function and return the JSON payload.
+
+        Parameters are inlined as OData literals: a GUID value becomes an unquoted
+        ``Edm.Guid`` literal (e.g.
+        ``RetrieveDependenciesForUninstallWithMetadata(SolutionId=<guid>)``); any
+        other value becomes a single-quoted ``Edm.String`` literal. Functions with
+        no parameters (e.g. ``GetPreferredSolution()``) pass none.
+        """
+        inner = ",".join(_format_function_param(key, value) for key, value in params.items())
+        path = f"{function_name}({inner})"
+        return self.get(path)
+
     def create(self, entity_set: str, data: JsonDict) -> str:
         """Create one Dataverse record and return its Dataverse record ID."""
         response = self.__request(
@@ -141,7 +174,14 @@ class DataverseClient:
             )
         return record_id
 
-    def update(self, entity_set: str, record_id: str, data: JsonDict) -> None:
+    def update(
+        self,
+        entity_set: str,
+        record_id: str,
+        data: JsonDict,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         """Update one Dataverse record without returning a payload."""
         self.__request(
             "PATCH",
@@ -149,6 +189,7 @@ class DataverseClient:
             json=data,
             operation="update",
             entity_set=entity_set,
+            headers=headers,
         )
 
     def delete(self, entity_set: str, record_id: str) -> None:
@@ -169,14 +210,16 @@ class DataverseClient:
         json: JsonDict | None = None,
         operation: str,
         entity_set: str | None,
+        headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         if method == "GET":
             response = self.__request_with_get_retry(
                 path,
                 params=params,
+                headers=headers,
             )
         else:
-            response = self.__send_once(method, path, params=params, json=json)
+            response = self.__send_once(method, path, params=params, json=json, headers=headers)
 
         self.__raise_for_status(response, operation=operation, entity_set=entity_set)
         return response
@@ -186,8 +229,9 @@ class DataverseClient:
         path: str,
         *,
         params: dict[str, str] | None,
+        headers: dict[str, str] | None,
     ) -> httpx.Response:
-        response = self.__send_once("GET", path, params=params)
+        response = self.__send_once("GET", path, params=params, headers=headers)
         for attempt in range(1, _GET_ATTEMPTS):
             if response.status_code not in _RETRY_STATUS_CODES:
                 return response
@@ -195,7 +239,7 @@ class DataverseClient:
             delay_seconds = _retry_delay_seconds(response, attempt)
             if delay_seconds > 0:
                 self.__sleep(delay_seconds)
-            response = self.__send_once("GET", path, params=params)
+            response = self.__send_once("GET", path, params=params, headers=headers)
 
         return response
 
@@ -206,13 +250,18 @@ class DataverseClient:
         *,
         params: dict[str, str] | None = None,
         json: JsonDict | None = None,
+        headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         token = self.__token_provider.get_token()
-        headers = {**_O_DATA_HEADERS, "Authorization": f"Bearer {token}"}
+        request_headers = {
+            **_O_DATA_HEADERS,
+            **(headers or {}),
+            "Authorization": f"Bearer {token}",
+        }
         return self.__client.request(
             method,
             self.__request_url(path),
-            headers=headers,
+            headers=request_headers,
             params=params,
             json=json,
         )

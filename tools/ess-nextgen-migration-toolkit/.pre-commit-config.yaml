@@ -6,7 +6,7 @@
 # from inside the toolkit (`uv run --project tools/ess-nextgen-migration-toolkit
 # ...`), so it can never touch solutions/, tests/, or other tools/.
 #
-# The `mtk start -Dev` dispatcher auto-installs these hooks via
+# The `mtk run --dev` dispatcher auto-installs these hooks via
 # `uv run pre-commit install -c .pre-commit-config.yaml`, so they fire on
 # every commit once provisioned. To run them on-demand outside a commit:
 #     cd tools/ess-nextgen-migration-toolkit

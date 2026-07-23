@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from core.pipelines import Pipeline, PipelineStep
-from modules.migration.models import MigrationContext
+from modules.transformation.models import ExecutionMode, MigrationContext
 from service import mtk_orchestrator
 
 
@@ -45,8 +45,8 @@ def test_main_runs_stage_pipelines_and_writes_two_bundle_files(
 ) -> None:
     created_contexts: list[MigrationContext] = []
 
-    def build_context(*, ExecutionMode: object) -> StageContext:
-        context = StageContext(ExecutionMode=ExecutionMode)  # type: ignore[arg-type]
+    def build_context(*, mode: object) -> StageContext:
+        context = StageContext(mode=mode)  # type: ignore[arg-type]
         created_contexts.append(context)
         return context
 
@@ -57,7 +57,7 @@ def test_main_runs_stage_pipelines_and_writes_two_bundle_files(
     )
     monkeypatch.setattr(
         mtk_orchestrator,
-        "build_migration_pipeline",
+        "build_transformation_pipeline",
         lambda logger, modes, **kw: _stage("migration"),
     )
     monkeypatch.setattr(
@@ -67,7 +67,7 @@ def test_main_runs_stage_pipelines_and_writes_two_bundle_files(
     mtk_orchestrator.main()
 
     assert len(created_contexts) == 1
-    assert created_contexts[0].ExecutionMode == "READONLY"
+    assert created_contexts[0].mode == "READONLY"
     assert created_contexts[0].events == ["input", "migration", "output"]  # type: ignore[attr-defined]
 
     session_dirs = sorted(path for path in tmp_path.iterdir() if path.is_dir())
@@ -85,9 +85,18 @@ def test_main_closes_logger_when_pipeline_execution_fails(
     closed = False
 
     class FakeLogger:
-        session_manager = SimpleNamespace(paths=SimpleNamespace(session_dir=tmp_path / "session"))
+        session_manager = SimpleNamespace(
+            paths=SimpleNamespace(
+                session_dir=tmp_path / "session",
+                report_path=tmp_path / "session" / "migration_report.md",
+                log_path=tmp_path / "session" / "session.log",
+            )
+        )
 
         def LogInfo(self, message: str, **_: object) -> None:
+            del message
+
+        def LogError(self, message: str, **_: object) -> None:
             del message
 
         def close(self) -> None:
@@ -115,12 +124,12 @@ def test_main_closes_logger_when_pipeline_execution_fails(
     monkeypatch.setattr(
         mtk_orchestrator.Logger,  # type: ignore[attr-defined]
         "start_session",
-        lambda output_root, context: FakeLogger(),
+        lambda output_root, context, **kwargs: FakeLogger(),
     )
     monkeypatch.setattr(mtk_orchestrator.Reporter, "render", lambda self, context: None)  # type: ignore[attr-defined]
     monkeypatch.setattr(mtk_orchestrator, "build_input_pipeline", fail_stage)
     monkeypatch.setattr(
-        mtk_orchestrator, "build_migration_pipeline", lambda logger, modes, **kw: _stage("m")
+        mtk_orchestrator, "build_transformation_pipeline", lambda logger, modes, **kw: _stage("m")
     )
     monkeypatch.setattr(
         mtk_orchestrator, "build_output_pipeline", lambda logger, modes, **kw: _stage("o")
@@ -130,3 +139,41 @@ def test_main_closes_logger_when_pipeline_execution_fails(
         mtk_orchestrator.main()
 
     assert closed is True
+
+
+def test_resolve_mode_defaults_to_readonly() -> None:
+    assert mtk_orchestrator._resolve_mode([]) == ExecutionMode.READONLY
+    assert mtk_orchestrator._resolve_mode(["--dev"]) == ExecutionMode.READONLY
+    # `--mode` with no value falls back to the default rather than crashing.
+    assert mtk_orchestrator._resolve_mode(["--mode"]) == ExecutionMode.READONLY
+
+
+def test_resolve_mode_parses_both_forms_case_insensitively() -> None:
+    assert mtk_orchestrator._resolve_mode(["--mode", "writeback"]) == ExecutionMode.WRITEBACK
+    assert mtk_orchestrator._resolve_mode(["--mode=writeback"]) == ExecutionMode.WRITEBACK
+    assert mtk_orchestrator._resolve_mode(["--dev", "--mode", "READONLY"]) == ExecutionMode.READONLY
+
+
+def test_resolve_mode_invalid_raises_systemexit() -> None:
+    with pytest.raises(SystemExit, match="Invalid --mode"):
+        mtk_orchestrator._resolve_mode(["--mode", "bogus"])
+
+
+def test_log_summary_reports_mode_agent_and_counts() -> None:
+    messages: list[str] = []
+
+    class RecordingLogger:
+        session_manager = SimpleNamespace(paths=SimpleNamespace(session_dir="/tmp/session-x"))
+
+        def LogInfo(self, message: str, **_: object) -> None:
+            messages.append(message)
+
+    context = MigrationContext(mode=ExecutionMode.WRITEBACK, selected_agent_name="ESS HR")
+    mtk_orchestrator._log_summary(RecordingLogger(), context)  # type: ignore[arg-type]
+
+    assert len(messages) == 1
+    summary = messages[0]
+    assert "mode=WRITEBACK" in summary
+    assert "agent=ESS HR" in summary
+    assert "changes=0" in summary
+    assert "warnings=0" in summary

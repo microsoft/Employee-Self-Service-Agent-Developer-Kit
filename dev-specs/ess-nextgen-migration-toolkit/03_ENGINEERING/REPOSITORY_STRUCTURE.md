@@ -75,18 +75,22 @@ tools/
         modules/
             preprocessing/
                 steps/
-            migration/
+            transformation/
                 migration_step.py
-                migration_pipeline.py
+                transformation_pipeline.py
                 models/
+                    execution_mode.py
                     migration_context.py
+                    customization_component.py
+                    writeback_plan.py
                 steps/
             postprocessing/
                 steps/
         service/
             mtk_orchestrator.py
             constants.py
-            toolkit.py
+            utils.py
+            reporter.py
 
     output/
         session-YYYY-MM-DD_HH-MM-SS/
@@ -145,24 +149,23 @@ Never contains:
 
 ## core/models/
 
-Owns canonical domain models.
+Owns the **generic, product-agnostic** base models the framework depends on.
 
-Contains only business entities shared across the framework.
+Contains only framework-level entities — no ESS/domain vocabulary:
 
-Examples:
+* `ExecutionContext` — base context with an opaque `mode: str` and the
+  diagnostic collectors (`Logs`, `Warnings`, `Errors`, `Changes`)
+* `DiagnosticEntry`, `ChangeEntry`
 
-* MigrationContext
-* MigrationSession
-* Component
-* ComponentLayer
-* MigrationCandidate
-* ValidationResult
-* MigrationReport
+Domain entities (e.g. `MigrationContext`, the `ExecutionMode` READONLY/WRITEBACK
+vocabulary) live in `modules/transformation/models/`, not here — this keeps
+`core/` extractable as a standalone framework.
 
 Never contains:
 
 * REST payloads
 * Business logic
+* Domain-specific vocabulary (e.g. concrete execution-mode values)
 
 ---
 
@@ -205,12 +208,17 @@ toolkit's entry point.
 Contains:
 
 * `mtk_orchestrator.py`
+* `constants.py`
+* `utils.py`
+* `reporter.py` — renders the customer-facing `migration_report.md` (moved out
+  of `core/logging` so the framework stays product-agnostic)
 
 Responsibilities include:
 
 * Initialize and coordinate a migration session
 * Build the MigrationContext and select the Execution Mode
 * Drive the Pipeline Engine over the pipeline-stage modules
+* Render the customer-facing report (Reporter)
 * Coordinate progress, failures, and final results
 
 The service layer never performs business transformations (those belong to
@@ -239,48 +247,56 @@ Owns pipeline-stage business logic grouped by execution phase.
 Contains:
 
 * `preprocessing/`
-* `migration/`
+* `transformation/`
 * `postprocessing/`
 
 Reusable service helpers outside this grouping must not contain migration rules.
 
 ---
 
-## modules/migration/
+## modules/transformation/
 
-Owns business transformations.
+Owns business transformations (the middle pipeline stage). Also hosts the
+shared domain types used by every stage — ``MigrationContext``
+(``models/migration_context.py``) and ``MigrationPipelineStep``
+(``migration_step.py``) — whose names are retained even though the stage was
+renamed from *migration* to *transformation*.
 
 Contains:
 
-* Migration Pipeline
-* Pipeline Step implementations
+* Transformation Pipeline (``transformation_pipeline.py``)
+* Pipeline Step implementations (``steps/``)
+* Shared domain types (``MigrationContext``, ``MigrationPipelineStep``)
 
 Every Pipeline Step performs one logical transformation.
 
 Examples:
 
-* Runtime Provider transformation
-* Template transformation
-* Model Kind transformation
-* Conversation Node transformation
+* DA-compatibility rewrite (Model Kind `PreviewModels` -> `MicrosoftCopilotModels`,
+  template `default-*` -> `gptagent-1.0.0`, add config model block)
+* Conversation Node transformation (e.g. `EndConversation` -> `EndAllTopics`)
+* Unsupported-trigger sanitization
 
 Migration rules live exclusively in
-`src/modules/migration/steps/`. Migration Steps never call Dataverse
+`src/modules/transformation/steps/`. Transformation Steps never call Dataverse
 directly.
 
 ---
 
 ## modules/preprocessing/
 
-Owns discovery and preparation.
+Owns discovery and preparation (the Input pipeline stage).
 
 Responsibilities include:
 
-* Discover ESS Agents
-* Retrieve Dependencies For Uninstall
-* Retrieve Solution Component Layers
-* Determine migration candidates
-* Load canonical components
+* Authenticate and resolve the target environment
+* Discover and select the ESS Agent (filtered by ESS schemaname)
+* Capture + verify the ALM customer's preferred solution
+  (`GetPreferredSolution` cross-check)
+* Retrieve the agent's configuration and metadata (bot record + gpt.default)
+* Retrieve customizations via `RetrieveDependenciesForUninstallWithMetadata`
+  and classify them from `msdyn_componentlayers` (see
+  `02_ARCHITECTURE/CUSTOMIZATION_DISCOVERY.md`)
 
 No transformations occur here.
 
@@ -288,12 +304,13 @@ No transformations occur here.
 
 ## modules/postprocessing/
 
-Owns execution after transformation.
+Owns execution after transformation (the Output pipeline stage).
 
 Responsibilities include:
 
 * Validation
-* Writeback
+* Writeback (applies the transformation module's `pending_writes`, WRITEBACK
+  mode only, into the preferred solution when set)
 * Report generation
 
 No migration rules belong here.
@@ -370,9 +387,9 @@ No layer may bypass another layer.
 | service                            | Application orchestration and entry point |
 | service/mtk_orchestrator.py        | Orchestration entry point              |
 | modules                    | Pipeline-stage business logic          |
-| modules/preprocessing      | Discovery pipeline                     |
-| modules/migration          | Business transformations               |
-| modules/postprocessing     | Validation and persistence             |
+| modules/preprocessing      | Discovery pipeline (Input)             |
+| modules/transformation     | Business transformations               |
+| modules/postprocessing     | Validation and persistence (Output)    |
 | debug                              | Generated logs and reports             |
 
 ---
@@ -386,8 +403,8 @@ No layer may bypass another layer.
 | SERVICES.md             | service                       |
 | DATAVERSE_CLIENT.md    | core/outbound                 |
 | PIPELINES.md            | core + modules        |
-| MIGRATION_RULES.md      | modules/migration     |
-| DIAGNOSTICS.md          | core/logging + debug          |
+| MIGRATION_RULES.md      | modules/transformation |
+| DIAGNOSTICS.md          | core/logging + service (Reporter) |
 | IMPLEMENTATION_GUIDE.md | Entire repository             |
 
 ---
@@ -460,20 +477,33 @@ Business logic must never write files directly.
 
 ---
 
-# 11. Pre-Commit Requirements
+# 11. Quality Gates (Pre-Commit + CI)
 
-The repository shall enforce quality gates through pre-commit hooks.
+The repository shall enforce quality gates both **locally** (pre-commit hooks)
+and in **continuous integration** (GitHub Actions).
 
-Examples include:
+Pre-commit hooks (`.pre-commit-config.yaml`, scoped to the toolkit) run on every
+commit and enforce:
 
-* Formatting
-* Linting
-* Type checking
-* Unit test execution
-* Prevention of direct `print()` statements
-* Prevention of accidental debug artifacts
+* Formatting (`ruff format`)
+* Linting (`ruff check`), including prevention of direct `print()` statements
+  (flake8-print / `T20`) and prevention of accidental debug artifacts
+* Type checking (`mypy`, strict)
 
-Logging must always use the framework logging abstraction.
+Continuous integration (`.github/workflows/mtk-toolkit-ci.yml`) runs on push and
+pull requests to `main` — path-filtered to `tools/ess-nextgen-migration-toolkit/**`
+so it only runs when the toolkit changes — and enforces the **same** gates plus
+**unit test execution**:
+
+* `uv sync --frozen` (locked deps, pinned Python)
+* `uv run ruff check .`
+* `uv run ruff format --check .`
+* `uv run mypy src`
+* `uv run pytest`
+
+Because the hooks and CI use the same locked tool versions (`uv.lock`), there is
+no version drift between local and CI enforcement. Logging must always use the
+framework logging abstraction.
 
 ---
 
@@ -499,19 +529,26 @@ The toolkit shall use:
 * **`.python-version`** — the pinned interpreter version used to resolve and run
   the toolkit.
 * **`scripts/mtk.{sh,ps1}`** — the single `mtk` command dispatcher. It is
-  self-sufficient and **pip-free**: `mtk start` installs `uv` if missing (its
+  self-sufficient and **pip-free**: `mtk run` installs `uv` if missing (its
   standalone installer requires no Python), has `uv` provision the pinned Python
   (a managed, standalone CPython — no system Python or admin rights), runs
   `uv sync` (which creates `.venv` automatically), then runs the toolkit. `pip`
-  is never used. `mtk refresh` fast-forwards the current branch from its remote,
-  then runs `start` (re-provision runtime — it is the customer update path, so it
-  does not accept `--dev` — and launch). New operational commands are added as
-  **new `mtk` subcommands**, never as new top-level scripts.
+  is never used. There is **one** command, `mtk run`, with two modes selected by
+  `--dev`: **customer** (no `--dev`) first **checks out pristine `origin/main`
+  detached** (`git checkout -f origin/main` + `git clean -fd`, discarding only
+  uncommitted changes + untracked files — local commits and branches are never
+  moved or deleted — so the tool only ever runs from reviewed `main`; gitignored
+  runtime state is preserved), **guarded by a confirmation prompt** whenever the
+  work tree is dirty, which refuses in a non-interactive shell unless `--yes` is
+  given — then provisions a runtime-only env and runs; **contributor** (`--dev`)
+  adds the dev dependency-group, installs the commit hooks, and **skips** the
+  checkout (contributors manage their own branches). New operational commands are
+  added as **new `mtk` subcommands**, never as new top-level scripts.
 * **`mtk.sh` / `mtk.ps1`** (at the **monorepo root**, not the toolkit root) —
   the single logic-free forwarders that `exec`/invoke
   `tools/ess-nextgen-migration-toolkit/scripts/mtk.*`. They exist only so the
   command can be invoked ergonomically from the top of the monorepo
-  (`./mtk.sh start`), mirroring the `./gradlew` / `./mvnw` Dataverse client convention.
+  (`./mtk.sh run`), mirroring the `./gradlew` / `./mvnw` Dataverse client convention.
   The dispatcher changes into the toolkit directory itself, so these forwarders
   need no logic. There is intentionally no second forwarder at the toolkit root.
 
@@ -532,8 +569,8 @@ constraint that every contributor shall follow.
 The convention has two layers:
 
 1. **One dispatcher** — `scripts/mtk.{sh,ps1}` (`mtk` = *migration tool kit*).
-   It parses a subcommand (`start`, `refresh`, `help`, …) plus shared options
-   (e.g. position-independent `--dev`) and routes to the matching handler. All
+   It parses a subcommand (`run`, `help`) plus shared options (position-independent
+   `--dev` and `--mode readonly|writeback`) and routes to the matching handler. All
    real logic lives here. It also **changes the working directory into the
    toolkit root** (`cd "$(dirname "$0")/.."`) before doing anything, so every
    command operates on the toolkit regardless of where it was invoked from.
@@ -541,7 +578,7 @@ The convention has two layers:
    root** `exec`/invoke `tools/ess-nextgen-migration-toolkit/scripts/mtk.*`,
    forwarding all arguments. They contain no logic and exist only for ergonomics
    (mirroring the `./gradlew` / `./mvnw` Dataverse client pattern), letting the toolkit be
-   driven from the top of the monorepo (`./mtk.sh start`). Because the dispatcher
+   driven from the top of the monorepo (`./mtk.sh run`). Because the dispatcher
    changes into the toolkit directory implicitly, invocation is cwd-independent.
    These two files are the **only sanctioned toolkit artifacts outside
    `tools/ess-nextgen-migration-toolkit/`** — a deliberate, documented exception

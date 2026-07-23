@@ -13,22 +13,34 @@
     A single forwarder at the repository root (.\mtk.ps1) calls this file.
 
 .PARAMETER Command
-    start | refresh | help
+    run | help
 
 .PARAMETER Dev
-    Include developer tooling (ruff, mypy, pytest, pre-commit).
+    Include developer tooling (ruff, mypy, pytest, pre-commit); also skips the
+    reset-to-main (contributors manage their own branches).
+
+.PARAMETER Mode
+    Execution mode: readonly (default, no writes) or writeback (persist changes).
+
+.PARAMETER Yes
+    Skip the confirmation prompt before the customer reset-to-main (required to
+    reset non-interactively; ignored with -Dev).
 
 .EXAMPLE
-    mtk start            # provision runtime environment, then run (customers)
-    mtk start -Dev       # provision runtime + dev tooling, then run (contributors)
-    mtk refresh          # pull latest, then start (re-provision runtime + run)
+    mtk run                      # customer: reset to pristine origin/main, provision, then run
+    mtk run -Dev                 # contributor: provision runtime + dev tooling, run (no git reset)
+    mtk run -Mode writeback      # run in writeback mode (persist changes)
 #>
 param(
     [Parameter(Position = 0)]
-    [ValidateSet("start", "refresh", "help")]
+    [ValidateSet("run", "help")]
     [string]$Command = "help",
 
-    [switch]$Dev
+    [switch]$Dev,
+
+    [string]$Mode = "",
+
+    [switch]$Yes
 )
 
 $ErrorActionPreference = "Stop"
@@ -113,40 +125,72 @@ function Invoke-Provision {
     }
 }
 
-# Run the toolkit. Launches the orchestration entry point (src/service/mtk_orchestrator.py). The dev flag
-# selects the matching run env: customers use --no-dev so `uv run` does not
-# implicitly re-add the dev dependency-group to a runtime-only .venv.
-function Invoke-Run {
-    param([bool]$DevMode)
+# Launch the toolkit. Execs the orchestration entry point
+# (src/service/mtk_orchestrator.py). The dev flag selects the matching run env:
+# customers use --no-dev so `uv run` does not implicitly re-add the dev
+# dependency-group to a runtime-only .venv.
+function Invoke-Launch {
+    param([bool]$DevMode, [string]$Mode)
 
     $UV = Find-Uv
     Write-Host ""
     Write-Host "==> Starting the toolkit CLI..."
-    if ($DevMode) { & $UV run python src/service/mtk_orchestrator.py --dev } else { & $UV run --no-dev python src/service/mtk_orchestrator.py }
+    $pyArgs = @("src/service/mtk_orchestrator.py")
+    if ($DevMode) { $pyArgs += "--dev" }
+    if ($Mode) { $pyArgs += @("--mode", $Mode) }
+    if ($DevMode) { & $UV run python @pyArgs } else { & $UV run --no-dev python @pyArgs }
 }
 
-# start = provision (idempotent) + run. The everyday command.
-function Invoke-Start {
-    param([bool]$DevMode)
-    Invoke-Provision -DevMode:$DevMode
-    Invoke-Run -DevMode:$DevMode
-}
+# Confirm before discarding local WORK-TREE changes. Only uncommitted changes and
+# untracked files are ever discarded — local commits and branches are never
+# touched (we check out origin/main detached, without moving any branch pointer).
+# Skips the prompt when the work tree is already clean. -Yes bypasses the prompt;
+# a non-interactive session REFUSES rather than silently destroying work.
+function Confirm-ResetOrAbort {
+    param([bool]$Force)
+    $dirty = [bool](git status --porcelain 2>$null)
+    if (-not $dirty) { return }  # clean work tree → nothing to lose
 
-# refresh = pull latest code, then start (provision + run). It is the customer
-# update path, so it always provisions a runtime-only environment (no -Dev).
-function Invoke-Refresh {
-    $branch = (git rev-parse --abbrev-ref HEAD).Trim()
-    Write-Host "==> Updating '$branch' from origin (fast-forward only)..."
-    git fetch --prune origin
-    git rev-parse --abbrev-ref --symbolic-full-name '@{u}' *> $null
-    if ($LASTEXITCODE -eq 0) {
-        git pull --ff-only
-    } else {
-        Write-Host "    '$branch' has no upstream; pulling origin/main..."
-        git pull --ff-only origin main
+    Write-Host ""
+    Write-Host "WARNING: 'mtk run' (customer mode) runs from a pristine checkout of origin/main."
+    Write-Host "  This DISCARDS your uncommitted changes and untracked files (git checkout -f + git clean -fd)."
+    Write-Host "  Your local commits and branches are PRESERVED (no branch is reset or deleted)."
+    Write-Host "  Contributors: re-run with '-Dev' to keep everything and skip this."
+    if ($Force) { Write-Host "  -Yes given; discarding uncommitted/untracked changes and continuing."; return }
+    if (-not [Environment]::UserInteractive) {
+        Write-Error ("Refusing to discard uncommitted changes in a non-interactive session. " +
+            "Re-run with '-Dev' (keep work) or '-Yes' (discard uncommitted/untracked).")
+        exit 3
     }
+    $reply = Read-Host "  Type 'yes' to discard uncommitted/untracked changes and continue"
+    if ($reply -ne "yes") { Write-Error "Aborted - nothing was changed."; exit 3 }
+}
 
-    Invoke-Start -DevMode:$false
+# Run from a pristine checkout of origin/main. Customer update path: check out
+# origin/main DETACHED (never moving/resetting any branch pointer) and clean
+# untracked files, so the working tree exactly matches the latest reviewed main —
+# discarding only uncommitted changes + untracked files. Local commits and
+# branches are fully preserved. Guarded by Confirm-ResetOrAbort so it never
+# silently destroys uncommitted work. Contributors (-Dev) skip this. Gitignored
+# runtime state (.venv, .local, output/) is preserved (clean respects .gitignore).
+function Sync-ToMain {
+    param([bool]$Force)
+    git fetch --prune origin
+    Confirm-ResetOrAbort -Force:$Force
+    Write-Host "==> Checking out pristine origin/main (local commits and branches preserved)..."
+    git -c advice.detachedHead=false checkout -f origin/main
+    git clean -fd
+}
+
+# run = the single everyday command. Without -Dev (customer) it first resets to
+# pristine origin/main (discarding local changes, after confirmation), then
+# provisions (idempotent) and runs. With -Dev (contributor) it provisions runtime
+# + dev tooling and runs WITHOUT touching git.
+function Invoke-Run {
+    param([bool]$DevMode, [string]$Mode, [bool]$Force)
+    if (-not $DevMode) { Sync-ToMain -Force:$Force }
+    Invoke-Provision -DevMode:$DevMode
+    Invoke-Launch -DevMode:$DevMode -Mode:$Mode
 }
 
 function Show-Usage {
@@ -154,12 +198,20 @@ function Show-Usage {
 mtk - ESS NextGen Migration Toolkit
 
 Usage:
-  mtk start [-Dev]      Provision a pip-free, locked environment (uv + Python + .venv), then run the toolkit
-  mtk refresh           Pull latest code, then start (re-provision runtime env + run)
+  mtk run [-Dev] [-Mode readonly|writeback] [-Yes]
+                        Run the toolkit. Without -Dev (customer), first resets to
+                        pristine origin/main (discarding any local changes), then
+                        provisions a locked runtime env and runs. With -Dev
+                        (contributor), provisions runtime + dev tooling and runs
+                        WITHOUT touching git.
   mtk help              Show this help
 
 Options:
-  -Dev                  (start only) Include developer tooling (ruff, mypy, pytest, pre-commit)
+  -Dev                  Include developer tooling (ruff, mypy, pytest, pre-commit);
+                        also skips the reset-to-main (contributors manage their git)
+  -Mode <mode>          Execution mode: readonly (default, no writes) or writeback (persist changes)
+  -Yes                  Skip the confirmation prompt before the customer reset-to-main
+                        (required to reset non-interactively; ignored with -Dev)
 "@ | Write-Host
 }
 
@@ -167,15 +219,6 @@ Options:
 # Dispatch
 # ---------------------------------------------------------------------------
 switch ($Command) {
-    "start"   { Invoke-Start -DevMode:$Dev.IsPresent }
-    "refresh" {
-        if ($Dev.IsPresent) {
-            Write-Error ("'-Dev' is only valid with 'start'. 'refresh' is the customer " +
-                "update path and always provisions a runtime-only environment. " +
-                "Contributors: run 'mtk start -Dev' to (re)add dev tooling.")
-            exit 2
-        }
-        Invoke-Refresh
-    }
-    default   { Show-Usage }
+    "run"   { Invoke-Run -DevMode:$Dev.IsPresent -Mode:$Mode -Force:$Yes.IsPresent }
+    default { Show-Usage }
 }

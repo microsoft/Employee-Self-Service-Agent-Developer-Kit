@@ -2,11 +2,34 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "MTK: Start (debug)",
+      "name": "MTK: Start — readonly (debug)",
       "type": "debugpy",
       "request": "launch",
       "module": "service.mtk_orchestrator",
-      "args": ["--dev"],
+      "args": ["--dev", "--mode", "readonly"],
+      "cwd": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit",
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit/src"
+      },
+      "python": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit/.venv/bin/python",
+      "console": "integratedTerminal",
+      "justMyCode": false,
+      "osx": {
+        "python": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit/.venv/bin/python"
+      },
+      "linux": {
+        "python": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit/.venv/bin/python"
+      },
+      "windows": {
+        "python": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit/.venv/Scripts/python.exe"
+      }
+    },
+    {
+      "name": "MTK: Start — writeback (debug)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "service.mtk_orchestrator",
+      "args": ["--dev", "--mode", "writeback"],
       "cwd": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit",
       "env": {
         "PYTHONPATH": "${workspaceFolder}/tools/ess-nextgen-migration-toolkit/src"

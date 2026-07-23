@@ -58,7 +58,9 @@ The Logger has two responsibilities that define this framework:
 
 - Logger — dual-channel (engineer + customer) with stdout/stderr transcript tee
 - Session Manager (owns the session bundle)
-- Reporter (renders `migration_report.md` from the report model)
+- Reporter (renders `migration_report.md` from the report model; now lives in
+  `src/service/reporter.py`, moved out of `core/logging` to keep the framework
+  product-agnostic)
 - MigrationContext diagnostic collectors
 
 ## References

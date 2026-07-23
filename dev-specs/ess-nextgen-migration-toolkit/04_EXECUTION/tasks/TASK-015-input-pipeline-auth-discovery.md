@@ -44,21 +44,20 @@ This task delivers:
 ```python
 from core.pipelines import ChainedPipeline, Pipeline
 from core.logging import Logger
-from core.models import ExecutionMode
-from modules.migration.models import MigrationContext
+from modules.transformation.models import ExecutionMode, MigrationContext
 
 def main() -> None:
-    ctx = MigrationContext(ExecutionMode=ExecutionMode.READONLY)
+    ctx = MigrationContext(mode=ExecutionMode.READONLY)
     logger = Logger.start_session(OUTPUT_ROOT, ctx)
     try:
         input_pipeline = build_input_pipeline(logger)
-        migration_pipeline = build_migration_pipeline(logger)  # pass-through
+        transformation_pipeline = build_transformation_pipeline(logger)  # pass-through
         output_pipeline = build_output_pipeline(logger)        # pass-through
 
         toolkit = (
             ChainedPipeline[MigrationContext]()
             .add(input_pipeline)
-            .add(migration_pipeline)
+            .add(transformation_pipeline)
             .add(output_pipeline)
         )
         toolkit.run(ctx)
@@ -79,13 +78,13 @@ def main() -> None:
   discovery before the Dataverse client is initialized.
 - No `EssMigrationToolkit` class — the orchestrator composes `ChainedPipeline`
   directly with `.add()`.
-- After this task, `./mtk.sh start` runs the full pipeline end-to-end and
+- After this task, `./mtk.sh run` runs the full pipeline end-to-end and
   produces a session bundle.
 
 ## Acceptance Criteria
 
 - [ ] `mtk_orchestrator.py` composes a `ChainedPipeline[MigrationContext]` with
-  three stages and runs end-to-end via `./mtk.sh start`.
+  three stages and runs end-to-end via `./mtk.sh run`.
 - [ ] Logger session lifecycle: `start_session` before pipeline, `close()` in
   `finally`, produces `output/session-<timestamp>/` with two files.
 - [ ] `MsalTokenProvider` is instantiated and used for Dataverse auth.
@@ -107,8 +106,8 @@ def main() -> None:
   + Logger lifecycle)
 - `src/modules/preprocessing/steps/gather_input_with_auth_step.py`
 - `src/modules/preprocessing/steps/agent_selection_step.py`
-- `src/modules/preprocessing/steps/gather_preferred_solution_step.py`
-- `src/modules/migration/migration_pipeline.py` — builder returning pass-through
+- `src/modules/preprocessing/steps/gather_alm_customer_input_step.py`
+- `src/modules/transformation/transformation_pipeline.py` — builder returning pass-through
 - `src/modules/postprocessing/output_pipeline.py` — builder returning pass-through
 - `MigrationContext` extended with session input fields
 - Unit tests under `tests/unit/service/` and `tests/unit/modules/preprocessing/`
@@ -121,6 +120,7 @@ def main() -> None:
 - 01_PRODUCT/CUSTOMER_JOURNEY.md — user interaction flow
 - src/core/auth/token_provider.py — MsalTokenProvider (TASK-008)
 - src/core/pipelines/ — ChainedPipeline, Pipeline, PipelineStep
-- src/modules/migration/migration_step.py — MigrationPipelineStep
-- src/modules/migration/models/migration_context.py — MigrationContext
-- src/core/models/execution_context.py — ExecutionContext, ExecutionMode
+- src/modules/transformation/migration_step.py — MigrationPipelineStep
+- src/modules/transformation/models/migration_context.py — MigrationContext
+- src/core/models/execution_context.py — ExecutionContext (generic `mode: str`)
+- src/modules/transformation/models/execution_mode.py — ExecutionMode
