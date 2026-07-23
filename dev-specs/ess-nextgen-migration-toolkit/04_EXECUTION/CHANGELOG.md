@@ -12,6 +12,14 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 
 ## [Unreleased]
 
+- **TASK-009 (End-to-End Framework Validation) → TODO (unblocked).** Its
+  dependencies (TASK-003/006/007/016) are all DONE, so it is no longer BLOCKED;
+  added the shipped rule tasks (TASK-011/012/013/017) to its `Consumes`. Enriched
+  its live-validation criteria to confirm the topic-rule writeback targets —
+  RULE-002 (`data`) and RULE-003/004 (`name` + `statecode`/`statuscode`) on
+  `botcomponents` — and, specifically, whether a single PATCH may combine the state
+  change with content columns (else the Writeback step splits state into its own PATCH).
+
 - **TASK-010 (RULE-001, Override Agent Instructions) → BLOCKED; dev-spec
   sanitization.** Marked TASK-010 `BLOCKED` (task file + TASKS.md index) pending
   ESS PM input on the canonical Declarative Agent *instructions* payload to apply;

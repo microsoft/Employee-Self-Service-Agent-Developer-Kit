@@ -4,8 +4,8 @@
 | ---------- | ------------------------- |
 | ID         | TASK-009                  |
 | Workstream | 0 — Repository Foundation |
-| Status     | BLOCKED                      |
-| Consumes   | TASK-003, TASK-006, TASK-007, TASK-016 |
+| Status     | TODO                      |
+| Consumes   | TASK-003, TASK-006, TASK-007, TASK-016, TASK-011, TASK-012, TASK-013, TASK-017 |
 
 ## Description
 
@@ -46,6 +46,12 @@ diagnostics, and writeback — is sound end-to-end.
   (`template`, `configuration`, `data`, `botcomponentid`) are confirmed against a
   live record — the transform produces a non-empty `pending_writes` and the PATCH
   succeeds.
+- [ ] The topic-rule writeback targets are confirmed live: RULE-002 (`data`) and
+  RULE-003/004 (`name` + `statecode`=1/`statuscode`=2) persist on `botcomponents`.
+  In particular, confirm whether a **single PATCH may combine the state change
+  (`statecode`/`statuscode`) with content columns (`name`/`data`)** — if Dataverse
+  rejects the combination, the Writeback step must emit the state fields as a
+  separate PATCH.
 - [ ] Session bundle produced: `output/session-<timestamp>/` with exactly two
   files.
 - [ ] `migration_report.md` contains Summary, Changes, Warnings, Errors sections.
