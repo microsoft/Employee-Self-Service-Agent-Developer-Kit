@@ -48,17 +48,18 @@ target.set("statuscode", _INACTIVE_STATUSCODE)
   `data` for this rule.
 - **Title** = the botcomponent `name` field (hydrated as
   `CustomizationComponent.name`). Prefix `"[DEPRECATED] "` once (idempotent).
-- **Disable** = the botcomponent `statecode`/`statuscode` (standard Dataverse
-  Inactive is `statecode=1`, `statuscode=2`). **UNCONFIRMED** for Copilot topics —
-  isolate the values as module constants and confirm live under TASK-009
-  (`./mtk.sh run --dev` WRITEBACK), per the existing UNCONFIRMED-field pattern.
-  `CustomizationComponent` does not yet hydrate statecode/statuscode; either read
-  them from the layer's `msdyn_componentjson` attributes or extend hydration.
+- **Disable** = the botcomponent `statecode`/`statuscode`. Confirmed by the
+  Dataverse `botcomponent` table reference: `statecode` 0=Active / **1=Inactive**,
+  `statuscode` 1=Active / **2=Inactive** — both **writable** columns set via a
+  normal `PATCH /botcomponents(id)`. Hydrated onto `CustomizationComponent`
+  (`statecode`/`statuscode`) from the componentjson attributes fetched during
+  discovery. Open live item (TASK-009): whether a single PATCH may combine the
+  State change with content (`data`) when a topic is also rewritten by another
+  rule — if not, split state into its own PATCH in the Writeback step.
 - **Idempotency (MIG-005)**: skip when the topic is already Inactive AND `name`
   already starts with `[DEPRECATED]`.
-- **Migration warning**: emit via the diagnostics warning collector the Reporter
-  renders (confirm the exact API used by existing steps, e.g. `logger.LogWarning`
-  vs a context collector).
+- **Migration warning**: emit via `logger.LogWarning`, which appends to
+  `context.Warnings` (rendered by the Reporter's "Warnings — Manual Review" section).
 
 ## Acceptance Criteria
 

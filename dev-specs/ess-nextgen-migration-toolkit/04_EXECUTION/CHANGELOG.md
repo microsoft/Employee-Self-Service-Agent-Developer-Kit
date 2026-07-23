@@ -27,9 +27,13 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
   `CustomizationComponent` now hydrates `statecode`/`statuscode` (from the componentjson
   attributes already fetched during discovery — no extra call). `supported_modes=("READONLY","WRITEBACK")`.
   Added unit tests (trigger detection + both steps + idempotency) and golden tests.
-  - **Note (UNCONFIRMED):** the Inactive `statecode=1`/`statuscode=2` values are
-    confirmed, but whether a plain Web API PATCH persists botcomponent state (vs a
-    dedicated state-change) is confirmed live under TASK-009.
+  - **State semantics confirmed:** the Dataverse `botcomponent` table reference
+    lists `statecode` (0=Active / 1=Inactive) and `statuscode` as **writable**
+    columns, so `name`/`statecode`/`statuscode` are set via a normal
+    `PATCH /botcomponents(id)`. The only open live item (TASK-009) is whether a
+    single PATCH may combine the State change with content (`data`) when a topic is
+    also rewritten by another rule — if not, the Writeback step splits state into
+    its own PATCH.
   - **Scope:** an ESS topic's editable dialog is the botcomponent `data` YAML +
     record fields only; the sibling `.xml` (`msdyn_employeeselfservicetemplateconfigs`,
     a managed Workday scenario template config) is a separate entity, excluded from

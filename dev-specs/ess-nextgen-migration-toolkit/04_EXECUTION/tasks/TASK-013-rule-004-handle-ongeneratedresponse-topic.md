@@ -44,11 +44,12 @@ target.set("statuscode", _INACTIVE_STATUSCODE)
 Identical mechanism to RULE-003 (TASK-012) — see its "Bring-up findings" section:
 the topic title/enabled state are the botcomponent `name` + `statecode`/`statuscode`
 record fields (not the `data` YAML); the trigger type is `beginDialog.kind` in
-`data`; the Inactive `statecode`/`statuscode` values are **UNCONFIRMED** and must
-be isolated as constants + confirmed live under TASK-009; idempotency (MIG-005)
-skips a topic already Inactive with a `[DEPRECATED]`-prefixed `name`. Consider a
-shared `_deprecate_topic` helper so RULE-003 and RULE-004 share the disable +
-title-prefix logic and differ only in the trigger they match.
+`data`; the Inactive `statecode=1`/`statuscode=2` values are **confirmed** by the
+Dataverse `botcomponent` table reference (both writable, set via a normal PATCH),
+with the single-PATCH state+content combination the only TASK-009 live item;
+idempotency (MIG-005) skips a topic already Inactive with a `[DEPRECATED]`-prefixed
+`name`. Implemented as the shared `DeprecateTriggerTopicStep` base so RULE-003 and
+RULE-004 share the disable + title-prefix logic and differ only in the trigger.
 
 ## Acceptance Criteria
 

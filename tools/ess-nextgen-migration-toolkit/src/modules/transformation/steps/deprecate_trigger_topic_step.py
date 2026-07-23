@@ -12,9 +12,14 @@ the title and enabled state are **record fields** (botcomponent ``name`` /
 edits on the ``WritebackPlan`` and never rewrites ``data``.
 
 .. note::
-   The Inactive ``statecode=1`` / ``statuscode=2`` values are confirmed, but whether
-   a plain Web API PATCH persists them for ``botcomponent`` (vs a dedicated
-   state-change) is **UNCONFIRMED** — confirm live under TASK-009.
+   Per the Dataverse ``botcomponent`` table reference, ``statecode`` (0=Active,
+   1=Inactive) and ``statuscode`` are **writable** columns, so ``name`` /
+   ``statecode`` / ``statuscode`` are set via a normal ``PATCH /botcomponents(id)``.
+   The only live-confirmation item (TASK-009) is whether a *single* PATCH may
+   combine the State change with content columns (e.g. ``data``) when a topic is
+   also rewritten by another rule — if not, the Writeback step emits the state
+   fields as a separate PATCH.
+   https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/botcomponent
 """
 
 from __future__ import annotations
@@ -30,8 +35,9 @@ _BOTCOMPONENTS_ENTITY = "botcomponents"
 _NAME_FIELD = "name"
 _STATECODE_FIELD = "statecode"
 _STATUSCODE_FIELD = "statuscode"
-# Disable-but-preserve: standard Dataverse Inactive state (values confirmed; the
-# PATCH-vs-state-change mechanism is UNCONFIRMED — see module docstring / TASK-009).
+# Disable-but-preserve: the Dataverse botcomponent Inactive state — statecode=1
+# (Inactive) / statuscode=2 — both writable columns per the botcomponent table
+# reference, set via a normal PATCH /botcomponents(id).
 _INACTIVE_STATECODE = 1
 _INACTIVE_STATUSCODE = 2
 _DEPRECATED_MARKER = "[DEPRECATED]"
