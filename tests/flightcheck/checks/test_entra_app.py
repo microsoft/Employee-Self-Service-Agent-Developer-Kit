@@ -132,6 +132,13 @@ def _register_grants_for(client_id: str, grants) -> None:
 
 
 class TestScopeExposed:
+    @pytest.fixture(autouse=True)
+    def _isolate_from_connect_config(self, tmp_path, monkeypatch):
+        """Run in a clean cwd so ``_workday_hints`` cannot pick up a stray
+        ``.local/connect/workday/config.json`` — these tests drive the hint
+        exclusively through ``config``."""
+        monkeypatch.chdir(tmp_path)
+
     @responses.activate
     def test_fully_configured_returns_passed(self, graph) -> None:
         from flightcheck.checks.entra_app import _check_scope_exposed
@@ -219,6 +226,13 @@ class TestScopeExposed:
 
 
 class TestAdminConsent:
+    @pytest.fixture(autouse=True)
+    def _isolate_from_connect_config(self, tmp_path, monkeypatch):
+        """Run in a clean cwd so ``_workday_hints`` cannot pick up a stray
+        ``.local/connect/workday/config.json`` — these tests drive the hint
+        exclusively through ``config``."""
+        monkeypatch.chdir(tmp_path)
+
     @responses.activate
     def test_admin_consent_granted_returns_passed(self, graph) -> None:
         from flightcheck.checks.entra_app import _check_admin_consent
@@ -472,6 +486,13 @@ class TestAppAssignment:
     under AUTH-005). These tests pin that skill-3 renders it under the
     WD-ASSIGN-001 / "Entra App" identity."""
 
+    @pytest.fixture(autouse=True)
+    def _isolate_from_connect_config(self, tmp_path, monkeypatch):
+        """Run in a clean cwd so ``_workday_hints`` cannot pick up a stray
+        ``.local/connect/workday/config.json`` — these tests drive the hint
+        exclusively through ``config``."""
+        monkeypatch.chdir(tmp_path)
+
     @responses.activate
     def test_group_assigned_returns_passed(self, graph) -> None:
         from flightcheck.checks.entra_app import _check_app_assignment
@@ -644,6 +665,13 @@ class TestAppAssignmentScopesToConfiguredApp:
 
 
 class TestNameIdMapping:
+    @pytest.fixture(autouse=True)
+    def _isolate_from_connect_config(self, tmp_path, monkeypatch):
+        """Run in a clean cwd so ``_workday_hints`` cannot pick up a stray
+        ``.local/connect/workday/config.json`` — these tests drive the hint
+        exclusively through ``config``."""
+        monkeypatch.chdir(tmp_path)
+
     @responses.activate
     def test_override_policy_returns_passed(self, graph) -> None:
         from flightcheck.checks.entra_app import _check_nameid_mapping

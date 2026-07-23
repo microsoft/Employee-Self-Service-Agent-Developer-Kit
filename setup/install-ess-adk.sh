@@ -578,7 +578,7 @@ with open(sys.argv[6], 'w', encoding='utf-8') as f:
     # --- Run FlightCheck ---
     step "Running FlightCheck"
     ess_tel_complete success || true
-    "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope full --invocation-source installer
+    "$FLIGHTCHECK_PYTHON" scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always
     exit $?
 fi
 

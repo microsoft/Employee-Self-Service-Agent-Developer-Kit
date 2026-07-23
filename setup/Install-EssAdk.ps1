@@ -1088,18 +1088,18 @@ if ($FlightCheckOnly) {
             $prevEAP = $ErrorActionPreference
             $ErrorActionPreference = 'Continue'
             if ($pythonExe -eq 'py -3.12') {
-                & py -3.12 scripts/flightcheck/cli.py --scope full --invocation-source installer
+                & py -3.12 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always
             } elseif ($pythonExe -eq 'py -3') {
-                & py -3 scripts/flightcheck/cli.py --scope full --invocation-source installer
+                & py -3 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always
             } else {
-                & $pythonExe scripts/flightcheck/cli.py --scope full --invocation-source installer
+                & $pythonExe scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always
             }
             $ErrorActionPreference = $prevEAP
         } finally { Pop-Location }
     } else {
         Write-Warn2 'Python not found. Open a new terminal and run:'
         Write-Warn2 "  cd $workspace"
-        Write-Warn2 '  python scripts/flightcheck/cli.py --scope full'
+        Write-Warn2 '  python scripts/flightcheck/cli.py --scope full --select-targets always'
     }
     # Record the FlightCheck-only install as a success HERE, before the early
     # return below. This branch returns from inside the top-level try well

@@ -2838,6 +2838,47 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
     # was returned, masking every cert-classification branch below.
     now = datetime.now(timezone.utc)
 
+    # Scope to the operator-selected Workday SSO app when one is configured
+    # or pinned for this run. Historically WD-CONN-102 validated *every*
+    # federated Workday SAML enterprise app in the tenant and coalesced them
+    # by status; a tenant with several (dev/test/prod, demos, Okta trials)
+    # therefore lumped unrelated apps into one verdict, so a broken sibling
+    # could fail a correctly-configured deployment. The standalone flightcheck
+    # lets the operator pin the app they are verifying (interactive picker /
+    # ``--workday-app-id`` / persisted ``entraAppId``); we resolve it through
+    # the SAME ``_workday_hints`` path AUTH-005 / WD-ASSIGN-001 already use so
+    # every Workday-SSO-app check agrees on the target. When the pin matches a
+    # discovered SAML SP we narrow to it; when it matches none (e.g. the
+    # operator pinned the OAuth Workday app, which is not a SAML app) we keep
+    # the full set and say so rather than silently validating an unrelated
+    # sibling. No pin ⇒ unchanged all-apps behavior (single-checkpoint mode
+    # never sets one).
+    from ._workday_app_assignment import _workday_hints
+
+    app_id_hint, _ = _workday_hints(getattr(runner, "config", None))
+    scope_note = ""
+    if app_id_hint:
+        _hint = app_id_hint.strip().lower()
+        _matched = [
+            sp for sp in workday_sps
+            if str(sp.get("appId", "")).strip().lower() == _hint
+        ]
+        if _matched:
+            workday_sps = _matched
+            scope_note = (
+                "\n\nScoped to the configured Workday SSO app "
+                f"(entraAppId={app_id_hint}); other Workday SAML enterprise "
+                "apps in this tenant were not evaluated."
+            )
+        else:
+            scope_note = (
+                "\n\nNote: the configured Workday app "
+                f"(entraAppId={app_id_hint}) is not among the Workday SAML "
+                "SSO enterprise apps in this tenant, so it could not be used "
+                "to narrow this check; all discovered Workday SAML apps are "
+                "shown."
+            )
+
     # Classify each SP into exactly one of these buckets. Each list
     # holds (sp_summary_string, remediation_hint) tuples so the
     # output emitter can keep result text and remediation text
@@ -2967,7 +3008,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
     results: list[CheckResult] = []
 
     if failed_entries:
-        bodies = "\n".join(e["summary"] for e in failed_entries)
+        bodies = "\n".join(e["summary"] for e in failed_entries) + scope_note
         results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.FAILED.value,
@@ -3014,7 +3055,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
         ))
 
     if warning_entries:
-        bodies = "\n".join(e["summary"] for e in warning_entries)
+        bodies = "\n".join(e["summary"] for e in warning_entries) + scope_note
         # Hardening framing per AGENTS.md principle 9 — these aren't
         # functional blockers today, only operational risk.
         results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value],
@@ -3059,7 +3100,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
         ))
 
     if manual_entries:
-        bodies = "\n".join(e["summary"] for e in manual_entries)
+        bodies = "\n".join(e["summary"] for e in manual_entries) + scope_note
         intro = (
             "1 federated Workday SAML app has a healthy active signing "
             "certificate in Entra"
