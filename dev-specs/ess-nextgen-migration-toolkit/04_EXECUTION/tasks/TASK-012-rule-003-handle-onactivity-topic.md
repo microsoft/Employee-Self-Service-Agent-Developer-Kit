@@ -4,7 +4,7 @@
 | ---------- | --------------------------------- |
 | ID         | TASK-012                          |
 | Workstream | 2 — Incremental Migration Rules   |
-| Status     | TODO                              |
+| Status     | DONE                              |
 | Consumes   | RULE-003, TASK-006, TASK-016, TASK-017 |
 
 ## Description
@@ -62,23 +62,29 @@ target.set("statuscode", _INACTIVE_STATUSCODE)
 
 ## Acceptance Criteria
 
-- [ ] `HandleOnActivityTopicStep` is a `MigrationPipelineStep` registered in the
+- [x] `HandleOnActivityTopicStep` is a `MigrationPipelineStep` registered in the
   Transformation Pipeline after `ApplyDaCompatibilityStep`.
-- [ ] Each OnActivity topic is disabled and its title is prefixed once with
-  `[DEPRECATED]` (idempotent), with all original logic preserved and customer
-  guidance to move it under OnConversationStart or discard, per RULE-003.
-- [ ] The transform is **idempotent** and a pure function unit-tested independently.
-- [ ] Edits are staged via `context.writeback`; unchanged topics produce no write.
-- [ ] `supported_modes=("READONLY", "WRITEBACK")`.
-- [ ] Unit Tests and Golden Tests (YAML before/after fixtures) pass.
-- [ ] The framework architecture is unchanged.
+- [x] Each OnActivity topic is disabled (`statecode`/`statuscode` → Inactive pair)
+  and its `name` prefixed once with `[DEPRECATED]`, all topic `data` logic preserved
+  (never rewritten), and a manual-review warning emitted, per RULE-003.
+- [x] Idempotent (MIG-005): a topic already Inactive AND `[DEPRECATED]`-prefixed is
+  skipped; `topic_trigger_kind` + title-prefix are pure and unit-tested.
+- [x] Edits are staged via `context.writeback` (record fields `name`/`statecode`/
+  `statuscode`); unchanged/other-trigger topics produce no write.
+- [x] `supported_modes=("READONLY", "WRITEBACK")`.
+- [x] Unit Tests and a Golden Test pass.
+- [x] The framework architecture is unchanged.
 
 ## Deliverables
 
 - `src/modules/transformation/steps/handle_on_activity_topic_step.py`
-  (`HandleOnActivityTopicStep` + a pure `deprecate_on_activity_topic(data)` transform)
+  (`HandleOnActivityTopicStep`)
+- `src/modules/transformation/steps/deprecate_trigger_topic_step.py`
+  (shared `DeprecateTriggerTopicStep` base + `topic_trigger_kind` — also used by RULE-004)
+- `CustomizationComponent` extended with `statecode`/`statuscode` (hydrated in
+  `RetrieveCustomizationsStep`)
 - Registration in `build_transformation_pipeline`
-- Unit Tests + Golden Tests
+- Unit Tests + Golden Test
 
 ## References
 

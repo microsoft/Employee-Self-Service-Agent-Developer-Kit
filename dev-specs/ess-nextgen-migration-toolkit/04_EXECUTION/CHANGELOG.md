@@ -12,6 +12,29 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 
 ## [Unreleased]
 
+- **TASK-012 / TASK-013 DONE — RULE-003 & RULE-004: disable unsupported-trigger
+  topics.** Added `HandleOnActivityTopicStep` (RULE-003) and
+  `HandleGeneratedResponseTopicStep` (RULE-004), thin subclasses of a shared
+  `DeprecateTriggerTopicStep` base (`src/modules/transformation/steps/`), registered
+  in `build_transformation_pipeline` after `ReplaceEndConversationStep`. Each detects
+  its unsupported trigger from the topic's `data` YAML (`beginDialog.kind`, via a
+  lightweight regex — no YAML round-trip and `data` is never rewritten) and, for
+  matches, stages the **record-field** edits on the `WritebackPlan`: `name` prefixed
+  once with `[DEPRECATED]`, and `statecode`/`statuscode` set to the Inactive pair
+  (`1`/`2`) — disable-but-preserve per the migration philosophy — plus a manual-review
+  warning via `LogWarning` (rendered in the report's Warnings section). Idempotent
+  (MIG-005): a topic already Inactive AND `[DEPRECATED]`-prefixed is skipped.
+  `CustomizationComponent` now hydrates `statecode`/`statuscode` (from the componentjson
+  attributes already fetched during discovery — no extra call). `supported_modes=("READONLY","WRITEBACK")`.
+  Added unit tests (trigger detection + both steps + idempotency) and golden tests.
+  - **Note (UNCONFIRMED):** the Inactive `statecode=1`/`statuscode=2` values are
+    confirmed, but whether a plain Web API PATCH persists botcomponent state (vs a
+    dedicated state-change) is confirmed live under TASK-009.
+  - **Scope:** an ESS topic's editable dialog is the botcomponent `data` YAML +
+    record fields only; the sibling `.xml` (`msdyn_employeeselfservicetemplateconfigs`,
+    a managed Workday scenario template config) is a separate entity, excluded from
+    customization discovery, and out of scope for CA→DA dialog migration.
+
 - **TASK-011 DONE — RULE-002: Replace EndConversation node.** Added
   `ReplaceEndConversationStep` (`src/modules/transformation/steps/`), registered in
   `build_transformation_pipeline` after `ApplyDaCompatibilityStep`. It iterates

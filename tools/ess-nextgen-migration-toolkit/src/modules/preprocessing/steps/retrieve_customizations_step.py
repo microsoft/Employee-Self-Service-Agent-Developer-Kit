@@ -73,6 +73,8 @@ _COMPONENT_TYPE_KEY = "componenttype"
 _SCHEMANAME_KEY = "schemaname"
 _NAME_KEY = "name"
 _DATA_KEY = "data"
+_STATECODE_KEY = "statecode"
+_STATUSCODE_KEY = "statuscode"
 # TEMP debug aid (remove later): dump the filtered customizations to .local so the
 # maker can navigate them. .local is gitignored; skipped under pytest.
 _TOOLKIT_ROOT = Path(__file__).resolve().parents[4]
@@ -331,14 +333,21 @@ def _hydrate_component(
         component_type=component_type,
         component_type_label=label,
         data=_attr_str(attributes, _DATA_KEY),
+        statecode=_attr_int(attributes, _STATECODE_KEY),
+        statuscode=_attr_int(attributes, _STATUSCODE_KEY),
         layers=layers,
     )
 
 
 def _component_type(attributes: dict[str, Any]) -> int | None:
-    value = attributes.get(_COMPONENT_TYPE_KEY)
-    component_type = value.get("Value") if isinstance(value, dict) else None
-    return component_type if isinstance(component_type, int) else None
+    return _attr_int(attributes, _COMPONENT_TYPE_KEY)
+
+
+def _attr_int(attributes: dict[str, Any], key: str) -> int | None:
+    """Read an int attribute whose value is wrapped as ``{"Value": <int>}``."""
+    value = attributes.get(key)
+    inner = value.get("Value") if isinstance(value, dict) else None
+    return inner if isinstance(inner, int) else None
 
 
 def _attr_str(attributes: dict[str, Any], key: str) -> str | None:

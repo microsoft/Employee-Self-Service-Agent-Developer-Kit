@@ -4,7 +4,7 @@
 | ---------- | --------------------------------- |
 | ID         | TASK-013                          |
 | Workstream | 2 — Incremental Migration Rules   |
-| Status     | TODO                              |
+| Status     | DONE                              |
 | Consumes   | RULE-004, TASK-006, TASK-016, TASK-017 |
 
 ## Description
@@ -52,23 +52,26 @@ title-prefix logic and differ only in the trigger they match.
 
 ## Acceptance Criteria
 
-- [ ] `HandleGeneratedResponseTopicStep` is a `MigrationPipelineStep` registered in
+- [x] `HandleGeneratedResponseTopicStep` is a `MigrationPipelineStep` registered in
   the Transformation Pipeline after `ApplyDaCompatibilityStep`.
-- [ ] Each OnGeneratedResponse topic is disabled and its title is prefixed once
-  with `[DEPRECATED]` (idempotent), with all topic logic preserved, per RULE-004.
-- [ ] The transform is **idempotent** and a pure function unit-tested independently.
-- [ ] Edits are staged via `context.writeback`; unchanged topics produce no write.
-- [ ] `supported_modes=("READONLY", "WRITEBACK")`.
-- [ ] Unit Tests and Golden Tests (YAML before/after fixtures) pass.
-- [ ] The framework architecture is unchanged.
+- [x] Each OnGeneratedResponse topic is disabled (`statecode`/`statuscode` → Inactive
+  pair) and its `name` prefixed once with `[DEPRECATED]`, all topic `data` logic
+  preserved (never rewritten), and a manual-review warning emitted, per RULE-004.
+- [x] Idempotent (MIG-005): a topic already Inactive AND `[DEPRECATED]`-prefixed is
+  skipped; shares the `DeprecateTriggerTopicStep` base + `topic_trigger_kind` with RULE-003.
+- [x] Edits are staged via `context.writeback` (record fields `name`/`statecode`/
+  `statuscode`); unchanged/other-trigger topics produce no write.
+- [x] `supported_modes=("READONLY", "WRITEBACK")`.
+- [x] Unit Tests and a Golden Test pass.
+- [x] The framework architecture is unchanged.
 
 ## Deliverables
 
 - `src/modules/transformation/steps/handle_generated_response_topic_step.py`
-  (`HandleGeneratedResponseTopicStep` + a pure
-  `deprecate_generated_response_topic(data)` transform)
+  (`HandleGeneratedResponseTopicStep` — a thin subclass of the shared
+  `DeprecateTriggerTopicStep`, differing only in the trigger it matches)
 - Registration in `build_transformation_pipeline`
-- Unit Tests + Golden Tests
+- Unit Tests + Golden Test
 
 ## References
 

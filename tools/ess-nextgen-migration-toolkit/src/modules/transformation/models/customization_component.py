@@ -26,5 +26,10 @@ class CustomizationComponent:
     # The component's ``data`` payload (the topic YAML) that migration rewrites and
     # writeback applies.
     data: str | None = None
+    # Dataverse record state (botcomponent statecode/statuscode). Migration rules
+    # that disable a topic set these to the Inactive pair; hydrated so a rule can
+    # baseline + idempotency-check the current state.
+    statecode: int | None = None
+    statuscode: int | None = None
     # Raw msdyn_componentlayers rows for this component, preserved as-is.
     layers: list[dict[str, Any]] = field(default_factory=list)

@@ -252,6 +252,8 @@ def _component_json(
     schemaname: str = "msdyn_copilotforemployeeselfservicehr.topic.Foo",
     name: str | None = None,
     data: str | None = None,
+    statecode: int | None = None,
+    statuscode: int | None = None,
 ) -> str:
     """Build a minimal msdyn_componentjson string carrying botcomponent attributes."""
     attributes: list[dict[str, Any]] = [
@@ -262,6 +264,10 @@ def _component_json(
         attributes.append({"Key": "name", "Value": name})
     if data is not None:
         attributes.append({"Key": "data", "Value": data})
+    if statecode is not None:
+        attributes.append({"Key": "statecode", "Value": {"Value": statecode}})
+    if statuscode is not None:
+        attributes.append({"Key": "statuscode", "Value": {"Value": statuscode}})
     return json.dumps({"Attributes": attributes})
 
 
@@ -466,6 +472,8 @@ def test_select_customizations_hydrates_top_level_fields() -> None:
                 schemaname="msdyn_copilotforemployeeselfservicehr.topic.Telescope",
                 name="telescope buy",
                 data="kind: AdaptiveDialog\nmodelDescription: buy a telescope",
+                statecode=0,
+                statuscode=1,
             ),
         }
     ]
@@ -479,6 +487,8 @@ def test_select_customizations_hydrates_top_level_fields() -> None:
     assert component.component_type == 9
     assert component.component_type_label == "Topic (V2)"
     assert component.data == "kind: AdaptiveDialog\nmodelDescription: buy a telescope"
+    assert component.statecode == 0
+    assert component.statuscode == 1
     assert component.layers == layers
 
 
