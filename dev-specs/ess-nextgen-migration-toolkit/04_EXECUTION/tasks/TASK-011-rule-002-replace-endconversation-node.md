@@ -4,7 +4,7 @@
 | ---------- | --------------------------------- |
 | ID         | TASK-011                          |
 | Workstream | 2 — Incremental Migration Rules   |
-| Status     | TODO                              |
+| Status     | DONE                              |
 | Consumes   | RULE-002, TASK-006, TASK-016, TASK-017 |
 
 ## Description
@@ -35,20 +35,20 @@ topic; the plan diffs vs the original so an unchanged topic yields no write.
 
 ## Acceptance Criteria
 
-- [ ] `ReplaceEndConversationStep` is a `MigrationPipelineStep` registered in the
+- [x] `ReplaceEndConversationStep` is a `MigrationPipelineStep` registered in the
   Transformation Pipeline (`build_transformation_pipeline`) after
   `ApplyDaCompatibilityStep`.
-- [ ] Every EndConversation node in a topic's `data` YAML is replaced with an End
+- [x] Every EndConversation node in a topic's `data` YAML is replaced with an End
   All Topics (CancelAllDialogs) node per RULE-002, preserving node connectivity
   and all other topic logic.
-- [ ] The transform is **idempotent** (re-running yields no further change) and a
+- [x] The transform is **idempotent** (re-running yields no further change) and a
   pure function unit-tested independently of the step.
-- [ ] Edits are staged via `context.writeback` — the step never appends to
+- [x] Edits are staged via `context.writeback` — the step never appends to
   `pending_writes`; unchanged topics produce no write.
-- [ ] `supported_modes=("READONLY", "WRITEBACK")` (READONLY previews via
+- [x] `supported_modes=("READONLY", "WRITEBACK")` (READONLY previews via
   `pending_writes`; WRITEBACK persists — the Output stage, TASK-007, applies them).
-- [ ] Unit Tests and Golden Tests (YAML before/after fixtures) pass.
-- [ ] The framework architecture is unchanged.
+- [x] Unit Tests and Golden Tests (YAML before/after fixtures) pass.
+- [x] The framework architecture is unchanged.
 
 ## Deliverables
 

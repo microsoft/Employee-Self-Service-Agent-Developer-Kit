@@ -12,6 +12,19 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 
 ## [Unreleased]
 
+- **TASK-011 DONE — RULE-002: Replace EndConversation node.** Added
+  `ReplaceEndConversationStep` (`src/modules/transformation/steps/`), registered in
+  `build_transformation_pipeline` after `ApplyDaCompatibilityStep`. It iterates
+  `context.customizations` (the discovered Topic-V2 topics) and, per topic, rewrites
+  every `kind: EndConversation` node to `kind: CancelAllDialogs` (End All Topics)
+  in the topic's `data` YAML — a node-anchored line substitution that preserves the
+  list-item prefix, indentation, node ids, and all other logic (no YAML round-trip,
+  so untouched topics stay byte-identical). Edits are staged on the `WritebackPlan`
+  (chaining-aware via `target_for`), so a topic with no EndConversation node
+  produces no write. `supported_modes=("READONLY","WRITEBACK")`. Added unit tests
+  (pure transform + step wiring + chaining) and a golden test
+  (`tests/golden/test_replace_end_conversation_golden.py`).
+
 - **TASK-007 DONE — Output pipeline validation + generic Dataverse writeback +
   report rendering.** Replaced the postprocessing pass-through with
   `ValidateMigration`, `Writeback`, and `GenerateMigrationReport` steps. The
