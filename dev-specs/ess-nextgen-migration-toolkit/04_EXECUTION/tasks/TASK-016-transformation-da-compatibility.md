@@ -72,8 +72,9 @@ write. See `02_ARCHITECTURE/CUSTOMIZATION_DISCOVERY.md` section 6.
 - [x] `transform_bot_template` rewrites `default-*` → `gptagent-1.0.0`; idempotent.
 - [x] `transform_bot_configuration` injects the DA model into `aISettings`;
   idempotent; tolerant of non-JSON / unexpected shapes.
-- [x] Only changed records append to `context.pending_writes`
-  (`{"entity_set", "record_id", "changes"}`).
+- [x] Edits are staged on `context.writeback` (the coalescing, no-op-guarded
+  `WritebackPlan`); `context.pending_writes` derives one entry per changed record
+  (`{"entity_set", "record_id", "changes"}`) — unchanged records produce no write.
 - [x] Step is a `MigrationPipelineStep` and performs no Dataverse I/O.
 - [x] Unit tests cover each transform + the step's pending-write assembly.
 - [x] Registered as the first step of `build_transformation_pipeline`.

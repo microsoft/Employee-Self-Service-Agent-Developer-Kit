@@ -81,6 +81,8 @@ tools/
                 models/
                     execution_mode.py
                     migration_context.py
+                    customization_component.py
+                    writeback_plan.py
                 steps/
             postprocessing/
                 steps/

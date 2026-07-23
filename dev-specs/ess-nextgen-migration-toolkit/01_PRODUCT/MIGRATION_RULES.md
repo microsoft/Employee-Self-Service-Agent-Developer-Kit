@@ -231,6 +231,11 @@ package values.
 The intended implementation replaces existing Agent Instructions with the
 Declarative Agent instructions.
 
+> **Implementation blocked — pending ESS PM input.** The concrete Declarative
+> Agent *instructions* payload to apply is owned by the ESS PMs and not yet
+> provided, so its implementation task (TASK-010) is **BLOCKED**. The rule spec
+> itself is Ready; only the canonical instructions content is outstanding.
+
 Future enhancements may introduce semantic merge capabilities when supported.
 
 ### Validation

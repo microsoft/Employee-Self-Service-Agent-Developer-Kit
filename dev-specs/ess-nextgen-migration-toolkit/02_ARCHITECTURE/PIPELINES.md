@@ -303,10 +303,10 @@ input_pipeline = (
 transformation_pipeline = (
     TransformationPipeline()
         .use(ApplyDaCompatibilityStep())         # CA→DA model/template/config rewrite (TASK-016)
-        .use(OverrideAgentInstructionsStep())    # RULE-001 (TASK-010)
-        .use(ReplaceEndConversationStep())       # RULE-002
-        .use(HandleOnActivityTopicStep())        # RULE-003
-        .use(HandleGeneratedResponseTopicStep()) # RULE-004
+        # .use(OverrideAgentInstructionsStep())  # RULE-001 (TASK-010) — BLOCKED, pending ESS PM input
+        .use(ReplaceEndConversationStep())       # RULE-002 (TASK-011)
+        .use(HandleOnActivityTopicStep())        # RULE-003 (TASK-012)
+        .use(HandleGeneratedResponseTopicStep()) # RULE-004 (TASK-013)
 )
 
 # Output Pipeline (src/modules/postprocessing/) — validate, persist, and render

@@ -148,7 +148,7 @@ The toolkit should now perform one real migration end-to-end.
 
 | Task                                                              | Title                                  | Status | Consumes |
 | ----------------------------------------------------------------- | -------------------------------------- | ------ | -------- |
-| [TASK-010](tasks/TASK-010-rule-001-override-agent-metadata.md)    | RULE-001 — Override Agent Instructions | TODO | RULE-001 |
+| [TASK-010](tasks/TASK-010-rule-001-override-agent-metadata.md)    | RULE-001 — Override Agent Instructions | BLOCKED | RULE-001 |
 
 ---
 

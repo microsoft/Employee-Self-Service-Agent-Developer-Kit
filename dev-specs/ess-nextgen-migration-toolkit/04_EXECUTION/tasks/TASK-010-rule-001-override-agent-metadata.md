@@ -4,7 +4,7 @@
 | ---------- | ------------------------------ |
 | ID         | TASK-010                       |
 | Workstream | 1 — First Vertical Slice       |
-| Status     | TODO                           |
+| Status     | BLOCKED                        |
 | Consumes   | RULE-001                       |
 
 ## Description
@@ -12,6 +12,12 @@
 Implement RULE-001 — the **Agent Instructions** override — as a dedicated
 Transformation step. This is the piece of the agent-metadata migration that the
 foundational `ApplyDaCompatibilityStep` (TASK-016) does **not** cover.
+
+> **BLOCKED — pending ESS PM input.** The canonical Declarative Agent
+> *instructions* payload to apply (the Overview-page system prompt content) is
+> owned by the ESS PMs and not yet provided. Implementation is paused until that
+> content is confirmed; the step's mechanics (stage via `context.writeback`,
+> idempotent, WRITEBACK-persisted) are otherwise ready to build.
 
 Scope (this task):
 
@@ -26,9 +32,10 @@ TASK-016):
 * AI Model Kind (`PreviewModels` → `MicrosoftCopilotModels`)
 * Configuration model block
 
-Like every transformation step, it produces `context.pending_writes` (no direct
-Dataverse I/O); persistence is TASK-007 (Output), gated to WRITEBACK mode. A new
-step is expected here — it does not exist yet.
+Like every transformation step, it stages its edits on `context.writeback` (the
+coalescing, no-op-guarded `WritebackPlan`; no direct Dataverse I/O), from which
+`context.pending_writes` derives; persistence is TASK-007 (Output), gated to
+WRITEBACK mode. A new step is expected here — it does not exist yet.
 
 ## Acceptance Criteria
 
@@ -37,7 +44,8 @@ step is expected here — it does not exist yet.
   `ApplyDaCompatibilityStep`.
 - [ ] The agent's instructions are overridden with the DA instructions
   (idempotent — re-running does not double-apply).
-- [ ] The step appends to `context.pending_writes`; it performs no Dataverse I/O.
+- [ ] The step stages its edit on `context.writeback` (never appends to
+  `pending_writes` directly); it performs no Dataverse I/O.
 - [ ] The change is recorded to the report model (`LogChange` / `context.Changes`).
 - [ ] Unit Tests and Golden Tests pass; covered by TASK-009 end-to-end validation.
 - [ ] Quality gates pass.

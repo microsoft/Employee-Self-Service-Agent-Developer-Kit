@@ -12,6 +12,16 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 
 ## [Unreleased]
 
+- **TASK-010 (RULE-001, Override Agent Instructions) → BLOCKED; dev-spec
+  sanitization.** Marked TASK-010 `BLOCKED` (task file + TASKS.md index) pending
+  ESS PM input on the canonical Declarative Agent *instructions* payload to apply;
+  added the blocker note to RULE-001 in `MIGRATION_RULES.md`. Aligned the specs
+  with the shipped transformation stage: the `PIPELINES.md` pipeline example now
+  comments out the blocked RULE-001 step and tags RULE-002/003/004 with their
+  tasks; the writeback-plan staging model replaced the stale "append to
+  `pending_writes`" wording in TASK-010/TASK-016; and `REPOSITORY_STRUCTURE.md`
+  lists the new `customization_component.py` / `writeback_plan.py` models.
+
 - **TASK-012 / TASK-013 DONE — RULE-003 & RULE-004: disable unsupported-trigger
   topics.** Added `HandleOnActivityTopicStep` (RULE-003) and
   `HandleGeneratedResponseTopicStep` (RULE-004), thin subclasses of a shared
