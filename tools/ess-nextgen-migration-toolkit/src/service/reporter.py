@@ -232,15 +232,15 @@ class Reporter:
         return [
             intro,
             "",
-            f"- [ ] Review every mitigation in the table above for **{agent}** and confirm "
+            f"1. Review every mitigation in the table above for **{agent}** and confirm "
             "each disabled/deprecated topic matches your intent.",
-            "- [ ] Manually validate the migrated agent in **Copilot Studio** — open the "
+            "2. Manually validate the migrated agent in **Copilot Studio** — open the "
             "affected topics and check the applied changes.",
-            "- [ ] **Run your own end-to-end evaluations** against the agent (happy paths "
+            "3. **Run your own end-to-end evaluations** against the agent (happy paths "
             "and edge cases) and confirm responses meet your quality bar.",
-            "- [ ] Address every item under *⚠️ Warnings — Manual Review Required* above; "
+            "4. Address every item under *⚠️ Warnings — Manual Review Required* above; "
             "these need a human decision.",
-            "- [ ] Only then promote the target solution through your **ALM pipeline** "
+            "5. Only then promote the target solution through your **ALM pipeline** "
             "(dev → test → prod).",
         ]
 

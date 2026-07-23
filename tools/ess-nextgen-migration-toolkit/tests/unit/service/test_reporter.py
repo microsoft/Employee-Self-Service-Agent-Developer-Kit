@@ -99,9 +99,9 @@ def test_reporter_renders_customer_report_from_context_collectors(tmp_path: Path
         "| 1 | Escalate to Agent | OnEscalate trigger unsupported. "
         "| Implement escalation via a supported hand-off action. |"
     ) in report
-    # Next steps (actionable checkboxes) + closing.
+    # Next steps (numbered checklist) + closing.
     assert "## ✅ Next Steps — Action Required" in report
-    assert "- [ ] **Run your own end-to-end evaluations**" in report
+    assert "3. **Run your own end-to-end evaluations**" in report
     assert "_Thanks for using the **ESS Migration Toolkit (MTK)**._ 🚀" in report
 
 

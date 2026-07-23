@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-_DEFAULT_MAX_SESSIONS = 3
+_DEFAULT_MAX_SESSIONS = 10  # keep the most recent N session bundles, delete older ones
 # Generic, product-agnostic default. Domain callers (e.g. the ESS toolkit) pass
 # their own report filename via ``report_filename``.
 DEFAULT_REPORT_FILENAME = "telemetry_report.md"

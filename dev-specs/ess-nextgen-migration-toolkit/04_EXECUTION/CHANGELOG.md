@@ -49,7 +49,7 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
     **🔧 Migration Mitigations by Component** table (Component Type | Component |
     Mitigations Applied, one row per topic), **⚠️ Warnings** / **❌ Errors** tables
     (# | Component | Reason | Recommendation), a **✅ Next Steps — Action Required**
-    checkbox checklist (validate + run your own end-to-end evals before promoting), and a
+    numbered checklist (validate + run your own end-to-end evals before promoting), and a
     closing "Thanks for using the ESS Migration Toolkit (MTK)."
   - Node `kind:` tokens are analysis-sourced; confirm live under TASK-009.
 

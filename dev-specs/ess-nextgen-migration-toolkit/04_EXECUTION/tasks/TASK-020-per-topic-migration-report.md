@@ -36,7 +36,7 @@ Implementation:
   Component** (Component Type | Component | Mitigations Applied (Rules), one row per
   topic with all rules' mitigations merged via `<br>`), **Warnings** / **Errors**
   (numbered `# | Component | Reason/Error | Recommendation` tables), **Next Steps —
-  Action Required** (checkbox checklist: validate + run your own end-to-end evals before
+  Action Required** (numbered checklist: validate + run your own end-to-end evals before
   promoting), a run status banner + emoji section headers, and a closing "Thanks for
   using the ESS Migration Toolkit (MTK)."
 
