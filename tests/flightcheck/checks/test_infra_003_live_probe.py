@@ -103,11 +103,13 @@ class TestLiveProbeOutcomes:
         assert row.status == Status.FAILED.value
         assert "UNREACHABLE from Power Platform egress" in row.result
         assert "DLP block" in row.result
-        # Five-field role-aware finding is still emitted (AC5).
-        assert "Impact:" in row.remediation
+        # Five-field Shared Steps role-aware finding is still emitted (AC5).
         assert "Probable cause:" in row.remediation
+        assert "Configuration Area or Scope:" in row.remediation
         assert "What it implies:" in row.remediation
         assert "Next steps:" in row.remediation
+        assert "Responsible role:" in row.remediation
+        assert "Impact:" not in row.remediation
         assert Role.SERVICENOW_ADMIN.value in row.roles
         assert Role.POWER_PLATFORM_ADMIN.value in row.roles
 

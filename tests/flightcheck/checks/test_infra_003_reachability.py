@@ -79,9 +79,26 @@ class TestEnumeration:
         eps = _discover_external_endpoints(runner)
         assert len(eps) == 1
 
-    def test_entries_without_url_are_skipped(self):
+    def test_entries_without_url_surface_as_unverifiable(self):
+        # No endpoint URL recorded -> surfaced as an unverifiable endpoint
+        # (host=None), never dropped silently.
         runner = _runner({"Workday": {"tenant": "contoso"}})
-        assert _discover_external_endpoints(runner) == []
+        eps = _discover_external_endpoints(runner)
+        assert len(eps) == 1
+        assert eps[0].system == "Workday"
+        assert eps[0].host is None
+        assert eps[0].url == ""
+
+    def test_unenumerable_endpoint_named_in_manual_row(self):
+        # A system with no endpoint URL is named in the MANUAL row, not skipped.
+        runner = _runner({"Workday": {"tenant": "contoso"}})
+        results = check_external_endpoint_reachability(runner)
+
+        assert len(results) == 1
+        row = results[0]
+        assert row.status == Status.MANUAL.value
+        assert "Workday" in row.result
+        assert "no endpoint URL recorded" in row.result
 
     def test_extracts_explicit_port_from_url(self):
         runner = _runner({
