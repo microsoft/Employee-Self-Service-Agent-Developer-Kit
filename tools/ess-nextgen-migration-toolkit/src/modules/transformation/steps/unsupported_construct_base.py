@@ -1,25 +1,22 @@
-"""Shared base for topic-trigger deprecation rules (RULE-003, RULE-004).
+"""Base classes for handling CA constructs that are unsupported in DA.
 
-Some topic triggers (``OnActivity``, ``OnGeneratedResponse``) have no Declarative
-Agent equivalent. Per the migration philosophy the toolkit never deletes customer
-logic — it **disables** the topic (Inactive statecode/statuscode) and prefixes its
-title with ``[DEPRECATED]`` (once), preserving all nodes/expressions, and emits a
-manual-review warning.
+Two scenarios, one mitigation (disable-but-preserve): a topic is disabled +
+``[DEPRECATED]``-prefixed either because (a) its **trigger** type is unsupported,
+or (b) it uses an unsupported **node**. Each concrete rule is a thin subclass that
+supplies the specific construct kind and a tailored, user-facing mitigation
+message (why it's unsupported + what to do instead) — the business identity lives
+in the subclass; the mechanics live here.
 
-The trigger type is read from the topic's ``data`` YAML (``beginDialog.kind``);
-the title and enabled state are **record fields** (botcomponent ``name`` /
-``statecode`` / ``statuscode``), not the YAML — so this rule stages record-field
-edits on the ``WritebackPlan`` and never rewrites ``data``.
+The topic ``data`` is never rewritten. Record-field edits (``name`` /
+``statecode`` / ``statuscode``) are staged on the ``WritebackPlan`` (coalesced
+across rules), a manual-review warning is emitted, and a per-topic change is
+recorded for the report.
 
 .. note::
-   Per the Dataverse ``botcomponent`` table reference, ``statecode`` (0=Active,
-   1=Inactive) and ``statuscode`` are **writable** columns, so ``name`` /
-   ``statecode`` / ``statuscode`` are set via a normal ``PATCH /botcomponents(id)``.
-   The only live-confirmation item (TASK-009) is whether a *single* PATCH may
-   combine the State change with content columns (e.g. ``data``) when a topic is
-   also rewritten by another rule — if not, the Writeback step emits the state
-   fields as a separate PATCH.
-   https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/botcomponent
+   Inactive ``statecode=1`` / ``statuscode=2`` are writable botcomponent columns
+   (Dataverse botcomponent reference), set via a normal ``PATCH /botcomponents(id)``.
+   Whether one PATCH may combine the state change with content is confirmed live
+   under TASK-009.
 """
 
 from __future__ import annotations
@@ -36,9 +33,6 @@ _BOTCOMPONENTS_ENTITY = "botcomponents"
 _NAME_FIELD = "name"
 _STATECODE_FIELD = "statecode"
 _STATUSCODE_FIELD = "statuscode"
-# Disable-but-preserve: the Dataverse botcomponent Inactive state — statecode=1
-# (Inactive) / statuscode=2 — both writable columns per the botcomponent table
-# reference, set via a normal PATCH /botcomponents(id).
 _INACTIVE_STATECODE = 1
 _INACTIVE_STATUSCODE = 2
 _DEPRECATED_MARKER = "[DEPRECATED]"
@@ -50,39 +44,34 @@ _BEGIN_DIALOG_RE = re.compile(r"(?m)^beginDialog:[ \t]*$")
 _KIND_RE = re.compile(r"(?m)^[ \t]+kind:[ \t]*(?P<kind>[A-Za-z0-9_]+)")
 
 
-class DeprecateTriggerTopicStep(MigrationPipelineStep):
-    """Disable + [DEPRECATED]-prefix topics whose trigger is unsupported in DA.
-
-    ``triggers`` maps each unsupported ``beginDialog.kind`` this rule handles to a
-    short customer guidance string, so one step can cover several related triggers
-    (e.g. RULE-006) while RULE-003/004 each pass a single-entry mapping.
-    """
+class UnsupportedTopicTriggerStep(MigrationPipelineStep):
+    """Base: disable + deprecate a topic whose trigger is a specific unsupported kind."""
 
     def __init__(
         self,
         logger: Logger,
         *,
         name: str,
-        description: str,
+        trigger_kind: str,
         rule_id: str,
         rule_name: str,
-        triggers: dict[str, str],
+        mitigation: str,
     ) -> None:
         super().__init__(
             name=name,
-            description=description,
+            description=f"Disable + deprecate unsupported '{trigger_kind}' topics ({rule_id}).",
             supported_modes=("READONLY", "WRITEBACK"),
         )
         self._logger = logger
+        self._trigger_kind = trigger_kind
         self._rule_id = rule_id
         self._rule_name = rule_name
-        self._triggers = triggers
+        self._mitigation = mitigation
 
     def execute(self, context: MigrationContext) -> MigrationContext:
-        deprecated = 0
+        disabled = 0
         for component in context.customizations.values():
-            kind = topic_trigger_kind(component.data)
-            if kind is None or kind not in self._triggers:
+            if topic_trigger_kind(component.data) != self._trigger_kind:
                 continue
             if deprecate_topic(
                 context,
@@ -90,18 +79,71 @@ class DeprecateTriggerTopicStep(MigrationPipelineStep):
                 component,
                 rule_id=self._rule_id,
                 rule_name=self._rule_name,
-                reason=f"unsupported '{kind}' trigger",
-                guidance=self._triggers[kind],
+                reason=f"unsupported '{self._trigger_kind}' trigger",
+                guidance=self._mitigation,
                 pipeline_step=self.name(),
             ):
-                deprecated += 1
-
+                disabled += 1
         self._logger.LogInfo(
-            f"{self._rule_id} deprecated {deprecated} unsupported-trigger topic(s).",
+            f"{self._rule_id} disabled {disabled} '{self._trigger_kind}' topic(s).",
             pipeline_stage="Transformation",
             pipeline_step=self.name(),
         )
         return context
+
+
+class UnsupportedNodeStep(MigrationPipelineStep):
+    """Base: disable + deprecate a topic that uses a specific unsupported node kind."""
+
+    def __init__(
+        self,
+        logger: Logger,
+        *,
+        name: str,
+        node_kind: str,
+        rule_id: str,
+        rule_name: str,
+        mitigation: str,
+    ) -> None:
+        super().__init__(
+            name=name,
+            description=f"Disable + deprecate topics using the '{node_kind}' node ({rule_id}).",
+            supported_modes=("READONLY", "WRITEBACK"),
+        )
+        self._logger = logger
+        self._node_kind = node_kind
+        self._rule_id = rule_id
+        self._rule_name = rule_name
+        self._mitigation = mitigation
+        self._node_re = re.compile(
+            rf"(?m)^[ \t]*(?:-[ \t]*)?kind:[ \t]*{re.escape(node_kind)}[ \t]*$"
+        )
+
+    def execute(self, context: MigrationContext) -> MigrationContext:
+        disabled = 0
+        for component in context.customizations.values():
+            if not self._uses_node(component.data):
+                continue
+            if deprecate_topic(
+                context,
+                self._logger,
+                component,
+                rule_id=self._rule_id,
+                rule_name=self._rule_name,
+                reason=f"uses unsupported '{self._node_kind}' node",
+                guidance=self._mitigation,
+                pipeline_step=self.name(),
+            ):
+                disabled += 1
+        self._logger.LogInfo(
+            f"{self._rule_id} disabled {disabled} topic(s) using the '{self._node_kind}' node.",
+            pipeline_stage="Transformation",
+            pipeline_step=self.name(),
+        )
+        return context
+
+    def _uses_node(self, data: Any) -> bool:
+        return isinstance(data, str) and bool(data) and self._node_re.search(data) is not None
 
 
 def deprecate_topic(
@@ -117,13 +159,11 @@ def deprecate_topic(
 ) -> bool:
     """Disable + [DEPRECATED]-prefix a topic (idempotent), warn, and record the change.
 
-    Shared by every "unsupported construct" rule (unsupported trigger *or*
-    unsupported node) — the mitigation is uniform: disable the topic
-    (``statecode``/``statuscode`` → Inactive), prefix its ``name`` with
-    ``[DEPRECATED]`` once, preserve all logic, emit a manual-review warning, and
-    record a per-topic change for the report. Stages record-field edits on the
-    ``WritebackPlan`` (coalesced across rules). Returns ``True`` when the topic was
-    newly deprecated, ``False`` when it was already migrated (MIG-005).
+    Uniform mitigation for any unsupported construct (trigger or node): disable the
+    topic (``statecode``/``statuscode`` → Inactive), prefix ``name`` with
+    ``[DEPRECATED]`` once, preserve all logic, warn, and record a per-topic change.
+    Stages record-field edits on the ``WritebackPlan`` (coalesced across rules).
+    Returns ``True`` when newly deprecated, ``False`` when already migrated (MIG-005).
     """
     if _already_migrated(component):
         return False

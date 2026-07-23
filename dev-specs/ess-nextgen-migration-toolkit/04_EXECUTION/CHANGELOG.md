@@ -15,17 +15,29 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 - **RULE-006 / RULE-007 + per-topic migration report (TASK-018/019/020).** Handled
   the rest of the CA→DA *unsupported* constructs from the component-support analysis
   with a uniform disable-but-preserve mitigation, and gave the report a per-topic view.
-  - **RULE-006 — Disable Unsupported-Trigger Topics** (`DisableUnsupportedTriggerTopicsStep`):
-    disables + `[DEPRECATED]`-prefixes topics whose trigger is `OnUnknownIntent`,
-    `OnPlanComplete`, `OnSystemRedirect`, `OnSelectIntent`, or `OnEscalate`. The shared
-    `DeprecateTriggerTopicStep` base was generalized to a `{trigger: guidance}` mapping.
-  - **RULE-007 — Disable Topics With Unsupported Nodes** (`DisableUnsupportedNodeTopicsStep`):
-    disables + deprecates any topic whose `data` uses an unsupported node kind
-    (`service.constants.UNSUPPORTED_TOPIC_NODES` — AnswerQuestionWithAI, RecognizeIntent,
-    SearchAndSummarizeContent, TransferConversationV2, ConversationHistory,
-    InvokeAIBuilderModelAction, IncludeSelectedTopics), naming the found node(s) in the
-    report. `data` is never rewritten (no partial-node mitigation).
-  - Both reuse a shared `deprecate_topic` action (disable state + `[DEPRECATED]` name +
+  Each unsupported construct is now its own thin `Step` subclass carrying a tailored,
+  user-facing mitigation message, over two shared abstract bases in
+  `unsupported_construct_base.py`:
+  - **`UnsupportedTopicTriggerStep`** (base) — matches one trigger via
+    `beginDialog.kind` and deprecates the topic.
+  - **`UnsupportedNodeStep`** (base) — matches one node `kind:` token via a
+    line-anchored regex over `data` and deprecates the topic.
+  - **RULE-006 — Unsupported-Trigger Topics** (`HandleOnUnknownIntentTopicStep`,
+    `HandleOnPlanCompleteTopicStep`, `HandleOnSystemRedirectTopicStep`,
+    `HandleOnSelectIntentTopicStep`, `HandleOnEscalateTopicStep`): each disables +
+    `[DEPRECATED]`-prefixes topics whose trigger is `OnUnknownIntent`, `OnPlanComplete`,
+    `OnSystemRedirect`, `OnSelectIntent`, or `OnEscalate` respectively.
+  - **RULE-007 — Topics With Unsupported Nodes** (`HandleAnswerQuestionWithAINodeStep`,
+    `HandleRecognizeIntentNodeStep`, `HandleSearchAndSummarizeContentNodeStep`,
+    `HandleTransferConversationV2NodeStep`, `HandleConversationHistoryNodeStep`,
+    `HandleInvokeAIBuilderModelActionNodeStep`, `HandleIncludeSelectedTopicsNodeStep`):
+    each disables + deprecates any topic whose `data` uses its unsupported node kind,
+    naming the found node in the report. `data` is never rewritten (no partial-node
+    mitigation). The node `kind:` token now lives on each step (no shared constant).
+  - RULE-003 (`HandleOnActivityTopicStep`) and RULE-004
+    (`HandleGeneratedResponseTopicStep`) were reworked to subclass
+    `UnsupportedTopicTriggerStep` on the same footing.
+  - All reuse a shared `deprecate_topic` action (disable state + `[DEPRECATED]` name +
     preserve logic + warn + record), so a topic disabled by multiple reasons coalesces to
     one PATCH while recording each reason.
   - **Per-topic report (TASK-020):** every topic rule (RULE-002/003/004/006/007) records a
@@ -54,7 +66,7 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 - **TASK-012 / TASK-013 DONE — RULE-003 & RULE-004: disable unsupported-trigger
   topics.** Added `HandleOnActivityTopicStep` (RULE-003) and
   `HandleGeneratedResponseTopicStep` (RULE-004), thin subclasses of a shared
-  `DeprecateTriggerTopicStep` base (`src/modules/transformation/steps/`), registered
+  `UnsupportedTopicTriggerStep` base (`src/modules/transformation/steps/`), registered
   in `build_transformation_pipeline` after `ReplaceEndConversationStep`. Each detects
   its unsupported trigger from the topic's `data` YAML (`beginDialog.kind`, via a
   lightweight regex — no YAML round-trip and `data` is never rewritten) and, for

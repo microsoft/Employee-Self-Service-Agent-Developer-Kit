@@ -80,8 +80,8 @@ target.set("statuscode", _INACTIVE_STATUSCODE)
 
 - `src/modules/transformation/steps/handle_on_activity_topic_step.py`
   (`HandleOnActivityTopicStep`)
-- `src/modules/transformation/steps/deprecate_trigger_topic_step.py`
-  (shared `DeprecateTriggerTopicStep` base + `topic_trigger_kind` — also used by RULE-004)
+- `src/modules/transformation/steps/unsupported_construct_base.py`
+  (shared `UnsupportedTopicTriggerStep` base + `topic_trigger_kind` — also used by RULE-004)
 - `CustomizationComponent` extended with `statecode`/`statuscode` (hydrated in
   `RetrieveCustomizationsStep`)
 - Registration in `build_transformation_pipeline`

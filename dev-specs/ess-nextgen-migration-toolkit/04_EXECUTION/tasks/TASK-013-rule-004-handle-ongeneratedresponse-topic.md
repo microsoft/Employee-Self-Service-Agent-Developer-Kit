@@ -48,7 +48,7 @@ record fields (not the `data` YAML); the trigger type is `beginDialog.kind` in
 Dataverse `botcomponent` table reference (both writable, set via a normal PATCH),
 with the single-PATCH state+content combination the only TASK-009 live item;
 idempotency (MIG-005) skips a topic already Inactive with a `[DEPRECATED]`-prefixed
-`name`. Implemented as the shared `DeprecateTriggerTopicStep` base so RULE-003 and
+`name`. Implemented as the shared `UnsupportedTopicTriggerStep` base so RULE-003 and
 RULE-004 share the disable + title-prefix logic and differ only in the trigger.
 
 ## Acceptance Criteria
@@ -59,7 +59,7 @@ RULE-004 share the disable + title-prefix logic and differ only in the trigger.
   pair) and its `name` prefixed once with `[DEPRECATED]`, all topic `data` logic
   preserved (never rewritten), and a manual-review warning emitted, per RULE-004.
 - [x] Idempotent (MIG-005): a topic already Inactive AND `[DEPRECATED]`-prefixed is
-  skipped; shares the `DeprecateTriggerTopicStep` base + `topic_trigger_kind` with RULE-003.
+  skipped; shares the `UnsupportedTopicTriggerStep` base + `topic_trigger_kind` with RULE-003.
 - [x] Edits are staged via `context.writeback` (record fields `name`/`statecode`/
   `statuscode`); unchanged/other-trigger topics produce no write.
 - [x] `supported_modes=("READONLY", "WRITEBACK")`.
@@ -70,7 +70,7 @@ RULE-004 share the disable + title-prefix logic and differ only in the trigger.
 
 - `src/modules/transformation/steps/handle_generated_response_topic_step.py`
   (`HandleGeneratedResponseTopicStep` — a thin subclass of the shared
-  `DeprecateTriggerTopicStep`, differing only in the trigger it matches)
+  `UnsupportedTopicTriggerStep`, differing only in the trigger it matches)
 - Registration in `build_transformation_pipeline`
 - Unit Tests + Golden Test
 

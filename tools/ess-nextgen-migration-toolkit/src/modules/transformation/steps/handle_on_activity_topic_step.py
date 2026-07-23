@@ -3,21 +3,21 @@
 from __future__ import annotations
 
 from core.logging import Logger
-from modules.transformation.steps.deprecate_trigger_topic_step import DeprecateTriggerTopicStep
+from modules.transformation.steps.unsupported_construct_base import UnsupportedTopicTriggerStep
 
 
-class HandleOnActivityTopicStep(DeprecateTriggerTopicStep):
-    """Disable and [DEPRECATED]-prefix every OnActivity topic (RULE-003)."""
+class HandleOnActivityTopicStep(UnsupportedTopicTriggerStep):
+    """Disable + deprecate every OnActivity topic (RULE-003)."""
 
     def __init__(self, logger: Logger) -> None:
         super().__init__(
             logger,
             name="HandleOnActivityTopic",
-            description="Disable + deprecate OnActivity topics (RULE-003).",
+            trigger_kind="OnActivity",
             rule_id="RULE-003",
             rule_name="Handle OnActivity Topic",
-            triggers={
-                "OnActivity": "Move its logic under an OnConversationStart topic, "
-                "or discard it if no longer needed.",
-            },
+            mitigation=(
+                "OnActivity has no DA equivalent. Move its user-context / setup logic "
+                "under an OnConversationStart topic, or discard it if no longer needed."
+            ),
         )

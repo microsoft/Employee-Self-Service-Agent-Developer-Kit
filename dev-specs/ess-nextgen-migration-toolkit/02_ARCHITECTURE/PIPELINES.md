@@ -299,7 +299,8 @@ input_pipeline = (
         .use(RetrieveCustomizationsStep())       # deps + componentlayers classification
 )
 
-# Transformation Pipeline (src/modules/transformation/) — one Step per rule.
+# Transformation Pipeline (src/modules/transformation/) — one Step per rule
+# (RULE-006/007 fan out to one thin step per construct).
 transformation_pipeline = (
     TransformationPipeline()
         .use(ApplyDaCompatibilityStep())         # CA→DA model/template/config rewrite (TASK-016)
@@ -307,8 +308,20 @@ transformation_pipeline = (
         .use(ReplaceEndConversationStep())       # RULE-002 (TASK-011)
         .use(HandleOnActivityTopicStep())        # RULE-003 (TASK-012)
         .use(HandleGeneratedResponseTopicStep()) # RULE-004 (TASK-013)
-        .use(DisableUnsupportedTriggerTopicsStep()) # RULE-006 (TASK-018) — additional triggers
-        .use(DisableUnsupportedNodeTopicsStep())    # RULE-007 (TASK-019) — unsupported nodes
+        # RULE-006 (TASK-018) — additional unsupported triggers, one step each
+        .use(HandleOnUnknownIntentTopicStep())
+        .use(HandleOnPlanCompleteTopicStep())
+        .use(HandleOnSystemRedirectTopicStep())
+        .use(HandleOnSelectIntentTopicStep())
+        .use(HandleOnEscalateTopicStep())
+        # RULE-007 (TASK-019) — unsupported nodes, one step each
+        .use(HandleAnswerQuestionWithAINodeStep())
+        .use(HandleRecognizeIntentNodeStep())
+        .use(HandleSearchAndSummarizeContentNodeStep())
+        .use(HandleTransferConversationV2NodeStep())
+        .use(HandleConversationHistoryNodeStep())
+        .use(HandleInvokeAIBuilderModelActionNodeStep())
+        .use(HandleIncludeSelectedTopicsNodeStep())
 )
 
 # Output Pipeline (src/modules/postprocessing/) — validate, persist, and render
@@ -698,10 +711,12 @@ Responsibilities
 
 Responsibilities
 
-- Execute Transformation Steps (one Step per rule) — deterministic business
-  transformations only. The first Step, `ApplyDaCompatibilityStep`, performs the
-  CA→DA model/template/config rewrite; the remaining Steps implement the
-  Migration Rules (RULE-001..004).
+- Execute Transformation Steps (one Step per rule; RULE-006/007 fan out to one
+  thin step per construct) — deterministic business transformations only. The
+  first Step, `ApplyDaCompatibilityStep`, performs the CA→DA model/template/config
+  rewrite; the remaining Steps implement the transformation Migration Rules
+  (RULE-002/003/004 and RULE-006/007; RULE-001 is BLOCKED, RULE-005 is a
+  validation rule).
 
 ### Writeback-plan contract (how a rule stages changes)
 

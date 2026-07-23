@@ -10,7 +10,10 @@
 >
 > A Migration Rule specifies how a Custom Engine Agent (CA) construct is transformed, overridden, preserved, validated, or deprecated during migration to Declarative Agents (DA).
 >
-> Every Migration Rule maps directly to exactly one Pipeline Step.
+> Every Migration Rule maps directly to one or more Pipeline Steps. Most rules are
+> exactly one step; the two broad-matrix "disable unsupported construct" rules
+> (RULE-006 triggers, RULE-007 nodes) fan out to one thin step per construct over a
+> shared base class.
 >
 > This document is intentionally a living specification and will evolve as additional MCS constructs become supported.
 
@@ -140,7 +143,8 @@ References
 
 # 6. Pipeline Mapping
 
-Every Migration Rule maps directly to one Pipeline Step. The rule steps run in
+Every Migration Rule maps to one or more Pipeline Steps (one for most rules; one
+thin step per construct for the broad-matrix RULE-006/007). The rule steps run in
 the **Transformation Pipeline** (`build_transformation_pipeline`,
 `src/modules/transformation/`), after the foundational DA-compatibility rewrite:
 
@@ -565,7 +569,11 @@ Disabled Topic
 
 ### Pipeline Step
 
-`DisableUnsupportedTriggerTopicsStep`
+One thin step per trigger, each subclassing the `UnsupportedTopicTriggerStep`
+base and supplying its trigger kind + tailored mitigation message:
+`HandleOnUnknownIntentTopicStep`, `HandleOnPlanCompleteTopicStep`,
+`HandleOnSystemRedirectTopicStep`, `HandleOnSelectIntentTopicStep`,
+`HandleOnEscalateTopicStep`.
 
 ### Motivation
 
@@ -624,7 +632,7 @@ P1
 Any topic whose `data` uses an unsupported conversational node:
 `IncludeSelectedTopics`, `InvokeAIBuilderModelAction`, `ConversationHistory`,
 `RecognizeIntent`, `TransferConversationV2`, `SearchAndSummarizeContent`,
-`AnswerQuestionWithAI` (`service.constants.UNSUPPORTED_TOPIC_NODES`).
+`AnswerQuestionWithAI`.
 
 ### Target Component
 
@@ -632,7 +640,12 @@ Disabled Topic
 
 ### Pipeline Step
 
-`DisableUnsupportedNodeTopicsStep`
+One thin step per node, each subclassing the `UnsupportedNodeStep` base and
+supplying its node kind + tailored mitigation message:
+`HandleAnswerQuestionWithAINodeStep`, `HandleRecognizeIntentNodeStep`,
+`HandleSearchAndSummarizeContentNodeStep`, `HandleTransferConversationV2NodeStep`,
+`HandleConversationHistoryNodeStep`, `HandleInvokeAIBuilderModelActionNodeStep`,
+`HandleIncludeSelectedTopicsNodeStep`.
 
 ### Motivation
 

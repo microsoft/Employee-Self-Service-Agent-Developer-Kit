@@ -10,23 +10,28 @@
 ## Description
 
 Implement RULE-007 — detect topics whose `data` uses an unsupported conversational
-node (`service.constants.UNSUPPORTED_TOPIC_NODES`: `IncludeSelectedTopics`,
-`InvokeAIBuilderModelAction`, `ConversationHistory`, `RecognizeIntent`,
-`TransferConversationV2`, `SearchAndSummarizeContent`, `AnswerQuestionWithAI`) and
-disable + deprecate the whole topic. Source of truth: the CA→DA component support
-analysis. These nodes have no DA equivalent and no automatic in-place mitigation
-today (tracked for later MCS waves), so — consistent with unsupported triggers —
-the topic is disabled and flagged rather than partially transformed.
+node (`IncludeSelectedTopics`, `InvokeAIBuilderModelAction`, `ConversationHistory`,
+`RecognizeIntent`, `TransferConversationV2`, `SearchAndSummarizeContent`,
+`AnswerQuestionWithAI`) and disable + deprecate the whole topic. Source of truth:
+the CA→DA component support analysis. These nodes have no DA equivalent and no
+automatic in-place mitigation today (tracked for later MCS waves), so — consistent
+with unsupported triggers — the topic is disabled and flagged rather than partially
+transformed.
 
-Delivered as `DisableUnsupportedNodeTopicsStep`, registered in
-`build_transformation_pipeline`. Detects node kinds via a line-anchored regex over
-`data` (read-only; `data` is never rewritten), then applies the shared
-`deprecate_topic` action, naming the specific unsupported node(s) in the per-topic
-report message (TASK-020).
+Delivered as one thin step per node, each subclassing the shared
+`UnsupportedNodeStep` base (which carries the node `kind:` token + a tailored
+mitigation message), registered in `build_transformation_pipeline`. Each step
+detects its node kind via a line-anchored regex over `data` (read-only; `data` is
+never rewritten), then applies the shared `deprecate_topic` action, naming the
+specific unsupported node in the per-topic report message (TASK-020).
 
 ## Acceptance Criteria
 
-- [x] `DisableUnsupportedNodeTopicsStep` registered in the Transformation Pipeline.
+- [x] One step per unsupported node (`HandleAnswerQuestionWithAINodeStep`,
+  `HandleRecognizeIntentNodeStep`, `HandleSearchAndSummarizeContentNodeStep`,
+  `HandleTransferConversationV2NodeStep`, `HandleConversationHistoryNodeStep`,
+  `HandleInvokeAIBuilderModelActionNodeStep`, `HandleIncludeSelectedTopicsNodeStep`)
+  registered in the Transformation Pipeline.
 - [x] Topics using any unsupported node are disabled + `[DEPRECATED]`-prefixed
   (idempotent, MIG-005), all logic preserved; clean topics untouched.
 - [x] The specific unsupported node(s) are named in the per-topic report change (RULE-007).
@@ -38,12 +43,17 @@ report message (TASK-020).
 
 - The exact YAML `kind:` tokens for the unsupported nodes are analysis-sourced;
   confirm them against live topic `data` under TASK-009. If a token differs,
-  update `UNSUPPORTED_TOPIC_NODES` (single source of truth).
+  update the `node_kind` on the corresponding `Handle*NodeStep` (each step owns
+  its own token — no shared constant).
 
 ## Deliverables
 
-- `src/modules/transformation/steps/disable_unsupported_node_topics_step.py`
-- `service/constants.py` — `UNSUPPORTED_TOPIC_NODES`
+- `src/modules/transformation/steps/unsupported_construct_base.py` —
+  `UnsupportedNodeStep` base + shared `deprecate_topic` action
+- `src/modules/transformation/steps/handle_answer_question_with_ai_node_step.py`,
+  `handle_recognize_intent_node_step.py`, `handle_search_and_summarize_content_node_step.py`,
+  `handle_transfer_conversation_v2_node_step.py`, `handle_conversation_history_node_step.py`,
+  `handle_invoke_ai_builder_model_action_node_step.py`, `handle_include_selected_topics_node_step.py`
 - Registration in `build_transformation_pipeline`; unit tests
 
 ## References
