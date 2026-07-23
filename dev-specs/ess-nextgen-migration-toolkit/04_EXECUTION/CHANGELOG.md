@@ -12,6 +12,24 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 
 ## [Unreleased]
 
+- **TASK-017 DONE — Writeback plan (coalescing + meaningful-change guard).** Added
+  `WritebackPlan` / `WritebackTarget`
+  (`src/modules/transformation/models/writeback_plan.py`), the shared accumulator
+  that every Transformation step now stages its edits on instead of appending to a
+  flat list. Keyed by `(entity_set, record_id)`, it gives **coalescing** (one PATCH
+  per record even when multiple steps/rules touch it), **chaining**
+  (`target.get()` returns the working value so rules compose on the same field),
+  and a **meaningful-change guard** (`pending_writes` derives by diffing working vs
+  original, so an unchanged value produces no write — no needless unmanaged
+  `Active` overlay over a clean managed base). `MigrationContext.pending_writes` is
+  now a read-only property deriving from `context.writeback`, so TASK-007's Output
+  contract is unchanged. Refactored `ApplyDaCompatibilityStep` (TASK-016) to stage
+  via the plan; reshaped TASK-011/012/013 (RULE-002/003/004) to consume
+  `context.customizations` topics and stage via the plan (with the concrete
+  pattern + golden-test expectations) so a worker can pick them up. Updated
+  `PIPELINES.md` (writeback-plan contract), `CUSTOMIZATION_DISCOVERY.md` §6–7
+  (incl. a future "overlay removal" note), and TASK-007/016 boundaries.
+
 - **Customization discovery: corrected the live Dataverse calls + rewrote the
   classifier (TASK-006).** Brought `RetrieveCustomizationsStep` in line with the
   live API after end-to-end bring-up:

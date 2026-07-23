@@ -8,6 +8,7 @@ from typing import Any
 from core.models import ExecutionContext
 from modules.transformation.models.customization_component import CustomizationComponent
 from modules.transformation.models.execution_mode import ExecutionMode
+from modules.transformation.models.writeback_plan import WritebackPlan
 
 
 @dataclass
@@ -55,6 +56,16 @@ class MigrationContext(ExecutionContext):
     # each DependencyMetadataInfoCollection entry whose dependentcomponentobjectid
     # is a customization. Carries the richer dependency metadata for those.
     customized_dependencies: list[dict[str, Any]] = field(default_factory=list, repr=False)
-    # Writeback payloads produced by the transformation module and applied by the
-    # output module. Each entry: {"entity_set", "record_id", "changes"}.
-    pending_writes: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    # Coalescing, no-op-guarded accumulator for writeback. Transformation steps
+    # stage field edits here (per record); ``pending_writes`` derives the writes.
+    writeback: WritebackPlan = field(default_factory=WritebackPlan, repr=False)
+
+    @property
+    def pending_writes(self) -> list[dict[str, Any]]:
+        """Writeback payloads for the output module, derived from ``writeback``.
+
+        Each entry is ``{"entity_set", "record_id", "changes"}``, coalesced to one
+        per record and containing only fields that genuinely changed (so an
+        unchanged record produces no write — no needless overlay).
+        """
+        return self.writeback.pending_writes()

@@ -183,9 +183,14 @@ Transformation stage rewrites, storing them raw on the context:
 ## 6. DA-compatibility transforms (`ApplyDaCompatibilityStep`)
 
 The first Transformation step. All three rewrites are **idempotent** — records
-already at DA values are left untouched and produce no write. Each changed record
-appends a payload to `context.pending_writes`
-(`{"entity_set", "record_id", "changes"}`) for the Output stage to persist.
+already at DA values are left untouched and produce no write. Each rewrite is
+**staged on the `WritebackPlan`** (`context.writeback`, see
+`04_EXECUTION/tasks/TASK-017-writeback-plan.md`) rather than appended directly:
+the step reads the working value (`target.get(field)`), transforms it, and stages
+the result (`target.set(field, …)`). `context.pending_writes`
+(`{"entity_set", "record_id", "changes"}`) derives from the plan — coalesced to
+one PATCH per record and containing only genuinely-changed fields, so an unchanged
+record never stamps a needless overlay.
 
 | # | Target                          | From (CA)                                     | To (DA)                                           |
 | - | ------------------------------- | --------------------------------------------- | ------------------------------------------------- |
@@ -209,11 +214,19 @@ Notes:
 ## 7. Writeback targeting (Output stage — forthcoming)
 
 The Output stage consumes `context.pending_writes` in **WRITEBACK** mode only
-(`ExecutionMode.WRITEBACK`). When `context.preferred_solution` is set (ALM
-customers), the writes target that solution — verified live in
-`GatherALMCustomerInputStep` via `GetPreferredSolution` so a typo cannot silently
-redirect writeback. In READONLY mode the pending writes are reported but not
-applied.
+(`ExecutionMode.WRITEBACK`). The list is already coalesced (one entry per record)
+and no-op-guarded by the `WritebackPlan`, so each entry maps to a single
+`update(f"{entity_set}({record_id})", changes)`. When
+`context.preferred_solution` is set (ALM customers), the writes target that
+solution — verified live in `GatherALMCustomerInputStep` via `GetPreferredSolution`
+so a typo cannot silently redirect writeback. In READONLY mode the pending writes
+are reported but not applied.
+
+> **Future — overlay removal.** The guard suppresses writes equal to the current
+> overlay value. If a transformed topic overlay becomes identical to the managed
+> base, the ideal is to *delete* the unmanaged overlay (revert to base) rather
+> than write a base-equal overlay; that base-equality removal is a future
+> enhancement, not yet implemented.
 
 ---
 

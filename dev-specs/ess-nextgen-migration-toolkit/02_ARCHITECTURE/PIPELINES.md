@@ -701,6 +701,42 @@ Responsibilities
   CA→DA model/template/config rewrite; the remaining Steps implement the
   Migration Rules (RULE-001..004).
 
+### Writeback-plan contract (how a rule stages changes)
+
+Transformation Steps **never** append to `pending_writes` directly. Each Step
+stages its edits on the shared `WritebackPlan` (`context.writeback`, TASK-017),
+keyed by `(entity_set, record_id)`:
+
+```python
+# A rule iterates its targets (topics from context.customizations, or the agent
+# bot) and stages the transformed value on the record's target:
+target = context.writeback.target(
+    "botcomponents", component.component_id, original={"data": component.data}
+)
+target.set("data", my_rule_transform(target.get("data")))
+```
+
+This gives three guarantees for free, so a rule author gets them without effort:
+
+- **Coalescing** — every Step editing the same record contributes to **one**
+  PATCH (not several that clobber each other).
+- **Chaining** — `target.get(field)` returns the *working* value, so a later rule
+  composes on an earlier rule's output for the same field (e.g. the topic `data`).
+- **Meaningful-change guard** — `context.pending_writes` derives by diffing the
+  working value vs the original baseline, so an unchanged record produces **no**
+  write — avoiding a needless unmanaged (`Active`) overlay over a clean managed
+  base.
+
+Rule transforms are **pure and idempotent**, and must **not reserialize untouched
+regions**: edit surgically (line-/node-anchored) and return the input unchanged on
+a no-op, rather than round-tripping the whole JSON/YAML (parse→dump), so a cosmetic
+reformat cannot trip the exact-string meaningful-change diff.
+
+For reporting/diagnostics, `context.writeback.target_for(entity_set, record_id)`
+(and `context.writeback.targets()`) expose each touched record's `original`
+(actual copy) and `working` (final modified copy) after all steps — a read-only
+lookup, not a second stored copy.
+
 ## Output Pipeline (`src/modules/postprocessing/`)
 
 Responsibilities

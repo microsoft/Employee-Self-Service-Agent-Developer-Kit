@@ -5,7 +5,7 @@
 | ID         | TASK-016                  |
 | Workstream | 0 — Repository Foundation |
 | Status     | DONE                      |
-| Consumes   | TASK-006, TASK-002        |
+| Consumes   | TASK-006, TASK-002, TASK-017 |
 
 ## Description
 
@@ -19,15 +19,18 @@ CA values (`PreviewModels` / `default-*`) and **block** the CA→DA transition.
 This step rewrites them.
 
 It consumes the agent artifacts hydrated by TASK-006
-(`context.agent_bot_record`, `context.agent_gpt_component`) and produces
-`context.pending_writes` for the Output stage (TASK-007) to persist. It performs
-**no** Dataverse I/O itself (transformation steps never call Dataverse directly).
+(`context.agent_bot_record`, `context.agent_gpt_component`) and **stages** its
+edits on the `WritebackPlan` (`context.writeback`, TASK-017) — from which
+`context.pending_writes` derives one coalesced, no-op-guarded PATCH per record for
+the Output stage (TASK-007) to persist. It performs **no** Dataverse I/O itself
+(transformation steps never call Dataverse directly).
 
-**Boundary.** This task is the *producer* of `pending_writes`; TASK-007 (Output)
-is the *consumer* that validates and persists them. Confirming the DA-compat
-field names (`template` / `configuration` / `data` / `botcomponentid`) against a
-**live** record is an end-to-end concern owned by TASK-009 (run under
-`./mtk.sh run --dev` in WRITEBACK mode) — it is not a per-step blocker here.
+**Boundary.** This task *stages* edits into the writeback plan; TASK-007 (Output)
+is the *consumer* that validates and persists the derived `pending_writes`.
+Confirming the DA-compat field names (`template` / `configuration` / `data` /
+`botcomponentid`) against a **live** record is an end-to-end concern owned by
+TASK-009 (run under `./mtk.sh run --dev` in WRITEBACK mode) — it is not a per-step
+blocker here.
 
 **Relationship to RULE-001.** This foundational step delivers the DA-compat
 *nomenclature* portion of the agent-metadata migration — Template, AI Model Kind,

@@ -5,7 +5,7 @@
 | ID         | TASK-007                  |
 | Workstream | 0 — Repository Foundation |
 | Status     | TODO                      |
-| Consumes   | TASK-015, TASK-004, TASK-005, TASK-016 |
+| Consumes   | TASK-015, TASK-004, TASK-005, TASK-016, TASK-017 |
 
 ## Description
 
@@ -18,10 +18,12 @@ the real steps:
 
 1. **ValidateMigration** — verify migrated components meet post-conditions
    (runs in both modes).
-2. **Writeback** — apply `context.pending_writes` (produced by the
-   Transformation stage, TASK-016) back to Dataverse via the DataverseClient
-   (TASK-004). Each pending write is
-   `{"entity_set", "record_id", "changes"}` → `update(f"{entity_set}({record_id})", changes)`.
+2. **Writeback** — apply `context.pending_writes` back to Dataverse via the
+   DataverseClient (TASK-004). The list is already **coalesced** (one entry per
+   record) and **no-op-guarded** (only genuinely-changed fields) by the
+   `WritebackPlan` (TASK-017), so each entry
+   `{"entity_set", "record_id", "changes"}` maps to a single
+   `update(f"{entity_set}({record_id})", changes)` — no de-duplication needed here.
    When `context.preferred_solution` is set (ALM customers, verified in
    `GatherALMCustomerInputStep`), the writes target that solution via the
    `MSCRM.SolutionUniqueName` request header. **WRITEBACK mode only** —

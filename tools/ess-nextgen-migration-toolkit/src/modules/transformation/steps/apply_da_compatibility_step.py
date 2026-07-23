@@ -12,8 +12,11 @@ block the CA->DA transition. We rewrite them:
 - bot ``template``: ``default-<version>`` -> ``gptagent-1.0.0``.
 - bot ``configuration`` (JSON): add ``aISettings.model = {"$kind": "MicrosoftCopilotModels"}``.
 
-The transforms are idempotent (already-DA values are left untouched). Only
-changed records produce a pending writeback for the output module.
+The transforms are idempotent (already-DA values are left untouched). Each step
+stages its edits on ``context.writeback`` (the coalescing, no-op-guarded
+``WritebackPlan``) rather than appending directly — so multiple steps targeting a
+record produce one PATCH, and an unchanged value produces no write (avoiding a
+needless unmanaged overlay). ``context.pending_writes`` derives the final list.
 """
 
 from __future__ import annotations
@@ -72,16 +75,20 @@ class ApplyDaCompatibilityStep(MigrationPipelineStep):
         if not record_id:
             return
 
-        changes: dict[str, Any] = {}
-        new_template, template_changed = transform_bot_template(bot.get(_BOT_TEMPLATE_FIELD))
-        if template_changed:
-            changes[_BOT_TEMPLATE_FIELD] = new_template
-        new_config, config_changed = transform_bot_configuration(bot.get(_BOT_CONFIGURATION_FIELD))
-        if config_changed:
-            changes[_BOT_CONFIGURATION_FIELD] = new_config
-
-        if changes:
-            _append_pending_write(context, _BOTS_ENTITY, record_id, changes)
+        target = context.writeback.target(
+            _BOTS_ENTITY,
+            record_id,
+            original={
+                _BOT_TEMPLATE_FIELD: bot.get(_BOT_TEMPLATE_FIELD),
+                _BOT_CONFIGURATION_FIELD: bot.get(_BOT_CONFIGURATION_FIELD),
+            },
+        )
+        # Read the working value (chains with any earlier step), transform, restage.
+        # The plan diffs vs the original, so a no-op transform yields no write.
+        new_template, _ = transform_bot_template(target.get(_BOT_TEMPLATE_FIELD))
+        target.set(_BOT_TEMPLATE_FIELD, new_template)
+        new_config, _ = transform_bot_configuration(target.get(_BOT_CONFIGURATION_FIELD))
+        target.set(_BOT_CONFIGURATION_FIELD, new_config)
 
     def _transform_gpt_component(self, context: MigrationContext) -> None:
         component = context.agent_gpt_component
@@ -96,14 +103,13 @@ class ApplyDaCompatibilityStep(MigrationPipelineStep):
             )
             return
 
-        new_data, data_changed = transform_gpt_data(component.get(_BOTCOMPONENT_DATA_FIELD))
-        if data_changed:
-            _append_pending_write(
-                context,
-                _BOTCOMPONENTS_ENTITY,
-                record_id,
-                {_BOTCOMPONENT_DATA_FIELD: new_data},
-            )
+        target = context.writeback.target(
+            _BOTCOMPONENTS_ENTITY,
+            record_id,
+            original={_BOTCOMPONENT_DATA_FIELD: component.get(_BOTCOMPONENT_DATA_FIELD)},
+        )
+        new_data, _ = transform_gpt_data(target.get(_BOTCOMPONENT_DATA_FIELD))
+        target.set(_BOTCOMPONENT_DATA_FIELD, new_data)
 
 
 def transform_bot_template(template: Any) -> tuple[Any, bool]:
@@ -147,11 +153,3 @@ def transform_gpt_data(data: Any) -> tuple[Any, bool]:
     )
     updated, hint_count = _MODEL_NAME_HINT_RE.subn("", updated)
     return updated, (kind_count > 0 or hint_count > 0)
-
-
-def _append_pending_write(
-    context: MigrationContext, entity_set: str, record_id: str, changes: dict[str, Any]
-) -> None:
-    context.pending_writes.append(
-        {"entity_set": entity_set, "record_id": record_id, "changes": changes}
-    )
