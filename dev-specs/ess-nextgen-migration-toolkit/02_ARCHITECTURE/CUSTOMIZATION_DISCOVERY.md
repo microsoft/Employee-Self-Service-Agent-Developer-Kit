@@ -216,7 +216,7 @@ Notes:
 The Output stage consumes `context.pending_writes` in **WRITEBACK** mode only
 (`ExecutionMode.WRITEBACK`). The list is already coalesced (one entry per record)
 and no-op-guarded by the `WritebackPlan`, so each entry maps to a single
-`update(f"{entity_set}({record_id})", changes)`. When
+`client.update(entity_set, record_id, changes)`. When
 `context.preferred_solution` is set (ALM customers), the writes target that
 solution — verified live in `GatherALMCustomerInputStep` via `GetPreferredSolution`
 so a typo cannot silently redirect writeback. In READONLY mode the pending writes

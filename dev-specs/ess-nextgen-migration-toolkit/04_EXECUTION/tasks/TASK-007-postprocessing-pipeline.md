@@ -4,7 +4,7 @@
 | ---------- | ------------------------- |
 | ID         | TASK-007                  |
 | Workstream | 0 — Repository Foundation |
-| Status     | TODO                      |
+| Status     | DONE                      |
 | Consumes   | TASK-015, TASK-004, TASK-005, TASK-016, TASK-017 |
 
 ## Description
@@ -23,7 +23,7 @@ the real steps:
    record) and **no-op-guarded** (only genuinely-changed fields) by the
    `WritebackPlan` (TASK-017), so each entry
    `{"entity_set", "record_id", "changes"}` maps to a single
-   `update(f"{entity_set}({record_id})", changes)` — no de-duplication needed here.
+   `client.update(entity_set, record_id, changes)` — no de-duplication needed here.
    When `context.preferred_solution` is set (ALM customers, verified in
    `GatherALMCustomerInputStep`), the writes target that solution via the
    `MSCRM.SolutionUniqueName` request header. **WRITEBACK mode only** —
@@ -51,18 +51,18 @@ correct is owned by TASK-009 (E2E, `--dev` WRITEBACK).
 
 ## Acceptance Criteria
 
-- [ ] `ValidateMigration` step verifies post-conditions on migrated components.
-- [ ] `Writeback` step applies `context.pending_writes` via DataverseClient —
+- [x] `ValidateMigration` step verifies post-conditions on migrated components.
+- [x] `Writeback` step applies `context.pending_writes` via DataverseClient —
   **WRITEBACK only**.
-- [ ] Writeback targets `context.preferred_solution` (when set) via the
+- [x] Writeback targets `context.preferred_solution` (when set) via the
   `MSCRM.SolutionUniqueName` header.
-- [ ] `Writeback` is auto-skipped in READONLY mode (mode-gating via
+- [x] `Writeback` is auto-skipped in READONLY mode (mode-gating via
   `MigrationPipelineStep.can_execute`).
-- [ ] `GenerateMigrationReport` renders `migration_report.md` via Reporter.
-- [ ] Output bundle contains exactly `migration_report.md` + `session.log`.
-- [ ] All steps are `MigrationPipelineStep` subclasses with `supported_modes`.
-- [ ] No transformation logic in this stage.
-- [ ] Quality gates pass.
+- [x] `GenerateMigrationReport` renders `migration_report.md` via Reporter.
+- [x] Output bundle contains exactly `migration_report.md` + `session.log`.
+- [x] All steps are `MigrationPipelineStep` subclasses with `supported_modes`.
+- [x] No transformation logic in this stage.
+- [x] Quality gates pass.
 
 ## Deliverables
 

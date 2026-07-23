@@ -263,3 +263,28 @@ def test_create_returns_record_id_from_odata_entity_id_header() -> None:
     record_id = client.create("bots", {"name": "Created"})
 
     assert record_id == "12345"
+
+
+def test_update_merges_per_request_headers_without_replacing_odata_headers() -> None:
+    seen_headers: list[httpx.Headers] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_headers.append(request.headers)
+        return httpx.Response(204)
+
+    client, _ = make_client(handler)
+
+    client.update(
+        "bots",
+        "record-id",
+        {"name": "Updated"},
+        headers={"MSCRM.SolutionUniqueName": "contoso_preferred"},
+    )
+
+    assert len(seen_headers) == 1
+    assert seen_headers[0]["MSCRM.SolutionUniqueName"] == "contoso_preferred"
+    assert seen_headers[0]["Accept"] == "application/json"
+    assert seen_headers[0]["OData-MaxVersion"] == "4.0"
+    assert seen_headers[0]["OData-Version"] == "4.0"
+    assert seen_headers[0]["Prefer"] == "odata.include-annotations=*"
+    assert seen_headers[0]["Authorization"] == "Bearer token-1"

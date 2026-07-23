@@ -88,6 +88,7 @@ def test_main_closes_logger_when_pipeline_execution_fails(
         session_manager = SimpleNamespace(
             paths=SimpleNamespace(
                 session_dir=tmp_path / "session",
+                report_path=tmp_path / "session" / "migration_report.md",
                 log_path=tmp_path / "session" / "session.log",
             )
         )
