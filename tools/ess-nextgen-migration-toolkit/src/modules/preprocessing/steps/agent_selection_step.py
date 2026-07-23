@@ -62,6 +62,7 @@ class AgentSelectionStep(MigrationPipelineStep):
 
         selection = _prompt_for_selection(len(agents))
         selected = agents[selection - 1]
+        context.discovered_agents = agents
         context.selected_agent_id = _string_field(selected, "botid")
         context.selected_agent_name = _string_field(selected, "name")
         context.selected_agent_schemaname = _string_field(selected, "schemaname")

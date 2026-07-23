@@ -40,9 +40,17 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
   - All reuse a shared `deprecate_topic` action (disable state + `[DEPRECATED]` name +
     preserve logic + warn + record), so a topic disabled by multiple reasons coalesces to
     one PATCH while recording each reason.
-  - **Per-topic report (TASK-020):** every topic rule (RULE-002/003/004/006/007) records a
-    structured `Change` via `record_topic_change`; the Reporter adds a **"Per-Topic Migration
-    Summary"** grouping changes by topic (rendered in READONLY previews too).
+  - **Migration report (TASK-020):** every topic rule (RULE-002/003/004/006/007) records a
+    structured `Change` via `record_topic_change` (now carrying `component_type`); the
+    Reporter renders a polished, fully-tabular `migration_report.md` with a status banner
+    and emoji section headers — **📋 Summary** (metrics table), **🌐 Environment**
+    (URL/tenant/user/target solution table), **🤖 Agents** (discovered ESS agents + selected),
+    **🧩 Customizations Extracted** (count + type/name/schema/state table), a
+    **🔧 Migration Mitigations by Component** table (Component Type | Component |
+    Mitigations Applied, one row per topic), **⚠️ Warnings** / **❌ Errors** tables
+    (# | Component | Reason | Recommendation), a **✅ Next Steps — Action Required**
+    checkbox checklist (validate + run your own end-to-end evals before promoting), and a
+    closing "Thanks for using the ESS Migration Toolkit (MTK)."
   - Node `kind:` tokens are analysis-sourced; confirm live under TASK-009.
 
 - **TASK-009 (End-to-End Framework Validation) → TODO (unblocked).** Its

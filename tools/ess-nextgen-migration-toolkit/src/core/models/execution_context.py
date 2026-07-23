@@ -42,6 +42,7 @@ class ChangeEntry:
     rule_id: str | None = None
     title: str | None = None
     component: str | None = None
+    component_type: str | None = None
     details: tuple[str, ...] = ()
 
 

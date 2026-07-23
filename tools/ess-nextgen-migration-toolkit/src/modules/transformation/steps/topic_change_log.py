@@ -19,6 +19,16 @@ def topic_label(component: CustomizationComponent) -> str:
     return component.name or component.schemaname or component.component_id
 
 
+def component_type_label(component: CustomizationComponent) -> str:
+    """A human-readable component-type label for the report (e.g. ``botcomponent / Topic (V2)``)."""
+    label = component.component_type_label or (
+        f"componenttype {component.component_type}"
+        if component.component_type is not None
+        else None
+    )
+    return f"botcomponent / {label}" if label else "botcomponent"
+
+
 def record_topic_change(
     logger: Logger,
     component: CustomizationComponent,
@@ -33,4 +43,5 @@ def record_topic_change(
         rule_id=rule_id,
         title=rule_name,
         component=topic_label(component),
+        component_type=component_type_label(component),
     )

@@ -33,6 +33,9 @@ class MigrationContext(ExecutionContext):
     selected_agent_id: str | None = None
     selected_agent_name: str | None = None
     selected_agent_schemaname: str | None = None
+    # All ESS agents discovered in the environment during selection (lightweight
+    # dicts: name/botid/statecode/schemaname), retained for the migration report.
+    discovered_agents: list[dict[str, Any]] = field(default_factory=list, repr=False)
     ess_solution_unique_name: str | None = None
     dataverse_client: Any = field(default=None, repr=False)
     # Raw ``bots({botid})`` record for the selected agent (holds template +

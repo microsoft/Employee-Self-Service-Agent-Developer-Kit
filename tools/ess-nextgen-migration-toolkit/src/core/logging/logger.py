@@ -224,6 +224,7 @@ class Logger:
         rule_id: str | None = None,
         title: str | None = None,
         component: str | None = None,
+        component_type: str | None = None,
         details: tuple[str, ...] = (),
     ) -> None:
         """Append a customer-channel change entry to the report model only."""
@@ -233,6 +234,7 @@ class Logger:
                 rule_id=rule_id,
                 title=title,
                 component=component,
+                component_type=component_type,
                 details=details,
             )
         )
