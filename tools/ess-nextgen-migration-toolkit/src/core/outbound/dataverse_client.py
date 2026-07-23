@@ -174,7 +174,14 @@ class DataverseClient:
             )
         return record_id
 
-    def update(self, entity_set: str, record_id: str, data: JsonDict) -> None:
+    def update(
+        self,
+        entity_set: str,
+        record_id: str,
+        data: JsonDict,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         """Update one Dataverse record without returning a payload."""
         self.__request(
             "PATCH",
@@ -182,6 +189,7 @@ class DataverseClient:
             json=data,
             operation="update",
             entity_set=entity_set,
+            headers=headers,
         )
 
     def delete(self, entity_set: str, record_id: str) -> None:
@@ -202,14 +210,16 @@ class DataverseClient:
         json: JsonDict | None = None,
         operation: str,
         entity_set: str | None,
+        headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         if method == "GET":
             response = self.__request_with_get_retry(
                 path,
                 params=params,
+                headers=headers,
             )
         else:
-            response = self.__send_once(method, path, params=params, json=json)
+            response = self.__send_once(method, path, params=params, json=json, headers=headers)
 
         self.__raise_for_status(response, operation=operation, entity_set=entity_set)
         return response
@@ -219,8 +229,9 @@ class DataverseClient:
         path: str,
         *,
         params: dict[str, str] | None,
+        headers: dict[str, str] | None,
     ) -> httpx.Response:
-        response = self.__send_once("GET", path, params=params)
+        response = self.__send_once("GET", path, params=params, headers=headers)
         for attempt in range(1, _GET_ATTEMPTS):
             if response.status_code not in _RETRY_STATUS_CODES:
                 return response
@@ -228,7 +239,7 @@ class DataverseClient:
             delay_seconds = _retry_delay_seconds(response, attempt)
             if delay_seconds > 0:
                 self.__sleep(delay_seconds)
-            response = self.__send_once("GET", path, params=params)
+            response = self.__send_once("GET", path, params=params, headers=headers)
 
         return response
 
@@ -239,13 +250,18 @@ class DataverseClient:
         *,
         params: dict[str, str] | None = None,
         json: JsonDict | None = None,
+        headers: dict[str, str] | None = None,
     ) -> httpx.Response:
         token = self.__token_provider.get_token()
-        headers = {**_O_DATA_HEADERS, "Authorization": f"Bearer {token}"}
+        request_headers = {
+            **_O_DATA_HEADERS,
+            **(headers or {}),
+            "Authorization": f"Bearer {token}",
+        }
         return self.__client.request(
             method,
             self.__request_url(path),
-            headers=headers,
+            headers=request_headers,
             params=params,
             json=json,
         )

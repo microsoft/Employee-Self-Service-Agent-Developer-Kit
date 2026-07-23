@@ -70,7 +70,7 @@ def main(argv: list[str] | None = None) -> None:
         raise
     finally:
         try:
-            Reporter(logger.session_manager).render(context)
+            _render_report_if_missing(logger, context)
         finally:
             logger.close()
 
@@ -86,6 +86,13 @@ def _log_summary(logger: Logger, context: MigrationContext) -> None:
         pipeline_stage="Orchestrator",
         pipeline_step="summary",
     )
+
+
+def _render_report_if_missing(logger: Logger, context: MigrationContext) -> None:
+    """Render a best-effort failure report if Output did not reach report generation."""
+    if logger.session_manager.paths.report_path.exists():
+        return
+    Reporter(logger.session_manager).render(context)
 
 
 if __name__ == "__main__":

@@ -12,6 +12,20 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 
 ## [Unreleased]
 
+- **TASK-007 DONE — Output pipeline validation + generic Dataverse writeback +
+  report rendering.** Replaced the postprocessing pass-through with
+  `ValidateMigration`, `Writeback`, and `GenerateMigrationReport` steps. The
+  Writeback step consumes the already-coalesced/no-op-guarded
+  `context.pending_writes` list and maps each entry directly to
+  `DataverseClient.update(entity_set, record_id, changes)` in WRITEBACK mode only;
+  READONLY is skipped by `MigrationPipelineStep` mode-gating. When
+  `context.preferred_solution` is set, Writeback passes the generic
+  `MSCRM.SolutionUniqueName` per-request header into the Dataverse client, which
+  now supports optional update headers without embedding ESS-specific logic.
+  `GenerateMigrationReport` renders `migration_report.md` via
+  `Reporter(logger.session_manager).render(context)`, preserving the two-file
+  session bundle.
+
 - **TASK-017 DONE — Writeback plan (coalescing + meaningful-change guard).** Added
   `WritebackPlan` / `WritebackTarget`
   (`src/modules/transformation/models/writeback_plan.py`), the shared accumulator
