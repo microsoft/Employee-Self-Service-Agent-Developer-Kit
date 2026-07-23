@@ -16,8 +16,10 @@ endpoint?" -- because the maker's laptop sits on a different network path
 than Power Platform's outbound IP ranges.
 
 It is opt-in (``/flightcheck --runtime-reachability``) precisely because it mutates
-the environment. The default INFRA-003 path stays a read-only local TCP
-probe (see ``checks/infrastructure.py``).
+the environment. When it is not run, INFRA-003 returns MANUAL guidance
+rather than a local probe (see ``checks/infrastructure.py``): a laptop
+TCP/TLS probe runs from the wrong network and never sends HTTP, so it
+cannot prove the runtime path.
 
 SUPPORTED API (confirmed by capture, not guessed)
 -------------------------------------------------

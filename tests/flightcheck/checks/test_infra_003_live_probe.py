@@ -13,7 +13,7 @@ validated-tier API => cassette-backed mock + a test that replays it).
 Covered:
 - egress-reachable  (invoke returns an int reachableStatusCode) -> PASS
 - egress-blocked    (invoke returns null)                       -> FAIL
-- indeterminate     (create fails)  -> per-endpoint fallback to local probe
+- indeterminate     (create fails)  -> MANUAL guidance (no local fallback)
 - guaranteed cleanup (the created flow is always DELETEd; orphan sweep runs)
 """
 
@@ -21,7 +21,6 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
 
 import responses
 
@@ -29,7 +28,6 @@ from tests.conftest import require_validated_mock
 from tests.mocks import power_automate as pa
 
 from flightcheck.checks.infrastructure import (
-    ProbeResult,
     check_external_endpoint_reachability,
 )
 from flightcheck.runner import Priority, Role, Status
@@ -66,13 +64,6 @@ def _register_lifecycle(*, reachable_status_code: int | None) -> None:
     responses.add(**pa.invoke_probe(reachable_status_code=reachable_status_code))
     responses.add(**pa.delete_workflow())
 
-
-def _reachable_local(host: str) -> ProbeResult:
-    return ProbeResult(
-        host=host, port=443, dns_ok=True, tcp_ok=True, tls_ok=True,
-        resolved_ip="203.0.113.10", dns_ms=5.0, tcp_ms=12.0, tls_ms=20.0,
-        tls_version="TLSv1.3",
-    )
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -216,46 +207,46 @@ class TestDeleteProbeFlow:
 
 
 # ───────────────────────────────────────────────────────────────────────
-# Fallback — an endpoint the egress probe can't cover uses the local probe
+# Indeterminate egress probe -> MANUAL guidance (no local fallback)
 # ───────────────────────────────────────────────────────────────────────
 
 
-class TestLiveProbeFallback:
+class TestLiveProbeIndeterminate:
     @responses.activate
-    def test_create_failure_falls_back_to_local_probe(self):
-        # Flow creation fails (500) -> live result is indeterminate for this
-        # endpoint -> the check falls back to the read-only local probe.
+    def test_create_failure_is_manual_not_local_probe(self):
+        # Flow creation fails (500) -> the egress result is indeterminate. The
+        # local probe was removed, so the endpoint is reported MANUAL with
+        # guidance, never a laptop probe.
         responses.add(**pa.find_workflows())
         responses.add(**pa.create_workflow(status=500))
         runner = _live_runner({"Workday": {"baseUrl": "https://wd.example.com"}})
 
-        with patch(
-            "flightcheck.checks.infrastructure.probe_endpoint",
-            side_effect=lambda host, port=443, timeout=10.0: _reachable_local(host),
-        ):
-            results = check_external_endpoint_reachability(runner)
+        results = check_external_endpoint_reachability(runner)
 
         assert len(results) == 1
         row = results[0]
-        assert row.status == Status.PASSED.value
-        # The endpoint is tagged as local-only and the local caveat reattaches.
-        assert "[local only]" in row.result
-        assert "necessary but not sufficient" in row.result
+        assert row.status == Status.MANUAL.value
+        assert "UNDETERMINED from the egress probe" in row.result
+        assert "[local only]" not in row.result
+        assert "necessary but not sufficient" not in row.result
+        # Guidance points back at the egress probe + manual verification.
+        assert "--runtime-reachability" in row.remediation
+        assert Role.WORKDAY_ADMIN.value in row.roles
+        assert Role.POWER_PLATFORM_ADMIN.value in row.roles
 
-    def test_missing_prerequisites_uses_local_probe(self):
-        # --runtime-reachability requested but no pp_admin / env / token on the runner.
+    def test_missing_prerequisites_is_manual_guidance(self):
+        # --runtime-reachability requested but no pp_admin / env / token on the
+        # runner: the egress probe can't run, so MANUAL guidance (no local probe).
         runner = SimpleNamespace(
             config={"connections": {"Workday": {"baseUrl": "https://wd.example.com"}}},
             runtime_reachability=True,
         )
-        with patch(
-            "flightcheck.checks.infrastructure.probe_endpoint",
-            side_effect=lambda host, port=443, timeout=10.0: _reachable_local(host),
-        ):
-            results = check_external_endpoint_reachability(runner)
+
+        results = check_external_endpoint_reachability(runner)
 
         assert len(results) == 1
         row = results[0]
-        assert row.status == Status.PASSED.value
+        assert row.status == Status.MANUAL.value
         assert "could not run" in row.result
-        assert "local probe only" in row.result
+        assert "NOT tested" in row.result
+        assert "--runtime-reachability" in row.remediation

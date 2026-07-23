@@ -560,9 +560,6 @@ def main():
         ),
     )
     parser.add_argument(
-        "--invocation-source", default="cli",
-        choices=["adk", "installer", "cli"],
-        help="How FlightCheck was invoked (adk=slash-command, installer=standalone installer, cli=direct Python CLI)",
         "--invocation-source", default=None,
         choices=["adk", "installer", "cli", "connect"],
         help="How FlightCheck was invoked (adk=slash-command, installer=standalone "

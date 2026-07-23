@@ -2,23 +2,24 @@
 # Licensed under the MIT License.
 
 """
-Unit tests for INFRA-003 external endpoint reachability (default local probe).
+Unit tests for INFRA-003 external endpoint reachability, NON-egress behavior.
 
-The default INFRA-003 path uses only Python stdlib (socket/ssl) via the shared
-``probe_endpoint()`` helper, so no external API mock or cassette validation is
-required (no ``require_validated_mock`` gate). These tests patch
-``probe_endpoint`` to drive each reachability outcome and assert INFRA-003's
-enumeration, status bucketing, five-field remediation, and roles.
+INFRA-003 tests reachability only from the Power Platform environment's own
+egress (the opt-in ``--runtime-reachability`` flow; see
+test_infra_003_live_probe.py). The local TCP/TLS probe was removed: it runs
+from the maker's machine, not the runtime egress, and never sends HTTP, so it
+cannot prove the runtime path. When the egress probe does not run, the check
+returns MANUAL guidance instead. These tests cover endpoint enumeration, the
+NOT_CONFIGURED empty case, and that MANUAL-guidance path (default run, requested
+but prerequisites missing, and operator-declined, including clickable links).
 """
 
 from __future__ import annotations
 
 from types import SimpleNamespace
 from typing import Any
-from unittest.mock import patch
 
 from flightcheck.checks.infrastructure import (
-    ProbeResult,
     _discover_external_endpoints,
     check_external_endpoint_reachability,
 )
@@ -26,72 +27,22 @@ from flightcheck.runner import Priority, Role, Status
 
 
 # ───────────────────────────────────────────────────────────────────────
-# ProbeResult builders (one per reachability outcome)
+# Runner builders
 # ───────────────────────────────────────────────────────────────────────
 
 
-def _reachable(host: str) -> ProbeResult:
-    return ProbeResult(
-        host=host, port=443, dns_ok=True, tcp_ok=True, tls_ok=True,
-        resolved_ip="203.0.113.10", dns_ms=5.0, tcp_ms=12.0, tls_ms=20.0,
-        tls_version="TLSv1.3",
+def _runner(
+    connections: dict[str, Any],
+    *,
+    runtime_reachability: bool = False,
+    runtime_reachability_declined: bool = False,
+) -> SimpleNamespace:
+    """A runner with no egress prerequisites, so the egress probe never runs."""
+    return SimpleNamespace(
+        config={"connections": connections},
+        runtime_reachability=runtime_reachability,
+        runtime_reachability_declined=runtime_reachability_declined,
     )
-
-
-def _dns_fail(host: str) -> ProbeResult:
-    return ProbeResult(
-        host=host, port=443, dns_ok=False, dns_ms=8.0,
-        error_layer="dns",
-        error_message=f"DNS resolution failed for {host}: name not known",
-    )
-
-
-def _refused(host: str) -> ProbeResult:
-    return ProbeResult(
-        host=host, port=443, dns_ok=True, resolved_ip="203.0.113.10",
-        dns_ms=5.0, tcp_ms=3.0, error_layer="tcp",
-        error_message=(
-            f"TCP connection to {host}:443 (203.0.113.10) refused — "
-            f"port closed or firewall sending RST"
-        ),
-    )
-
-
-def _timeout(host: str) -> ProbeResult:
-    return ProbeResult(
-        host=host, port=443, dns_ok=True, resolved_ip="203.0.113.10",
-        dns_ms=5.0, tcp_ms=10000.0, error_layer="tcp",
-        error_message=(
-            f"TCP connection to {host}:443 (203.0.113.10) timed out after 10.0s "
-            f"— firewall may be silently dropping packets"
-        ),
-    )
-
-
-def _tls_fail(host: str) -> ProbeResult:
-    return ProbeResult(
-        host=host, port=443, dns_ok=True, tcp_ok=True, resolved_ip="203.0.113.10",
-        dns_ms=5.0, tcp_ms=12.0, tls_ms=30.0, error_layer="tls",
-        error_message=f"TLS handshake failed for {host}:443: certificate verify failed",
-    )
-
-
-def _runner(connections: dict[str, Any], *, runtime_reachability: bool = False) -> SimpleNamespace:
-    return SimpleNamespace(config={"connections": connections}, runtime_reachability=runtime_reachability)
-
-
-def _patch_probe(mapping: dict[str, ProbeResult]):
-    """Patch probe_endpoint to return a crafted ProbeResult keyed by host."""
-
-    def fake(host: str, port: int = 443, timeout: float = 10.0) -> ProbeResult:
-        assert host in mapping, f"unexpected host probed: {host}"
-        return mapping[host]
-
-    return patch("flightcheck.checks.infrastructure.probe_endpoint", side_effect=fake)
-
-
-def _rows_by_status(results: list) -> dict[str, Any]:
-    return {r.status: r for r in results}
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -150,179 +101,54 @@ class TestEnumeration:
         eps = _discover_external_endpoints(runner)
         assert {e.port for e in eps} == {8443, 9443}
 
-    def test_probe_called_with_extracted_port(self):
-        runner = _runner({
-            "Workday": {"baseUrl": "https://impl.workday.example.com:8443"},
-        })
-        seen: list[int] = []
-
-        def fake(host: str, port: int = 443, timeout: float = 10.0) -> ProbeResult:
-            seen.append(port)
-            return _reachable(host)
-
-        with patch(
-            "flightcheck.checks.infrastructure.probe_endpoint", side_effect=fake
-        ):
-            check_external_endpoint_reachability(runner)
-
-        assert seen == [8443]
-
 
 # ───────────────────────────────────────────────────────────────────────
-# AC2 / AC3 / AC4 — status mapping
+# Empty case + MANUAL guidance when the egress probe does not run
 # ───────────────────────────────────────────────────────────────────────
 
 
-class TestReachabilityStatus:
-    def test_all_reachable_passes(self):
-        runner = _runner({
-            "Workday": {"baseUrl": "https://wd.example.com"},
-            "ServiceNow": {"instanceUrl": "https://sn.example.com"},
-        })
-        mapping = {"wd.example.com": _reachable("wd.example.com"),
-                   "sn.example.com": _reachable("sn.example.com")}
-        with _patch_probe(mapping):
-            results = check_external_endpoint_reachability(runner)
-
-        assert len(results) == 1
-        row = results[0]
-        assert row.status == Status.PASSED.value
-        assert row.priority == Priority.CRITICAL.value
-        assert "wd.example.com" in row.result
-        assert "sn.example.com" in row.result
-        # Necessary-but-not-sufficient caveat is surfaced on PASS.
-        assert "necessary but not sufficient" in row.result
-        assert row.remediation == ""
-
-    def test_one_blocked_fails_and_names_endpoint_and_hop(self):
-        runner = _runner({
-            "Workday": {"baseUrl": "https://wd.example.com"},
-            "ServiceNow": {"instanceUrl": "https://sn.example.com"},
-        })
-        mapping = {"wd.example.com": _reachable("wd.example.com"),
-                   "sn.example.com": _refused("sn.example.com")}
-        with _patch_probe(mapping):
-            results = check_external_endpoint_reachability(runner)
-
-        by_status = _rows_by_status(results)
-        assert Status.FAILED.value in by_status
-        assert Status.PASSED.value in by_status
-
-        fail = by_status[Status.FAILED.value]
-        # Names the endpoint URL and the blocking hop (AC3).
-        assert "https://sn.example.com" in fail.result
-        assert "UNREACHABLE at TCP connect" in fail.result
-        # Five-field role-aware finding (AC5) + manual verification (Step G).
-        assert "Impact:" in fail.remediation
-        assert "Probable cause:" in fail.remediation
-        assert "What it implies:" in fail.remediation
-        assert "Next steps:" in fail.remediation
-        assert "InfoSec" in fail.remediation
-        assert "outbound IP" in fail.remediation.lower() or "outbound-ip" in fail.doc_link
-        # Roles: owning system admin + Power Platform admin.
-        assert Role.SERVICENOW_ADMIN.value in fail.roles
-        assert Role.POWER_PLATFORM_ADMIN.value in fail.roles
-
-    def test_dns_failure_fails(self):
-        runner = _runner({"Workday": {"baseUrl": "https://wd.example.com"}})
-        with _patch_probe({"wd.example.com": _dns_fail("wd.example.com")}):
-            results = check_external_endpoint_reachability(runner)
-
-        assert len(results) == 1
-        row = results[0]
-        assert row.status == Status.FAILED.value
-        assert "UNREACHABLE at DNS resolution" in row.result
-
-    def test_tls_failure_warns(self):
-        runner = _runner({"Workday": {"baseUrl": "https://wd.example.com"}})
-        with _patch_probe({"wd.example.com": _tls_fail("wd.example.com")}):
-            results = check_external_endpoint_reachability(runner)
-
-        assert len(results) == 1
-        row = results[0]
-        assert row.status == Status.WARNING.value
-        assert "PARTIALLY reachable" in row.result
-        assert "TLS handshake failed" in row.result
-        assert "interception" in row.remediation.lower()
-
-    def test_timeout_warns_not_fails(self):
-        runner = _runner({"Workday": {"baseUrl": "https://wd.example.com"}})
-        with _patch_probe({"wd.example.com": _timeout("wd.example.com")}):
-            results = check_external_endpoint_reachability(runner)
-
-        assert len(results) == 1
-        row = results[0]
-        assert row.status == Status.WARNING.value
-        assert "timed out" in row.result.lower()
-
-
-# ───────────────────────────────────────────────────────────────────────
-# AC7 / principle 7 — bucketing, empty case, idempotency, live-probe note
-# ───────────────────────────────────────────────────────────────────────
-
-
-class TestBucketingAndEdges:
+class TestManualGuidanceWhenNoEgressProbe:
     def test_no_endpoints_is_not_configured(self):
-        runner = _runner({})
-        results = check_external_endpoint_reachability(runner)
+        results = check_external_endpoint_reachability(_runner({}))
 
         assert len(results) == 1
         assert results[0].status == Status.NOT_CONFIGURED.value
         assert "Nothing to probe" in results[0].result
 
-    def test_multiple_unreachable_collapse_to_one_fail_row(self):
-        runner = _runner({
-            "Workday": {"baseUrl": "https://wd.example.com"},
-            "SAPSuccessFactors": {"apiUrl": "https://sf.example.com"},
-        })
-        mapping = {"wd.example.com": _refused("wd.example.com"),
-                   "sf.example.com": _dns_fail("sf.example.com")}
-        with _patch_probe(mapping):
-            results = check_external_endpoint_reachability(runner)
-
-        fail_rows = [r for r in results if r.status == Status.FAILED.value]
-        assert len(fail_rows) == 1  # principle 7: one row per status
-        assert "https://wd.example.com" in fail_rows[0].result
-        assert "https://sf.example.com" in fail_rows[0].result
-        assert Role.WORKDAY_ADMIN.value in fail_rows[0].roles
-        assert Role.SAP_ADMIN.value in fail_rows[0].roles
-
-    def test_probe_exception_is_unverifiable_warn_not_crash(self):
+    def test_default_run_returns_manual_guidance_not_a_probe(self):
+        # No --runtime-reachability: reachability is not tested; the check hands
+        # back MANUAL guidance rather than a (meaningless) laptop probe.
         runner = _runner({"Workday": {"baseUrl": "https://wd.example.com"}})
-        with patch(
-            "flightcheck.checks.infrastructure.probe_endpoint",
-            side_effect=RuntimeError("boom"),
-        ):
-            results = check_external_endpoint_reachability(runner)
+        results = check_external_endpoint_reachability(runner)
 
         assert len(results) == 1
-        assert results[0].status == Status.WARNING.value
-        assert "UNVERIFIABLE" in results[0].result
+        row = results[0]
+        assert row.status == Status.MANUAL.value
+        assert row.priority == Priority.CRITICAL.value
+        # Names the endpoint and states reachability was NOT tested.
+        assert "https://wd.example.com" in row.result
+        assert "NOT tested" in row.result
+        assert "own egress" in row.result
+        # Points the operator at the egress probe + manual verification.
+        assert "--runtime-reachability" in row.remediation
+        assert "verify" in row.remediation.lower() or "allowlist" in row.remediation.lower()
+        # Roles: owning system admin + Power Platform admin.
+        assert Role.WORKDAY_ADMIN.value in row.roles
+        assert Role.POWER_PLATFORM_ADMIN.value in row.roles
 
-    def test_idempotent_same_result_and_no_side_effects(self):
-        runner = _runner({"Workday": {"baseUrl": "https://wd.example.com"}})
-        mapping = {"wd.example.com": _reachable("wd.example.com")}
-        with _patch_probe(mapping):
-            first = check_external_endpoint_reachability(runner)
-        with _patch_probe(mapping):
-            second = check_external_endpoint_reachability(runner)
-
-        assert [(r.status, r.result) for r in first] == [
-            (r.status, r.result) for r in second
-        ]
-
-    def test_live_probe_requested_but_prereqs_missing_falls_back_to_local(self):
+    def test_requested_but_prereqs_missing_is_manual_with_reason(self):
+        # --runtime-reachability requested, but no pp_admin / env / token on the
+        # runner, so the egress probe can't run; explain why, still MANUAL.
         runner = _runner(
             {"Workday": {"baseUrl": "https://wd.example.com"}}, runtime_reachability=True
         )
-        with _patch_probe({"wd.example.com": _reachable("wd.example.com")}):
-            results = check_external_endpoint_reachability(runner)
+        results = check_external_endpoint_reachability(runner)
 
-        assert results[0].status == Status.PASSED.value
-        # No pp_admin / env / token on this runner, so the egress probe can't
-        # run; the check degrades to the local probe and says so.
-        assert "could not run" in results[0].result
-        assert "local probe only" in results[0].result
+        assert len(results) == 1
+        row = results[0]
+        assert row.status == Status.MANUAL.value
+        assert "could not run" in row.result
+        assert "missing" in row.result
 
     def test_declined_egress_probe_surfaces_manual_ip_ranges_link(self):
         """When the operator declines the runtime-reachability probe, INFRA-003
@@ -332,28 +158,35 @@ class TestBucketingAndEdges:
         from flightcheck import consent
         from flightcheck.runner import _render_check_card
 
-        runner = SimpleNamespace(
-            config={"connections": {"Workday": {"baseUrl": "https://wd.example.com"}}},
-            runtime_reachability=False,
+        runner = _runner(
+            {"Workday": {"baseUrl": "https://wd.example.com"}},
             runtime_reachability_declined=True,
         )
-        with _patch_probe({"wd.example.com": _reachable("wd.example.com")}):
-            results = check_external_endpoint_reachability(runner)
+        results = check_external_endpoint_reachability(runner)
 
-        passed = results[0]
-        assert passed.status == Status.PASSED.value
+        row = results[0]
+        assert row.status == Status.MANUAL.value
         # The skip caveat stays in result...
-        assert "skipped by choice" in passed.result
+        assert "skipped by choice" in row.result
         # ...but the clickable links live in remediation (the linkified channel),
         # never as raw markdown in result.
-        assert consent.OUTBOUND_IP_ARTICLE_URL in passed.remediation
-        assert consent.SERVICE_TAGS_JSON_URL in passed.remediation
-        assert "](http" not in passed.result  # no raw markdown link leaked
+        assert consent.OUTBOUND_IP_ARTICLE_URL in row.remediation
+        assert consent.SERVICE_TAGS_JSON_URL in row.remediation
+        assert "](http" not in row.result  # no raw markdown link leaked
         # And they actually render as clickable anchors in the report card.
-        card = _render_check_card(passed)
+        card = _render_check_card(row)
         assert card.count("<a href=") >= 2
         assert consent.OUTBOUND_IP_ARTICLE_URL in card
         assert consent.SERVICE_TAGS_JSON_URL in card
+
+    def test_manual_guidance_is_idempotent(self):
+        runner = _runner({"Workday": {"baseUrl": "https://wd.example.com"}})
+        first = check_external_endpoint_reachability(runner)
+        second = check_external_endpoint_reachability(runner)
+
+        assert [(r.status, r.result) for r in first] == [
+            (r.status, r.result) for r in second
+        ]
 
     def test_every_row_sets_roles(self):
         """test_check_roles.py enforces roles on every constructor."""
@@ -361,10 +194,7 @@ class TestBucketingAndEdges:
             "Workday": {"baseUrl": "https://wd.example.com"},
             "ServiceNow": {"instanceUrl": "https://sn.example.com"},
         })
-        mapping = {"wd.example.com": _reachable("wd.example.com"),
-                   "sn.example.com": _refused("sn.example.com")}
-        with _patch_probe(mapping):
-            results = check_external_endpoint_reachability(runner)
+        results = check_external_endpoint_reachability(runner)
 
         assert results  # non-empty
         for row in results:
