@@ -7,6 +7,11 @@ ESS FlightCheck — Infrastructure & Security (INFRA-xxx)
 Extensible module for infrastructure pre-deployment checks. Currently
 implements:
   - INFRA-001: Inbound connectivity to Microsoft services
+  - INFRA-003: External endpoint reachability (Workday / ServiceNow / SAP /
+    custom HTTP) — probes from the Power Platform environment's OWN egress
+    via the opt-in --runtime-reachability flow (the kit's only mutating
+    path); when that probe is unavailable it returns MANUAL guidance
+    instead of a local probe
 
 Adding a new INFRA-xxx check:
   1. Define a target discovery function or whatever inputs your check needs.
@@ -38,6 +43,8 @@ from typing import Any, Callable
 from urllib.parse import urlparse
 
 from ..runner import CheckResult, Priority, Role, Status
+from .. import live_egress_probe
+from .. import consent
 from ._dlp_utils import (
     agent_connector_ids,
     evaluate_connector_classification,
@@ -299,6 +306,22 @@ def _host_from_url(url: str | None) -> str | None:
     return parsed.hostname or None
 
 
+def _port_from_url(url: str | None) -> int:
+    """Extract the TCP port from a URL, defaulting by scheme (https→443, http→80).
+
+    An explicit port in the URL (e.g. ``https://host:8443``) wins so endpoints
+    on non-standard ports are probed on the correct port, not always 443.
+    """
+    if not url:
+        return 443
+    if "://" not in url:
+        url = f"https://{url}"
+    parsed = urlparse(url)
+    if parsed.port:
+        return parsed.port
+    return 80 if (parsed.scheme or "").lower() == "http" else 443
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # INDIVIDUAL INFRA-xxx CHECKS
 #
@@ -385,6 +408,549 @@ def check_microsoft_service_reachability(runner: Any) -> list[CheckResult]:
                 ),
                 doc_link=_DOC_LINK_INFRA_001,
                 roles=[Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
+            )
+        )
+
+    return results
+
+
+# ───────────────────────────────────────────────────────────────────────
+# INFRA-003: External endpoint reachability from Power Platform egress
+#
+# Enumerates the external system endpoints the agent's installed
+# extensions use (Workday, ServiceNow, SAP SuccessFactors, custom HTTP)
+# and verifies each is reachable FROM THE POWER PLATFORM ENVIRONMENT'S OWN
+# EGRESS — the path the agent runtime actually uses.
+#
+# ONE PROBE, ONE FALLBACK (see docs/design-infra-003-endpoint-reachability.md):
+#   - Egress probe (opt-in, --runtime-reachability): a transient cloud flow
+#     that sends a real HTTP request from Power Platform's own egress and
+#     returns the observed status code. This is the ONLY authoritative
+#     signal and the kit's only tenant-mutating path.
+#   - No egress probe available (flag not given, operator declined, or the
+#     Dataverse / flow prerequisites are missing): the check returns MANUAL
+#     guidance — re-run with --runtime-reachability, or verify allowlisting
+#     manually. A local TCP/TLS probe from the maker's machine was removed
+#     on purpose: it runs from the wrong network and never sends HTTP, so a
+#     laptop PASS does NOT prove the runtime path.
+# ───────────────────────────────────────────────────────────────────────
+
+# Managed connectors outbound IP addresses (Power Platform egress ranges).
+# Verified: same URL cited in src/reference/ess-docs/integrations/workday.md,
+# .../integrations/sapsuccessfactors.md, and .../deployment/prepare.md.
+_DOC_LINK_INFRA_003 = (
+    "https://learn.microsoft.com/en-us/connectors/common/"
+    "outbound-ip-addresses#power-platform"
+)
+
+# config.json `connections.<name>` keys that may carry an endpoint URL.
+# Workday's `baseUrl` is confirmed by _resolve_workday_metadata() in
+# checks/workday.py; the rest are common URL-bearing keys, whichever is present.
+_EXTERNAL_SYSTEM_URL_KEYS = (
+    "baseUrl", "instanceUrl", "apiUrl", "odataUrl", "url", "host", "endpoint",
+)
+
+# System-name substring → owning admin role. Unknown systems (custom HTTP)
+# fall back to the Power Platform admin.
+_KNOWN_SYSTEM_ROLES: tuple[tuple[str, str], ...] = (
+    ("workday", Role.WORKDAY_ADMIN.value),
+    ("servicenow", Role.SERVICENOW_ADMIN.value),
+    ("successfactors", Role.SAP_ADMIN.value),
+    ("sap", Role.SAP_ADMIN.value),
+)
+
+
+@dataclass
+class _ExternalEndpoint:
+    """One external system endpoint to probe."""
+
+    system: str          # display name, e.g. "Workday"
+    url: str             # configured endpoint URL
+    host: str | None     # extracted hostname (None if unparseable)
+    port: int            # TCP port (from the URL, default 443)
+    role: str            # Role enum value of the owning system admin
+
+
+def _system_role(system_name: str) -> str:
+    """Map a connections key (e.g. "Workday", "SAPSuccessFactors") to a role."""
+    key = system_name.strip().lower().replace(" ", "").replace("-", "")
+    for needle, role in _KNOWN_SYSTEM_ROLES:
+        if needle in key:
+            return role
+    return Role.POWER_PLATFORM_ADMIN.value
+
+
+def _extract_endpoint_url(entry: Any) -> str | None:
+    """Return the first non-empty URL-ish value from a connections entry."""
+    if isinstance(entry, str):
+        return entry.strip() or None
+    if not isinstance(entry, dict):
+        return None
+    for key in _EXTERNAL_SYSTEM_URL_KEYS:
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _discover_external_endpoints(runner: Any) -> list[_ExternalEndpoint]:
+    """Enumerate external system endpoints from the agent's connection config.
+
+    Endpoint URLs are not exposed on the BAP connection records (connector
+    auth is configured in the Copilot Studio portal, not in code), so this
+    reads the kit's own ``.local/config.json`` ``connections`` map — where the
+    /connect skill records each system's non-secret endpoint metadata (e.g.
+    Workday ``baseUrl``). One endpoint per configured system, de-duplicated by
+    host. Read-only.
+    """
+    config = getattr(runner, "config", {}) or {}
+    connections = config.get("connections", {})
+    if not isinstance(connections, dict):
+        return []
+
+    endpoints: list[_ExternalEndpoint] = []
+    seen_hosts: set[str] = set()
+    for system_name, entry in connections.items():
+        url = _extract_endpoint_url(entry)
+        if not url:
+            # A connected system with no endpoint URL recorded. Do NOT skip it
+            # silently: surface it as an unverifiable endpoint (host=None) so the
+            # orchestrator names it rather than dropping it. A check that claims
+            # "every endpoint" must account for the ones it could not test.
+            endpoints.append(
+                _ExternalEndpoint(
+                    system=str(system_name),
+                    url="",
+                    host=None,
+                    port=443,
+                    role=_system_role(str(system_name)),
+                )
+            )
+            continue
+        host = _host_from_url(url)
+        port = _port_from_url(url)
+        dedup_key = f"{(host or url).lower()}:{port}"
+        if dedup_key in seen_hosts:
+            continue
+        seen_hosts.add(dedup_key)
+        endpoints.append(
+            _ExternalEndpoint(
+                system=str(system_name),
+                url=url,
+                host=host,
+                port=port,
+                role=_system_role(str(system_name)),
+            )
+        )
+    return endpoints
+
+
+def _infra_003_manual_verification() -> str:
+    """The manual allowlist-verification path (design Step G).
+
+    Includes direct links to the official 'Managed connectors outbound IP
+    addresses' article and the Azure service-tags / IP-ranges JSON download, so
+    an operator who declines the egress probe can self-serve. Markdown link
+    syntax renders clickable in report.html (runner._md_links_to_html)."""
+    return (
+        "Prefer to verify allowlisting manually:\n"
+        "1. In the Power Platform admin center, note your environment's region.\n"
+        "2. From Microsoft's [Managed connectors outbound IP addresses]"
+        f"({consent.OUTBOUND_IP_ARTICLE_URL}) list, get the ranges for that "
+        "region. For a custom HTTP endpoint, use the [Azure service tags / IP "
+        f"ranges JSON]({consent.SERVICE_TAGS_JSON_URL}) instead.\n"
+        "3. Work with your InfoSec / network team to confirm those ranges are "
+        "allowlisted in the target system's firewall / WAF."
+    )
+
+
+def _infra_003_directive(
+    *,
+    cause: str,
+    scope: str,
+    implies: str,
+    next_steps: str,
+    responsible_role: str,
+    probe_layer_note: str,
+) -> str:
+    """Assemble the five-field Shared Steps role-aware finding (design Step E / AC5).
+
+    Fields, in the order defined by the Shared Steps output contract
+    (docs/design-infra-003-endpoint-reachability.md): Probable cause /
+    Configuration Area or Scope / What it implies / Next steps / Responsible
+    role. The manual-verification block and the probe-layer caveat follow.
+    """
+    text = "\n\n".join(
+        [
+            f"Probable cause: {cause}",
+            f"Configuration Area or Scope: {scope}",
+            f"What it implies: {implies}",
+            f"Next steps: {next_steps}",
+            f"Responsible role: {responsible_role}",
+            _infra_003_manual_verification(),
+        ]
+    )
+    return text + "\n\n" + probe_layer_note
+
+
+@dataclass
+class _ProbeContext:
+    """Describes whether the INFRA-003 egress probe ran, so the result text can
+    state that reachability was confirmed from the Power Platform egress
+    (--runtime-reachability) or explain why the probe did not run."""
+
+    live_requested: bool = False   # --runtime-reachability flag was set
+    live_ran: bool = False         # egress probe actually executed
+    unavailable_reason: str = ""   # why live did not run (when requested)
+    declined_by_user: bool = False  # operator declined the egress probe
+
+
+def _infra_003_probe_layer_note() -> str:
+    """The probe-layer annotation appended to every egress-probed INFRA-003 row.
+
+    Only the egress probe produces reachable / unreachable rows now, so this is
+    always the egress statement — the authoritative runtime path the agent
+    actually uses.
+    """
+    return (
+        "Probe layer: reachability was tested from the Power Platform "
+        "environment's own egress via a transient probe flow "
+        "(--runtime-reachability) — the authoritative runtime path the agent "
+        "actually uses."
+    )
+
+
+def _infra_003_not_probed_reason(ctx: _ProbeContext) -> str:
+    """Explain, on the MANUAL 'not probed' row, why the egress probe did not run."""
+    if ctx.declined_by_user:
+        return (
+            "\n\nThe runtime-reachability egress probe was skipped by choice, so "
+            "reachability from the Power Platform egress — including firewall / "
+            "IP allowlisting — was NOT confirmed."
+        )
+    if ctx.live_requested:
+        return (
+            "\n\nNote: --runtime-reachability was requested but could not run "
+            f"({ctx.unavailable_reason})."
+        )
+    return (
+        "\n\nRe-run with --runtime-reachability to probe from the environment's "
+        "own egress."
+    )
+
+
+def _infra_003_not_probed_row(
+    endpoints: list[_ExternalEndpoint], ctx: _ProbeContext
+) -> CheckResult:
+    """One MANUAL row for when the egress probe did not run.
+
+    The local TCP/TLS probe was removed on purpose: it runs from the maker's
+    machine, not the Power Platform egress, and never sends HTTP, so it cannot
+    prove the runtime path. Rather than a misleading local PASS, hand the
+    operator the runtime-reachability re-run plus the manual
+    allowlist-verification steps. The clickable links live in remediation (the
+    linkified channel); result is escaped but not linkified.
+    """
+    listed = "\n".join(
+        f"- {ep.system} ({ep.url})"
+        if ep.url
+        else f"- {ep.system} (no endpoint URL recorded)"
+        for ep in endpoints
+    )
+    result = (
+        "Reachability was NOT tested for the endpoint(s) below. FlightCheck "
+        "verifies these only from the Power Platform environment's own egress "
+        "— the path the agent runtime actually uses — and that egress probe "
+        "did not run:\n"
+        f"{listed}"
+        f"{_infra_003_not_probed_reason(ctx)}"
+    )
+    remediation = (
+        "Test reachability from the Power Platform egress by re-running with "
+        "the runtime-reachability probe:\n"
+        "  /flightcheck --scope infrastructure --runtime-reachability\n"
+        "It stands up a transient probe flow, triggers it once from the "
+        "environment's own egress, reads the HTTP status, then deletes it (the "
+        "kit's only tenant-mutating step).\n\n"
+        + _infra_003_manual_verification()
+    )
+    roles = sorted({ep.role for ep in endpoints} | {Role.POWER_PLATFORM_ADMIN.value})
+    return _infra_003_row(
+        status=Status.MANUAL.value,
+        result=result,
+        remediation=remediation,
+        roles=roles,
+    )
+
+
+def _live_finding(
+    ep: _ExternalEndpoint, res: "live_egress_probe.LiveProbeResult"
+) -> tuple[str, str]:
+    """Classify one endpoint from a live egress-probe result.
+
+    Returns ``(bucket, line)`` where bucket is ``reachable`` / ``unreachable``
+    / ``manual``. ``manual`` covers an indeterminate probe (``reachable is
+    None`` — create / activate / trigger could not complete): there is no local
+    fallback, so the operator verifies it manually.
+    """
+    label = f"{ep.system} ({ep.url})"
+    if res.reachable is True:
+        return (
+            "reachable",
+            f"{label}: Reachable from Power Platform egress ({res.detail}).",
+        )
+    if res.reachable is False:
+        return (
+            "unreachable",
+            f"{label}: UNREACHABLE from Power Platform egress — {res.detail}.",
+        )
+    return (
+        "manual",
+        f"{label}: UNDETERMINED from the egress probe — {res.detail}.",
+    )
+
+
+def _live_probe_context(runner: Any) -> tuple[_ProbeContext, dict | None]:
+    """Resolve --runtime-reachability prerequisites off the runner.
+
+    Returns ``(ctx, live_env)`` where ``live_env`` is a dict of the resolved
+    egress-probe inputs (or ``None`` when the live probe cannot run). Never
+    raises: a missing prerequisite or token-acquisition failure degrades to
+    the local probe with an explanatory reason on ``ctx``.
+    """
+    ctx = _ProbeContext(
+        live_requested=bool(getattr(runner, "runtime_reachability", False)),
+        declined_by_user=bool(getattr(runner, "runtime_reachability_declined", False)),
+    )
+    if not ctx.live_requested:
+        return ctx, None
+
+    pp = getattr(runner, "pp_admin", None)
+    env_id = getattr(runner, "env_id", None)
+    env_url = getattr(runner, "env_url", None)
+    dv_token = getattr(runner, "dv_token", None)
+    missing = []
+    if pp is None:
+        missing.append("Power Platform admin client")
+    if not env_id:
+        missing.append("environment id")
+    if not env_url:
+        missing.append("Dataverse URL")
+    if not dv_token:
+        missing.append("Dataverse token")
+    if missing:
+        ctx.unavailable_reason = "missing " + ", ".join(missing)
+        return ctx, None
+
+    try:
+        flow_headers = pp.flow_headers
+    except Exception as exc:  # pragma: no cover - defensive token failure
+        ctx.unavailable_reason = (
+            f"could not acquire a Power Automate token ({type(exc).__name__})"
+        )
+        return ctx, None
+
+    ctx.live_ran = True
+    return ctx, {
+        "env_url": env_url,
+        "dv_token": dv_token,
+        "env_id": env_id,
+        "flow_headers": flow_headers,
+    }
+
+
+def _infra_003_row(
+    status: str, result: str, remediation: str, roles: list[str],
+) -> CheckResult:
+    return CheckResult(
+        checkpoint_id="INFRA-003",
+        category="Infrastructure",
+        priority=Priority.CRITICAL.value,
+        status=status,
+        description="External endpoint reachability",
+        result=result,
+        remediation=remediation,
+        doc_link=_DOC_LINK_INFRA_003,
+        roles=roles,
+    )
+
+
+def check_external_endpoint_reachability(runner: Any) -> list[CheckResult]:
+    """Verify the agent's external system endpoints are reachable (INFRA-003).
+
+    Reachability is tested from the Power Platform environment's OWN egress —
+    the path the agent runtime actually uses. The opt-in
+    ``--runtime-reachability`` flow stands up a transient Power Automate probe
+    flow, triggers it once to send a real HTTP request from that egress, reads
+    the returned status code, then deletes the flow (the kit's only mutating
+    path). When the egress probe is unavailable (flag not given, operator
+    declined, or Dataverse / flow prerequisites missing) the check returns
+    MANUAL guidance rather than a local probe: a laptop TCP/TLS probe runs from
+    the wrong network and never sends HTTP, so it cannot prove the runtime
+    path. Results are bucketed by outcome (one row per distinct status).
+
+    Known limitations (documented so a result is not over-read):
+    - DLP vs network block: if a Data Loss Prevention policy blocks the native
+      HTTP action, the egress probe reports "blocked" identically to a firewall
+      / DNS / TLS drop. It cannot tell them apart. FlightCheck has a separate
+      DLP checkpoint; the unreachable finding cross-references it so a
+      DLP-caused block is not mislabeled as a pure network problem.
+    - Native HTTP vs managed connector: the probe uses a native HTTP action, not
+      the managed connector the agent uses at runtime (e.g. shared_workdaysoap).
+      For an IP-range firewall allowlist they share the same environment egress,
+      so this is the correct reachability tool — but a PASS is not an absolute
+      guarantee for a connector with exotic per-connector routing.
+    - Installed vs connected: enumeration reads .local/config.json connections
+      (written by /connect), which reflects CONNECTED systems and may undercount
+      installed-but-not-yet-connected extensions. Any system with no recorded
+      endpoint URL is surfaced as MANUAL (unverifiable) rather than dropped.
+    """
+    endpoints = _discover_external_endpoints(runner)
+
+    if not endpoints:
+        return [
+            _infra_003_row(
+                status=Status.NOT_CONFIGURED.value,
+                result=(
+                    "No external system endpoints found in the agent's "
+                    "connection configuration. Nothing to probe for Workday / "
+                    "ServiceNow / SAP SuccessFactors / custom HTTP."
+                ),
+                remediation=(
+                    "If this agent integrates with an external HR system, record "
+                    "its endpoint so reachability can be validated:\n"
+                    "- Workday and ServiceNow: the /connect skill records the "
+                    "endpoint automatically.\n"
+                    "- SAP SuccessFactors or a custom HTTP system (no /connect "
+                    "flow yet): add the endpoint URL to .local/config.json under "
+                    "connections.<System> (for example "
+                    'connections.SAPSuccessFactors.odataUrl = '
+                    '"https://<api-server>/odata/v2").\n'
+                    "Otherwise no action is needed."
+                ),
+                roles=[Role.POWER_PLATFORM_ADMIN.value],
+            )
+        ]
+
+    ctx, live_env = _live_probe_context(runner)
+
+    # The local TCP/TLS probe was removed: it runs from the maker's machine,
+    # not the Power Platform egress, and never sends HTTP, so it cannot prove
+    # the runtime path. When the egress probe is unavailable, hand back MANUAL
+    # guidance instead of a misleading local result.
+    if not (ctx.live_ran and live_env is not None):
+        return [_infra_003_not_probed_row(endpoints, ctx)]
+
+    # The kit's only mutating path. Sweep any flow leaked by a crashed prior
+    # run first, guarantee a final sweep, and let run_live_probe delete each
+    # flow it creates.
+    findings: list[tuple[str, str, str]] = []  # (bucket, line, role)
+    try:
+        live_egress_probe.cleanup_orphan_probe_flows(
+            live_env["env_url"], live_env["dv_token"]
+        )
+        for ep in endpoints:
+            if not ep.host:
+                # No probeable URL recorded for this system: it can never be
+                # egress-tested, so surface it as MANUAL rather than dropping it.
+                findings.append(
+                    (
+                        "manual",
+                        f"{ep.system}: UNVERIFIABLE — no endpoint URL is "
+                        f"recorded for this system, so its egress reachability "
+                        f"could not be tested.",
+                        ep.role,
+                    )
+                )
+                continue
+            res = live_egress_probe.run_live_probe(target_url=ep.url, **live_env)
+            bucket, line = _live_finding(ep, res)
+            findings.append((bucket, line, ep.role))
+    finally:
+        live_egress_probe.cleanup_orphan_probe_flows(
+            live_env["env_url"], live_env["dv_token"]
+        )
+
+    reachable = [ln for b, ln, _ in findings if b == "reachable"]
+    unreachable = [ln for b, ln, _ in findings if b == "unreachable"]
+    manual_lines = [ln for b, ln, _ in findings if b == "manual"]
+    reachable_roles = {r for b, _, r in findings if b == "reachable"}
+    unreachable_roles = {r for b, _, r in findings if b == "unreachable"}
+    manual_roles = {r for b, _, r in findings if b == "manual"}
+
+    probe_layer_note = _infra_003_probe_layer_note()
+
+    results: list[CheckResult] = []
+
+    if unreachable:
+        results.append(
+            _infra_003_row(
+                status=Status.FAILED.value,
+                result="\n".join(unreachable),
+                remediation=_infra_003_directive(
+                    cause=(
+                        "A firewall / WAF is refusing the connection, or DNS has "
+                        "no record for the host. The egress HTTP probe only "
+                        "distinguishes reached vs blocked — it cannot separate "
+                        "DNS, TCP, or TLS."
+                    ),
+                    scope=(
+                        "Network — the external system endpoint(s) named above "
+                        "(Workday / ServiceNow / SAP SuccessFactors / custom HTTP)."
+                    ),
+                    implies=(
+                        "The agent cannot reach the endpoint(s) above, so any "
+                        "topic that calls the affected system will error for "
+                        "every employee at runtime until the network path is "
+                        "opened."
+                    ),
+                    next_steps=(
+                        "Share the endpoint URL and the combined probable cause "
+                        "above with your InfoSec / network team and request "
+                        "allowlisting of HTTPS (port 443) to that host from the "
+                        "Power Platform outbound IP ranges, then re-run "
+                        "/flightcheck --scope infrastructure. If a Data Loss "
+                        "Prevention (DLP) policy could be blocking the connector, "
+                        "also review the DLP checkpoint — a DLP block looks "
+                        "identical to a network block to this probe."
+                    ),
+                    responsible_role=(
+                        "InfoSec / Network admin (allowlisting), with the Power "
+                        "Platform admin to confirm the environment's egress "
+                        "ranges."
+                    ),
+                    probe_layer_note=probe_layer_note,
+                ),
+                roles=sorted(unreachable_roles | {Role.POWER_PLATFORM_ADMIN.value}),
+            )
+        )
+
+    if manual_lines:
+        results.append(
+            _infra_003_row(
+                status=Status.MANUAL.value,
+                result="\n".join(manual_lines) + "\n\n" + probe_layer_note,
+                remediation=(
+                    "The egress probe could not return a definite result for "
+                    "the endpoint(s) above — either the transient flow could not "
+                    "be created, activated, or triggered, or no endpoint URL is "
+                    "recorded for the system. Re-run /flightcheck --scope "
+                    "infrastructure --runtime-reachability to retry, confirm the "
+                    "endpoint URL recorded during /connect is correct, or verify "
+                    "allowlisting manually:\n\n"
+                    + _infra_003_manual_verification()
+                ),
+                roles=sorted(manual_roles | {Role.POWER_PLATFORM_ADMIN.value}),
+            )
+        )
+
+    if reachable:
+        results.append(
+            _infra_003_row(
+                status=Status.PASSED.value,
+                result="\n".join(reachable) + "\n\n" + probe_layer_note,
+                remediation="",
+                roles=sorted(reachable_roles | {Role.POWER_PLATFORM_ADMIN.value}),
             )
         )
 
@@ -638,6 +1204,7 @@ def check_dlp_connector_classification(runner: Any) -> list[CheckResult]:
 
 _INFRA_CHECKS: list[Callable[[Any], list[CheckResult]]] = [
     check_microsoft_service_reachability,
+    check_external_endpoint_reachability,
     check_dlp_connector_classification,
     # Future checks — add here:
     # check_hr_system_reachability,

@@ -71,6 +71,7 @@ from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.checks.licensing import run_licensing_checks
 from flightcheck.checks.cloud_policy import run_cloud_policy_checks
 from flightcheck.checks.infrastructure import run_infrastructure_checks
+from flightcheck import consent
 
 
 SCOPE_MAP = {
@@ -125,6 +126,74 @@ FULL_SCOPE = [
     ("Publishing", run_publishing_checks),
     ("Cloud Policies", run_cloud_policy_checks),
 ]
+
+
+def _endpoint_systems_for_offer(runner) -> list[str]:
+    """External-system names that have a discoverable endpoint, for the consent
+    offer. Read-only; never raises (a discovery failure just means no offer)."""
+    try:
+        from flightcheck.checks.infrastructure import _discover_external_endpoints
+
+        return [ep.system for ep in _discover_external_endpoints(runner)]
+    except Exception:  # noqa: BLE001 - discovery is best-effort for the offer
+        return []
+
+
+def _apply_runtime_reachability_consent(args, runner, checks) -> None:
+    """Resolve consent for the mutating runtime-reachability probe and record the
+    decision on the runner (Approach C: proactively offer during a normal run).
+
+    Sets ``runner.runtime_reachability`` (bool: may the probe create its flow?)
+    and ``runner.runtime_reachability_declined`` (bool: surface the skip +
+    manual-verification guidance in the report). The probe only ever runs after
+    an explicit YES, so a non-interactive run without the flag stays read-only.
+    """
+    runner.runtime_reachability = False
+    runner.runtime_reachability_declined = False
+
+    # Tri-state flag: True (forced on), False (forced off), None (maybe offer).
+    # getattr keeps this robust for callers that build args without the flag.
+    flag = getattr(args, "runtime_reachability", None)
+
+    # The egress probe only lives inside the Infrastructure category (INFRA-003).
+    infra_in_scope = any(fn is run_infrastructure_checks for _, fn in checks)
+    if not infra_in_scope:
+        runner.runtime_reachability = flag is True
+        return
+
+    systems = _endpoint_systems_for_offer(runner)
+    label = consent.system_label(systems[0] if systems else None)
+
+    # Suppress the terminal offer on the ADK/chat path: the skill asks the user
+    # conversationally and passes --runtime-reachability on YES, so prompting the
+    # (usually non-tty) subprocess again would be wrong.
+    interactive = (
+        getattr(args, "invocation_source", "cli") != "adk"
+        and sys.stdin is not None
+        and sys.stdin.isatty()
+        and sys.stdout is not None
+        and sys.stdout.isatty()
+    )
+
+    decision = consent.resolve_consent(
+        flag,
+        endpoints_present=bool(systems),
+        interactive=interactive,
+        prompt_fn=(lambda: consent.ask_yes_no(label)) if interactive else None,
+    )
+    runner.runtime_reachability = decision.enabled
+    runner.runtime_reachability_declined = decision.declined
+
+    if decision.enabled and not decision.prompted:
+        # Forced on via flag: state what will happen (the user never saw the
+        # interactive offer copy) so the mutation is never a surprise.
+        print(
+            "Runtime-reachability probe enabled: FlightCheck will briefly create "
+            f"and delete a transient flow to test egress to {label}."
+        )
+    if decision.declined:
+        print(consent.build_skip_message(label))
+        print(consent.build_manual_fallback(label))
 
 
 def open_report_in_browser(output_dir):
@@ -326,6 +395,11 @@ def _run_single_checkpoint(args):
     runner.powerplatform = powerplatform
     runner.azure_arm = None
 
+    # Resolve runtime-reachability consent for --checkpoint INFRA-003 runs too,
+    # so the mutating egress probe is reachable (and consent-gated) from the
+    # single-checkpoint path, not only the broad --scope path.
+    _apply_runtime_reachability_consent(args, runner, plan.ordered_fns)
+
     for label, fn in plan.ordered_fns:
         runner.register(label, fn)
 
@@ -469,6 +543,21 @@ def main():
     parser.add_argument(
         "--no-telemetry", action="store_true",
         help="Don't emit anonymous FlightCheck outcome telemetry",
+    )
+    parser.add_argument(
+        "--runtime-reachability",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Runtime-reachability egress probe for INFRA-003. Stands up a "
+            "transient test flow, triggers it once to probe each external "
+            "endpoint from the Power Platform environment's OWN egress, then "
+            "deletes it — the only FlightCheck path that mutates the tenant. "
+            "--runtime-reachability forces it on (consent given); "
+            "--no-runtime-reachability forces it off. Omit both to be asked "
+            "interactively during a normal run; non-interactive runs stay "
+            "read-only (local probe only)."
+        ),
     )
     parser.add_argument(
         "--invocation-source", default=None,
@@ -708,6 +797,11 @@ def main():
         checks = FULL_SCOPE
     else:
         checks = SCOPE_MAP.get(args.scope, FULL_SCOPE)
+
+    # Resolve consent for the mutating runtime-reachability probe (INFRA-003)
+    # before any check runs. This is the only FlightCheck path that writes to
+    # the tenant, so it never proceeds without an explicit YES.
+    _apply_runtime_reachability_consent(args, runner, checks)
 
     for category, fn in checks:
         runner.register(category, fn)
