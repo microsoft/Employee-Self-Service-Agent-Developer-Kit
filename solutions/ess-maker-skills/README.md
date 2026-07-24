@@ -243,6 +243,27 @@ The kit also includes a local ServiceNow MCP server (`src/mcp/servicenow/`) for 
 
 Configured automatically during `/connect servicenow`.
 
+### Work IQ MCP (developer tool — people & directory lookup)
+
+> **Authoring-time developer tool, not an agent integration.** Work IQ runs on your
+> machine under your own Microsoft Entra sign-in and helps *you* while building. It is
+> never a connection reference, extension pack, or runtime dependency of the ESS agent,
+> and it is never deployed to Copilot Studio.
+
+The kit can use Microsoft [Work IQ](https://github.com/microsoft/work-iq)
+(`@microsoft/workiq`) — Microsoft's MCP server for Microsoft 365 intelligence — so
+Copilot can resolve people and directory data on demand while you author. The common
+use is **getting a person's Entra (AAD) object id**: ask *"what's the Entra object id
+for jane@contoso.com?"* and Copilot calls Work IQ's `fetch /users/{upn}` under the
+hood. Useful for seeding test employees, wiring approvers/managers, and populating
+eval fixtures without copying object ids out of the Entra portal.
+
+Enable it: `/setup` wires the `workiq` entry into `.vscode/mcp.json` automatically
+(the entry is static — no tenant values — so it ships with the kit; needs Node.js for
+`npx` and signs in interactively on first use). See
+[`src/reference/work-iq-mcp.md`](src/reference/work-iq-mcp.md) for the config snippet,
+the AAD-id recipe, and boundaries.
+
 ---
 
 ## Getting Started
@@ -252,6 +273,7 @@ Configured automatically during `/connect servicenow`.
 - [VS Code](https://code.visualstudio.com/) (latest version)
 - [GitHub Copilot](https://marketplace.visualstudio.com/items?itemName=GitHub.copilot-chat) extension (with an active subscription)
 - Access to a Power Platform environment with an ESS agent deployed
+- **Node.js** (optional) — only needed for the Work IQ developer MCP (`npx`); the rest of the kit does not require it
 - **Dataverse MCP server** enabled in your Power Platform environment with the "Microsoft GitHub Copilot" client allowed. Admin setup: Power Platform admin center → environment → Settings → Features → Dataverse Model Context Protocol → check "Allow MCP clients (GA version)" → Advanced Settings → enable "Microsoft GitHub Copilot". See [Connect Dataverse MCP with VS Code](https://learn.microsoft.com/en-us/power-apps/maker/data-platform/data-platform-mcp-vscode).
 
 ### Recommended Models
