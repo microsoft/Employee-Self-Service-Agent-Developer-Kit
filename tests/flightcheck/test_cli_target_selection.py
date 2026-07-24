@@ -27,8 +27,6 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import patch
 
-import pytest
-
 from flightcheck import cli
 from tests.conftest import require_validated_mock
 from tests.mocks import pp_admin as pp

@@ -4934,6 +4934,40 @@ def _check_custom_workflow_inventory(runner) -> list[CheckResult]:
 
 # ---- Credential Resolution ----
 
+# Directly-targetable checkpoint families whose checks consume the
+# interactively-resolved Workday runtime inputs (test employee ID + ISU
+# credentials). Only a --checkpoint run that overlaps one of these should be
+# allowed to block on those prompts. The workflow family (WD-WF-*) is the sole
+# such target: WD-SEC-003 also reads them but is emitted only in full/scope
+# runs, never as a standalone --checkpoint target.
+_WD_RUNTIME_INPUT_FAMILIES = ("WD-WF",)
+
+
+def _interactive_workday_prompts_allowed(runner) -> bool:
+    """Whether blocking on an interactive Workday runtime prompt (test
+    employee ID / ISU credentials) is appropriate for this run.
+
+    Full and scope runs (no single-checkpoint target matcher) keep the legacy
+    behavior and may prompt. In ``--checkpoint`` mode the entire Workday
+    category function is executed to hydrate shared state, but only the target
+    checkpoint's rows survive ``run()``'s post-filter — so a prompt fired by a
+    non-target check (e.g. the workflow / personal-data checks running only to
+    hydrate a ``WD-PKG-001`` request) would block the operator for a row that
+    is about to be discarded. Restrict the prompt to checkpoint runs whose
+    target actually overlaps a runtime-input-consuming family.
+    """
+    if getattr(runner, "_target_matcher", None) is None:
+        return True
+    scope = str(getattr(runner, "scope", "") or "")
+    prefix = "checkpoint:"
+    target = scope[len(prefix):] if scope.startswith(prefix) else ""
+    probe = target.rstrip("*").rstrip("-")
+    return any(
+        probe == fam or target.startswith(fam + "-")
+        for fam in _WD_RUNTIME_INPUT_FAMILIES
+    )
+
+
 def _resolve_workday_metadata(runner) -> tuple[str, str, str]:
     """Resolve non-sensitive Workday metadata: (base_url, tenant, test_employee_id).
 
@@ -4964,7 +4998,7 @@ def _resolve_workday_metadata(runner) -> tuple[str, str, str]:
         test_employee = config.get("workdayTestEmployeeId", "")
 
     # --- Source 5: Test employee ID (prompt + cache in config) ---
-    if not test_employee and sys.stdin.isatty():
+    if not test_employee and sys.stdin.isatty() and _interactive_workday_prompts_allowed(runner):
         test_employee = input("  Test Employee ID (e.g. 21508): ").strip()
         if test_employee:
             _cache_test_employee_id(test_employee)
@@ -4984,7 +5018,7 @@ def _resolve_workday_credentials(runner, tenant: str) -> tuple[str, str]:
     password = os.environ.get("WORKDAY_PASSWORD", "")
 
     # --- Source 4: Interactive prompt for secrets ---
-    if (not username or not password) and sys.stdin.isatty():
+    if (not username or not password) and sys.stdin.isatty() and _interactive_workday_prompts_allowed(runner):
         print("\n  Workday SOAP workflow tests need ISU credentials.")
         print("  (Credentials are used for this run only - never saved to disk)\n")
         if not username:
