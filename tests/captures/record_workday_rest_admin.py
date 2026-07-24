@@ -230,7 +230,6 @@ def _acquire_token_jwt_bearer(
     token_url: str, client_id: str, client_secret: str, private_key_path: str
 ) -> str | None:
     """Build a signed JWT assertion and exchange it for a bearer token."""
-    import requests
 
     print("  Auth flow: JWT Bearer (RFC 7523)")
     try:
@@ -304,7 +303,6 @@ def _acquire_token_client_credentials(
     """POST to Workday's OAuth token endpoint with client_credentials grant.
     Most Workday tenants don't support this grant type for clients
     registered via 'Register API Client for Integrations'."""
-    import requests
 
     print("  Auth flow: client_credentials")
     creds = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("ascii")
@@ -364,7 +362,6 @@ def _acquire_token_refresh_token(
     The refresh token is bootstrapped via the
     "Manage Refresh Tokens for Integrations" task in Workday.
     """
-    import requests
 
     print("  Auth flow: refresh_token (Workday Application Credentials pattern)")
     creds = base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode("ascii")

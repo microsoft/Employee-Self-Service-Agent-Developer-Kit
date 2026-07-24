@@ -324,11 +324,11 @@ def main() -> None:
             t = inner.get("$kind") if isinstance(inner, dict) else "(no-component)"
             type_counts[t or "(no-kind)"] = type_counts.get(t or "(no-kind)", 0) + 1
         if envelope_counts:
-            print(f"    Components by envelope $kind:")
+            print("    Components by envelope $kind:")
             for k, n in sorted(envelope_counts.items(), key=lambda kv: -kv[1]):
                 print(f"      {n:>4}  {k}")
         if type_counts:
-            print(f"    Components by inner $kind (the actual type):")
+            print("    Components by inner $kind (the actual type):")
             for k, n in sorted(type_counts.items(), key=lambda kv: -kv[1]):
                 print(f"      {n:>4}  {k}")
 
@@ -368,7 +368,7 @@ def main() -> None:
             cassette_path.write_text(text, encoding="utf-8")
             print(f"  Total scrubs: {scrubbed_count}. Cassette updated.")
         else:
-            print(f"  No bot-name scrubs needed (or names not found in cassette text).")
+            print("  No bot-name scrubs needed (or names not found in cassette text).")
 
 
 if __name__ == "__main__":

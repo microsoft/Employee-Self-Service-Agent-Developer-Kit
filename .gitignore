@@ -26,6 +26,7 @@
 !setup/
 !no-commit/
 !pyproject.toml
+!.pre-commit-config.yaml
 !requirements-dev.txt
 !dev-specs/
 

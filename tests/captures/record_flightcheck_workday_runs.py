@@ -42,7 +42,6 @@ remaining BotSchemaName values before committing.
 
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 
@@ -50,7 +49,13 @@ from pathlib import Path
 _KIT_SCRIPTS = Path(__file__).resolve().parents[2] / "solutions" / "ess-maker-skills" / "scripts"
 sys.path.insert(0, str(_KIT_SCRIPTS))
 
-from _common import announce, build_cassette, chdir_kit_root, confirm_or_exit, get_dataverse_url
+from _common import (  # noqa: E402
+    announce,
+    build_cassette,
+    chdir_kit_root,
+    confirm_or_exit,
+    get_dataverse_url,
+)
 
 
 def main() -> None:
