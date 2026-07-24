@@ -76,6 +76,30 @@ def system_label(name: str | None) -> str:
     return _SYSTEM_LABELS.get(key, name)
 
 
+def systems_label(names: list[str] | None) -> str:
+    """Combine one or more raw system names into a single user-facing label.
+
+    The egress probe touches EVERY discovered endpoint, so the consent offer
+    must name them all — not just the first — for consent to be informed
+    (PR #197 review). De-duplicates mapped labels and joins them naturally:
+    "ServiceNow", "Workday and ServiceNow", "Workday, ServiceNow, and SAP
+    SuccessFactors". Falls back to the generic phrase when nothing is
+    discoverable.
+    """
+    if not names:
+        return _DEFAULT_LABEL
+    labels: list[str] = []
+    for name in names:
+        mapped = system_label(name)
+        if mapped not in labels:
+            labels.append(mapped)
+    if len(labels) == 1:
+        return labels[0]
+    if len(labels) == 2:
+        return f"{labels[0]} and {labels[1]}"
+    return ", ".join(labels[:-1]) + f", and {labels[-1]}"
+
+
 def build_offer_prompt(label: str) -> str:
     """Primary terminal consent copy (standalone / installer)."""
     return (
@@ -84,8 +108,8 @@ def build_offer_prompt(label: str) -> str:
         f"To confirm that your connection to {label} has been whitelisted, "
         "FlightCheck needs to temporarily create a Power Platform flow in your "
         "environment. This flow sends a network request from the same service "
-        f"boundary as your agent to your {label} endpoint, so we can verify the "
-        "connection is allowed through your network security rules.\n"
+        "boundary as your agent to each configured endpoint, so we can verify "
+        "each connection is allowed through your network security rules.\n"
         "It only tests connectivity — no business data is read, written, or "
         "changed.\n"
         "The flow is automatically deleted as soon as the check finishes.\n"
@@ -137,7 +161,7 @@ def build_offer_prompt_conversational(label: str) -> str:
     contract). The skill mirrors this text in SKILL.md.
     """
     return (
-        f"To check that your {label} connection is whitelisted, I'll create a "
+        f"To check that your connection to {label} is whitelisted, I'll create a "
         "temporary flow in your environment that sends a test network request, "
         "then delete it right after. It won't touch any of your data. Okay to "
         "proceed?"

@@ -78,9 +78,10 @@ Prerequisites-only scopes, skip this gate and go straight to Step 2b.
 
 Ask using this exact wording, swapping `<SYSTEM>` for the system being checked
 (Workday / ServiceNow / SAP SuccessFactors / custom HTTP — use the connected
-system from `.local/config.json`; if more than one, name the primary one):
+system(s) from `.local/config.json`; if more than one, name **all** of them,
+since the probe tests every configured endpoint):
 
-> To check that your `<SYSTEM>` connection is whitelisted, I'll create a temporary
+> To check that your connection to `<SYSTEM(S)>` is whitelisted, I'll create a temporary
 > flow in your environment that sends a test network request, then delete it right
 > after. It won't touch any of your data. Okay to proceed?
 

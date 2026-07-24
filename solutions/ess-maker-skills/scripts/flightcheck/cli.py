@@ -166,7 +166,9 @@ def _apply_runtime_reachability_consent(args, runner, checks) -> None:
         return
 
     systems = _endpoint_systems_for_offer(runner)
-    label = consent.system_label(systems[0] if systems else None)
+    # Name EVERY discovered system, not just the first: the probe tests all of
+    # them, so consent must cover all of them (PR #197 review).
+    label = consent.systems_label(systems)
 
     # --- Explicit flag wins; the flag is the consent, but never silent. -------
     if flag is True:
@@ -428,10 +430,12 @@ def _run_single_checkpoint(args):
     runner.powerplatform = powerplatform
     runner.azure_arm = None
 
-    # Resolve runtime-reachability consent for --checkpoint INFRA-003 runs too,
-    # so the mutating egress probe is reachable (and consent-gated) from the
-    # single-checkpoint path, not only the broad --scope path.
-    _apply_runtime_reachability_consent(args, runner, plan.ordered_fns)
+    # No runtime-reachability consent here: INFRA-003 is not individually
+    # targetable in single-checkpoint mode (there is no INFRA CheckpointSpec in
+    # registry.py, and plan.ordered_fns holds only leaf check fns, never
+    # run_infrastructure_checks), so the egress probe never runs on this path.
+    # Consent is resolved on the --scope path only. If an INFRA checkpoint is
+    # ever registered, wire _apply_runtime_reachability_consent here then.
 
     for label, fn in plan.ordered_fns:
         runner.register(label, fn)
@@ -589,7 +593,7 @@ def main():
             "--runtime-reachability forces it on (consent given); "
             "--no-runtime-reachability forces it off. Omit both to be asked "
             "interactively during a normal run; non-interactive runs stay "
-            "read-only (local probe only)."
+            "read-only and report INFRA-003 as MANUAL guidance."
         ),
     )
     parser.add_argument(
@@ -689,7 +693,8 @@ def main():
                 print("  Power Platform: OK")
             except Exception as e:
                 print(f"  Power Platform: WARNING — {e}")
-                print("  (Runtime-reachability probe will fall back to the local probe)")
+                print("  (Runtime-reachability probe can't run without Power "
+                      "Platform auth — INFRA-003 will report MANUAL guidance)")
                 pp_admin = None
 
             if not args.environment_id:

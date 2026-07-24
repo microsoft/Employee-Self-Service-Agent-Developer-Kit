@@ -309,8 +309,10 @@ def _host_from_url(url: str | None) -> str | None:
 def _port_from_url(url: str | None) -> int:
     """Extract the TCP port from a URL, defaulting by scheme (https→443, http→80).
 
-    An explicit port in the URL (e.g. ``https://host:8443``) wins so endpoints
-    on non-standard ports are probed on the correct port, not always 443.
+    Retained after the local TCP probe was removed: the egress probe uses the
+    full ``ep.url``, but ``port`` still keys endpoint de-duplication so two
+    systems on the same host but different ports stay distinct (both probed).
+    An explicit port in the URL (e.g. ``https://host:8443``) wins.
     """
     if not url:
         return 443
@@ -467,7 +469,7 @@ class _ExternalEndpoint:
     system: str          # display name, e.g. "Workday"
     url: str             # configured endpoint URL
     host: str | None     # extracted hostname (None if unparseable)
-    port: int            # TCP port (from the URL, default 443)
+    port: int            # TCP port (from the URL, default 443); keys dedup
     role: str            # Role enum value of the owning system admin
 
 
@@ -715,8 +717,9 @@ def _live_probe_context(runner: Any) -> tuple[_ProbeContext, dict | None]:
 
     Returns ``(ctx, live_env)`` where ``live_env`` is a dict of the resolved
     egress-probe inputs (or ``None`` when the live probe cannot run). Never
-    raises: a missing prerequisite or token-acquisition failure degrades to
-    the local probe with an explanatory reason on ``ctx``.
+    raises: a missing prerequisite or token-acquisition failure records an
+    explanatory reason on ``ctx`` and the caller reports MANUAL guidance (there
+    is no local fallback).
     """
     ctx = _ProbeContext(
         live_requested=bool(getattr(runner, "runtime_reachability", False)),

@@ -85,7 +85,7 @@ class TestForcedFlag:
         assert runner.runtime_reachability is True
         assert runner.runtime_reachability_declined is False
         out = capsys.readouterr().out
-        assert "Runtime-reachability probe enabled" in out
+        assert "running with your consent" in out
         assert "Workday" in out
 
     def test_forced_off_declines_and_prints_skip_and_links(self, capsys):
@@ -159,9 +159,14 @@ class TestReadOnlyPaths:
         )
 
         assert runner.runtime_reachability is False
-        # Passive skip (CI), not an explicit decline -> no manual-links spam.
+        # Non-interactive: not an explicit decline, so declined stays False. But
+        # we DO explain that the probe did not run and how to opt in (passing the
+        # flag doubles as consent), plus the manual-verification links.
         assert runner.runtime_reachability_declined is False
-        assert "Connectivity check skipped" not in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "Connectivity check skipped" not in out  # that's the explicit-decline copy
+        assert "Network connectivity check — not run" in out
+        assert cli.consent.OUTBOUND_IP_ARTICLE_URL in out
 
     def test_no_endpoints_makes_no_offer(self, monkeypatch):
         _force_tty(monkeypatch, interactive=True)
@@ -220,7 +225,7 @@ class TestAdkChatPath:
             _INFRA_CHECKS,
         )
         assert runner.runtime_reachability is True
-        assert "Runtime-reachability probe enabled" in capsys.readouterr().out
+        assert "running with your consent" in capsys.readouterr().out
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -288,7 +293,7 @@ class TestInfraScopeSuppressesBareOffer:
             _INFRA_CHECKS,
         )
         assert runner.runtime_reachability is True
-        assert "Runtime-reachability probe enabled" in capsys.readouterr().out
+        assert "running with your consent" in capsys.readouterr().out
 
     def test_infra_scope_forced_off_still_declines_with_links(self, monkeypatch, capsys):
         _force_tty(monkeypatch, interactive=True)

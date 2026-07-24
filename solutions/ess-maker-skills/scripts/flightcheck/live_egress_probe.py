@@ -168,7 +168,7 @@ class LiveProbeResult:
                  DNS / TLS / connection / DLP).
       - None  -> the probe itself could not run to completion (create /
                  activate / callback failed), so egress is UNKNOWN and the
-                 caller should fall back to the local probe result.
+                 caller reports MANUAL guidance (there is no local fallback).
     """
 
     reachable: bool | None
@@ -422,7 +422,7 @@ def run_live_probe(
     Creates + activates a probe flow, triggers it once, reads the probed
     HTTP status, and ALWAYS deletes the flow (``finally``). Returns a
     LiveProbeResult; ``reachable is None`` means the probe could not run
-    (caller should fall back to the local probe). Never raises.
+    (caller reports MANUAL guidance; there is no local fallback). Never raises.
     """
     sess = session or requests
     workflow_id: str | None = None
