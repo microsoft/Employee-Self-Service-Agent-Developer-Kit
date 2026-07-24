@@ -141,17 +141,21 @@ def _endpoint_systems_for_offer(runner) -> list[str]:
 
 def _apply_runtime_reachability_consent(args, runner, checks) -> None:
     """Resolve consent for the mutating runtime-reachability probe and record the
-    decision on the runner (Approach C: proactively offer during a normal run).
+    decision on the runner. Consent is ALWAYS surfaced when the egress probe is
+    in scope: we prompt on an interactive terminal, announce the mutation when
+    the flag forces it on, and explain the skip (plus how to opt in) when we
+    cannot ask.
 
     Sets ``runner.runtime_reachability`` (bool: may the probe create its flow?)
     and ``runner.runtime_reachability_declined`` (bool: surface the skip +
     manual-verification guidance in the report). The probe only ever runs after
-    an explicit YES, so a non-interactive run without the flag stays read-only.
+    an explicit YES (interactive answer) or an explicit ``--runtime-reachability``
+    flag, so a run we could not get consent for stays read-only.
     """
     runner.runtime_reachability = False
     runner.runtime_reachability_declined = False
 
-    # Tri-state flag: True (forced on), False (forced off), None (maybe offer).
+    # Tri-state flag: True (forced on), False (forced off), None (must offer).
     # getattr keeps this robust for callers that build args without the flag.
     flag = getattr(args, "runtime_reachability", None)
 
@@ -164,43 +168,62 @@ def _apply_runtime_reachability_consent(args, runner, checks) -> None:
     systems = _endpoint_systems_for_offer(runner)
     label = consent.system_label(systems[0] if systems else None)
 
-    # Infrastructure scope intentionally skips Dataverse / Power Platform auth
-    # unless --runtime-reachability is explicitly passed (see the cli auth
-    # block). Without the flag there are no probe tokens, so do NOT proactively
-    # offer the probe on a bare infra run — accepting it would only degrade to a
-    # "missing tokens" MANUAL. Explicit --runtime-reachability (flag True) is
-    # handled by the auth block; explicit --no-runtime-reachability (flag False)
-    # still flows through to the normal declined path below.
-    if getattr(args, "scope", None) == "infrastructure" and flag is None:
-        runner.runtime_reachability = False
+    # --- Explicit flag wins; the flag is the consent, but never silent. -------
+    if flag is True:
+        # Passing the flag IS consent — do not re-prompt — but announce exactly
+        # what will happen so the tenant mutation is never a surprise.
+        runner.runtime_reachability = True
+        print(consent.build_forced_on_notice(label))
         return
-    # Suppress the terminal offer on the ADK/chat path: the skill asks the user
-    # conversationally and passes --runtime-reachability on YES, so prompting the
-    # (usually non-tty) subprocess again would be wrong.
+    if flag is False:
+        # Explicit opt-out: surface the skip + manual-verification guidance.
+        runner.runtime_reachability_declined = True
+        print(consent.build_skip_message(label))
+        print(consent.build_manual_fallback(label))
+        return
+
+    # --- No flag: consent must be surfaced (flag is None). --------------------
+    # ADK/chat path: the skill asks the user conversationally BEFORE the run and
+    # passes --runtime-reachability on YES, so reaching here with no flag means
+    # the skill did not get a YES. Stay read-only and let the skill own the chat
+    # messaging (prompting the non-tty subprocess again would be wrong).
+    if getattr(args, "invocation_source", "cli") == "adk":
+        return
+
+    # Infrastructure-only scope intentionally skips Dataverse / Power Platform
+    # auth unless --runtime-reachability is explicitly passed (see the cli auth
+    # block). Without the flag there are no probe tokens, so we cannot run the
+    # probe even with a YES. Tell the operator how to opt in rather than
+    # prompting for something we cannot honor.
+    if getattr(args, "scope", None) == "infrastructure":
+        print(consent.build_cannot_prompt_message(label))
+        print(consent.build_manual_fallback(label))
+        return
+
     interactive = (
-        getattr(args, "invocation_source", "cli") != "adk"
-        and sys.stdin is not None
+        sys.stdin is not None
         and sys.stdin.isatty()
         and sys.stdout is not None
         and sys.stdout.isatty()
     )
 
+    if not interactive:
+        # No TTY (CI / piped): we cannot ask a human. Stay read-only, but explain
+        # what did not run and how to opt in (the flag doubles as consent).
+        print(consent.build_cannot_prompt_message(label))
+        print(consent.build_manual_fallback(label))
+        return
+
+    # Interactive terminal: ALWAYS ask before touching the tenant.
     decision = consent.resolve_consent(
         flag,
         endpoints_present=bool(systems),
-        interactive=interactive,
-        prompt_fn=(lambda: consent.ask_yes_no(label)) if interactive else None,
+        interactive=True,
+        prompt_fn=lambda: consent.ask_yes_no(label),
     )
     runner.runtime_reachability = decision.enabled
     runner.runtime_reachability_declined = decision.declined
 
-    if decision.enabled and not decision.prompted:
-        # Forced on via flag: state what will happen (the user never saw the
-        # interactive offer copy) so the mutation is never a surprise.
-        print(
-            "Runtime-reachability probe enabled: FlightCheck will briefly create "
-            f"and delete a transient flow to test egress to {label}."
-        )
     if decision.declined:
         print(consent.build_skip_message(label))
         print(consent.build_manual_fallback(label))

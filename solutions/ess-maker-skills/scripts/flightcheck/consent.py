@@ -18,13 +18,24 @@ CLI, the installer, and the ADK/chat skill all present the same wording and the
 same manual-verification fallback. It performs no network or Dataverse calls;
 it only decides whether the probe is allowed to run and renders the copy.
 
-RUN-PATH BEHAVIOR (Approach C: proactively offer during a normal run)
----------------------------------------------------------------------
-- ``--runtime-reachability``      -> consent granted up front, no prompt.
-- ``--no-runtime-reachability``   -> declined up front, no prompt.
-- neither flag, interactive TTY   -> FlightCheck offers the probe and asks Y/N.
-- neither flag, no TTY (CI/pipe)  -> stays read-only (safe default, never asks).
-- ADK/chat                        -> the skill asks conversationally and passes
+RUN-PATH BEHAVIOR (consent is ALWAYS surfaced when there is something to probe)
+-------------------------------------------------------------------------------
+- ``--runtime-reachability``      -> consent granted up front. No prompt, but
+                                     FlightCheck announces exactly what the probe
+                                     will do (create + delete a transient flow)
+                                     so passing the flag is never a silent
+                                     mutation.
+- ``--no-runtime-reachability``   -> declined up front; shows the skip + manual
+                                     fallback.
+- neither flag, interactive TTY   -> FlightCheck ALWAYS offers the probe and
+                                     asks Y/N before doing anything.
+- neither flag, no TTY (CI/pipe)  -> stays read-only, but explains that it could
+                                     not ask for permission, how to re-run with
+                                     ``--runtime-reachability`` (which both runs
+                                     the check and counts as consent), and how to
+                                     verify manually.
+- ADK/chat                        -> the skill asks conversationally BEFORE the
+                                     run (mandatory gate) and passes
                                      ``--runtime-reachability`` on YES, so the
                                      terminal offer is suppressed for that path.
 """
@@ -114,6 +125,65 @@ def build_manual_fallback(label: str) -> str:
         "instead.\n"
         f"3. Work with your InfoSec / network team to confirm those ranges are "
         f"allowlisted in your {label} firewall / WAF."
+    )
+
+
+def build_offer_prompt_conversational(label: str) -> str:
+    """Shorter conversational consent copy for the ADK / chat (co-create) path.
+
+    The chat skill MUST ask this before running FlightCheck when the egress
+    probe is in scope. Kept here so the terminal CLI, the installer, and the
+    skill all share one canonical wording (this module's single-source-of-truth
+    contract). The skill mirrors this text in SKILL.md.
+    """
+    return (
+        f"To check that your {label} connection is whitelisted, I'll create a "
+        "temporary flow in your environment that sends a test network request, "
+        "then delete it right after. It won't touch any of your data. Okay to "
+        "proceed?"
+    )
+
+
+def build_forced_on_notice(label: str) -> str:
+    """Announcement shown when ``--runtime-reachability`` is passed explicitly.
+
+    Passing the flag is itself consent, so we do not re-prompt — but we still
+    state exactly what will happen so a caller who did not see the interactive
+    offer is never surprised by a tenant mutation. Emphasizes the two trust
+    points: only connectivity is tested, and the flow is auto-deleted.
+    """
+    return (
+        "\n"
+        "Network connectivity check — running with your consent "
+        "(--runtime-reachability)\n"
+        f"FlightCheck will temporarily create a Power Platform flow in your "
+        f"environment to test egress to {label}, then delete it as soon as the "
+        "check finishes.\n"
+        "It only tests connectivity — no business data is read, written, or "
+        "changed."
+    )
+
+
+def build_cannot_prompt_message(label: str) -> str:
+    """Shown when the probe was not run because we could not ask for permission.
+
+    Covers the non-interactive terminal (CI / piped, no TTY) and the
+    infrastructure-only scope (no probe tokens without the flag). Explains that
+    nothing was created or verified, and that re-running with
+    ``--runtime-reachability`` both runs the check and counts as consent.
+    """
+    return (
+        "\n"
+        "Network connectivity check — not run\n"
+        "FlightCheck could not ask for permission in this session, so it did "
+        "NOT create anything in your environment.\n"
+        f"Because this check didn't run, we can't confirm whether your "
+        f"connection to {label} is whitelisted. If the IP ranges aren't "
+        "whitelisted, your agent may fail to connect at runtime.\n"
+        "To run it, re-run FlightCheck with --runtime-reachability. That flag "
+        f"briefly creates and deletes a transient flow to test egress to {label} "
+        "(no business data is read, written, or changed), and passing it counts "
+        "as your consent to that one-time flow."
     )
 
 

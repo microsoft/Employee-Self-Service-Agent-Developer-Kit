@@ -58,60 +58,39 @@ Map the selection to a scope flag:
 ---
 
 ## Step 2: Run the check
+## Step 2: Consent gate for the connectivity probe (MANDATORY — ask before running)
 
-**Message:**
+FlightCheck's connectivity check (INFRA-003) confirms the agent's external system
+endpoints (Workday, ServiceNow, SAP SuccessFactors, custom HTTP) are reachable
+**from the Power Platform environment's own egress** — the path the agent runtime
+actually uses. The only way to prove that is the **live egress probe**
+(`--runtime-reachability`): it briefly creates a transient Power Platform flow,
+sends one outbound request, reads the result, then deletes the flow. This is the
+**only** FlightCheck path that writes to the tenant.
 
-Running readiness checks — this takes 1–3 minutes depending on scope...
+Because it mutates the environment, you **MUST** ask for consent **before** you run
+the check. Do not run first and ask later. The terminal CLI cannot prompt you in
+chat (it is a non-interactive subprocess), so **you own the consent question**.
 
-**End message.**
+**This gate applies only when the scope is `full`** — that is the only scope that
+runs INFRA-003. For Workday-only, ServiceNow-only, Local-files-only, or
+Prerequisites-only scopes, skip this gate and go straight to Step 2b.
 
-Run in the terminal:
+Ask using this exact wording, swapping `<SYSTEM>` for the system being checked
+(Workday / ServiceNow / SAP SuccessFactors / custom HTTP — use the connected
+system from `.local/config.json`; if more than one, name the primary one):
 
-```
-python scripts/flightcheck/cli.py --scope {SCOPE} --invocation-source adk
-```
-
-Wait for the script to finish.
-
-`cli.py` automatically opens the HTML report (`workspace/flightcheck/report.html`)
-in the user's default browser when it finishes. **Do not open it yourself** — a
-second `webbrowser.open` / `Start-Process` would launch a duplicate tab pointing
-at the same file. If the report does not appear (Codespaces, headless box, or
-the user passed `--no-open`), tell them to open it manually from the file
-explorer rather than spawning another tab from this skill.
-
----
-
-## Step 2b: Optional live egress probe (INFRA-003, consent required)
-
-INFRA-003 verifies the agent's external system endpoints (Workday, ServiceNow,
-SAP SuccessFactors, custom HTTP) are reachable. By default it runs a **read-only
-local probe** from the maker's machine — no permission needed, nothing created.
-
-There is also an opt-in **live egress probe** (`--runtime-reachability`) that confirms
-reachability from the Power Platform environment's own egress by briefly creating
-and then deleting a transient test flow. This mutates the environment, so you MUST
-get explicit consent before passing `--runtime-reachability`. (A normal terminal run
-proactively offers this same probe with an inline Y/N prompt; in chat, you own the
-consent, so ask using this exact wording, swapping `<SYSTEM>` for the system being
-checked, one of Workday / ServiceNow / SuccessFactors / custom HTTP):
-
-> To confirm your `<SYSTEM>` connection is whitelisted, I'll temporarily create a
-> Power Platform flow in your environment. It sends a network request from the same
-> service boundary as your agent to your `<SYSTEM>` endpoint, so I can verify the
-> connection is allowed through your network security rules.
->
-> It only tests connectivity. No business data is read, written, or changed, and the
-> flow is deleted as soon as the check finishes.
->
-> Okay to proceed?
+> To check that your `<SYSTEM>` connection is whitelisted, I'll create a temporary
+> flow in your environment that sends a test network request, then delete it right
+> after. It won't touch any of your data. Okay to proceed?
 
 The reassurance points (no data touched, auto-deleted) are what earn user trust.
 Keep them in whatever phrasing you use.
 
-**If the user declines**, run without `--runtime-reachability` (local probe only), note in the
-summary that the egress-level probe was skipped by choice, and offer the manual
-verification path (again swapping `<SYSTEM>` for the selected system):
+- **If the user says YES** → run the check **with** `--runtime-reachability` (Step 2b).
+- **If the user says NO** → run the check **without** the flag (Step 2b), then in the
+  summary note that the connectivity probe was skipped by choice, and offer the
+  manual verification path:
 
 > Prefer to verify manually? You can confirm the connection is whitelisted:
 >
@@ -123,10 +102,43 @@ verification path (again swapping `<SYSTEM>` for the selected system):
 > 3. Work with your InfoSec / network team to confirm those ranges are allowlisted
 >    in your `<SYSTEM>` firewall / WAF.
 
-> **Note:** `--runtime-reachability` is the only FlightCheck path that writes to the tenant.
-> It creates one transient probe flow per run, always deletes it (even on failure),
-> and sweeps any orphan left by a crashed prior run. If a prerequisite is missing
-> (no environment / Dataverse token), it degrades to the local probe and says so.
+> **Note:** without `--runtime-reachability`, INFRA-003 returns **Manual** guidance —
+> it does not fall back to a local probe (a probe from the maker's machine runs on a
+> different network than Power Platform's egress, so it cannot prove the runtime
+> path). The flag creates one transient probe flow per run, always deletes it (even
+> on failure), and sweeps any orphan left by a crashed prior run.
+
+---
+
+## Step 2b: Run the check
+
+**Message:**
+
+Running readiness checks — this takes 1–3 minutes depending on scope...
+
+**End message.**
+
+Run in the terminal. Append `--runtime-reachability` **only** if the user said YES
+at the Step 2 consent gate:
+
+```
+python scripts/flightcheck/cli.py --scope {SCOPE} --invocation-source adk
+```
+
+On YES:
+
+```
+python scripts/flightcheck/cli.py --scope {SCOPE} --invocation-source adk --runtime-reachability
+```
+
+Wait for the script to finish.
+
+`cli.py` automatically opens the HTML report (`workspace/flightcheck/report.html`)
+in the user's default browser when it finishes. **Do not open it yourself** — a
+second `webbrowser.open` / `Start-Process` would launch a duplicate tab pointing
+at the same file. If the report does not appear (Codespaces, headless box, or
+the user passed `--no-open`), tell them to open it manually from the file
+explorer rather than spawning another tab from this skill.
 
 ---
 
