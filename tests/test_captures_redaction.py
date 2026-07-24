@@ -14,7 +14,6 @@ import re
 import sys
 from pathlib import Path
 
-import pytest
 
 
 # Make tests/captures importable so we can poke at its internals.
