@@ -325,6 +325,8 @@ def _run_single_checkpoint(args):
     runner.pva = pva
     runner.powerplatform = powerplatform
     runner.azure_arm = None
+    runner.live_network_probe = bool(getattr(args, "live_network_probe", False))
+    runner.probe_target_url = getattr(args, "probe_target_url", None)
 
     for label, fn in plan.ordered_fns:
         runner.register(label, fn)
@@ -449,6 +451,18 @@ def main():
     parser.add_argument(
         "--environment-id",
         help="Override the Power Platform environment ID (used by environment_picker.py)",
+    )
+    parser.add_argument(
+        "--live-network-probe", action="store_true",
+        help="INFRA-002: probe HR-system reachability from Power Platform's OWN "
+             "egress by temporarily creating + deleting a cloud flow (net-zero). "
+             "Requires explicit maker consent; without this flag INFRA-002 uses a "
+             "local TCP probe. Live path needs --scope full.",
+    )
+    parser.add_argument(
+        "--probe-target-url",
+        help="INFRA-002: override the HR-system URL to probe (default: baseUrl from "
+             ".local/connect/workday/config.json).",
     )
     parser.add_argument(
         "--no-open", action="store_true",
@@ -702,6 +716,8 @@ def main():
     runner.pva = pva
     runner.powerplatform = powerplatform
     runner.azure_arm = azure_arm
+    runner.live_network_probe = bool(getattr(args, "live_network_probe", False))
+    runner.probe_target_url = getattr(args, "probe_target_url", None)
 
     # Register checks based on scope
     if args.scope == "full":

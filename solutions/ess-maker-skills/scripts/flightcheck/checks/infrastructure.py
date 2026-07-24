@@ -7,6 +7,7 @@ ESS FlightCheck — Infrastructure & Security (INFRA-xxx)
 Extensible module for infrastructure pre-deployment checks. Currently
 implements:
   - INFRA-001: Inbound connectivity to Microsoft services
+  - INFRA-002: HR-system reachability from Power Platform's egress boundary
 
 Adding a new INFRA-xxx check:
   1. Define a target discovery function or whatever inputs your check needs.
@@ -26,10 +27,23 @@ Design constraints (apply to all checks in this module):
   - Read-only and idempotent (AC7). No mutations, no credentials.
   - Python stdlib only (socket + ssl). No external dependencies.
   - No application-level data sent — only TCP SYN + TLS ClientHello.
+
+  EXCEPTION — INFRA-002 live network probe: when (and only when) the maker
+  grants explicit consent via the ``--live-network-probe`` flag, INFRA-002
+  temporarily creates + deletes a Power Platform cloud flow (a Dataverse
+  mutation) to measure reachability from Power Platform's own egress rather
+  than the maker's machine. The flow issues a single unauthenticated HEAD
+  request (no business data, no credentials to the target) and is always
+  deleted net-zero. The flow lifecycle lives in ``flow_probe.py`` and is
+  lazy-imported inside the consent-gated branch so the default TCP path stays
+  stdlib-only. Without consent, INFRA-002 falls back to a local TCP probe and
+  honours every constraint above.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import socket
 import ssl
 import time
@@ -392,6 +406,291 @@ def check_microsoft_service_reachability(runner: Any) -> list[CheckResult]:
 
 
 # ───────────────────────────────────────────────────────────────────────
+# INFRA-002: HR-system reachability from Power Platform's egress boundary
+#
+# Probe accuracy: HIGH (live path) — the reachability request originates from
+# Power Platform's OWN service boundary via a temporary cloud flow, which is
+# the boundary the deployed agent's connectors actually use. This answers the
+# firewall/allowlist question INFRA-001's local TCP probe cannot: "can Power
+# Platform reach Workday?", not "can the maker's laptop reach Workday?".
+#
+# The live path is CONSENT-GATED (``--live-network-probe``) because it
+# temporarily creates + deletes a Power Platform flow (see the module header
+# EXCEPTION note and flow_probe.py). Without consent — or if the live probe
+# cannot run (missing sign-in context, DLP blocks the HTTP connector,
+# insufficient permissions) — INFRA-002 falls back to a local TCP probe
+# (accuracy: MEDIUM — maker's network, not Power Platform's) so the check
+# always returns an actionable result.
+#
+# Verdict: PASS iff the target is reachable AND the instance URL is valid.
+# Authorization is deliberately NOT tested — the probe sends no credentials,
+# so a login redirect (302) counts as reachable+valid, not as a failure.
+# ───────────────────────────────────────────────────────────────────────
+
+# No public MS Learn page documents this ESS-specific check yet.
+# TODO(INFRA-002): set doc_link once the readiness-guide page is published.
+_DOC_LINK_INFRA_002 = ""
+
+# Workday redirects an unrecognized instance URL to its invalid-url landing
+# page; a Location containing one of these means reachable-but-invalid-instance.
+_INFRA_002_INVALID_URL_MARKERS = ("/invalid-url", "community.workday.com/invalid-url")
+
+
+def _load_workday_connect_config() -> dict:
+    """Best-effort load of ``.local/connect/workday/config.json`` (never raises)."""
+    try:
+        path = os.path.join(".local", "connect", "workday", "config.json")
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:  # noqa: BLE001 — missing/invalid config → no target
+        return {}
+
+
+def _resolve_probe_target(runner: Any) -> str | None:
+    """Resolve the HR-system URL to probe.
+
+    Precedence: explicit ``--probe-target-url`` override, then the Workday
+    connect config's ``baseUrl`` / ``restBaseUrl`` / ``soapBaseUrl``.
+    """
+    override = str(getattr(runner, "probe_target_url", "") or "").strip()
+    if override:
+        return override
+    cfg = _load_workday_connect_config()
+    for key in ("baseUrl", "restBaseUrl", "soapBaseUrl"):
+        val = str(cfg.get(key) or "").strip()
+        if val:
+            return val
+    return None
+
+
+def _infra_002_row(
+    status: str,
+    result: str,
+    *,
+    remediation: str = "",
+    roles: list[str] | None = None,
+) -> CheckResult:
+    return CheckResult(
+        checkpoint_id="INFRA-002",
+        category="Infrastructure",
+        priority=Priority.HIGH.value,
+        status=status,
+        description="HR-system reachability from Power Platform",
+        result=result,
+        remediation=remediation,
+        doc_link=_DOC_LINK_INFRA_002,
+        roles=roles or [Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
+    )
+
+
+def _infra_002_from_live(target_url: str, host: str, verdict: dict[str, Any]) -> CheckResult:
+    """Map a live flow-probe verdict → CheckResult (PASS iff reachable + valid)."""
+    reachable = bool(verdict.get("reachable"))
+    instance_valid = bool(verdict.get("instance_valid"))
+    http_status = verdict.get("http_status")
+    status_hint = f" (HTTP {http_status})" if http_status else ""
+
+    if not reachable:
+        err = verdict.get("error")
+        err_note = f" Probe error: {err}." if err else ""
+        status = Status.FAILED.value
+        result = (
+            f"{host}: UNREACHABLE from Power Platform's service boundary. The "
+            f"temporary probe flow's HEAD request to {target_url} returned no HTTP "
+            f"response — DNS resolution failed or the connection timed out.{err_note}"
+        )
+        remediation = (
+            f"Impact: The deployed ESS agent's connectors run from Power Platform's "
+            f"egress and will not be able to reach {host} at runtime.\n\n"
+            f"Probable cause: A firewall or network allowlist is blocking outbound "
+            f"traffic from Power Platform to {host}.\n\n"
+            f"Next steps:\n"
+            f"1. Share this result with your network / InfoSec team.\n"
+            f"2. Request allowlisting of outbound HTTPS from Power Platform to {host} "
+            f"(see the Power Platform IP ranges / service tags for your region).\n"
+            f"3. Re-run /flightcheck --scope full --live-network-probe."
+        )
+        roles = [Role.POWER_PLATFORM_ADMIN.value, Role.WORKDAY_ADMIN.value]
+    elif not instance_valid:
+        redirect = verdict.get("redirect_location")
+        redirect_note = f" (redirected to {redirect})" if redirect else ""
+        status = Status.FAILED.value
+        result = (
+            f"{host}: Reachable from Power Platform, but the instance URL "
+            f"'{target_url}' is NOT valid{status_hint}{redirect_note}. The HR system "
+            f"redirected the probe to its invalid-URL page, so the network path is "
+            f"open but the configured endpoint is wrong."
+        )
+        remediation = (
+            f"Impact: Connectivity is fine, but '{target_url}' is not a real HR-system "
+            f"instance URL — connectors pointed at it will fail.\n\n"
+            f"Next steps:\n"
+            f"1. Confirm your Workday tenant/instance URL (e.g. "
+            f"https://<host>/<tenant>) with your Workday administrator.\n"
+            f"2. Update baseUrl in .local/connect/workday/config.json (or pass "
+            f"--probe-target-url) and re-run /flightcheck --scope full "
+            f"--live-network-probe."
+        )
+        roles = [Role.WORKDAY_ADMIN.value, Role.ESS_MAKER.value]
+    else:
+        status = Status.PASSED.value
+        result = (
+            f"{host}: Reachable from Power Platform's service boundary. The HEAD "
+            f"request to {target_url} succeeded{status_hint} — your network allowlist "
+            f"permits Power Platform → HR-system connectivity. "
+            f"(Connectivity only; authorization was not tested.)"
+        )
+        remediation = ""
+        roles = [Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value]
+
+    # Net-zero cleanup: if the temporary flow could not be auto-deleted, the
+    # environment is NOT left clean — surface it (downgrade a PASS to WARNING,
+    # and always append manual-deletion guidance). The maker emphasised that
+    # flow deletion matters.
+    if verdict.get("flow_id") and not verdict.get("deleted"):
+        cleanup = verdict.get("cleanup_note") or (
+            f"The temporary probe flow '{verdict.get('flow_name')}' "
+            f"(workflowid {verdict.get('flow_id')}) could not be deleted "
+            f"automatically. Delete it manually at "
+            f"https://make.powerautomate.com (My flows)."
+        )
+        if status == Status.PASSED.value:
+            status = Status.WARNING.value
+            result += " NOTE: the temporary probe flow could not be auto-deleted."
+        remediation = (remediation + "\n\n" if remediation else "") + f"Cleanup: {cleanup}"
+
+    return _infra_002_row(status, result, remediation=remediation, roles=roles)
+
+
+def _infra_002_tcp(target_url: str, host: str, *, fallback_reason: str | None) -> CheckResult:
+    """Local TCP-probe path (default, and fallback when the live probe can't run)."""
+    prefix = ""
+    if fallback_reason:
+        prefix = (
+            f"Live probe unavailable ({fallback_reason}); fell back to a local "
+            f"TCP probe from this machine. "
+        )
+
+    probe = probe_endpoint(host, 443)
+    host_port = f"{host}:443"
+
+    if probe.dns_ok and probe.tcp_ok and probe.tls_ok:
+        return _infra_002_row(
+            Status.PASSED.value,
+            (
+                f"{prefix}{host_port} ({target_url}): Reachable from THIS MACHINE "
+                f"(DNS {probe.dns_ms}ms → TCP {probe.tcp_ms}ms → "
+                f"{probe.tls_version or 'TLS'} {probe.tls_ms}ms). NOTE: this probes "
+                f"from the maker's network, not Power Platform's egress boundary. To "
+                f"confirm Power Platform itself can reach {host}, re-run with "
+                f"--live-network-probe under --scope full."
+            ),
+            roles=[Role.ESS_MAKER.value, Role.WORKDAY_ADMIN.value],
+        )
+
+    if probe.error_layer == "dns":
+        detail = f"DNS resolution failed ({probe.dns_ms}ms)."
+    elif probe.error_layer == "tcp":
+        ip = f" DNS resolved to {probe.resolved_ip}." if probe.resolved_ip else ""
+        detail = f"TCP connection failed ({probe.tcp_ms}ms): {probe.error_message}.{ip}"
+    else:
+        detail = f"TLS handshake failed ({probe.tls_ms}ms): {probe.error_message}."
+
+    return _infra_002_row(
+        Status.FAILED.value,
+        (
+            f"{prefix}{host_port} ({target_url}): UNREACHABLE from this machine. "
+            f"{detail}"
+        ),
+        remediation=(
+            f"Impact: {host} is not reachable from this network. If the deployed "
+            f"agent runs from the same network boundary, its connectors will fail.\n\n"
+            f"Probable cause: A firewall/DNS restriction is blocking HTTPS to {host}.\n\n"
+            f"Next steps:\n"
+            f"1. Verify the HR-system URL is correct.\n"
+            f"2. Ask your network team to allowlist HTTPS to {host}.\n"
+            f"3. For an authoritative Power-Platform-side result, re-run with "
+            f"--live-network-probe under --scope full."
+        ),
+        roles=[Role.ESS_MAKER.value, Role.WORKDAY_ADMIN.value],
+    )
+
+
+def check_hr_system_reachability(runner: Any) -> list[CheckResult]:
+    """Verify the HR system is reachable from Power Platform's egress (INFRA-002).
+
+    Default path: a local TCP probe from this machine (read-only, stdlib).
+
+    Consent-gated live path (``runner.live_network_probe`` — set by the
+    ``--live-network-probe`` flag after the maker approves the network-probe
+    consent prompt): temporarily creates a Power Platform cloud flow that
+    issues a HEAD request to the HR-system URL from Power Platform's OWN
+    service boundary, reads the reachability result, then deletes the flow
+    (net-zero). Falls back to the local TCP probe if the live probe cannot run
+    (missing sign-in context, insufficient permissions, DLP blocks the HTTP
+    connector, transient failure).
+
+    PASS iff the target is reachable AND the instance URL is valid;
+    authorization is not tested.
+    """
+    target_url = _resolve_probe_target(runner)
+    if not target_url:
+        return [_infra_002_row(
+            Status.SKIPPED.value,
+            "HR-system reachability skipped: no target URL configured.",
+            remediation=(
+                "Set baseUrl in .local/connect/workday/config.json (run /connect for "
+                "Workday) or pass --probe-target-url to include INFRA-002."
+            ),
+        )]
+
+    host = _host_from_url(target_url)
+    if not host:
+        return [_infra_002_row(
+            Status.SKIPPED.value,
+            f"HR-system reachability skipped: '{target_url}' is not a valid URL.",
+            remediation=(
+                "Provide a full HR-system URL (e.g. https://<host>/<tenant>) via "
+                "baseUrl in .local/connect/workday/config.json or --probe-target-url."
+            ),
+        )]
+
+    if not bool(getattr(runner, "live_network_probe", False)):
+        return [_infra_002_tcp(target_url, host, fallback_reason=None)]
+
+    # Consent granted — attempt the live Power Platform egress probe.
+    pp = getattr(runner, "pp_admin", None)
+    env_id = getattr(runner, "env_id", None)
+    env_url = getattr(runner, "env_url", None)
+    dv_token = getattr(runner, "dv_token", None)
+    if not (pp and env_id and env_url and dv_token):
+        return [_infra_002_tcp(
+            target_url,
+            host,
+            fallback_reason=(
+                "sign-in context for the live probe was unavailable — the live path "
+                "requires --scope full with Power Platform and Dataverse access"
+            ),
+        )]
+
+    try:
+        from ..flow_probe import FlowProbeError, run_live_probe
+
+        verdict = run_live_probe(
+            env_url=env_url,
+            dv_token=dv_token,
+            pp_admin=pp,
+            env_id=env_id,
+            target_url=target_url,
+        )
+    except Exception as exc:  # noqa: BLE001 — FlowProbeError + any client error → TCP fallback
+        return [_infra_002_tcp(target_url, host, fallback_reason=str(exc))]
+
+    return [_infra_002_from_live(target_url, host, verdict)]
+
+
+# ───────────────────────────────────────────────────────────────────────
 # INFRA-006: DLP policies permit every agent connector, co-grouped, none Blocked
 #
 # Deep counterpart to ENV-008 (which only checks whether *a* policy
@@ -638,9 +937,8 @@ def check_dlp_connector_classification(runner: Any) -> list[CheckResult]:
 
 _INFRA_CHECKS: list[Callable[[Any], list[CheckResult]]] = [
     check_microsoft_service_reachability,
+    check_hr_system_reachability,
     check_dlp_connector_classification,
-    # Future checks — add here:
-    # check_hr_system_reachability,
 ]
 
 

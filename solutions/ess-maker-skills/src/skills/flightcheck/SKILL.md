@@ -57,6 +57,56 @@ Map the selection to a scope flag:
 
 ---
 
+## Step 1b: Network connectivity permission (full check only)
+
+This step applies **only when SCOPE is `full`**. For any other scope, skip
+straight to Step 2 with `{LIVE_PROBE_FLAG}` set to empty.
+
+One infrastructure check (INFRA-002) can verify that your HR-system endpoint
+is reachable **from Power Platform's own service boundary** — the boundary
+your deployed agent's connectors actually use. It does this by temporarily
+creating a Power Platform flow, and because that mutates your environment it
+requires your explicit permission. If you decline, the same check still runs,
+but as a local network probe from this machine instead.
+
+Show this Message **exactly** as written:
+
+**Message:**
+
+Network connectivity check — permission required
+
+To confirm that your connection to Workday has been whitelisted, FlightCheck needs to temporarily create a Power Platform flow in your environment. This flow sends a network request from the same service boundary as your agent to your Workday endpoint, so we can verify the connection is allowed through your network security rules.
+
+It only tests connectivity — no business data is read, written, or changed.
+
+The flow is automatically deleted as soon as the check finishes.
+
+Do you want to continue? [Y] Yes  /  [N] No
+
+**End message.**
+
+Then use `vscode_askQuestions`:
+
+```json
+[
+  {
+    "header": "NetworkProbe",
+    "question": "Temporarily create a Power Platform flow to verify connectivity from Power Platform to your HR system?",
+    "options": [
+      { "label": "Yes — verify from Power Platform", "description": "Creates and then deletes a temporary flow (net-zero). No business data is touched." },
+      { "label": "No — local check only", "description": "Runs a network probe from this machine instead. Nothing is created in your environment.", "recommended": true }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+Set the flag from the answer:
+- "Yes — verify from Power Platform" → `{LIVE_PROBE_FLAG}` = `--live-network-probe`
+- "No — local check only" → `{LIVE_PROBE_FLAG}` = (empty string)
+
+---
+
 ## Step 2: Run the check
 
 **Message:**
@@ -68,7 +118,7 @@ Running readiness checks — this takes 1–3 minutes depending on scope...
 Run in the terminal:
 
 ```
-python scripts/flightcheck/cli.py --scope {SCOPE} --invocation-source adk
+python scripts/flightcheck/cli.py --scope {SCOPE} {LIVE_PROBE_FLAG} --invocation-source adk
 ```
 
 Wait for the script to finish.
@@ -206,7 +256,7 @@ appropriate skill file:
 After all auto-fixes complete, re-run flightcheck:
 
 ```
-python scripts/flightcheck/cli.py --scope {SCOPE} --invocation-source adk
+python scripts/flightcheck/cli.py --scope {SCOPE} {LIVE_PROBE_FLAG} --invocation-source adk
 ```
 
 `cli.py` reopens the updated report in the browser automatically — **do not run

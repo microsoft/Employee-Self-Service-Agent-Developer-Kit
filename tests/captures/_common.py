@@ -261,6 +261,15 @@ REDACT_REGEX: list[tuple[re.Pattern[str], str]] = [
         re.compile(r"\bclient_secret=[A-Za-z0-9._\-]+"),
         "client_secret=REDACTED_CLIENT_SECRET",
     ),
+    # SAS signature on Logic Apps / Power Automate manual-trigger callback
+    # URLs (INFRA-002 listCallbackUrl response body + the invoke request URI:
+    # ...?sp=...&sv=...&sig=<signature>). The `sig` is a shared-access secret
+    # that authorises invoking the flow; it MUST be scrubbed even though the
+    # temporary probe flow is deleted at end-of-run.
+    (
+        re.compile(r"\bsig=[A-Za-z0-9%._\-]+"),
+        "sig=REDACTED_SAS_SIGNATURE",
+    ),
     # Long JWTs (3 base64url-encoded segments separated by dots, each
     # at least 16 chars). Catches tokens that snuck into URLs, logs, or
     # JSON values whose key didn't match the scrub list.

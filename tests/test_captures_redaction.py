@@ -214,6 +214,29 @@ class TestRedactText:
         assert "isu_account_name" not in out
         assert "REDACTED_WSSE_USERNAME" in out
 
+    def test_scrubs_sas_signature_in_callback_url(self) -> None:
+        # INFRA-002 listCallbackUrl returns a manual-trigger invoke URL whose
+        # `sig=` query param is a shared-access secret authorising the flow
+        # run. It must be scrubbed from the cassette even though the probe
+        # flow is deleted at end-of-run.
+        url = (
+            "https://prod-12.eastus.logic.azure.com/workflows/abc/triggers/"
+            "manual/paths/invoke?api-version=2016-06-01&sp=%2Ftriggers%2Fmanual"
+            "%2Frun&sv=1.0&sig=Xy9zAbC_dEf-123.456ghiJKLmnop"
+        )
+        out = _redact_text(url)
+        assert "Xy9zAbC_dEf-123.456ghiJKLmnop" not in out
+        assert "sig=REDACTED_SAS_SIGNATURE" in out
+        # Non-secret query params are preserved so the cassette stays realistic.
+        assert "sp=%2Ftriggers%2Fmanual%2Frun" in out
+        assert "sv=1.0" in out
+
+    def test_scrubs_sas_signature_in_response_body(self) -> None:
+        body = '{"value":"https://prod-12.logic.azure.com/x?sv=1.0&sig=SECRETsig123"}'
+        out = _redact_body_text(body)
+        assert "SECRETsig123" not in out
+        assert "sig=REDACTED_SAS_SIGNATURE" in out
+
 
 class TestWorkdayPiiScrubbing:
     """The Workday PII element scrubber lives outside REDACT_REGEX so it

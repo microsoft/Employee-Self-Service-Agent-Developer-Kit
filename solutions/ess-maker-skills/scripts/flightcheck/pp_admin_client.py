@@ -433,6 +433,44 @@ class PPAdminClient:
             return resp
         return resp.get("value", [])
 
+    def list_callback_url(self, env_id: str, flow_id: str) -> str | None:
+        """Return the manual-trigger invoke (callback) URL for a cloud flow.
+
+        Used by the INFRA-002 live network probe to obtain the SAS-signed URL
+        that triggers a flow's "When a HTTP request is received" trigger. The
+        flow must be ACTIVATED and its trigger named ``manual`` (the designer
+        default) for a URL to be returned.
+
+        Uses the Power Automate *runtime* listCallbackUrl action (owner scope) —
+        note NO ``scopes/admin`` segment; same host + audience as ``get_flows``
+        (``api.flow.microsoft.com`` / ``service.flow.microsoft.com`` token).
+        This is a POST, so it bypasses the module ``_SESSION`` (whose retry
+        allows only GET/HEAD/OPTIONS) and issues a plain ``requests.post``.
+
+        Returns the callback URL string, or ``None`` if the response carries no
+        URL (e.g. flow not activated). Raises for a non-2xx HTTP status so the
+        caller (``flow_probe.run_live_probe``) can fall back to the local probe.
+        """
+        url = (
+            f"{FLOW_BASE}/providers/Microsoft.ProcessSimple/environments/{env_id}"
+            f"/flows/{flow_id}/triggers/manual/listCallbackUrl"
+        )
+        resp = requests.post(
+            url,
+            headers={**self.flow_headers, "Content-Type": "application/json"},
+            params={"api-version": "2016-11-01"},
+            json={},
+            timeout=60,
+        )
+        resp.raise_for_status()
+        try:
+            data = resp.json()
+        except ValueError:
+            return None
+        if not isinstance(data, dict):
+            return None
+        return data.get("value") or data.get("response", {}).get("value")
+
     # ----- Connection APIs -----
 
     def get_connections(self, env_id: str) -> list:
