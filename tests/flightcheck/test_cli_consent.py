@@ -246,3 +246,59 @@ class TestInfraNotInScope:
         )
         assert runner.runtime_reachability is expected
         assert runner.runtime_reachability_declined is False
+
+
+# ───────────────────────────────────────────────────────────────────────
+# --scope infrastructure: no auth unless the flag is explicit, so no offer
+# ───────────────────────────────────────────────────────────────────────
+
+
+class TestInfraScopeSuppressesBareOffer:
+    """Infrastructure scope skips Dataverse / Power Platform auth unless
+    --runtime-reachability is explicit, so a bare infra run has no probe tokens.
+    The gate must NOT proactively offer the probe there (accepting would only
+    degrade to a 'missing tokens' MANUAL). Explicit flags still work."""
+
+    def test_infra_scope_omit_flag_makes_no_offer(self, monkeypatch):
+        _force_tty(monkeypatch, interactive=True)
+
+        def _boom(label):  # noqa: ANN001
+            raise AssertionError(
+                "must not offer the probe on a bare --scope infrastructure run"
+            )
+
+        monkeypatch.setattr(cli.consent, "ask_yes_no", _boom)
+        runner = _runner(_WD)
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=None, scope="infrastructure"),
+            runner,
+            _INFRA_CHECKS,
+        )
+        assert runner.runtime_reachability is False
+        assert runner.runtime_reachability_declined is False
+
+    def test_infra_scope_forced_on_still_enables(self, monkeypatch, capsys):
+        _force_tty(monkeypatch, interactive=True)
+        runner = _runner(_WD)
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=True, scope="infrastructure"),
+            runner,
+            _INFRA_CHECKS,
+        )
+        assert runner.runtime_reachability is True
+        assert "Runtime-reachability probe enabled" in capsys.readouterr().out
+
+    def test_infra_scope_forced_off_still_declines_with_links(self, monkeypatch, capsys):
+        _force_tty(monkeypatch, interactive=True)
+        runner = _runner(_WD)
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=False, scope="infrastructure"),
+            runner,
+            _INFRA_CHECKS,
+        )
+        assert runner.runtime_reachability is False
+        assert runner.runtime_reachability_declined is True
+        assert "Connectivity check skipped" in capsys.readouterr().out

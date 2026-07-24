@@ -366,12 +366,33 @@ def interpret_probe_response(body: Any) -> LiveProbeResult:
       {"reachableStatusCode": <int|null>, "actionStatus": "<str>"}
 
     An int status (any 2xx/3xx/4xx/5xx) means the environment REACHED the
-    endpoint. A null status means the HTTP action ran but got no response
-    (egress blocked).
+    endpoint. An explicit null status means the HTTP action ran but got no
+    response (egress blocked). A body that is absent, non-dict, or missing the
+    ``reachableStatusCode`` key is UNDETERMINED (the probe response could not be
+    parsed) — reachable is None so the caller degrades to MANUAL rather than
+    misreporting a definitive block.
     """
-    status = body.get("reachableStatusCode") if isinstance(body, dict) else None
+    # Distinguish "undetermined" from "blocked". Only an explicit JSON null for
+    # a PRESENT reachableStatusCode key is a genuine egress block. A missing key
+    # or an unparseable body means we simply do not know, which must not be
+    # reported as FAIL.
+    if not isinstance(body, dict) or "reachableStatusCode" not in body:
+        return LiveProbeResult(
+            reachable=None,
+            status_code=None,
+            stage="done",
+            detail="probe response missing reachableStatusCode (undetermined)",
+        )
+    status = body.get("reachableStatusCode")
     if isinstance(status, bool):  # guard: bool is an int subclass
-        status = None
+        # A boolean is not a valid HTTP status code; treat as undetermined
+        # rather than pretending we observed a reachable/blocked result.
+        return LiveProbeResult(
+            reachable=None,
+            status_code=None,
+            stage="done",
+            detail="probe returned a non-numeric reachableStatusCode (undetermined)",
+        )
     if isinstance(status, int):
         return LiveProbeResult(
             reachable=True,

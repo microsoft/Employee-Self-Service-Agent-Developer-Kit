@@ -30,6 +30,7 @@ from tests.mocks import power_automate as pa
 from flightcheck.checks.infrastructure import (
     check_external_endpoint_reachability,
 )
+from flightcheck.live_egress_probe import interpret_probe_response
 from flightcheck.runner import Priority, Role, Status
 
 require_validated_mock(pa)
@@ -252,3 +253,42 @@ class TestLiveProbeIndeterminate:
         assert "could not run" in row.result
         assert "NOT tested" in row.result
         assert "--runtime-reachability" in row.remediation
+
+
+class TestInterpretProbeResponse:
+    """interpret_probe_response must separate a genuine egress block (explicit
+    JSON null for a present key) from an UNDETERMINED probe (absent/malformed
+    body). Only the former is FAIL; the latter is reachable=None -> MANUAL."""
+
+    def test_int_status_is_reachable(self):
+        result = interpret_probe_response(
+            {"reachableStatusCode": 404, "actionStatus": "Failed"}
+        )
+
+        assert result.reachable is True
+        assert result.status_code == 404
+
+    def test_explicit_null_status_is_blocked(self):
+        # Key present, value explicitly null: the flow ran and the HTTP action
+        # got no response -> a real egress block -> FAIL.
+        result = interpret_probe_response(
+            {"reachableStatusCode": None, "actionStatus": "Failed"}
+        )
+
+        assert result.reachable is False
+
+    def test_missing_key_is_undetermined(self):
+        # Dict body but no reachableStatusCode: contract not satisfied -> we do
+        # NOT know the result, so MANUAL (reachable None), never FAIL.
+        result = interpret_probe_response({"actionStatus": "Succeeded"})
+
+        assert result.reachable is None
+
+    def test_non_dict_body_is_undetermined(self):
+        # A None / unparseable trigger body must not be reported as a block.
+        assert interpret_probe_response(None).reachable is None
+        assert interpret_probe_response("not-json").reachable is None
+
+    def test_bool_status_is_undetermined(self):
+        # bool is an int subclass but is not a valid HTTP status code.
+        assert interpret_probe_response({"reachableStatusCode": True}).reachable is None

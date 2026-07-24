@@ -164,6 +164,16 @@ def _apply_runtime_reachability_consent(args, runner, checks) -> None:
     systems = _endpoint_systems_for_offer(runner)
     label = consent.system_label(systems[0] if systems else None)
 
+    # Infrastructure scope intentionally skips Dataverse / Power Platform auth
+    # unless --runtime-reachability is explicitly passed (see the cli auth
+    # block). Without the flag there are no probe tokens, so do NOT proactively
+    # offer the probe on a bare infra run — accepting it would only degrade to a
+    # "missing tokens" MANUAL. Explicit --runtime-reachability (flag True) is
+    # handled by the auth block; explicit --no-runtime-reachability (flag False)
+    # still flows through to the normal declined path below.
+    if getattr(args, "scope", None) == "infrastructure" and flag is None:
+        runner.runtime_reachability = False
+        return
     # Suppress the terminal offer on the ADK/chat path: the skill asks the user
     # conversationally and passes --runtime-reachability on YES, so prompting the
     # (usually non-tty) subprocess again would be wrong.
@@ -633,12 +643,38 @@ def main():
     print()
 
     if infra_only_scope:
-        print("Skipping Dataverse/Graph/Power Platform auth for infrastructure scope.")
-        dv_token = None
-        tenant_id = None
+        # Infrastructure scope skips auth to stay fast and read-only. The one
+        # exception is the INFRA-003 egress probe: when explicitly opted in with
+        # --runtime-reachability it needs Dataverse + Power Platform tokens to
+        # stand up its transient flow, so acquire just those (no Graph / PVA).
         graph = None
+        tenant_id = None
+        dv_token = None
         pp_admin = None
         env_id = args.environment_id or None
+        if getattr(args, "runtime_reachability", None) is True and env_url:
+            from auth import authenticate, discover_tenant
+
+            print("Authenticating to Dataverse (runtime-reachability probe)...")
+            dv_token = authenticate(env_url)
+            tenant_id = discover_tenant(env_url)
+
+            print("Authenticating to Power Platform Admin API...")
+            pp_admin = PPAdminClient(tenant_id)
+            try:
+                pp_admin.authenticate()
+                print("  Power Platform: OK")
+            except Exception as e:
+                print(f"  Power Platform: WARNING — {e}")
+                print("  (Runtime-reachability probe will fall back to the local probe)")
+                pp_admin = None
+
+            if not args.environment_id:
+                env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
+        else:
+            print(
+                "Skipping Dataverse/Graph/Power Platform auth for infrastructure scope."
+            )
     else:
         # --- Authenticate ---
         from auth import authenticate, discover_tenant
