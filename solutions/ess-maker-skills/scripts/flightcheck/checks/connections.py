@@ -72,6 +72,7 @@ def check_connector_connections(
     category: str,
     not_found_remediation: str,
     doc_link: str = "",
+    connection_pin: str = "",
 ) -> list[CheckResult]:
     """Generic connection check for any Power Platform connector.
 
@@ -88,6 +89,15 @@ def check_connector_connections(
         category: Check category (e.g. "Workday", "ServiceNow").
         not_found_remediation: Remediation text when no connections are found.
         doc_link: Optional documentation link for the check results.
+        connection_pin: Optional operator selection (a connection ``name`` or
+            a ``displayName`` substring). When set and it matches at least one
+            of the keyword-filtered connections, the check narrows to just the
+            matching connection(s) so a tenant with several connections for the
+            same connector (dev/test/prod) reports on only the one the operator
+            is verifying. A pin that matches nothing is ignored (all matching
+            connections are validated, as before) rather than reported as
+            "not configured". Set only by standalone scope runs; single-
+            checkpoint mode leaves it empty.
 
     Returns:
         List of CheckResult entries.
@@ -125,6 +135,26 @@ def check_connector_connections(
 
         conns = filter_connections_by_connector(all_conns, connector_keyword)
 
+        # Narrow to the operator-selected connection when one is pinned and
+        # actually matches. Matching is by the connection's ``name`` (the
+        # stable connection id) OR a case-insensitive substring of its
+        # ``displayName``. A pin that matches nothing is deliberately ignored
+        # (fall through to validating all matches) so a stale/typo'd pin never
+        # masks a real connection as "not configured".
+        pin_note = ""
+        pin = (connection_pin or "").strip().lower()
+        if pin and conns:
+            narrowed = [
+                c for c in conns
+                if pin == str(c.get("name", "")).strip().lower()
+                or pin in str(
+                    c.get("properties", {}).get("displayName", "")
+                ).strip().lower()
+            ]
+            if narrowed:
+                conns = narrowed
+                pin_note = f" (scoped to selected connection '{connection_pin}')"
+
         if conns:
             connected = [c for c in conns if get_connection_status(c) == "Connected"]
             errored = [c for c in conns if get_connection_status(c) != "Connected"]
@@ -135,7 +165,7 @@ def check_connector_connections(
                 priority=Priority.HIGH.value,
                 status=Status.PASSED.value if connected else Status.FAILED.value,
                 description=f"{category} connections",
-                result=f"{len(conns)} total — {len(connected)} connected, {len(errored)} errored",
+                result=f"{len(conns)} total — {len(connected)} connected, {len(errored)} errored{pin_note}",
                 remediation="Re-authenticate errored connections in Power Platform." if errored else "",
                 doc_link=doc_link,
                 roles=[Role.POWER_PLATFORM_ADMIN.value],

@@ -134,6 +134,7 @@ def _check_connections(runner) -> list[CheckResult]:
         category="ServiceNow",
         not_found_remediation="Configure ServiceNow connections in the environment. Run /connect servicenow.",
         doc_link=f"{DOC_BASE}/servicenow",
+        connection_pin=getattr(runner, "servicenow_connection_pin", "") or "",
     )
 
 

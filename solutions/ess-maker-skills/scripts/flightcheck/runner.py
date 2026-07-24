@@ -123,6 +123,14 @@ class FlightCheckRunner:
         # target checkpoint, or every member of a target family) before the
         # summary/verdict is built. None = normal full/scope run (no filter).
         self._target_matcher: Callable | None = target_matcher
+        # Standalone-scope target selection (set by cli.py's
+        # _resolve_target_selection in scope mode only). Pins the
+        # ServiceNow connection SN-CONN-* should scope to; None ⇒ validate
+        # every matching connection (legacy behavior). The Workday SSO-app
+        # equivalent is carried on ``config["entraAppId"]`` instead, so it
+        # flows through the existing ``_workday_hints`` path all Workday-app
+        # checks already read. Single-checkpoint mode never sets these.
+        self.servicenow_connection_pin: str | None = None
 
     def register(self, category: str, fn: Callable):
         """Register a check function. fn(runner) -> list[CheckResult]."""

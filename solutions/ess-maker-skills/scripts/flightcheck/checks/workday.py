@@ -2838,6 +2838,47 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
     # was returned, masking every cert-classification branch below.
     now = datetime.now(timezone.utc)
 
+    # Scope to the operator-selected Workday SSO app when one is configured
+    # or pinned for this run. Historically WD-CONN-102 validated *every*
+    # federated Workday SAML enterprise app in the tenant and coalesced them
+    # by status; a tenant with several (dev/test/prod, demos, Okta trials)
+    # therefore lumped unrelated apps into one verdict, so a broken sibling
+    # could fail a correctly-configured deployment. The standalone flightcheck
+    # lets the operator pin the app they are verifying (interactive picker /
+    # ``--workday-app-id`` / persisted ``entraAppId``); we resolve it through
+    # the SAME ``_workday_hints`` path AUTH-005 / WD-ASSIGN-001 already use so
+    # every Workday-SSO-app check agrees on the target. When the pin matches a
+    # discovered SAML SP we narrow to it; when it matches none (e.g. the
+    # operator pinned the OAuth Workday app, which is not a SAML app) we keep
+    # the full set and say so rather than silently validating an unrelated
+    # sibling. No pin ⇒ unchanged all-apps behavior (single-checkpoint mode
+    # never sets one).
+    from ._workday_app_assignment import _workday_hints
+
+    app_id_hint, _ = _workday_hints(getattr(runner, "config", None))
+    scope_note = ""
+    if app_id_hint:
+        _hint = app_id_hint.strip().lower()
+        _matched = [
+            sp for sp in workday_sps
+            if str(sp.get("appId", "")).strip().lower() == _hint
+        ]
+        if _matched:
+            workday_sps = _matched
+            scope_note = (
+                "\n\nScoped to the configured Workday SSO app "
+                f"(entraAppId={app_id_hint}); other Workday SAML enterprise "
+                "apps in this tenant were not evaluated."
+            )
+        else:
+            scope_note = (
+                "\n\nNote: the configured Workday app "
+                f"(entraAppId={app_id_hint}) is not among the Workday SAML "
+                "SSO enterprise apps in this tenant, so it could not be used "
+                "to narrow this check; all discovered Workday SAML apps are "
+                "shown."
+            )
+
     # Classify each SP into exactly one of these buckets. Each list
     # holds (sp_summary_string, remediation_hint) tuples so the
     # output emitter can keep result text and remediation text
@@ -2967,7 +3008,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
     results: list[CheckResult] = []
 
     if failed_entries:
-        bodies = "\n".join(e["summary"] for e in failed_entries)
+        bodies = "\n".join(e["summary"] for e in failed_entries) + scope_note
         results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.FAILED.value,
@@ -3014,7 +3055,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
         ))
 
     if warning_entries:
-        bodies = "\n".join(e["summary"] for e in warning_entries)
+        bodies = "\n".join(e["summary"] for e in warning_entries) + scope_note
         # Hardening framing per AGENTS.md principle 9 — these aren't
         # functional blockers today, only operational risk.
         results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value],
@@ -3059,7 +3100,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
         ))
 
     if manual_entries:
-        bodies = "\n".join(e["summary"] for e in manual_entries)
+        bodies = "\n".join(e["summary"] for e in manual_entries) + scope_note
         intro = (
             "1 federated Workday SAML app has a healthy active signing "
             "certificate in Entra"
@@ -4893,6 +4934,40 @@ def _check_custom_workflow_inventory(runner) -> list[CheckResult]:
 
 # ---- Credential Resolution ----
 
+# Directly-targetable checkpoint families whose checks consume the
+# interactively-resolved Workday runtime inputs (test employee ID + ISU
+# credentials). Only a --checkpoint run that overlaps one of these should be
+# allowed to block on those prompts. The workflow family (WD-WF-*) is the sole
+# such target: WD-SEC-003 also reads them but is emitted only in full/scope
+# runs, never as a standalone --checkpoint target.
+_WD_RUNTIME_INPUT_FAMILIES = ("WD-WF",)
+
+
+def _interactive_workday_prompts_allowed(runner) -> bool:
+    """Whether blocking on an interactive Workday runtime prompt (test
+    employee ID / ISU credentials) is appropriate for this run.
+
+    Full and scope runs (no single-checkpoint target matcher) keep the legacy
+    behavior and may prompt. In ``--checkpoint`` mode the entire Workday
+    category function is executed to hydrate shared state, but only the target
+    checkpoint's rows survive ``run()``'s post-filter — so a prompt fired by a
+    non-target check (e.g. the workflow / personal-data checks running only to
+    hydrate a ``WD-PKG-001`` request) would block the operator for a row that
+    is about to be discarded. Restrict the prompt to checkpoint runs whose
+    target actually overlaps a runtime-input-consuming family.
+    """
+    if getattr(runner, "_target_matcher", None) is None:
+        return True
+    scope = str(getattr(runner, "scope", "") or "")
+    prefix = "checkpoint:"
+    target = scope[len(prefix):] if scope.startswith(prefix) else ""
+    probe = target.rstrip("*").rstrip("-")
+    return any(
+        probe == fam or target.startswith(fam + "-")
+        for fam in _WD_RUNTIME_INPUT_FAMILIES
+    )
+
+
 def _resolve_workday_metadata(runner) -> tuple[str, str, str]:
     """Resolve non-sensitive Workday metadata: (base_url, tenant, test_employee_id).
 
@@ -4923,7 +4998,7 @@ def _resolve_workday_metadata(runner) -> tuple[str, str, str]:
         test_employee = config.get("workdayTestEmployeeId", "")
 
     # --- Source 5: Test employee ID (prompt + cache in config) ---
-    if not test_employee and sys.stdin.isatty():
+    if not test_employee and sys.stdin.isatty() and _interactive_workday_prompts_allowed(runner):
         test_employee = input("  Test Employee ID (e.g. 21508): ").strip()
         if test_employee:
             _cache_test_employee_id(test_employee)
@@ -4943,7 +5018,7 @@ def _resolve_workday_credentials(runner, tenant: str) -> tuple[str, str]:
     password = os.environ.get("WORKDAY_PASSWORD", "")
 
     # --- Source 4: Interactive prompt for secrets ---
-    if (not username or not password) and sys.stdin.isatty():
+    if (not username or not password) and sys.stdin.isatty() and _interactive_workday_prompts_allowed(runner):
         print("\n  Workday SOAP workflow tests need ISU credentials.")
         print("  (Credentials are used for this run only - never saved to disk)\n")
         if not username:

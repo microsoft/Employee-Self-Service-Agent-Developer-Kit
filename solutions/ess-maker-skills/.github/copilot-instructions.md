@@ -320,6 +320,14 @@ JSON format", "something went wrong with Workday".
 "flightcheck", "flight check", "is my agent ready", "validate my environment",
 "check my setup", "pre-flight", "deployment readiness", "run validation".
 
+**FlightCheck results rendering:** When presenting `/flightcheck` results (Step 3
+of `src/skills/flightcheck/SKILL.md`), read `workspace/flightcheck/results.json`
+with your file-reading tool and format the summary banner and tables **yourself,
+directly in the chat reply**. Do NOT write or execute any script (`.py`, `.js`,
+`.ps1`, shell one-liner, etc.) to parse the JSON, build the tables, or print the
+summary. Generating a helper script here is a bug — it leaks raw terminal output
+and internal process into chat instead of the clean formatted result.
+
 **Quality validation invocation:** When quality validation is requested on
 eval files — at step 4.3 of the eval create flow, step 4 of the eval
 update flow, OR step 5 of the eval delete flow (single test case deletion
