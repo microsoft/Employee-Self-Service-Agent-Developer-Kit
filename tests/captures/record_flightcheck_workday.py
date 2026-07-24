@@ -33,7 +33,6 @@ from __future__ import annotations
 import os
 import re
 import sys
-from pathlib import Path
 from xml.sax.saxutils import escape as xml_escape
 
 from _common import announce, build_cassette, chdir_kit_root, confirm_or_exit

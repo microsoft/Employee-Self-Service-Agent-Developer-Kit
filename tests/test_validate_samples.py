@@ -12,7 +12,6 @@ import sys
 import textwrap
 from pathlib import Path
 
-import pytest
 
 # Make repo-root tools/ package importable for tests without altering pyproject.
 _REPO_ROOT = Path(__file__).resolve().parent.parent

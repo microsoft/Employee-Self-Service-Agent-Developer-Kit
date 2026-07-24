@@ -74,7 +74,7 @@ def main() -> None:
         if not env_id:
             print(f"ERROR: no BAP environment matched Dataverse host {target_host!r}.")
             sys.exit(1)
-        print(f"  Resolved env_id by instanceUrl match")
+        print("  Resolved env_id by instanceUrl match")
 
         # Each subsequent call is best-effort — if any individual endpoint
         # 404s or 5xx's we want to keep capturing the others rather than
