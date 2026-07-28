@@ -228,10 +228,11 @@ def test_manual_count_serialized_to_json(tmp_path) -> None:
     assert "Manual" in html
     assert "pill manual" in html
     assert 'data-s="manual"' in html
-    # Multi-line result payloads must keep their formatting: they render
-    # in a <pre class="err"> block whose CSS pins whitespace preservation
-    # (issue: wall-of-text rendering in early AUTH-006 iterations).
-    assert '<pre class="err">' in html
-    assert "white-space:pre" in html
+    # Multi-line result payloads keep their line breaks but render as normal
+    # wrapped prose (not a monospace code box): a <dd class="detail"> block
+    # whose CSS preserves newlines (white-space:pre-wrap) and wraps long lines
+    # instead of forcing a horizontal scrollbar.
+    assert '<dd class="detail">' in html
+    assert "white-space:pre-wrap" in html
     assert "Manual finding line 1" in html
     assert "line 2 \u2014 indented" in html

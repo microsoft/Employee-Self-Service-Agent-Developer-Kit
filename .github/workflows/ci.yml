@@ -26,7 +26,10 @@ jobs:
         python-version: '3.11'
 
     - name: Install ruff
-      run: pip install ruff
+      # Pinned for reproducibility: an unpinned install silently upgrades and a
+      # Ruff release that broadens the default rule set would fail every PR. The
+      # rule set itself is pinned in pyproject.toml ([tool.ruff.lint] select).
+      run: pip install ruff==0.16.0
 
     - name: Discover Python source paths
       id: discover

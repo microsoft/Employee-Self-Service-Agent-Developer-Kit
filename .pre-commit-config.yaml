@@ -1,0 +1,36 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+#
+# Repo-root pre-commit hooks. Lints the repo's Python sources under solutions/,
+# tests/, and tools/ with Ruff, mirroring the "Lint Python" job in
+# .github/workflows/ci.yml so contributors catch lint failures locally before
+# pushing — the same gate, one commit earlier.
+#
+# Ruff is pinned to the SAME version as CI (see .github/workflows/ci.yml) and
+# reads its rule set from pyproject.toml ([tool.ruff.lint] select), which is
+# pinned to Ruff's classic default (E4/E7/E9 + F). Pinning both the version and
+# the rule set keeps lint deterministic: a future Ruff release that broadens the
+# default rule set can't silently fail every PR (which is exactly what happened
+# and prompted this config).
+#
+# EXCLUDED: tools/ess-nextgen-migration-toolkit/ is intentionally NOT covered
+# here. That toolkit is fully self-governed — it has its OWN Ruff config, its own
+# uv-locked Ruff version, and its own .pre-commit-config.yaml (installed via
+# `mtk run --dev`) — and it deliberately avoids the external ruff-pre-commit
+# mirror to stay pinned to uv.lock (no version drift). Its nearest Ruff config
+# wins for config; excluding it here keeps the tool VERSION self-governed too.
+#
+# Enable locally with:
+#     pre-commit install
+# Run on demand:
+#     pre-commit run --all-files
+minimum_pre_commit_version: "3.5.0"
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.0
+    hooks:
+      - id: ruff-check
+        name: ruff check — solutions/, tests/, tools/ (excl. MTK toolkit)
+        args: [--output-format=github]
+        files: ^(solutions|tests|tools)/.*\.py$
+        exclude: ^tools/ess-nextgen-migration-toolkit/

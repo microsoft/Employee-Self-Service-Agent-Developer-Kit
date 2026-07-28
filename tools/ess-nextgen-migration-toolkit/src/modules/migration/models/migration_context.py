@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Any
 
 from core.models import ExecutionContext
 
@@ -17,3 +18,12 @@ class MigrationContext(ExecutionContext):
 
     All ESS migration steps operate on this type via ``MigrationPipelineStep``.
     """
+
+    tid: str | None = None
+    oid: str | None = None
+    upn: str | None = None
+    environment_url: str | None = None
+    preferred_solution: str | None = None
+    selected_agent_id: str | None = None
+    selected_agent_name: str | None = None
+    dataverse_client: Any = field(default=None, repr=False)

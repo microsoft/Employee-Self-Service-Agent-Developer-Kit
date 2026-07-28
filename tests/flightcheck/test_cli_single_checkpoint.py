@@ -35,12 +35,16 @@ def _args(
     checkpoint: str,
     tmp_path: Path,
     environment_url: str | None = None,
+    no_telemetry: bool = True,
+    invocation_source: str | None = None,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         checkpoint=checkpoint,
         environment_url=environment_url,
         environment_id=None,
         output=str(tmp_path / "out"),
+        no_telemetry=no_telemetry,
+        invocation_source=invocation_source,
     )
 
 
@@ -157,3 +161,89 @@ class TestHermeticRun:
         with pytest.raises(SystemExit) as exc:
             cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
         assert exc.value.code == 1
+
+
+class TestCheckpointTelemetry:
+    """Single-checkpoint runs emit outcome telemetry attributed to the
+    ``connect`` invocation source with a ``checkpoint:<ID>`` scope (ADO
+    7587431). The emit is best-effort and never affects the exit code.
+    """
+
+    @staticmethod
+    def _capture(monkeypatch: pytest.MonkeyPatch) -> dict:
+        """Stub both telemetry families and capture the kwargs passed to the
+        legacy ``emit_flightcheck_telemetry`` call. Returns a dict that is
+        populated with ``called`` / ``kwargs`` once the emit runs."""
+        from flightcheck import telemetry as _tele_mod
+        import adk_telemetry as _adk_mod
+
+        captured: dict = {"called": False, "kwargs": None}
+
+        def _fake_emit(run_result, **kwargs):  # noqa: ARG001
+            captured["called"] = True
+            captured["kwargs"] = kwargs
+            return {"sent": False, "events": 0, "status": None, "env": "dev", "reason": "test"}
+
+        monkeypatch.setattr(_tele_mod, "emit_flightcheck_telemetry", _fake_emit)
+        # Neutralise the adk.* family so no network / real identity is touched.
+        monkeypatch.setattr(_adk_mod, "set_identity", lambda *a, **k: None)
+        monkeypatch.setattr(_adk_mod, "next_run_index", lambda *a, **k: 1)
+        monkeypatch.setattr(_adk_mod, "emit_flightcheck_run", lambda *a, **k: None)
+        monkeypatch.setattr(_adk_mod, "emit_flightcheck_result", lambda *a, **k: None)
+        monkeypatch.setattr(_adk_mod, "flush", lambda *a, **k: None)
+        return captured
+
+    def test_emits_connect_source_and_checkpoint_scope(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        TestHermeticRun._install_fake_plan(
+            monkeypatch, [_row("WD-ENTRA-CONSENT-001", Status.PASSED.value)]
+        )
+        captured = self._capture(monkeypatch)
+        # no_telemetry=False reaches the emit; invocation_source unset -> connect.
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(
+                _args("WD-ENTRA-CONSENT-001", tmp_path, no_telemetry=False)
+            )
+        assert exc.value.code == 0
+        assert captured["called"] is True
+        assert captured["kwargs"]["invocation_source"] == "connect"
+        assert captured["kwargs"]["scope"] == "checkpoint:WD-ENTRA-CONSENT-001"
+
+    def test_explicit_invocation_source_wins(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        TestHermeticRun._install_fake_plan(
+            monkeypatch, [_row("FAKE-001", Status.PASSED.value)]
+        )
+        captured = self._capture(monkeypatch)
+        with pytest.raises(SystemExit):
+            cli._run_single_checkpoint(
+                _args("FAKE-001", tmp_path, no_telemetry=False, invocation_source="adk")
+            )
+        assert captured["kwargs"]["invocation_source"] == "adk"
+
+    def test_no_telemetry_flag_suppresses_emit(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        TestHermeticRun._install_fake_plan(
+            monkeypatch, [_row("FAKE-001", Status.PASSED.value)]
+        )
+        captured = self._capture(monkeypatch)
+        with pytest.raises(SystemExit):
+            cli._run_single_checkpoint(
+                _args("FAKE-001", tmp_path, no_telemetry=True)
+            )
+        assert captured["called"] is False

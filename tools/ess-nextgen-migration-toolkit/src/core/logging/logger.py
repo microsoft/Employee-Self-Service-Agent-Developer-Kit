@@ -38,7 +38,7 @@ class TeeStream(TextIOBase):
         chars_written = self._original.write(text)
         try:
             self._log_file.write(text)
-        except Exception:  # noqa: BLE001 — DIAG-001: diagnostics must never abort execution
+        except (OSError, ValueError):  # DIAG-001: diagnostics must never abort execution
             pass
         return chars_written
 
@@ -47,7 +47,7 @@ class TeeStream(TextIOBase):
         self._original.flush()
         try:
             self._log_file.flush()
-        except Exception:  # noqa: BLE001 — DIAG-001: diagnostics must never abort execution
+        except (OSError, ValueError):  # DIAG-001: diagnostics must never abort execution
             pass
 
     def isatty(self) -> bool:
@@ -132,7 +132,7 @@ class Logger:
             try:
                 self._log_file.flush()
                 self._log_file.close()
-            except Exception:  # noqa: BLE001 — DIAG-001: safe teardown
+            except (OSError, ValueError):  # DIAG-001: safe teardown
                 pass
         self._started = False
 
@@ -243,11 +243,18 @@ class Logger:
         pipeline_stage: str,
         pipeline_step: str,
     ) -> None:
-        if level < self._level:
-            return
-
         timestamp = self._clock().strftime("%Y-%m-%d %H:%M:%S")
-        line = f"{timestamp} {level.name} {pipeline_stage} {pipeline_step} {message}\n"
-        stream = sys.stderr if level >= LogLevel.ERROR else sys.stdout
-        stream.write(line)
-        stream.flush()
+        line = f"[{timestamp}] [{level.name}] [{pipeline_stage}/{pipeline_step}] {message}\n"
+
+        if level >= self._level:
+            # Above console threshold — write to console (TeeStream mirrors to session.log)
+            stream = sys.stderr if level >= LogLevel.ERROR else sys.stdout
+            stream.write(line)
+            stream.flush()
+        elif self._log_file is not None:
+            # Below console threshold — write directly to session.log only
+            try:
+                self._log_file.write(line)
+                self._log_file.flush()
+            except OSError:  # DIAG-001: diagnostics file write failure
+                pass

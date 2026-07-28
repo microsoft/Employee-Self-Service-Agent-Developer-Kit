@@ -4,7 +4,7 @@
 | ---------- | ------------------------- |
 | ID         | TASK-009                  |
 | Workstream | 0 — Repository Foundation |
-| Status     | TODO                      |
+| Status     | BLOCKED                      |
 | Consumes   | TASK-003, TASK-006, TASK-007 |
 
 ## Description

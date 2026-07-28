@@ -39,10 +39,15 @@
 
 | Concern               | Implementation location                         |
 | --------------------- | ----------------------------------------------- |
+| Pipeline framework    | `src/core/pipelines/`                           |
 | Dataverse APIs        | `src/core/outbound/`                            |
-| Domain Models         | `src/core/models/`                              |
+| Domain Models         | `src/core/models/` + `src/modules/migration/models/` |
 | Migration Rules       | `src/modules/migration/steps/`                  |
-| Pipeline Registration | `src/modules/migration/`                        |
+| Migration Step base   | `src/modules/migration/migration_step.py`       |
+| Input Pipeline        | `src/modules/preprocessing/`                    |
+| Output Pipeline       | `src/modules/postprocessing/`                   |
+| Orchestrator          | `src/service/mtk_orchestrator.py`               |
+| Constants             | `src/service/constants.py`                      |
 | Utilities             | `src/core/utils/`                               |
 | Diagnostics code      | `src/core/logging/`                             |
 | Generated output      | `output/session-<timestamp>/`                   |
