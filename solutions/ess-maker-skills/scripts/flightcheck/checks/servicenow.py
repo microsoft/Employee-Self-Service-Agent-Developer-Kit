@@ -8,6 +8,7 @@ Validates ServiceNow connection references, flow status, template configurations
 in Dataverse, and local agent topic files for ServiceNow HRSD/ITSM scenarios.
 """
 
+import json
 import os
 import re
 import sys
@@ -628,22 +629,111 @@ def _value_has_valid_base_url(value: str | None) -> bool:
     return False
 
 
+# The portal base URL lives only in the two extension-pack "root" configs
+# (msdyn_ServiceNowHRSD / msdyn_ServiceNowITSM) as a JSON object carrying a
+# "ServiceNowPortalBaseURI" field. Every other ServiceNow-named template
+# config (scenario request templates, field mappings, live-agent settings)
+# never carries the portal URL, so SN-CFG-002 must evaluate only the configs
+# that actually hold this field — otherwise it false-WARNs on the majority.
+_BASE_URI_KEY = "servicenowportalbaseuri"
+
+
+def _portal_base_uri_field(value: str | None) -> tuple[bool, str]:
+    """Return ``(has_field, field_value)`` for a template config value.
+
+    ``has_field`` is True only when the value carries a
+    ``ServiceNowPortalBaseURI`` field — the marker of a base-URL-bearing
+    config. ``field_value`` is that field's string ('' when present but
+    empty). Non-base-URL configs (the majority of ServiceNow-named configs)
+    return ``(False, '')`` and are skipped by SN-CFG-002.
+    """
+    if not value or not value.strip():
+        return (False, "")
+    try:
+        data = json.loads(value)
+    except (ValueError, TypeError):
+        # Non-JSON value — fall back to substring detection so a
+        # differently-serialised config still counts as base-URL-bearing.
+        if _BASE_URI_KEY in value.lower():
+            return (True, value)
+        return (False, "")
+    if isinstance(data, dict):
+        for key, val in data.items():
+            if isinstance(key, str) and key.lower() == _BASE_URI_KEY:
+                return (True, val if isinstance(val, str) else "")
+    return (False, "")
+
+
+def _pack_for_config_name(name: str | None) -> str | None:
+    """Map a ServiceNow config/env-var name to its extension pack token."""
+    lowered = (name or "").lower()
+    if "hrsd" in lowered:
+        return "hrsd"
+    if "itsm" in lowered:
+        return "itsm"
+    return None
+
+
+def _env_var_valid_base_urls(env_url: str, dv_token: str) -> dict[str, str]:
+    """Return ``{pack_token: url}`` for ServiceNow ``*PortalBaseURI`` env
+    vars that are set to a valid absolute URL.
+
+    SN-CFG-002 validates the legacy template-config base URL. Once a tenant
+    moves to the update-safe env-var mechanism (US 7535608, checked by
+    SN-URL-001/002), the template config is intentionally left empty, so
+    SN-CFG-002 must defer to the env var to avoid a false WARN on migrated
+    tenants. Returns ``{}`` on any error — deference simply does not apply.
+    """
+    try:
+        from auth import query_all
+
+        defs = query_all(
+            env_url, dv_token,
+            "environmentvariabledefinitions",
+            "schemaname,environmentvariabledefinitionid",
+            filter_expr="contains(schemaname,'PortalBaseURI')",
+        )
+        if not defs:
+            return {}
+        vals = query_all(
+            env_url, dv_token,
+            "environmentvariablevalues",
+            "value,_environmentvariabledefinitionid_value",
+        )
+    except Exception:
+        return {}
+
+    schema_by_def_id = {
+        d.get("environmentvariabledefinitionid"): d.get("schemaname", "")
+        for d in defs
+    }
+    valid: dict[str, str] = {}
+    for v in vals:
+        schema = schema_by_def_id.get(v.get("_environmentvariabledefinitionid_value"))
+        if not schema:
+            continue
+        if not _value_has_valid_base_url(v.get("value", "")):
+            continue
+        pack = _pack_for_config_name(schema)
+        if pack:
+            valid[pack] = v.get("value", "")
+    return valid
+
+
 def _check_template_config_base_urls(runner) -> list[CheckResult]:
-    """SN-CFG-002 — verify the portal base URL value inside each ServiceNow
-    template config is populated and well-formed.
+    """SN-CFG-002 — verify the portal base URL is populated in the ServiceNow
+    extension-pack template config(s) that carry it.
 
-    Extends SN-CFG-001 (which only validates that the expected config
-    records exist by scenario name) from *presence* to *value populated*.
+    Only the HRSD/ITSM root configs embed the base URL (as a
+    ``ServiceNowPortalBaseURI`` JSON field); scenario/field-mapping configs
+    never do and are ignored. When a tenant has moved the base URL to the
+    update-safe environment variable (US 7535608 / SN-URL-001/002), this
+    check defers to that env var instead of flagging the now-empty template
+    config.
+
     When the base URL value is blank or malformed, "read all tickets" /
-    "read all cases" responses silently omit hyperlinks — no runtime
-    error is surfaced, so a pre-flight WARN catches it before rollout.
-
-    Reads the Dataverse ``msdyn_value`` column of
-    ``msdyn_employeeselfservicetemplateconfigs`` (Dataverse Web API is the
-    ``documented`` tier; field names confirmed in the production
-    ``backup_template_configs.py`` selector). Gated the same way as the
-    rest of the ServiceNow deep validation (``run_servicenow_checks``
-    early-returns when no ServiceNow flows are detected).
+    "read all cases" responses silently omit hyperlinks — no runtime error
+    is surfaced, so a pre-flight WARN catches it before rollout.
     """
     results: list[CheckResult] = []
     env_url = runner.env_url
@@ -685,14 +775,38 @@ def _check_template_config_base_urls(runner) -> list[CheckResult]:
         ))
         return results
 
-    if not configs:
-        # SN-CFG-001 already reports the missing-config (NotConfigured)
-        # state; nothing to validate the base URL against here.
+    # Scope to only the config(s) that actually carry the portal base URL
+    # field. The majority of ServiceNow-named configs are scenario/field-
+    # mapping records that never hold a URL and must not be flagged.
+    base_url_configs = []
+    for c in configs:
+        has_field, field_value = _portal_base_uri_field(c.get("msdyn_value"))
+        if has_field:
+            base_url_configs.append((c.get("msdyn_name", "(unnamed)"), field_value))
+
+    env_valid = _env_var_valid_base_urls(env_url, dv_token)
+
+    if not base_url_configs:
+        # No template config carries the base URL field. Either the pack
+        # isn't installed, or the tenant stores the URL only in the env var.
+        if env_valid:
+            results.append(CheckResult(roles=roles,
+                checkpoint_id="SN-CFG-002", category="ServiceNow",
+                priority=Priority.MEDIUM.value, status=Status.PASSED.value,
+                description="ServiceNow portal base URL populated",
+                result=(
+                    "Portal base URL is provided via the update-safe environment "
+                    "variable (validated by SN-URL-001/002); no template-config "
+                    "base URL to validate."
+                ),
+                doc_link=f"{DOC_BASE}/servicenow",
+            ))
+            return results
         results.append(CheckResult(roles=roles,
             checkpoint_id="SN-CFG-002", category="ServiceNow",
             priority=Priority.MEDIUM.value, status=Status.NOT_CONFIGURED.value,
             description="ServiceNow portal base URL populated",
-            result="No ServiceNow template configs found to validate base URL value",
+            result="No ServiceNow template config carries a portal base URL to validate",
             remediation=(
                 "Install the ServiceNow extension pack (HRSD/ITSM) in Copilot "
                 "Studio — see SN-CFG-001."
@@ -701,32 +815,37 @@ def _check_template_config_base_urls(runner) -> list[CheckResult]:
         ))
         return results
 
+    # Evaluate each base-URL config, deferring per-pack to the update-safe
+    # env var when it already holds a valid URL (migrated tenant).
     missing = []
-    for c in configs:
-        name = c.get("msdyn_name", "(unnamed)")
-        if not _value_has_valid_base_url(c.get("msdyn_value")):
+    deferred = []
+    validated = 0
+    for name, field_value in base_url_configs:
+        pack = _pack_for_config_name(name)
+        if pack and pack in env_valid:
+            deferred.append(name)
+            continue
+        if _value_has_valid_base_url(field_value):
+            validated += 1
+        else:
             missing.append(name)
 
-    if not missing:
-        results.append(CheckResult(roles=roles,
-            checkpoint_id="SN-CFG-002", category="ServiceNow",
-            priority=Priority.MEDIUM.value, status=Status.PASSED.value,
-            description="ServiceNow portal base URL populated",
-            result=(
-                f"All {len(configs)} ServiceNow template config(s) carry a "
-                "populated, well-formed http(s) portal base URL"
-            ),
-            doc_link=f"{DOC_BASE}/servicenow",
-        ))
-    else:
+    if missing:
+        result = (
+            f"{len(missing)} of {len(base_url_configs)} ServiceNow base-URL "
+            f"config(s) have a missing or malformed portal base URL: "
+            f"{', '.join(sorted(missing))}"
+        )
+        if deferred:
+            result += (
+                f" ({len(deferred)} superseded by the env var and validated by "
+                "SN-URL-001/002)"
+            )
         results.append(CheckResult(roles=roles,
             checkpoint_id="SN-CFG-002", category="ServiceNow",
             priority=Priority.MEDIUM.value, status=Status.WARNING.value,
             description="ServiceNow portal base URL populated",
-            result=(
-                f"{len(missing)} of {len(configs)} ServiceNow template config(s) "
-                f"have a missing or malformed portal base URL: {', '.join(sorted(missing))}"
-            ),
+            result=result,
             remediation=(
                 "Set the ServiceNow portal base URL to your instance URL "
                 "(e.g. https://<instance>.service-now.com) in the HRSD/ITSM "
@@ -736,7 +855,32 @@ def _check_template_config_base_urls(runner) -> list[CheckResult]:
             ),
             doc_link=f"{DOC_BASE}/servicenow",
         ))
+        return results
 
+    if deferred and validated == 0:
+        result = (
+            f"All {len(deferred)} ServiceNow base-URL config(s) are superseded "
+            "by the update-safe env var (validated by SN-URL-001/002)."
+        )
+    elif deferred:
+        result = (
+            f"{validated} ServiceNow base-URL template config(s) carry a "
+            "populated, well-formed http(s) portal base URL; "
+            f"{len(deferred)} superseded by the env var (validated by "
+            "SN-URL-001/002)."
+        )
+    else:
+        result = (
+            f"All {len(base_url_configs)} ServiceNow base-URL template config(s) "
+            "carry a populated, well-formed http(s) portal base URL"
+        )
+    results.append(CheckResult(roles=roles,
+        checkpoint_id="SN-CFG-002", category="ServiceNow",
+        priority=Priority.MEDIUM.value, status=Status.PASSED.value,
+        description="ServiceNow portal base URL populated",
+        result=result,
+        doc_link=f"{DOC_BASE}/servicenow",
+    ))
     return results
 
 

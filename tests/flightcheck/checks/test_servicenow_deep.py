@@ -14,6 +14,7 @@ is exercised by the connection/env tests).
 
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -139,109 +140,122 @@ def test_template_configs_skipped_without_token():
 # _check_template_config_base_urls — SN-CFG-002 (portal base URL populated)
 # --------------------------------------------------------------------------
 
-def test_base_url_all_populated_passes(monkeypatch):
-    import auth
-    monkeypatch.setattr(
-        auth, "query_all",
-        lambda *a, **kw: [
-            dv.template_config(name="ServiceNowHRSDGetCasesList"),
-            dv.template_config(
-                name="ServiceNowITSMGetUserTickets",
-                value="https://contoso.service-now.com/api/now/table/incident",
-            ),
-        ],
+def _base_url_cfg(name, url):
+    """A root extension-pack config that carries the portal base URL."""
+    return dv.template_config(
+        name=name, value=json.dumps({"ServiceNowPortalBaseURI": url})
     )
+
+
+def _scenario_cfg(name):
+    """A scenario / field-mapping config — never carries the base URL."""
+    return dv.template_config(
+        name=name, value=json.dumps({"Scenario": name, "Table": "sn_hr_core_case"})
+    )
+
+
+def _route(*, configs=None, env_defs=None, env_vals=None):
+    """Build a query_all stub that routes by Dataverse entity set."""
+    configs = configs or []
+    env_defs = env_defs or []
+    env_vals = env_vals or []
+
+    def _q(*a, **kw):
+        entity = a[2] if len(a) > 2 else kw.get("entity_set")
+        if entity == "msdyn_employeeselfservicetemplateconfigs":
+            return configs
+        if entity == "environmentvariabledefinitions":
+            return env_defs
+        if entity == "environmentvariablevalues":
+            return env_vals
+        return []
+
+    return _q
+
+
+_HRSD_CFG = "msdyn_ServiceNowHRSD"
+_ITSM_CFG = "msdyn_ServiceNowITSM"
+_DEF_HRSD = "00000000-0000-0000-0000-0000000060a1"
+_DEF_ITSM = "00000000-0000-0000-0000-0000000060a2"
+
+
+def _env_present(hrsd_url=None, itsm_url=None):
+    """Build (defs, vals) for the ServiceNow*PortalBaseURI env vars."""
+    defs, vals = [], []
+    if hrsd_url is not None:
+        defs.append(dv.env_var_def(
+            definition_id=_DEF_HRSD, schema_name="ServiceNowHRSDPortalBaseURI"))
+        vals.append(dv.env_var_value(
+            definition_id=_DEF_HRSD, schema_name="ServiceNowHRSDPortalBaseURI",
+            value=hrsd_url))
+    if itsm_url is not None:
+        defs.append(dv.env_var_def(
+            definition_id=_DEF_ITSM, schema_name="ServiceNowITSMPortalBaseURI"))
+        vals.append(dv.env_var_value(
+            definition_id=_DEF_ITSM, schema_name="ServiceNowITSMPortalBaseURI",
+            value=itsm_url))
+    return defs, vals
+
+
+def _run_base_url(monkeypatch, stub):
+    import auth
+    monkeypatch.setattr(auth, "query_all", stub)
     from flightcheck.checks.servicenow import _check_template_config_base_urls
     runner = SimpleNamespace(env_url="https://org.crm.dynamics.com", dv_token="t")
-    cfg = _by_id(_check_template_config_base_urls(runner), "SN-CFG-002")
+    return _by_id(_check_template_config_base_urls(runner), "SN-CFG-002")
 
+
+def test_base_url_all_populated_passes(monkeypatch):
+    cfg = _run_base_url(monkeypatch, _route(configs=[
+        _base_url_cfg(_HRSD_CFG, "https://contoso.service-now.com/sp"),
+        _base_url_cfg(_ITSM_CFG, "https://contoso.service-now.com/esc"),
+    ]))
     assert cfg.status == "Passed"
-    assert "All 2 ServiceNow template config(s)" in cfg.result
+    assert "All 2 ServiceNow base-URL template config(s)" in cfg.result
     assert "well-formed http(s) portal base URL" in cfg.result
     assert cfg.priority == "Medium"
 
 
 def test_base_url_blank_value_warns(monkeypatch):
-    import auth
-    monkeypatch.setattr(
-        auth, "query_all",
-        lambda *a, **kw: [
-            dv.template_config(name="ServiceNowHRSDGetCasesList"),
-            dv.template_config(name="ServiceNowITSMGetUserTickets", value=""),
-        ],
-    )
-    from flightcheck.checks.servicenow import _check_template_config_base_urls
-    runner = SimpleNamespace(env_url="https://org.crm.dynamics.com", dv_token="t")
-    cfg = _by_id(_check_template_config_base_urls(runner), "SN-CFG-002")
-
+    cfg = _run_base_url(monkeypatch, _route(configs=[
+        _base_url_cfg(_HRSD_CFG, "https://contoso.service-now.com/sp"),
+        _base_url_cfg(_ITSM_CFG, ""),
+    ]))
     assert cfg.status == "Warning"
-    assert "1 of 2 ServiceNow template config(s)" in cfg.result
-    assert "ServiceNowITSMGetUserTickets" in cfg.result
+    assert "1 of 2 ServiceNow base-URL config(s)" in cfg.result
+    assert _ITSM_CFG in cfg.result
     assert "https://<instance>.service-now.com" in cfg.remediation
     assert "omit" in cfg.remediation and "hyperlinks" in cfg.remediation
 
 
 def test_base_url_unsubstituted_placeholder_warns(monkeypatch):
-    import auth
-    monkeypatch.setattr(
-        auth, "query_all",
-        lambda *a, **kw: [
-            # Scheme-prefixed placeholder: the host is still a template
-            # token, so this must NOT pass as a populated base URL.
-            dv.template_config(
-                name="ServiceNowHRSDGetCasesList",
-                value="https://{{ServiceNowBaseUrl}}/api/now/table/sn_hr_core_case",
-            ),
-        ],
-    )
-    from flightcheck.checks.servicenow import _check_template_config_base_urls
-    runner = SimpleNamespace(env_url="https://org.crm.dynamics.com", dv_token="t")
-    cfg = _by_id(_check_template_config_base_urls(runner), "SN-CFG-002")
-
+    # Scheme-prefixed placeholder: the host is still a template token, so
+    # this must NOT pass as a populated base URL.
+    cfg = _run_base_url(monkeypatch, _route(configs=[
+        _base_url_cfg(_HRSD_CFG, "https://{{ServiceNowBaseUrl}}/sp"),
+    ]))
     assert cfg.status == "Warning"
     assert "missing or malformed portal base URL" in cfg.result
-    assert "ServiceNowHRSDGetCasesList" in cfg.result
+    assert _HRSD_CFG in cfg.result
     assert "https://<instance>.service-now.com" in cfg.remediation
     assert "omit" in cfg.remediation and "hyperlinks" in cfg.remediation
 
 
 def test_base_url_bare_placeholder_token_warns(monkeypatch):
-    import auth
-    monkeypatch.setattr(
-        auth, "query_all",
-        lambda *a, **kw: [
-            dv.template_config(
-                name="ServiceNowHRSDGetCasesList",
-                value="{{ServiceNowBaseUrl}}/api/now/table/sn_hr_core_case",
-            ),
-        ],
-    )
-    from flightcheck.checks.servicenow import _check_template_config_base_urls
-    runner = SimpleNamespace(env_url="https://org.crm.dynamics.com", dv_token="t")
-    cfg = _by_id(_check_template_config_base_urls(runner), "SN-CFG-002")
-
+    cfg = _run_base_url(monkeypatch, _route(configs=[
+        _base_url_cfg(_HRSD_CFG, "{{ServiceNowBaseUrl}}/sp"),
+    ]))
     assert cfg.status == "Warning"
-    assert "ServiceNowHRSDGetCasesList" in cfg.result
+    assert _HRSD_CFG in cfg.result
     assert "https://<instance>.service-now.com" in cfg.remediation
 
 
 def test_base_url_relative_path_only_warns(monkeypatch):
-    import auth
-    monkeypatch.setattr(
-        auth, "query_all",
-        lambda *a, **kw: [
-            dv.template_config(
-                name="ServiceNowITSMGetUserTickets",
-                value="/api/now/table/incident",
-            ),
-        ],
-    )
-    from flightcheck.checks.servicenow import _check_template_config_base_urls
-    runner = SimpleNamespace(env_url="https://org.crm.dynamics.com", dv_token="t")
-    cfg = _by_id(_check_template_config_base_urls(runner), "SN-CFG-002")
-
+    cfg = _run_base_url(monkeypatch, _route(configs=[
+        _base_url_cfg(_ITSM_CFG, "/api/now/table/incident"),
+    ]))
     assert cfg.status == "Warning"
-    assert "ServiceNowITSMGetUserTickets" in cfg.result
+    assert _ITSM_CFG in cfg.result
     assert "https://<instance>.service-now.com" in cfg.remediation
     assert "omit" in cfg.remediation and "hyperlinks" in cfg.remediation
 
@@ -255,13 +269,9 @@ def test_base_url_skipped_without_token():
 
 
 def test_base_url_none_found_not_configured(monkeypatch):
-    import auth
-    monkeypatch.setattr(auth, "query_all", lambda *a, **kw: [])
-    from flightcheck.checks.servicenow import _check_template_config_base_urls
-    runner = SimpleNamespace(env_url="https://org.crm.dynamics.com", dv_token="t")
-    cfg = _by_id(_check_template_config_base_urls(runner), "SN-CFG-002")
+    cfg = _run_base_url(monkeypatch, _route(configs=[]))
     assert cfg.status == "NotConfigured"
-    assert "No ServiceNow template configs found" in cfg.result
+    assert "No ServiceNow template config carries a portal base URL" in cfg.result
 
 
 def test_base_url_query_error_warns(monkeypatch):
@@ -276,6 +286,80 @@ def test_base_url_query_error_warns(monkeypatch):
     cfg = _by_id(_check_template_config_base_urls(runner), "SN-CFG-002")
     assert cfg.status == "Warning"
     assert "Unable to query template config values" in cfg.result
+
+
+def test_base_url_scenario_configs_ignored(monkeypatch):
+    # Regression for the 19-false-positive bug: scenario / field-mapping
+    # configs carry no ServiceNowPortalBaseURI field and must never be flagged.
+    cfg = _run_base_url(monkeypatch, _route(configs=[
+        _scenario_cfg("msdyn_ServiceNowHRSDCreateCasePayroll"),
+        _scenario_cfg("msdyn_ITHelpdeskServiceNowITSMCreateTicket"),
+        _scenario_cfg("msdyn_ServiceNowLiveAgent"),
+    ]))
+    assert cfg.status == "NotConfigured"
+    assert "No ServiceNow template config carries a portal base URL" in cfg.result
+
+
+def test_base_url_only_flags_root_config_amongst_scenarios(monkeypatch):
+    # Mirrors the real PROD tenant: many scenario configs plus two root
+    # configs, one root empty. Only the empty root is flagged.
+    cfg = _run_base_url(monkeypatch, _route(configs=[
+        _scenario_cfg("msdyn_ServiceNowHRSDCreateCaseCore"),
+        _scenario_cfg("msdyn_ServiceNowHRSDGetUserCases"),
+        _scenario_cfg("msdyn_ITHelpdeskServiceNowITSMGetUserTickets"),
+        _base_url_cfg(_HRSD_CFG, ""),
+        _base_url_cfg(_ITSM_CFG, "https://contoso.service-now.com/esc"),
+    ]))
+    assert cfg.status == "Warning"
+    assert "1 of 2 ServiceNow base-URL config(s)" in cfg.result
+    assert _HRSD_CFG in cfg.result
+    assert "CreateCaseCore" not in cfg.result
+    assert "GetUserCases" not in cfg.result
+
+
+def test_base_url_defers_to_env_var_when_both_migrated(monkeypatch):
+    # Both template configs empty, but both env vars hold valid URLs
+    # (Option B). SN-CFG-002 defers entirely — no false WARN.
+    defs, vals = _env_present(
+        hrsd_url="https://contoso.service-now.com/sp",
+        itsm_url="https://contoso.service-now.com/esc",
+    )
+    cfg = _run_base_url(monkeypatch, _route(
+        configs=[_base_url_cfg(_HRSD_CFG, ""), _base_url_cfg(_ITSM_CFG, "")],
+        env_defs=defs, env_vals=vals,
+    ))
+    assert cfg.status == "Passed"
+    assert "superseded" in cfg.result
+    assert "SN-URL-001/002" in cfg.result
+
+
+def test_base_url_partial_env_deference_warns_on_unmigrated(monkeypatch):
+    # HRSD moved to env var (defer); ITSM still an empty template config with
+    # no env var -> WARN on ITSM only, noting HRSD superseded.
+    defs, vals = _env_present(hrsd_url="https://contoso.service-now.com/sp")
+    cfg = _run_base_url(monkeypatch, _route(
+        configs=[_base_url_cfg(_HRSD_CFG, ""), _base_url_cfg(_ITSM_CFG, "")],
+        env_defs=defs, env_vals=vals,
+    ))
+    assert cfg.status == "Warning"
+    assert "1 of 2 ServiceNow base-URL config(s)" in cfg.result
+    assert _ITSM_CFG in cfg.result
+    assert "1 superseded" in cfg.result
+
+
+def test_base_url_from_env_var_only_no_template_config(monkeypatch):
+    # No template config carries the field, but the env var holds a valid URL.
+    defs, vals = _env_present(
+        hrsd_url="https://contoso.service-now.com/sp",
+        itsm_url="https://contoso.service-now.com/esc",
+    )
+    cfg = _run_base_url(monkeypatch, _route(
+        configs=[_scenario_cfg("msdyn_ServiceNowHRSDCreateCaseCore")],
+        env_defs=defs, env_vals=vals,
+    ))
+    assert cfg.status == "Passed"
+    assert "environment variable" in cfg.result
+    assert "SN-URL-001/002" in cfg.result
 
 
 # --------------------------------------------------------------------------
