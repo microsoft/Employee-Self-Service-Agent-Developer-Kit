@@ -1,27 +1,30 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Offline hygiene gate for URL hosts emitted by FlightCheck.
+"""Offline hygiene gate for URLs emitted by FlightCheck.
 
-Purpose: catch a whole class of broken links *before* merge, without any
-network access. A wrong or hallucinated host (``learn.microsft.com``,
-``admin.powerplatfrom.microsoft.com``) or an ``http`` portal link sends
-the operator nowhere. This test scans FlightCheck source for every
-``http(s)`` URL and asserts each static host is deliberately registered
-in ``url_registry.py`` and (for real fetchable hosts) uses https.
+Purpose: catch, before merge and without any network access, a URL an
+operator is meant to click that is served over insecure ``http``. The
+check scans FlightCheck source for every ``http(s)`` URL and asserts each
+fetchable host uses ``https``. Known namespace / identifier hosts (SOAP /
+SAML namespace URIs) are exempt because they are identifiers, not
+addresses to fetch.
 
 Scope and honesty about limits:
-  * This is a HOST-level gate. It catches typo'd / unapproved domains and
-    http-on-a-portal. It deterministically runs offline, so it is safe to
-    gate CI on.
+  * This is an offline, deterministic gate on link *scheme* and basic
+    host shape. It is safe to gate CI on.
+  * It does NOT allowlist every host (an earlier design did; that was
+    self-referential and high-maintenance -- see ``url_hygiene_rules``).
+  * It does NOT make links clickable -- the report renderer does that
+    (PR #208).
   * It does NOT verify a path is live. A well-formed
     ``https://learn.microsoft.com/<moved-article>`` that now 404s or
     redirects to the docs home passes this test. That "stale path"
-    problem needs a live (networked) checker, which is intentionally kept
-    OUT of the deterministic suite and can reuse ``url_registry.py``.
+    problem needs a live (networked) checker, kept OUT of this
+    deterministic suite.
 
-This test reads source as text (stdlib only) — no imports of the check
-modules, no tokens, no network — so it is cheap to run in CI.
+This test reads source as text (stdlib only) -- no imports of the check
+modules, no tokens, no network -- so it is cheap to run in CI.
 """
 
 from __future__ import annotations
@@ -29,11 +32,9 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from tests.flightcheck.url_registry import (
-    API_HOSTS,
-    NAMESPACE_AND_EXAMPLE_HOSTS,
-    PORTAL_AND_DOC_HOSTS,
-    host_is_approved,
+from tests.flightcheck.url_hygiene_rules import (
+    HTTP_ALLOWED_IDENTIFIER_HOSTS,
+    looks_like_host,
     requires_https,
 )
 
@@ -50,7 +51,7 @@ _FLIGHTCHECK_SRC = (
 def _iter_source_urls():
     """Yield (file, scheme, host) for every static http(s) URL in source.
 
-    Dynamic hosts (``https://{url}``) are skipped — a fully variable host
+    Dynamic hosts (``https://{url}``) are skipped -- a fully variable host
     cannot be validated statically and is not an authored link.
     """
     for path in sorted(_FLIGHTCHECK_SRC.rglob("*.py")):
@@ -82,55 +83,60 @@ def test_scan_actually_finds_urls() -> None:
     )
 
 
-def test_every_emitted_host_is_registered() -> None:
-    """Every static host in FlightCheck source must be categorized in
-    url_registry.py. An unknown host is a review signal: either a typo, a
-    hallucinated domain, or a genuinely new host that needs deliberate
-    categorization."""
-    unknown: dict[str, str] = {}
-    for path, _scheme, host in _iter_source_urls():
-        if not host_is_approved(host):
-            unknown.setdefault(host, path.name)
-    assert not unknown, (
-        "Unregistered URL host(s) found in FlightCheck source. If a host "
-        "is legitimate, add it to the correct set in "
-        "tests/flightcheck/url_registry.py; if it is a typo, fix the URL.\n"
-        + "\n".join(f"  {h}  (first seen in {f})" for h, f in sorted(unknown.items()))
-    )
+def test_fetchable_urls_use_https() -> None:
+    """Every fetchable URL must be https. Only known namespace / identifier
+    hosts (SOAP / SAML namespace URIs) may be http, because a namespace URI
+    is an identifier, not an address to fetch.
 
-
-def test_portal_and_api_hosts_use_https() -> None:
-    """Real fetchable hosts (portals, docs, backend APIs) must be https.
-    Namespace / example URIs are exempt (a namespace URI is an identifier,
-    not an address to fetch)."""
+    Fail-closed: a new, unlisted host is required to be https by default,
+    so a genuinely new fetchable host is covered with no registry edit."""
     insecure: list[str] = []
     for path, scheme, host in _iter_source_urls():
         if scheme != "https" and requires_https(host):
             insecure.append(f"{host} (http) in {path.name}")
     assert not insecure, (
-        "http:// used for a host that must be https:\n  "
+        "http:// used for a host that should be https. If the host is a "
+        "namespace / identifier URI that is never fetched, add it to "
+        "HTTP_ALLOWED_IDENTIFIER_HOSTS in tests/flightcheck/"
+        "url_hygiene_rules.py; otherwise change the URL to https:\n  "
         + "\n  ".join(sorted(set(insecure)))
     )
 
 
-# --- registry self-consistency -------------------------------------------
-
-def test_registry_categories_are_disjoint() -> None:
-    """A host must live in exactly one category, else the intent (link vs
-    API vs namespace) is ambiguous."""
-    assert not (PORTAL_AND_DOC_HOSTS & API_HOSTS)
-    assert not (PORTAL_AND_DOC_HOSTS & NAMESPACE_AND_EXAMPLE_HOSTS)
-    assert not (API_HOSTS & NAMESPACE_AND_EXAMPLE_HOSTS)
-
-
-def test_host_is_approved_matches_suffix() -> None:
-    assert host_is_approved("orgb78b4a3b.crm.dynamics.com")
-    assert host_is_approved("learn.microsoft.com")
-    assert not host_is_approved("learn.microsft.com")  # typo not approved
-    assert not host_is_approved("evil.example.com")
+def test_every_host_is_structurally_valid() -> None:
+    """Every scanned host must look like a real domain. Catches a malformed
+    capture (empty label, stray punctuation) rather than letting it pass as
+    a valid host."""
+    malformed: list[str] = []
+    for path, _scheme, host in _iter_source_urls():
+        if not looks_like_host(host):
+            malformed.append(f"{host} in {path.name}")
+    assert not malformed, (
+        "Malformed URL host(s) found in FlightCheck source:\n  "
+        + "\n  ".join(sorted(set(malformed)))
+    )
 
 
-def test_namespace_hosts_exempt_from_https_requirement() -> None:
-    assert not requires_https("schemas.xmlsoap.org")
+# --- rule helpers self-consistency ---------------------------------------
+
+def test_identifier_hosts_are_exempt_from_https() -> None:
+    for host in HTTP_ALLOWED_IDENTIFIER_HOSTS:
+        assert not requires_https(host), (
+            f"{host} is listed as an http-allowed identifier but "
+            f"requires_https() still demands https for it."
+        )
+
+
+def test_unlisted_fetchable_hosts_require_https() -> None:
+    # Fail-closed: anything not in the identifier exemption needs https.
     assert requires_https("learn.microsoft.com")
-    assert requires_https("orgb78b4a3b.crm.dynamics.com")
+    assert requires_https("admin.powerplatform.microsoft.com")
+    assert requires_https("some-brand-new-host.microsoft.com")
+
+
+def test_looks_like_host_rejects_malformed() -> None:
+    assert looks_like_host("learn.microsoft.com")
+    assert looks_like_host("orgb78b4a3b.crm.dynamics.com")
+    assert not looks_like_host("")
+    assert not looks_like_host("localhost")   # no dot
+    assert not looks_like_host("a..b")         # empty label
