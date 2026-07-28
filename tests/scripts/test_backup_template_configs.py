@@ -216,7 +216,7 @@ def test_main_writes_backup_file_with_monkeypatched_dataverse(
             "msdyn_value": "<items/>",
         },
     ]
-    monkeypatch.setattr(bt, "authenticate", lambda _url: "fake-token")
+    monkeypatch.setattr(bt, "authenticate", lambda _url, **_kw: "fake-token")
     monkeypatch.setattr(
         bt,
         "query_all",
@@ -248,7 +248,7 @@ def test_main_writes_backup_file_with_monkeypatched_dataverse(
 
 
 def test_main_exits_2_when_no_records_match(monkeypatch, tmp_path):
-    monkeypatch.setattr(bt, "authenticate", lambda _url: "fake-token")
+    monkeypatch.setattr(bt, "authenticate", lambda _url, **_kw: "fake-token")
     monkeypatch.setattr(
         bt,
         "query_all",

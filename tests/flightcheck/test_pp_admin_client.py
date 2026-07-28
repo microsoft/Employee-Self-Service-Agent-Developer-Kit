@@ -221,3 +221,173 @@ class TestDeriveEnvironmentIdFallbackBehavior:
             pp_admin=StubAdmin(),
         )
         assert result == "ecf4737d-bef7-e58a-aa5e-e71a60780efc"
+
+
+class TestGetDlpPoliciesForEnv:
+    """Pins environment-scoping of get_dlp_policies_for_env across both
+    DLP policy schemas.
+
+    Bug being fixed: the filter historically read env scope ONLY from the
+    legacy ``properties.environmentFilter.environments``. Modern-schema
+    policies store scope under ``properties.definition.constraints``
+    (``EnvironmentFilter``) and leave ``environmentFilter`` empty, so a
+    modern policy scoped to a DIFFERENT environment resolved to an empty
+    env list and was wrongly treated as tenant-wide — corrupting the
+    INFRA-006 verdict (false FAIL/WARN) for that environment.
+    """
+
+    _THIS_ENV = pp.MOCK_ENV_ID
+    _OTHER_ENV = "Default-99999999-9999-9999-9999-999999999999"
+
+    def _client(self, policies):
+        from flightcheck.pp_admin_client import PPAdminClient
+
+        client = PPAdminClient(tenant_id="00000000-0000-0000-0000-000000001111")
+        client.get_dlp_policies = lambda: policies  # type: ignore[method-assign]
+        return client
+
+    def test_unscoped_policy_applies_to_all_envs(self):
+        client = self._client([pp.dlp_policy_modern(business=["shared_x"])])
+        result = client.get_dlp_policies_for_env(self._THIS_ENV)
+        assert len(result) == 1
+
+    def test_legacy_include_scopes_by_env(self):
+        client = self._client([
+            pp.dlp_policy(display_name="here", environments=[self._THIS_ENV]),
+            pp.dlp_policy(display_name="elsewhere", environments=[self._OTHER_ENV]),
+        ])
+        result = client.get_dlp_policies_for_env(self._THIS_ENV)
+        names = [p["properties"]["displayName"] for p in result]
+        assert names == ["here"]
+
+    def test_modern_scoped_to_this_env_is_included(self):
+        client = self._client([
+            pp.dlp_policy_modern(display_name="here", environments=[self._THIS_ENV]),
+        ])
+        result = client.get_dlp_policies_for_env(self._THIS_ENV)
+        assert len(result) == 1
+
+    def test_modern_scoped_to_other_env_is_excluded(self):
+        # The core regression: a modern policy governing a DIFFERENT env
+        # must NOT be returned as effective on this env.
+        client = self._client([
+            pp.dlp_policy_modern(display_name="elsewhere", environments=[self._OTHER_ENV]),
+        ])
+        result = client.get_dlp_policies_for_env(self._THIS_ENV)
+        assert result == []
+
+    def test_permission_error_passthrough(self):
+        client = self._client({"_error": "insufficient_permissions", "_status": 403})
+        result = client.get_dlp_policies_for_env(self._THIS_ENV)
+        assert isinstance(result, dict)
+        assert result["_error"] == "insufficient_permissions"
+
+
+class TestPolicyEnvScopeParsing:
+    """Direct coverage for the schema-aware env-scope extractor."""
+
+    def test_modern_constraints_scope_and_default_include(self):
+        from flightcheck.pp_admin_client import _policy_applies_to_env
+
+        policy = pp.dlp_policy_modern(environments=["env-a"])
+        assert _policy_applies_to_env(policy, "env-a") is True
+        assert _policy_applies_to_env(policy, "env-b") is False
+
+    def test_exclude_filter_applies_to_all_but_listed(self):
+        from flightcheck.pp_admin_client import _policy_env_scope, _policy_applies_to_env
+
+        policy = pp.dlp_policy_modern(environments=["env-a"])
+        # Flip the modern constraint to an exclude filter.
+        params = (
+            policy["properties"]["definition"]["constraints"]
+            ["environmentFilter1"]["parameters"]
+        )
+        params["filterType"] = "exclude"
+
+        ft, ids = _policy_env_scope(policy)
+        assert ft == "exclude" and ids == ["env-a"]
+        assert _policy_applies_to_env(policy, "env-a") is False
+        assert _policy_applies_to_env(policy, "env-b") is True
+
+    def test_unscoped_policy_has_no_filter(self):
+        from flightcheck.pp_admin_client import _policy_env_scope
+
+        assert _policy_env_scope(pp.dlp_policy_modern()) == (None, [])
+
+
+class TestGetEnvironmentSkuByDataverseUrl:
+    """Pins PPAdminClient.get_environment_sku_by_dataverse_url — the deploy
+    telemetry classifier resolves sandbox-vs-production from this SKU. Mirrors
+    the host-matching contract of find_environment_id_by_dataverse_url (matches
+    on both instanceUrl and instanceApiUrl), but returns the SKU string."""
+
+    def _make_client(self, envs):
+        from flightcheck.pp_admin_client import PPAdminClient
+
+        client = PPAdminClient(tenant_id="00000000-0000-0000-0000-000000001111")
+        client.get_environments = lambda: envs  # type: ignore[method-assign]
+        return client
+
+    def _env(self, *, sku=None, env_type=None, instance_url="", instance_api_url=""):
+        linked = {}
+        if instance_url:
+            linked["instanceUrl"] = instance_url
+        if instance_api_url:
+            linked["instanceApiUrl"] = instance_api_url
+        props = {"linkedEnvironmentMetadata": linked}
+        if sku is not None:
+            props["environmentSku"] = sku
+        if env_type is not None:
+            props["environmentType"] = env_type
+        return {"name": "bap-env-1", "properties": props}
+
+    def test_returns_sku_on_host_match(self):
+        client = self._make_client([
+            self._env(sku="Sandbox",
+                      instance_api_url="https://orgd98aef4a.api.crm12.dynamics.com"),
+        ])
+        assert client.get_environment_sku_by_dataverse_url(
+            "https://orgd98aef4a.api.crm12.dynamics.com"
+        ) == "Sandbox"
+
+    def test_falls_back_to_environment_type_when_no_sku(self):
+        client = self._make_client([
+            self._env(env_type="Production",
+                      instance_url="https://orgmocktenant.crm.dynamics.com/"),
+        ])
+        assert client.get_environment_sku_by_dataverse_url(
+            "https://orgmocktenant.crm.dynamics.com/"
+        ) == "Production"
+
+    def test_returns_none_when_no_env_matches(self):
+        client = self._make_client([
+            self._env(sku="Production",
+                      instance_url="https://otherorg.crm.dynamics.com/"),
+        ])
+        assert client.get_environment_sku_by_dataverse_url(
+            "https://orgd98aef4a.api.crm12.dynamics.com"
+        ) is None
+
+    def test_skips_envs_with_empty_url_fields(self):
+        client = self._make_client([
+            self._env(sku="ignored"),  # no linked URLs
+            self._env(sku="Trial",
+                      instance_api_url="https://orgd98aef4a.api.crm12.dynamics.com"),
+        ])
+        assert client.get_environment_sku_by_dataverse_url(
+            "https://orgd98aef4a.api.crm12.dynamics.com"
+        ) == "Trial"
+
+
+class TestAuthenticateSilent:
+    """authenticate_silent() must NEVER prompt interactively; when there is no
+    cached token it returns False so best-effort callers (push telemetry) fall
+    back cleanly instead of popping a browser."""
+
+    def test_returns_false_when_no_token_cache(self, chdir_kit_root):
+        from flightcheck.pp_admin_client import PPAdminClient
+
+        # chdir_kit_root created .local/ but no .token_cache.bin — the guard
+        # returns False before touching MSAL (no interactive prompt).
+        client = PPAdminClient(tenant_id="00000000-0000-0000-0000-000000001111")
+        assert client.authenticate_silent() is False

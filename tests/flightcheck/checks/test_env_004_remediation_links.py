@@ -156,6 +156,204 @@ def _patch_query_all(monkeypatch, env_mod, *, conn_refs, solutions=None):
     monkeypatch.setattr(env_mod, "query_all", _fake)
 
 
+@pytest.fixture(autouse=True)
+def _scope_to_all_present_refs(monkeypatch):
+    """Reproduce ENV-004's original whole-environment behavior for the
+    remediation-link tests in this module.
+
+    ENV-004 now scopes its verdict to the connection references the agent
+    actually uses (``build_agent_ref_scope``). These tests predate that
+    scoping and assert on the binding-state / deep-link behavior, so we
+    default the scope to "every reference + connector present in the
+    test's fixtures", which keeps all of a test's refs in scope exactly
+    as the pre-scoping code judged them. Tests exercising the new
+    scoping / SKIP / missing-ref paths override ``build_agent_ref_scope``
+    themselves (a later ``monkeypatch.setattr`` wins)."""
+    from flightcheck.checks import environment as env_mod
+    from flightcheck.checks._agent_connection_refs import AgentRefScope
+    from flightcheck.checks._dlp_utils import normalize_connector_id
+
+    def _all_present(runner):
+        refs = env_mod.query_all(
+            runner.env_url, runner.dv_token, "connectionreferences", "sel"
+        )
+        logicals = {
+            (r.get("connectionreferencelogicalname") or "").lower()
+            for r in refs or []
+            if (r.get("connectionreferencelogicalname") or "")
+        }
+        connectors = {
+            normalize_connector_id(r.get("connectorid"))
+            for r in refs or []
+            if r.get("connectorid")
+        }
+        try:
+            conns = runner.pp_admin.get_connections(runner.env_id)
+        except Exception:
+            conns = []
+        for c in conns or []:
+            cid = normalize_connector_id((c.get("properties", {}) or {}).get("apiId"))
+            if cid:
+                connectors.add(cid)
+        return AgentRefScope(
+            logical_names=frozenset(logicals),
+            connectors=frozenset(connectors),
+        )
+
+    monkeypatch.setattr(env_mod, "build_agent_ref_scope", _all_present)
+
+
+def _scope(*, logical_names, connectors=("shared_workdaysoap",)):
+    """Build a fixed :class:`AgentRefScope` for the agent-scoping tests."""
+    from flightcheck.checks._agent_connection_refs import AgentRefScope
+
+    return AgentRefScope(
+        logical_names=frozenset(logical_names),
+        connectors=frozenset(connectors),
+    )
+
+
+def _ref_named(logical, conn_id, *, ref_id, display="Reference"):
+    """A connectionreferences row with an explicit logical name (the
+    default ``_ref`` helper hardcodes 'logical_name')."""
+    return {
+        "connectionreferenceid": ref_id,
+        "connectionreferencelogicalname": logical,
+        "connectionreferencedisplayname": display,
+        "connectorid": "shared_workdaysoap",
+        "connectionid": conn_id,
+        "statuscode": 1,
+    }
+
+
+def _conn_c(name, connector, display_name="Display Name"):
+    """A get_connections record with an explicit connector."""
+    return {
+        "name": name,
+        "properties": {
+            "displayName": display_name,
+            "apiId": f"/providers/Microsoft.PowerApps/apis/{connector}",
+        },
+    }
+
+
+def test_env_004_skips_when_agent_scope_unresolvable(monkeypatch):
+    """When the agent's connection-reference set can't be resolved
+    (builder returns None), ENV-004 SKIPs rather than judging every
+    reference in the environment."""
+    from flightcheck.checks import environment as env_mod
+
+    runner = _make_runner(connections=[_conn("real-conn-id")])
+    monkeypatch.setattr(env_mod, "query_all", lambda *a, **kw: [_ref("", display="Placeholder")])
+    monkeypatch.setattr(env_mod, "build_agent_ref_scope", lambda runner: None)
+
+    results = env_mod._check_connections_and_refs(runner)
+
+    env004 = [r for r in results if r.checkpoint_id == "ENV-004"]
+    assert len(env004) == 1
+    assert env004[0].status == "Skipped"
+    assert "belong to this agent" in env004[0].result
+    # The unbound placeholder ref must NOT surface as a FAILED detail row.
+    assert not any(r.checkpoint_id.startswith("ENV-004-UR-") for r in results)
+
+
+def test_env_004_warns_when_scope_build_raises(monkeypatch):
+    """A genuine API error while resolving the agent's flows surfaces as
+    a WARNING (principle 3), not a silent SKIP or an env-wide verdict."""
+    from flightcheck.checks import environment as env_mod
+
+    runner = _make_runner(connections=[_conn("real-conn-id")])
+    monkeypatch.setattr(env_mod, "query_all", lambda *a, **kw: [_ref("real-conn-id")])
+
+    def _boom(runner):
+        raise RuntimeError("flow listing failed: 403")
+
+    monkeypatch.setattr(env_mod, "build_agent_ref_scope", _boom)
+
+    results = env_mod._check_connections_and_refs(runner)
+
+    env004 = [r for r in results if r.checkpoint_id == "ENV-004"]
+    assert len(env004) == 1
+    assert env004[0].status == "Warning"
+    assert "403" in env004[0].result
+
+
+def test_env_004_out_of_scope_unbound_ref_is_not_failed(monkeypatch):
+    """The customer-reported bug: an unbound reference the agent does NOT
+    use (e.g. the ESS-shipped placeholder on a simplified install) must
+    not FAIL ENV-004. Only the agent's own reference is judged."""
+    from flightcheck.checks import environment as env_mod
+
+    used = _ref_named("msdyn_used", "conn-1", ref_id="ref-used", display="Used")
+    placeholder = _ref_named("msdyn_placeholder", "", ref_id="ref-ph", display="Placeholder")
+    runner = _make_runner(connections=[_conn("conn-1")])
+    monkeypatch.setattr(env_mod, "query_all", lambda *a, **kw: [used, placeholder])
+    monkeypatch.setattr(
+        env_mod, "build_agent_ref_scope",
+        lambda runner: _scope(logical_names={"msdyn_used"}),
+    )
+
+    results = env_mod._check_connections_and_refs(runner)
+
+    summary = next(r for r in results if r.checkpoint_id == "ENV-004")
+    assert summary.status == "Passed", summary.__dict__
+    # The out-of-scope placeholder must not produce an unbound-ref FAIL.
+    assert not any(r.checkpoint_id.startswith("ENV-004-UR-") for r in results)
+    assert "1 reference(s) used by this agent" in summary.result
+
+
+def test_env_004_missing_ref_emits_mr_row(monkeypatch):
+    """A logical name the agent's flows reference but that has no row in
+    the environment surfaces as an ENV-004-MR-* FAILED detail row."""
+    from flightcheck.checks import environment as env_mod
+
+    used = _ref_named("msdyn_used", "conn-1", ref_id="ref-used")
+    runner = _make_runner(connections=[_conn("conn-1")])
+    monkeypatch.setattr(env_mod, "query_all", lambda *a, **kw: [used])
+    monkeypatch.setattr(
+        env_mod, "build_agent_ref_scope",
+        lambda runner: _scope(logical_names={"msdyn_used", "msdyn_missing"}),
+    )
+
+    results = env_mod._check_connections_and_refs(runner)
+
+    summary = next(r for r in results if r.checkpoint_id == "ENV-004")
+    assert summary.status == "Failed", summary.__dict__
+    mr = [r for r in results if r.checkpoint_id.startswith("ENV-004-MR-")]
+    assert len(mr) == 1
+    assert mr[0].status == "Failed"
+    assert "msdyn_missing" in mr[0].result
+    assert "no such reference exists" in mr[0].result
+    assert "1 missing ref(s)" in summary.result
+
+
+def test_env_004_unbound_connection_scoped_to_agent_connectors(monkeypatch):
+    """Unbound connections are only flagged when their connector is one
+    the agent uses — a stale connection of an unrelated connector in the
+    same environment is not reported."""
+    from flightcheck.checks import environment as env_mod
+
+    bound = _conn_c("bound-wd", "shared_workdaysoap")
+    stale_wd = _conn_c("stale-wd", "shared_workdaysoap", display_name="Stale Workday")
+    other = _conn_c("other-app", "shared_office365", display_name="Other App")
+    used = _ref_named("msdyn_used", "bound-wd", ref_id="ref-used")
+
+    runner = _make_runner(connections=[bound, stale_wd, other])
+    monkeypatch.setattr(env_mod, "query_all", lambda *a, **kw: [used])
+    monkeypatch.setattr(
+        env_mod, "build_agent_ref_scope",
+        lambda runner: _scope(logical_names={"msdyn_used"}, connectors={"shared_workdaysoap"}),
+    )
+
+    results = env_mod._check_connections_and_refs(runner)
+
+    uc_rows = [r for r in results if r.checkpoint_id.startswith("ENV-004-UC-")]
+    # Only the same-connector stale Workday connection is flagged.
+    assert len(uc_rows) == 1
+    assert "Stale Workday" in uc_rows[0].description
+    assert not any("Other App" in r.description for r in uc_rows)
+
+
 def test_env_004_summary_orphan_remediation_links_to_solutions(monkeypatch):
     """The top-level ENV-004 row, when orphan refs are present, must
     point the operator at the Power Apps Solutions page where the

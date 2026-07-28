@@ -268,6 +268,33 @@ REDACT_REGEX: list[tuple[re.Pattern[str], str]] = [
         re.compile(r"\beyJ[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\.[A-Za-z0-9_-]{16,}\b"),
         "REDACTED_JWT",
     ),
+    # Shared Access Signature on Logic Apps / Power Automate trigger
+    # callback URLs (listCallbackUrl response + the triggered run URL).
+    # The `sig=` query param IS the bearer secret that authorizes anyone
+    # to invoke the flow trigger — it MUST be scrubbed. `sp=` (permission
+    # path) and `sv=` (sig version) are not secret and are left intact so
+    # the URL shape stays realistic for tests. Matches in URLs whether the
+    # value is raw or percent-encoded.
+    (
+        re.compile(r"([?&]sig=)[A-Za-z0-9._%\-]+"),
+        r"\1REDACTED_SAS_SIG",
+    ),
+    # Power Platform environment-specific hostnames on Logic Apps /
+    # Power Automate callback + run-content URLs, e.g.
+    #   f7962332f9b6e6ad8a727c3c4c78d7.0c.environment.api.powerplatform.com
+    #   <same>.environment.api.powerplatformusercontent.com
+    # The leading labels are the BAP environment GUID with dashes stripped
+    # and split (30 hex `.` 2 hex), so the dashed-GUID rule above never
+    # matches them. That GUID identifies the tenant's environment and MUST
+    # be scrubbed. `usercontent` is preserved so the URL shape stays real.
+    (
+        re.compile(
+            r"\b[0-9a-f]{16,32}\.[0-9a-f]{1,8}\.environment\.api\."
+            r"(powerplatformusercontent|powerplatform)\.com\b",
+            re.IGNORECASE,
+        ),
+        r"mockenv.00.environment.api.\1.com",
+    ),
 ]
 
 

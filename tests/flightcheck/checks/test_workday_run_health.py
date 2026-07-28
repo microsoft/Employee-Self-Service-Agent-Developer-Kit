@@ -81,6 +81,29 @@ class TestGoodState:
         assert r.remediation == ""
 
     @responses.activate
+    def test_run_check_stashes_failure_signal_on_runner(
+        self, runner: _MinimalRunner
+    ) -> None:
+        """Wiring pin: WD-RUN-001 records the classified failure signal on the
+        runner so the suppression step can consume it. A caught Workday fault
+        ⟹ auth_proven + workday_fault."""
+        from flightcheck.checks.workday import _check_workday_run_health
+
+        responses.add(**pp.list_flow_runs(
+            env_id=runner.env_id, flow_id=_FLOW_ID,
+            runs=[
+                pp.flow_run(run_id="f1", flow_id=_FLOW_ID, status="Succeeded",
+                            response_name="Respond_to_Copilot_with_failure_errorMessage"),
+            ],
+        ))
+
+        _check_workday_run_health(runner)
+        sig = runner._workday_run_failure_signal
+        assert sig["auth_proven"] is True
+        assert sig["workday_fault"] is True
+        assert sig["hard_failure"] is False
+
+    @responses.activate
     def test_recent_successes_with_a_few_failures_still_passes(
         self, runner: _MinimalRunner
     ) -> None:
@@ -329,3 +352,155 @@ class TestManualConnSecSuppression:
         out = _suppress_manual_conn_sec_when_runs_healthy(self._build(Status.NOT_CONFIGURED.value))
         ids = {r.checkpoint_id for r in out}
         assert {"WD-CONN-010", "WD-CONN-102", "WD-SEC-003"} <= ids
+
+
+class TestComputeRunFailureSignal:
+    """`_compute_run_failure_signal` summarises the recent-window failure
+    categories that drive error-aware manual-check suppression."""
+
+    @staticmethod
+    def _row(kind, resp):
+        return {"kind": kind, "resp": resp}
+
+    def test_success_is_auth_proven_only(self) -> None:
+        from flightcheck.checks.workday import (
+            _compute_run_failure_signal, _WD_SUCCESS_RESPONSE_ACTION,
+        )
+        sig = _compute_run_failure_signal(
+            [self._row("success", _WD_SUCCESS_RESPONSE_ACTION)]
+        )
+        assert sig["auth_proven"] is True
+        assert sig["workday_fault"] is False
+        assert sig["hard_failure"] is False
+
+    def test_caught_workday_fault_sets_auth_and_fault(self) -> None:
+        from flightcheck.checks.workday import (
+            _compute_run_failure_signal, _WD_WORKDAY_FAULT_RESPONSE,
+        )
+        sig = _compute_run_failure_signal(
+            [self._row("caught_failure", _WD_WORKDAY_FAULT_RESPONSE)]
+        )
+        # A caught Workday SOAP fault proves the token was accepted (auth) AND
+        # carries the permission/credential signal.
+        assert sig["auth_proven"] is True
+        assert sig["workday_fault"] is True
+
+    def test_template_transform_is_auth_proven_without_fault(self) -> None:
+        from flightcheck.checks.workday import (
+            _compute_run_failure_signal, _WD_TEMPLATE_TRANSFORM_RESPONSE,
+        )
+        sig = _compute_run_failure_signal(
+            [self._row("caught_failure", _WD_TEMPLATE_TRANSFORM_RESPONSE)]
+        )
+        assert sig["auth_proven"] is True
+        assert sig["workday_fault"] is False
+
+    def test_template_retrieval_is_uninformative(self) -> None:
+        from flightcheck.checks.workday import (
+            _compute_run_failure_signal, _WD_TEMPLATE_RETRIEVAL_RESPONSE,
+        )
+        sig = _compute_run_failure_signal(
+            [self._row("caught_failure", _WD_TEMPLATE_RETRIEVAL_RESPONSE)]
+        )
+        # Pre-call config error — rules nothing out about auth or permission.
+        assert sig == {
+            "auth_proven": False, "workday_fault": False, "hard_failure": False,
+        }
+
+    def test_hard_failure_is_not_auth_proven(self) -> None:
+        from flightcheck.checks.workday import _compute_run_failure_signal
+        sig = _compute_run_failure_signal([self._row("hard_failure", "?")])
+        assert sig["auth_proven"] is False
+        assert sig["workday_fault"] is False
+        assert sig["hard_failure"] is True
+
+
+class TestErrorAwareManualSuppression:
+    """The refined `_suppress_manual_conn_sec_when_runs_healthy` removes a manual
+    check only on positive evidence its failure DOMAIN is not the culprit."""
+
+    @staticmethod
+    def _cr(checkpoint_id, status):
+        from flightcheck.runner import CheckResult, Priority
+        return CheckResult(
+            checkpoint_id=checkpoint_id, category="Workday",
+            priority=Priority.HIGH.value, status=status,
+            description="x", result="x", roles=["Workday Admin"],
+        )
+
+    def _build(self, run_status):
+        from flightcheck.runner import Status
+        return [
+            self._cr("WD-RUN-001", run_status),
+            self._cr("WD-CONN-010", Status.MANUAL.value),
+            self._cr("WD-CONN-102", Status.MANUAL.value),
+            self._cr("WD-SEC-003", Status.MANUAL.value),
+        ]
+
+    @staticmethod
+    def _runner(signal):
+        from types import SimpleNamespace
+        return SimpleNamespace(_workday_run_failure_signal=signal)
+
+    def _ids_after(self, run_status, signal):
+        from flightcheck.checks.workday import _suppress_manual_conn_sec_when_runs_healthy
+        from flightcheck.runner import Status
+        status = getattr(Status, run_status).value
+        out = _suppress_manual_conn_sec_when_runs_healthy(
+            self._build(status), self._runner(signal)
+        )
+        return {r.checkpoint_id for r in out}
+
+    def test_caught_fault_shows_only_permission(self) -> None:
+        ids = self._ids_after("FAILED", {
+            "auth_proven": True, "workday_fault": True, "hard_failure": False,
+        })
+        assert "WD-CONN-010" not in ids
+        assert "WD-CONN-102" not in ids
+        assert "WD-SEC-003" in ids
+
+    def test_transform_only_shows_all_via_safety_net(self) -> None:
+        # auth_proven + no fault would rule out ALL three manual checks while
+        # runs are unhealthy — contradictory, so the safety net shows them all
+        # rather than leave the operator with zero guidance.
+        ids = self._ids_after("FAILED", {
+            "auth_proven": True, "workday_fault": False, "hard_failure": False,
+        })
+        assert {"WD-CONN-010", "WD-CONN-102", "WD-SEC-003"} <= ids
+
+    def test_safety_net_holds_with_hard_failure_present(self) -> None:
+        # Same rule-out-everything situation but with a hard failure too — still
+        # show all (the break is outside the modelled manual domains).
+        ids = self._ids_after("FAILED", {
+            "auth_proven": True, "workday_fault": False, "hard_failure": True,
+        })
+        assert {"WD-CONN-010", "WD-CONN-102", "WD-SEC-003"} <= ids
+
+    def test_hard_failure_only_keeps_all(self) -> None:
+        # No Workday response, nothing proven -> nothing ruled out -> keep all.
+        ids = self._ids_after("FAILED", {
+            "auth_proven": False, "workday_fault": False, "hard_failure": True,
+        })
+        assert {"WD-CONN-010", "WD-CONN-102", "WD-SEC-003"} <= ids
+
+    def test_uninformative_signal_keeps_all(self) -> None:
+        ids = self._ids_after("FAILED", {
+            "auth_proven": False, "workday_fault": False, "hard_failure": False,
+        })
+        assert {"WD-CONN-010", "WD-CONN-102", "WD-SEC-003"} <= ids
+
+    def test_fault_plus_hard_shows_only_permission(self) -> None:
+        # The caught fault proves SSO works, so the hard failure is not SSO.
+        ids = self._ids_after("FAILED", {
+            "auth_proven": True, "workday_fault": True, "hard_failure": True,
+        })
+        assert "WD-CONN-010" not in ids
+        assert "WD-CONN-102" not in ids
+        assert "WD-SEC-003" in ids
+
+    def test_passed_short_circuits_regardless_of_signal(self) -> None:
+        # Even a permission-implicating signal is overridden by a clean PASS.
+        ids = self._ids_after("PASSED", {
+            "auth_proven": True, "workday_fault": True, "hard_failure": False,
+        })
+        assert {"WD-CONN-010", "WD-CONN-102", "WD-SEC-003"}.isdisjoint(ids)

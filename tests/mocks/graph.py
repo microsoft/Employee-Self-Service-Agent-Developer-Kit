@@ -228,6 +228,11 @@ def conditional_access_policy(
 
 MOCK_WORKDAY_SP_ID = "00000000-0000-0000-0000-000000005001"
 MOCK_WORKDAY_APP_ID = "00000000-0000-0000-0000-000000005002"
+# The /applications object id (distinct from the servicePrincipal id
+# above and from the appId). skill-3's WD-ENTRA-SCOPE-001 reads the
+# application object, not the service principal, for the exposed scope
+# / pre-authorized apps / requiredResourceAccess.
+MOCK_WORKDAY_APP_OBJECT_ID = "00000000-0000-0000-0000-000000005003"
 # The Entra gallery applicationTemplate id for the Workday SSO template.
 # Real values are Microsoft-issued; this mock value is stable so tests
 # can wire `applicationTemplateId` through the SP and the
@@ -459,6 +464,158 @@ def app_role_assignment(
         "principalType": principal_type,
         "resourceDisplayName": resource_display_name,
         "resourceId": resource_id,
+    }
+
+
+# Well-known first-party GUIDs skill-3's Entra-app checks match against.
+# These are stable Microsoft identifiers (not tenant-specific), mirrored
+# from checks/entra_app.py so the mock reproduces the real app shape.
+WORKDAY_CONNECTOR_APP_ID = "4e4707ca-5f53-46a6-a819-f7765446e6ff"
+MS_GRAPH_RESOURCE_APP_ID = "00000003-0000-0000-c000-000000000000"
+GRAPH_DELEGATED_SCOPE_IDS = {
+    "openid": "37f7f235-527c-4136-accd-4a02d197296e",
+    "profile": "14dad69e-099b-42c9-810b-d002981feec1",
+    "User.Read": "e1fe6dd8-ba31-4d61-89e7-88639da4683d",
+}
+
+
+def application(
+    *,
+    object_id: str = MOCK_WORKDAY_APP_OBJECT_ID,
+    app_id: str = MOCK_WORKDAY_APP_ID,
+    display_name: str = "Workday",
+    expose_scope: bool = True,
+    scope_guid: str = "00000000-0000-0000-0000-000000005301",
+    preauthorize_connector: bool = True,
+    connector_app_id: str = WORKDAY_CONNECTOR_APP_ID,
+    graph_permissions: bool = True,
+) -> dict[str, Any]:
+    """Build a single Graph /applications record for the Workday app.
+
+    Defaults reproduce a fully-provisioned Workday integration app —
+    the shape WD-ENTRA-SCOPE-001 expects once skill-3's S3.2 step has
+    run: the ``user_impersonation`` API scope is exposed, the Workday
+    connector (``4e4707ca``) is pre-authorized on that scope, and the
+    three Graph delegated permissions (openid / profile / User.Read)
+    are requested via ``requiredResourceAccess``.
+
+    Toggle each dimension independently to build the FAILED variants:
+      * ``expose_scope=False`` — drop the user_impersonation scope.
+      * ``preauthorize_connector=False`` — drop the connector pre-auth.
+      * ``graph_permissions=False`` — drop the Graph delegated perms.
+
+    Cited consumers:
+      - flightcheck/checks/entra_app.py (WD-ENTRA-SCOPE-001 —
+        _check_scope_exposed; _resolve_workday_app).
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="application" — fields used:
+                id (Edm.String, key — the object id)
+                appId (Edm.String)
+                displayName (Edm.String)
+                api (apiApplication) — fields used:
+                  oauth2PermissionScopes (Collection(permissionScope)):
+                    id (Edm.Guid), value (Edm.String),
+                    isEnabled (Edm.Boolean), type (Edm.String)
+                  preAuthorizedApplications
+                    (Collection(preAuthorizedApplication)):
+                    appId (Edm.String),
+                    delegatedPermissionIds (Collection(Edm.String))
+                requiredResourceAccess (Collection(requiredResourceAccess)):
+                  resourceAppId (Edm.String),
+                  resourceAccess (Collection(resourceAccess)):
+                    id (Edm.Guid), type (Edm.String — "Scope"|"Role")
+      Docs:   https://learn.microsoft.com/graph/api/application-get
+              https://learn.microsoft.com/graph/api/resources/application
+    """
+    scopes: list[dict[str, Any]] = []
+    if expose_scope:
+        scopes.append({
+            "id": scope_guid,
+            "adminConsentDescription": "Access Workday on behalf of the user",
+            "adminConsentDisplayName": "Access Workday",
+            "isEnabled": True,
+            "type": "User",
+            "userConsentDescription": "Access Workday on your behalf",
+            "userConsentDisplayName": "Access Workday",
+            "value": "user_impersonation",
+        })
+
+    preauth: list[dict[str, Any]] = []
+    if preauthorize_connector:
+        preauth.append({
+            "appId": connector_app_id,
+            "delegatedPermissionIds": [scope_guid],
+        })
+
+    required_resource_access: list[dict[str, Any]] = []
+    if graph_permissions:
+        required_resource_access.append({
+            "resourceAppId": MS_GRAPH_RESOURCE_APP_ID,
+            "resourceAccess": [
+                {"id": sid, "type": "Scope"}
+                for sid in GRAPH_DELEGATED_SCOPE_IDS.values()
+            ],
+        })
+
+    return {
+        "id": object_id,
+        "appId": app_id,
+        "displayName": display_name,
+        "signInAudience": "AzureADMyOrg",
+        "identifierUris": [f"api://{app_id}"],
+        "api": {
+            "oauth2PermissionScopes": scopes,
+            "preAuthorizedApplications": preauth,
+        },
+        "requiredResourceAccess": required_resource_access,
+    }
+
+
+def oauth2_permission_grant(
+    *,
+    grant_id: str = "00000000-0000-0000-0000-000000005401gr",
+    client_id: str = MOCK_WORKDAY_SP_ID,
+    consent_type: str = "AllPrincipals",
+    principal_id: str | None = None,
+    resource_id: str = "00000000-0000-0000-0000-00000000graph",
+    scope: str = "openid profile User.Read",
+) -> dict[str, Any]:
+    """Build a single Graph /oauth2PermissionGrants record.
+
+    Defaults represent tenant-wide admin consent (``consentType`` ==
+    ``AllPrincipals``) covering the three delegated scopes skill-3
+    grants. WD-ENTRA-CONSENT-001 aggregates the ``scope`` string(s)
+    across every AllPrincipals grant whose ``clientId`` is the Workday
+    service principal and confirms openid / profile / user.read are all
+    present. Pass ``consent_type="Principal"`` to model a user-only
+    consent (which does NOT satisfy admin consent), or a narrower
+    ``scope`` to model partial consent.
+
+    Cited consumers:
+      - flightcheck/checks/entra_app.py (WD-ENTRA-CONSENT-001 —
+        _check_admin_consent).
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="oAuth2PermissionGrant" — fields used:
+                id (Edm.String, key)
+                clientId (Edm.String)
+                consentType (Edm.String — "AllPrincipals"|"Principal")
+                principalId (Edm.String, nullable)
+                resourceId (Edm.String)
+                scope (Edm.String — space-delimited)
+      Docs:   https://learn.microsoft.com/graph/api/oauth2permissiongrant-get
+              https://learn.microsoft.com/graph/api/resources/oauth2permissiongrant
+    """
+    return {
+        "id": grant_id,
+        "clientId": client_id,
+        "consentType": consent_type,
+        "principalId": principal_id,
+        "resourceId": resource_id,
+        "scope": scope,
     }
 
 
@@ -721,6 +878,66 @@ def list_claims_mapping_policies_for_sp(
         "json": collection(
             pol_list,
             odata_context=f"$metadata#servicePrincipals('{sp_id}')/claimsMappingPolicies",
+        ),
+        "status": 200,
+    }
+
+
+def list_applications(
+    *,
+    applications: Iterable[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Mock GET /v1.0/applications (with or without ``$filter``).
+
+    WD-ENTRA-SCOPE-001's ``_resolve_workday_app`` narrows on
+    ``appId eq '<workday-app-id>'``; per the server-side-narrowing rule
+    one mock covers all ``$filter`` variants on the same path.
+    """
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/applications",
+        "json": collection(
+            applications if applications is not None else [application()],
+            odata_context="$metadata#applications",
+        ),
+        "status": 200,
+    }
+
+
+def get_application(
+    *,
+    object_id: str = MOCK_WORKDAY_APP_OBJECT_ID,
+    app: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Mock GET /v1.0/applications/{object-id} (single-item shape).
+
+    Used when the skill-3 config supplies an ``entraAppObjectId`` hint so
+    ``_resolve_workday_app`` reads the application object directly.
+    """
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/applications/{object_id}",
+        "json": dict(app) if app is not None else application(object_id=object_id),
+        "status": 200,
+    }
+
+
+def list_oauth2_permission_grants(
+    *,
+    grants: Iterable[Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Mock GET /v1.0/oauth2PermissionGrants (with or without ``$filter``).
+
+    WD-ENTRA-CONSENT-001 narrows on ``clientId eq '<sp-id>'``; one mock
+    covers all ``$filter`` variants on the same path. Pass ``grants=[]``
+    to mock the no-admin-consent case.
+    """
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/oauth2PermissionGrants",
+        "json": collection(
+            grants if grants is not None else [oauth2_permission_grant()],
+            odata_context="$metadata#oauth2PermissionGrants",
         ),
         "status": 200,
     }

@@ -9,6 +9,9 @@ on:
   pull_request:
     branches: [ "main" ]
 
+permissions:
+  contents: read
+
 jobs:
   lint:
     name: Lint Python
@@ -23,7 +26,10 @@ jobs:
         python-version: '3.11'
 
     - name: Install ruff
-      run: pip install ruff
+      # Pinned for reproducibility: an unpinned install silently upgrades and a
+      # Ruff release that broadens the default rule set would fail every PR. The
+      # rule set itself is pinned in pyproject.toml ([tool.ruff.lint] select).
+      run: pip install ruff==0.16.0
 
     - name: Discover Python source paths
       id: discover
@@ -57,3 +63,18 @@ jobs:
         PATHS: ${{ steps.discover.outputs.paths }}
       run: |
         python -m compileall -q $PATHS
+
+  installer-scripts:
+    name: Installer script smoke tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    # pwsh is preinstalled on GitHub-hosted ubuntu runners. The harness only
+    # parses and string-matches the setup scripts (no OS-specific execution),
+    # so it runs cross-platform. Guards against the Windows PowerShell 5.1
+    # parse crash by asserting the scripts stay ASCII-only. See PR #185.
+    - name: Run installer smoke tests
+      shell: pwsh
+      run: ./setup/Install-EssAdk.Tests.ps1

@@ -9,8 +9,9 @@ This skill guides the user through creating a new Copilot Studio topic.
 - ALWAYS read `.local/config.json` to get the agent folder name and schema name.
 - Write the new topic file to `{agent.folder}/topics/{TopicName}.mcs.yml`.
 - After writing the file, check for errors using the diagnostics tool on the new file.
-- **TEMPLATE CONFIG IS THE DEFAULT**: For any scenario that calls ServiceNow or Workday, use the **Template Config + Shared Flow** pattern. This is the official ESS extensibility pattern. The topic calls the existing shared system topic (e.g., `ServiceNowHRSDSystemGetCommonExecution`), which invokes the shared orchestrator flow. Do NOT create standalone cloud flows for these connectors.
-  - ALWAYS read `src/reference/ess-docs/customization/customize.md` when the scenario involves ServiceNow or Workday.
+- **PRESERVE THE AUTHORING INVARIANTS**: follow [`authoring-invariants.md`](src/reference/ess-docs/customization/authoring-invariants.md) — the generated topic MUST delegate the backend call to the shared system topic, render backend data with the standard parse → iterate → table pattern, and let failures flow through the shared error path.
+- **TEMPLATE CONFIG IS THE DEFAULT**: For any scenario that calls an ESS-orchestrated backend (ServiceNow, Workday, or SAP SuccessFactors), use the **Template Config + Shared Flow** pattern. This is the official ESS extensibility pattern. The topic calls the existing shared system topic (e.g., `ServiceNowHRSDSystemGetCommonExecution`), which invokes the shared orchestrator flow. Do NOT create standalone cloud flows for these connectors.
+  - ALWAYS read `src/reference/ess-docs/customization/customize.md` when the scenario involves ServiceNow, Workday, or SAP SuccessFactors.
   - Use an existing topic in the agent folder that calls a shared system topic as the starting pattern.
   - Guide the user through creating the template config record in Dataverse as part of the flow.
 - **STANDALONE IS THE EXCEPTION**: Only use the standalone topic + workflow pattern when the scenario requires a connector that does NOT have an existing ESS orchestrator flow (e.g., Jira, custom HTTP APIs, non-ESS connectors). In this case, read `src/skills/workflows/create/SKILL.md` to create the workflow.
@@ -41,7 +42,7 @@ Based on the user's description, select a starting template:
 
 **Decision rule**: If the scenario involves ServiceNow or Workday, ALWAYS use the template config pattern with the shared system topic. Do NOT create standalone flows for these connectors — that bypasses the ESS orchestrator.
 
-If the topic involves ServiceNow, also read `src/reference/ess-docs/integrations/servicenow.md` and `src/reference/ess-docs/integrations/servicenow-hrsd-itsm.md` for integration-specific guidance.
+If the topic involves ServiceNow, also read `src/reference/ess-docs/integrations/servicenow.md` and `src/reference/ess-docs/integrations/servicenow-hrsd-itsm.md` for integration-specific guidance. If the topic **consumes a custom Power Automate flow's output in Power Fx** — typed tables, dynamic option lists, or status/success handling — also read `src/reference/ess-docs/customization/powerfx-and-power-automate-authoring.md` for the type-safety constraints and the deploy/verify loop.
 If the topic involves Workday, also read `src/reference/ess-docs/integrations/workday.md` and `src/reference/ess-docs/integrations/workday-extensibility.md` for integration-specific guidance.
 
 **Official samples**: Before generating YAML, read a relevant sample from `src/examples/ess-samples/` to use as a real-world reference:
@@ -138,7 +139,7 @@ Show the generated YAML to the user for review. Highlight the key parts:
 - Action chain (what happens step by step)
 - Any placeholders that still need values (like workflow GUIDs)
 
-## Step 6: Checkpoint, Write, Scan, and Push
+## Step 6: Checkpoint, Write, Scan, Review, and Push
 
 This is the end-to-end delivery step. Do NOT stop after writing the file.
 The user should never have to leave VS Code or manually push changes.
@@ -149,9 +150,12 @@ Before making any changes, save the current state. Run in the terminal:
 
 ```
 python scripts/checkpoint.py "pre-create-{TopicName}"
+python scripts/emit_capability.py topic_create
 ```
 
-Tell the user: "Saved a backup of your current agent files."
+Tell the user: "Saved a backup of your current agent files." The
+`emit_capability.py` line records anonymous usage telemetry (best-effort,
+non-blocking); it needs no user-facing message and never fails the step.
 
 ### 6.2 — Create dependencies (if needed)
 
@@ -219,7 +223,53 @@ not just the new file.
   do NOT block the push. Example: "I also found 3 pre-existing errors in other
   topics. You can fix those later with `/scan`."
 
-### 6.5 — Dry run
+### 6.5 — Review the topic
+
+Run an advisory review over the topic you just wrote, **before** the dry run and
+push. This surfaces authoring issues the maker should consider — dangling
+`Global.*` references, adaptive-card bindings that render blank, Power Fx logic
+problems, and integration-pattern gaps — while the topic is still easy to change.
+
+**When the maker runs `/create` directly, running this review is mandatory — do
+not skip it.** The review's *findings*, however, are advisory: present them and
+let the maker decide; never refuse to proceed or treat a finding as a hard
+failure. Do NOT continue to 6.6 until the review has run and its report is
+displayed.
+
+**Exception — invoked by the Workday setup flow.** When this skill is being run
+as the P6.1 authoring delegation of
+`src/skills/setup/workday/create-new-topic.md`, **do NOT run this review sub-step
+at all**. The tenant reference IDs aren't wired yet at that point, so a review
+now would false-flag unresolved placeholders; the setup flow runs its one and
+only topic review after the wiring is verified (its S6.3). Run this review
+normally only when `/create` is invoked directly by the maker.
+
+1. Invoke the review by calling `runSubagent` (the VS Code Copilot Chat tool) —
+   do not run its detectors yourself. Point the subagent to read
+   `src/skills/topics/review/SKILL.md` as its first action, and tell it this is a
+   **single-topic** review of the topic you just created — pass the agent slug
+   (from `.local/config.json`) and the topic stem (the filename without
+   `.mcs.yml`). Ask it to present the **maker-facing report** (its Step 9), not
+   structured findings.
+
+2. **Display the subagent's full report verbatim** in the chat — the verdict line,
+   the findings table, and the close. Do NOT summarize, compress, or re-word it.
+
+3. **If the report lists findings**, pause and ask the maker how to proceed:
+   - **Fix now** → run `/update` on the topic to apply the fixes (it reads the
+     review's findings catalog), then re-run this review before continuing.
+   - **Push anyway** → continue to 6.6 with the findings unaddressed (they are
+     advisory).
+
+   Do NOT continue to the dry run until the maker has chosen.
+
+4. **If the report is clean** (no findings), say so briefly and continue to 6.6.
+
+**If the review can't run** (the subagent or its detector scripts fail), tell the
+maker the review was skipped, then continue to 6.6 — a review failure never blocks
+the push.
+
+### 6.6 — Dry run
 
 Run in the terminal:
 
@@ -236,7 +286,7 @@ will be created, modified, or deleted in their environment. Example:
 > |--------|------|
 > | ➕ New | topics/SubmitITSupportTicket.mcs.yml |
 
-### 6.6 — Push
+### 6.7 — Push
 
 Ask the user: "Ready to push to your environment?"
 
@@ -256,7 +306,7 @@ local baseline and component map.
   - **Revert** — `python scripts/checkpoint.py --revert` to restore the
     backup from step 6.1
 
-### 6.7 — Verify and link
+### 6.8 — Verify and link
 
 After a successful push, show the user what was created:
 
@@ -264,9 +314,21 @@ After a successful push, show the user what was created:
 - If template config was created: the scenario name
 - If workflow was created: the workflow file path
 
+A new **topic** only goes live once the agent is **published** (a new flow's `clientdata` is live immediately, but its registration still needs the push, which is done). Offer to publish for them:
+
+```
+python scripts/publish.py
+```
+
+If a **workflow** was created (e.g. a ServiceNow options flow for runtime dependent dropdowns), also offer to confirm it is agent-invocable — this verifies it is activated, `modernflowtype=1`, has kind:Skills Response actions, a bound flow-scoped connection reference, and a system-topic link:
+
+```
+python scripts/validate.py "<flow name>"
+```
+
 Then show:
 
-> Your topic is live! Test it here:
+> Your topic is ready. After publishing, test it here:
 > [Open Copilot Studio](https://copilotstudio.microsoft.com/)
 
 ## Step 7: Offer Next Steps

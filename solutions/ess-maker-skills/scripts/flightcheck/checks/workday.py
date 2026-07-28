@@ -146,13 +146,14 @@ _REF_SUFFIX_ROLES = {
 #     }
 #
 #   The ``ff0df`` connection is configured with Power Platform's
-#   "Microsoft Entra ID Integrated" authentication type (per
-#   src/skills/connect/workday/step3.md lines 155-166), not Basic
-#   auth. That auth type authenticates the signed-in employee against
-#   a federated Workday enterprise app in Entra (Application ID URI
-#   ``http://www.workday.com/{WD_TENANT}``), which is the same
-#   enterprise app the connect skill provisions in step2.md lines
-#   191-264. The X.509 signing certificate WD-CONN-102 inspects lives
+#   "Microsoft Entra ID Integrated" authentication type (per skill-5,
+#   src/skills/setup/workday/install-workday-extension-pack.md S5.3), not
+#   Basic auth. That auth type authenticates the signed-in employee
+#   against a federated Workday enterprise app in Entra (Application ID
+#   URI ``http://www.workday.com/{WD_TENANT}``), which is the same
+#   enterprise app the setup flow provisions in skill-3,
+#   src/skills/setup/workday/provision-workday-entra-app.md. The X.509
+#   signing certificate WD-CONN-102 inspects lives
 #   on that enterprise app as a keyCredential. It is the most visible
 #   expiry-driven health signal on the federation app that the
 #   user-context SOAP/REST runtime path depends on.
@@ -192,7 +193,7 @@ _REF_SUFFIX_ROLES = {
 #     SAML Identity Providers". This is NOT reachable via any public
 #     Workday API the kit talks to (the SOAP RaaS / Worker services
 #     don't expose tenant security configuration). Comparison of the
-#     two thumbprints is therefore an operator step.
+#     two certificates is therefore an operator step.
 #
 # WD-CONN-102 reads the Entra side automatically, surfaces the
 # current active-cert thumbprint and NotAfter date, and emits a
@@ -637,7 +638,19 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # present, this tenant has no Workday integration. Skip the
     # downstream Workday-specific checks (preserves the pre-existing
     # behavior of returning early when there's no Workday signal).
-    if not wd_flows and flavor in (None, "none"):
+    #
+    # `"skipped"` is folded in alongside `None`/`"none"` because it means
+    # WD-PKG-001 had no Dataverse token to detect the install flavor — the
+    # case for a Graph-only single-checkpoint run (e.g.
+    # `--checkpoint WD-CONN-102` / `WD-CONN-010`, both of which run above
+    # this guard). Without Dataverse the deep block below can only SKIP, but
+    # `_check_workflows` / `_check_personal_data_write_permission` would first
+    # prompt interactively for a Test Employee ID and ISU username/password
+    # (`input()` / `getpass`) — raw stdin prompts that hang a headless,
+    # skill-launched run forever. Returning here keeps those Graph-only
+    # invocations non-interactive. Full-scope runs authenticate Dataverse, so
+    # `flavor` is never `"skipped"` there and this branch is a no-op for them.
+    if not wd_flows and flavor in (None, "none", "skipped"):
         return results
 
     print("\n  Running Workday deep validation...")
@@ -651,6 +664,12 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # --- Connection References ---
     results.extend(_check_connections(runner))
     results.extend(_check_connection_token_health(runner))
+
+    # WD-CONN-013 — Agent connection OBO parameter sharing. Verifies every
+    # connection the agent uses has "Allow permission to share parameters"
+    # enabled (read from the connectionreference config columns) so end users
+    # invoke the backing services without a first-use connection prompt.
+    results.extend(_check_workday_connection_obo_sharing(runner))
 
     # --- Flow Status ---
     results.extend(_check_flow_status(runner, wd_flows))
@@ -688,37 +707,110 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # SOAP tests run (e.g. credentials unavailable).
     results.extend(_check_custom_workflow_inventory(runner))
 
-    return _suppress_manual_conn_sec_when_runs_healthy(results)
+    return _suppress_manual_conn_sec_when_runs_healthy(results, runner)
+
+
+# The MANUAL Workday verification checks run-health can suppress, grouped by the
+# failure DOMAIN each diagnoses. Run history can narrow to a domain but cannot
+# split the two SSO-path checks from each other — it never distinguishes "signing
+# cert expired" from "Entra federation misconfigured", so an SSO-family break
+# surfaces both. Permission (WD-SEC-003) is independently isolable.
+_RUNHEALTH_SSO_MANUAL = ("WD-CONN-010", "WD-CONN-102")
+_RUNHEALTH_PERMISSION_MANUAL = ("WD-SEC-003",)
+_RUNHEALTH_ALL_SUPPRESSIBLE = frozenset(_RUNHEALTH_SSO_MANUAL + _RUNHEALTH_PERMISSION_MANUAL)
 
 
 def _suppress_manual_conn_sec_when_runs_healthy(
     results: list[CheckResult],
+    runner=None,
 ) -> list[CheckResult]:
-    """Hide the MANUAL Workday connection/security checks when the run-health
-    litmus test (WD-RUN-001) proves Workday is actually working.
+    """Show only the MANUAL Workday verification checks the run-health signal
+    cannot rule out.
 
     WD-CONN-010 (Entra↔Workday federation), WD-CONN-102 (SAML signing cert),
     and WD-SEC-003 (personal-data write permission) emit MANUAL rows asking the
-    operator to hand-verify config in the Workday/Entra tenant. When WD-RUN-001
-    PASSES, runtime traffic already demonstrates that chain works end to end, so
-    those manual asks are redundant noise — drop them.
+    operator to hand-verify config in the Workday/Entra tenant. They are noise
+    when the relevant chain demonstrably works, and signal when it is broken.
 
-    They are KEPT whenever WD-RUN-001 does NOT pass — i.e. it FAILED (they help
-    diagnose the break), or it could not confirm health (NOT_CONFIGURED = no
-    traffic yet, SKIPPED = run history unavailable), where hand-verification is
-    still the operator's best signal (e.g. a fresh pre-deployment env).
+    Two layers:
+
+    1. **WD-RUN-001 PASSED** — recent runtime traffic proves the whole chain
+       works end to end → drop *every* MANUAL Workday connection/security ask.
+
+    2. **WD-RUN-001 not passed** — use the classified failure signal
+       (``runner._workday_run_failure_signal``, from
+       ``_compute_run_failure_signal``) to hide only the checks whose failure
+       DOMAIN the observed errors positively exclude, leaving the verification(s)
+       plausibly responsible:
+         * ``auth_proven`` (Workday answered in any form) ⟹ the SSO / signing-cert
+           path works ⟹ suppress WD-CONN-010 / WD-CONN-102.
+         * ``auth_proven`` AND no caught Workday fault ⟹ Workday answered with no
+           permission denial on the exercised scenarios ⟹ also suppress
+           WD-SEC-003.
+       A check is removed ONLY on such positive evidence. Anything not excluded
+       stays visible — including *every* check when the signal is absent
+       (SKIPPED / NOT_CONFIGURED, or no runner) or uninformative (e.g. only a
+       no-response hard failure, or a pre-call template-retrieval error), since
+       those rule nothing out.
+
+       Safety net: if the rule-outs would suppress *every* manual check while
+       run-health is NOT passing, that is contradictory — we have classified a
+       real, unhealthy break as excluding all of our manual verifications, which
+       means the actual cause is something this model didn't anticipate (e.g. a
+       pure template/config break). Rather than leave the operator with zero
+       guidance, fail safe and show *all* of them.
     """
     run_health = next(
         (r.status for r in results if r.checkpoint_id == "WD-RUN-001"), None
     )
-    if run_health != Status.PASSED.value:
+
+    if run_health == Status.PASSED.value:
+        # Clean litmus pass — hide every MANUAL Workday connection/security row.
+        # NOTE: deliberately BROAD (prefix match) — a clean pass should silence
+        # ALL manual conn/sec asks, including any added later. The not-passed
+        # branch below is intentionally NARROW (exact ids in _RUNHEALTH_*),
+        # because failure suppression must be evidence-based. Do not "align"
+        # the two: broadening the failure branch would hide manual checks the
+        # error signal hasn't actually ruled out.
+        return [
+            r for r in results
+            if not (
+                r.status == Status.MANUAL.value
+                and (r.checkpoint_id.startswith("WD-CONN")
+                     or r.checkpoint_id.startswith("WD-SEC"))
+            )
+        ]
+
+    signal = getattr(runner, "_workday_run_failure_signal", None) if runner else None
+    if not signal:
+        # Inconclusive (no run window) or called without a runner — keep all.
+        return results
+
+    # Suppress a manual check ONLY on positive evidence that its failure domain
+    # is not the culprit. Absence of evidence is never a rule-out, so anything
+    # not positively excluded stays visible.
+    suppress: set[str] = set()
+    if signal.get("auth_proven"):
+        # Workday accepted the OAuthUser SSO token and answered in some form →
+        # the SSO / Entra-federation / signing-cert path demonstrably works.
+        suppress.update(_RUNHEALTH_SSO_MANUAL)
+        if not signal.get("workday_fault"):
+            # Workday answered AND none of the answers was a fault → no
+            # permission denial occurred on the exercised scenarios → the
+            # personal-data write-permission check is not implicated either.
+            suppress.update(_RUNHEALTH_PERMISSION_MANUAL)
+
+    if not suppress:
+        return results
+    if suppress == _RUNHEALTH_ALL_SUPPRESSIBLE:
+        # Ruled out every manual check while runs are unhealthy → the break is
+        # outside the model's domains (or we misclassified). Fail safe: show all.
+        # (suppress is only ever drawn from _RUNHEALTH_ALL_SUPPRESSIBLE, so this
+        # equality means "every suppressible domain was ruled out".)
         return results
     return [
         r for r in results
-        if not (
-            r.status == Status.MANUAL.value
-            and (r.checkpoint_id.startswith("WD-CONN") or r.checkpoint_id.startswith("WD-SEC"))
-        )
+        if not (r.status == Status.MANUAL.value and r.checkpoint_id in suppress)
     ]
 
 
@@ -1335,6 +1427,157 @@ def _check_package_connection_completeness(runner) -> list[CheckResult]:
         doc_link=doc_link,
     )]
 
+
+# ─────────────────────────────────────────────────────────────────────────
+# WD-CONN-013 — Workday connection OBO parameter sharing
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Microsoft Learn → Copilot Studio → Create and manage connections →
+# "Share connection parameters for On-Behalf-Of (OBO) authentication": the agent
+# maker turns on "Allow permission to share parameters" on each Workday
+# connection (Agent → Settings → Connection Settings → the connection → See
+# details → Connection parameters) so end users invoke Workday without being
+# prompted to establish their own connection at first use.
+#
+# Where the setting is stored (confirmed empirically by toggling it live):
+#   The flag is persisted on the AGENT's own connection reference rows in the
+#   Dataverse ``connectionreference`` table — column
+#   ``connectionparametersetconfig`` (Memo / JSON): populated = shared, null =
+#   not shared. (``promptingbehavior`` is unrelated — it is the solution-import
+#   "Prompt on import / Skip" choice. The connection ``/permissions`` role
+#   assignments are a different, unrelated sharing surface.)
+#
+# Which references count as "the agent's connections":
+#   Copilot Studio creates the agent's own connection references with a logical
+#   name of the form ``{schema}.{guid}.{connectorName}`` — e.g.
+#   ``msdyn_copilotforemployeeselfservicehr.<guid>.shared_workdaysoap`` — i.e. a
+#   GUID delimited by dots (the connector is the final segment). Those are the
+#   rows the toggle writes to, for EVERY connector the agent uses (Workday SOAP,
+#   Dataverse, etc.). The solution-template references shipped by the install
+#   (``new_sharedworkdaysoap_ff0df``, ``msdyn_sharedcommondataserviceforapps_92b66``)
+#   are bound but are NOT the agent's Connection-Settings connections; their
+#   underscore-only logical names carry no ``.{guid}.`` segment, so they're
+#   excluded. (We match on this structural format rather than the agent schema
+#   name from config: the reference prefix is the *product* bot schema, which
+#   does not necessarily equal the published agent's ``config.agent.schemaName``.)
+#
+# Data source: the same documented-tier Dataverse ``connectionreferences`` query
+# WD-PKG-001 already makes, with two extra columns
+# (``connectionparametersetconfig`` / ``connectionparametersconfig``). No new
+# endpoint, no cassette.
+
+
+# An agent's own connection reference logical name embeds a GUID between dots:
+# ``{schema}.{guid}.{connector}``. Solution-template refs (``new_x_y``) don't.
+_AGENT_CONNECTION_REF_RE = re.compile(
+    r"\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.", re.I
+)
+
+
+def _connection_label(ref: dict) -> str:
+    return (
+        ref.get("connectionreferencedisplayname")
+        or ref.get("connectionreferencelogicalname")
+        or "(unnamed connection)"
+    )
+
+
+def _check_workday_connection_obo_sharing(runner) -> list[CheckResult]:
+    """WD-CONN-013 — every connection the agent uses has OBO parameter sharing
+    ("Allow permission to share parameters") enabled, so end users invoke the
+    backing services without a first-use connection prompt.
+
+    Scopes to the agent's own connection references (logical name of the form
+    ``{schema}.{guid}.{connector}``, any connector) and requires
+    ``connectionparametersetconfig`` to be populated on each. See the module
+    comment for why this column / scoping is correct.
+    """
+    cp_id = "WD-CONN-013"
+    desc = "Agent connection OBO parameter sharing"
+    doc_link = f"{DOC_BASE}/workday#step-3-connection-references"
+    roles = [Role.POWER_PLATFORM_ADMIN.value]
+
+    env_url = getattr(runner, "env_url", None)
+    dv_token = getattr(runner, "dv_token", None)
+    if not env_url or not dv_token:
+        return [CheckResult(roles=roles, checkpoint_id=cp_id, category="Workday",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=desc,
+            result="Dataverse token not available — cannot read connection-reference sharing config.",
+        )]
+
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+        from auth import query_all
+
+        refs = query_all(
+            env_url, dv_token, "connectionreferences",
+            "connectionreferencelogicalname,connectionreferencedisplayname,"
+            "connectorid,connectionid,connectionparametersetconfig,"
+            "connectionparametersconfig",
+        )
+    except Exception as e:
+        return [CheckResult(roles=roles, checkpoint_id=cp_id, category="Workday",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=desc,
+            result=f"Unable to read Dataverse connection references: {e}.",
+            remediation="Confirm the FlightCheck identity has Dataverse read access on connectionreferences.",
+        )]
+
+    agent_refs = [
+        r for r in refs
+        if r.get("connectionid")
+        and _AGENT_CONNECTION_REF_RE.search(
+            r.get("connectionreferencelogicalname") or ""
+        )
+    ]
+
+    if not agent_refs:
+        return [CheckResult(roles=roles, checkpoint_id=cp_id, category="Workday",
+            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            description=desc,
+            result=(
+                "No agent connection references found — nothing to evaluate for "
+                "OBO parameter sharing."
+            ),
+            doc_link=doc_link,
+        )]
+
+    unshared = [
+        r for r in agent_refs
+        if not (r.get("connectionparametersetconfig") or r.get("connectionparametersconfig"))
+    ]
+
+    if not unshared:
+        return [CheckResult(roles=roles, checkpoint_id=cp_id, category="Workday",
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
+            description=desc,
+            result=(
+                f"All {len(agent_refs)} connection(s) the agent uses have OBO "
+                "parameter sharing enabled — end users invoke the backing "
+                "services without a first-use connection prompt."
+            ),
+            doc_link=doc_link,
+        )]
+
+    names = ", ".join(sorted(_connection_label(r) for r in unshared))
+    studio = _wd_studio_link(runner)
+    return [CheckResult(roles=roles, checkpoint_id=cp_id, category="Workday",
+        priority=Priority.HIGH.value, status=Status.FAILED.value,
+        description=desc,
+        result=(
+            f"{len(unshared)} of {len(agent_refs)} connection(s) the agent uses "
+            f"do NOT have OBO parameter sharing enabled: {names}. End users will "
+            "be prompted to establish their own connection the first time the "
+            "agent uses the backing service."
+        ),
+        remediation=(
+            f"In Copilot Studio, open {studio} → Settings → Connection Settings → "
+            "the connection → See details → Connection parameters → turn on "
+            "'Allow permission to share parameters' and select the parameters."
+        ),
+        doc_link=doc_link,
+    )]
 
 # ─────────────────────────────────────────────────────────────────────────
 # Install-flavor gating helper (see AGENTS.md design principle #11)
@@ -2480,7 +2723,8 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
         ``CERT_EXPIRY_WARN_DAYS`` days, OR its NotBefore is in the
         future (not yet valid).
       * MANUAL — active cert is healthy. The operator must compare
-        its thumbprint against the row in Workday's "Edit Tenant
+        its certificate (validity dates, or an externally-computed
+        SHA-1 thumbprint) against the row in Workday's "Edit Tenant
         Setup - Security -> SAML Identity Providers" because that
         is not reachable from any Workday API the kit talks to.
       * NOT_CONFIGURED — no federated Workday SAML enterprise app
@@ -2593,6 +2837,47 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
     # it raised ImportError as soon as any Workday SAML SP with certs
     # was returned, masking every cert-classification branch below.
     now = datetime.now(timezone.utc)
+
+    # Scope to the operator-selected Workday SSO app when one is configured
+    # or pinned for this run. Historically WD-CONN-102 validated *every*
+    # federated Workday SAML enterprise app in the tenant and coalesced them
+    # by status; a tenant with several (dev/test/prod, demos, Okta trials)
+    # therefore lumped unrelated apps into one verdict, so a broken sibling
+    # could fail a correctly-configured deployment. The standalone flightcheck
+    # lets the operator pin the app they are verifying (interactive picker /
+    # ``--workday-app-id`` / persisted ``entraAppId``); we resolve it through
+    # the SAME ``_workday_hints`` path AUTH-005 / WD-ASSIGN-001 already use so
+    # every Workday-SSO-app check agrees on the target. When the pin matches a
+    # discovered SAML SP we narrow to it; when it matches none (e.g. the
+    # operator pinned the OAuth Workday app, which is not a SAML app) we keep
+    # the full set and say so rather than silently validating an unrelated
+    # sibling. No pin ⇒ unchanged all-apps behavior (single-checkpoint mode
+    # never sets one).
+    from ._workday_app_assignment import _workday_hints
+
+    app_id_hint, _ = _workday_hints(getattr(runner, "config", None))
+    scope_note = ""
+    if app_id_hint:
+        _hint = app_id_hint.strip().lower()
+        _matched = [
+            sp for sp in workday_sps
+            if str(sp.get("appId", "")).strip().lower() == _hint
+        ]
+        if _matched:
+            workday_sps = _matched
+            scope_note = (
+                "\n\nScoped to the configured Workday SSO app "
+                f"(entraAppId={app_id_hint}); other Workday SAML enterprise "
+                "apps in this tenant were not evaluated."
+            )
+        else:
+            scope_note = (
+                "\n\nNote: the configured Workday app "
+                f"(entraAppId={app_id_hint}) is not among the Workday SAML "
+                "SSO enterprise apps in this tenant, so it could not be used "
+                "to narrow this check; all discovered Workday SAML apps are "
+                "shown."
+            )
 
     # Classify each SP into exactly one of these buckets. Each list
     # holds (sp_summary_string, remediation_hint) tuples so the
@@ -2723,7 +3008,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
     results: list[CheckResult] = []
 
     if failed_entries:
-        bodies = "\n".join(e["summary"] for e in failed_entries)
+        bodies = "\n".join(e["summary"] for e in failed_entries) + scope_note
         results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value],
             checkpoint_id=cp_id, category=category,
             priority=Priority.HIGH.value, status=Status.FAILED.value,
@@ -2770,7 +3055,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
         ))
 
     if warning_entries:
-        bodies = "\n".join(e["summary"] for e in warning_entries)
+        bodies = "\n".join(e["summary"] for e in warning_entries) + scope_note
         # Hardening framing per AGENTS.md principle 9 — these aren't
         # functional blockers today, only operational risk.
         results.append(CheckResult(roles=[Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value],
@@ -2815,7 +3100,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
         ))
 
     if manual_entries:
-        bodies = "\n".join(e["summary"] for e in manual_entries)
+        bodies = "\n".join(e["summary"] for e in manual_entries) + scope_note
         intro = (
             "1 federated Workday SAML app has a healthy active signing "
             "certificate in Entra"
@@ -2830,7 +3115,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.MANUAL.value,
             description=description,
             result=(
-                f"{intro}. Manual thumbprint comparison required "
+                f"{intro}. Manual certificate comparison required "
                 "against Workday — the Workday 'X509 Certificate' "
                 "field is not exposed via any Workday API the kit "
                 "talks to (the SOAP RaaS / Worker services don't "
@@ -2843,7 +3128,7 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
                 "Workday has on file for the same Service Provider ID. "
                 "ESS uses exactly one of the federated apps listed "
                 "above; identify it via Workday first, then verify "
-                "only that app's thumbprint.\n"
+                "only that app's certificate.\n"
                 "\n"
                 "Step 1 — Identify the active Entra app from inside "
                 "Workday:\n"
@@ -2861,15 +3146,28 @@ def _check_saml_certificate_health(runner) -> list[CheckResult]:
                 "listed above — the matching row is the active "
                 "Entra app.\n"
                 "\n"
-                "Step 2 — Compare the thumbprints:\n"
-                "  a. In Workday, in that same row, open the 'X509 "
-                "Certificate' value and view its details — Workday "
-                "displays the SHA-1 thumbprint in colon-separated "
-                "uppercase hex (matches the format shown above).\n"
-                "  b. Compare it byte-for-byte against the active "
-                "thumbprint listed for that app above. They MUST "
-                "match exactly.\n"
-                "  c. If they differ, end-user browser-based SAML "
+                "Step 2 — Compare the certificate. Workday does NOT "
+                "display a thumbprint anywhere; its 'X509 Certificate' "
+                "object shows only Name, Valid From, Valid To, and the "
+                "Base64 certificate body. Verify parity one of two "
+                "ways:\n"
+                "  a. Quick check (no tooling) — open the 'X509 "
+                "Certificate' value on that row and confirm its "
+                "'Valid From' / 'Valid To' match the Entra cert's "
+                "NotBefore / NotAfter shown above.\n"
+                "  b. Definitive check — copy the Base64 certificate "
+                "body from Workday, wrap it between "
+                "'-----BEGIN CERTIFICATE-----' and "
+                "'-----END CERTIFICATE-----' markers, save it as a "
+                "PEM file (e.g. workday.cer), then compute its SHA-1 "
+                "thumbprint and confirm it equals the active Entra "
+                "thumbprint above (ignore ':' separators and case):\n"
+                "       PowerShell: [System.Security.Cryptography."
+                "X509Certificates.X509Certificate2]::"
+                "new(\"$PWD\\workday.cer\").Thumbprint\n"
+                "       openssl:    openssl x509 -in workday.cer "
+                "-noout -fingerprint -sha1\n"
+                "  If they differ, end-user browser-based SAML "
                 "SSO into Workday is broken. The OAuth-routed "
                 "``new_sharedworkdaysoap_ff0df`` connection used by "
                 "the ``ESS HR Workday`` and ``WorkdayRESTExecution`` "
@@ -3016,6 +3314,26 @@ def _check_flow_status(runner, wd_flows: list) -> list[CheckResult]:
 # The single success Response action. Anything else is a failure branch.
 _WD_SUCCESS_RESPONSE_ACTION = "Respond_to_Copilot_with_Success"
 
+# The distinct FAILURE Response-action branches the ESS Workday shared flow
+# routes to (verified live + in the flightcheck_workday_runs.yaml cassette).
+# The Response-action name is the only run-history-visible signal of *what kind*
+# of failure occurred (the actual Workday faultstring lives behind a separate,
+# SAS-signed outputsLink we deliberately do NOT fetch — see the WD-RUN-001
+# module comment and _compute_run_failure_signal):
+#   * errorMessage          — a Workday SOAP/API fault was CAUGHT: the call
+#                             reached Workday and it answered with a fault, so
+#                             the OAuthUser SSO token was accepted. This is the
+#                             permission/credential signal.
+#   * XmlTemplate→Json fail  — Workday returned a response the flow could not
+#                             transform. Also proves the call SUCCEEDED (SSO/auth
+#                             OK); the problem is the response template/config.
+#   * TemplateRetrievalFail  — the scenario's request template could not be
+#                             retrieved from Dataverse config. A pre-call config
+#                             error that proves nothing about auth or permission.
+_WD_WORKDAY_FAULT_RESPONSE = "Respond_to_Copilot_with_failure_errorMessage"
+_WD_TEMPLATE_TRANSFORM_RESPONSE = "Respond_to_Copilot_with_XmlTemplate_To_Json_Failed"
+_WD_TEMPLATE_RETRIEVAL_RESPONSE = "Respond_to_Copilot_with_TemplateRetrievalFailure"
+
 # Terminal run statuses that are definite failures of the run itself. A run in
 # any of these did not complete successfully, regardless of response branch.
 # (Cancelled / Skipped and unknown states are intentionally NOT here — they are
@@ -3057,6 +3375,48 @@ def _classify_run(run: dict) -> str:
     if status in _RUN_FAILURE_STATUSES:
         return "hard_failure"
     return "pending"
+
+
+def _compute_run_failure_signal(window: list[dict]) -> dict[str, bool]:
+    """Summarise which failure-branch categories appear in the recent run window
+    so run-health can suppress only the MANUAL Workday verification checks whose
+    failure DOMAIN the observed errors positively rule out (see
+    ``_suppress_manual_conn_sec_when_runs_healthy``).
+
+    ``window`` rows are the dicts built in ``_check_workday_run_health`` — each
+    carries ``kind`` (from ``_classify_run``) and ``resp`` (the Response-action
+    name, or ``"?"`` for a no-response hard failure).
+
+    Returns a dict of bools:
+      auth_proven   — Workday accepted the OAuthUser SSO token and returned a
+                      response in SOME form: a success, a CAUGHT SOAP fault, or a
+                      response that failed XML→JSON transform. Any of these proves
+                      the SSO / Entra-federation / signing-cert path works, so the
+                      SAML manual checks (WD-CONN-010 / WD-CONN-102) cannot be the
+                      culprit.
+      workday_fault — a run routed to the caught-Workday-fault branch (Workday
+                      processed the request and rejected it). The permission /
+                      credential signal (keeps WD-SEC-003 visible).
+      hard_failure  — a run terminated Failed/TimedOut/etc with NO Response
+                      action — the signature of a token/connection that never
+                      completed the call. Recorded for diagnosis; it is NOT a
+                      rule-out basis on its own (a no-response failure positively
+                      excludes nothing), so it leaves every manual check visible.
+
+    A window whose failures match none of these (e.g. only TemplateRetrievalFail,
+    or an unrecognised branch) yields all-False — an *uninformative* signal, on
+    which the caller deliberately keeps every manual check visible.
+    """
+    resps = {r.get("resp") for r in window}
+    success = any(r.get("kind") == "success" for r in window)
+    workday_fault = _WD_WORKDAY_FAULT_RESPONSE in resps
+    template_transform = _WD_TEMPLATE_TRANSFORM_RESPONSE in resps
+    hard_failure = any(r.get("kind") == "hard_failure" for r in window)
+    return {
+        "auth_proven": success or workday_fault or template_transform,
+        "workday_fault": workday_fault,
+        "hard_failure": hard_failure,
+    }
 
 
 def _check_workday_run_health(runner) -> list[CheckResult]:
@@ -3151,6 +3511,11 @@ def _check_workday_run_health(runner) -> list[CheckResult]:
     n = len(window)
     win_fail = [r for r in window if r["kind"] in ("caught_failure", "hard_failure")]
     win_success = n - len(win_fail)
+
+    # Stash the classified failure signal so _suppress_manual_conn_sec_when_runs_healthy
+    # can show only the MANUAL verification checks the observed error category
+    # cannot rule out (error-aware suppression).
+    runner._workday_run_failure_signal = _compute_run_failure_signal(window)
 
     def _sample_lines(rows: list[dict]) -> str:
         lines = []
@@ -4569,6 +4934,40 @@ def _check_custom_workflow_inventory(runner) -> list[CheckResult]:
 
 # ---- Credential Resolution ----
 
+# Directly-targetable checkpoint families whose checks consume the
+# interactively-resolved Workday runtime inputs (test employee ID + ISU
+# credentials). Only a --checkpoint run that overlaps one of these should be
+# allowed to block on those prompts. The workflow family (WD-WF-*) is the sole
+# such target: WD-SEC-003 also reads them but is emitted only in full/scope
+# runs, never as a standalone --checkpoint target.
+_WD_RUNTIME_INPUT_FAMILIES = ("WD-WF",)
+
+
+def _interactive_workday_prompts_allowed(runner) -> bool:
+    """Whether blocking on an interactive Workday runtime prompt (test
+    employee ID / ISU credentials) is appropriate for this run.
+
+    Full and scope runs (no single-checkpoint target matcher) keep the legacy
+    behavior and may prompt. In ``--checkpoint`` mode the entire Workday
+    category function is executed to hydrate shared state, but only the target
+    checkpoint's rows survive ``run()``'s post-filter — so a prompt fired by a
+    non-target check (e.g. the workflow / personal-data checks running only to
+    hydrate a ``WD-PKG-001`` request) would block the operator for a row that
+    is about to be discarded. Restrict the prompt to checkpoint runs whose
+    target actually overlaps a runtime-input-consuming family.
+    """
+    if getattr(runner, "_target_matcher", None) is None:
+        return True
+    scope = str(getattr(runner, "scope", "") or "")
+    prefix = "checkpoint:"
+    target = scope[len(prefix):] if scope.startswith(prefix) else ""
+    probe = target.rstrip("*").rstrip("-")
+    return any(
+        probe == fam or target.startswith(fam + "-")
+        for fam in _WD_RUNTIME_INPUT_FAMILIES
+    )
+
+
 def _resolve_workday_metadata(runner) -> tuple[str, str, str]:
     """Resolve non-sensitive Workday metadata: (base_url, tenant, test_employee_id).
 
@@ -4599,7 +4998,7 @@ def _resolve_workday_metadata(runner) -> tuple[str, str, str]:
         test_employee = config.get("workdayTestEmployeeId", "")
 
     # --- Source 5: Test employee ID (prompt + cache in config) ---
-    if not test_employee and sys.stdin.isatty():
+    if not test_employee and sys.stdin.isatty() and _interactive_workday_prompts_allowed(runner):
         test_employee = input("  Test Employee ID (e.g. 21508): ").strip()
         if test_employee:
             _cache_test_employee_id(test_employee)
@@ -4619,7 +5018,7 @@ def _resolve_workday_credentials(runner, tenant: str) -> tuple[str, str]:
     password = os.environ.get("WORKDAY_PASSWORD", "")
 
     # --- Source 4: Interactive prompt for secrets ---
-    if (not username or not password) and sys.stdin.isatty():
+    if (not username or not password) and sys.stdin.isatty() and _interactive_workday_prompts_allowed(runner):
         print("\n  Workday SOAP workflow tests need ISU credentials.")
         print("  (Credentials are used for this run only - never saved to disk)\n")
         if not username:

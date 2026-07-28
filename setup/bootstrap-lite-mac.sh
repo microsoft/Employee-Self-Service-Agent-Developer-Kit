@@ -45,6 +45,12 @@ if [[ ! -s "$TEMP_DIR/install-ess-adk.sh" ]] || ! head -1 "$TEMP_DIR/install-ess
     exit 1
 fi
 
+# Best-effort: fetch the installer telemetry emitter (fail-open — a telemetry
+# download failure must never block the install).
+if curl -fsSL "$SOURCE_BASE_URL/telemetry/install-telemetry.sh" -o "$TEMP_DIR/install-telemetry.sh" 2>/dev/null; then
+    export ESS_INSTALL_TELEMETRY_LIB="$TEMP_DIR/install-telemetry.sh"
+fi
+
 # Run the downloaded installer in a subshell to avoid issues if it calls exit
 export ESS_ADK_BRANCH="$BRANCH"
 bash "$TEMP_DIR/install-ess-adk.sh"

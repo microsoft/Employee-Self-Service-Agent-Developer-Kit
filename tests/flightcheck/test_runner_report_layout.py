@@ -1,19 +1,20 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Unit tests for the prioritized FlightCheck report layout introduced
-in PR for grahamc/flightcheck-report-prioritized-format.
+"""Unit tests for the FlightCheck HTML report layout.
 
-The redesign reshapes the operator's triage path: a verdict banner at
-the top tells them at a glance whether the deployment is ready, and
-results are split into three sections so they don't have to scan a
-single mixed table to find what needs action.
+The report gives the operator a fast triage path: a verdict banner at
+the top says whether the deployment is ready, an action-items panel
+lists the blockers to fix and the warnings to review, a readiness
+synopsis shows one tile per category, and the results themselves are
+grouped into one collapsible section per category (one check card per
+result).
 
 This file pins the layout contracts so a future refactor cannot
-silently break the "find what needs my attention" path the report
-was designed for.
+silently break the "find what needs my attention" path.
 
-The three buckets are:
+The pure-logic bucket helper still classifies statuses into three
+triage buckets (used to order the action panel and sort cards):
   - ACTION REQUIRED:  Failed, Error
   - MANUAL:           Warning, Manual, NotConfigured
   - PASSED:           Passed, Skipped
@@ -314,14 +315,22 @@ def test_verdict_not_ready_headline_counts_failures_only_not_warnings(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Section rendering — the three stacked sections.
+# Section rendering — per-category collapsible sections with check cards.
+#
+# The report groups results by category (one <details class="sec"> per
+# category, in RunResult.categories order) rather than the old three
+# fixed buckets. These tests pin the new structure: the synopsis grid,
+# per-category sections, data-s status attributes on cards, open/collapse
+# behaviour, the action-items panel, and the "next step" remediation line.
+# _build_run_with registers a single "Test" category, so the section id
+# is "cat-test".
 # ---------------------------------------------------------------------------
 
 
-def test_html_renders_three_named_sections(tmp_path):
-    """The three section anchors must exist regardless of which
-    sections happen to be populated, so the layout is stable for any
-    downstream tooling that links into specific section ids."""
+def test_html_renders_synopsis_grid_and_category_section(tmp_path):
+    """The report must render the readiness synopsis grid and one
+    collapsible section per category, so the operator can jump from a
+    tile to the matching detail block."""
     from flightcheck.runner import save_results
     result = _build_run_with([
         _make_result("F-1", "Failed"),
@@ -331,71 +340,19 @@ def test_html_renders_three_named_sections(tmp_path):
     save_results(result, output_dir=str(tmp_path))
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
 
-    assert 'id="section-action"' in html
-    assert 'id="section-manual"' in html
-    assert 'id="section-passed"' in html
-    assert "Action required" in html
-    assert "Needs manual verification" in html
-    assert ">Passed</h2>" in html
+    # Synopsis grid with a tile linking to the category section.
+    assert 'class="synopsis"' in html
+    assert 'class="syn-grid"' in html
+    assert 'href="#cat-test"' in html
+    # One section per category, anchored by a slug of the category name.
+    assert 'id="cat-test"' in html
+    assert re.search(r'<details class="sec" id="cat-test"', html)
 
 
-def test_action_section_open_by_default_passed_section_collapsed(tmp_path):
-    """The ACTION section must be open (operator sees rows
-    immediately), the PASSED section must be collapsed (operator
-    isn't forced to scroll past every passing row)."""
-    from flightcheck.runner import save_results
-    result = _build_run_with([
-        _make_result("F-1", "Failed"),
-        _make_result("P-1", "Passed"),
-    ])
-    save_results(result, output_dir=str(tmp_path))
-    html = (tmp_path / "report.html").read_text(encoding="utf-8")
-
-    # <details id="section-action" class="section" open> — note the
-    # exact attribute presence, since absence flips the default.
-    assert re.search(
-        r'<details id="section-action" class="section" open>', html
-    ), "Action section must be open by default"
-    assert re.search(
-        r'<details id="section-manual" class="section" open>', html
-    ), "Manual section must be open by default"
-
-    # PASSED has no `open` attribute — collapsed.
-    passed_block = re.search(
-        r'<details id="section-passed"[^>]*>', html
-    )
-    assert passed_block is not None
-    assert " open" not in passed_block.group(0), (
-        "Passed section must NOT be open by default"
-    )
-
-
-def test_empty_section_shows_friendly_note_not_an_empty_table(tmp_path):
-    """A section with zero results must show a friendly empty-note,
-    not an empty table the operator has to decode."""
-    from flightcheck.runner import save_results
-    # Only passing rows — both action_required and manual sections
-    # are empty.
-    result = _build_run_with([_make_result("OK-1", "Passed")])
-    save_results(result, output_dir=str(tmp_path))
-    html = (tmp_path / "report.html").read_text(encoding="utf-8")
-
-    assert "nothing here" in html.lower() or "no failing" in html.lower()
-    # The empty section should NOT have a table inside it; check that
-    # by ensuring action section header is followed by the empty-note
-    # class before the next section.
-    m = re.search(
-        r'id="section-action".*?</details>', html, flags=re.S
-    )
-    assert m is not None
-    assert "empty-note" in m.group(0)
-    assert "<table>" not in m.group(0)
-
-
-def test_status_to_section_routing_in_rendered_html(tmp_path):
-    """Each status renders inside the section its bucket dictates.
-    Warning lands under MANUAL (operator must verify); Skipped lands
-    under PASSED (kit chose not to run the check)."""
+def test_check_cards_carry_data_s_status_attributes(tmp_path):
+    """Each check renders as a card carrying a data-s attribute so the
+    filter bar can show/hide by status. Statuses map to the filter
+    keys pass/fail/warn/manual/na."""
     from flightcheck.runner import save_results
     result = _build_run_with([
         _make_result("FAIL-X", "Failed"),
@@ -407,71 +364,179 @@ def test_status_to_section_routing_in_rendered_html(tmp_path):
     save_results(result, output_dir=str(tmp_path))
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
 
-    def section_html(section_id: str) -> str:
-        m = re.search(
-            rf'id="{section_id}".*?</details>', html, flags=re.S
-        )
-        assert m is not None, f"Section {section_id} not in HTML"
-        return m.group(0)
-
-    action_html = section_html("section-action")
-    manual_html = section_html("section-manual")
-    passed_html = section_html("section-passed")
-
-    # FAIL belongs in action
-    assert "FAIL-X" in action_html
-    assert "FAIL-X" not in manual_html and "FAIL-X" not in passed_html
-
-    # WARN + MAN belong in manual (Warning folds here per design —
-    # it's an operator-verification question, not a fix-this).
-    assert "WARN-X" in manual_html
-    assert "MAN-X" in manual_html
-    assert "WARN-X" not in action_html and "WARN-X" not in passed_html
-    assert "MAN-X" not in action_html and "MAN-X" not in passed_html
-
-    # PASS + SKIP belong in passed (Skipped folds here per design —
-    # the kit chose not to run the check, so the row needs no action).
-    assert "PASS-X" in passed_html
-    assert "SKIP-X" in passed_html
-    assert "PASS-X" not in action_html and "PASS-X" not in manual_html
-    assert "SKIP-X" not in action_html and "SKIP-X" not in manual_html
+    # Every filter key used by a rendered card must be present.
+    assert 'data-s="fail"' in html
+    assert 'data-s="warn"' in html
+    assert 'data-s="manual"' in html
+    assert 'data-s="pass"' in html
+    # Skipped folds into the neutral "na" bucket.
+    assert 'data-s="na"' in html
+    # Each card anchors by a slug of its checkpoint id for deep links.
+    assert 'id="chk-fail-x"' in html
 
 
-def test_section_count_badge_matches_bucket_size(tmp_path):
-    """The badge next to each section header shows the bucket count
-    so the operator sees scale before expanding. Counts reflect the
-    new mapping: Warning is in MANUAL (not ACTION), Skipped is in
-    PASSED (not MANUAL)."""
+def test_category_section_open_when_actionable_collapsed_when_all_pass(
+    tmp_path,
+):
+    """A category containing any actionable row (Failed/Error/Warning/
+    Manual/NotConfigured) opens by default so the operator sees it
+    immediately; an all-passing category stays collapsed."""
+    from flightcheck.runner import save_results
+
+    actionable = _build_run_with([
+        _make_result("F-1", "Failed"),
+        _make_result("P-1", "Passed"),
+    ])
+    save_results(actionable, output_dir=str(tmp_path))
+    html_actionable = (tmp_path / "report.html").read_text(encoding="utf-8")
+    assert re.search(
+        r'<details class="sec" id="cat-test" open>', html_actionable
+    ), "A category with a failure must open by default"
+
+    all_pass = _build_run_with([_make_result("P-1", "Passed")])
+    save_results(all_pass, output_dir=str(tmp_path))
+    html_pass = (tmp_path / "report.html").read_text(encoding="utf-8")
+    m = re.search(r'<details class="sec" id="cat-test"[^>]*>', html_pass)
+    assert m is not None
+    assert " open" not in m.group(0), (
+        "An all-passing category must NOT be open by default"
+    )
+
+
+def test_empty_category_renders_friendly_note(tmp_path):
+    """Defensive: a category with zero results renders a friendly note
+    rather than an empty card list. (The grouping path never emits an
+    empty category, so we exercise the renderer directly.)"""
+    from flightcheck.runner import _render_category_section
+
+    section = _render_category_section(1, "Empty Stage", [])
+    assert 'id="cat-empty-stage"' in section
+    assert "Nothing here" in section
+    # No status card / filter attribute should be present.
+    assert "data-s=" not in section
+
+
+def test_failed_result_details_appear_in_html(tmp_path):
+    """A Failed result must surface its checkpoint id, its result
+    payload, and its remediation text in the rendered HTML — the
+    operator needs all three to act."""
+    from flightcheck.runner import save_results
+    result = _build_run_with([_make_result("FAIL-DETAIL", "Failed")])
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert "FAIL-DETAIL" in html
+    assert "result for FAIL-DETAIL" in html
+    assert "remediation for FAIL-DETAIL" in html
+
+
+def test_next_step_renders_remediation(tmp_path):
+    """For non-manual checks, remediation renders as an explicit
+    "Next step" line on the card, NOT as a checklist (the completion
+    checklist is reserved for Manual items)."""
+    from flightcheck.runner import save_results
+    result = _build_run_with([_make_result("F-1", "Failed")])
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert "Next step" in html
+    assert "remediation for F-1" in html
+    # A failed check must not get the manual completion checklist.
+    assert 'class="checklist"' not in html
+
+
+def test_action_panel_lists_blockers_with_anchor_links(tmp_path):
+    """The action-items panel lists Failed/Error results as blockers,
+    each linking to its check card below."""
     from flightcheck.runner import save_results
     result = _build_run_with([
         _make_result("F-1", "Failed"),
-        _make_result("F-2", "Failed"),
-        _make_result("W-1", "Warning"),
-        _make_result("M-1", "Manual"),
-        _make_result("S-1", "Skipped"),
         _make_result("P-1", "Passed"),
-        _make_result("P-2", "Passed"),
-        _make_result("P-3", "Passed"),
     ])
     save_results(result, output_dir=str(tmp_path))
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
 
-    def badge_count_for(section_id: str) -> str:
-        m = re.search(
-            rf'id="{section_id}".*?count-badge">(\d+)</span>',
-            html, flags=re.S,
-        )
-        assert m is not None, f"No count badge for {section_id}"
-        return m.group(1)
+    assert 'class="actions-panel"' in html
+    assert "Action items" in html
+    # Blocker links to the failing check's card anchor.
+    assert 'href="#chk-f-1"' in html
+    # No fabricated "auto-fix available" badge (not in the data model).
+    assert "auto-fix available" not in html
 
-    assert badge_count_for("section-action") == "2"   # 2 Failed only
-    assert badge_count_for("section-manual") == "2"   # 1 Warning + 1 Manual
-    assert badge_count_for("section-passed") == "4"   # 3 Passed + 1 Skipped
+
+def test_action_panel_all_clear_when_no_blockers_or_warnings(tmp_path):
+    """When a run has neither blockers nor warnings, the action panel
+    becomes a positive all-clear note instead of an empty red box."""
+    from flightcheck.runner import save_results
+    result = _build_run_with([_make_result("P-1", "Passed")])
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert "actions-panel allclear" in html
+    assert "Nothing needs action" in html
+
+
+def test_action_pill_carries_priority_class(tmp_path):
+    """Each blocker pill carries a priority-derived class so the panel
+    can colour Critical/High/Medium/Low distinctly (Critical=red,
+    High=amber, Medium=neutral, Low=na) instead of one flat colour."""
+    from flightcheck.runner import save_results
+    result = _build_run_with([
+        _make_result("CRIT-1", "Failed", priority="Critical"),
+        _make_result("HIGH-1", "Failed", priority="High"),
+        _make_result("MED-1", "Failed", priority="Medium"),
+        _make_result("LOW-1", "Failed", priority="Low"),
+    ])
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert 'class="ap-pri critical"' in html
+    assert 'class="ap-pri high"' in html
+    assert 'class="ap-pri medium"' in html
+    assert 'class="ap-pri low"' in html
+
+
+def test_synopsis_collapses_per_agent_categories(tmp_path):
+    """Per-agent categories (e.g. "Topics (Agent A)") collapse to a
+    single base tile ("Topics") in the readiness synopsis, coloured by
+    the worst status across agents. The per-category detail anchors stay
+    intact so the tile still deep-links into a real section."""
+    from flightcheck.runner import _render_synopsis
+    result = _build_run_with([_make_result("P-1", "Passed")])
+    categories = [
+        ("Topics (Agent A)", [_make_result("T-A", "Passed")]),
+        ("Topics (Agent B)", [_make_result("T-B", "Failed")]),
+        ("External Systems", [_make_result("E-1", "Passed")]),
+    ]
+
+    html = _render_synopsis(result, categories)
+
+    # Two base tiles, not three per-agent tiles.
+    assert html.count('class="syn-tile') == 2
+    assert ">Topics<" in html
+    assert ">External Systems<" in html
+    assert "Agent A" not in html and "Agent B" not in html
+    # Collapsed tile links to the first matching category's section and is
+    # coloured red because one agent failed.
+    assert 'href="#cat-topics-agent-a"' in html
+    assert 'class="syn-tile red"' in html
+
+
+def test_base_category_strips_agent_suffix():
+    """_base_category strips a trailing "(...)" agent suffix but leaves
+    suffix-free categories untouched."""
+    from flightcheck.runner import _base_category
+
+    assert _base_category("Topics (Contoso HR)") == "Topics"
+    assert _base_category("External Systems") == "External Systems"
+    assert _base_category("Cloud Policies / Telemetry") == (
+        "Cloud Policies / Telemetry"
+    )
 
 
 def test_action_rows_sorted_critical_before_high_in_html(tmp_path):
-    """Within ACTION REQUIRED, a Critical-priority row must appear
-    BEFORE a High-priority row in the rendered table — even if
+    """Within a category section, a Critical-priority row must appear
+    BEFORE a High-priority row in the rendered cards — even if
     Critical was registered later."""
     from flightcheck.runner import save_results
     result = _build_run_with([
@@ -482,17 +547,17 @@ def test_action_rows_sorted_critical_before_high_in_html(tmp_path):
     save_results(result, output_dir=str(tmp_path))
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
 
-    action_section_match = re.search(
-        r'id="section-action".*?</details>', html, flags=re.S,
+    section_match = re.search(
+        r'id="cat-test".*?</details>', html, flags=re.S,
     )
-    assert action_section_match is not None
-    section_html = action_section_match.group(0)
+    assert section_match is not None
+    section_html = section_match.group(0)
 
     crit_pos = section_html.index("CRIT-1")
     high_pos = section_html.index("HIGH-1")
     med_pos = section_html.index("MED-1")
     assert crit_pos < high_pos < med_pos, (
-        "Within Action Required, priorities must render Critical -> "
+        "Within a category, priorities must render Critical -> "
         "High -> Medium so operator triages worst-first."
     )
 
@@ -669,3 +734,168 @@ def test_overall_verdict_error_plus_warning_is_not_ready_not_ready_with_warnings
     assert result.errors == 1
     assert result.warnings == 1
     assert result.overall == "NOT_READY"
+
+
+# ---------------------------------------------------------------------------
+# View tools, how-to guide, and manual completion checklists.
+# ---------------------------------------------------------------------------
+
+
+def test_fold_unfold_controls_present(tmp_path):
+    """The report ships Fold all / Unfold all controls (hidden until JS
+    un-hides them) plus the script hooks that open/close every section."""
+    from flightcheck.runner import save_results
+    result = _build_run_with([_make_result("P-1", "Passed")])
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert 'id="viewtools"' in html
+    assert 'id="unfoldAll"' in html
+    assert 'id="foldAll"' in html
+    # Hidden in the no-JS view so the buttons aren't dead controls.
+    assert re.search(r'<div class="viewtools" id="viewtools" hidden>', html)
+
+
+def test_howto_guide_is_collapsed_and_below_verdict(tmp_path):
+    """A collapsed "How to read this report" guide renders after the
+    verdict banner (not first) so the outcome leads."""
+    from flightcheck.runner import save_results
+    result = _build_run_with([_make_result("P-1", "Passed")])
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert '<details class="howto">' in html
+    assert "How to read this report" in html
+    # Collapsed by default (no open attribute on the howto details).
+    assert re.search(r'<details class="howto">\s*<summary>', html)
+    # It sits below the verdict banner, above the action panel. Anchor on
+    # body-only markup (these class names also appear in the <style> block).
+    assert html.index('<div class="verdict ') < html.index('<details class="howto">')
+    assert html.index('<details class="howto">') < html.index('aria-label="Action items"')
+
+
+def _manual_with_steps():
+    """A manual CheckResult whose remediation carries two real steps."""
+    from flightcheck.runner import CheckResult
+    return CheckResult(
+        checkpoint_id="AUTH-006",
+        category="Authentication",
+        priority="High",
+        status="Manual",
+        description="SAML NameID alignment",
+        result="Found Workday SAML app",
+        remediation=(
+            "Manual verification required.\n\n"
+            "Step 1 - Identify the active Entra app:\n"
+            "  a. Sign in to the Workday tenant.\n"
+            "  b. Open Edit Tenant Setup - Security.\n"
+            "Step 2 - Compare the NameID mapping and confirm alignment."
+        ),
+    )
+
+
+def test_manual_check_renders_completion_checklist(tmp_path):
+    """A Manual check renders a completion checklist: one tick per real
+    step, plus an explicit "Mark as verified" item, plus the run-only
+    note. Total counter = steps + 1."""
+    from flightcheck.runner import FlightCheckRunner, save_results
+
+    runner = FlightCheckRunner(scope="test")
+    runner.register("Authentication", lambda _r: [_manual_with_steps()])
+    result = runner.run()
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert 'class="checklist"' in html
+    assert "Completion checklist" in html
+    # Two real steps + the explicit "Mark as verified" affordance.
+    assert "Mark as verified" in html
+    assert 'class="cl-count">0 / 3<' in html
+    assert "Step 1" in html and "Step 2" in html
+    # Expectation-setting note (mitigation instead of persistence).
+    assert "Progress applies to this run only." in html
+    # The Manual card must NOT also render the plain "Next step" line.
+    assert "Next step" not in html
+
+
+def test_manual_check_without_steps_gets_single_verify_item(tmp_path):
+    """A Manual check whose remediation has no "Step N" markers still
+    gets a checklist, but with only the explicit "Mark as verified"
+    item (no fabricated steps): counter = 0 / 1."""
+    from flightcheck.runner import FlightCheckRunner, CheckResult, save_results
+
+    runner = FlightCheckRunner(scope="test")
+    runner.register("Publishing", lambda _r: [
+        CheckResult(
+            checkpoint_id="PUB-001", category="Publishing",
+            priority="Critical", status="Manual",
+            description="Solution present in target environment",
+            result="Not auto-verifiable",
+            remediation="In Power Apps, confirm the solution is present.",
+        ),
+    ])
+    result = runner.run()
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert 'class="checklist"' in html
+    assert 'class="cl-count">0 / 1<' in html
+    assert "Mark as verified" in html
+
+
+def test_manual_checklist_items_parses_steps():
+    """_manual_checklist_items returns (preamble, steps): a leading
+    paragraph plus one block per "Step N", and an empty step list when
+    there are no markers."""
+    from flightcheck.runner import _manual_checklist_items
+
+    preamble, steps = _manual_checklist_items(
+        _manual_with_steps().remediation
+    )
+    assert preamble == "Manual verification required."
+    assert len(steps) == 2
+    assert steps[0].startswith("Step 1")
+    # The step block keeps its indented sub-lines.
+    assert "a. Sign in" in steps[0]
+    assert steps[1].startswith("Step 2")
+
+    pre2, steps2 = _manual_checklist_items("Just one paragraph, no steps.")
+    assert pre2 == "Just one paragraph, no steps."
+    assert steps2 == []
+
+
+def test_mask_sensitive_redacts_upn_and_guid():
+    """_mask_sensitive keeps enough context to stay actionable while
+    hiding the identifying part of emails/UPNs and GUIDs."""
+    from flightcheck.runner import _mask_sensitive
+
+    masked = _mask_sensitive("Owner lmoulet@EmployeeHub.onmicrosoft.com")
+    assert "lmoulet" not in masked
+    assert "l***@EmployeeHub.onmicrosoft.com" in masked
+
+    g = _mask_sensitive("Env 1a2b3c4d-1111-2222-3333-444455556666 is bound")
+    assert "1111-2222" not in g
+    assert "1a2b3c4d-****-****-****-************" in g
+
+
+def test_manual_checklist_masks_sensitive_data(tmp_path):
+    """A UPN in a manual check's remediation is masked in the rendered
+    checklist so a shared report doesn't leak the identity."""
+    from flightcheck.runner import FlightCheckRunner, CheckResult, save_results
+
+    runner = FlightCheckRunner(scope="test")
+    runner.register("Environment", lambda _r: [
+        CheckResult(
+            checkpoint_id="ENV-004", category="Environment",
+            priority="Medium", status="Manual",
+            description="Unbound connection",
+            result="Unbound",
+            remediation="Rebind the connection owned by jdoe@contoso.com.",
+        ),
+    ])
+    result = runner.run()
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    assert "jdoe@contoso.com" not in html
+    assert "j***@contoso.com" in html

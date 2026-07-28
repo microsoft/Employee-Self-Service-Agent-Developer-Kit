@@ -69,6 +69,73 @@ _SESSION = requests.Session()
 _SESSION.mount("https://", HTTPAdapter(max_retries=_RETRY))
 
 
+def _policy_env_scope(policy: dict) -> tuple[str | None, list[str]]:
+    """Return ``(filter_type, env_ids)`` for a DLP policy's environment scope.
+
+    The apiPolicies endpoint expresses environment scope in one of two
+    shapes; this reads both:
+
+    * Legacy: ``properties.environmentFilter.environments[].name`` (with an
+      optional ``filterType``; historically an include list).
+    * Modern: ``properties.definition.constraints.<key>`` where
+      ``type == "EnvironmentFilter"`` and
+      ``parameters.{filterType, environments[].name}``.
+
+    ``filter_type`` is ``"include"`` | ``"exclude"`` | ``None``. When no
+    environment filter is present ``env_ids`` is empty and the policy
+    applies to ALL environments.
+    """
+    if not isinstance(policy, dict):
+        return None, []
+    props = policy.get("properties", {})
+    if not isinstance(props, dict):
+        return None, []
+
+    # Legacy shape: properties.environmentFilter
+    legacy = props.get("environmentFilter")
+    if isinstance(legacy, dict):
+        env_list = legacy.get("environments") or []
+        ids = [e.get("name", "") for e in env_list if isinstance(e, dict)]
+        if ids:
+            ft = str(legacy.get("filterType", "include")).strip().lower()
+            return ft, ids
+
+    # Modern shape: properties.definition.constraints.<key> (EnvironmentFilter)
+    definition = props.get("definition")
+    if isinstance(definition, dict):
+        constraints = definition.get("constraints")
+        if isinstance(constraints, dict):
+            for constraint in constraints.values():
+                if not isinstance(constraint, dict):
+                    continue
+                if constraint.get("type") != "EnvironmentFilter":
+                    continue
+                params = constraint.get("parameters") or {}
+                env_list = params.get("environments") or []
+                ids = [e.get("name", "") for e in env_list if isinstance(e, dict)]
+                if ids:
+                    ft = str(params.get("filterType", "include")).strip().lower()
+                    return ft, ids
+
+    return None, []
+
+
+def _policy_applies_to_env(policy: dict, env_id: str) -> bool:
+    """Whether a DLP policy is effective on ``env_id``.
+
+    An unscoped policy (no environment filter) applies to all
+    environments. An ``include`` filter applies only to the listed
+    environments; an ``exclude`` filter applies to every environment
+    EXCEPT the listed ones.
+    """
+    filter_type, env_ids = _policy_env_scope(policy)
+    if not env_ids:
+        return True  # tenant-wide
+    if filter_type == "exclude":
+        return env_id not in env_ids
+    return env_id in env_ids  # include (default)
+
+
 class PPAdminClient:
     """Power Platform Admin API client for environment and flow queries."""
 
@@ -138,6 +205,40 @@ class PPAdminClient:
         self._token = pp_token
         self._flow_token = flow_token
         return self._token
+
+    def authenticate_silent(self) -> bool:
+        """Acquire a PowerApps/BAP token from cache WITHOUT prompting.
+
+        Unlike :meth:`authenticate`, this never opens a browser: it only
+        tries ``acquire_token_silent`` against the shared MSAL cache
+        (``.local/.token_cache.bin``). Intended for best-effort background
+        lookups (e.g. resolving an environment SKU during telemetry) that
+        must never block or interrupt the user. Returns True if a token was
+        obtained (``self._token`` set), False otherwise. Only the PowerApps
+        audience is acquired — callers needing flow endpoints must use the
+        interactive :meth:`authenticate`.
+        """
+        try:
+            authority = f"https://login.microsoftonline.com/{self.tenant_id}"
+            cache = msal.SerializableTokenCache()
+            cache_path = os.path.join(".local", ".token_cache.bin")
+            if not os.path.exists(cache_path):
+                return False
+            with open(cache_path, "r") as f:
+                cache.deserialize(f.read())
+            app = msal.PublicClientApplication(
+                CLIENT_ID, authority=authority, token_cache=cache
+            )
+            accounts = app.get_accounts()
+            if not accounts:
+                return False
+            result = app.acquire_token_silent([PP_SCOPE], account=accounts[0])
+            if not result or "access_token" not in result:
+                return False
+            self._token = result["access_token"]
+            return True
+        except Exception:  # noqa: BLE001 — best-effort, never raise to caller
+            return False
 
     @property
     def headers(self) -> dict:
@@ -251,6 +352,34 @@ class PPAdminClient:
                     return env.get("name")
         return None
 
+    def get_environment_sku_by_dataverse_url(self, env_url: str) -> str | None:
+        """Return the ``environmentSku`` of the BAP environment whose linked
+        Dataverse instance matches ``env_url`` (host match against both
+        ``instanceUrl`` and ``instanceApiUrl``), or ``None`` if not found.
+
+        Mirrors :meth:`find_environment_id_by_dataverse_url` but returns the
+        SKU (e.g. Production/Default/Sandbox/Trial/Developer) rather than the
+        BAP env id — used to classify deploy telemetry into sandbox vs
+        production.
+        """
+        target_host = (urlparse(env_url.rstrip("/")).hostname or "").lower()
+        if not target_host:
+            return None
+        envs = self.get_environments()
+        if isinstance(envs, dict) and "_error" in envs:
+            return None
+        for env in envs:
+            props = env.get("properties", {})
+            linked = props.get("linkedEnvironmentMetadata", {})
+            for url_field in ("instanceUrl", "instanceApiUrl"):
+                candidate = linked.get(url_field, "")
+                if not candidate:
+                    continue
+                candidate_host = (urlparse(candidate).hostname or "").lower()
+                if candidate_host == target_host:
+                    return props.get("environmentSku") or props.get("environmentType")
+        return None
+
     # ----- Flow APIs -----
     # Power Automate's admin flow endpoints live on api.flow.microsoft.com
     # and require the service.flow.microsoft.com audience token. The
@@ -333,17 +462,10 @@ class PPAdminClient:
         # "environment is unrestricted" verdict.
         if isinstance(all_policies, dict) and "_error" in all_policies:
             return all_policies
-        # Filter to policies that include this environment
+        # Filter to policies effective on this environment.
         relevant = []
         for p in all_policies:
-            env_list = (
-                p.get("properties", {})
-                .get("environmentFilter", {})
-                .get("environments", [])
-            )
-            env_ids = [e.get("name", "") for e in env_list]
-            # If no env filter, policy applies to all
-            if not env_ids or env_id in env_ids:
+            if _policy_applies_to_env(p, env_id):
                 relevant.append(p)
         return relevant
 

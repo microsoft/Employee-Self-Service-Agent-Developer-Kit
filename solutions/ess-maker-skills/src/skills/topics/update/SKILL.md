@@ -19,6 +19,7 @@ take effect. **NEVER stop after editing only the local file.**
 - ALWAYS push changes to Copilot Studio after editing.
 - NEVER modify system topics (`on-error`, `conversation-start`, etc.) without
   warning the user about potential side effects.
+- **PRESERVE THE AUTHORING INVARIANTS**: follow [`authoring-invariants.md`](src/reference/ess-docs/customization/authoring-invariants.md) — an edit MUST keep the shared-system-topic delegation, the standard parse → iterate → table rendering, and the shared error path intact.
 - **TRACK PROGRESS**: Use the todo list tool to track your progress.
 
 ## Step 1: Identify the Topic
@@ -50,15 +51,36 @@ already clear. Common modifications:
 Show the user the relevant section of the current topic and propose the
 specific edit. Explain what will change and why.
 
+**Power Fx + Power Automate (flow-backed data).** If the change makes a topic **consume a custom Power Automate flow's output in Power Fx** — typed tables, dynamic/dependent option lists, or status/success handling — read `src/reference/ess-docs/customization/powerfx-and-power-automate-authoring.md` first. It defines the type-safety constraints (untyped flow output → stringify → `ParseValue` into a typed table, `number` not `integer` status codes, `kind:Skills` flow Response, PascalCase system-topic schemaname) and the deploy/verify loop (`push` registration, `publish`, `validate`, `--repair`). Skipping these causes silently dropped fields or a non-functional topic.
+
+**Acting on a `/review` finding.** If the change comes from a `/review` finding, prefer the structured
+findings catalog `/review` writes at `.local/review-findings/{topic-stem}-catalog.json` — it survives
+across sessions and gives each finding a stable `id`, its `files[]`, and a `concrete_fix`. List it with
+`python scripts/merge_findings.py --solution {topic-stem} --show` from `solutions/ess-maker-skills/`. Act on
+the finding whose `id` (or step/label) the customer named; if the catalog is absent, fall back to the
+suggested fix in the visible `/review` report. Either way, locate the action by its **identity** (`kind` +
+node `id`, step name/label, any quoted expression) — **not** a line number — and apply the fix. Read the
+surrounding actions first: if the node's actual context makes a better fix obvious than the suggestion (for
+example, the flagged value turns out to be dead — written but never read — so removing it is cleaner than
+rewriting it), apply that and say why. If one finding covers several angles at the same node, address each.
+
+After a fix is applied and you have confirmed by re-reading the file that the flagged node is gone or
+corrected, tell the customer to re-run `/review` — its reconcile step sees the finding's file changed
+(evidence-stale), confirms the node is gone, and records it resolved in the shared ledger so it stops being
+carried forward. Then continue from Step 3.
+
 ## Step 3: Checkpoint
 
 Run in the terminal:
 
 ```
 python scripts/checkpoint.py "pre-update-{TopicName}"
+python scripts/emit_capability.py topic_update
 ```
 
-Tell the user: "Saved a backup of your current agent files."
+Tell the user: "Saved a backup of your current agent files." The
+`emit_capability.py` line records anonymous usage telemetry (best-effort,
+non-blocking); it needs no user-facing message and never fails the step.
 
 ## Step 4: Apply the Edit
 
@@ -116,10 +138,20 @@ python scripts/push.py --yes
 After a successful push, tell the user:
 
 > ✅ **{TopicName}** has been updated in Copilot Studio.
->
-> Remember to **Publish** your agent to make the change live.
->
-> [Open Copilot Studio](https://copilotstudio.microsoft.com/)
+
+Topic (botcomponent) changes only go live once the agent is **published** (flow `clientdata` edits are live immediately). Offer to publish for them:
+
+```
+python scripts/publish.py
+```
+
+If the change added or modified a ServiceNow ITSM flow (e.g. the runtime dependent-dropdowns options flow), also offer to confirm the flow is agent-invocable — this verifies it is activated, `modernflowtype=1`, has kind:Skills Response actions, a bound flow-scoped connection reference, and a system-topic link:
+
+```
+python scripts/validate.py "<flow name>"
+```
+
+If the user prefers to publish manually instead, point them at [Copilot Studio](https://copilotstudio.microsoft.com/).
 
 ## Step 9: Offer Next Steps
 

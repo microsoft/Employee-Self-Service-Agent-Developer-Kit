@@ -7,6 +7,8 @@
 const vscode = require('vscode');
 const _fs = require('fs');
 const _path = require('path');
+const _cp = require('child_process');
+const _execFile = require('util').promisify(_cp.execFile);
 
 // Debug log file for troubleshooting activation/wizard detection
 const _logFile = _path.join(process.env.APPDATA || process.env.HOME || '/tmp', 'ess-maker-debug.log');
@@ -19,6 +21,20 @@ const EXT_ID = 'microsoft-ess.ess-maker-profile';
 const APPLIED_KEY = 'essMaker.chatOnlyApplied.v7';
 const LITE_MODE_KEY = 'essMaker.liteMode.v1';
 const SETTINGS_BACKUP_KEY = 'essMaker.settingsBackup.v1';
+
+// --- Auto-update nudge (ADO 7569528 / 7569530) ------------------------------
+// The kit is delivered as a git clone; installers pull `main`, but users who
+// already have the ADK cloned have nothing prompting them to pull, so they can
+// silently run stale code. On startup we compare the local clone to
+// origin/main and, when behind, offer a one-click `git pull --ff-only`.
+const UPDATE_BRANCH = 'main';
+// How often to re-run the check within a long-lived session. VS Code sessions
+// can stay open for days, so a single startup check isn't enough to keep
+// makers on latest — re-check every 4 hours (in addition to each startup).
+const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
+// Guards against stacking notifications: true while a nudge (or the resulting
+// update) is already being shown, so the periodic timer doesn't open a second.
+let _updateNudgeActive = false;
 
 // Settings that strip developer chrome to the bone. Applied at GLOBAL (user)
 // scope because workspace-scope leaves menu/title-bar/activity-bar visible
@@ -1094,6 +1110,298 @@ class ActionsViewProvider {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Auto-update nudge: pure, testable helpers
+// ---------------------------------------------------------------------------
+
+// Extract the commit SHA from `git ls-remote <remote> <ref>` output. The first
+// whitespace-delimited token on the first non-empty line is the SHA.
+function parseLsRemoteSha(output) {
+    if (!output) return null;
+    for (const line of String(output).split('\n')) {
+        const trimmed = line.trim();
+        if (!trimmed) continue;
+        const sha = trimmed.split(/\s+/)[0];
+        if (/^[0-9a-f]{7,40}$/i.test(sha)) return sha.toLowerCase();
+    }
+    return null;
+}
+
+// True when the local clone differs from the remote tip. We only call this
+// after confirming the clone is on the tracked branch, so "differs" means
+// "behind" for the customer scenario (customers never commit locally).
+function localIsBehind(localSha, remoteSha) {
+    if (!localSha || !remoteSha) return false;
+    return String(localSha).trim().toLowerCase() !== String(remoteSha).trim().toLowerCase();
+}
+
+// Parse the output of `git rev-list --count <range>` into a non-negative
+// integer. Returns null if the output is empty/non-numeric so callers can
+// fall back to a generic message.
+function parseCommitCount(output) {
+    if (output === null || output === undefined) return null;
+    const trimmed = String(output).trim();
+    if (!/^\d+$/.test(trimmed)) return null;
+    return parseInt(trimmed, 10);
+}
+
+// Build the update-nudge notification text. When we know how many commits the
+// local clone is behind we say so (with correct singular/plural); otherwise we
+// fall back to a generic message.
+function formatUpdateMessage(behindCount) {
+    if (typeof behindCount === 'number' && Number.isFinite(behindCount) && behindCount > 0) {
+        const unit = behindCount === 1 ? 'commit' : 'commits';
+        return `Your ESS ADK is ${behindCount} ${unit} behind. Please update now to get the latest.`;
+    }
+    return 'A newer version of the ESS ADK is available.';
+}
+
+// Numeric-tuple version compare. Returns 1 if a>b, -1 if a<b, 0 if equal.
+function compareVersions(a, b) {
+    const pa = String(a || '0').split('.').map((n) => parseInt(n, 10) || 0);
+    const pb = String(b || '0').split('.').map((n) => parseInt(n, 10) || 0);
+    const len = Math.max(pa.length, pb.length);
+    for (let i = 0; i < len; i++) {
+        const x = pa[i] || 0;
+        const y = pb[i] || 0;
+        if (x > y) return 1;
+        if (x < y) return -1;
+    }
+    return 0;
+}
+
+// A `git pull` refreshes scripts/skills/docs but NOT the installed VSIX, so a
+// pulled repo can ship a newer extension than the one currently running.
+function extensionIsStale(installedVersion, repoVersion) {
+    if (!installedVersion || !repoVersion) return false;
+    return compareVersions(repoVersion, installedVersion) > 0;
+}
+
+// Map a failed `git pull --ff-only` to an actionable, non-technical message.
+function classifyPullError(text) {
+    const t = String(text || '').toLowerCase();
+    if (/could not resolve host|unable to access|network is unreachable|timed out|timeout|connection refused|failed to connect|no route to host/.test(t)) {
+        return {
+            kind: 'offline',
+            guidance: 'You appear to be offline or behind a firewall. Reconnect and try again, or re-run the ESS installer when you have network access.',
+        };
+    }
+    if (/not possible to fast-forward|non-fast-forward|diverge|would clobber existing tag/.test(t)) {
+        return {
+            kind: 'diverged',
+            guidance: 'Your local copy has diverged from the latest version. Re-run the ESS installer, or reset the clone with "git fetch origin && git reset --hard origin/main" (this discards local commits).',
+        };
+    }
+    if (/local changes|would be overwritten|unstaged|uncommitted|please commit|stash|overwritten by merge/.test(t)) {
+        return {
+            kind: 'dirty',
+            guidance: 'You have local edits that block the update. Stash or discard them first ("git stash"), then update again — or re-run the ESS installer.',
+        };
+    }
+    return {
+        kind: 'unknown',
+        guidance: 'The update could not be completed automatically. Re-run the ESS installer to get the latest version.',
+    };
+}
+
+// ---------------------------------------------------------------------------
+// Auto-update nudge: git + VS Code orchestration (not unit-tested — side effects)
+// ---------------------------------------------------------------------------
+
+// Run a git command, capturing output. Never throws: returns {ok, code,
+// stdout, stderr} so callers can degrade gracefully offline / on error.
+async function runGit(args, cwd) {
+    try {
+        const { stdout, stderr } = await _execFile('git', args, {
+            cwd,
+            timeout: 20000,
+            windowsHide: true,
+            maxBuffer: 1024 * 1024,
+        });
+        return { ok: true, code: 0, stdout: (stdout || '').toString(), stderr: (stderr || '').toString() };
+    } catch (err) {
+        return {
+            ok: false,
+            code: typeof err.code === 'number' ? err.code : 1,
+            stdout: (err.stdout || '').toString(),
+            stderr: (err.stderr || err.message || '').toString(),
+        };
+    }
+}
+
+// Resolve the git repository root that contains the open workspace folder.
+// The workspace may be opened at a subfolder (e.g. solutions/ess-maker-skills),
+// so we ask git for the top level and pull there.
+async function resolveRepoRoot() {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || !folders.length) return null;
+    const cwd = folders[0].uri.fsPath;
+    const res = await runGit(['rev-parse', '--show-toplevel'], cwd);
+    if (!res.ok) return null;
+    const top = res.stdout.trim().split('\n')[0].trim();
+    return top || null;
+}
+
+// Startup entry point: async, never blocks activation, swallows all errors.
+async function checkForUpdate(context) {
+    try {
+        // Admin/IT-managed opt-out via settings (deployable through policy).
+        // There is intentionally no per-user "dismiss forever" — makers must
+        // stay on the latest ADK; only a managed policy can suppress the check.
+        if (!vscode.workspace.getConfiguration().get('essMaker.autoUpdateCheck', true)) {
+            _log('update: disabled via essMaker.autoUpdateCheck');
+            return;
+        }
+
+        const repoRoot = await resolveRepoRoot();
+        if (!repoRoot) {
+            _log('update: workspace is not a git clone — skipping');
+            return;
+        }
+
+        // Only nudge users tracking the release branch. A developer on a
+        // feature branch legitimately differs from origin/main and must not be
+        // nagged (and pulling would be wrong).
+        const branchRes = await runGit(['rev-parse', '--abbrev-ref', 'HEAD'], repoRoot);
+        const branch = branchRes.ok ? branchRes.stdout.trim() : '';
+        if (branch !== UPDATE_BRANCH) {
+            _log(`update: on '${branch}', not '${UPDATE_BRANCH}' — skipping`);
+            return;
+        }
+
+        const localRes = await runGit(['rev-parse', 'HEAD'], repoRoot);
+        if (!localRes.ok) {
+            _log('update: git rev-parse HEAD failed — skipping');
+            return;
+        }
+        const localSha = localRes.stdout.trim();
+
+        const remoteRes = await runGit(['ls-remote', 'origin', UPDATE_BRANCH], repoRoot);
+        if (!remoteRes.ok) {
+            _log(`update: git ls-remote failed (offline?) — ${remoteRes.stderr.trim()}`);
+            return;
+        }
+        const remoteSha = parseLsRemoteSha(remoteRes.stdout);
+
+        if (!localIsBehind(localSha, remoteSha)) {
+            _log('update: local clone is up to date');
+            return;
+        }
+
+        _log(`update: behind origin/${UPDATE_BRANCH} (local=${localSha.slice(0, 8)} remote=${(remoteSha || '').slice(0, 8)}) — prompting`);
+        if (_updateNudgeActive) {
+            _log('update: a nudge is already open — skipping this re-check');
+            return;
+        }
+
+        // Try to compute how many commits we're behind for a dynamic message.
+        // ls-remote gives us the remote SHA without fetching objects, so we
+        // fetch the branch (quietly) before counting. Any failure here is
+        // non-fatal — we simply fall back to the generic message.
+        let behindCount = null;
+        const fetchRes = await runGit(['fetch', '--quiet', 'origin', UPDATE_BRANCH], repoRoot);
+        if (fetchRes.ok) {
+            const countRes = await runGit(['rev-list', '--count', `HEAD..${remoteSha}`], repoRoot);
+            if (countRes.ok) {
+                behindCount = parseCommitCount(countRes.stdout);
+            } else {
+                _log(`update: rev-list count failed — ${countRes.stderr.trim()}`);
+            }
+        } else {
+            _log(`update: git fetch failed — ${fetchRes.stderr.trim()}`);
+        }
+
+        _updateNudgeActive = true;
+        try {
+            await promptUpdate(context, repoRoot, behindCount);
+        } finally {
+            _updateNudgeActive = false;
+        }
+    } catch (err) {
+        _log(`update: checkForUpdate error: ${err && err.message}`);
+    }
+}
+
+// Non-blocking notification. Offers "Update now" or "Later" only — there is
+// deliberately no permanent per-user opt-out, so a maker who defers is asked
+// again on the next startup until they update (keeping everyone on latest).
+async function promptUpdate(context, repoRoot, behindCount) {
+    const UPDATE = 'Update now';
+    const LATER = 'Later';
+    const sel = await vscode.window.showInformationMessage(
+        formatUpdateMessage(behindCount),
+        UPDATE,
+        LATER,
+    );
+    if (sel !== UPDATE) {
+        // "Later" or dismissed — do nothing; ask again next startup.
+        _log(`update: user chose ${sel ? `"${sel}"` : 'dismiss'} — will re-check next startup`);
+        return;
+    }
+    await performUpdate(context, repoRoot);
+}
+
+// Pull the latest and surface success/failure; offer a window reload on success.
+async function performUpdate(context, repoRoot) {
+    const res = await vscode.window.withProgress(
+        { location: vscode.ProgressLocation.Notification, title: 'Updating the ESS ADK\u2026', cancellable: false },
+        () => runGit(['-C', repoRoot, 'pull', '--ff-only'], repoRoot),
+    );
+    if (!res.ok) {
+        const { kind, guidance } = classifyPullError(`${res.stdout}\n${res.stderr}`);
+        _log(`update: git pull --ff-only failed (${kind}, code ${res.code}): ${res.stderr.trim()}`);
+        await vscode.window.showWarningMessage(`ESS ADK update could not be completed. ${guidance}`);
+        return;
+    }
+    _log('update: git pull --ff-only succeeded');
+
+    // If the pulled repo ships a newer extension than the running VSIX, a code
+    // pull alone won't refresh it — guide the user to reinstall instead.
+    if (await maybePromptReinstall(repoRoot)) return;
+
+    const sel = await vscode.window.showInformationMessage(
+        'ESS ADK updated to the latest version. Reload the window to use it.',
+        'Reload Window',
+        'Later',
+    );
+    if (sel === 'Reload Window') {
+        await vscode.commands.executeCommand('workbench.action.reloadWindow');
+    }
+}
+
+// Detect extension self-staleness after a pull and guide reinstall/reload.
+// Returns true when a reinstall prompt was shown (so the caller skips the
+// generic reload prompt).
+async function maybePromptReinstall(repoRoot) {
+    try {
+        const installed = vscode.extensions.getExtension(EXT_ID)?.packageJSON?.version;
+        const pkgPath = _path.join(repoRoot, 'tools', 'ess-maker-profile', 'extension', 'package.json');
+        let repoVersion = null;
+        try {
+            repoVersion = JSON.parse(_fs.readFileSync(pkgPath, 'utf8')).version;
+        } catch (_) {
+            return false;
+        }
+        if (!extensionIsStale(installed, repoVersion)) return false;
+
+        _log(`update: extension self-stale (installed=${installed} repo=${repoVersion}) — prompting reinstall`);
+        const HOW = 'How to update';
+        const sel = await vscode.window.showInformationMessage(
+            `The ESS Maker extension has a newer version (${repoVersion}; you have ${installed}). Updating the code does not refresh the extension itself \u2014 re-run the ESS installer, or run "code --install-extension" on the bundled .vsix, then reload the window.`,
+            HOW,
+            'Later',
+        );
+        if (sel === HOW) {
+            const readme = vscode.Uri.file(_path.join(repoRoot, 'tools', 'ess-maker-profile', 'extension', 'README.md'));
+            vscode.commands.executeCommand('markdown.showPreview', readme).then(() => {}, () => {});
+        }
+        return true;
+    } catch (err) {
+        _log(`update: maybePromptReinstall error: ${err && err.message}`);
+        return false;
+    }
+}
+
 function activate(context) {
     _extensionContext = context;
     _log(`activate: ENTRY. workspaceFolders=${JSON.stringify(vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath))}`);
@@ -1198,6 +1506,22 @@ function activate(context) {
             setTimeout(() => { applyChatOnlyLayout({ silent: true }).catch(() => {}); }, 1500);
         }
         // If userWantsLite is false (standard mode), skip re-applying.
+
+        // Auto-update nudge (ADO 7569528 / 7569530): check whether the local
+        // clone is behind origin/main and, if so, offer a one-click pull.
+        // Fully async, fire-and-forget: never blocks activation, and any
+        // failure is logged and swallowed inside checkForUpdate.
+        checkForUpdate(context).catch((err) => _log(`activate: checkForUpdate rejected: ${err && err.message}`));
+
+        // Re-check periodically so long-lived sessions (VS Code left open for
+        // days) still get nudged after "Later" without needing a restart. The
+        // interval reuses every guard in checkForUpdate (only on main,
+        // offline-safe, respects essMaker.autoUpdateCheck, won't stack an open
+        // nudge). Disposed with the extension so it doesn't outlive it.
+        const _updateTimer = setInterval(() => {
+            checkForUpdate(context).catch((err) => _log(`update: periodic re-check rejected: ${err && err.message}`));
+        }, UPDATE_CHECK_INTERVAL_MS);
+        context.subscriptions.push({ dispose: () => clearInterval(_updateTimer) });
     }
 }
 

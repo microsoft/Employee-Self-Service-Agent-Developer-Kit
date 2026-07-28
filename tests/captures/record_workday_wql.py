@@ -119,7 +119,6 @@ Output: tests/fixtures/cassettes/workday_wql_admin.yaml
 from __future__ import annotations
 
 import os
-import re
 import sys
 
 from _common import announce, build_cassette, chdir_kit_root, confirm_or_exit
@@ -131,7 +130,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from record_workday_rest_admin import (  # noqa: E402
     REQUIRED_ENV as REST_REQUIRED_ENV,
     _acquire_token,
-    _check_env as _check_rest_env,
     _rewrite_web_to_soap_host,
 )
 
@@ -293,7 +291,7 @@ def main() -> None:
             catalog_dump = local_dir / "workday_wql_catalog.txt"
             with catalog_dump.open("w", encoding="utf-8") as fh:
                 fh.write(f"# Workday WQL data source catalog ({len(all_sources)} sources)\n")
-                fh.write(f"# Format: alias\\tdescriptor\\tWID\n")
+                fh.write("# Format: alias\\tdescriptor\\tWID\n")
                 for row in sorted(all_sources, key=lambda r: r.get("alias") or ""):
                     fh.write(f"{row.get('alias')}\t{row.get('descriptor')}\t{row.get('id')}\n")
             print(f"    Full catalog dumped to {catalog_dump} (gitignored).")
@@ -478,7 +476,7 @@ def main() -> None:
                     print(f"      - {fi.get('alias')}  [{fi.get('descriptor')}]")
             if filter_required and not where_clause and not target.get("filter"):
                 print(f"    WARNING: filterIsRequired=true but no 'filter'/'where' set in target_aliases for {alias}.")
-                print(f"    Query will likely fail with 400 'Specify a data source filter'.")
+                print("    Query will likely fail with 400 'Specify a data source filter'.")
 
             # Step 3a-fields: fetch the field catalog for this data source
             # via the /fields sub-resource. The detail endpoint above does
@@ -530,8 +528,6 @@ def main() -> None:
 
             # Step 3b: build a query using the first 5 field aliases.
             picked = field_aliases[:5]
-            # Build the basic SELECT (no WHERE / no body params).
-            select_clause = f"SELECT {', '.join(picked)} FROM {alias} LIMIT 5"
 
             def run_query(label: str, query: str, body_extras: dict | None = None,
                           url_params: dict | None = None) -> int:
@@ -607,8 +603,8 @@ def main() -> None:
                 # multiple known-failing probes just bloats the cassette
                 # with HTTP 400 noise. The discovery output above is the
                 # whole point of capturing this source.
-                print(f"    SKIP query: filterIsRequired=true, see KNOWN LIMITATION in module docstring.")
-                print(f"    Discovery metadata above is sufficient for a future agent to complete.")
+                print("    SKIP query: filterIsRequired=true, see KNOWN LIMITATION in module docstring.")
+                print("    Discovery metadata above is sufficient for a future agent to complete.")
 
     print()
     print("Cassette written. Inspect tests/fixtures/cassettes/workday_wql_admin.yaml")

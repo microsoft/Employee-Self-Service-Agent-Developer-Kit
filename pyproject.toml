@@ -18,6 +18,22 @@ test = [
     "PyYAML>=6.0,<7.0",
 ]
 
+# Ruff configuration for the repo-root Python sources (solutions/ess-maker-skills/
+# scripts + src/mcp, and tests/). The ESS NextGen Migration Toolkit under
+# tools/ess-nextgen-migration-toolkit/ has its OWN [tool.ruff] in its own
+# pyproject.toml and is unaffected (ruff uses the nearest config).
+#
+# The rule set is pinned to Ruff's classic default (pycodestyle E4/E7/E9 + Pyflakes
+# F) ON PURPOSE: an unpinned `pip install ruff` in CI once picked up a newer Ruff
+# whose broadened default rule set flagged 200+ pre-existing issues and failed
+# *every* PR. Selecting rules explicitly makes lint deterministic across Ruff
+# versions. Grow this list intentionally (with the fixes), never implicitly.
+[tool.ruff]
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F"]
+
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]

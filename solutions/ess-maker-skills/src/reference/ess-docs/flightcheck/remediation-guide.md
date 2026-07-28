@@ -133,13 +133,14 @@ Both flows declare exactly one Workday connection:
 ```
 
 `ff0df` is configured with Power Platform's **"Microsoft Entra ID
-Integrated"** authentication type (see
-`src/skills/connect/workday/step3.md` lines 155–166), not Basic auth.
+Integrated"** authentication type (see skill-5,
+`src/skills/setup/workday/install-workday-extension-pack.md`, S5.3), not Basic
+auth.
 "Microsoft Entra ID Integrated" authenticates the signed-in employee against
 a **federated Workday enterprise app** in Entra
 (Application ID URI: `http://www.workday.com/{WD_TENANT}`) — the same
-enterprise app the connect skill provisions in
-`src/skills/connect/workday/step2.md` lines 191–264. The X.509 signing
+enterprise app the setup flow provisions in skill-3,
+`src/skills/setup/workday/provision-workday-entra-app.md`. The X.509 signing
 certificate WD-CONN-102 inspects lives on that same enterprise app as a
 `keyCredential`. It is the signing key Entra uses to issue SAML assertions
 for browser-based Workday SSO and is the most visible expiry-driven artifact
@@ -177,11 +178,18 @@ the Workday API Client's Authorized Public Key setting (see table above).
 rotation before `NotAfter`; same steps as above, but stage the new cert in
 both systems first and only flip the active selection during a low-traffic
 window.
-**Fix (MANUAL — active cert is healthy on the Entra side):** Compare the
-thumbprint surfaced in the result against the `X509 Certificate` thumbprint
-on the matching `Service Provider ID` row in Workday. They must match
-byte-for-byte (colon-separated uppercase hex); if they differ, re-upload the
-active Entra `Certificate (Base64)` into Workday.
+**Fix (MANUAL — active cert is healthy on the Entra side):** Workday does
+not display a thumbprint — its `X509 Certificate` object exposes only `Name`,
+`Valid From`, `Valid To`, and the Base64 certificate body. On the matching
+`Service Provider ID` row in Workday, verify parity either by (a) confirming
+`Valid From` / `Valid To` match the Entra cert's `NotBefore` / `NotAfter`
+surfaced in the result, or (b) copying the Base64 certificate out of Workday
+into a PEM file and computing its SHA-1 to compare against the Entra
+thumbprint in the result — PowerShell
+`[System.Security.Cryptography.X509Certificates.X509Certificate2]::new("$PWD\workday.cer").Thumbprint`
+or `openssl x509 -in workday.cer -noout -fingerprint -sha1` (ignore `:`
+separators and case). If they differ, re-upload the active Entra
+`Certificate (Base64)` into Workday.
 **Verify:** Re-run `/flightcheck --scope workday`
 
 ### WD-FLOW-xxx: Flow disabled
@@ -323,6 +331,49 @@ can confirm it manually. These don't affect the automated pass/fail
 verdict.
 
 Refer to the [deployment checklist](https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service/deploy-overview-alm)
+
+---
+
+## Infrastructure & Security
+
+### INFRA-001: Inbound connectivity to Microsoft services
+
+**What it checks:** TCP probe (DNS → TCP → TLS) from the maker's machine to
+the Microsoft cloud endpoints required by Power Platform, Copilot Studio, and
+the ESS agent runtime.
+
+**Targets probed:**
+- `login.microsoftonline.com` (Entra ID authentication)
+- `api.powerplatform.com` (Power Platform API)
+- `api.powerapps.com` (Power Apps API)
+- `powerva.microsoft.com` (Power Virtual Agents)
+- `api.flow.microsoft.com` (Power Automate API)
+- `graph.microsoft.com` (Microsoft Graph)
+- Your Dataverse environment URL (e.g. `org.crm.dynamics.com`) when configured
+
+**Probe accuracy:** HIGH — the maker's machine is behind the same corporate
+firewall that governs employee access to Microsoft 365 services.
+
+**Root cause (FAILED):** Corporate egress firewall is blocking outbound HTTPS
+to one or more Microsoft endpoints, or DNS cannot resolve the hostname.
+
+**Fix:**
+1. Identify which endpoint(s) failed from the FlightCheck output.
+2. Share the failed endpoints with your network / InfoSec team.
+3. Request allowlisting of HTTPS (port 443) traffic to the listed hostnames.
+4. Reference: [Power Platform online requirements](https://learn.microsoft.com/en-us/power-platform/admin/online-requirements)
+5. Re-run `/flightcheck --scope infrastructure`
+
+**Root cause (WARNING — TLS failure):** TCP connectivity exists but TLS
+handshake failed. Likely a corporate proxy intercepting HTTPS traffic or a
+certificate mismatch.
+
+**Fix:**
+1. Check if a proxy or WAF is intercepting HTTPS to the affected endpoint.
+2. Add the endpoint to proxy bypass / SSL inspection exclusion list.
+3. Re-run `/flightcheck --scope infrastructure`
+
+**Responsible role:** ESS Maker / Agent Developer → escalate to Network Admin
 for detailed guidance on each item.
 
 ## Cloud Policies / Telemetry & Feedback

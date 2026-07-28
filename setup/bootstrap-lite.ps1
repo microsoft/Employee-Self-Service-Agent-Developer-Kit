@@ -60,11 +60,23 @@ foreach ($f in $files) {
     }
 }
 
+# Best-effort: fetch the installer telemetry emitter (fail-open - a telemetry
+# download failure must never block the install).
+$telLib = Join-Path $tempDir 'install-telemetry.ps1'
+try {
+    Invoke-WebRequest -Uri "$SourceBaseUrl/telemetry/install-telemetry.ps1" -OutFile $telLib -UseBasicParsing -TimeoutSec 30
+    $env:ESS_INSTALL_TELEMETRY_LIB = $telLib
+} catch {
+    Write-Host "  [warn] Installer telemetry unavailable (continuing)" -ForegroundColor DarkYellow
+}
+
 $installer = Join-Path $tempDir 'Install-EssAdk.ps1'
 
 # Run the installer in-memory (as a script block) so execution policy never
-# applies — the script content is never "executed from disk".
-$scriptContent = Get-Content $installer -Raw
+# applies - the script content is never "executed from disk". Read as UTF-8
+# explicitly: Windows PowerShell 5.1 otherwise decodes a no-BOM file as ANSI
+# (CP1252), which mangles any non-ASCII byte and breaks ScriptBlock parsing.
+$scriptContent = [System.IO.File]::ReadAllText($installer, [System.Text.Encoding]::UTF8)
 $scriptBlock = [ScriptBlock]::Create($scriptContent)
 
 # Lite mode: do NOT pass -SkipMakerProfile so the chat-first profile installs.

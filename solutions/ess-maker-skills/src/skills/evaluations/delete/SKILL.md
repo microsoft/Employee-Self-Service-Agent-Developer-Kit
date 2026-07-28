@@ -70,7 +70,11 @@ Wait for confirmation.
 
 ```
 python scripts/checkpoint.py "pre-delete-evaluation-{name}"
+python scripts/emit_capability.py evaluations
 ```
+
+The `emit_capability.py` line records anonymous usage telemetry (best-effort,
+non-blocking); it needs no user-facing message and never fails the step.
 
 ## Step 4: Delete Local Files
 
