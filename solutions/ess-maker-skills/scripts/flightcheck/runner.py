@@ -1515,25 +1515,38 @@ def _autolink_bare_urls(html: str) -> str:
     text between anchors is scanned for bare URLs.
     """
     import re
-    # A bare URL: scheme + run of non-space, non-quote, non-bracket chars.
-    # Trailing sentence punctuation is trimmed in the replacer so
-    # "see https://aka.ms/x." keeps the period outside the link.
-    bare_url_re = re.compile(r'https?://[^\s<>"\')\]]+')
+    # A bare URL: scheme + run of non-space, non-quote, non-']' chars.
+    # ')' is allowed here so balanced-paren links (e.g. ".../Foo_(bar)")
+    # survive intact; the replacer resolves paren balance and trailing
+    # punctuation, so "see https://aka.ms/x." and "(see https://x)" keep
+    # the trailing char outside the link.
+    bare_url_re = re.compile(r'https?://[^\s<>"\'\]]+')
     # An anchor already emitted by the markdown pass; keep it verbatim.
     anchor_re = re.compile(r'<a\b[^>]*>.*?</a>', re.IGNORECASE | re.DOTALL)
+    # A ';' that closes an HTML entity (&amp; etc.) belongs to the URL,
+    # so it must not be peeled as if it were sentence punctuation.
+    entity_tail_re = re.compile(r'&(?:amp|lt|gt|quot);$')
 
     def _wrap(segment: str) -> str:
         def repl(m: "re.Match[str]") -> str:
             url = m.group(0)
             trail = ""
-            # Peel trailing sentence punctuation off the link target.
-            while url and url[-1] in ".,;:!?":
-                trail = url[-1] + trail
-                url = url[:-1]
-            # Peel an unbalanced closing paren (e.g. "(see https://x)").
-            if url.endswith(")") and url.count("(") < url.count(")"):
-                trail = ")" + trail
-                url = url[:-1]
+            # Peel trailing sentence punctuation and unbalanced closing
+            # parens (in any order) off the link target. A balanced pair
+            # (".../Foo_(bar)") is kept; an unbalanced ")" ("(see https://x)")
+            # is pushed back into the surrounding text.
+            while url:
+                last = url[-1]
+                if last == ";" and entity_tail_re.search(url):
+                    break  # ';' closes an HTML entity; keep it in the URL
+                if last in ".,;:!?":
+                    trail = last + trail
+                    url = url[:-1]
+                elif last == ")" and url.count("(") < url.count(")"):
+                    trail = ")" + trail
+                    url = url[:-1]
+                else:
+                    break
             if not url:
                 return m.group(0)
             return f'<a href="{url}" target="_blank">{url}</a>{trail}'

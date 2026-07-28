@@ -84,6 +84,37 @@ def test_bare_url_with_query_string_is_html_safe() -> None:
     assert '<a href="https://host/x?a=1&amp;b=2" target="_blank">' in html
 
 
+def test_bare_url_balanced_parens_preserved() -> None:
+    """A URL with balanced parens keeps the closing paren inside the href.
+
+    e.g. a doc anchor like `.../Foo_(bar)` must not truncate at the first
+    `)`. Only an *unbalanced* trailing `)` is pushed outside the link.
+    """
+    from flightcheck.runner import _md_links_to_html
+
+    html = _md_links_to_html(
+        "See https://en.wikipedia.org/wiki/Foo_(bar) for details."
+    )
+    assert (
+        '<a href="https://en.wikipedia.org/wiki/Foo_(bar)" target="_blank">'
+        "https://en.wikipedia.org/wiki/Foo_(bar)</a>" in html
+    )
+
+
+def test_bare_url_trailing_ampersand_entity_not_split() -> None:
+    """A trailing `&` (escaped to `&amp;`) must stay whole in the href.
+
+    Peeling trailing punctuation must not strip the `;` that terminates
+    an HTML entity, which would split `&amp;` into `&amp` + a stray `;`.
+    """
+    from flightcheck.runner import _md_links_to_html
+
+    html = _md_links_to_html("Go to https://host/x?a=1& now")
+    assert '<a href="https://host/x?a=1&amp;" target="_blank">' in html
+    assert "&amp;</a>" in html
+    assert "</a>;" not in html
+
+
 # --- markdown links keep working (no double-wrap) -------------------------
 
 def test_markdown_link_still_renders() -> None:
