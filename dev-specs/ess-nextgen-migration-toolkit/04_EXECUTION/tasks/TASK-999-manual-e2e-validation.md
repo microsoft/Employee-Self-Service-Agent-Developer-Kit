@@ -4,7 +4,7 @@
 | ---------- | ------------------------- |
 | ID         | TASK-999                  |
 | Workstream | 3 — Final Validation      |
-| Status     | TODO                      |
+| Status     | BLOCKED                      |
 | Consumes   | —                         |
 
 ## Description

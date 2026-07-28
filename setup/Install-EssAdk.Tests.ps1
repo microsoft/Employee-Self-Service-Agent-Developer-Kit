@@ -304,6 +304,15 @@ Test 'Install-EssAdk.ps1 records success on the normal path, not in finally' {
         throw "finally must not force a 'success' outcome (mislabels Ctrl+C)"
     }
 }
+Test 'Install-EssAdk.ps1 records success for a FlightCheck-only install before its early return' {
+    # Regression: the FlightCheck-only branch returns from inside the top-level
+    # try before the normal-path success emit, so it must emit its own success
+    # completion. Otherwise the finally net mislabels it 'cancelled' and the
+    # Installer Outcomes / by-Platform tiles never receive a real completion.
+    if ($src -notmatch "(?s)Python not found\..*?Complete-EssInstallTelemetry -Outcome 'success'\s*\r?\n[^}]*?return") {
+        throw "FlightCheck-only branch must emit a 'success' completion before its early return"
+    }
+}
 Test 'PS emitter uses a short send timeout and trips a circuit breaker on failure' {
     $emitterSrc = Get-Content $psEmitter -Raw
     if ($emitterSrc -notmatch 'TimeoutSec 3') { throw 'PS emitter should use a short (3s) send timeout' }

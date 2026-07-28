@@ -123,6 +123,14 @@ class FlightCheckRunner:
         # target checkpoint, or every member of a target family) before the
         # summary/verdict is built. None = normal full/scope run (no filter).
         self._target_matcher: Callable | None = target_matcher
+        # Standalone-scope target selection (set by cli.py's
+        # _resolve_target_selection in scope mode only). Pins the
+        # ServiceNow connection SN-CONN-* should scope to; None ⇒ validate
+        # every matching connection (legacy behavior). The Workday SSO-app
+        # equivalent is carried on ``config["entraAppId"]`` instead, so it
+        # flows through the existing ``_workday_hints`` path all Workday-app
+        # checks already read. Single-checkpoint mode never sets these.
+        self.servicenow_connection_pin: str | None = None
 
     def register(self, category: str, fn: Callable):
         """Register a check function. fn(runner) -> list[CheckResult]."""
@@ -613,8 +621,9 @@ _REPORT_CSS = """
   .role{flex:none;font-size:12px;color:var(--muted);border:1px dashed var(--line-strong);border-radius:6px;padding:2px 8px;margin-top:1px}
   .kv{display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;margin:10px 0 0 0;font-size:13.5px}
   .kv dt{color:var(--muted)} .kv dd{margin:0}
-  pre.err{background:var(--code-bg);color:var(--code-ink);border-radius:8px;padding:12px 14px;margin:10px 0 0;
-    font-size:12px;line-height:1.55;overflow-x:auto;white-space:pre}
+  /* Result detail: prose, lists, and multi-paragraph findings render as normal
+     wrapped text (not a monospace code box) and wrap instead of scrolling. */
+  .kv dd.detail{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55}
   .next{margin:10px 0 0;font-size:13.5px}
   .next b{font-weight:650}
   .actions{margin-top:10px;display:flex;flex-wrap:wrap;gap:8px}
@@ -1339,10 +1348,11 @@ def _render_sections(
 def _render_check_card(res: CheckResult) -> str:
     """One check rendered as a card: pill, title, role, result, next step.
 
-    result renders as a dark <pre> when it spans multiple lines (to
-    preserve authored payload formatting) or a compact key/value row for
-    one-liners. remediation becomes the "Next step" line; doc_link becomes
-    an action button. All check-authored text is HTML-escaped.
+    result renders as a normal wrapped key/value "Detail" block: line breaks
+    in the authored text are preserved (white-space:pre-wrap) and long lines
+    (e.g. endpoint URLs) wrap rather than forcing a horizontal scrollbar.
+    remediation becomes the "Next step" line; doc_link becomes an action
+    button. All check-authored text is HTML-escaped.
     """
     pill_class, label, data_s = _STATUS_STYLE.get(
         res.status, ("na", res.status, "na")
@@ -1369,15 +1379,10 @@ def _render_check_card(res: CheckResult) -> str:
         f'<span class="role">{role_txt}</span></div>\n',
     ]
     if res.result:
-        if "\n" in res.result:
-            parts.append(
-                f'        <pre class="err">{_html_escape(res.result)}</pre>\n'
-            )
-        else:
-            parts.append(
-                '        <dl class="kv"><dt>Detail</dt>'
-                f'<dd>{_html_escape(res.result)}</dd></dl>\n'
-            )
+        parts.append(
+            '        <dl class="kv"><dt>Detail</dt>'
+            f'<dd class="detail">{_html_escape(res.result)}</dd></dl>\n'
+        )
     if res.remediation:
         if res.status == Status.MANUAL.value:
             parts.append(_render_manual_checklist(res.remediation))

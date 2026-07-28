@@ -12,7 +12,6 @@ the function level — no external API calls are made.
 from __future__ import annotations
 
 import json
-from io import StringIO
 from unittest.mock import patch
 
 import pytest
@@ -247,7 +246,7 @@ class TestDiscoverListEnvironmentsMode:
         output = capsys.readouterr().out
         assert "SELECTED_ENV_JSON:" in output
 
-        json_line = [l for l in output.splitlines() if "SELECTED_ENV_JSON:" in l][0]
+        json_line = [line for line in output.splitlines() if "SELECTED_ENV_JSON:" in line][0]
         payload = json.loads(json_line.split("SELECTED_ENV_JSON:", 1)[1])
         assert payload["displayName"] == "Test Environment 1"
         assert payload["instanceUrl"] == "https://org001.crm.dynamics.com"

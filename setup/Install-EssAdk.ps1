@@ -1088,19 +1088,29 @@ if ($FlightCheckOnly) {
             $prevEAP = $ErrorActionPreference
             $ErrorActionPreference = 'Continue'
             if ($pythonExe -eq 'py -3.12') {
-                & py -3.12 scripts/flightcheck/cli.py --scope full --invocation-source installer
+                & py -3.12 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always
             } elseif ($pythonExe -eq 'py -3') {
-                & py -3 scripts/flightcheck/cli.py --scope full --invocation-source installer
+                & py -3 scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always
             } else {
-                & $pythonExe scripts/flightcheck/cli.py --scope full --invocation-source installer
+                & $pythonExe scripts/flightcheck/cli.py --scope full --invocation-source installer --select-targets always
             }
             $ErrorActionPreference = $prevEAP
         } finally { Pop-Location }
     } else {
         Write-Warn2 'Python not found. Open a new terminal and run:'
         Write-Warn2 "  cd $workspace"
-        Write-Warn2 '  python scripts/flightcheck/cli.py --scope full'
+        Write-Warn2 '  python scripts/flightcheck/cli.py --scope full --select-targets always'
     }
+    # Record the FlightCheck-only install as a success HERE, before the early
+    # return below. This branch returns from inside the top-level try well
+    # before the normal-path success emit at the end, so without this the run
+    # has no completion event and the finally net mislabels a successful
+    # FlightCheck-only install as 'cancelled' -- leaving the Installer Outcomes
+    # / by-Platform tiles (both Complete-fed) empty while Attempts (Start-fed)
+    # keeps climbing. Idempotent: the finally's 'cancelled' is a no-op once any
+    # outcome has been emitted. (The FlightCheck run's own pass/fail verdict is
+    # separate telemetry emitted by cli.py; this outcome is the install's.)
+    Complete-EssInstallTelemetry -Outcome 'success'
     # ``return`` (not ``exit 0``) so the script ends without terminating
     # the PowerShell host. When this installer is invoked via
     # ``iex (irm .../bootstrap-flightcheck.ps1)`` from an interactive

@@ -122,7 +122,7 @@ function Invoke-Run {
     $UV = Find-Uv
     Write-Host ""
     Write-Host "==> Starting the toolkit CLI..."
-    if ($DevMode) { & $UV run python src/service/mtk_orchestrator.py } else { & $UV run --no-dev python src/service/mtk_orchestrator.py }
+    if ($DevMode) { & $UV run python src/service/mtk_orchestrator.py --dev } else { & $UV run --no-dev python src/service/mtk_orchestrator.py }
 }
 
 # start = provision (idempotent) + run. The everyday command.

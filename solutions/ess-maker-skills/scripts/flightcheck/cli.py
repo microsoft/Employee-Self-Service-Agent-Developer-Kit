@@ -71,6 +71,7 @@ from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.checks.licensing import run_licensing_checks
 from flightcheck.checks.cloud_policy import run_cloud_policy_checks
 from flightcheck.checks.infrastructure import run_infrastructure_checks
+from flightcheck import consent
 
 
 SCOPE_MAP = {
@@ -127,6 +128,109 @@ FULL_SCOPE = [
 ]
 
 
+def _endpoint_systems_for_offer(runner) -> list[str]:
+    """External-system names that have a discoverable endpoint, for the consent
+    offer. Read-only; never raises (a discovery failure just means no offer)."""
+    try:
+        from flightcheck.checks.infrastructure import _discover_external_endpoints
+
+        return [ep.system for ep in _discover_external_endpoints(runner)]
+    except Exception:  # noqa: BLE001 - discovery is best-effort for the offer
+        return []
+
+
+def _apply_runtime_reachability_consent(args, runner, checks) -> None:
+    """Resolve consent for the mutating runtime-reachability probe and record the
+    decision on the runner. Consent is ALWAYS surfaced when the egress probe is
+    in scope: we prompt on an interactive terminal, announce the mutation when
+    the flag forces it on, and explain the skip (plus how to opt in) when we
+    cannot ask.
+
+    Sets ``runner.runtime_reachability`` (bool: may the probe create its flow?)
+    and ``runner.runtime_reachability_declined`` (bool: surface the skip +
+    manual-verification guidance in the report). The probe only ever runs after
+    an explicit YES (interactive answer) or an explicit ``--runtime-reachability``
+    flag, so a run we could not get consent for stays read-only.
+    """
+    runner.runtime_reachability = False
+    runner.runtime_reachability_declined = False
+
+    # Tri-state flag: True (forced on), False (forced off), None (must offer).
+    # getattr keeps this robust for callers that build args without the flag.
+    flag = getattr(args, "runtime_reachability", None)
+
+    # The egress probe only lives inside the Infrastructure category (INFRA-003).
+    infra_in_scope = any(fn is run_infrastructure_checks for _, fn in checks)
+    if not infra_in_scope:
+        runner.runtime_reachability = flag is True
+        return
+
+    systems = _endpoint_systems_for_offer(runner)
+    # Name EVERY discovered system, not just the first: the probe tests all of
+    # them, so consent must cover all of them (PR #197 review).
+    label = consent.systems_label(systems)
+
+    # --- Explicit flag wins; the flag is the consent, but never silent. -------
+    if flag is True:
+        # Passing the flag IS consent — do not re-prompt — but announce exactly
+        # what will happen so the tenant mutation is never a surprise.
+        runner.runtime_reachability = True
+        print(consent.build_forced_on_notice(label))
+        return
+    if flag is False:
+        # Explicit opt-out: surface the skip + manual-verification guidance.
+        runner.runtime_reachability_declined = True
+        print(consent.build_skip_message(label))
+        print(consent.build_manual_fallback(label))
+        return
+
+    # --- No flag: consent must be surfaced (flag is None). --------------------
+    # ADK/chat path: the skill asks the user conversationally BEFORE the run and
+    # passes --runtime-reachability on YES, so reaching here with no flag means
+    # the skill did not get a YES. Stay read-only and let the skill own the chat
+    # messaging (prompting the non-tty subprocess again would be wrong).
+    if getattr(args, "invocation_source", "cli") == "adk":
+        return
+
+    # Infrastructure-only scope intentionally skips Dataverse / Power Platform
+    # auth unless --runtime-reachability is explicitly passed (see the cli auth
+    # block). Without the flag there are no probe tokens, so we cannot run the
+    # probe even with a YES. Tell the operator how to opt in rather than
+    # prompting for something we cannot honor.
+    if getattr(args, "scope", None) == "infrastructure":
+        print(consent.build_cannot_prompt_message(label))
+        print(consent.build_manual_fallback(label))
+        return
+
+    interactive = (
+        sys.stdin is not None
+        and sys.stdin.isatty()
+        and sys.stdout is not None
+        and sys.stdout.isatty()
+    )
+
+    if not interactive:
+        # No TTY (CI / piped): we cannot ask a human. Stay read-only, but explain
+        # what did not run and how to opt in (the flag doubles as consent).
+        print(consent.build_cannot_prompt_message(label))
+        print(consent.build_manual_fallback(label))
+        return
+
+    # Interactive terminal: ALWAYS ask before touching the tenant.
+    decision = consent.resolve_consent(
+        flag,
+        endpoints_present=bool(systems),
+        interactive=True,
+        prompt_fn=lambda: consent.ask_yes_no(label),
+    )
+    runner.runtime_reachability = decision.enabled
+    runner.runtime_reachability_declined = decision.declined
+
+    if decision.declined:
+        print(consent.build_skip_message(label))
+        print(consent.build_manual_fallback(label))
+
+
 def open_report_in_browser(output_dir):
     """Open the FlightCheck HTML report in the default browser.
 
@@ -178,6 +282,338 @@ def _print_unknown_checkpoint(target):
     for spec in registry.list_checkpoints():
         key = f"{spec.key}-*" if spec.is_family else spec.key
         print(f"  {key}")
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Standalone-scope target selection (Workday SSO app / ServiceNow connection)
+# ─────────────────────────────────────────────────────────────────────────
+#
+# Only the scope-mode main() resolves a selection; --checkpoint mode never
+# does. These sets say which --scope values actually run a check that the
+# selection scopes, so we don't prompt (or make discovery API calls) on a
+# scope that ignores the pin.
+_WORKDAY_APP_SCOPES = frozenset({"full", "workday", "authentication", "entraapp"})
+_SERVICENOW_SCOPES = frozenset({"full", "servicenow"})
+
+# Sentinel returned by the picker when the operator explicitly chooses "All".
+_SELECT_ALL = "__all__"
+
+
+def _discover_workday_apps(graph) -> list[dict]:
+    """Return the federated Workday SAML enterprise apps (candidates the
+    WD-CONN-102 selection scopes to), each as ``{appId, displayName, id}``.
+
+    Uses the same Graph listing WD-CONN-102 consumes, so the picker shows
+    exactly the set the check would otherwise validate together.
+    """
+    sps = graph.get_workday_saml_service_principals()
+    return [
+        {
+            "appId": sp.get("appId", ""),
+            "displayName": sp.get("displayName", ""),
+            "id": sp.get("id", ""),
+        }
+        for sp in (sps or [])
+    ]
+
+
+def _discover_servicenow_connections(pp_admin, env_id) -> list[dict]:
+    """Return the ServiceNow connections in the environment (candidates the
+    SN-CONN-* selection scopes to), each as ``{name, displayName, status}``.
+    """
+    if not env_id or pp_admin is None:
+        return []
+    from flightcheck.checks.connections import (
+        filter_connections_by_connector,
+        get_connection_status,
+    )
+
+    all_conns = pp_admin.get_connections(env_id)
+    if isinstance(all_conns, dict):  # ``{"_error": ...}`` shape
+        return []
+    conns = filter_connections_by_connector(all_conns, ["service-now", "servicenow"])
+    return [
+        {
+            "name": c.get("name", ""),
+            "displayName": c.get("properties", {}).get("displayName", ""),
+            "status": get_connection_status(c),
+        }
+        for c in conns
+    ]
+
+
+def _list_targets(args):
+    """Discovery-only entry point for the /flightcheck picker.
+
+    Authenticates the single client needed for ``args.list_targets`` and
+    prints ``{"kind": ..., "targets": [...]}`` as JSON on stdout, then
+    returns. Any failure prints ``{"kind": ..., "targets": [], "error": ...}``
+    so the caller can degrade gracefully. Never runs checks.
+    """
+    payload = {"kind": args.list_targets, "targets": []}
+
+    config_path = os.path.join(".local", "config.json")
+    if not os.path.exists(config_path):
+        payload["error"] = ".local/config.json not found. Run /setup first."
+        print(json.dumps(payload))
+        return
+    with open(config_path, "r", encoding="utf-8") as f:
+        config = json.load(f)
+
+    env_url = args.environment_url or config.get("dataverseEndpoint", "")
+    from auth import discover_tenant
+
+    try:
+        tenant_id = discover_tenant(env_url) if env_url else "organizations"
+    except Exception:  # noqa: BLE001 — tenant discovery best-effort
+        tenant_id = "organizations"
+
+    try:
+        if args.list_targets == "workday":
+            graph = GraphClient(tenant_id)
+            graph.authenticate()
+            payload["targets"] = _discover_workday_apps(graph)
+        else:  # servicenow
+            from auth import authenticate
+
+            dv_token = None
+            try:
+                dv_token = authenticate(env_url) if env_url else None
+            except Exception:  # noqa: BLE001 — dv token only aids env-id derivation
+                dv_token = None
+            pp_admin = PPAdminClient(tenant_id)
+            pp_admin.authenticate()
+            env_id = args.environment_id or derive_environment_id(
+                env_url, dv_token, pp_admin=pp_admin
+            )
+            payload["targets"] = _discover_servicenow_connections(pp_admin, env_id)
+    except Exception as e:  # noqa: BLE001 — surface discovery failure as JSON
+        payload["error"] = str(e)
+
+    print(json.dumps(payload))
+
+
+def _prompt_choice(candidates: list[dict], *, kind: str):
+    """Interactively prompt the operator to pick one target.
+
+    Returns the pin value (appId for Workday, connection name for
+    ServiceNow), the ``_SELECT_ALL`` sentinel when the operator picks
+    "All", or None on EOF/blank (treated as All).
+    """
+    label = "Workday SSO app" if kind == "workday" else "ServiceNow connection"
+    print(f"\n  Multiple {label}s found. Which one should FlightCheck verify?")
+    for i, c in enumerate(candidates, 1):
+        if kind == "workday":
+            print(f"    {i}. {c.get('displayName') or '(unnamed)'}  "
+                  f"(appId={c.get('appId')})")
+        else:
+            print(f"    {i}. {c.get('displayName') or c.get('name')}  "
+                  f"(status={c.get('status')})")
+    print(f"    0. All — validate every {label}")
+    while True:
+        try:
+            raw = input("  Enter number [0]: ").strip()
+        except EOFError:
+            return None
+        if raw in ("", "0"):
+            return _SELECT_ALL
+        if raw.isdigit() and 1 <= int(raw) <= len(candidates):
+            c = candidates[int(raw) - 1]
+            if kind == "workday":
+                return c.get("appId") or _SELECT_ALL
+            return c.get("name") or c.get("displayName") or _SELECT_ALL
+        print("  Invalid selection — enter a number from the list.")
+
+
+def _is_interactive() -> bool:
+    """True when both stdin and stdout are attached to a TTY.
+
+    The gate for any interactive target prompt so piped runs and the
+    installer's captured child process never block waiting on ``input()``.
+    """
+    return bool(
+        getattr(sys.stdin, "isatty", lambda: False)()
+        and getattr(sys.stdout, "isatty", lambda: False)()
+    )
+
+
+def _maybe_prompt(candidates: list[dict], *, kind: str, args):
+    """Decide whether/how to prompt for a target and return the chosen pin.
+
+    Returns a pin value, the ``_SELECT_ALL`` sentinel, or None (no
+    selection made). Prompts only when there is a genuine ambiguity
+    (>= 2 candidates) and the terminal is interactive (or the operator
+    forced it with ``--select-targets always``).
+    """
+    if args.select_targets == "never":
+        return None
+    if not candidates or len(candidates) < 2:
+        # Zero or one candidate ⇒ nothing to disambiguate; validating "all"
+        # is already the single (or empty) app.
+        return None
+
+    interactive = _is_interactive()
+    if not interactive:
+        flag = "--workday-app-id" if kind == "workday" else "--servicenow-connection"
+        print(f"  Multiple {kind} targets found but this is not an interactive "
+              f"terminal — validating all. Pass {flag} <value> to scope.")
+        return None
+
+    return _prompt_choice(candidates, kind=kind)
+
+
+def _confirm_persisted_workday_app(app_id: str, graph) -> bool:
+    """Show the Workday SSO app FlightCheck will scope to — the one the
+    connect/Workday-setup flow persisted — and let the operator confirm it.
+
+    Doubles as a reminder that this is the app subsequent Workday
+    configuration steps use, so a stale or wrong pin surfaces before every
+    check is silently scoped to it.
+
+    Returns True to proceed with ``app_id`` (confirmed, or non-interactive so
+    the installer / a piped run is never blocked). Returns False only when an
+    operator at an interactive terminal declines — the caller then falls back
+    to the picker so they can choose a different app for this run.
+    """
+    display = ""
+    if graph is not None:
+        try:
+            for row in _discover_workday_apps(graph):
+                if row.get("appId") == app_id:
+                    display = row.get("displayName") or ""
+                    break
+        except Exception:  # noqa: BLE001 — the name is cosmetic; fall back to id
+            display = ""
+
+    label = f"{display}  (appId {app_id})" if display else f"appId {app_id}"
+    print("\n  Workday SSO app on file (from your setup config):")
+    print(f"      {label}")
+    print("  FlightCheck and your subsequent Workday configuration will use "
+          "this app.")
+
+    if not _is_interactive():
+        print("  (non-interactive terminal — using this app. Pass "
+              "--workday-app-id <appId> or --select-targets always to change.)")
+        return True
+
+    while True:
+        try:
+            raw = input("  Use this app? [Y/n]: ").strip().lower()
+        except EOFError:
+            return True
+        if raw in ("", "y", "yes"):
+            return True
+        if raw in ("n", "no"):
+            return False
+        print("  Please answer 'y' or 'n'.")
+
+
+def _resolve_workday_app(args, runner):
+    """Resolve and apply the Workday SSO-app selection for this run.
+
+    The pin lives on ``runner.config['entraAppId']`` so it flows through the
+    existing ``_workday_hints`` path every Workday-SSO-app check reads.
+
+    Precedence:
+      1. An explicit ``--workday-app-id`` flag always wins.
+      2. Otherwise, when selection is left on the default ``auto``, the app the
+         connect/Workday-setup flow already provisioned — the operator's
+         persisted ``entraAppId`` resolved by the shared ``_workday_hints``
+         (``runner.config`` or ``.local/connect/workday/config.json``, the same
+         source WD-CONN-102 / AUTH-005 / WD-ASSIGN-001 scope to) — is offered
+         to the operator for confirmation (a reminder that this is the app
+         subsequent configuration uses). At an interactive terminal they can
+         decline to fall through to the picker; a non-interactive run (the
+         installer child process, a pipe) proceeds with it automatically so an
+         in-flow readiness report never blocks. Pass ``--select-targets
+         always`` to force the picker even when a persisted app exists, or
+         ``--workday-app-id`` to override it.
+      3. Otherwise the interactive picker runs (``auto`` with no persisted app,
+         a declined persisted app, or ``always``). Choosing "All" clears any
+         hint so every app is checked.
+    """
+    graph = getattr(runner, "graph", None)
+    cfg = getattr(runner, "config", None)
+    chosen = (args.workday_app_id or "").strip()
+
+    # No explicit flag + default (auto) selection: offer the app the
+    # connect/setup flow already provisioned (the same pin the Workday-SSO-app
+    # checks resolve via ``_workday_hints``). Confirmed / non-interactive ⇒ use
+    # it and skip the picker; declined at a TTY ⇒ fall through to the picker.
+    # ``always`` still forces the picker; ``never`` opts out.
+    if not chosen and args.select_targets == "auto":
+        from flightcheck.checks._workday_app_assignment import _workday_hints
+        persisted, _ = _workday_hints(cfg)
+        if persisted and _confirm_persisted_workday_app(persisted, graph):
+            if isinstance(cfg, dict):
+                cfg["entraAppId"] = persisted
+            print(f"  Scoping Workday SSO-app checks to appId={persisted} "
+                  "(from setup config).")
+            return
+
+    if not chosen and args.select_targets != "never" and graph is not None:
+        try:
+            candidates = _discover_workday_apps(graph)
+        except Exception as e:  # noqa: BLE001 — discovery failure ⇒ validate all
+            print(f"  Target selection: could not list Workday SSO apps ({e}); "
+                  "validating all.")
+            candidates = []
+        choice = _maybe_prompt(candidates, kind="workday", args=args)
+        if choice == _SELECT_ALL:
+            if isinstance(cfg, dict) and cfg.get("entraAppId"):
+                cfg["entraAppId"] = ""
+            print("  Validating all Workday SSO apps (no scoping).")
+            return
+        chosen = choice or ""
+
+    if chosen:
+        if isinstance(cfg, dict):
+            cfg["entraAppId"] = chosen
+        print(f"  Scoping Workday SSO-app checks to appId={chosen}.")
+
+
+def _resolve_servicenow_connection(args, runner):
+    """Resolve and apply the ServiceNow connection selection for this run.
+
+    The pin lives on ``runner.servicenow_connection_pin`` (consumed by
+    SN-CONN-* via ``check_connector_connections``). An explicit flag wins;
+    otherwise the interactive picker runs.
+    """
+    pp_admin = getattr(runner, "pp_admin", None)
+    env_id = getattr(runner, "env_id", None)
+    chosen = (args.servicenow_connection or "").strip()
+
+    if not chosen and args.select_targets != "never" and pp_admin is not None and env_id:
+        try:
+            candidates = _discover_servicenow_connections(pp_admin, env_id)
+        except Exception as e:  # noqa: BLE001 — discovery failure ⇒ validate all
+            print(f"  Target selection: could not list ServiceNow connections "
+                  f"({e}); validating all.")
+            candidates = []
+        choice = _maybe_prompt(candidates, kind="servicenow", args=args)
+        if choice == _SELECT_ALL:
+            print("  Validating all ServiceNow connections (no scoping).")
+            return
+        chosen = choice or ""
+
+    if chosen:
+        runner.servicenow_connection_pin = chosen
+        print(f"  Scoping ServiceNow connection checks to '{chosen}'.")
+
+
+def _resolve_target_selection(args, runner):
+    """Standalone-scope-only: pin the Workday SSO app / ServiceNow connection
+    the operator wants this run scoped to.
+
+    Reached ONLY from the scope-mode main(); ``--checkpoint`` mode builds its
+    own runner and never calls this, so setup gates stay deterministic and
+    non-interactive.
+    """
+    scope = getattr(runner, "scope", "")
+    if scope in _WORKDAY_APP_SCOPES:
+        _resolve_workday_app(args, runner)
+    if scope in _SERVICENOW_SCOPES:
+        _resolve_servicenow_connection(args, runner)
 
 
 def _run_single_checkpoint(args):
@@ -326,6 +762,13 @@ def _run_single_checkpoint(args):
     runner.powerplatform = powerplatform
     runner.azure_arm = None
 
+    # No runtime-reachability consent here: INFRA-003 is not individually
+    # targetable in single-checkpoint mode (there is no INFRA CheckpointSpec in
+    # registry.py, and plan.ordered_fns holds only leaf check fns, never
+    # run_infrastructure_checks), so the egress probe never runs on this path.
+    # Consent is resolved on the --scope path only. If an INFRA checkpoint is
+    # ever registered, wire _apply_runtime_reachability_consent here then.
+
     for label, fn in plan.ordered_fns:
         runner.register(label, fn)
 
@@ -339,11 +782,86 @@ def _run_single_checkpoint(args):
         print(f"\nNOTE: checkpoint {target} produced no result rows (the owning "
               "check may have skipped it for this tenant state).")
 
-    # Single-checkpoint mode never auto-opens the HTML report. Programmatic
-    # pass/fail rows AND MANUAL verification steps are both printed in full in
-    # the terminal above (see verbose_manual), so they surface directly in
-    # Copilot chat instead of a browser popup. results.json / report.html are
-    # still written to args.output for anyone who wants them.
+    # --- Emit anonymous outcome telemetry (best-effort; never affects exit) ---
+    # Single-checkpoint mode never auto-opens the HTML report; results.json /
+    # report.html are still written to args.output for anyone who wants them.
+    # Single-checkpoint runs are the "connect" invocation source: incremental
+    # FlightChecks that gate individual setup/connect steps (ADO 7587431).
+    # Without this, checkpoint runs were invisible to the Aria dashboards even
+    # though they exercise the same checks a full run does.
+    if not getattr(args, "no_telemetry", False):
+        # Explicit --invocation-source wins; otherwise checkpoint mode attributes
+        # the run to "connect" (vs "cli"/"adk"/"installer" for --scope runs).
+        _inv_source = getattr(args, "invocation_source", None) or "connect"
+        _tele_debug = os.environ.get(
+            "ESS_FLIGHTCHECK_TELEMETRY_DEBUG", ""
+        ).strip().lower() in ("1", "on", "true", "yes")
+        # Resolve the active agent from config (may be empty for Entra-only
+        # checkpoints run before /setup writes a full config).
+        _agents = config.get("agents", [])
+        if not _agents:
+            _agent_entry = config.get("agent", {})
+            if _agent_entry:
+                _agents = [_agent_entry]
+        _active = config.get("activeAgent", config.get("agent", {}).get("slug", ""))
+        _active_agent = next(
+            (a for a in _agents if a.get("slug") == _active),
+            _agents[0] if _agents else {},
+        )
+        # Best-effort tenant display name (OII; privacy-approved). Reuses the
+        # already-authenticated Graph client when one was needed; never re-auths.
+        tenant_name = ""
+        try:
+            if graph is not None:
+                tenant_name = (graph.get_organization() or {}).get("displayName", "") or ""
+        except Exception:  # noqa: BLE001 — telemetry name is best-effort
+            tenant_name = ""
+        try:
+            from flightcheck import telemetry
+
+            _tele = telemetry.emit_flightcheck_telemetry(
+                result,
+                tenant_id=tenant_id or "",
+                tenant_name=tenant_name,
+                agent_id=_active_agent.get("botId", ""),
+                scope=f"checkpoint:{target}",
+                agent_count=len(_agents),
+                invocation_source=_inv_source,
+            )
+            if _tele_debug:
+                print(
+                    f"[telemetry] env={_tele.get('env')} sent={_tele.get('sent')} "
+                    f"events={_tele.get('events')} status={_tele.get('status')} "
+                    f"reason={_tele.get('reason')}"
+                )
+        except Exception as _tele_err:  # never break the run
+            if _tele_debug:
+                print(f"[telemetry] skipped — {type(_tele_err).__name__}: {_tele_err}")
+
+        # Additive adk.* event family (spec Feature #7403772), mirroring the
+        # --scope emit so checkpoint runs also count toward the adk.* cubes.
+        try:
+            import adk_telemetry as _adk
+
+            _agent_id = _active_agent.get("botId", "")
+            if tenant_id or tenant_name:
+                _adk.set_identity(tenant_id=tenant_id or "", tenant_name=tenant_name)
+            _ridx = _adk.next_run_index(_agent_id)
+            _adk.emit_flightcheck_run(agent_id=_agent_id, run_index=_ridx)
+            _result_map = {
+                "READY": "pass",
+                "READY_WITH_WARNINGS": "partial",
+                "NOT_READY": "fail",
+            }
+            _adk.emit_flightcheck_result(
+                agent_id=_agent_id,
+                run_index=_ridx,
+                result=_result_map.get(result.overall, "fail"),
+                duration_ms=int(getattr(result, "duration_secs", 0) * 1000),
+            )
+            _adk.flush(timeout=3)
+        except Exception:  # noqa: BLE001 — adk telemetry must never break the run
+            pass
 
     sys.exit(1 if result.failed > 0 else 0)
 
@@ -396,15 +914,66 @@ def main():
         help="Don't emit anonymous FlightCheck outcome telemetry",
     )
     parser.add_argument(
-        "--invocation-source", default="cli",
-        choices=["adk", "installer", "cli"],
-        help="How FlightCheck was invoked (adk=slash-command, installer=standalone installer, cli=direct Python CLI)",
+        "--runtime-reachability",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help=(
+            "Runtime-reachability egress probe for INFRA-003. Stands up a "
+            "transient test flow, triggers it once to probe each external "
+            "endpoint from the Power Platform environment's OWN egress, then "
+            "deletes it — the only FlightCheck path that mutates the tenant. "
+            "--runtime-reachability forces it on (consent given); "
+            "--no-runtime-reachability forces it off. Omit both to be asked "
+            "interactively during a normal run; non-interactive runs stay "
+            "read-only and report INFRA-003 as MANUAL guidance."
+        ),
+    )
+    parser.add_argument(
+        "--invocation-source", default=None,
+        choices=["adk", "installer", "cli", "connect"],
+        help="How FlightCheck was invoked (adk=slash-command, installer=standalone "
+             "installer, cli=direct Python CLI, connect=incremental single-checkpoint "
+             "run from a connect/setup skill). Default: cli for --scope runs, connect "
+             "for --checkpoint runs.",
+    )
+    parser.add_argument(
+        "--workday-app-id", default=None,
+        help="Scope Workday SSO-app checks (WD-CONN-102 and the other "
+             "Workday enterprise-app checks) to this Entra enterprise-app "
+             "appId. Standalone scope runs only; ignored with --checkpoint.",
+    )
+    parser.add_argument(
+        "--servicenow-connection", default=None,
+        help="Scope ServiceNow connection checks (SN-CONN-*) to this "
+             "connection (its name/id or a displayName substring). "
+             "Standalone scope runs only; ignored with --checkpoint.",
+    )
+    parser.add_argument(
+        "--select-targets", choices=["auto", "always", "never"], default="auto",
+        help="When multiple Workday SSO apps / ServiceNow connections exist "
+             "and no --workday-app-id/--servicenow-connection is given, prompt "
+             "to choose one. auto=prompt on an interactive terminal only "
+             "(default); always=prompt (falls back to all on a non-TTY); "
+             "never=disable and validate all (legacy behavior).",
+    )
+    parser.add_argument(
+        "--list-targets", choices=["workday", "servicenow"], default=None,
+        help="Discovery helper for the /flightcheck picker: authenticate, "
+             "print candidate Workday SSO apps or ServiceNow connections as "
+             "JSON, then exit without running any checks.",
     )
     args = parser.parse_args()
 
     # --- Single-checkpoint mode (additive; leaves all --scope behavior intact) ---
     if args.list_checkpoints:
         _print_checkpoint_list()
+        sys.exit(0)
+
+    if args.list_targets:
+        # Discovery-only mode for the skill-driven picker: authenticate the
+        # one client we need, print candidate targets as JSON, and exit. No
+        # checks run. Never touches --scope / --checkpoint behavior.
+        _list_targets(args)
         sys.exit(0)
 
     if args.checkpoint:
@@ -418,6 +987,12 @@ def main():
     # None on the parser so checkpoint-mode can detect an explicit --scope.)
     if args.scope is None:
         args.scope = "full"
+
+    # --invocation-source defaults to "cli" for scope-mode runs. (Default is
+    # None on the parser so checkpoint-mode can default it to "connect" instead
+    # while still honouring an explicit --invocation-source.)
+    if args.invocation_source is None:
+        args.invocation_source = "cli"
 
     # Load config
     config_path = os.path.join(".local", "config.json")
@@ -460,12 +1035,39 @@ def main():
     print()
 
     if infra_only_scope:
-        print("Skipping Dataverse/Graph/Power Platform auth for infrastructure scope.")
-        dv_token = None
-        tenant_id = None
+        # Infrastructure scope skips auth to stay fast and read-only. The one
+        # exception is the INFRA-003 egress probe: when explicitly opted in with
+        # --runtime-reachability it needs Dataverse + Power Platform tokens to
+        # stand up its transient flow, so acquire just those (no Graph / PVA).
         graph = None
+        tenant_id = None
+        dv_token = None
         pp_admin = None
         env_id = args.environment_id or None
+        if getattr(args, "runtime_reachability", None) is True and env_url:
+            from auth import authenticate, discover_tenant
+
+            print("Authenticating to Dataverse (runtime-reachability probe)...")
+            dv_token = authenticate(env_url)
+            tenant_id = discover_tenant(env_url)
+
+            print("Authenticating to Power Platform Admin API...")
+            pp_admin = PPAdminClient(tenant_id)
+            try:
+                pp_admin.authenticate()
+                print("  Power Platform: OK")
+            except Exception as e:
+                print(f"  Power Platform: WARNING — {e}")
+                print("  (Runtime-reachability probe can't run without Power "
+                      "Platform auth — INFRA-003 will report MANUAL guidance)")
+                pp_admin = None
+
+            if not args.environment_id:
+                env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
+        else:
+            print(
+                "Skipping Dataverse/Graph/Power Platform auth for infrastructure scope."
+            )
     else:
         # --- Authenticate ---
         from auth import authenticate, discover_tenant
@@ -619,11 +1221,24 @@ def main():
     runner.powerplatform = powerplatform
     runner.azure_arm = azure_arm
 
+    # --- Target selection (standalone scope runs only) ---
+    # Pin the Workday SSO app / ServiceNow connection the operator wants this
+    # run scoped to (explicit flag > persisted setup config on default `auto` >
+    # interactive picker). This is reached ONLY from the scope-mode main();
+    # --checkpoint mode builds its own runner and never calls this, keeping
+    # setup gates deterministic.
+    _resolve_target_selection(args, runner)
+
     # Register checks based on scope
     if args.scope == "full":
         checks = FULL_SCOPE
     else:
         checks = SCOPE_MAP.get(args.scope, FULL_SCOPE)
+
+    # Resolve consent for the mutating runtime-reachability probe (INFRA-003)
+    # before any check runs. This is the only FlightCheck path that writes to
+    # the tenant, so it never proceeds without an explicit YES.
+    _apply_runtime_reachability_consent(args, runner, checks)
 
     for category, fn in checks:
         runner.register(category, fn)

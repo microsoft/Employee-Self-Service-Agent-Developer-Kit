@@ -126,13 +126,13 @@ Instead, it establishes the complete framework, wiring, and developer experience
 | [TASK-001](tasks/TASK-001-repository-scaffold.md)        | Repository Scaffold            | DONE   | —        |
 | [TASK-002](tasks/TASK-002-pipeline-framework.md)         | Pipeline Framework             | DONE   | —        |
 | [TASK-003](tasks/TASK-003-migration-orchestrator.md)     | Migration Orchestrator         | TODO   | TASK-002, TASK-005, TASK-015 |
-| [TASK-004](tasks/TASK-004-dataverse-client.md)           | Dataverse Client               | TODO   | —        |
+| [TASK-004](tasks/TASK-004-dataverse-client.md)           | Dataverse Client               | DONE   | —        |
 | [TASK-005](tasks/TASK-005-diagnostics-framework.md)      | Diagnostics Framework          | DONE   | —        |
 | [TASK-006](tasks/TASK-006-preprocessing-pipeline.md)     | Preprocessing Pipeline         | TODO   | TASK-015 |
-| [TASK-007](tasks/TASK-007-postprocessing-pipeline.md)    | Postprocessing Pipeline        | TODO   | TASK-015 |
+| [TASK-007](tasks/TASK-007-postprocessing-pipeline.md)    | Postprocessing Pipeline        | BLOCKED | TASK-015, TASK-004, TASK-005 |
 | [TASK-008](tasks/TASK-008-authentication-token-provider.md) | Authentication Token Provider | DONE   | —        |
-| [TASK-009](tasks/TASK-009-end-to-end-framework-validation.md) | End-to-End Framework Validation | TODO | —      |
-| [TASK-015](tasks/TASK-015-input-pipeline-auth-discovery.md) | Input Pipeline: Auth + Agent Discovery + Orchestrator Wiring | TODO | TASK-002, TASK-005, TASK-008 |
+| [TASK-009](tasks/TASK-009-end-to-end-framework-validation.md) | End-to-End Framework Validation | BLOCKED | TASK-003, TASK-006, TASK-007 |
+| [TASK-015](tasks/TASK-015-input-pipeline-auth-discovery.md) | Input Pipeline: Auth + Agent Discovery + Orchestrator Wiring | DONE | TASK-002, TASK-005, TASK-008 |
 
 ---
 
@@ -181,7 +181,7 @@ release.
 
 | Task                                                     | Title                          | Status | Consumes |
 | -------------------------------------------------------- | ------------------------------ | ------ | -------- |
-| [TASK-999](tasks/TASK-999-manual-e2e-validation.md)      | Manual End-to-End Validation   | TODO   | —        |
+| [TASK-999](tasks/TASK-999-manual-e2e-validation.md)      | Manual End-to-End Validation   | BLOCKED | TASK-009 |
 
 ---
 

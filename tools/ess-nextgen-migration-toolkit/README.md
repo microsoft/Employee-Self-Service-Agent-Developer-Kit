@@ -16,19 +16,18 @@ specifications define the system, and this code is one implementation of them.
 
 ```text
 src/
-    constants/       Shared constants
     core/
         auth/        Authentication (token_provider.py)
         logging/     Diagnostics framework
-        models/      Canonical domain models
+        models/      Canonical domain models (execution_context.py)
         outbound/    Dataverse client (dataverse_client.py)
-        pipeline/    Pipeline engine
+        pipelines/   Pipeline engine (pipeline.py, pipeline_step.py, chained_pipeline.py)
         utils/       Generic helpers
     modules/
-        preprocessing/
-        migration/       migration_pipeline.py, steps/
-        postprocessing/
-    service/         Orchestration (mtk_orchestrator.py)
+        preprocessing/   Input pipeline steps
+        migration/       Migration step base, models, migration_pipeline.py, steps/
+        postprocessing/  Output pipeline steps
+    service/         Orchestration (mtk_orchestrator.py, constants.py)
 output/              Generated, gitignored output
     session-<timestamp>/   migration_report.md, session.log
 tests/
