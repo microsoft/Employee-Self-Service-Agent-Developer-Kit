@@ -248,6 +248,7 @@ def test_base_url_bare_placeholder_token_warns(monkeypatch):
     assert cfg.status == "Warning"
     assert _HRSD_CFG in cfg.result
     assert "https://<instance>.service-now.com" in cfg.remediation
+    assert "omit" in cfg.remediation and "hyperlinks" in cfg.remediation
 
 
 def test_base_url_relative_path_only_warns(monkeypatch):
@@ -286,6 +287,8 @@ def test_base_url_query_error_warns(monkeypatch):
     cfg = _by_id(_check_template_config_base_urls(runner), "SN-CFG-002")
     assert cfg.status == "Warning"
     assert "Unable to query template config values" in cfg.result
+    assert "Re-run /flightcheck" in cfg.remediation
+    assert "Dataverse is reachable" in cfg.remediation
 
 
 def test_base_url_scenario_configs_ignored(monkeypatch):
@@ -315,6 +318,8 @@ def test_base_url_only_flags_root_config_amongst_scenarios(monkeypatch):
     assert _HRSD_CFG in cfg.result
     assert "CreateCaseCore" not in cfg.result
     assert "GetUserCases" not in cfg.result
+    assert "https://<instance>.service-now.com" in cfg.remediation
+    assert "omit" in cfg.remediation and "hyperlinks" in cfg.remediation
 
 
 def test_base_url_defers_to_env_var_when_both_migrated(monkeypatch):
@@ -345,6 +350,8 @@ def test_base_url_partial_env_deference_warns_on_unmigrated(monkeypatch):
     assert "1 of 2 ServiceNow base-URL config(s)" in cfg.result
     assert _ITSM_CFG in cfg.result
     assert "1 superseded" in cfg.result
+    assert "https://<instance>.service-now.com" in cfg.remediation
+    assert "omit" in cfg.remediation and "hyperlinks" in cfg.remediation
 
 
 def test_base_url_from_env_var_only_no_template_config(monkeypatch):
