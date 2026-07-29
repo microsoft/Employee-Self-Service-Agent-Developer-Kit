@@ -61,6 +61,7 @@ from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
 from flightcheck.checks.entra_app import run_entra_app_checks
 from flightcheck.checks.graph_connector_kb import run_graph_connector_kb_checks
+from flightcheck.checks.agent_handoff import run_handoff_topic_checks
 from flightcheck.checks.workday import run_workday_checks
 from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
@@ -97,6 +98,7 @@ SCOPE_MAP = {
         ("External Systems", run_external_systems_checks),
         ("Graph Connector KB", run_graph_connector_kb_checks),
     ],
+    "handoff": [("Agent Handoff", run_handoff_topic_checks)],
     "servicenow": [
         ("External Systems", run_external_systems_checks),
         ("ServiceNow", run_servicenow_checks),
@@ -120,6 +122,7 @@ FULL_SCOPE = [
     ("Workday Extension", run_workday_extension_checks),
     ("Workday Topics", run_topic_checks),
     ("Graph Connector KB", run_graph_connector_kb_checks),
+    ("Agent Handoff", run_handoff_topic_checks),
     ("ServiceNow", run_servicenow_checks),
     ("Local Files", run_local_file_checks),
     ("Licensing", run_licensing_checks),
