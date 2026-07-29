@@ -160,6 +160,15 @@ def run_handoff_topic_checks(runner) -> list[CheckResult]:
         agent_id = _resolved_agent_id(setvariable)
 
         if not agent_id or agent_id == _PLACEHOLDER:
+            if agent_id == _PLACEHOLDER:
+                detail = (
+                    f"{_HANDOFF_VAR} still holds the shipped placeholder "
+                    f"'{_PLACEHOLDER}' (no concrete target agent id set)."
+                )
+            else:
+                detail = (
+                    f"{_HANDOFF_VAR} is blank (no target agent id set)."
+                )
             results.append(CheckResult(
                 roles=[Role.ESS_MAKER.value],
                 checkpoint_id=cid,
@@ -168,9 +177,7 @@ def run_handoff_topic_checks(runner) -> list[CheckResult]:
                 status=Status.FAILED.value,
                 description=f"Handoff target agent id: {name}",
                 result=(
-                    f"Handoff topic '{name}' is enabled but "
-                    f"{_HANDOFF_VAR} still holds the shipped placeholder "
-                    f"'{_PLACEHOLDER}' (no concrete target agent id set). "
+                    f"Handoff topic '{name}' is enabled but {detail} "
                     "The handoff will fail at runtime."
                 ),
                 remediation=(

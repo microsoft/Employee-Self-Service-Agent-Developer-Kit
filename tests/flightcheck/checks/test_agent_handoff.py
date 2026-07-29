@@ -270,6 +270,9 @@ class TestPlaceholderStillSet:
         runner = _build_runner(pva=_FakePVA(dialog_components=[comp]))
         r = _result_by_id(run_handoff_topic_checks(runner), "TOPIC-020-001")
         assert r.status == "Failed"
+        assert "blank" in r.result
+        assert "AgentIdentifier" not in r.result
+        assert "Topic.HandoffAgentId" in r.result
 
 
 # ───────────────────────────────────────────────────────────────────────
