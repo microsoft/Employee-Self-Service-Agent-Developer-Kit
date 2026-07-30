@@ -19,8 +19,13 @@ Respond with ONLY this exact message and nothing else:
 > Hey! Welcome to the ESS Maker Kit. Before we dive in, I need to set up
 > your environment. Type `/setup` to get started — it only takes a couple minutes.
 
-**The ONLY exception**: If the user typed `/setup` or explicitly asked to run
+**The exceptions**: If the user typed `/setup` or explicitly asked to run
 setup, proceed with setup — read `src/skills/onboarding/SKILL.md` and follow it.
+If the user typed `/planner` or asked to **plan a rollout / plan an ESS
+deployment / "what am I assigned?"**, proceed with planning — read
+`src/skills/planner/SKILL.md` and follow it (the planner is the one experience
+that is allowed to run before setup, because planning is how a greenfield
+deployment is decided).
 
 **This gate applies to ALL user messages** — including "hello", "hi", "help",
 "what can you do", "I need a topic", "create a workflow", or any other request.
@@ -285,6 +290,7 @@ After a successful push, `.baseline/` is updated to match the new state.
 
 | User intent | Skill to read |
 |-------------|--------------|
+| Plan a rollout / generate a scenario Plan / "what am I assigned?" | `src/skills/planner/SKILL.md` |
 | Provision/connect the Workday setup environment (`/connect workday`) | `src/skills/setup/SKILL.md` |
 | Connect to ServiceNow/Workday | `src/skills/connect/SKILL.md` |
 | Create a topic | `src/skills/topics/create/SKILL.md` |
@@ -309,6 +315,11 @@ After a successful push, `.baseline/` is updated to match the new state.
 **Trigger phrases for connect:** "connect ServiceNow", "set up ServiceNow",
 "integrate ServiceNow", "connect Workday", "set up Workday", "add ServiceNow",
 "I want to connect to ServiceNow", "ServiceNow integration".
+
+**Trigger phrases for planner:** "plan a rollout", "plan my ESS deployment",
+"create a plan", "scenario plan", "set up ESS with Workday/ServiceNow",
+"what should I do first", "what am I assigned", "what are my tasks",
+"my tasks", "what's assigned to me".
 
 **Trigger phrases for troubleshooting:** "Workday error", "ISU not working",
 "invalid_client", "invalid username or password", "SOAP failure", "maker works
