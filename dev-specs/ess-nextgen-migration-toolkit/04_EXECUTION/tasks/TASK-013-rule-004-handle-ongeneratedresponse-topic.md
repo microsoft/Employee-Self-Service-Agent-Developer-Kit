@@ -4,35 +4,82 @@
 | ---------- | --------------------------------- |
 | ID         | TASK-013                          |
 | Workstream | 2 — Incremental Migration Rules   |
-| Status     | TODO                              |
-| Consumes   | RULE-004                          |
+| Status     | DONE                              |
+| Consumes   | RULE-004, TASK-006, TASK-016, TASK-017 |
 
 ## Description
 
-Implement RULE-004 as a Migration Step that handles the OnGeneratedResponse
-topic, following the established framework pattern. The framework architecture
-remains unchanged.
+Implement RULE-004 as a Transformation Step (`HandleGeneratedResponseTopicStep`)
+that deprecates each **OnGeneratedResponse** topic. Follow the framework pattern
+established by `ApplyDaCompatibilityStep` (TASK-016): a `MigrationPipelineStep`
+that reads its targets from `context.customizations` and **stages** its edits on
+the `WritebackPlan` (TASK-017) — no Dataverse I/O, never appends to
+`pending_writes`.
+
+**Input.** Iterate `context.customizations`
+(`dict[str, CustomizationComponent]`, Topic V2 topics). The OnGeneratedResponse
+trigger is identified from the topic's `data` YAML
+(`beginDialog.kind == "OnGeneratedResponse"`), but the **title and disabled state
+are record fields, NOT in the `data` YAML** (see bring-up findings below). Its
+record is `botcomponents({component_id})`.
+
+**Staging (chaining- and no-op-safe).** Detect the trigger from `component.data`,
+then stage the record-field edits (title + disabled state) — NOT `data`:
+
+```python
+if not is_generated_response_topic(component.data):
+    continue
+target = context.writeback.target(
+    "botcomponents",
+    component.component_id,
+    original={"name": component.name, "statecode": ..., "statuscode": ...},
+)
+target.set("name", deprecate_title(target.get("name")))   # "[DEPRECATED] " once
+target.set("statecode", _INACTIVE_STATECODE)              # disable
+target.set("statuscode", _INACTIVE_STATUSCODE)
+```
+
+### Bring-up findings (from RULE-002, TASK-011)
+
+Identical mechanism to RULE-003 (TASK-012) — see its "Bring-up findings" section:
+the topic title/enabled state are the botcomponent `name` + `statecode`/`statuscode`
+record fields (not the `data` YAML); the trigger type is `beginDialog.kind` in
+`data`; the Inactive `statecode=1`/`statuscode=2` values are **confirmed** by the
+Dataverse `botcomponent` table reference (both writable, set via a normal PATCH),
+with the single-PATCH state+content combination the only TASK-009 live item;
+idempotency (MIG-005) skips a topic already Inactive with a `[DEPRECATED]`-prefixed
+`name`. Implemented as the shared `UnsupportedTopicTriggerStep` base so RULE-003 and
+RULE-004 share the disable + title-prefix logic and differ only in the trigger.
 
 ## Acceptance Criteria
 
-- [ ] `HandleGeneratedResponseTopicStep` is delivered as the Pipeline Step that
-  implements RULE-004 and is registered in the migration pipeline.
-- [ ] Each OnGeneratedResponse topic is disabled and its title is prefixed once
-  with `[DEPRECATED]` (idempotent), with all topic logic preserved, per
-  RULE-004.
-- [ ] Preview and Writeback modes are supported.
-- [ ] Unit Tests and Golden Tests pass.
-- [ ] The framework architecture is unchanged.
+- [x] `HandleGeneratedResponseTopicStep` is a `MigrationPipelineStep` registered in
+  the Transformation Pipeline after `ApplyDaCompatibilityStep`.
+- [x] Each OnGeneratedResponse topic is disabled (`statecode`/`statuscode` → Inactive
+  pair) and its `name` prefixed once with `[DEPRECATED]`, all topic `data` logic
+  preserved (never rewritten), and a manual-review warning emitted, per RULE-004.
+- [x] Idempotent (MIG-005): a topic already Inactive AND `[DEPRECATED]`-prefixed is
+  skipped; shares the `UnsupportedTopicTriggerStep` base + `topic_trigger_kind` with RULE-003.
+- [x] Edits are staged via `context.writeback` (record fields `name`/`statecode`/
+  `statuscode`); unchanged/other-trigger topics produce no write.
+- [x] `supported_modes=("READONLY", "WRITEBACK")`.
+- [x] Unit Tests and a Golden Test pass.
+- [x] The framework architecture is unchanged.
 
 ## Deliverables
 
-- `HandleGeneratedResponseTopicStep` (Pipeline Step)
-- Unit Tests
-- Golden Tests
+- `src/modules/transformation/steps/handle_generated_response_topic_step.py`
+  (`HandleGeneratedResponseTopicStep` — a thin subclass of the shared
+  `UnsupportedTopicTriggerStep`, differing only in the trigger it matches)
+- Registration in `build_transformation_pipeline`
+- Unit Tests + Golden Test
 
 ## References
 
-- 02_ARCHITECTURE/PIPELINES.md
+- 02_ARCHITECTURE/PIPELINES.md — Transformation stage + writeback-plan contract
+- 02_ARCHITECTURE/CUSTOMIZATION_DISCOVERY.md — customizations input, §7 writeback
+- 04_EXECUTION/tasks/TASK-016-transformation-da-compatibility.md — step pattern
+- 04_EXECUTION/tasks/TASK-017-writeback-plan.md — staging API
 - 02_ARCHITECTURE/DOMAIN_MODEL.md
 - 03_ENGINEERING/CODING_STANDARDS.md
 - 03_ENGINEERING/TESTING.md

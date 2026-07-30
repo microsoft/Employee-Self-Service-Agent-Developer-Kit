@@ -11,9 +11,9 @@ from pathlib import Path
 
 import pytest
 
-from core.logging import Logger, LogLevel, Reporter, SessionManager
-from core.models import ChangeEntry, DiagnosticEntry, ExecutionMode
-from modules.migration.models import MigrationContext
+from core.logging import Logger, LogLevel, SessionManager
+from core.models import ChangeEntry, DiagnosticEntry
+from modules.transformation.models import MigrationContext
 
 FIXED_TIME = datetime(2026, 7, 18, 14, 32, 5)
 
@@ -39,7 +39,16 @@ def test_session_manager_creates_timestamped_session_folder(workspace: Path) -> 
 
     assert paths.session_dir == workspace / "session-2026-07-18_14-32-05"
     assert paths.session_dir.is_dir()
-    assert paths.report_path == paths.session_dir / "migration_report.md"
+    assert paths.report_path == paths.session_dir / "telemetry_report.md"
+    assert paths.log_path == paths.session_dir / "session.log"
+
+
+def test_session_manager_honors_custom_report_filename(workspace: Path) -> None:
+    manager = SessionManager(workspace, report_filename="readiness.md", clock=lambda: FIXED_TIME)
+
+    paths = manager.create_session()
+
+    assert paths.report_path == paths.session_dir / "readiness.md"
     assert paths.log_path == paths.session_dir / "session.log"
 
 
@@ -155,54 +164,6 @@ def test_customer_channel_updates_report_model_only(
             component="ESS HR Agent",
         )
     ]
-
-
-def test_reporter_renders_customer_report_from_context_collectors(workspace: Path) -> None:
-    context = MigrationContext(
-        ExecutionMode=ExecutionMode.WRITEBACK,
-        Changes=[
-            ChangeEntry(
-                message="Runtime Provider CA → DA",
-                rule_id="RULE-001",
-                title="Updated Agent Metadata",
-                component="ESS HR Agent",
-                details=("Template           CA → DA",),
-            )
-        ],
-        Warnings=[
-            DiagnosticEntry(
-                message="OnActivity trigger unsupported.",
-                severity="WARNING",
-                component="Employee Context",
-                recommendation="Move logic into OnConversationStart.",
-            )
-        ],
-    )
-    manager = SessionManager(workspace, clock=lambda: FIXED_TIME)
-    manager.create_session()
-
-    Reporter(manager).render(context)
-
-    report = manager.paths.report_path.read_text(encoding="utf-8")
-    assert "# Migration Report" in report
-    assert "## Summary" in report
-    assert "- Execution Mode: WRITEBACK" in report
-    assert "## Changes" in report
-    assert "### RULE-001 — Updated Agent Metadata" in report
-    assert "Template           CA → DA" in report
-    assert "## Warnings — Manual Review Required" in report
-    assert "Recommendation     Move logic into OnConversationStart." in report
-
-
-def test_logger_and_reporter_leave_exactly_two_bundle_files(workspace: Path) -> None:
-    context = MigrationContext()
-    logger = Logger.start_session(workspace, context, clock=lambda: FIXED_TIME)
-    logger.close()
-
-    Reporter(logger.session_manager).render(context)
-
-    bundle_files = sorted(path.name for path in logger.session_manager.paths.session_dir.iterdir())
-    assert bundle_files == ["migration_report.md", "session.log"]
 
 
 def test_tee_stream_survives_log_file_write_failure(

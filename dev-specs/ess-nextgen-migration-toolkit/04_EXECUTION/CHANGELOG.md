@@ -12,6 +12,308 @@ task (`TASK-XXX`) where applicable, per `IMPLEMENTATION_GUIDE.md`.
 
 ## [Unreleased]
 
+- **Session-bundle customizations snapshot (`customizations.json`).** The discovery
+  step now writes a **pre-writeback snapshot** of the in-scope customizations into the
+  session bundle (`output/session-<timestamp>/customizations.json`) — each in-scope
+  topic's original `data` (topic YAML) plus identity/state, minus the verbose raw
+  layers. Previously this dump went to a gitignored `.local/` path as a temp debug
+  aid; it is now a first-class bundle artifact, written **early** (Input stage, before
+  any transformation/writeback) so it survives a later partial failure. It is an
+  internal engineering/recovery aid — if a run must be reverted manually (e.g. a
+  customer incident/ICM), the original topic YAML can be read back from here — and is
+  **not** surfaced as a customer-facing "undo" feature (the tool is still positioned as
+  making irreversible, idempotent changes). The write is best-effort (never fails the
+  run) and degrades to a no-op when no session bundle is available (unit tests).
+  `DIAG-004` updated accordingly (bundle is now report + log + the discovery snapshot).
+
+- **Preferred-solution scoping for ALM customers (`RetrieveCustomizationsStep`).**
+  When the customer declares a preferred solution (`context.preferred_solution` —
+  an unmanaged solution they imported and marked preferred), discovery is now
+  narrowed to the components that *belong to that solution*, so transformations and
+  writeback touch only that solution's customizations (topics layered on the managed
+  ESS base). Membership is read from the solution's **`solutioncomponents`**
+  (`_solutionid_value eq <solutionid>` → `objectid`), **not** the component layers —
+  every unmanaged solution shares the single `Active` layer, so `msdyn_solutionname`
+  can't distinguish them. With no preferred solution (non-ALM path), every discovered
+  customization is kept and no `solutioncomponents` query is issued. An ALM customer
+  who owns several preferred-solution setups runs the tool **once per preferred
+  solution** (no array/loop that waits on the maker to re-mark each). Added
+  `_narrow_to_preferred_solution` / `_fetch_preferred_solution_component_ids` /
+  `_norm_guid`; `context.customized_dependencies` is derived after the narrowing so
+  it stays consistent. **Query shape confirmed live** — a topic is a
+  `solutioncomponents` row with `objectid` = `botcomponentid`, `componenttype` 10213
+  (`botcomponent`). Documented in `CUSTOMIZATION_DISCOVERY.md` §4.4 + §7. Gates
+  green (116 tests, +3).
+
+- **RULE-006 / RULE-007 + per-topic migration report (TASK-018/019/020).** Handled
+  the rest of the CA→DA *unsupported* constructs from the component-support analysis
+  with a uniform disable-but-preserve mitigation, and gave the report a per-topic view.
+  Each unsupported construct is now its own thin `Step` subclass carrying a tailored,
+  user-facing mitigation message, over two shared abstract bases in
+  `unsupported_construct_base.py`:
+  - **`UnsupportedTopicTriggerStep`** (base) — matches one trigger via
+    `beginDialog.kind` and deprecates the topic.
+  - **`UnsupportedNodeStep`** (base) — matches one node `kind:` token via a
+    line-anchored regex over `data` and deprecates the topic.
+  - **RULE-006 — Unsupported-Trigger Topics** (`HandleOnUnknownIntentTopicStep`,
+    `HandleOnPlanCompleteTopicStep`, `HandleOnSystemRedirectTopicStep`,
+    `HandleOnSelectIntentTopicStep`, `HandleOnEscalateTopicStep`): each disables +
+    `[DEPRECATED]`-prefixes topics whose trigger is `OnUnknownIntent`, `OnPlanComplete`,
+    `OnSystemRedirect`, `OnSelectIntent`, or `OnEscalate` respectively.
+  - **RULE-007 — Topics With Unsupported Nodes** (`HandleAnswerQuestionWithAINodeStep`,
+    `HandleRecognizeIntentNodeStep`, `HandleSearchAndSummarizeContentNodeStep`,
+    `HandleTransferConversationV2NodeStep`, `HandleConversationHistoryNodeStep`,
+    `HandleInvokeAIBuilderModelActionNodeStep`, `HandleIncludeSelectedTopicsNodeStep`):
+    each disables + deprecates any topic whose `data` uses its unsupported node kind,
+    naming the found node in the report. `data` is never rewritten (no partial-node
+    mitigation). The node `kind:` token now lives on each step (no shared constant).
+  - RULE-003 (`HandleOnActivityTopicStep`) and RULE-004
+    (`HandleGeneratedResponseTopicStep`) were reworked to subclass
+    `UnsupportedTopicTriggerStep` on the same footing.
+  - All reuse a shared `deprecate_topic` action (disable state + `[DEPRECATED]` name +
+    preserve logic + warn + record), so a topic disabled by multiple reasons coalesces to
+    one PATCH while recording each reason.
+  - **Migration report (TASK-020):** every topic rule (RULE-002/003/004/006/007) records a
+    structured `Change` via `record_topic_change` (now carrying `component_type`); the
+    Reporter renders a polished, fully-tabular `migration_report.md` with a status banner
+    and emoji section headers — **📋 Summary** (metrics table), **🌐 Environment**
+    (URL/tenant/user/target solution table), **🤖 Agents** (discovered ESS agents + selected),
+    **🧩 Customizations Extracted** (count + type/name/schema/state table), a
+    **🔧 Migration Mitigations by Component** table (Component Type | Component |
+    Mitigations Applied, one row per topic), **⚠️ Warnings** / **❌ Errors** tables
+    (# | Component | Reason | Recommendation), a **✅ Next Steps — Action Required**
+    numbered checklist (validate + run your own end-to-end evals before promoting), and a
+    closing "Thanks for using the ESS Migration Toolkit (MTK)."
+  - Node `kind:` tokens are analysis-sourced; confirm live under TASK-009.
+
+- **TASK-009 (End-to-End Framework Validation) → TODO (unblocked).** Its
+  dependencies (TASK-003/006/007/016) are all DONE, so it is no longer BLOCKED;
+  added the shipped rule tasks (TASK-011/012/013/017) to its `Consumes`. Enriched
+  its live-validation criteria to confirm the topic-rule writeback targets —
+  RULE-002 (`data`) and RULE-003/004 (`name` + `statecode`/`statuscode`) on
+  `botcomponents` — and, specifically, whether a single PATCH may combine the state
+  change with content columns (else the Writeback step splits state into its own PATCH).
+
+- **TASK-010 (RULE-001, Override Agent Instructions) → BLOCKED; dev-spec
+  sanitization.** Marked TASK-010 `BLOCKED` (task file + TASKS.md index) pending
+  ESS PM input on the canonical Declarative Agent *instructions* payload to apply;
+  added the blocker note to RULE-001 in `MIGRATION_RULES.md`. Aligned the specs
+  with the shipped transformation stage: the `PIPELINES.md` pipeline example now
+  comments out the blocked RULE-001 step and tags RULE-002/003/004 with their
+  tasks; the writeback-plan staging model replaced the stale "append to
+  `pending_writes`" wording in TASK-010/TASK-016; and `REPOSITORY_STRUCTURE.md`
+  lists the new `customization_component.py` / `writeback_plan.py` models.
+
+- **TASK-012 / TASK-013 DONE — RULE-003 & RULE-004: disable unsupported-trigger
+  topics.** Added `HandleOnActivityTopicStep` (RULE-003) and
+  `HandleGeneratedResponseTopicStep` (RULE-004), thin subclasses of a shared
+  `UnsupportedTopicTriggerStep` base (`src/modules/transformation/steps/`), registered
+  in `build_transformation_pipeline` after `ReplaceEndConversationStep`. Each detects
+  its unsupported trigger from the topic's `data` YAML (`beginDialog.kind`, via a
+  lightweight regex — no YAML round-trip and `data` is never rewritten) and, for
+  matches, stages the **record-field** edits on the `WritebackPlan`: `name` prefixed
+  once with `[DEPRECATED]`, and `statecode`/`statuscode` set to the Inactive pair
+  (`1`/`2`) — disable-but-preserve per the migration philosophy — plus a manual-review
+  warning via `LogWarning` (rendered in the report's Warnings section). Idempotent
+  (MIG-005): a topic already Inactive AND `[DEPRECATED]`-prefixed is skipped.
+  `CustomizationComponent` now hydrates `statecode`/`statuscode` (from the componentjson
+  attributes already fetched during discovery — no extra call). `supported_modes=("READONLY","WRITEBACK")`.
+  Added unit tests (trigger detection + both steps + idempotency) and golden tests.
+  - **State semantics confirmed:** the Dataverse `botcomponent` table reference
+    lists `statecode` (0=Active / 1=Inactive) and `statuscode` as **writable**
+    columns, so `name`/`statecode`/`statuscode` are set via a normal
+    `PATCH /botcomponents(id)`. The only open live item (TASK-009) is whether a
+    single PATCH may combine the State change with content (`data`) when a topic is
+    also rewritten by another rule — if not, the Writeback step splits state into
+    its own PATCH.
+  - **Scope:** an ESS topic's editable dialog is the botcomponent `data` YAML +
+    record fields only; the sibling `.xml` (`msdyn_employeeselfservicetemplateconfigs`,
+    a managed Workday scenario template config) is a separate entity, excluded from
+    customization discovery, and out of scope for CA→DA dialog migration.
+
+- **TASK-011 DONE — RULE-002: Replace EndConversation node.** Added
+  `ReplaceEndConversationStep` (`src/modules/transformation/steps/`), registered in
+  `build_transformation_pipeline` after `ApplyDaCompatibilityStep`. It iterates
+  `context.customizations` (the discovered Topic-V2 topics) and, per topic, rewrites
+  every `kind: EndConversation` node to `kind: CancelAllDialogs` (End All Topics)
+  in the topic's `data` YAML — a node-anchored line substitution that preserves the
+  list-item prefix, indentation, node ids, and all other logic (no YAML round-trip,
+  so untouched topics stay byte-identical). Edits are staged on the `WritebackPlan`
+  (chaining-aware via `target_for`), so a topic with no EndConversation node
+  produces no write. `supported_modes=("READONLY","WRITEBACK")`. Added unit tests
+  (pure transform + step wiring + chaining) and a golden test
+  (`tests/golden/test_replace_end_conversation_golden.py`).
+
+- **TASK-007 DONE — Output pipeline validation + generic Dataverse writeback +
+  report rendering.** Replaced the postprocessing pass-through with
+  `ValidateMigration`, `Writeback`, and `GenerateMigrationReport` steps. The
+  Writeback step consumes the already-coalesced/no-op-guarded
+  `context.pending_writes` list and maps each entry directly to
+  `DataverseClient.update(entity_set, record_id, changes)` in WRITEBACK mode only;
+  READONLY is skipped by `MigrationPipelineStep` mode-gating. When
+  `context.preferred_solution` is set, Writeback passes the generic
+  `MSCRM.SolutionUniqueName` per-request header into the Dataverse client, which
+  now supports optional update headers without embedding ESS-specific logic.
+  `GenerateMigrationReport` renders `migration_report.md` via
+  `Reporter(logger.session_manager).render(context)`, preserving the two-file
+  session bundle.
+
+- **TASK-017 DONE — Writeback plan (coalescing + meaningful-change guard).** Added
+  `WritebackPlan` / `WritebackTarget`
+  (`src/modules/transformation/models/writeback_plan.py`), the shared accumulator
+  that every Transformation step now stages its edits on instead of appending to a
+  flat list. Keyed by `(entity_set, record_id)`, it gives **coalescing** (one PATCH
+  per record even when multiple steps/rules touch it), **chaining**
+  (`target.get()` returns the working value so rules compose on the same field),
+  and a **meaningful-change guard** (`pending_writes` derives by diffing working vs
+  original, so an unchanged value produces no write — no needless unmanaged
+  `Active` overlay over a clean managed base). `MigrationContext.pending_writes` is
+  now a read-only property deriving from `context.writeback`, so TASK-007's Output
+  contract is unchanged. Refactored `ApplyDaCompatibilityStep` (TASK-016) to stage
+  via the plan; reshaped TASK-011/012/013 (RULE-002/003/004) to consume
+  `context.customizations` topics and stage via the plan (with the concrete
+  pattern + golden-test expectations) so a worker can pick them up. Updated
+  `PIPELINES.md` (writeback-plan contract), `CUSTOMIZATION_DISCOVERY.md` §6–7
+  (incl. a future "overlay removal" note), and TASK-007/016 boundaries.
+
+- **Customization discovery: corrected the live Dataverse calls + rewrote the
+  classifier (TASK-006).** Brought `RetrieveCustomizationsStep` in line with the
+  live API after end-to-end bring-up:
+  - **`RetrieveDependenciesForUninstallWithMetadata` takes `SolutionId` (GUID),
+    not `SolutionUniqueName`** — the base solution's unique name is resolved to
+    its `solutionid` first, and `DataverseClient.call_function` now inlines a
+    GUID-shaped value as an unquoted `Edm.Guid` literal (other values stay
+    single-quoted strings).
+  - **`msdyn_componentlayers` is fetched one component at a time**, pairing
+    `msdyn_componentid` with `msdyn_solutioncomponentname` (from the dependency's
+    `dependentcomponententitylogicalname`). The virtual table needs the
+    solutioncomponentname and silently drops all-but-a-couple rows when ids are
+    OR-ed, so the earlier chunked-OR bulk fetch was replaced with sequential
+    per-id reads (each retriable on 429 via `Retry-After`).
+  - **Dropped the ~1900 `msdyn_overwritetime` sentinel rule** (net-new topics read
+    ~1900 too, so it was unreliable). Classification now keeps a component when it
+    is **customized** (more than one layer, or a lone layer in a non-OOB solution)
+    AND **migratable** (componenttype in `ALLOWED_BOT_COMPONENT_TYPES` = Topic V2,
+    schemaname matches an `ESS_AGENT_SCHEMANAMES` HR/IT prefix). Added
+    `OOB_ESS_SOLUTIONS` (base HR/IT + 11 extension packs), `BOT_COMPONENT_TYPE_LABELS`
+    (full option-set catalog), `ALLOWED_BOT_COMPONENT_TYPES`, and
+    `ESS_AGENT_SCHEMANAMES` to `service/constants.py`.
+  - **Hydrated model:** kept components become `CustomizationComponent`
+    (`modules/transformation/models/`) with top-level `component_id`,
+    `schemaname`, `name`, `component_type`, `component_type_label`, `data`, and raw
+    `layers`, so Transformation/Output consume the fields without re-parsing
+    `msdyn_componentjson`. `context.component_layers` and `context.customizations`
+    are now keyed by component id; added `context.customized_dependencies` (the
+    raw dependency infos for the kept components).
+  - Updated `02_ARCHITECTURE/CUSTOMIZATION_DISCOVERY.md` §3–4 and TASK-006.
+
+- **CLI: consolidated `mtk start` + `mtk refresh` into a single `mtk run`.**
+  Removes the start/refresh confusion. One command, two modes selected by `--dev`:
+  - **customer** (`mtk run`, no `--dev`): **runs from a pristine checkout of
+    `origin/main`** — `git fetch` + `git checkout -f origin/main` (detached) +
+    `git clean -fd` — so the working tree exactly matches reviewed `main`
+    (gitignored runtime state `.venv`/`.local`/`output/` preserved), then
+    provisions runtime-only and runs. **Local commits and branches are never
+    touched** (no branch is reset or deleted — earlier iterations used
+    `checkout -f -B main`, which could orphan local `main` commits; the detached
+    checkout fixes that). **Guarded against silent data loss:** only *uncommitted
+    changes* + *untracked files* are ever discarded — it proceeds without asking
+    only when the work tree is clean, otherwise it prints exactly what it will
+    discard and requires an interactive `yes` (or `--yes`), and **refuses in a
+    non-interactive shell**.
+  - **contributor** (`mtk run --dev`): provisions runtime + dev tooling, installs
+    hooks, and **skips** the reset (contributors manage their own branches).
+  `--mode readonly|writeback` works with both. Updated `scripts/mtk.sh`,
+  `scripts/mtk.ps1`, the monorepo-root forwarders, `.pre-commit-config.yaml`,
+  the toolkit `README`,
+  `REPOSITORY_STRUCTURE.md` §11a/§11b, `CODING_STANDARDS.md`, and TASK-003/009/015/016.
+  Also reconciled remaining middle-stage naming "Migration Pipeline" →
+  "Transformation Pipeline" across `ARCHITECTURE.md`, `PIPELINES.md`,
+  `VOCABULARY.md`, `IMPLEMENTATION_GUIDE.md`.
+- **TASK-003 DONE — orchestrator execution-mode selection + summary + error
+  handling.** `mtk_orchestrator.main()` now parses `--mode readonly|writeback`
+  (`_resolve_mode`; accepts `--mode X` / `--mode=X`, case-insensitive; invalid →
+  friendly `SystemExit`) and applies it to `MigrationContext.mode` (default
+  `READONLY`). On success it logs a one-line summary (mode, agent, changes/
+  warnings/errors, bundle path); on failure it logs a user-friendly `LogError`
+  (with the session-log path) and always closes the logger. The `mtk.sh` and
+  `mtk.ps1` dispatchers parse and forward `--mode` (and `-Mode`). Added
+  `_resolve_mode` / `_log_summary` unit tests.
+- **Consolidated the RULE-001 / DA-compat overlap.** `ApplyDaCompatibilityStep`
+  (TASK-016) and RULE-001 (TASK-010) overlapped on Template + Model Kind. Split
+  them cleanly: TASK-016 keeps the foundational DA-compat *nomenclature* rewrite
+  (Template, Model Kind, config — DONE); RULE-001 / TASK-010 is re-scoped to
+  **only** the Agent Instructions override (TODO, future
+  `OverrideAgentInstructionsStep`). Renamed RULE-001 "Override Agent Metadata" →
+  "Override Agent Instructions" and its step `OverrideAgentMetadataStep` →
+  `OverrideAgentInstructionsStep`; updated `MIGRATION_RULES.md`, `PIPELINES.md`,
+  `DIAGNOSTICS.md`, `CODING_STANDARDS.md`, `IMPLEMENTATION_GUIDE.md`, and the
+  TASKS.md index.
+- **CI: run the toolkit gates + unit tests on GitHub Actions.** Added
+  `.github/workflows/mtk-toolkit-ci.yml`, a dedicated workflow (path-filtered to
+  `tools/ess-nextgen-migration-toolkit/**`) that runs `uv sync --frozen`, then
+  `ruff check`, `ruff format --check`, `mypy src`, and `pytest` on push/PR to
+  `main`. Mirrors the local pre-commit gates and adds unit-test execution in CI.
+  Updated `REPOSITORY_STRUCTURE.md` §11 (Quality Gates: Pre-Commit + CI).
+- **Report filename is now a `SessionManager` constructor arg; core default is
+  neutral.** `core/logging/session_manager.py` no longer hardcodes
+  `migration_report.md` — it takes `report_filename` (default the neutral
+  `telemetry_report.md`) so the generic framework carries no product vocabulary.
+  `Logger.start_session` forwards the name; the ESS orchestrator passes
+  `service.constants.REPORT_FILENAME = "migration_report.md"`. The `output_root`
+  base folder handling is unchanged. Gates green.
+- **Reporter moved out of `core/` into the service layer.** The customer-facing
+  report renderer (`Reporter`) — which hardcodes ESS report titles and the
+  `migration_report.md` shape — moved from `src/core/logging/reporter.py` to
+  `src/service/reporter.py`. `core/logging` now contains only the generic
+  streaming Logger + SessionManager, so the framework carries no migration
+  vocabulary. Updated `mtk_orchestrator.py` (imports Reporter from
+  `service.reporter`), `service/__init__.py` (re-exports it), moved the Reporter
+  unit tests to `tests/unit/service/test_reporter.py`, and synced the specs
+  (`DIAGNOSTICS.md`, `REPOSITORY_STRUCTURE.md`, TASK-005/007). No behavioural
+  change; gates green.
+- **Generalized the framework base context; `ExecutionMode` moved to the domain.**
+  To keep `core/` product-agnostic and extractable, the base
+  `ExecutionContext` (`src/core/models/execution_context.py`) no longer defines
+  or holds the migration-specific `ExecutionMode` enum — it now carries only a
+  generic opaque `mode: str` plus the diagnostic collectors. The
+  `ExecutionMode` StrEnum (READONLY/WRITEBACK) moved to the ESS domain at
+  `src/modules/transformation/models/execution_mode.py`; `MigrationContext`
+  supplies it and defaults `mode` to `READONLY`. Updated the three readers
+  (`reporter.py`, `migration_step.py`, `mtk_orchestrator.py`) to read
+  `context.mode`, plus tests and the specs that cited the old location
+  (`REPOSITORY_STRUCTURE.md` core/models section, `DOMAIN_MODEL.md`,
+  `MIGRATION_MODES.md`, `PIPELINES.md`, `AGENTS.md`, TASK-003/007/009/015). No
+  behavioural change; gates green.
+- **Modes model sanitized to the two technical `ExecutionMode` values
+  (READONLY / WRITEBACK).** `01_PRODUCT/MIGRATION_MODES.md` is now authoritative
+  on the two modes the code actually implements; the three customer-journey
+  *intents* (Discover / Preview / Migrate) are kept only as journey language that
+  maps onto them (Discover + Preview → `READONLY`, Migrate → `WRITEBACK`). The
+  sole behavioural difference is the persistence step (`supported_modes=("WRITEBACK",)`).
+  Removed the stale `DISCOVER/PREVIEW/MIGRATE` execution-mode nomenclature from
+  `MIGRATION_MODES.md`, `AGENTS.md` §9, `DIAGNOSTICS.md` §10-12, `ROADMAP.md`
+  stages, `PROJECT.md` §7, `CUSTOMER_JOURNEY.md`, and two code docstrings
+  (`execution_context.py`, `migration_step.py`). Also sanitized
+  `01_PRODUCT/MIGRATION_RULES.md` §6 (`MigrationPipeline()` →
+  `TransformationPipeline()`, added the foundational `ApplyDaCompatibilityStep`
+  ahead of the rule steps, cross-referenced RULE-001's template/model overlap).
+- **Module rename: `migration/` → `transformation/`, plus customization-discovery
+  specs.** Renamed the middle pipeline stage folder `src/modules/migration/` →
+  `src/modules/transformation/` (builder `build_migration_pipeline` →
+  `build_transformation_pipeline`, `migration_pipeline.py` →
+  `transformation_pipeline.py`); the `MigrationContext` and `MigrationPipelineStep`
+  type/file names are intentionally retained. Added a new architecture spec
+  `02_ARCHITECTURE/CUSTOMIZATION_DISCOVERY.md` documenting solution resolution by
+  vertical → `RetrieveDependenciesForUninstallWithMetadata` → `msdyn_componentlayers`
+  → the ~1900 sentinel classification rule → the three idempotent DA-compatibility
+  transforms. Synced `PIPELINES.md`, `REPOSITORY_STRUCTURE.md`, `SERVICES.md`,
+  `INVARIANTS.md`, `VOCABULARY.md`, `IMPLEMENTATION_GUIDE.md`, both `AGENTS.md`
+  nav tables, and the toolkit `README.md`. Reframed **TASK-006** (Input: agent
+  config + customization discovery, ACTIVE), unblocked **TASK-007** (Output:
+  applies `pending_writes`, WRITEBACK + preferred-solution targeting, TODO), and
+  added **TASK-016** (Transformation: DA-compatibility rewrite / `ApplyDaCompatibilityStep`,
+  ACTIVE). (TASK-006, TASK-007, TASK-016)
 - **TASK-015 input-pipeline review refinements.** Consolidated environment
   prompting + MSAL authentication into `GatherInputWithAuthStep`, renamed agent
   discovery to `AgentSelectionStep`, added `GatherPreferredSolutionStep`, and

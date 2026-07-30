@@ -12,10 +12,13 @@
 Implement the diagnostics infrastructure. All toolkit output shall flow through
 the framework Logger; direct `print()` is prohibited. Logging code lives in
 `src/core/logging/`. Each execution produces one timestamped **session bundle**
-under `output/session-<timestamp>/` containing exactly two files:
+under `output/session-<timestamp>/`. Its core diagnostics are two files:
 `migration_report.md` (customer-facing) and `session.log` (ESS-engineer
-diagnostics). Steps accumulate into the `MigrationContext` collectors; the
-Reporter renders the report — steps never write files.
+diagnostics); a migration run also writes `customizations.json` (a pre-writeback
+snapshot of the in-scope customizations, written by the discovery step — see
+`02_ARCHITECTURE/CUSTOMIZATION_DISCOVERY.md` §4.4). Steps accumulate into the
+`MigrationContext` collectors; the Reporter renders the report, and only the
+Logger, Reporter, and the discovery-stage snapshot write files.
 
 The Logger has two responsibilities that define this framework:
 
@@ -58,7 +61,9 @@ The Logger has two responsibilities that define this framework:
 
 - Logger — dual-channel (engineer + customer) with stdout/stderr transcript tee
 - Session Manager (owns the session bundle)
-- Reporter (renders `migration_report.md` from the report model)
+- Reporter (renders `migration_report.md` from the report model; now lives in
+  `src/service/reporter.py`, moved out of `core/logging` to keep the framework
+  product-agnostic)
 - MigrationContext diagnostic collectors
 
 ## References
