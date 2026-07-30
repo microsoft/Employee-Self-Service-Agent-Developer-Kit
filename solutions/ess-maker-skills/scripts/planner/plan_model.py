@@ -57,6 +57,14 @@ PRINCIPAL_TYPES = ("User", "Role")
 CONTEXT_SOURCES = ("User", "Agent", "Discovered")
 ARTIFACT_KINDS = ("Environment", "Connection", "EntraApp", "KnowledgeSource", "Custom")
 ACTION_KINDS = ("kitSkill", "manual", "portal", "external")
+DEPENDENCY_KINDS = ("requires", "recommends")
+# Scenario dependency lives in the open Context bag (no new typed collection),
+# consistent with the "one Context bag" model. A scenario in scope is a Context
+# entry in SCENARIO_GROUP; a dependency edge is an entry in DEPENDS_ON_GROUP whose
+# key encodes "<dependent> -> <prerequisite>" and whose scalar value is the kind.
+SCENARIO_GROUP = "scenario"
+DEPENDS_ON_GROUP = "scenarioDependsOn"
+_DEP_SEP = " -> "
 
 
 class Limits:
@@ -237,6 +245,40 @@ def new_task(
     if checklist:
         task["checklist"] = list(checklist)
     return task
+
+
+def dependency_key(scenario: str, depends_on: str) -> str:
+    """The Context key for a scenario dependency edge: ``"<dep> -> <prereq>"``."""
+    return f"{scenario}{_DEP_SEP}{depends_on}"
+
+
+def parse_dependency_key(key: str) -> tuple[str, str]:
+    """Split a dependency key back into ``(scenario, depends_on)``."""
+    parts = key.split(_DEP_SEP, 1)
+    return (parts[0], parts[1]) if len(parts) == 2 else (key, "")
+
+
+# Scenario dependencies the PM spec asserts, seeded so the planner can advise the
+# sponsor without re-deriving them. Stored on a plan as Context entries (below);
+# this constant is just the grounding seed. Extend as the spec / research surface
+# more.
+KNOWN_SCENARIO_DEPENDENCIES: tuple[dict[str, str], ...] = (
+    {
+        "scenario": "hr-ticketing",
+        "dependsOn": "hr-knowledge",
+        "kind": "requires",
+        "rationale": (
+            "PM spec: deploy HR knowledge before HR ticketing so the agent "
+            "deflects — it answers from knowledge first and creates a ticket "
+            "only when the question isn't resolved."
+        ),
+    },
+)
+
+
+def known_scenario_dependencies() -> list[dict[str, str]]:
+    """A fresh copy of the seeded PM-spec scenario dependencies."""
+    return [dict(edge) for edge in KNOWN_SCENARIO_DEPENDENCIES]
 
 
 # --------------------------------------------------------------------------- #
@@ -460,6 +502,87 @@ class Plan:
         """"This task's outputs" = the ledger filtered by producing id (no copy)."""
         return [a for a in self.outputs if a.get("producedByTaskId") == task_id]
 
+    # ---- scenario dependencies (open Context bag, not a typed collection) - #
+
+    def in_scope_scenarios(self) -> dict[str, str]:
+        """Scenario id -> label for scenarios in scope (Context group 'scenario')."""
+        return {
+            e["key"]: e.get("value", "")
+            for e in self.context
+            if e.get("group") == SCENARIO_GROUP
+        }
+
+    def scenario_dependencies(self) -> list[dict[str, Any]]:
+        """Dependency edges parsed from the Context bag (group 'scenarioDependsOn').
+
+        Each edge: ``{scenario, dependsOn, kind, rationale, provenance}``. The
+        Plan stores these as ordinary Context entries — there is no separate
+        typed collection — so they round-trip and read back like any intent.
+        """
+        edges: list[dict[str, Any]] = []
+        for e in self.context:
+            if e.get("group") != DEPENDS_ON_GROUP:
+                continue
+            scenario, depends_on = parse_dependency_key(e.get("key", ""))
+            edges.append(
+                {
+                    "scenario": scenario,
+                    "dependsOn": depends_on,
+                    "kind": e.get("value", ""),
+                    "rationale": e.get("description", ""),
+                    "provenance": e.get("provenance", {}),
+                }
+            )
+        return edges
+
+    def add_scenario_dependency(
+        self,
+        scenario: str,
+        depends_on: str,
+        *,
+        kind: str = "requires",
+        rationale: str = "",
+        source: str = "Agent",
+    ) -> dict[str, Any]:
+        """Record that ``scenario`` depends on ``depends_on`` as a Context entry.
+
+        ``source`` is the Context provenance source ("Agent" when the planner
+        asserts it from the PM spec / research, "User" when the sponsor states
+        it); the PM-spec citation lives in ``rationale``.
+        """
+        if scenario == depends_on:
+            raise ValueError("a scenario cannot depend on itself")
+        if kind not in DEPENDENCY_KINDS:
+            raise ValueError(f"invalid dependency kind: {kind!r}")
+        return self.set_context(
+            dependency_key(scenario, depends_on),
+            kind,
+            group=DEPENDS_ON_GROUP,
+            description=rationale,
+            source=source,
+        )
+
+    def unmet_scenario_dependencies(self, *, include_known: bool = True) -> list[dict[str, Any]]:
+        """Edges whose dependent scenario is in scope but whose prerequisite
+        scenario is not — what to surface to the sponsor. Merges the PM-spec seed
+        (for in-scope scenarios) with edges captured on this plan."""
+        in_scope = set(self.in_scope_scenarios())
+        edges = self.scenario_dependencies()
+        if include_known:
+            have = {(e["scenario"], e["dependsOn"]) for e in edges}
+            for edge in known_scenario_dependencies():
+                pair = (edge["scenario"], edge["dependsOn"])
+                if edge["scenario"] in in_scope and pair not in have:
+                    edges.append({**edge, "provenance": {"source": "Agent"}})
+        unmet: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for edge in edges:
+            pair = (edge["scenario"], edge["dependsOn"])
+            if edge["scenario"] in in_scope and edge["dependsOn"] not in in_scope and pair not in seen:
+                unmet.append(edge)
+                seen.add(pair)
+        return unmet
+
     # ---- Flow 2: discovery ---------------------------------------------- #
 
     def tasks_for_person(
@@ -514,6 +637,12 @@ class Plan:
             src = (entry.get("provenance") or {}).get("source")
             if src and src not in CONTEXT_SOURCES:
                 errors.append(f"context[{key}] invalid provenance source: {src!r}")
+            if entry.get("group") == DEPENDS_ON_GROUP:
+                if entry.get("value") not in DEPENDENCY_KINDS:
+                    errors.append(f"scenario dependency {key!r} invalid kind: {entry.get('value')!r}")
+                dep_from, dep_to = parse_dependency_key(key)
+                if not dep_to or dep_from == dep_to:
+                    errors.append(f"scenario dependency {key!r} malformed (expected 'A -> B')")
 
         # Tasks
         if len(self.tasks) > Limits.MAX_TASKS:
@@ -634,6 +763,27 @@ class Plan:
         else:
             lines.append("_No tasks yet._")
         lines.append("")
+
+        # Scenario dependencies (read from the Context bag).
+        deps = self.scenario_dependencies()
+        unmet = self.unmet_scenario_dependencies()
+        if deps or unmet:
+            in_scope = set(self.in_scope_scenarios())
+            lines.append("## Scenario dependencies")
+            lines.append("")
+            lines.append("| Scenario | Depends on | Kind | Status |")
+            lines.append("|----------|-----------|------|--------|")
+            shown: set[tuple[str, str]] = set()
+            for edge in deps + unmet:
+                pair = (edge["scenario"], edge["dependsOn"])
+                if pair in shown:
+                    continue
+                shown.add(pair)
+                status = "met" if edge["dependsOn"] in in_scope else "MISSING — add it first"
+                lines.append(
+                    f"| {edge['scenario']} | {edge['dependsOn']} | {edge.get('kind')} | {status} |"
+                )
+            lines.append("")
 
         # Outputs ledger.
         active = [a for a in self.outputs if a.get("state") == "Active"]

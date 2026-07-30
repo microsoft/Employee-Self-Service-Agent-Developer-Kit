@@ -16,7 +16,7 @@ pure logic.
 | `roles.py` | The **absent-safe** roles-source seam (`RoleDirectory` / `RoleSource`). With no backing source wired, validation degrades to a well-formed-id check and enumerations return empty so the skill falls back gracefully. `StaticRoleSource` is a trivial in-memory implementation for demos/tests. |
 | `capture.py` | Observe-mode detectors that read what a Task produced from local kit state (the `/setup` → `environmentId` hand-off, from `.local/config.json`), plus `ask_artifact` for assignee-supplied (mode-b) outputs. |
 | `research.py` | Table-of-Contents-first Learn research: parse a fetched `toc.json`, classify child/sibling links, and relevance-select the pages to read within a budget. Pure logic except `fetch_toc` (best-effort network convenience). |
-| `cli.py` | The command surface the skill invokes (`init`, `set-context`, `add-task`, `assign`, `claim`, `set-state`, `capture-setup`, `mine`, `research`, `summary`, `validate`). |
+| `cli.py` | The command surface the skill invokes (`init`, `set-context`, `add-scenario`, `add-scenario-dependency`, `check-deps`, `add-task`, `assign`, `claim`, `set-state`, `capture-setup`, `mine`, `research`, `summary`, `validate`). |
 
 ## Local Plan location
 

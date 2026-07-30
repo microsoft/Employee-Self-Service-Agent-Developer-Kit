@@ -38,6 +38,7 @@ from planner import research
 from planner.capture import detect_environment, snapshot_config
 from planner.plan_model import (
     PLAN_PATH,
+    SCENARIO_GROUP,
     Plan,
     action_external,
     action_kit_skill,
@@ -100,6 +101,45 @@ def cmd_set_context(args: argparse.Namespace) -> int:
     )
     _save(plan, args)
     print(f"Set context {args.key!r} = {args.value!r}")
+    return 0
+
+
+def cmd_add_scenario(args: argparse.Namespace) -> int:
+    plan = _load(args)
+    plan.set_context(
+        args.id, args.label, group=SCENARIO_GROUP,
+        description="Scenario in scope", source=args.source,
+    )
+    _save(plan, args)
+    print(f"Registered scenario {args.id!r}")
+    return 0
+
+
+def cmd_add_scenario_dependency(args: argparse.Namespace) -> int:
+    plan = _load(args)
+    plan.add_scenario_dependency(
+        args.scenario, args.depends_on,
+        kind=args.kind, rationale=args.rationale or "", source=args.source,
+    )
+    _save(plan, args)
+    print(f"{args.scenario} {args.kind} {args.depends_on}")
+    return 0
+
+
+def cmd_check_deps(args: argparse.Namespace) -> int:
+    plan = _load(args)
+    unmet = plan.unmet_scenario_dependencies()
+    if args.json:
+        print(json.dumps(unmet, indent=2))
+        return 0
+    if not unmet:
+        print("No unmet scenario dependencies.")
+        return 0
+    print("Unmet scenario dependencies (advise the sponsor to add the prerequisite first):\n")
+    for edge in unmet:
+        print(f"  - {edge['scenario']} {edge['kind']} {edge['dependsOn']}")
+        if edge.get("rationale"):
+            print(f"      why: {edge['rationale']}")
     return 0
 
 
@@ -257,6 +297,24 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--description")
     p.add_argument("--source", default="User", choices=["User", "Agent", "Discovered"])
     p.set_defaults(func=cmd_set_context)
+
+    p = sub.add_parser("add-scenario", help="register a scenario in scope")
+    p.add_argument("--id", required=True, help="scenario id, e.g. hr-ticketing")
+    p.add_argument("--label", required=True, help="human-readable scenario label")
+    p.add_argument("--source", default="User", choices=["User", "Agent", "Discovered"])
+    p.set_defaults(func=cmd_add_scenario)
+
+    p = sub.add_parser("add-scenario-dependency", help="record that scenario A depends on scenario B")
+    p.add_argument("--scenario", required=True, help="the dependent scenario id")
+    p.add_argument("--depends-on", required=True, dest="depends_on", help="the prerequisite scenario id")
+    p.add_argument("--kind", default="requires", choices=["requires", "recommends"])
+    p.add_argument("--rationale", help="why — cite the PM spec / Learn source")
+    p.add_argument("--source", default="Agent", choices=["User", "Agent", "Discovered"])
+    p.set_defaults(func=cmd_add_scenario_dependency)
+
+    p = sub.add_parser("check-deps", help="show unmet scenario dependencies to advise the sponsor")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_check_deps)
 
     p = sub.add_parser("add-task", help="add an atomic task")
     p.add_argument("--id", required=True)
