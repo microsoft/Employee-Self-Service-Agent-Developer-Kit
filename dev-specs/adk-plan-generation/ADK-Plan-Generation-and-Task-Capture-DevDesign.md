@@ -404,6 +404,17 @@ The ADK‑only fields are `task.action` and the optional `task.checklist[]` (§1
 - Caps (writer‑enforced): `MaxTasks` (~50), `MaxOutputs`, `MaxContextEntries`, key/value/description length caps (following `Project.Metadata` caps).
 - `checklist[]` is **optional display state**, populated at runtime by the skill (§10.1) — never the Task boundary and never a Plan sub‑entity; absent/empty is valid, and it carries no ledger‑style history.
 
+### 9.4 Scenario dependencies live in the Context bag (no new collection)
+
+Some scenarios must be deployed in an order the sponsor should see — the PM spec's canonical case is **HR knowledge before HR ticketing** (the agent answers from knowledge first and only creates a ticket when unresolved). This is a *scenario→scenario* dependency, distinct from the scenario→prerequisite coupling that already falls out of task `produces`/`consumes`.
+
+Because everything intent‑shaped already lives in the **one open Context bag** (§9.2), a dependency is modelled as **more Context entries — not a new typed collection**. Adding a `scenarioDependencies` array would reintroduce exactly the typed‑field‑per‑concept burden Step‑2 collapsed away. Instead:
+
+- A **scenario in scope** is a Context entry in group `scenario` (`key` = scenario id like `hr-ticketing`, `value` = label).
+- A **dependency edge** is a Context entry in group `scenarioDependsOn` whose `key` encodes `"{dependent} -> {prerequisite}"` and whose scalar `value` is the kind (`requires` | `recommends`); the `description` carries the rationale/citation, and provenance names the source (`Agent` when the planner asserts it from the PM spec/research, `User` when the sponsor states it). Values stay scalar and keys stay unique — the same open‑bag rules as every other entry.
+
+The planner keeps a small grounded **seed** of PM‑spec dependencies (`KNOWN_SCENARIO_DEPENDENCIES`, currently just knowledge→ticketing) so it can advise the sponsor without re‑deriving; the seed is grounding data, not Plan schema. `unmet_scenario_dependencies()` compares in‑scope scenarios against their (captured + seeded) edges and returns the ones whose prerequisite isn't in scope. **Exposure:** the interview surfaces unmet dependencies to the sponsor ("deploy HR knowledge before ticketing — add it?"), and the summary renders a *Scenario dependencies* table with a met / MISSING status, so ordering is visible to everyone on the plan. Enforcement then rides the existing task DAG (the knowledge task produces what the ticketing work consumes). Because edges are ordinary Context entries, they round‑trip, read back, and sync exactly like the rest of the bag — the intelligence is in the agent's readback, not in a rigid schema.
+
 ---
 
 ## 10. Tasks: atomic, performed by an action, assigned by a grounded role (Flow 1)

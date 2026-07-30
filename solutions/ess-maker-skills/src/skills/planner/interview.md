@@ -28,6 +28,41 @@ Questions 1–3 are almost always asked; 4–7 as scope warrants; the last is on
 branch. Use scalar values (one fact per entry); group related facts rather than
 nesting.
 
+## Register the scenarios and expose dependencies
+
+As the sponsor picks scenarios, register each one so the plan knows what's in
+scope, using a stable id (e.g. `hr-knowledge`, `hr-ticketing`, `hr-profile-read`,
+`hr-profile-write`, `handoff`):
+
+```
+python scripts/planner/cli.py add-scenario --id hr-ticketing --label "HR ticketing"
+```
+
+Then check for **scenario dependencies** — cases where one scenario should be
+deployed before another. Some are asserted by the PM spec (e.g. **HR knowledge
+before HR ticketing**, so the agent answers from knowledge first and only creates
+a ticket when unresolved); the planner already knows those. Surface any unmet
+ones:
+
+```
+python scripts/planner/cli.py check-deps
+```
+
+If a selected scenario depends on one that's not in scope, tell the sponsor in
+plain language — "To get the deflection benefit, deploy HR knowledge before HR
+ticketing — want me to add it?" — and, if they agree, register the prerequisite
+scenario and record the edge:
+
+```
+python scripts/planner/cli.py add-scenario --id hr-knowledge --label "HR knowledge"
+python scripts/planner/cli.py add-scenario-dependency --scenario hr-ticketing --depends-on hr-knowledge --kind requires --rationale "PM spec: knowledge before ticketing"
+```
+
+Dependencies are stored as ordinary intent in the open plan and show up in the
+summary with a met / MISSING status, so the ordering is visible to everyone and
+flows into task sequencing (the knowledge task produces what the ticketing work
+consumes).
+
 ## Do NOT ask which role a Task needs
 
 The **role** for each Task comes from the Learn docs (Phase 1), not the sponsor.
