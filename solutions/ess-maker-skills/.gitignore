@@ -3,6 +3,7 @@ workspace/**
 !workspace/
 !workspace/onboarding/
 !workspace/agents/
+!workspace/plan/
 !workspace/**/.gitkeep
 
 .local/**
