@@ -14,15 +14,15 @@ from __future__ import annotations
 from collections.abc import Iterable
 
 from core.pipelines import PipelineStep
-from modules.migration.models.migration_context import MigrationContext
+from modules.transformation.models.migration_context import MigrationContext
 
 
 class MigrationPipelineStep(PipelineStep[MigrationContext, MigrationContext]):
     """Base for all ESS migration steps operating on MigrationContext.
 
     Provides automatic execution-mode gating: if a subclass declares
-    ``supported_modes`` (e.g. ``("PREVIEW", "MIGRATE")``), the step is
-    skipped when the context's ``ExecutionMode`` is not in that set.
+    ``supported_modes`` (e.g. ``("WRITEBACK",)``), the step is
+    skipped when the context's ``mode`` is not in that set.
 
     Steps with empty ``supported_modes`` (the default) run in all modes.
 
@@ -46,13 +46,13 @@ class MigrationPipelineStep(PipelineStep[MigrationContext, MigrationContext]):
         )
 
     def can_execute(self, context: MigrationContext) -> bool:
-        """Gate execution by ``supported_modes`` against ``context.ExecutionMode``.
+        """Gate execution by ``supported_modes`` against ``context.mode``.
 
         Returns True if:
         - ``supported_modes`` is empty (step runs in all modes), OR
-        - ``context.ExecutionMode`` is in ``supported_modes``.
+        - ``context.mode`` is in ``supported_modes``.
         """
         modes = self.supported_modes()
         if modes:
-            return context.ExecutionMode.upper() in modes
+            return context.mode.upper() in modes
         return True

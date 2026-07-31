@@ -41,15 +41,18 @@
 | --------------------- | ----------------------------------------------- |
 | Pipeline framework    | `src/core/pipelines/`                           |
 | Dataverse APIs        | `src/core/outbound/`                            |
-| Domain Models         | `src/core/models/` + `src/modules/migration/models/` |
-| Migration Rules       | `src/modules/migration/steps/`                  |
-| Migration Step base   | `src/modules/migration/migration_step.py`       |
+| Domain Models         | `src/core/models/` + `src/modules/transformation/models/` |
+| Migration Rules       | `src/modules/transformation/steps/`             |
+| Migration Step base   | `src/modules/transformation/migration_step.py`  |
 | Input Pipeline        | `src/modules/preprocessing/`                    |
 | Output Pipeline       | `src/modules/postprocessing/`                   |
 | Orchestrator          | `src/service/mtk_orchestrator.py`               |
 | Constants             | `src/service/constants.py`                      |
 | Utilities             | `src/core/utils/`                               |
-| Diagnostics code      | `src/core/logging/`                             |
+| Diagnostics (Logger, sessions) | `src/core/logging/`                    |
+| Report renderer       | `src/service/reporter.py`                       |
+| Execution modes       | `src/modules/transformation/models/execution_mode.py` |
+| CLI dispatcher        | `scripts/mtk.sh` / `scripts/mtk.ps1` (`mtk run`) |
 | Generated output      | `output/session-<timestamp>/`                   |
 
 ---

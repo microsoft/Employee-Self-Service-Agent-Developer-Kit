@@ -239,7 +239,7 @@ MIGRATION_RULES.md
 
 The implementation of a single Migration Rule.
 
-Migration Steps execute within the Migration Pipeline.
+Migration Steps execute within the Transformation Pipeline.
 
 Each Migration Step performs exactly one logical transformation.
 
@@ -321,16 +321,17 @@ Examples
 
 * Discovery Pipeline
 * Analysis Pipeline
-* Migration Pipeline
+* Transformation Pipeline
 * Validation Pipeline
 
 ---
 
-## Migration Pipeline
+## Transformation Pipeline
 
 ### Definition
 
-The pipeline responsible for executing Migration Steps.
+The pipeline responsible for executing Migration Steps (`build_transformation_pipeline`,
+`src/modules/transformation/`).
 
 ---
 
@@ -358,7 +359,7 @@ The application orchestration layer (`service/mtk_orchestrator.py`), responsible
 for coordinating a migration session — composing the lower layers and driving
 the pipeline.
 
-Migration rules live exclusively in `src/modules/migration/steps/`.
+Migration rules live exclusively in `src/modules/transformation/steps/`.
 The service layer never contains migration rules.
 
 ---

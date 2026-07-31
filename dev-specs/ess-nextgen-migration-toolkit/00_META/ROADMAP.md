@@ -148,7 +148,7 @@ Initial Internal Dogfood
 
 ## Execution Mode
 
-DISCOVER
+`READONLY` (Discover intent)
 
 ---
 
@@ -206,7 +206,7 @@ Internal Dogfood + Design Partners
 
 ## Execution Mode
 
-PREVIEW
+`READONLY` (Preview intent)
 
 ---
 
@@ -260,7 +260,7 @@ Internal Dogfood
 
 ## Execution Mode
 
-MIGRATE
+`WRITEBACK` (Migrate intent)
 
 ---
 

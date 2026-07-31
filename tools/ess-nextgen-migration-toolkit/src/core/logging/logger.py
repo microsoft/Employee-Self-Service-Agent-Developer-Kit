@@ -11,7 +11,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import TextIO
 
-from core.logging.session_manager import SessionManager
+from core.logging.session_manager import DEFAULT_REPORT_FILENAME, SessionManager
 from core.models.execution_context import ChangeEntry, DiagnosticEntry, ExecutionContext
 
 
@@ -92,11 +92,12 @@ class Logger:
         output_root: Path,
         context: ExecutionContext,
         *,
+        report_filename: str = DEFAULT_REPORT_FILENAME,
         level: LogLevel = LogLevel.INFO,
         clock: Callable[[], datetime] | None = None,
     ) -> Logger:
         """Create a session bundle, install the transcript tee, and return Logger."""
-        session_manager = SessionManager(output_root, clock=clock)
+        session_manager = SessionManager(output_root, report_filename=report_filename, clock=clock)
         logger = cls(session_manager, context, level=level, clock=clock)
         logger.start()
         return logger
@@ -223,6 +224,7 @@ class Logger:
         rule_id: str | None = None,
         title: str | None = None,
         component: str | None = None,
+        component_type: str | None = None,
         details: tuple[str, ...] = (),
     ) -> None:
         """Append a customer-channel change entry to the report model only."""
@@ -232,6 +234,7 @@ class Logger:
                 rule_id=rule_id,
                 title=title,
                 component=component,
+                component_type=component_type,
                 details=details,
             )
         )

@@ -8,7 +8,11 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
-_DEFAULT_MAX_SESSIONS = 5
+_DEFAULT_MAX_SESSIONS = 10  # keep the most recent N session bundles, delete older ones
+# Generic, product-agnostic default. Domain callers (e.g. the ESS toolkit) pass
+# their own report filename via ``report_filename``.
+DEFAULT_REPORT_FILENAME = "telemetry_report.md"
+_LOG_FILENAME = "session.log"
 
 
 @dataclass(frozen=True)
@@ -21,16 +25,25 @@ class SessionPaths:
 
 
 class SessionManager:
-    """Owns creation and path tracking for one diagnostics session bundle."""
+    """Owns creation and path tracking for one diagnostics session bundle.
+
+    The report filename is a constructor argument so the generic framework does
+    not hardcode any product-specific name; it defaults to the neutral
+    ``telemetry_report.md``. Domain layers pass their own (the ESS toolkit uses
+    ``migration_report.md``). The ``output_root`` base folder is caller-supplied
+    and used as-is.
+    """
 
     def __init__(
         self,
         output_root: Path,
         *,
+        report_filename: str = DEFAULT_REPORT_FILENAME,
         clock: Callable[[], datetime] | None = None,
         max_sessions: int = _DEFAULT_MAX_SESSIONS,
     ) -> None:
         self._output_root = output_root
+        self._report_filename = report_filename
         self._clock = clock or datetime.now
         self._paths: SessionPaths | None = None
         self._max_sessions = max_sessions
@@ -53,8 +66,8 @@ class SessionManager:
         session_dir.mkdir(parents=True, exist_ok=False)
         self._paths = SessionPaths(
             session_dir=session_dir,
-            report_path=session_dir / "migration_report.md",
-            log_path=session_dir / "session.log",
+            report_path=session_dir / self._report_filename,
+            log_path=session_dir / _LOG_FILENAME,
         )
         self._prune_old_sessions()
         return self._paths

@@ -9,11 +9,13 @@
 #
 # This file is the real implementation and lives in <toolkit-root>/scripts/.
 # A single forwarder at the repository root (./mtk.sh) execs this file, so it
-# can be run as `./mtk.sh start` from the top of the monorepo.
+# can be run as `./mtk.sh run` from the top of the monorepo.
 #
 # Usage:
-#   mtk start [--dev]     Provision a pip-free, locked environment, then run the toolkit
-#   mtk refresh           Pull latest code, then start (re-provision runtime env + run)
+#   mtk run [--dev]       Run the toolkit. Customers (no --dev) reset to pristine
+#                         origin/main first (local changes discarded); contributors
+#                         (--dev) add dev tooling and skip the reset. Add
+#                         --mode readonly|writeback.
 #   mtk help              Show this help
 #
 # Everything is pip-free: uv is a self-contained binary that provisions both the
@@ -113,47 +115,98 @@ cmd_provision() {
   fi
 }
 
-# Run the toolkit. Launches the orchestration entry point (src/service/mtk_orchestrator.py), replacing the
-# current process. The dev flag selects the matching run env: customers use
-# --no-dev so `uv run` does not implicitly re-add the dev dependency-group to a
-# runtime-only .venv.
-cmd_run() {
+# Launch the toolkit. Execs the orchestration entry point
+# (src/service/mtk_orchestrator.py), replacing the current process. The dev flag
+# selects the matching run env: customers use --no-dev so `uv run` does not
+# implicitly re-add the dev dependency-group to a runtime-only .venv.
+launch_toolkit() {
   local dev="$1"
+  local mode="$2"
   local UV
   UV="$(find_uv || true)"
   echo ""
   echo "==> Starting the toolkit CLI..."
+  # Build the orchestrator argument list safely (bash 3.2 + set -u friendly).
+  set -- src/service/mtk_orchestrator.py
+  [[ "$dev" == "1" ]] && set -- "$@" --dev
+  [[ -n "$mode" ]] && set -- "$@" --mode "$mode"
   if [[ "$dev" == "1" ]]; then
-    exec "$UV" run python src/service/mtk_orchestrator.py --dev
+    exec "$UV" run python "$@"
   else
-    exec "$UV" run --no-dev python src/service/mtk_orchestrator.py
+    exec "$UV" run --no-dev python "$@"
   fi
 }
 
-# start = provision (idempotent) + run. The everyday command.
-cmd_start() {
-  local dev="$1"
-  cmd_provision "$dev"
-  cmd_run "$dev"
+# Confirm before discarding local WORK-TREE changes. Only uncommitted changes and
+# untracked files are ever discarded — local commits and branches are never
+# touched (we check out origin/main detached, without moving any branch pointer).
+# Skips the prompt when the work tree is already clean (nothing to lose). `--yes`
+# bypasses the prompt; a non-interactive shell REFUSES rather than silently
+# destroying work.
+confirm_reset_or_abort() {
+  local force="$1"
+  # Only uncommitted tracked changes + untracked files are at risk. `git status
+  # --porcelain` lists exactly those (and respects .gitignore, so runtime state
+  # is not counted). Empty → nothing to lose, proceed silently.
+  if [[ -z "$(git status --porcelain 2>/dev/null || true)" ]]; then
+    return 0
+  fi
+  {
+    echo ""
+    echo "WARNING: 'mtk run' (customer mode) runs from a pristine checkout of origin/main."
+    echo "  This DISCARDS your uncommitted changes and untracked files (git checkout -f + git clean -fd)."
+    echo "  Your local commits and branches are PRESERVED (no branch is reset or deleted)."
+    echo "  Contributors: re-run with '--dev' to keep everything and skip this."
+  } >&2
+  if [[ "$force" == "1" ]]; then
+    echo "  --yes given; discarding uncommitted/untracked changes and continuing." >&2
+    return 0
+  fi
+  if [[ ! -t 0 ]]; then
+    echo "ERROR: refusing to discard uncommitted changes in a non-interactive shell." >&2
+    echo "       Re-run with '--dev' (keep work) or '--yes' (discard uncommitted/untracked)." >&2
+    exit 3
+  fi
+  printf "  Type 'yes' to discard uncommitted/untracked changes and continue: " >&2
+  local reply=""
+  read -r reply || true
+  if [[ "$reply" != "yes" ]]; then
+    echo "Aborted — nothing was changed." >&2
+    exit 3
+  fi
 }
 
-# refresh = pull latest code, then start (provision + run). It is the customer
-# update path, so it always provisions a runtime-only environment (no --dev).
-cmd_refresh() {
-  # 1. Pull the latest code (fast-forward only; never rewrites local work).
-  local branch
-  branch="$(git rev-parse --abbrev-ref HEAD)"
-  echo "==> Updating '$branch' from origin (fast-forward only)..."
+# Run from a pristine checkout of origin/main. Customer update path: check out
+# origin/main **detached** (never moving/resetting any branch pointer) and clean
+# untracked files, so the working tree exactly matches the latest reviewed main —
+# discarding only uncommitted changes + untracked files. Local commits and
+# branches are fully preserved. Guarded by confirm_reset_or_abort so it never
+# silently destroys uncommitted work. Contributors (--dev) skip this entirely.
+# Gitignored runtime state (.venv, .local, output/) is preserved (clean respects
+# .gitignore).
+sync_to_main() {
+  local force="$1"
   git fetch --prune origin
-  if git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; then
-    git pull --ff-only
-  else
-    echo "    '$branch' has no upstream; pulling origin/main..."
-    git pull --ff-only origin main
-  fi
+  confirm_reset_or_abort "$force"
+  echo "==> Checking out pristine origin/main (local commits and branches preserved)..."
+  git -c advice.detachedHead=false checkout -f origin/main
+  git clean -fd
+}
 
-  # 2. Start: re-provision from the (updated) lockfile, then run (runtime only).
-  cmd_start "0"
+# run = the single everyday command. Without --dev (customer) it first resets to
+# pristine origin/main (discarding local changes, after confirmation), then
+# provisions (idempotent) and runs. With --dev (contributor) it provisions
+# runtime + dev tooling and runs WITHOUT touching git — contributors manage their
+# own branches.
+cmd_run() {
+  local dev="$1"
+  local mode="$2"
+  local force="$3"
+  if [[ "$dev" != "1" ]]; then
+    sync_to_main "$force"
+  fi
+  cmd_provision "$dev"
+  launch_toolkit "$dev" "$mode"
 }
 
 usage() {
@@ -161,39 +214,45 @@ usage() {
 mtk — ESS NextGen Migration Toolkit
 
 Usage:
-  mtk start [--dev]     Provision a pip-free, locked environment (uv + Python + .venv), then run the toolkit
-  mtk refresh           Pull latest code, then start (re-provision runtime env + run)
+  mtk run [--dev] [--mode readonly|writeback] [--yes]
+                        Run the toolkit. Without --dev (customer), first resets to
+                        pristine origin/main (discarding any local changes), then
+                        provisions a locked runtime env and runs. With --dev
+                        (contributor), provisions runtime + dev tooling and runs
+                        WITHOUT touching git.
   mtk help              Show this help
 
 Options:
-  --dev                 (start only) Include developer tooling (ruff, mypy, pytest, pre-commit)
+  --dev                 Include developer tooling (ruff, mypy, pytest, pre-commit);
+                        also skips the reset-to-main (contributors manage their git)
+  --mode <mode>         Execution mode: readonly (default, no writes) or writeback (persist changes)
+  --yes                 Skip the confirmation prompt before the customer reset-to-main
+                        (required to reset non-interactively; ignored with --dev)
 EOF
 }
 
 # ---------------------------------------------------------------------------
-# Argument parsing — subcommand plus an optional, position-independent --dev
+# Argument parsing — subcommand plus optional, position-independent --dev,
+# --mode readonly|writeback (accepts `--mode X` and `--mode=X`), and --yes.
 # ---------------------------------------------------------------------------
 CMD=""
 DEV=0
-for arg in "$@"; do
-  case "$arg" in
-    start|refresh)  CMD="$arg" ;;
-    help|-h|--help) CMD="help" ;;
-    --dev)          DEV=1 ;;
-    *) echo "ERROR: unknown argument '$arg'" >&2; usage; exit 2 ;;
+MODE=""
+FORCE=0
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    run)            CMD="run"; shift ;;
+    help|-h|--help) CMD="help"; shift ;;
+    --dev)          DEV=1; shift ;;
+    --yes|-y)       FORCE=1; shift ;;
+    --mode)         MODE="${2:-}"; shift 2 || shift ;;
+    --mode=*)       MODE="${1#--mode=}"; shift ;;
+    *) echo "ERROR: unknown argument '$1'" >&2; usage; exit 2 ;;
   esac
 done
 
 case "$CMD" in
-  start)   cmd_start "$DEV" ;;
-  refresh)
-    if [[ "$DEV" == "1" ]]; then
-      echo "ERROR: '--dev' is only valid with 'start'. 'refresh' is the customer" >&2
-      echo "       update path and always provisions a runtime-only environment." >&2
-      echo "       Contributors: run 'mtk start --dev' to (re)add dev tooling." >&2
-      exit 2
-    fi
-    cmd_refresh ;;
+  run)     cmd_run "$DEV" "$MODE" "$FORCE" ;;
   help)    usage ;;
   "")      echo "ERROR: no command given." >&2; usage; exit 2 ;;
 esac

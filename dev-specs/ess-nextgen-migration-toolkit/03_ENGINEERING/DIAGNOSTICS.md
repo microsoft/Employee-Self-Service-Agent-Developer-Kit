@@ -68,7 +68,15 @@ All output flows through the Diagnostics framework.
 
 # 3. Diagnostics Architecture
 
-Diagnostics code lives in `src/core/logging/`.
+The generic diagnostics infrastructure (Logger, Session Manager) lives in
+`src/core/logging/`. The **Reporter** — which renders the ESS customer-facing
+`migration_report.md` — lives in the service layer at `src/service/reporter.py`,
+so `core/` stays product-agnostic (see `REPOSITORY_STRUCTURE.md`).
+
+The Session Manager owns the bundle folder and takes the report filename as a
+parameter (framework default: the neutral `telemetry_report.md`); the ESS
+toolkit supplies `migration_report.md` via `service.constants.REPORT_FILENAME`,
+so the customer-facing filename is domain-owned, not baked into `core/`.
 
 ```
 Pipeline Step
@@ -290,20 +298,22 @@ Example:
 
 INFO
 
-Migration
+Transformation
 
-OverrideAgentMetadataStep
+ApplyDaCompatibilityStep
 
-Overrode agent metadata.
+Applied DA-compatibility rewrite (template, model kind).
 ```
 
 ---
 
 # 9. Reporter
 
-The Reporter renders the single customer-facing artifact —
-**`migration_report.md`** — from the `MigrationContext` collectors. It is the
-only component (besides the Logger) that writes files.
+The Reporter (ESS service layer, `src/service/reporter.py`) renders the single
+customer-facing artifact — **`migration_report.md`** — from the
+`MigrationContext` collectors. It is the only component (besides the Logger) that
+writes files. It reads the base `ExecutionContext` collectors and the generic
+`mode` string, so it depends on the framework but is not part of it.
 
 `migration_report.md` is one document composed of sections, so the customer has
 a single readable file rather than many:
@@ -323,9 +333,9 @@ The heart of the report: what changed, grouped by Migration Rule.
 ```
 ## Changes
 
-### RULE-001 — Updated Agent Metadata
-Runtime Provider   CA → DA
+### DA Compatibility — Model & Template
 Template           CA → DA
+Model Kind         PreviewModels → MicrosoftCopilotModels
 
 ### RULE-002 — Replaced EndConversation
 Topic              Employee Leave
@@ -356,7 +366,7 @@ Recommendation   Move logic into OnConversationStart.
 Generated during:
 
 ```
-DISCOVER
+READONLY (Discover intent)
 ```
 
 Contains:
@@ -376,7 +386,7 @@ Contains:
 Generated during:
 
 ```
-PREVIEW
+READONLY (Preview intent)
 ```
 
 Contains:
@@ -396,7 +406,7 @@ No environment changes occur.
 Generated during:
 
 ```
-MIGRATE
+WRITEBACK (Migrate intent)
 ```
 
 Contains:
