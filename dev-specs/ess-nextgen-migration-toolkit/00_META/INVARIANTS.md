@@ -225,7 +225,7 @@ returns. Pipeline behaviour never lives in the orchestrator.
 
 The service layer coordinates application behavior (orchestration).
 
-Migration rules live exclusively in `src/modules/migration/steps/`.
+Migration rules live exclusively in `src/modules/transformation/steps/`.
 The service layer never contains migration rules.
 
 ---
@@ -351,10 +351,16 @@ Examples
 
 Every execution produces exactly one session bundle.
 
-Each run writes one timestamped folder `output/session-<timestamp>/` containing
-exactly two files: `migration_report.md` (customer-facing) and `session.log`
-(ESS-engineer diagnostics). Steps accumulate into the `MigrationContext`
-collectors; only the Logger and the Reporter service write files.
+Each run writes one timestamped folder `output/session-<timestamp>/`. Its core
+diagnostics are two files written by the Logger and the Reporter service:
+`migration_report.md` (customer-facing) and `session.log` (ESS-engineer
+diagnostics). A migration run additionally writes `customizations.json` — a
+pre-writeback snapshot of the in-scope customizations (their original topic `data`
+YAML plus identity/state), written by the discovery step (Input stage) *before* any
+transformation/writeback so it survives a later partial failure. It is an internal
+engineering/recovery artifact (not a customer-facing "undo" feature). Steps
+otherwise accumulate into the `MigrationContext` collectors; only the Logger, the
+Reporter, and the discovery-stage snapshot write files.
 
 ---
 

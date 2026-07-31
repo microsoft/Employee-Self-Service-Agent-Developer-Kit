@@ -3,8 +3,8 @@
 # Monorepo-root convenience forwarder for the ESS NextGen Migration Toolkit.
 #
 # Lets you drive the toolkit from the very top of the repository, e.g.:
-#   ./mtk.sh start --dev
-#   ./mtk.sh refresh
+#   ./mtk.sh run --dev
+#   ./mtk.sh run --mode writeback
 #
 # It forwards to tools/ess-nextgen-migration-toolkit/scripts/mtk.sh, which
 # implicitly changes into the toolkit directory before doing anything. All logic
