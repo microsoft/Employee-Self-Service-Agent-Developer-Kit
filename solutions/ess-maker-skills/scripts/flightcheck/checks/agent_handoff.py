@@ -3,10 +3,13 @@
 The ESS agent ships with auto-handoff template topics (see
 solutions/ess-maker-skills/src/reference/ess-docs/customization/agent-handoff.md).
 Each template topic contains a **SetVariable** node that assigns
-``Topic.HandoffAgentId``. Out of the box that node holds the placeholder
-string literal ``"AgentIdentifier"``; the maker must replace it with the
-GPT ID of the real target agent (agent-handoff.md Step 4 "Set Handoff
-Agent ID").
+``Topic.HandoffAgentId``. Out of the box that node holds a placeholder
+string literal the maker must replace with the GPT ID of the real target
+agent (agent-handoff.md Step 4 "Set Handoff Agent ID"). The sample
+template ships ``"AgentIdentifier"``; the out-of-the-box Handoff
+Accelerators ship system-prefixed variants such as
+``"ServiceNowAgentIdentifier"`` (observed on live OOTB accelerators). A
+blank value is likewise unconfigured.
 
 By default every handoff template topic is **disabled** (agent-handoff.md
 line 63). So this check is conditional: it only validates handoff topics
@@ -20,11 +23,27 @@ Island Gateway botcomponents API, enumerated via
 Graph-Connector knowledge-source check). Mock tier: validated —
 tests/fixtures/cassettes/island_gateway_botcomponents.yaml.
 
+Identifying a handoff topic: a topic IS a handoff topic if, and only if,
+it contains a SetVariable node assigning ``Topic.HandoffAgentId``. That
+variable is what defines the topic as a handoff. We deliberately do NOT
+key on the schemaName: agent-handoff.md tells makers to CLONE and RENAME
+the sample template (Step 1) or to enable an out-of-the-box Handoff
+Accelerator, so the real enabled topics carry their own schemaNames, not
+``Agenthandoff-scenarioname``. Keying on the name would skip exactly the
+topics the maker enabled and misconfigured, which is the case #152 exists
+to catch.
+
 New pattern: no prior check parses the DialogComponent action tree, so
 this module walks ``dialog.beginDialog.actions`` recursively to locate
 the SetVariable node. Structure confirmed against the captured cassette's
 handoff DialogComponent (schemaName
 ``...topic.Agenthandoff-scenarioname``).
+
+Inference note: the mapping ``status == "Active"`` meaning "enabled" is
+inferred. The validated cassette only captured the disabled template
+(``status == "Inactive"``); no cassette yet captures an enabled handoff
+topic. The inference is consistent with how other live components report
+state, but the enabled shape is unproven pending a captured cassette.
 """
 
 from __future__ import annotations
@@ -39,17 +58,18 @@ DOC_LINK = (
 
 CATEGORY = "Agent Handoff"
 
-# The shipped placeholder value the maker is expected to replace. Stored
-# in the SetVariable node as a PowerFx string literal — i.e. the raw
-# expressionText is the six characters plus surrounding quotes:
+# The shipped placeholder value on the SAMPLE template. Stored in the
+# SetVariable node as a PowerFx string literal — i.e. the raw expressionText
+# is the value plus surrounding quotes:
 #   "AgentIdentifier"  ->  expressionText == '"AgentIdentifier"'
+# The out-of-the-box Handoff Accelerators (Workday / ServiceNow) ship
+# system-prefixed variants of the same placeholder, e.g.
+# "ServiceNowAgentIdentifier". Real target ids are prefixed GUIDs (e.g.
+# "T_<guid>...", "P_<guid>"), so they never end in "AgentIdentifier".
 _PLACEHOLDER = "AgentIdentifier"
 
-# Case-insensitive substring identifying a handoff auto-template topic by
-# its schemaName (e.g. "...topic.Agenthandoff-scenarioname").
-_HANDOFF_MARKER = "agenthandoff"
-
-# The topic variable the handoff target id is written to.
+# The topic variable the handoff target id is written to. A topic is a
+# handoff topic iff it contains a SetVariable assigning this variable.
 _HANDOFF_VAR = "Topic.HandoffAgentId"
 
 
@@ -88,6 +108,20 @@ def _resolved_agent_id(setvariable: dict) -> str:
     return expr.strip().strip('"').strip()
 
 
+def _is_placeholder_id(agent_id: str) -> bool:
+    """True if the resolved id is a shipped placeholder the maker must
+    replace, rather than a concrete target agent id.
+
+    The sample template ships ``AgentIdentifier``; the Handoff Accelerators
+    ship system-prefixed variants (e.g. ``ServiceNowAgentIdentifier``,
+    observed on live OOTB ServiceNow accelerators). Real target ids are
+    prefixed GUIDs (e.g. ``T_<guid>...``, ``P_<guid>``), so a case-insensitive
+    ``...AgentIdentifier`` suffix reliably identifies any of these placeholders
+    without matching a real id.
+    """
+    return agent_id.lower().endswith(_PLACEHOLDER.lower())
+
+
 def run_handoff_topic_checks(runner) -> list[CheckResult]:
     """TOPIC-020: enabled auto-handoff topics must set a concrete target
     agent id, not the shipped ``AgentIdentifier`` placeholder.
@@ -95,9 +129,10 @@ def run_handoff_topic_checks(runner) -> list[CheckResult]:
     Conditional / gating:
     - Returns ``[]`` if PVA (Island Gateway) is not configured or the bot
       id is unknown — we cannot enumerate topics, mirroring EXT-002.
-    - Returns ``[]`` if the agent has no handoff template topic that is
-      ENABLED (status == "Active"). Disabled handoff topics are the OOTB
-      state and are intentionally not flagged.
+    - Returns ``[]`` if the agent has no ENABLED (status == "Active")
+      handoff topic. A handoff topic is any topic containing a SetVariable
+      that assigns ``Topic.HandoffAgentId``. Disabled handoff topics are
+      the OOTB state and are intentionally not flagged.
     """
     pva = getattr(runner, "pva", None)
     config = getattr(runner, "config", {}) or {}
@@ -112,21 +147,29 @@ def run_handoff_topic_checks(runner) -> list[CheckResult]:
         # CONFIG-013 already surfaces PVA connectivity errors; don't double-warn.
         return []
 
-    # Keep only ENABLED handoff auto-template topics.
-    handoff_topics = [
-        comp
-        for comp in components
-        if isinstance(comp, dict)
-        and _HANDOFF_MARKER in str(comp.get("schemaName", "")).lower()
-        and str(comp.get("status", "")).lower() == "active"
-    ]
+    # Keep only ENABLED handoff topics. Identity is the presence of a
+    # SetVariable assigning Topic.HandoffAgentId, NOT the schemaName — makers
+    # clone/rename the template or enable an accelerator, so the enabled
+    # topics do not carry the "Agenthandoff" name (see module docstring).
+    handoff_topics: list[tuple[dict, dict]] = []
+    for comp in components:
+        if not isinstance(comp, dict):
+            continue
+        if comp.get("$kind") != "DialogComponent":
+            continue
+        if str(comp.get("status", "")).lower() != "active":
+            continue
+        setvariable = _find_handoff_setvariable(comp.get("dialog", {}))
+        if setvariable is None:
+            continue
+        handoff_topics.append((comp, setvariable))
 
     if not handoff_topics:
         return []
 
     results: list[CheckResult] = []
 
-    for i, topic in enumerate(handoff_topics, start=1):
+    for i, (topic, setvariable) in enumerate(handoff_topics, start=1):
         cid = f"TOPIC-020-{i:03d}"
         name = (
             topic.get("displayName")
@@ -134,36 +177,13 @@ def run_handoff_topic_checks(runner) -> list[CheckResult]:
             or f"Handoff topic {i}"
         )
 
-        setvariable = _find_handoff_setvariable(topic.get("dialog", {}))
-
-        if setvariable is None:
-            results.append(CheckResult(
-                roles=[Role.ESS_MAKER.value],
-                checkpoint_id=cid,
-                category=CATEGORY,
-                priority=Priority.HIGH.value,
-                status=Status.WARNING.value,
-                description=f"Handoff target agent id: {name}",
-                result=(
-                    "Enabled handoff topic has no SetVariable node assigning "
-                    f"{_HANDOFF_VAR}; unable to verify the target agent id."
-                ),
-                remediation=(
-                    "Open the topic in Copilot Studio and confirm it still "
-                    "contains the SetVariable node that sets "
-                    f"{_HANDOFF_VAR}. See agent-handoff.md Step 4."
-                ),
-                doc_link=DOC_LINK,
-            ))
-            continue
-
         agent_id = _resolved_agent_id(setvariable)
 
-        if not agent_id or agent_id == _PLACEHOLDER:
-            if agent_id == _PLACEHOLDER:
+        if not agent_id or _is_placeholder_id(agent_id):
+            if agent_id:
                 detail = (
                     f"{_HANDOFF_VAR} still holds the shipped placeholder "
-                    f"'{_PLACEHOLDER}' (no concrete target agent id set)."
+                    f"value '{agent_id}' (no concrete target agent id set)."
                 )
             else:
                 detail = (
@@ -181,11 +201,15 @@ def run_handoff_topic_checks(runner) -> list[CheckResult]:
                     "The handoff will fail at runtime."
                 ),
                 remediation=(
-                    "In the topic's flow, find the SetVariable node that "
-                    f"sets {_HANDOFF_VAR} and replace the placeholder "
-                    f"'{_PLACEHOLDER}' with the GPT ID of the target agent. "
-                    "See agent-handoff.md Step 4 'Set Handoff Agent ID' and "
-                    "'Locate the GPT ID of an agent'."
+                    "Either set a valid target agent id or disable the "
+                    "handoff. 1) To use this handoff, open the topic in "
+                    "Copilot Studio, find the SetVariable node that sets "
+                    f"{_HANDOFF_VAR} and replace the placeholder value with "
+                    "the GPT ID of the target agent (agent-handoff.md Step 4 "
+                    "'Set Handoff Agent ID' and 'Locate the GPT ID of an "
+                    "agent'). 2) If you did not intend to enable this handoff, "
+                    "disable the topic to return it to its default "
+                    "out-of-the-box state."
                 ),
                 doc_link=DOC_LINK,
             ))

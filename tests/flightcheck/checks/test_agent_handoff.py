@@ -5,10 +5,11 @@
 (TOPIC-020, emitted per enabled handoff topic as ``TOPIC-020-{N:03d}``).
 
 The check (``solutions/ess-maker-skills/scripts/flightcheck/checks/
-agent_handoff.py``) is conditional: it only validates handoff auto-template
-topics that the maker has ENABLED (``status == "Active"``). For each such
-topic it walks ``dialog.beginDialog.actions`` for the ``SetVariable`` node
-that assigns ``Topic.HandoffAgentId`` and confirms the assigned id is a
+agent_handoff.py``) is conditional: it only validates ENABLED
+(``status == "Active"``) handoff topics. A handoff topic is identified by
+the presence of a ``SetVariable`` node assigning ``Topic.HandoffAgentId``
+(not by its schemaName, because makers clone/rename the template or enable
+an accelerator). For each such topic it confirms the assigned id is a
 concrete value rather than the shipped ``"AgentIdentifier"`` placeholder.
 
 These tests build a minimal fake PVA (Island Gateway) client that returns
@@ -261,8 +262,9 @@ class TestPlaceholderStillSet:
         assert r.status == "Failed"
         assert "AgentIdentifier" in r.result
         assert "Topic.HandoffAgentId" in r.result
-        # Remediation points at the real fix path (agent-handoff.md Step 4).
+        # Remediation offers both paths: set a real id, or disable the topic.
         assert "Set Handoff Agent ID" in r.remediation
+        assert "disable the topic" in r.remediation
         assert r.doc_link.endswith("agent-handoff.md")
 
     def test_blank_value_fails(self):
@@ -273,17 +275,66 @@ class TestPlaceholderStillSet:
         assert "blank" in r.result
         assert "AgentIdentifier" not in r.result
         assert "Topic.HandoffAgentId" in r.result
+        assert "disable the topic" in r.remediation
 
 
 # ───────────────────────────────────────────────────────────────────────
-# Warning branch — SetVariable node absent
+# Identity is the HandoffAgentId SetVariable, not the schemaName
 # ───────────────────────────────────────────────────────────────────────
 
 
-class TestSetVariableMissing:
-    def test_missing_setvariable_warns(self):
+class TestHandoffIdentity:
+    def test_handoff_named_topic_without_setvariable_is_ignored(self):
+        # A component that merely carries the handoff schemaName but has no
+        # SetVariable assigning Topic.HandoffAgentId is not a handoff topic
+        # by definition (identity is the variable, not the name), so it is
+        # not flagged.
         comp = _handoff_dialog_component(status="Active", include_setvariable=False)
         runner = _build_runner(pva=_FakePVA(dialog_components=[comp]))
+        assert run_handoff_topic_checks(runner) == []
+
+    def test_renamed_clone_with_placeholder_fails(self):
+        # The core #152 case: a maker CLONES the sample template, RENAMES it
+        # (so the schemaName no longer contains "agenthandoff"), enables it,
+        # but leaves the placeholder. Keying on the schemaName would skip
+        # this; keying on the SetVariable catches it.
+        comp = _handoff_dialog_component(
+            schema_name="msdyn_copilotforemployeeselfservicehr.topic.RouteToWorkday",
+            display_name="Route to Workday",
+            status="Active",
+            expression_text='"AgentIdentifier"',
+        )
+        runner = _build_runner(pva=_FakePVA(dialog_components=[comp]))
         r = _result_by_id(run_handoff_topic_checks(runner), "TOPIC-020-001")
-        assert r.status == "Warning"
-        assert "Topic.HandoffAgentId" in r.result
+        assert r.status == "Failed"
+        assert "AgentIdentifier" in r.result
+
+    def test_enabled_accelerator_prefixed_placeholder_fails(self):
+        # Handoff Accelerators (Workday / ServiceNow) ship a system-prefixed
+        # placeholder, e.g. "ServiceNowAgentIdentifier" (observed on live OOTB
+        # ServiceNow accelerators), with a schemaName that does not contain
+        # "agenthandoff". An enabled accelerator left on its own placeholder
+        # must FAIL, not silently pass.
+        comp = _handoff_dialog_component(
+            schema_name="msdyn_copilotforemployeeselfservice.topic.ServiceNowITSMEmployeeHandoffScenarios",
+            display_name="ServiceNow ITSM Employee Handoff Scenarios",
+            status="Active",
+            expression_text='"ServiceNowAgentIdentifier"',
+        )
+        runner = _build_runner(pva=_FakePVA(dialog_components=[comp]))
+        r = _result_by_id(run_handoff_topic_checks(runner), "TOPIC-020-001")
+        assert r.status == "Failed"
+        assert "ServiceNowAgentIdentifier" in r.result
+
+    def test_enabled_accelerator_concrete_id_passes(self):
+        # A renamed/configured accelerator with a real prefixed-GUID target id
+        # (observed live as e.g. "T_<guid>...") must PASS.
+        comp = _handoff_dialog_component(
+            schema_name="msdyn_copilotforemployeeselfserviceit.topic.ServiceNowITSMEmployeeHandoffScenariosCopy",
+            display_name="Alternative ServiceNow ITSM Employee Handoff Scenarios",
+            status="Active",
+            expression_text='"T_e1871622-17c8-d06a-b128-28cae5867b15.90e587d7-0995-4a6d-bfff-2e770b4df23d"',
+        )
+        runner = _build_runner(pva=_FakePVA(dialog_components=[comp]))
+        r = _result_by_id(run_handoff_topic_checks(runner), "TOPIC-020-001")
+        assert r.status == "Passed"
