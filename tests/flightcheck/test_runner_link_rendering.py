@@ -115,6 +115,34 @@ def test_bare_url_trailing_ampersand_entity_not_split() -> None:
     assert "</a>;" not in html
 
 
+def test_angle_bracket_wrapped_url_excludes_brackets() -> None:
+    """"<https://x>" escapes to "&lt;https://x&gt;"; the trailing "&gt;"
+    (an escaped ">") must not land inside the href.
+
+    An unescaped angle bracket is never a valid URL char, so the wrapping
+    brackets stay as text and only the URL is anchored.
+    """
+    from flightcheck.runner import _md_links_to_html
+
+    html = _md_links_to_html("See <https://aka.ms/ess-docs> for details.")
+    assert '<a href="https://aka.ms/ess-docs" target="_blank">' in html
+    # The escaped brackets render as text, outside the anchor.
+    assert 'href="https://aka.ms/ess-docs&gt;"' not in html
+    assert "&lt;<a " in html
+    assert "</a>&gt;" in html
+
+
+def test_quote_wrapped_url_excludes_quotes() -> None:
+    '''A double-quote-wrapped URL escapes to "&quot;https://x&quot;"; the
+    trailing "&quot;" must not land inside the href.'''
+    from flightcheck.runner import _md_links_to_html
+
+    html = _md_links_to_html('Open "https://aka.ms/ess" now')
+    assert '<a href="https://aka.ms/ess" target="_blank">' in html
+    assert 'href="https://aka.ms/ess&quot;"' not in html
+    assert "</a>&quot;" in html
+
+
 # --- markdown links keep working (no double-wrap) -------------------------
 
 def test_markdown_link_still_renders() -> None:

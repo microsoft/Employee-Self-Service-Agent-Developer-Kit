@@ -1523,22 +1523,36 @@ def _autolink_bare_urls(html: str) -> str:
     bare_url_re = re.compile(r'https?://[^\s<>"\'\]]+')
     # An anchor already emitted by the markdown pass; keep it verbatim.
     anchor_re = re.compile(r'<a\b[^>]*>.*?</a>', re.IGNORECASE | re.DOTALL)
-    # A ';' that closes an HTML entity (&amp; etc.) belongs to the URL,
-    # so it must not be peeled as if it were sentence punctuation.
-    entity_tail_re = re.compile(r'&(?:amp|lt|gt|quot);$')
+    # A ';' that closes an HTML entity belongs to the URL, so it must not
+    # be peeled as if it were sentence punctuation. Only '&amp;' (a real
+    # query-string '&') is kept; '&lt;'/'&gt;' are handled separately below
+    # because an unescaped angle bracket can never be a valid URL char.
+    entity_tail_re = re.compile(r'&amp;$')
+    # A trailing escaped delimiter entity from a wrapped URL, e.g. an
+    # angle-bracket-wrapped "<https://x>" (escapes to "&lt;https://x&gt;")
+    # or a quote-wrapped '"https://x"' ("&quot;https://x&quot;"). Angle
+    # brackets and quotes are URL delimiters, never valid unescaped URL
+    # chars, so peel the whole entity back into the surrounding text.
+    delim_tail_re = re.compile(r'&(?:lt|gt|quot);$')
 
     def _wrap(segment: str) -> str:
         def repl(m: "re.Match[str]") -> str:
             url = m.group(0)
             trail = ""
-            # Peel trailing sentence punctuation and unbalanced closing
-            # parens (in any order) off the link target. A balanced pair
-            # (".../Foo_(bar)") is kept; an unbalanced ")" ("(see https://x)")
-            # is pushed back into the surrounding text.
+            # Peel trailing sentence punctuation, unbalanced closing parens,
+            # and escaped delimiter entities (in any order) off the link
+            # target. A balanced paren pair (".../Foo_(bar)") is kept; an
+            # unbalanced ")" ("(see https://x)") is pushed back into the
+            # surrounding text.
             while url:
+                delim = delim_tail_re.search(url)
+                if delim:
+                    trail = url[delim.start():] + trail
+                    url = url[: delim.start()]
+                    continue
                 last = url[-1]
                 if last == ";" and entity_tail_re.search(url):
-                    break  # ';' closes an HTML entity; keep it in the URL
+                    break  # ';' closes an '&amp;' entity; keep it in the URL
                 if last in ".,;:!?":
                     trail = last + trail
                     url = url[:-1]
