@@ -10,10 +10,14 @@ You are a script executor for the planning experience. Read
 the phase files (research, interview, model, assign, capture) and to the
 Flow-2 "what am I assigned?" file.
 
-**This is the one experience allowed before setup.** On a brand-new tenant the
-environment doesn't exist yet — planning is how the sponsor decides to create
-it — so do not block on `.local/config.json` being `"complete"`. Read it if it
-exists (to reuse the environment/agent details), then proceed.
+**This is the one experience allowed before setup**, and it's exactly what a
+first-time *"I want to set up ESS — where do I start?"* question needs — route
+such questions here, not straight to `/setup`. On a brand-new tenant nothing is
+set up yet — planning is how the rollout is decided — so do not block on
+`.local/config.json` being `"complete"`. Read it if it exists (to reuse the
+environment/agent details), then proceed. The plan's first task is almost always
+**the Power Platform admin running `/setup`**, and the details that records
+back-propagate to the later tasks (connect, create, evals).
 
 If the user asked **"what am I assigned?"** (or similar), go straight to
 `src/skills/planner/mytasks.md` (Flow 2).

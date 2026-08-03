@@ -37,7 +37,7 @@ step.
 
 | Task | Action | Produces | Consumes | Role (grounded) |
 |------|--------|----------|----------|-----------------|
-| Create/bind env & run setup | `--skill onboarding` | `primaryEnvironment` | — | `power-platform-admin` |
+| Run `/setup` — onboard the ADK to the deployed agent (records the environment & agent details) | `--skill onboarding` | `primaryEnvironment` | — | `power-platform-admin` |
 | Check readiness | `--skill flightcheck` | `readinessReport` | `primaryEnvironment` | `power-platform-admin` |
 | Connect Workday | `--skill connect` | `workdayConnection,workdayEntraApp` | `primaryEnvironment` | `integration-owner` |
 | Connect ServiceNow | `--skill connect` | `servicenowConnection` | `primaryEnvironment` | `integration-owner` |
@@ -47,3 +47,28 @@ step.
 
 `produces`/`consumes` keys drive ordering ("blocked until produced") and are
 what Phase 5 captures. When the tasks are in, show the summary and go to Phase 4.
+
+## First step for a first-time / greenfield rollout
+
+The first task is almost always the **Power Platform admin running `/setup`**.
+Be accurate about what `/setup` (onboarding) does: it **connects the kit to an
+ESS agent that is already deployed in a Power Platform environment and records
+its details** — it does *not* create the environment or install ESS. For a
+brand-new tenant, provisioning the environment and installing the ESS agent are
+**portal/admin prerequisites**; add a `--action-kind portal` task before
+`/setup` if they don't exist yet.
+
+## Back-propagation — how the admin's setup details flow to later tasks
+
+When the admin runs `/setup`, it writes the environment and agent details
+(`environmentId`, `dataverseEndpoint`, agent slug/schema/folder) into
+`.local/config.json`, and the planner pins `primaryEnvironment` onto the plan
+(Phase 5). Those details then reach every downstream task **two ways**, so
+nobody re-enters what the admin already set up:
+
+- Every kit skill (`/connect`, `/create`, `/evaluate`) reads `.local/config.json`
+  directly for the agent folder / slug / schema.
+- Tasks that `consume primaryEnvironment` read the pinned value off the plan.
+
+This is the back-propagation: capture the admin's output once, and every task
+that needs it — including topic **create** and eval generation — picks it up.
