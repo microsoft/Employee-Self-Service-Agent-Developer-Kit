@@ -54,6 +54,37 @@ _STOPWORDS = frozenset(
     {"the", "and", "for", "with", "from", "into", "to", "a", "an", "of", "in", "on", "our"}
 )
 
+# Default recognition vocabulary for :func:`extract_signals`. The vendored facts
+# file (``planner_facts.json``) is the source of truth at runtime; these are the
+# offline fallback so the pure function stands alone and is testable. The lexicon
+# only helps *spot* a role/output in prose — the actual value is read off the page.
+DEFAULT_ROLE_LEXICON: tuple[str, ...] = (
+    "Power Platform administrator",
+    "Power Platform admin",
+    "Global administrator",
+    "Microsoft 365 administrator",
+    "Teams administrator",
+    "SharePoint administrator",
+    "security administrator",
+    "Entra administrator",
+    "maker",
+)
+DEFAULT_OUTPUT_LEXICON: tuple[str, ...] = (
+    "environment",
+    "connection",
+    "connector",
+    "app registration",
+    "Entra app",
+    "knowledge source",
+    "solution",
+    "agent",
+    "publish",
+)
+
+_SCRIPT_STYLE_RE = re.compile(r"<(script|style)\b[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL)
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
+
 
 def toc_url(base: str = LEARN_SECTION_BASE) -> str:
     """The ``toc.json`` URL for a section base."""
@@ -161,6 +192,42 @@ def select_hrefs(
     return selected[:budget]
 
 
+def strip_html(html: str) -> str:
+    """Reduce an HTML page to readable text: drop script/style, tags, collapse
+    whitespace. Deterministic and pure — no parser dependency."""
+    without_blocks = _SCRIPT_STYLE_RE.sub(" ", html or "")
+    without_tags = _TAG_RE.sub(" ", without_blocks)
+    return _WS_RE.sub(" ", without_tags).strip()
+
+
+def _unique(seq: list[str]) -> list[str]:
+    out: list[str] = []
+    for item in seq:
+        if item not in out:
+            out.append(item)
+    return out
+
+
+def extract_signals(
+    text: str,
+    *,
+    roles: "tuple[str, ...] | list[str]" = DEFAULT_ROLE_LEXICON,
+    outputs: "tuple[str, ...] | list[str]" = DEFAULT_OUTPUT_LEXICON,
+) -> dict[str, list[str]]:
+    """Pull role/output candidates out of page text using a recognition lexicon.
+
+    Pure and deterministic: a phrase is a hit when it appears (case-insensitive)
+    in the (HTML-stripped) text. Returns ``{"roles": [...], "outputs": [...]}``
+    with the lexicon's surface forms, de-duplicated and in lexicon order. This is
+    the deterministic half of "read the Learn page and note who does what and
+    what it produces" — the agent still reasons over the result.
+    """
+    haystack = strip_html(text).lower()
+    found_roles = _unique([r for r in roles if r and r.lower() in haystack])
+    found_outputs = _unique([o for o in outputs if o and o.lower() in haystack])
+    return {"roles": found_roles, "outputs": found_outputs}
+
+
 def classify(a_href: str, b_href: str, index: dict[str, dict[str, Any]]) -> str:
     """Relationship of ``b`` to ``a`` in the TOC: child / parent / sibling /
     related / unknown. Drives how the crawl expands from a fetched page."""
@@ -189,3 +256,16 @@ def fetch_toc(url: str = "", *, timeout: float = 10.0) -> dict[str, Any]:
     req = urllib.request.Request(url, headers={"User-Agent": "ess-maker-kit-planner"})
     with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — fixed https Learn URL
         return json.loads(resp.read().decode("utf-8"))
+
+
+def fetch_page_text(url: str, *, timeout: float = 10.0) -> str:
+    """Best-effort fetch of a Learn page, reduced to readable text (network).
+
+    Companion to :func:`fetch_toc` for the ``research --extract`` path: the CLI
+    fetches each selected page and runs :func:`extract_signals` on the result.
+    Raises on network failure so the caller can skip the page."""
+    req = urllib.request.Request(url, headers={"User-Agent": "ess-maker-kit-planner"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:  # noqa: S310 — https Learn URL
+        charset = resp.headers.get_content_charset() or "utf-8"
+        return strip_html(resp.read().decode(charset, errors="replace"))
+

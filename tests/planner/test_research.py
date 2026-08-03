@@ -124,6 +124,36 @@ def test_toc_and_page_urls():
     assert research.page_url("workday", base) == base + "/workday"
 
 
+def test_strip_html_removes_tags_and_scripts():
+    html = "<html><head><style>.x{color:red}</style></head><body><h1>Set up</h1>"
+    html += "<script>var a=1;</script><p>Create an <b>environment</b>.</p></body></html>"
+    text = research.strip_html(html)
+    # Text content survives (tags become spaces, so punctuation may separate);
+    # scripts/styles are gone entirely and no angle brackets remain.
+    assert "Set up" in text and "Create an" in text and "environment" in text
+    assert "color:red" not in text and "var a=1" not in text and "<" not in text
+
+
+def test_extract_signals_finds_roles_and_outputs():
+    text = (
+        "<p>The <b>Power Platform administrator</b> creates the environment and "
+        "publishes the agent. A maker adds a knowledge source.</p>"
+    )
+    sig = research.extract_signals(text)
+    assert "Power Platform administrator" in sig["roles"]
+    assert "maker" in sig["roles"]
+    assert "environment" in sig["outputs"]
+    assert "knowledge source" in sig["outputs"]
+    assert "publish" in sig["outputs"]
+
+
+def test_extract_signals_dedupes_and_honours_custom_lexicon():
+    text = "environment environment ENVIRONMENT"
+    sig = research.extract_signals(text, roles=(), outputs=("environment",))
+    assert sig["roles"] == []
+    assert sig["outputs"] == ["environment"]  # de-duped, case-insensitive
+
+
 @pytest.mark.live
 def test_fetch_toc_live():
     """Opt-in (``--run-live``): the real ESS TOC parses and has known pages."""
