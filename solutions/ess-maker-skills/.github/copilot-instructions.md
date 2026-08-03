@@ -26,10 +26,13 @@ Respond with ONLY this exact message and nothing else:
 **The exceptions**: If the user typed `/setup` or explicitly asked to run
 setup, proceed with setup — read `src/skills/foundation-setup/SKILL.md` and follow it.
 If the user typed `/planner` or asked to **plan a rollout / plan an ESS
-deployment / "what am I assigned?"**, proceed with planning — read
+deployment / set up ESS for the first time / where do I start / how do I get
+started / "what am I assigned?"**, proceed with planning — read
 `src/skills/planner/SKILL.md` and follow it (the planner is the one experience
 that is allowed to run before setup, because planning is how a greenfield
-deployment is decided).
+deployment is decided). A first-time / "where do I start" request is a
+**planning** request — route it to the planner, which then emits "run `/setup`"
+as the first task; do **not** send it straight to `/setup`.
 
 **This gate applies to ALL user messages** — including "hello", "hi", "help",
 "what can you do", "I need a topic", "create a workflow", or any other request.
@@ -333,8 +336,10 @@ After a successful push, `.baseline/` is updated to match the new state.
 
 **Trigger phrases for planner:** "plan a rollout", "plan my ESS deployment",
 "create a plan", "scenario plan", "set up ESS with Workday/ServiceNow",
-"what should I do first", "what am I assigned", "what are my tasks",
-"my tasks", "what's assigned to me".
+"I want to set up ESS for the first time", "where do I start", "where should I
+start", "how do I get started", "getting started with ESS", "set up ESS from
+scratch", "first-time setup", "what should I do first", "what am I assigned",
+"what are my tasks", "my tasks", "what's assigned to me".
 
 **Trigger phrases for troubleshooting:** "Workday error", "ISU not working",
 "invalid_client", "invalid username or password", "SOAP failure", "maker works

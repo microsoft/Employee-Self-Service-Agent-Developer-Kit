@@ -103,7 +103,7 @@ Sponsor │  /planner  ─grounded interview─►  Plan (local, structured)    
         │  src/reference/ess-docs (seed + offline) ▼                               │
         │                              Tasks (atomic; role/person via Principal)    │
         │  roles endpoint (unbuilt seam) ─holders/roles─► assign (Flow 1) / find (Flow 2)
-        │  /setup ─provisions env─►  .local/config.json  ─ADK detects─► pin artifact  │
+        │  /setup ─binds env, records details─►  .local/config.json  ─ADK detects─► pin  │
         └────────────────────────────────────────┬──────────────────────────────────┘
                                                   │  best-effort sync (§15)
                                                   ▼
@@ -330,8 +330,8 @@ workspace/
 
   // ── Tasks: atomic; one extended Principal each (Step-2 §7.4) ──
   "tasks": [
-    { "id": "T1", "title": "Create Power Platform environment & run setup",
-      "description": "Run /setup to provision/bind the Dataverse environment.",
+    { "id": "T1", "title": "Run /setup — onboard the ADK to the deployed agent",
+      "description": "Run /setup: connect the kit to the ESS agent already deployed in the environment and record its details into config.json. (Provisioning the environment + installing ESS is a portal/admin prerequisite on a brand-new tenant.)",
       "action": { "kind": "kitSkill", "skill": "onboarding" }, // HOW it's done — here a kit skill (§10)
       "assignedTo": { "type": "User", "id": "<paul oid>",  // assigned to a PERSON…
                       "user": { "oid": "<paul oid>" },
@@ -438,7 +438,7 @@ Three reasons the Task stays at skill granularity, not step granularity:
 
 | Task (typical greenfield) | Action (`task.action`) | Produces | Consumes | Role (grounded from Learn) |
 |---|---|---|---|---|
-| Create/bind env & run setup | kitSkill `onboarding` (`/setup`) | `primaryEnvironment` | — | `power-platform-admin` |
+| Run `/setup` — onboard the ADK to the deployed agent (records env & agent details) | kitSkill `onboarding` (`/setup`) | `primaryEnvironment` | — | `power-platform-admin` |
 | Check readiness | kitSkill `flightcheck` (`/flightcheck`) | `readinessReport` | `primaryEnvironment` | `power-platform-admin` |
 | Register Entra app *(if not via connect)* | **portal** (Learn / Azure portal doc) | `entraApp` | `primaryEnvironment` | `entra-admin` |
 | Connect Workday | kitSkill `connect` (`/connect`) | `workdayConnection`, `workdayEntraApp` | `primaryEnvironment` | `integration-owner` |
@@ -448,6 +448,8 @@ Three reasons the Task stays at skill granularity, not step granularity:
 | Publish the agent | **portal/admin** (Learn publish doc) | — | built agent | `power-platform-admin` |
 
 The planner sequences these actions; **the role in the last column and the `produces` keys are extracted from the Learn docs during research (§7.6), not hardcoded kit defaults and not asked of the sponsor.** Where a kit skill exists the Task runs it; where none does (portal/manual rows) the Task carries a grounded doc `ref` and the assignee follows it. `produces`/`consumes` drive ordering + "blocked until produced" UX (Step‑2 §7.2, phase‑2); each key is what the capture loop (§12) fills and pins.
+
+**Greenfield first step & the onboarding correction.** A first-time *"set up ESS — where do I start?"* request routes to the planner (not straight to `/setup`), which emits **the Power Platform admin running `/setup`** as the first task. Be accurate about `/setup` (onboarding): it **connects the kit to an ESS agent already deployed in a Power Platform environment and records its details into `.local/config.json`** — it does *not* create the environment or install ESS. On a brand-new tenant those are **portal/admin prerequisites** (add a `portal` task before `/setup`). What `/setup` records — `environmentId`, `dataverseEndpoint`, and agent slug/schema/folder — is exactly the state that **back-propagates** to later tasks: every kit skill (`/connect`, `/create`, `/evaluate`) reads `.local/config.json` directly, and tasks that `consume primaryEnvironment` read the pinned artifact off the plan (§12).
 
 ### 10.3 Flow 1 — assign at creation (grounded role → pick a person)
 
@@ -537,9 +539,9 @@ So `produces` (from the doc) says *what* to capture; observe/ask says *how*; the
 ### 12.2 Observe mode, worked: the `/setup` → `environmentId` hand‑off
 
 1. **Before.** Planner snapshots the current environment (from `config.json` + `list_environments.py`/`pp_admin_client.py`). T1 is `NotStarted`; `outputs:[]`.
-2. **The assignee runs `/setup`.** It provisions/binds Dataverse and **atomically writes `.local/config.json`** (`setup:"complete"`, `dataverseEndpoint`).
-3. **The ADK detects the change.** On return to `/planner`, it re‑reads `config.json`, diffs against the snapshot — a new endpoint/`environmentId` = T1 produced an environment. *(Where `config.json` lacks a raw `environmentId` GUID, resolve it once from the endpoint via the existing PP/BAP client and persist it onto `config.json` — §18.)*
-4. **Confirm with the person doing the job.** The planner does **not** silently write. It asks the assignee (person P, acting as the role): *"I see `/setup` created environment `d3f1…` (`https://…`). Pin it to the plan as T1's output?"* — the "ask the role who did the job" the requirement calls for.
+2. **The assignee runs `/setup`.** It connects the kit to the ESS agent already deployed in the environment (it does **not** create the environment) and **atomically writes `.local/config.json`** (`setup:"complete"`, `dataverseEndpoint`, agent slug/schema/folder).
+3. **The ADK detects the change.** On return to `/planner`, it re‑reads `config.json`, diffs against the snapshot — a new endpoint/`environmentId` = T1 recorded/bound the environment. *(Where `config.json` lacks a raw `environmentId` GUID, resolve it once from the endpoint via the existing PP/BAP client and persist it onto `config.json` — §18.)*
+4. **Confirm with the person doing the job.** The planner does **not** silently write. It asks the assignee (person P, acting as the role): *"I see `/setup` recorded environment `d3f1…` (`https://…`). Pin it to the plan as T1's output?"* — the "ask the role who did the job" the requirement calls for.
 5. **Pin onto the ledger.** On yes, append a `PlanArtifact` to `outputs[]` (`key:primaryEnvironment`, `kind:Environment`, `attributes:{environmentId, environmentUrl}`, `inventoryRef`, `producedByTaskId:T1`, `provenance.source:Agent`, `state:Active`); T1 → `Completed`; `summary.md` re‑renders. Supersede‑by‑key handles a re‑run.
 6. **Downstream reads off the Plan.** T3 (evals), a possibly different role, reads `outputs["primaryEnvironment"].attributes.environmentId` straight from `plan.json` — no re‑discovery. The reproducible hand‑off (Step‑2 §11), realised locally.
 
@@ -665,7 +667,7 @@ Verified on `origin/main`, HEAD `72a24f8`, worktree cleaned to match `main`:
 
 | Task | Action | Produces | Consumes | Role (from Learn) | Capture (§12) |
 |---|---|---|---|---|---|
-| Create/bind env & setup | kitSkill `onboarding` (`/setup`) | `primaryEnvironment` | — | `power-platform-admin` | observe: `config.json` diff |
+| Onboard ADK to the deployed agent (`/setup`) | kitSkill `onboarding` (`/setup`) | `primaryEnvironment` | — | `power-platform-admin` | observe: `config.json` diff |
 | Readiness check | kitSkill `flightcheck` (`/flightcheck`) | `readinessReport` | `primaryEnvironment` | `power-platform-admin` | observe: readiness file |
 | Connect Workday | kitSkill `connect` (`/connect`) | `workdayConnection`, `workdayEntraApp` | `primaryEnvironment` | `integration-owner` | observe: conn refs + app id |
 | Connect ServiceNow | kitSkill `connect` (`/connect`) | `servicenowConnection` | `primaryEnvironment` | `integration-owner` | observe: conn refs |

@@ -8,8 +8,10 @@ ways to fill a value:
 ## (a) Observe — read it from what the action changed
 
 Preferred for kit-skill Tasks that leave a signal. The canonical case is the
-setup → environment hand-off: after `/setup` runs, it writes the environment
-into `.local/config.json`. Detect and pin it:
+setup hand-off: after `/setup` runs (onboarding the ADK to the deployed agent),
+it **records** the environment & agent details into `.local/config.json` — it
+connects to the environment and records its id/URL; it doesn't create it. Detect
+and pin the environment:
 
 ```
 python scripts/planner/cli.py capture-setup --task <T#> --complete

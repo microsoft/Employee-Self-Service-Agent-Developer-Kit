@@ -73,9 +73,11 @@ def detect_environment(
 ) -> dict[str, Any] | None:
     """Detect an Environment artifact from a ``config.json`` before/after diff.
 
-    Returns a ``PlanArtifact`` when ``/setup`` produced or bound an environment
+    Returns a ``PlanArtifact`` when ``/setup`` bound/recorded an environment
     that wasn't reflected before (a new/changed ``dataverseEndpoint`` or
     ``environmentId``, or setup transitioning to ``"complete"``), else ``None``.
+    ``/setup`` connects the kit to an already-deployed agent and records its
+    environment details; it does not create the environment.
 
     ``environmentId`` is a GUID assigned when the environment is created and is
     stable thereafter; ``dataverseEndpoint`` is the org URL. ``setup.py`` writes
