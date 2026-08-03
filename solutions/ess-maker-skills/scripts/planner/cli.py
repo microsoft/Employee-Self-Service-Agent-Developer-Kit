@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from planner import research
 from planner.capture import detect_environment, snapshot_config
 from planner.plan_model import (
+    ARTIFACT_KINDS,
     PLAN_PATH,
     SCENARIO_GROUP,
     Plan,
@@ -45,6 +46,7 @@ from planner.plan_model import (
     action_manual,
     action_portal,
     new_task,
+    plan_artifact,
     principal_person,
     principal_pool,
 )
@@ -213,6 +215,62 @@ def cmd_capture_setup(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_pin_output(args: argparse.Namespace) -> int:
+    """Commit what a task produced onto the plan (ask-mode capture).
+
+    Used when the output isn't observable from local kit state — e.g. a Workday
+    connection or Entra app the assignee created — so the assignee tells us the
+    values and we pin them. This is the generic counterpart to capture-setup.
+    """
+    plan = _load(args)
+    attrs: dict = {}
+    for kv in (args.attr or []):
+        if "=" in kv:
+            k, v = kv.split("=", 1)
+            attrs[k.strip()] = v.strip()
+    art = plan_artifact(
+        args.key, args.kind, attrs,
+        produced_by_task_id=args.task,
+        inventory_ref=args.inventory_ref,
+        source=args.source,
+    )
+    plan.add_output(art)
+    if args.complete:
+        plan.set_task_state(args.task, "Completed")
+    _save(plan, args)
+    print(json.dumps(art, indent=2))
+    return 0
+
+
+def cmd_task_brief(args: argparse.Namespace) -> int:
+    """Brief a task's assignee: how to do it, their role, the resolved values it
+    consumes (e.g. the env id from setup), and the keys to capture when done."""
+    plan = _load(args)
+    brief = plan.task_brief(args.task)
+    if args.json:
+        print(json.dumps(brief, indent=2))
+        return 0
+    print(f"Task {brief['id']}: {brief['title']}")
+    action = brief.get("action") or {}
+    if action.get("kind") == "kitSkill":
+        print(f"  Do it by running: /{action.get('skill')}")
+    elif action.get("ref"):
+        print(f"  How: {action.get('kind')} - {action['ref']}")
+    print(f"  Role: {brief.get('role')}  |  State: {brief.get('state')}")
+    consumes = brief.get("consumes") or {}
+    if consumes:
+        print("  Use these values produced by earlier tasks:")
+        for key, attrs in consumes.items():
+            if attrs:
+                vals = ", ".join(f"{ak}={av}" for ak, av in attrs.items())
+                print(f"    - {key}: {vals}")
+            else:
+                print(f"    - {key}: (not produced yet - blocked)")
+    if brief.get("produces"):
+        print("  When done, capture these outputs: " + ", ".join(brief["produces"]))
+    return 0
+
+
 def cmd_mine(args: argparse.Namespace) -> int:
     plan = _load(args)
     grouped = plan.tasks_for_person(args.person, _csv(args.roles))
@@ -352,6 +410,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--before", help="JSON snapshot taken before setup (optional)")
     p.add_argument("--complete", action="store_true", help="mark the task Completed")
     p.set_defaults(func=cmd_capture_setup)
+
+    p = sub.add_parser("pin-output", help="commit what a task produced onto the plan (ask-mode capture)")
+    p.add_argument("--task", required=True)
+    p.add_argument("--key", required=True, help="ledger key, e.g. workdayConnection")
+    p.add_argument("--kind", required=True, choices=list(ARTIFACT_KINDS))
+    p.add_argument("--attr", action="append", help="attribute key=value (repeatable)")
+    p.add_argument("--inventory-ref", dest="inventory_ref")
+    p.add_argument("--source", default="User", choices=["User", "Agent", "Discovered"])
+    p.add_argument("--complete", action="store_true", help="mark the task Completed")
+    p.set_defaults(func=cmd_pin_output)
+
+    p = sub.add_parser("task-brief", help="brief an assignee: how, role, consumed values, outputs to capture")
+    p.add_argument("--task", required=True)
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_task_brief)
 
     p = sub.add_parser("mine", help="show tasks for a person, grouped by role (Flow 2)")
     p.add_argument("--person", required=True)

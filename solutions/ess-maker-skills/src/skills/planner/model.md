@@ -72,3 +72,26 @@ nobody re-enters what the admin already set up:
 
 This is the back-propagation: capture the admin's output once, and every task
 that needs it — including topic **create** and eval generation — picks it up.
+
+## Emit the full task set now (do not stop at setup)
+
+From the systems and scenarios captured in Phase 2, create **every** task now —
+not just setup. For *"file HR tickets + get HR knowledge, on Workday + ServiceNow"*
+that is:
+
+```
+# 1. PP admin onboards the ADK (records the environment details)
+python scripts/planner/cli.py add-task --id T1 --title "Run /setup - onboard the ADK to the deployed agent" --skill onboarding --role power-platform-admin --produces primaryEnvironment
+# 2. one connect task PER system (grounded role from the connect skill + Learn)
+python scripts/planner/cli.py add-task --id T2 --title "Connect Workday" --skill connect --role integration-owner --produces "workdayConnection,workdayEntraApp" --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T3 --title "Connect ServiceNow" --skill connect --role integration-owner --produces servicenowConnection --consumes primaryEnvironment
+# 3. authoring per scenario area (knowledge before ticketing — register the dependency)
+python scripts/planner/cli.py add-task --id T4 --title "Set up HR knowledge" --skill topics --role maker --produces "topic:hr-knowledge" --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T5 --title "Author HR ticketing topics" --skill topics --role maker --produces "topic:hr-ticketing" --consumes "primaryEnvironment,servicenowConnection"
+# 4. evals + publish
+python scripts/planner/cli.py add-task --id T6 --title "Generate evals" --skill evaluations --role eval-author --produces evalSuite --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T7 --title "Publish the agent" --action-kind portal --ref "<Learn publish doc>" --role power-platform-admin --consumes primaryEnvironment
+```
+
+Also register the scenarios and their dependencies (see `interview.md`) so the
+plan shows knowledge-before-ticketing. Then show the summary and go to Phase 4.

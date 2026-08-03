@@ -502,6 +502,33 @@ class Plan:
         """"This task's outputs" = the ledger filtered by producing id (no copy)."""
         return [a for a in self.outputs if a.get("producedByTaskId") == task_id]
 
+    def resolved_consumes(self, task_id: str) -> dict[str, Any]:
+        """For each key a task consumes, the Active artifact's attributes (or
+        ``None`` if not produced yet). This is how a downstream assignee learns,
+        e.g., the ``environmentId`` the setup task produced — the back-propagation."""
+        task = self._require_task(task_id)
+        resolved: dict[str, Any] = {}
+        for key in task.get("consumes", []):
+            art = self.output(key)
+            resolved[key] = art.get("attributes", {}) if art else None
+        return resolved
+
+    def task_brief(self, task_id: str) -> dict[str, Any]:
+        """A briefing for a task's assignee: how to do it (action), the role, the
+        resolved values it consumes (e.g. the env id to use), and the keys to
+        capture when done."""
+        task = self._require_task(task_id)
+        return {
+            "id": task["id"],
+            "title": task.get("title", ""),
+            "action": task.get("action", {}),
+            "role": assignee_role_id(task.get("assignedTo")),
+            "assignee": assignee_user_oid(task.get("assignedTo")),
+            "state": task.get("state", ""),
+            "consumes": self.resolved_consumes(task_id),
+            "produces": list(task.get("produces", [])),
+        }
+
     # ---- scenario dependencies (open Context bag, not a typed collection) - #
 
     def in_scope_scenarios(self) -> dict[str, str]:
