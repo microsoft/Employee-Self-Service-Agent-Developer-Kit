@@ -24,6 +24,14 @@ python scripts/planner/cli.py set-context --key <k> --value "<v>" --group <group
 | "How will you know a scenario is done — pilot-ready? production-signed-off?" | `acceptanceCriteria` |
 | "Is this a brand-new environment, or do you already have ESS running?" | (branch — greenfield vs enrichment) |
 
+**Required before Phase 3.** Questions 1–3 (objective, **which systems**, **which
+scenarios**) are **mandatory** — they determine the connect tasks, the authoring
+tasks, and which Learn docs ground the roles. Do not skip them, and do not end
+the interview (or jump to unrelated questions like sponsor/timeframe) until
+systems and scenarios are captured. Ask 4–7 as scope warrants. For each chosen
+system you will emit a connect task in Phase 3; for each scenario you register it
+(below) and author tasks.
+
 Questions 1–3 are almost always asked; 4–7 as scope warrants; the last is one
 branch. Use scalar values (one fact per entry); group related facts rather than
 nesting.

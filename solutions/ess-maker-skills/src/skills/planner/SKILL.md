@@ -53,6 +53,17 @@ Run these in order; each has a sub-file with the concrete steps.
 When a person asks **"what am I assigned?"**, skip to Flow 2:
 read `src/skills/planner/mytasks.md`.
 
+> **Critical — build the whole plan, not just setup.** Run *all five phases in
+> order*. Phase 3 must emit the **full task set** grounded in research and the
+> sponsor's chosen systems/scenarios: the setup task **plus** one connect task
+> per system (e.g. Workday, ServiceNow), authoring tasks per scenario, an evals
+> task, and publish — each with a Learn-grounded role and `produces`/`consumes`
+> keys. **Do not stop after adding the "run setup" task.** The interview
+> (Phase 2) must capture *which systems* and *which scenarios* before Phase 3 —
+> those drive the tasks and the roles. After setup runs, use Phase 5 to brief
+> each downstream assignee with what setup produced (the env id) and to commit
+> what they create back onto the plan.
+
 ## Start
 
 1. If `workspace/plan/plan.json` already exists, read it (via

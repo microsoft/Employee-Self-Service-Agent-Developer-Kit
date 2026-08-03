@@ -25,14 +25,42 @@ and URL). Show the assignee the detected value and confirm before it's saved.
 Do **not** trust the agent's narration ("I created env X"); the value is read
 from real state the action changed.
 
-## (b) Ask — the assignee tells you
+## (b) Ask — the assignee tells you, then commit it
 
-For manual/portal/external Tasks, or any output not observable from local state
-(e.g. an Entra app id registered in the portal), ask the assignee for the value
-and pin it. Record it against the Task's produced key with provenance marked as
-supplied by the person. (Set the values via a follow-up `set-context`/output
-step or record them in the Task's notes; the environment case above is the one
-with a built-in detector today.)
+For Tasks whose output isn't observable from local state — a Workday connection,
+an Entra app registered in the portal, an eval suite — ask the assignee for the
+value(s) and **commit them to the plan** with `pin-output`:
+
+```
+python scripts/planner/cli.py pin-output --task <T#> --key <producedKey> \
+  --kind Connection|EntraApp|KnowledgeSource|Custom \
+  --attr <name>=<value> [--attr <name>=<value> ...] --complete
+```
+
+Example — the Workday connect assignee committing what they created:
+
+```
+python scripts/planner/cli.py pin-output --task T2 --key workdayConnection \
+  --kind Connection --attr connectionId=<id> --attr connector=shared_workdaysoap --complete
+```
+
+Use `capture-setup` for the environment (observed); use `pin-output` for
+connections / apps / suites an assignee created (asked). Confirm the values with
+the person before committing.
+
+## Guide the assignee with what earlier tasks produced
+
+Before an assignee starts a task, brief them — this back-propagates the details
+setup (and earlier tasks) produced:
+
+```
+python scripts/planner/cli.py task-brief --task <T#>
+```
+
+It prints which skill to run, their role, the **values to use** (e.g.
+`primaryEnvironment: environmentId=<id>` from setup), and the outputs to capture.
+So the Workday assignee is told "use env `<id>`, run `/connect`, then we'll pin
+the connection" — no re-discovery.
 
 ## Downstream reads it off the Plan
 
