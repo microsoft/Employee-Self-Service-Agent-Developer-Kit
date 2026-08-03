@@ -99,21 +99,23 @@ def test_in_scope_scenarios_reads_group():
     }
 
 
-def test_pm_spec_dependency_is_seeded():
+def test_known_dependency_is_seeded():
     edges = known_scenario_dependencies()
     assert {"scenario": "hr-ticketing", "dependsOn": "hr-knowledge"}.items() <= edges[0].items()
     assert edges[0]["kind"] == "requires"
-    assert "PM spec" in edges[0]["rationale"]
+    # Sourced honestly from the facts file — NOT attributed to the PM spec.
+    assert edges[0]["source"] and "spec" not in edges[0]["source"].lower()
+    assert "deflect" in edges[0]["rationale"].lower()
 
 
-def test_unmet_surfaces_pm_spec_knowledge_before_ticketing():
-    # Ticketing in scope, knowledge NOT -> the PM-spec edge is surfaced as unmet.
+def test_unmet_surfaces_known_knowledge_before_ticketing():
+    # Ticketing in scope, knowledge NOT -> the known edge is surfaced as unmet.
     plan = _plan_with_ticketing()
     unmet = plan.unmet_scenario_dependencies()
     assert len(unmet) == 1
     assert unmet[0]["scenario"] == "hr-ticketing"
     assert unmet[0]["dependsOn"] == "hr-knowledge"
-    assert "PM spec" in unmet[0]["rationale"]
+    assert "deflect" in unmet[0]["rationale"].lower()
 
 
 def test_unmet_clears_when_prerequisite_added():
@@ -190,3 +192,30 @@ def test_cli_scenario_dependency_flow(tmp_path, capsys):
     assert "No unmet scenario dependencies" in capsys.readouterr().out
 
     assert cli.main(["--plan", plan_path, "validate"]) == 0
+
+
+def test_scenario_dependency_status_flags_met_and_unmet():
+    # Unmet: ticketing in scope, knowledge not.
+    plan = _plan_with_ticketing()
+    status = plan.scenario_dependency_status()
+    assert len(status) == 1
+    assert status[0]["met"] is False
+    # Met: add the prerequisite scenario.
+    plan.set_context("hr-knowledge", "HR knowledge", group=SCENARIO_GROUP)
+    status = plan.scenario_dependency_status()
+    assert len(status) == 1
+    assert status[0]["met"] is True
+
+
+def test_cli_check_deps_lists_met_dependencies(tmp_path, capsys):
+    plan_path = str(tmp_path / "plan.json")
+    cli.main(["--plan", plan_path, "init"])
+    cli.main(["--plan", plan_path, "add-scenario", "--id", "hr-ticketing", "--label", "HR ticketing"])
+    cli.main(["--plan", plan_path, "add-scenario", "--id", "hr-knowledge", "--label", "HR knowledge"])
+    capsys.readouterr()
+    rc = cli.main(["--plan", plan_path, "check-deps"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Met scenario dependencies" in out
+    assert "hr-ticketing requires hr-knowledge" in out
+    assert "No unmet scenario dependencies" in out

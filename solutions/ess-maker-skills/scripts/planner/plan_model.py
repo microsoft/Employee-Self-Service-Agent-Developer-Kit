@@ -258,27 +258,20 @@ def parse_dependency_key(key: str) -> tuple[str, str]:
     return (parts[0], parts[1]) if len(parts) == 2 else (key, "")
 
 
-# Scenario dependencies the PM spec asserts, seeded so the planner can advise the
-# sponsor without re-deriving them. Stored on a plan as Context entries (below);
-# this constant is just the grounding seed. Extend as the spec / research surface
-# more.
-KNOWN_SCENARIO_DEPENDENCIES: tuple[dict[str, str], ...] = (
-    {
-        "scenario": "hr-ticketing",
-        "dependsOn": "hr-knowledge",
-        "kind": "requires",
-        "rationale": (
-            "PM spec: deploy HR knowledge before HR ticketing so the agent "
-            "deflects — it answers from knowledge first and creates a ticket "
-            "only when the question isn't resolved."
-        ),
-    },
-)
-
-
 def known_scenario_dependencies() -> list[dict[str, str]]:
-    """A fresh copy of the seeded PM-spec scenario dependencies."""
-    return [dict(edge) for edge in KNOWN_SCENARIO_DEPENDENCIES]
+    """The scenario dependencies the planner knows about, read from the vendored
+    non-Learn facts file (``planner_facts.json``).
+
+    These are *not* a scenario list — an edge only takes effect when the maker
+    independently puts both its scenarios in scope. Each edge carries an explicit
+    ``source``; the planner never fabricates a citation. A missing/empty facts
+    file simply yields no known dependencies (nothing invented)."""
+    try:
+        from . import facts
+
+        return facts.scenario_dependency_edges()
+    except Exception:  # noqa: BLE001 — facts are best-effort; never fail a read
+        return []
 
 
 # --------------------------------------------------------------------------- #
@@ -301,9 +294,11 @@ class Plan:
 
     @classmethod
     def new(cls, *, objective: str | None = None) -> "Plan":
+        ts = now_iso()
         data: dict[str, Any] = {
             "schemaVersion": SCHEMA_VERSION,
-            "generatedAt": now_iso(),
+            "generatedAt": ts,
+            "updatedAt": ts,
             "planId": "",
             "projectId": "",
             "status": "Draft",
@@ -330,6 +325,8 @@ class Plan:
         for key in ("planId", "projectId"):
             data.setdefault(key, "")
         data.setdefault("status", "Draft")
+        data.setdefault("generatedAt", "")
+        data.setdefault("updatedAt", data.get("generatedAt", ""))
         return cls(data)
 
     @classmethod
@@ -347,6 +344,7 @@ class Plan:
         path = os.fspath(path)
         parent = os.path.dirname(path) or "."
         os.makedirs(parent, exist_ok=True)
+        self.data["updatedAt"] = now_iso()
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(self.data, fh, indent=2, ensure_ascii=False)
@@ -426,6 +424,20 @@ class Plan:
         )
         self.context.append(entry)
         return entry
+
+    def set_system(self, area: str, system: str, *, source: str = "User") -> dict[str, Any]:
+        """Record the target system for one scenario/area under a scoped key.
+
+        Systems are captured per area (``system.<area>``) so two areas never
+        collide on a single reused key: e.g. ``system.hr-knowledge = Workday``
+        and ``system.it-ticketing = ServiceNow ITSM`` coexist. ``area`` is a
+        scenario id or a short slug; the value is the system name the maker gave.
+        """
+        slug = area.strip().lower().replace(" ", "-")
+        return self.set_context(
+            f"system.{slug}", system, group="system",
+            description=f"Target system for {area}", source=source,
+        )
 
     # ---- task mutators --------------------------------------------------- #
 
@@ -588,6 +600,30 @@ class Plan:
             description=rationale,
             source=source,
         )
+
+    def scenario_dependency_status(self) -> list[dict[str, Any]]:
+        """Every scenario-dependency edge whose dependent scenario is in scope,
+        each tagged ``met`` (prerequisite also in scope) or not.
+
+        Merges edges captured on this plan with the known non-Learn facts, so
+        callers can show *both* satisfied and unmet dependencies (not only the
+        gaps). De-dupes on ``(scenario, dependsOn)``, plan edges winning.
+        """
+        in_scope = set(self.in_scope_scenarios())
+        edges = self.scenario_dependencies()
+        have = {(e["scenario"], e["dependsOn"]) for e in edges}
+        for edge in known_scenario_dependencies():
+            pair = (edge["scenario"], edge["dependsOn"])
+            if edge["scenario"] in in_scope and pair not in have:
+                edges.append({**edge, "provenance": {"source": edge.get("source", "")}})
+        status: list[dict[str, Any]] = []
+        seen: set[tuple[str, str]] = set()
+        for edge in edges:
+            pair = (edge["scenario"], edge["dependsOn"])
+            if edge["scenario"] in in_scope and pair not in seen:
+                seen.add(pair)
+                status.append({**edge, "met": edge["dependsOn"] in in_scope})
+        return status
 
     def unmet_scenario_dependencies(self, *, include_known: bool = True) -> list[dict[str, Any]]:
         """Edges whose dependent scenario is in scope but whose prerequisite
@@ -759,7 +795,12 @@ class Plan:
         lines.append(f"# Scenario plan — {objective}")
         lines.append("")
         planid = d.get("planId") or "(local, not synced)"
-        lines.append(f"Generated: {d.get('generatedAt', '')}  |  Status: {d.get('status', '')}  |  Plan: {planid}")
+        generated = d.get("generatedAt", "")
+        updated = d.get("updatedAt", "") or generated
+        stamp = f"Generated: {generated}"
+        if updated and updated != generated:
+            stamp += f"  |  Updated: {updated}"
+        lines.append(f"{stamp}  |  Status: {d.get('status', '')}  |  Plan: {planid}")
         lines.append("")
 
         # Intent, grouped.

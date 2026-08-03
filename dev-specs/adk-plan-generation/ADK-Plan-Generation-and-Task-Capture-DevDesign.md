@@ -255,7 +255,7 @@ Intent answers become **`Context` entries** (§9.2), grouped:
 | # | Question (grounded example) | Context `group` |
 |---|---|---|
 | 1 | "In one sentence — what should this agent do, and for whom?" | `objective` |
-| 2 | "Which systems hold that data — Workday, ServiceNow, SharePoint?" | `scenarioContext` (targetSystem) |
+| 2 | "Which system holds the data for **{area}** — e.g. Workday, ServiceNow, SharePoint?" (ask per area) | `system` (scoped key `system.{area}`) |
 | 3 | "From {system} I can support {grounded scenario list}. Which are in scope for wave 1?" | `scenarioContext` (area/jtbd) |
 | 4 | "Employees only, or managers too?" | `scenarioContext` (persona) |
 | 5 | "Rolling out to a specific market or wave first (e.g. Germany, pilot group)?" | `market` |
@@ -316,7 +316,7 @@ workspace/
       "description": "Primary business outcome", "provenance": { "source": "User", … } },
     { "key": "area", "value": "HR-Ticketing", "group": "scenarioContext",
       "description": "ESS scenario area", "provenance": { "source": "Agent", "addedBy": {"type":"Service","id":"planner"}, … } },
-    { "key": "targetSystem", "value": "ServiceNow HRSD", "group": "scenarioContext", "provenance": { "source": "Agent", … } },
+    { "key": "system.hr-ticketing", "value": "ServiceNow HRSD", "group": "system", "provenance": { "source": "User", … } },
     { "key": "market", "value": "DE", "group": "market",
       "description": "Market this rollout targets first",
       "provenance": { "source": "User", "addedBy": {"type":"User","id":"<sponsor>"}, "addedAt": "…",
@@ -411,9 +411,9 @@ Some scenarios must be deployed in an order the sponsor should see — the PM sp
 Because everything intent‑shaped already lives in the **one open Context bag** (§9.2), a dependency is modelled as **more Context entries — not a new typed collection**. Adding a `scenarioDependencies` array would reintroduce exactly the typed‑field‑per‑concept burden Step‑2 collapsed away. Instead:
 
 - A **scenario in scope** is a Context entry in group `scenario` (`key` = scenario id like `hr-ticketing`, `value` = label).
-- A **dependency edge** is a Context entry in group `scenarioDependsOn` whose `key` encodes `"{dependent} -> {prerequisite}"` and whose scalar `value` is the kind (`requires` | `recommends`); the `description` carries the rationale/citation, and provenance names the source (`Agent` when the planner asserts it from the PM spec/research, `User` when the sponsor states it). Values stay scalar and keys stay unique — the same open‑bag rules as every other entry.
+- A **dependency edge** is a Context entry in group `scenarioDependsOn` whose `key` encodes `"{dependent} -> {prerequisite}"` and whose scalar `value` is the kind (`requires` | `recommends`); the `description` carries the rationale/citation, and provenance names the source (`Agent` when the planner asserts it from research, `User` when the sponsor states it). Values stay scalar and keys stay unique — the same open‑bag rules as every other entry.
 
-The planner keeps a small grounded **seed** of PM‑spec dependencies (`KNOWN_SCENARIO_DEPENDENCIES`, currently just knowledge→ticketing) so it can advise the sponsor without re‑deriving; the seed is grounding data, not Plan schema. `unmet_scenario_dependencies()` compares in‑scope scenarios against their (captured + seeded) edges and returns the ones whose prerequisite isn't in scope. **Exposure:** the interview surfaces unmet dependencies to the sponsor ("deploy HR knowledge before ticketing — add it?"), and the summary renders a *Scenario dependencies* table with a met / MISSING status, so ordering is visible to everyone on the plan. Enforcement then rides the existing task DAG (the knowledge task produces what the ticketing work consumes). Because edges are ordinary Context entries, they round‑trip, read back, and sync exactly like the rest of the bag — the intelligence is in the agent's readback, not in a rigid schema.
+The planner keeps a small vendored file of **non‑Learn facts** (`planner_facts.json`) — dependency edges the planner needs but that aren't discoverable on Learn and aren't a business‑scenario catalogue (business scenarios come from the maker + Learn per the PM spec, FR‑1/FR‑3). Each edge carries an explicit `source`; the planner never fabricates a citation. The one seeded edge (knowledge→ticketing, deflection) is labelled `ess-design-guidance` and flagged *confirm citation* — it is **not** verbatim in the ADO planner PM spec. A missing/empty facts file simply yields no known dependencies (nothing invented). `known_scenario_dependencies()` reads this file; `unmet_scenario_dependencies()` / `scenario_dependency_status()` compare in‑scope scenarios against their (captured + known) edges and return which prerequisites are missing or met. **Exposure:** the interview surfaces met/unmet dependencies to the sponsor ("deploy HR knowledge before ticketing — add it?"), and the summary renders a *Scenario dependencies* table with a met / MISSING status. Enforcement then rides the existing task DAG (the knowledge task produces what the ticketing work consumes). Because edges are ordinary Context entries, they round‑trip, read back, and sync exactly like the rest of the bag — the intelligence is in the agent's readback, not in a rigid schema.
 
 ---
 

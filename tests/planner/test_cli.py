@@ -36,6 +36,20 @@ def test_init_refuses_overwrite_without_force(tmp_path, capsys):
     assert "already exists" in capsys.readouterr().err
 
 
+def test_add_system_uses_scoped_keys(tmp_path):
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    assert _run("--plan", plan_path, "add-system", "--area", "hr-knowledge", "--system", "SharePoint") == 0
+    assert _run("--plan", plan_path, "add-system", "--area", "hr-ticketing", "--system", "ServiceNow HRSD") == 0
+    plan = Plan.load(plan_path)
+    systems = {e["key"]: e["value"] for e in plan.context if e.get("group") == "system"}
+    # Two systems coexist — no collision on a single reused key.
+    assert systems == {
+        "system.hr-knowledge": "SharePoint",
+        "system.hr-ticketing": "ServiceNow HRSD",
+    }
+
+
 def test_full_flow(tmp_path, capsys):
     plan_path = str(tmp_path / "plan.json")
     config_path = tmp_path / "config.json"

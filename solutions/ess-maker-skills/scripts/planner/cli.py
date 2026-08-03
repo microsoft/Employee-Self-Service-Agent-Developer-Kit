@@ -130,10 +130,17 @@ def cmd_add_scenario_dependency(args: argparse.Namespace) -> int:
 
 def cmd_check_deps(args: argparse.Namespace) -> int:
     plan = _load(args)
-    unmet = plan.unmet_scenario_dependencies()
+    status = plan.scenario_dependency_status()
     if args.json:
-        print(json.dumps(unmet, indent=2))
+        print(json.dumps(status, indent=2))
         return 0
+    met = [e for e in status if e.get("met")]
+    unmet = [e for e in status if not e.get("met")]
+    if met:
+        print("Met scenario dependencies:\n")
+        for edge in met:
+            print(f"  - {edge['scenario']} {edge['kind']} {edge['dependsOn']}  [met]")
+        print()
     if not unmet:
         print("No unmet scenario dependencies.")
         return 0
@@ -142,6 +149,16 @@ def cmd_check_deps(args: argparse.Namespace) -> int:
         print(f"  - {edge['scenario']} {edge['kind']} {edge['dependsOn']}")
         if edge.get("rationale"):
             print(f"      why: {edge['rationale']}")
+        if edge.get("source"):
+            print(f"      source: {edge['source']}")
+    return 0
+
+
+def cmd_add_system(args: argparse.Namespace) -> int:
+    plan = _load(args)
+    plan.set_system(args.area, args.system, source=args.source)
+    _save(plan, args)
+    print(f"Set system for {args.area!r} = {args.system!r}")
     return 0
 
 
@@ -303,16 +320,44 @@ def cmd_research(args: argparse.Namespace) -> int:
     nodes = research.flatten_toc(toc)
     tokens = research.intent_tokens(args.tokens or "")
     hrefs = research.select_hrefs(nodes, tokens, budget=args.budget)
+    selected = [{"href": h, "url": research.page_url(h, args.base)} for h in hrefs]
     result = {
         "base": args.base,
         "tokens": tokens,
         "totalPages": len(nodes),
-        "selected": [
-            {"href": h, "url": research.page_url(h, args.base)} for h in hrefs
-        ],
+        "selected": selected,
     }
+    if getattr(args, "extract", False):
+        result["signals"] = _extract_signals_for(selected)
     print(json.dumps(result, indent=2))
     return 0
+
+
+def _extract_signals_for(selected: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:
+    """Fetch each selected page and pull role/output candidates off it, grounded
+    to the page they came from. Network + best-effort: pages that fail to fetch
+    are skipped, never fatal. The recognition vocabulary comes from the vendored
+    facts file (falling back to the module defaults)."""
+    from planner import facts
+
+    roles = facts.role_lexicon() or list(research.DEFAULT_ROLE_LEXICON)
+    outputs = facts.output_lexicon() or list(research.DEFAULT_OUTPUT_LEXICON)
+    role_hits: dict[str, str] = {}
+    output_hits: dict[str, str] = {}
+    for item in selected:
+        try:
+            text = research.fetch_page_text(item["url"])
+        except Exception:  # noqa: BLE001 — one bad page must not sink the crawl
+            continue
+        sig = research.extract_signals(text, roles=roles, outputs=outputs)
+        for role in sig["roles"]:
+            role_hits.setdefault(role, item["href"])
+        for out in sig["outputs"]:
+            output_hits.setdefault(out, item["href"])
+    return {
+        "roles": [{"value": k, "href": v} for k, v in role_hits.items()],
+        "outputs": [{"value": k, "href": v} for k, v in output_hits.items()],
+    }
 
 
 def cmd_summary(args: argparse.Namespace) -> int:
@@ -370,9 +415,15 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--source", default="Agent", choices=["User", "Agent", "Discovered"])
     p.set_defaults(func=cmd_add_scenario_dependency)
 
-    p = sub.add_parser("check-deps", help="show unmet scenario dependencies to advise the sponsor")
+    p = sub.add_parser("check-deps", help="show met and unmet scenario dependencies")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_check_deps)
+
+    p = sub.add_parser("add-system", help="record the target system for one scenario/area (scoped key)")
+    p.add_argument("--area", required=True, help="scenario id or area slug, e.g. hr-knowledge")
+    p.add_argument("--system", required=True, help="system name, e.g. 'Workday' or 'ServiceNow ITSM'")
+    p.add_argument("--source", default="User", choices=["User", "Agent", "Discovered"])
+    p.set_defaults(func=cmd_add_system)
 
     p = sub.add_parser("add-task", help="add an atomic task")
     p.add_argument("--id", required=True)
@@ -436,6 +487,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tokens", help="intent tokens, e.g. 'workday servicenow'")
     p.add_argument("--toc", help="path to a local toc.json")
     p.add_argument("--fetch", action="store_true", help="fetch the live TOC (network)")
+    p.add_argument("--extract", action="store_true",
+                   help="also fetch each selected page and extract role/output candidates (network)")
     p.add_argument("--base", default=research.LEARN_SECTION_BASE)
     p.add_argument("--budget", type=int, default=18)
     p.set_defaults(func=cmd_research)

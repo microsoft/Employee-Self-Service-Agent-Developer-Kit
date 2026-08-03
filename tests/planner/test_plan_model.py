@@ -115,6 +115,31 @@ def test_set_context_overwrites_in_place_and_keeps_creator():
     assert prov["source"] == "Agent"
 
 
+def test_set_system_scopes_keys_per_area():
+    plan = Plan.new()
+    plan.set_system("hr-knowledge", "SharePoint")
+    plan.set_system("hr-ticketing", "ServiceNow HRSD")
+    plan.set_system("IT Ticketing", "ServiceNow ITSM")  # slugified
+    systems = {e["key"]: e["value"] for e in plan.context if e.get("group") == "system"}
+    assert systems == {
+        "system.hr-knowledge": "SharePoint",
+        "system.hr-ticketing": "ServiceNow HRSD",
+        "system.it-ticketing": "ServiceNow ITSM",
+    }
+
+
+def test_save_bumps_updated_at_and_summary_shows_it(tmp_path):
+    plan = Plan.new(objective="x")
+    created = plan.data["updatedAt"]
+    plan.data["updatedAt"] = "2000-01-01T00:00:00Z"  # simulate an older stamp
+    plan.data["generatedAt"] = "2000-01-01T00:00:00Z"
+    plan.save(tmp_path / "plan.json")
+    assert plan.data["updatedAt"] != "2000-01-01T00:00:00Z"  # bumped on save
+    assert created  # new() set an updatedAt
+    summary = plan.render_summary()
+    assert "Updated:" in summary
+
+
 # --------------------------------------------------------------------------- #
 # Tasks + assignment (the extended Principal states)
 # --------------------------------------------------------------------------- #
