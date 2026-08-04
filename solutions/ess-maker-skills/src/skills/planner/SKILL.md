@@ -52,8 +52,10 @@ have checked for an existing plan.**
      caller's identity or ask which of the plan's roles are theirs, then show only
      those roles' tasks.
    - Offer next actions: **continue/extend** the plan (add or assign tasks),
-     **pick up** one of their tasks (claim → do it → capture what it produced,
-     Phase 5), or **capture** a completed task's output.
+     **pick up** one of their tasks (brief them with `task-brief` — if the plan
+     has an environment pinned, that nudges them to run `/setup` and connect to it
+     first — then claim → do it → capture what it produced, Phase 5), or
+     **capture** a completed task's output.
    - Only start over on **explicit** confirmation — `init --force` overwrites the
      plan.
 3. **If no plan exists** (or the sponsor explicitly confirmed starting over),

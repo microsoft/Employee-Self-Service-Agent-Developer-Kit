@@ -57,6 +57,10 @@ PRINCIPAL_TYPES = ("User", "Role")
 CONTEXT_SOURCES = ("User", "Agent", "Discovered")
 ARTIFACT_KINDS = ("Environment", "Connection", "EntraApp", "KnowledgeSource", "Custom")
 ACTION_KINDS = ("kitSkill", "manual", "portal", "external")
+# Kit skills that ARE the /setup step (they connect a kit to the environment).
+# A task using one of these is the setup task itself, not a task that needs the
+# kit already connected.
+ONBOARDING_SKILLS = ("onboarding", "setup")
 DEPENDENCY_KINDS = ("requires", "recommends")
 # Scenario dependency lives in the open Context bag (no new typed collection),
 # consistent with the "one Context bag" model. A scenario in scope is a Context
@@ -525,6 +529,37 @@ class Plan:
             resolved[key] = art.get("attributes", {}) if art else None
         return resolved
 
+    def kit_setup_nudge(self, task_id: str) -> dict[str, Any] | None:
+        """Whether this task's assignee should run ``/setup`` to connect their own
+        kit to the plan's environment before starting.
+
+        The Power Platform admin's setup task decides or creates the environment
+        and pins ``primaryEnvironment``. Every *other* kit-skill task runs against
+        that same environment, but each assignee's local kit must be connected to
+        it first (via ``/setup``) — a per-person step the pinned plan value can't
+        do for them. So:
+
+        - Returns ``{environmentId, environmentUrl}`` when the task is a kit skill
+          *other than* setup/onboarding **and** the plan already has an
+          environment pinned — nudge this persona to run ``/setup`` and connect to
+          that env.
+        - Returns ``None`` for the setup task itself, for non-kit tasks, or when no
+          environment is pinned yet (then the setup task is the prerequisite, not a
+          nudge).
+        """
+        task = self._require_task(task_id)
+        action = task.get("action", {}) or {}
+        if action.get("kind") != "kitSkill" or action.get("skill") in ONBOARDING_SKILLS:
+            return None
+        env = self.output("primaryEnvironment")
+        if not env:
+            return None
+        attrs = env.get("attributes", {})
+        return {
+            "environmentId": attrs.get("environmentId", ""),
+            "environmentUrl": attrs.get("environmentUrl", ""),
+        }
+
     def task_brief(self, task_id: str) -> dict[str, Any]:
         """A briefing for a task's assignee: how to do it (action), the role, the
         resolved values it consumes (e.g. the env id to use), and the keys to
@@ -537,6 +572,7 @@ class Plan:
             "role": assignee_role_id(task.get("assignedTo")),
             "assignee": assignee_user_oid(task.get("assignedTo")),
             "state": task.get("state", ""),
+            "kitSetup": self.kit_setup_nudge(task_id),
             "consumes": self.resolved_consumes(task_id),
             "produces": list(task.get("produces", [])),
         }
