@@ -234,6 +234,7 @@ def new_task(
     produces: Iterable[str] | None = None,
     consumes: Iterable[str] | None = None,
     checklist: list[dict[str, Any]] | None = None,
+    role_source: str = "",
     state: str = "NotStarted",
 ) -> dict[str, Any]:
     task: dict[str, Any] = {
@@ -248,6 +249,11 @@ def new_task(
     }
     if checklist:
         task["checklist"] = list(checklist)
+    if role_source:
+        # The Microsoft Learn URL that grounded this task's role (traceability):
+        # the role a task needs is read off the Learn page for the prerequisite,
+        # never invented — see research.md / model.md.
+        task["roleSource"] = role_source
     return task
 
 
@@ -570,6 +576,7 @@ class Plan:
             "title": task.get("title", ""),
             "action": task.get("action", {}),
             "role": assignee_role_id(task.get("assignedTo")),
+            "roleSource": task.get("roleSource", ""),
             "assignee": assignee_user_oid(task.get("assignedTo")),
             "state": task.get("state", ""),
             "kitSetup": self.kit_setup_nudge(task_id),

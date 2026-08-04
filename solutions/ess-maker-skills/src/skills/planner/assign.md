@@ -33,3 +33,22 @@ same result and the same capture (Phase 5).
 When every Task is assigned or pooled, show the summary. The Plan is ready to
 run: each assignee runs the Task's skill (or does the manual/portal step), and
 you capture what it produced in Phase 5.
+
+## Future — resolve the person from an external roles API
+
+Today a Task carries a Learn-grounded **role** (pooled), and the sponsor picks the
+person by hand. The next step wires a real **roles source** behind the same seam
+(`scripts/planner/roles.py` → `RoleSource`), so the planner can:
+
+1. **List holders of a role** from an external API — `list_holders(role)` returns
+   the people who hold `{role}`, and the sponsor picks from that list instead of
+   typing a name (Flow 1).
+2. **Assign a user together with the role** — the choice is stored as
+   `assign --task <T#> --role <role> --person <oid>` (person owns it, role
+   retained), so the Task still groups under the role in Flow 2.
+3. **Resolve "what am I assigned?"** — `roles_of(person)` maps the caller to their
+   role(s) so Flow 2 needs no manual role entry.
+
+The Plan schema and skills already support user+role assignment; only the backing
+`RoleSource` is unbuilt. The role stays **Learn-grounded** regardless of who fills
+it — the external API resolves *people*, never the *role* a Task needs.

@@ -10,13 +10,23 @@ Add each Task with:
 ```
 python scripts/planner/cli.py add-task --id <T#> --title "<title>" \
   [--skill <kitSkill> | --action-kind <portal|manual|external> --ref <docUrl>] \
-  --role <grounded-role> \
+  --role <grounded-role> --role-source <learnUrl> \
   [--produces <key,key>] [--consumes <key,key>]
 ```
 
-The `--role` and `--produces` keys come from the **Learn docs** (Phase 1) — not
-hardcoded and not from the sponsor. Set `--role` to pool the Task to that role
-for now; Phase 4 assigns a person.
+**Every Task is assigned to a role at creation — the role that should be able to
+pick it up — and that role is _sourced from the Learn link_, never invented.** The
+`--role` and `--produces` values come from the **Learn page for that prerequisite**
+(Phase 1; the `research --extract` step surfaces the role candidates). Pass the
+Learn URL that names the role as `--role-source` so the grounding is recorded on
+the Task and auditable. `--role` pools the Task to that role for now (any holder
+can pick it up, Flow 2); Phase 4 assigns the actual person.
+
+> **Person comes later.** Today the role is pooled and the sponsor picks a person
+> (Phase 4, Flow 1). A future step resolves *who holds the role* from an external
+> roles API (the `roles.py` `RoleSource` seam — `list_holders(role)`), and a Task
+> can then be assigned a **user together with the role** (`assign --role R
+> --person <oid>`). Do not hardcode people; keep the role Learn-grounded.
 
 ## A Task is not a skill's steps
 
