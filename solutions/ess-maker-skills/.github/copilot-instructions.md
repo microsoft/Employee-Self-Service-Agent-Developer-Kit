@@ -21,7 +21,8 @@ Do not say "hello" or introduce yourself.
 Respond with ONLY this exact message and nothing else:
 
 > Hey! Welcome to the ESS Maker Kit. Before we dive in, I need to set up
-> your environment. Type `/setup` to get started — it only takes a couple minutes.
+> your environment. In VS Code, type `/setup`; in the Copilot CLI (or any chat),
+> just say **"set up ESS"**. It only takes a couple minutes.
 
 **The exceptions**: If the user typed `/setup` or explicitly asked to run
 setup, proceed with setup — read `src/skills/foundation-setup/SKILL.md` and follow it.
