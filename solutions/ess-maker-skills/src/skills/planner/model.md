@@ -48,6 +48,14 @@ step.
 `produces`/`consumes` keys drive ordering ("blocked until produced") and are
 what Phase 5 captures. When the tasks are in, show the summary and go to Phase 4.
 
+**Native connector vs. custom flow.** A `--skill connect` task is only valid for a
+system ESS has a **native integration** for (Workday, ServiceNow HRSD/ITSM, SAP
+SuccessFactors — confirm from Phase‑1 Learn research). For a captured system with
+**no** native connector (e.g. ADP, Jira, Dynamics 365, custom HTTP API), emit a
+**`--skill create`** (custom Power Automate flow) task instead — do not fabricate a
+`connect` task for it. SharePoint / M365 content is a **knowledge source**, so it's
+the topics/knowledge task, not a connect task.
+
 ## First step for a first-time / greenfield rollout
 
 The first task is almost always the **Power Platform admin running `/setup`**.
