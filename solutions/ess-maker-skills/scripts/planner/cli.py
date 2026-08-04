@@ -219,15 +219,19 @@ def cmd_capture_setup(args: argparse.Namespace) -> int:
     this is called, then shows the pinned artifact.
     """
     plan = _load(args)
+    task_id = args.task or plan.setup_task_id()
+    if not task_id:
+        print("No setup task found on the plan; pass --task <T#>.", file=sys.stderr)
+        return 1
     before = json.loads(args.before) if args.before else {}
     after = snapshot_config(args.config)
-    artifact = detect_environment(before, after, task_id=args.task, key=args.key)
+    artifact = detect_environment(before, after, task_id=task_id, key=args.key)
     if artifact is None:
         print("No environment change detected in config.json; nothing to pin.", file=sys.stderr)
         return 1
     plan.add_output(artifact)
     if args.complete:
-        plan.set_task_state(args.task, "Completed")
+        plan.set_task_state(task_id, "Completed")
     _save(plan, args)
     print(json.dumps(artifact, indent=2))
     return 0
@@ -464,7 +468,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_set_state)
 
     p = sub.add_parser("capture-setup", help="observe /setup output and pin the environment")
-    p.add_argument("--task", required=True)
+    p.add_argument("--task", help="setup task id (default: auto-detect the plan's /setup task)")
     p.add_argument("--key", default="primaryEnvironment")
     p.add_argument("--config", default=os.path.join(".local", "config.json"))
     p.add_argument("--before", help="JSON snapshot taken before setup (optional)")
