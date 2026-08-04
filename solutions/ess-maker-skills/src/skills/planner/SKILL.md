@@ -33,6 +33,34 @@ exist yet, and the first Task the Plan emits is usually "run setup". So:
    details and enable output capture).
 2. Whether or not setup is complete, **proceed** with planning.
 
+## First — resume an existing plan, or start a new one
+
+**Always begin here. Do NOT ask for the objective (or anything else) until you
+have checked for an existing plan.**
+
+1. Check whether a plan already exists at `workspace/plan/plan.json`.
+2. **If a plan exists, resume it — do not re-interview and do not ask for the
+   objective again.**
+   - Show its latest state: `python scripts/planner/cli.py summary` — the
+     objective, every task and its state, scenario dependencies, and what's been
+     produced so far. Present it in plain language.
+   - Show the **tasks that can be picked up now**, *role-gated* to the person in
+     front of you (Flow 2 — read `src/skills/planner/mytasks.md`): the tasks
+     assigned to them or open to a role they hold, that aren't already Completed.
+     A task is shown **only** if the person holds the role it needs. Role
+     resolution is best-effort until the roles source / MCP exists — resolve the
+     caller's identity or ask which of the plan's roles are theirs, then show only
+     those roles' tasks.
+   - Offer next actions: **continue/extend** the plan (add or assign tasks),
+     **pick up** one of their tasks (claim → do it → capture what it produced,
+     Phase 5), or **capture** a completed task's output.
+   - Only start over on **explicit** confirmation — `init --force` overwrites the
+     plan.
+3. **If no plan exists** (or the sponsor explicitly confirmed starting over),
+   create one after you have their one-line goal, then build it through the
+   phases below:
+   `python scripts/planner/cli.py init --objective "<their goal>"` → Phase 1.
+
 ## Progress
 
 Use the todo-list tool to track the phases below. Create the list up front and
@@ -40,7 +68,9 @@ mark each phase in-progress → done as you go.
 
 ## Phases
 
-Run these in order; each has a sub-file with the concrete steps.
+Run these in order **when building a new plan (or extending an existing one)**;
+each has a sub-file with the concrete steps. (If a plan already exists, resume it
+per **First** above instead of re-running the interview.)
 
 | Phase | What | Read |
 |-------|------|------|
@@ -64,16 +94,10 @@ read `src/skills/planner/mytasks.md`.
 > each downstream assignee with what setup produced (the env id) and to commit
 > what they create back onto the plan.
 
-## Start
+## Building the plan
 
-1. If `workspace/plan/plan.json` already exists, read it (via
-   `python scripts/planner/cli.py summary`) and ask the sponsor whether to
-   **continue** that plan or **start fresh**. Only overwrite on explicit
-   confirmation (`init --force`).
-2. Otherwise create a new plan once you have the sponsor's one-line goal:
-   `python scripts/planner/cli.py init --objective "<their goal>"`.
-3. Go to Phase 1 (research).
-
-After every phase that changes the plan, regenerate the human view implicitly
-(the CLI does this on each write) and, at natural checkpoints, show the sponsor
-`python scripts/planner/cli.py summary`.
+When creating a new plan — or extending an existing one — work the phases in
+order. After every phase that changes the plan the CLI regenerates the human view
+(`workspace/plan/summary.md`); at natural checkpoints show the sponsor
+`python scripts/planner/cli.py summary`. (To resume a plan that already exists,
+see **First** above — don't restart the interview.)
