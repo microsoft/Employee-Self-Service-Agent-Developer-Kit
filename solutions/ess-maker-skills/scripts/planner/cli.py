@@ -274,6 +274,10 @@ def cmd_task_brief(args: argparse.Namespace) -> int:
     elif action.get("ref"):
         print(f"  How: {action.get('kind')} - {action['ref']}")
     print(f"  Role: {brief.get('role')}  |  State: {brief.get('state')}")
+    nudge = brief.get("kitSetup")
+    if nudge:
+        env = nudge.get("environmentId") or nudge.get("environmentUrl") or "the plan's environment"
+        print(f"  First connect your kit: run /setup and choose environment {env}.")
     consumes = brief.get("consumes") or {}
     if consumes:
         print("  Use these values produced by earlier tasks:")

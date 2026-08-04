@@ -62,6 +62,17 @@ It prints which skill to run, their role, the **values to use** (e.g.
 So the Workday assignee is told "use env `<id>`, run `/connect`, then we'll pin
 the connection" — no re-discovery.
 
+**Every non-setup persona connects their own kit first.** The environment id is a
+*plan* fact once the Power Platform admin's `/setup` pins `primaryEnvironment`,
+but each assignee's own kit still has to connect to that same environment before
+their task's skill will work. `task-brief` handles the nudge: for a kit-skill task
+that isn't setup, once the plan has an environment pinned it prints **"First
+connect your kit: run /setup and choose environment `<envId>`"**. So the
+Workday / topics / eval assignee is nudged to `/setup` into the *plan's*
+environment — never to pick or create a different one. If the plan has **no**
+environment pinned yet, the admin's setup task hasn't run — that task is the
+prerequisite, so don't nudge others to setup; tell them it's blocked on setup.
+
 ## Downstream reads it off the Plan
 
 Once pinned, a later Task reads the value straight from the Plan — no

@@ -48,6 +48,25 @@ def test_task_brief_shape():
     assert b["produces"] == ["workdayConnection", "workdayEntraApp"]
 
 
+def test_kit_setup_nudge_is_plan_env_driven():
+    p = _plan()
+    # No env pinned yet -> no nudge (the admin's setup task is the prerequisite).
+    assert p.kit_setup_nudge("T2") is None
+    # Pin the env -> the connect assignee is nudged to /setup into THAT env.
+    p.add_output(plan_artifact("primaryEnvironment", "Environment",
+                               {"environmentId": "e1", "environmentUrl": "u"}, produced_by_task_id="T1"))
+    assert p.kit_setup_nudge("T2") == {"environmentId": "e1", "environmentUrl": "u"}
+    # The setup task itself is never nudged.
+    assert p.kit_setup_nudge("T1") is None
+    # A non-kit task (portal/manual) is never nudged, even with an env pinned.
+    from planner.plan_model import action_portal
+    p.add_task(new_task("T3", "Publish", action=action_portal("https://doc"),
+                        assigned_to=principal_pool("power-platform-admin")))
+    assert p.kit_setup_nudge("T3") is None
+    # task_brief surfaces the nudge for the connect task.
+    assert p.task_brief("T2")["kitSetup"] == {"environmentId": "e1", "environmentUrl": "u"}
+
+
 def _run(*argv: str) -> int:
     return cli.main(list(argv))
 
@@ -84,6 +103,7 @@ def test_cli_task_brief_shows_env_and_steps(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "/connect" in out             # which skill to run
     assert "env-9" in out                # the env id back-propagated from setup
+    assert "/setup" in out               # nudged to connect their kit to the plan env
     assert "integration-owner" in out    # role
     assert "workdayConnection" in out    # what to capture
 

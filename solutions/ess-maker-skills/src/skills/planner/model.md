@@ -81,6 +81,13 @@ nobody re-enters what the admin already set up:
 This is the back-propagation: capture the admin's output once, and every task
 that needs it — including topic **create** and eval generation — picks it up.
 
+Each downstream persona connects their **own** kit to that environment first: they
+run `/setup` and choose the environment the admin pinned (`primaryEnvironment`),
+then their kit skill reads `.local/config.json`. The planner nudges this
+automatically — `task-brief` prints "run /setup and choose environment `<envId>`"
+for any non-setup kit task once the plan has an environment. So the `/setup` nudge
+for other personas is **driven by the plan having an env id**, not fired blindly.
+
 ## Emit the full task set now (do not stop at setup)
 
 From the systems and scenarios captured in Phase 2, create **every** task now —
