@@ -29,6 +29,16 @@ instead of scraping links.
    plus the pages whose title/path match the sponsor's intent tokens, capped by
    a page budget. Non-matching siblings (e.g. SAP when the sponsor said Workday)
    are read title-only, not fetched.
+
+   Add `--extract` to also fetch each selected page and pull **role/output
+   candidates** off it (grounded to the page they came from):
+
+   ```
+   python scripts/planner/cli.py research --fetch --extract --tokens "<systems + scenarios>"
+   ```
+
+   Use those role candidates as the Learn-grounded role for each prerequisite's
+   Task (Phase 3), and keep the page URL — it becomes the Task's `--role-source`.
 4. **Read the selected pages** with your fetch tool, using the URLs the CLI
    prints. Only follow links that resolve to a TOC `href` — never invent a URL.
 
@@ -41,8 +51,10 @@ For every page you read, pull out (each stamped with its source URL):
   case). This is what makes a scenario *buildable*.
 - **Prerequisites** — what must exist first (environment, licensing, an Entra
   app + SSO, a connection, a knowledge source), and for each: the **responsible
-  role** the docs name, **how** it's done (a kit skill, or a portal/manual
-  step), and the **output keys** it produces. These become Tasks (Phase 3).
+  role** the docs name (and the **page URL** it came from — this becomes the
+  Task's `--role`/`--role-source`), **how** it's done (a kit skill, or a
+  portal/manual step), and the **output keys** it produces. These become Tasks
+  (Phase 3).
 - **Constraints** — e.g. "Workday requires Entra SSO", data-residency notes.
 - **Open items** — anything the docs don't answer → interview questions
   (Phase 2).

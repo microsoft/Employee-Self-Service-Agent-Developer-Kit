@@ -178,6 +178,7 @@ def cmd_add_task(args: argparse.Namespace) -> int:
             assigned_to=assigned,
             produces=_csv(args.produces),
             consumes=_csv(args.consumes),
+            role_source=args.role_source or "",
         )
     )
     _save(plan, args)
@@ -274,6 +275,8 @@ def cmd_task_brief(args: argparse.Namespace) -> int:
     elif action.get("ref"):
         print(f"  How: {action.get('kind')} - {action['ref']}")
     print(f"  Role: {brief.get('role')}  |  State: {brief.get('state')}")
+    if brief.get("roleSource"):
+        print(f"  Role grounded in: {brief['roleSource']}")
     nudge = brief.get("kitSetup")
     if nudge:
         env = nudge.get("environmentId") or nudge.get("environmentUrl") or "the plan's environment"
@@ -437,6 +440,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--action-kind", choices=["kitSkill", "manual", "portal", "external"])
     p.add_argument("--ref", help="doc/portal URL for a non-skill action")
     p.add_argument("--role", help="Learn-grounded role for this task")
+    p.add_argument("--role-source", dest="role_source",
+                   help="Microsoft Learn URL that grounds the role for this task")
     p.add_argument("--person", help="assign directly to a person (oid)")
     p.add_argument("--produces", help="comma-separated output keys")
     p.add_argument("--consumes", help="comma-separated consumed keys")
