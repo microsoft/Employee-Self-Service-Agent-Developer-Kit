@@ -16,7 +16,7 @@ python scripts/planner/cli.py set-context --key <k> --value "<v>" --group <group
 | Ask (grounded example) | Store as |
 |------------------------|----------|
 | "In one sentence — what should this agent do, and for whom?" | `set-context --group objective` |
-| "Which system holds the data for **{area}** — e.g. Workday, ServiceNow, SharePoint?" — ask **per area**, once you know the areas | `add-system --area {area} --system "{name}"` |
+| "Which system holds the data for **{area}**?" — ask **per area**; ground the options in the ESS **native integrations** surfaced by Phase‑1 Learn research (currently Workday, ServiceNow HRSD/ITSM, SAP SuccessFactors). Don't improvise the list. | `add-system --area {area} --system "{name}"` |
 | "Which business scenarios are in scope for the first wave?" — capture the maker's own words; ground each against Microsoft Learn (Phase 1). Do **not** offer a fixed menu. | `set-context --group scenarioContext` (keys `area`, `jtbd`) |
 | "Employees only, or managers too?" | `set-context --group scenarioContext` (key `persona`) |
 | "Rolling out to a specific market or wave first (e.g. Germany, a pilot group)?" | `set-context --group market` |
@@ -24,13 +24,29 @@ python scripts/planner/cli.py set-context --key <k> --value "<v>" --group <group
 | "How will you know a scenario is done — pilot-ready? production-signed-off?" | `set-context --group acceptanceCriteria` |
 | "Is this a brand-new environment, or do you already have ESS running?" | (branch — greenfield vs enrichment) |
 
-**Capture systems per area, not as one value.** A rollout usually has different
-systems per area (e.g. HR knowledge on SharePoint, HR ticketing on ServiceNow
+**Ground the systems in Learn — don't improvise the connector list.** ESS ships
+native integrations (extension packs) for a specific set of systems, each with a
+Microsoft Learn page: **Workday**, **ServiceNow** (HRSD/ITSM), and **SAP
+SuccessFactors**. Derive the current native set from Phase‑1 research (the
+integration pages in the ESS Learn TOC — `workday`, `servicenow`,
+`servicenow-hrsd-itsm`, `sapsuccessfactors`, …) rather than naming systems from
+memory; that keeps it correct as Learn adds connectors. Two rules the maker's
+answer must be checked against:
+
+- **SharePoint (and other M365 content) is a *knowledge source*, not a data‑system
+  connector** — capture it as the knowledge task, not a connect task.
+- **A system with no native ESS connector — e.g. ADP, Jira, Dynamics 365, or a
+  custom HTTP API — needs a custom Power Automate flow via `/create`, not a native
+  connect task.** Flag it so Phase 3 emits a workflow (create) task, and say so to
+  the maker rather than implying a native connector exists.
+
+**Capture systems per area, not as one value.** Different areas usually use
+different systems (e.g. HR knowledge on SharePoint, HR ticketing on ServiceNow
 HRSD, IT ticketing on ServiceNow ITSM). Record each with its own scoped key so
 they never overwrite each other:
 
 ```
-python scripts/planner/cli.py add-system --area hr-knowledge --system "SharePoint"
+python scripts/planner/cli.py add-system --area hr-knowledge --system "SharePoint (knowledge source)"
 python scripts/planner/cli.py add-system --area hr-ticketing --system "ServiceNow HRSD"
 python scripts/planner/cli.py add-system --area it-ticketing --system "ServiceNow ITSM"
 ```
