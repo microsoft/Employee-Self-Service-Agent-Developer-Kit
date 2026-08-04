@@ -535,6 +535,23 @@ class Plan:
             resolved[key] = art.get("attributes", {}) if art else None
         return resolved
 
+    def setup_task_id(self) -> str | None:
+        """The plan's setup task id — the task whose action runs ``/setup``
+        (onboarding). Prefers the first not-yet-Completed such task, else the
+        first one; ``None`` if the plan has no setup task. Lets the capture step
+        auto-target the right task after ``/setup`` finishes."""
+        candidates = [
+            t for t in self.tasks
+            if (t.get("action") or {}).get("kind") == "kitSkill"
+            and (t.get("action") or {}).get("skill") in ONBOARDING_SKILLS
+        ]
+        if not candidates:
+            return None
+        for t in candidates:
+            if t.get("state") != "Completed":
+                return t["id"]
+        return candidates[0]["id"]
+
     def kit_setup_nudge(self, task_id: str) -> dict[str, Any] | None:
         """Whether this task's assignee should run ``/setup`` to connect their own
         kit to the plan's environment before starting.

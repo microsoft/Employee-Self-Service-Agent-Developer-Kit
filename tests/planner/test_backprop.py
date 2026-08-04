@@ -98,6 +98,39 @@ def test_role_source_absent_by_default():
     assert "roleSource" not in t  # only present when grounded from Learn
 
 
+def test_setup_task_id_picks_the_onboarding_task():
+    p = Plan.new()
+    from planner.plan_model import action_portal
+    # A portal "provision" task is NOT the setup task; the onboarding-skill task is.
+    p.add_task(new_task("T1", "Provision env", action=action_portal("https://doc"),
+                        assigned_to=principal_pool("power-platform-admin")))
+    p.add_task(new_task("T2", "Run setup", action=action_kit_skill("onboarding"),
+                        assigned_to=principal_pool("power-platform-admin"),
+                        produces=["primaryEnvironment"]))
+    assert p.setup_task_id() == "T2"
+    assert Plan.new().setup_task_id() is None  # no setup task -> None
+
+
+def test_capture_setup_autodetects_setup_task(tmp_path):
+    plan_path = str(tmp_path / "plan.json")
+    cfg = tmp_path / "config.json"
+    cfg.write_text(json.dumps({"setup": "complete",
+                               "dataverseEndpoint": "https://o.crm.dynamics.com",
+                               "environmentId": "env-7"}), encoding="utf-8")
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Provision env",
+         "--action-kind", "portal", "--ref", "https://doc", "--role", "power-platform-admin")
+    _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Run setup",
+         "--skill", "onboarding", "--role", "power-platform-admin", "--produces", "primaryEnvironment")
+    # No --task: capture-setup finds the plan's /setup task (T2), pins env, completes it.
+    rc = _run("--plan", plan_path, "capture-setup", "--config", str(cfg), "--before", "{}", "--complete")
+    assert rc == 0
+    p = Plan.load(plan_path)
+    assert p.output("primaryEnvironment")["attributes"]["environmentId"] == "env-7"
+    assert p.task("T2")["state"] == "Completed"
+    assert p.task("T1")["state"] == "NotStarted"  # portal task untouched
+
+
 def test_cli_pin_output_commits_artifact(tmp_path, capsys):
     plan_path = str(tmp_path / "plan.json")
     _run("--plan", plan_path, "init")
