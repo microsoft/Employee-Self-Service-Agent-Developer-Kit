@@ -203,6 +203,10 @@ def test_classify_tenant_microsoft_corp_is_internal():
     assert _fc.classify_tenant(f"  {_fc.MICROSOFT_CORP_TENANT_ID.upper()} ") == "internal"
 
 
+def test_classify_tenant_employeehub_is_internal():
+    assert _fc.classify_tenant(_fc.EMPLOYEEHUB_TENANT_ID) == "internal"
+
+
 def test_classify_tenant_other_tenant_is_customer():
     assert _fc.classify_tenant("11111111-1111-1111-1111-111111111111") == "customer"
 
