@@ -22,6 +22,18 @@ fields like an action/kit-skill type — those are not task data; the descriptio
 carries it. (The setup task is identified by what it **produces**, below — not by
 any skill field.)
 
+**The description names the how; the _detailed_ steps are enriched from Learn on
+start — so keep the Learn anchor.** Keep the description a clear, self-contained
+summary (what to do, which command or portal step); don't try to inline every
+step — steps drift and go stale. When an assignee picks the task up, Flow 2 renders
+the full how-to by **handing off to the named kit skill** (`/setup`, `/connect`,
+`/create`, `/evaluate`) or **fetching the step's Microsoft Learn page fresh** for a
+portal/manual step (`src/skills/planner/mytasks.md` → *Brief the task in detail*).
+For that to work, keep each task's **grounding Learn page URL** in the research
+context (§7.6, `prerequisites[].sourceUrl`) — that anchor is what the brief
+enriches from at render time. Mantra: **enrich from Learn**, don't freeze steps
+into the plan.
+
 **Every Task is assigned to a role at creation — the role that should be able to
 pick it up — and that role is _sourced from the Learn link_, never invented.** The
 `--role` and `--produces` values come from the **Learn page for that prerequisite**

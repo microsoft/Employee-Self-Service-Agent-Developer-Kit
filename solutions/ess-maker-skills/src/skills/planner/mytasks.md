@@ -53,3 +53,43 @@ python scripts/planner/cli.py task-brief --task <T#>
 
 Present the result in plain language — role headings with their tasks beneath —
 not as raw output.
+
+## Brief the task in detail — enrich from Learn
+
+When an assignee engages a task — "what do I do?", or they claim it — do **not**
+just echo the one-line description. Give a **detailed, actionable how-to**, the
+same depth `/connect` or `/setup` gives. **Mantra: enrich from Learn.** Start from
+the structured brief, then enrich the "how":
+
+```
+python scripts/planner/cli.py task-brief --task <T#>
+```
+
+`task-brief` gives the role, the values the task **consumes** (resolved off the
+plan — e.g. the environment id to use), the outputs to **capture** when done, and
+the `/setup`-into-the-pinned-environment nudge. On top of that, render the "how"
+by the task's kind:
+
+1. **The task is done by running a kit skill** (its description says run `/setup`,
+   `/connect`, `/create`, `/evaluate`): **hand off to that skill** — it owns the
+   detailed, current, per-tenant steps (that's exactly why `/connect` and `/setup`
+   are rich). Read that skill's `SKILL.md` and follow it; don't re-summarise its
+   steps from memory. The skill *is* the how-to. (E.g. "create a topic" → `/create`.)
+
+2. **The task is a portal / manual step** with no kit skill (register an Entra app,
+   provision the Power Platform environment, publish the agent): **fetch the how-to
+   from Microsoft Learn at render time** and render a **task walkthrough**:
+   - **Role** — taken *verbatim* from the step's Learn page (never relabelled or
+     invented; if Learn lists alternatives, name them as Learn does).
+   - **What it accomplishes** — a line or two of context.
+   - **Steps** — numbered; each step ends with an inline `learn.microsoft.com` link
+     to the exact page/section it came from.
+   - **Help & resources** — a short list of the relevant Learn links.
+
+   Fetch from the task's grounding Learn anchor kept in the research context
+   (§7.6, `prerequisites[].sourceUrl`) — **never** rely only on the terse stored
+   description, and **never** fabricate a step, role, or link. The description is
+   the scannable summary; the Learn fetch (or the kit skill) is the detailed how.
+
+Always enrich **on start**, freshly from Learn, so the steps and links are current
+rather than baked into (and drifting from) the stored plan.

@@ -25,7 +25,7 @@ def test_init_creates_plan(tmp_path):
     assert _run("--plan", plan_path, "init", "--objective", "Do ESS") == 0
     plan = Plan.load(plan_path)
     assert plan.output_value_or_context("objective") == "Do ESS"
-    assert (tmp_path / "summary.md").exists()
+    assert (tmp_path / "ESS-scenario-plan.md").exists()
 
 
 def test_init_refuses_overwrite_without_force(tmp_path, capsys):
@@ -48,6 +48,25 @@ def test_add_system_uses_scoped_keys(tmp_path):
         "system.hr-knowledge": "SharePoint",
         "system.hr-ticketing": "ServiceNow HRSD",
     }
+
+
+def test_update_and_remove_task_roundtrip(tmp_path):
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Run setup",
+         "--role", "power-platform-admin", "--produces", "primaryEnvironment")
+    # Reconcile an edit: retitle + new description + extra produced key.
+    assert _run("--plan", plan_path, "update-task", "--id", "T1",
+                "--title", "Run setup (revised)", "--description", "new how-to",
+                "--produces", "primaryEnvironment,extra") == 0
+    plan = Plan.load(plan_path)
+    t = plan.task("T1")
+    assert t["title"] == "Run setup (revised)"
+    assert t["description"] == "new how-to"
+    assert t["produces"] == ["primaryEnvironment", "extra"]
+    # Reconcile a deletion.
+    assert _run("--plan", plan_path, "remove-task", "--id", "T1") == 0
+    assert Plan.load(plan_path).task("T1") is None
 
 
 def test_full_flow(tmp_path, capsys):

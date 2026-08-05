@@ -7,7 +7,10 @@ Microsoft Learn*, interviews the sponsor for what it can't ground, assigns the
 work, and captures Task outputs (starting with the environment `/setup`
 creates) so later Tasks read them straight off the Plan.
 
-The Plan lives at `workspace/plan/plan.json` (human view: `workspace/plan/summary.md`).
+The Plan lives at `workspace/plan/plan.json`. Its human view —
+`workspace/plan/ESS-scenario-plan.md` — is an **editable** surface a Plan editor
+can revise directly (or edit and re-upload); you reconcile their edits back into
+the plan (`src/skills/planner/edit.md`). The CLI regenerates it after every change.
 All structured reads/writes go through the CLI so writes are atomic and
 validated:
 
@@ -52,10 +55,13 @@ have checked for an existing plan.**
      caller's identity or ask which of the plan's roles are theirs, then show only
      those roles' tasks.
    - Offer next actions: **continue/extend** the plan (add or assign tasks),
-     **pick up** one of their tasks (brief them with `task-brief` — if the plan
-     has an environment pinned, that nudges them to run `/setup` and connect to it
-     first — then claim → do it → capture what it produced, Phase 6), or
-     **capture** a completed task's output.
+     **edit** the plan — they can revise the ESS scenario plan Markdown directly
+     or just say what to change, and you reconcile it (`src/skills/planner/edit.md`),
+     **pick up** one of their tasks (brief them with `task-brief`, enriched into a
+     detailed how-to from Learn or the owning kit skill — `src/skills/planner/mytasks.md`;
+     if the plan has an environment pinned, that nudges them to run `/setup` and
+     connect to it first — then claim → do it → capture what it produced, Phase 6),
+     or **capture** a completed task's output.
    - Only start over on **explicit** confirmation — `init --force` overwrites the
      plan.
 3. **If no plan exists** (or the sponsor explicitly confirmed starting over),
@@ -103,9 +109,11 @@ read `src/skills/planner/mytasks.md`.
 
 When creating a new plan — or extending an existing one — work the phases in
 order. After every phase that changes the plan the CLI regenerates the human view
-(`workspace/plan/summary.md`); at natural checkpoints show the sponsor
+(`workspace/plan/ESS-scenario-plan.md`); at natural checkpoints show the sponsor
 `python scripts/planner/cli.py summary`. When authoring is complete (after
 Phase 4), run **Phase 5** to hand off to the eval skill for a theoretical,
-scenario-based eval; **Phase 6** (capture) runs later as each Task executes. (To
-resume a plan that already exists, see **First** above — don't restart the
-interview.)
+scenario-based eval; **Phase 6** (capture) runs later as each Task executes. Once
+the plan exists, hand the editor the **ESS scenario plan** Markdown as an editable
+file — they can revise it directly or say what to change, and you reconcile it
+back into the plan (`src/skills/planner/edit.md`). (To resume a plan that already
+exists, see **First** above — don't restart the interview.)
