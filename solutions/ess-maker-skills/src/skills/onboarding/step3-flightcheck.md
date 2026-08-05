@@ -74,7 +74,7 @@ exactly.
 
 After the results, always append the setup completion table:
 
-| # | Task | Status |
+| # | Step | Status |
 |---|------|--------|
 | 1 | Dataverse configured | ✅ |
 | 2 | Agent discovered | ✅ |

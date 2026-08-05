@@ -219,7 +219,7 @@ Update `.local/connect/servicenow/steps.md` — change step 2 from
 
 ✅ OAuth application created in ServiceNow.
 
-| # | Task | Status |
+| # | Step | Status |
 |---|------|--------|
 | 1 | Instance configured | ✅ |
 | 2 | Connection secured | ✅ |

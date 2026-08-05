@@ -77,7 +77,7 @@ Update `workspace/onboarding/steps.md` — change both step 1 and step 2 from
 
 ✅ Selected **{BOT_NAME}**.
 
-| # | Task | Status |
+| # | Step | Status |
 |---|------|--------|
 | 1 | Dataverse configured | ✅ |
 | 2 | Agent discovered | ✅ |

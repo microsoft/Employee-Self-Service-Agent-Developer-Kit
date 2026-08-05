@@ -71,7 +71,7 @@ Count the new ServiceNow-related topics from the script output.
 
 ✅ Connection verified!
 
-| # | Task | Status |
+| # | Step | Status |
 |---|------|--------|
 | 1 | Instance configured | ✅ |
 | 2 | Connection secured | ✅ |

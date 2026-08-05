@@ -43,7 +43,7 @@ by "Picking up at Step {N}." Then go to the matching step below.
 
 **Message:**
 
-| # | Task | Status |
+| # | Step | Status |
 |---|------|--------|
 | 1 | Dataverse configured | ⬜ |
 | 2 | Agent discovered | ⬜ |

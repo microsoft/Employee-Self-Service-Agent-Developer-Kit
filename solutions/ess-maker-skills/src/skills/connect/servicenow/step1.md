@@ -252,7 +252,7 @@ Update `.local/connect/servicenow/steps.md` — change step 1 from
 
 ✅ Instance configured — connected to `{INSTANCE_NAME}`.
 
-| # | Task | Status |
+| # | Step | Status |
 |---|------|--------|
 | 1 | Instance configured | ✅ |
 | 2 | Connection secured | ⬜ |

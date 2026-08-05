@@ -764,7 +764,7 @@ Update `.local/connect/servicenow/steps.md` — change step 2 from
 ✅ Certificate connection secured — both apps registered, OIDC
 configured, and system user created.
 
-| # | Task | Status |
+| # | Step | Status |
 |---|------|--------|
 | 1 | Instance configured | ✅ |
 | 2 | Connection secured | ✅ |
