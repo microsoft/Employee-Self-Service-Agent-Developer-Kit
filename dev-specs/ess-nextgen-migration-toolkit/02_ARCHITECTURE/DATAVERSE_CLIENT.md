@@ -320,6 +320,10 @@ Persist transformed components.
 
 Update Dataverse artifacts.
 
+Support caller-supplied per-request headers for Dataverse platform scoping (for
+example `MSCRM.SolutionUniqueName`) without interpreting those headers as
+migration business logic.
+
 ---
 
 ## Consumes

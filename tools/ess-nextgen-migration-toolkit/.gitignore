@@ -16,3 +16,8 @@ venv/
 # Generated execution artifacts (keep folder, ignore contents)
 output/*
 !output/.gitkeep
+
+# Local developer config (tokens, env URLs — never committed)
+.local/
+
+solutions/

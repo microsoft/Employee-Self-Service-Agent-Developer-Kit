@@ -11,7 +11,7 @@ from pathlib import Path
 from types import TracebackType
 from typing import TextIO
 
-from core.logging.session_manager import SessionManager
+from core.logging.session_manager import DEFAULT_REPORT_FILENAME, SessionManager
 from core.models.execution_context import ChangeEntry, DiagnosticEntry, ExecutionContext
 
 
@@ -38,7 +38,7 @@ class TeeStream(TextIOBase):
         chars_written = self._original.write(text)
         try:
             self._log_file.write(text)
-        except Exception:  # noqa: BLE001 — DIAG-001: diagnostics must never abort execution
+        except (OSError, ValueError):  # DIAG-001: diagnostics must never abort execution
             pass
         return chars_written
 
@@ -47,7 +47,7 @@ class TeeStream(TextIOBase):
         self._original.flush()
         try:
             self._log_file.flush()
-        except Exception:  # noqa: BLE001 — DIAG-001: diagnostics must never abort execution
+        except (OSError, ValueError):  # DIAG-001: diagnostics must never abort execution
             pass
 
     def isatty(self) -> bool:
@@ -92,11 +92,12 @@ class Logger:
         output_root: Path,
         context: ExecutionContext,
         *,
+        report_filename: str = DEFAULT_REPORT_FILENAME,
         level: LogLevel = LogLevel.INFO,
         clock: Callable[[], datetime] | None = None,
     ) -> Logger:
         """Create a session bundle, install the transcript tee, and return Logger."""
-        session_manager = SessionManager(output_root, clock=clock)
+        session_manager = SessionManager(output_root, report_filename=report_filename, clock=clock)
         logger = cls(session_manager, context, level=level, clock=clock)
         logger.start()
         return logger
@@ -132,7 +133,7 @@ class Logger:
             try:
                 self._log_file.flush()
                 self._log_file.close()
-            except Exception:  # noqa: BLE001 — DIAG-001: safe teardown
+            except (OSError, ValueError):  # DIAG-001: safe teardown
                 pass
         self._started = False
 
@@ -223,6 +224,7 @@ class Logger:
         rule_id: str | None = None,
         title: str | None = None,
         component: str | None = None,
+        component_type: str | None = None,
         details: tuple[str, ...] = (),
     ) -> None:
         """Append a customer-channel change entry to the report model only."""
@@ -232,6 +234,7 @@ class Logger:
                 rule_id=rule_id,
                 title=title,
                 component=component,
+                component_type=component_type,
                 details=details,
             )
         )
@@ -243,11 +246,18 @@ class Logger:
         pipeline_stage: str,
         pipeline_step: str,
     ) -> None:
-        if level < self._level:
-            return
-
         timestamp = self._clock().strftime("%Y-%m-%d %H:%M:%S")
-        line = f"{timestamp} {level.name} {pipeline_stage} {pipeline_step} {message}\n"
-        stream = sys.stderr if level >= LogLevel.ERROR else sys.stdout
-        stream.write(line)
-        stream.flush()
+        line = f"[{timestamp}] [{level.name}] [{pipeline_stage}/{pipeline_step}] {message}\n"
+
+        if level >= self._level:
+            # Above console threshold — write to console (TeeStream mirrors to session.log)
+            stream = sys.stderr if level >= LogLevel.ERROR else sys.stdout
+            stream.write(line)
+            stream.flush()
+        elif self._log_file is not None:
+            # Below console threshold — write directly to session.log only
+            try:
+                self._log_file.write(line)
+                self._log_file.flush()
+            except OSError:  # DIAG-001: diagnostics file write failure
+                pass

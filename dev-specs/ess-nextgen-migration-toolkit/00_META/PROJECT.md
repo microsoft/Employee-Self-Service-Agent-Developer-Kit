@@ -117,23 +117,25 @@ Support for new component types should be extensible through migration rules.
 
 # 7. Migration Strategy
 
-Migration follows a staged confidence model.
+Migration follows a staged confidence model. These are customer-journey
+*intents* that map onto the two technical execution modes (`READONLY` /
+`WRITEBACK` — see `01_PRODUCT/MIGRATION_MODES.md`):
 
 ```text
-DISCOVER
+Discover   → READONLY
 
 ↓
 
-PREVIEW
+Preview    → READONLY
 
 ↓
 
-MIGRATE
+Migrate    → WRITEBACK
 ```
 
 Each stage increases confidence before customer environments are modified.
 
-The migration engine remains identical across Preview and Migrate.
+The migration engine remains identical across `READONLY` and `WRITEBACK`.
 
 Only persistence differs.
 

@@ -11,6 +11,7 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Anil Kumar Adepu" }]
 dependencies = [
+    "httpx>=0.28.1",
     "msal>=1.37.0",
 ]
 
@@ -31,7 +32,6 @@ dev = [
 # places top-level packages directly under src/. The build maps them explicitly.
 [tool.hatch.build.targets.wheel]
 packages = [
-    "src/constants",
     "src/core",
     "src/modules",
     "src/service",

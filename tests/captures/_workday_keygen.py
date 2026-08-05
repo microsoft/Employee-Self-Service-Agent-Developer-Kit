@@ -30,7 +30,6 @@ from __future__ import annotations
 import os
 import stat
 import sys
-from pathlib import Path
 
 from _common import KIT_ROOT
 

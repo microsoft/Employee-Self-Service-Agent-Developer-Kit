@@ -2,18 +2,17 @@
 
 from __future__ import annotations
 
-import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from importlib import import_module
-from typing import Any, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, Any, Protocol, TypeAlias, cast
 from urllib.parse import urlparse
+
+if TYPE_CHECKING:
+    from core.logging import Logger
 
 TokenResult: TypeAlias = dict[str, object]
 Clock: TypeAlias = Callable[[], float]
-
-# TODO(TASK-005): replace this stdlib logger seam with the framework Logger.
-LOGGER = logging.getLogger(__name__)
 
 
 class AuthenticationException(RuntimeError):
@@ -72,15 +71,15 @@ class MsalTokenProvider:
     def __init__(
         self,
         config: MsalTokenProviderConfig,
+        logger: Logger,
         *,
         app: MsalApplication | None = None,
         now: Clock | None = None,
-        logger: logging.Logger | None = None,
     ) -> None:
         self._config = config
         self._app = app if app is not None else self._build_public_client_application(config)
         self._now = now if now is not None else _default_now
-        self._logger = logger if logger is not None else LOGGER
+        self._logger = logger
 
     def get_token(self, scopes: str | Sequence[str] | None = None) -> str:
         """Return a currently-valid bearer token for the requested HTTPS scopes."""
@@ -90,10 +89,18 @@ class MsalTokenProvider:
 
         result: TokenResult | None = None
         if account is not None:
-            self._logger.debug("Attempting silent token acquisition.")
+            self._logger.LogDebug(
+                "Attempting silent token acquisition.",
+                pipeline_stage="Auth",
+                pipeline_step="TokenProvider",
+            )
             result = self._app.acquire_token_silent(normalized_scopes, account=account)
             if result is not None and self._token_needs_refresh(result):
-                self._logger.debug("Cached token is near expiry; forcing silent refresh.")
+                self._logger.LogDebug(
+                    "Cached token is near expiry; forcing silent refresh.",
+                    pipeline_stage="Auth",
+                    pipeline_step="TokenProvider",
+                )
                 result = self._app.acquire_token_silent(
                     normalized_scopes,
                     account=account,
@@ -102,18 +109,34 @@ class MsalTokenProvider:
 
         if result is None:
             if account is not None:
-                self._logger.warning("Silent token acquisition failed.")
+                self._logger.LogWarning(
+                    "Silent token acquisition failed.",
+                    pipeline_stage="Auth",
+                    pipeline_step="TokenProvider",
+                )
                 raise AuthenticationException("Authentication token acquisition failed.")
-            self._logger.info("Starting interactive token acquisition for cold start.")
+            self._logger.LogInfo(
+                "Starting interactive token acquisition for cold start.",
+                pipeline_stage="Auth",
+                pipeline_step="TokenProvider",
+            )
             result = self._app.acquire_token_interactive(normalized_scopes)
 
         if self._token_needs_refresh(result):
-            self._logger.warning("Token acquisition returned an expired or near-expiry token.")
+            self._logger.LogWarning(
+                "Token acquisition returned an expired or near-expiry token.",
+                pipeline_stage="Auth",
+                pipeline_step="TokenProvider",
+            )
             raise AuthenticationException("Authentication token acquisition failed.")
 
         access_token = result.get("access_token")
         if not isinstance(access_token, str) or not access_token:
-            self._logger.warning("Token acquisition response did not include a bearer token.")
+            self._logger.LogWarning(
+                "Token acquisition response did not include a bearer token.",
+                pipeline_stage="Auth",
+                pipeline_step="TokenProvider",
+            )
             raise AuthenticationException("Authentication token acquisition failed.")
 
         return access_token
@@ -146,19 +169,19 @@ def _default_now() -> float:
 def _normalize_scopes(
     requested_scopes: str | Sequence[str] | None,
     default_scopes: tuple[str, ...],
-) -> tuple[str, ...]:
+) -> list[str]:
     scopes = default_scopes if requested_scopes is None else _coerce_scopes(requested_scopes)
     if not scopes:
         raise ValueError("at least one scope must be provided.")
     for scope in scopes:
         _validate_https_url(scope, "scope")
-    return tuple(scopes)
+    return list(scopes)
 
 
-def _coerce_scopes(scopes: str | Sequence[str]) -> tuple[str, ...]:
+def _coerce_scopes(scopes: str | Sequence[str]) -> list[str]:
     if isinstance(scopes, str):
-        return (_resource_to_default_scope(scopes),)
-    return tuple(_resource_to_default_scope(scope) for scope in scopes)
+        return [_resource_to_default_scope(scopes)]
+    return [_resource_to_default_scope(scope) for scope in scopes]
 
 
 def _resource_to_default_scope(scope_or_resource: str) -> str:
