@@ -1479,16 +1479,101 @@ def _html_escape(text: str) -> str:
 
 
 def _md_links_to_html(text: str) -> str:
-    """Convert markdown links [text](url) to HTML <a> tags with target=_blank."""
+    """Escape text, then render BOTH markdown links and bare URLs as
+    clickable ``<a target="_blank">`` anchors.
+
+    Two link forms reach the report from check ``remediation`` strings:
+    markdown ``[label](url)`` and bare ``https://…`` URLs. Only the
+    markdown form used to be linkified, so a check that pasted a raw URL
+    produced a non-clickable link. That inconsistency surfaced as "the
+    link works sometimes but not others" on MANUAL / NotConfigured rows,
+    where remediation URLs are the operator's only path to the fix. Both
+    forms are now anchored so the operator can always click through,
+    regardless of how the check authored the URL.
+    """
     import re
     escaped = _html_escape(text)
-    # Now convert markdown links (which got escaped) back to real HTML links
-    # The escaping turned [text](url) into [text](url) since [] and () aren't escaped
-    return re.sub(
+    # Markdown links first. Escaping left [] and () intact, so the raw
+    # [label](url) survives to here; turn it into a real anchor.
+    with_md = re.sub(
         r'\[([^\]]+)\]\(([^)]+)\)',
         r'<a href="\2" target="_blank">\1</a>',
         escaped,
     )
+    # Then autolink any remaining bare URLs, skipping the anchors we just
+    # created so their href/label URLs aren't wrapped a second time.
+    return _autolink_bare_urls(with_md)
+
+
+def _autolink_bare_urls(html: str) -> str:
+    """Wrap bare ``http(s)://…`` URLs in ``html`` as clickable anchors.
+
+    Operates on text that has already been HTML-escaped and had its
+    markdown links converted to ``<a>…</a>``. Those existing anchors are
+    stepped over untouched (matched by ``anchor_re``) so a URL inside an
+    ``href`` or an anchor label is never double-wrapped. Only the plain
+    text between anchors is scanned for bare URLs.
+    """
+    import re
+    # A bare URL: scheme + run of non-space, non-quote, non-']' chars.
+    # ')' is allowed here so balanced-paren links (e.g. ".../Foo_(bar)")
+    # survive intact; the replacer resolves paren balance and trailing
+    # punctuation, so "see https://aka.ms/x." and "(see https://x)" keep
+    # the trailing char outside the link.
+    bare_url_re = re.compile(r'https?://[^\s<>"\'\]]+')
+    # An anchor already emitted by the markdown pass; keep it verbatim.
+    anchor_re = re.compile(r'<a\b[^>]*>.*?</a>', re.IGNORECASE | re.DOTALL)
+    # A ';' that closes an HTML entity belongs to the URL, so it must not
+    # be peeled as if it were sentence punctuation. Only '&amp;' (a real
+    # query-string '&') is kept; '&lt;'/'&gt;' are handled separately below
+    # because an unescaped angle bracket can never be a valid URL char.
+    entity_tail_re = re.compile(r'&amp;$')
+    # A trailing escaped delimiter entity from a wrapped URL, e.g. an
+    # angle-bracket-wrapped "<https://x>" (escapes to "&lt;https://x&gt;")
+    # or a quote-wrapped '"https://x"' ("&quot;https://x&quot;"). Angle
+    # brackets and quotes are URL delimiters, never valid unescaped URL
+    # chars, so peel the whole entity back into the surrounding text.
+    delim_tail_re = re.compile(r'&(?:lt|gt|quot);$')
+
+    def _wrap(segment: str) -> str:
+        def repl(m: "re.Match[str]") -> str:
+            url = m.group(0)
+            trail = ""
+            # Peel trailing sentence punctuation, unbalanced closing parens,
+            # and escaped delimiter entities (in any order) off the link
+            # target. A balanced paren pair (".../Foo_(bar)") is kept; an
+            # unbalanced ")" ("(see https://x)") is pushed back into the
+            # surrounding text.
+            while url:
+                delim = delim_tail_re.search(url)
+                if delim:
+                    trail = url[delim.start():] + trail
+                    url = url[: delim.start()]
+                    continue
+                last = url[-1]
+                if last == ";" and entity_tail_re.search(url):
+                    break  # ';' closes an '&amp;' entity; keep it in the URL
+                if last in ".,;:!?":
+                    trail = last + trail
+                    url = url[:-1]
+                elif last == ")" and url.count("(") < url.count(")"):
+                    trail = ")" + trail
+                    url = url[:-1]
+                else:
+                    break
+            if not url:
+                return m.group(0)
+            return f'<a href="{url}" target="_blank">{url}</a>{trail}'
+        return bare_url_re.sub(repl, segment)
+
+    out: list[str] = []
+    last = 0
+    for m in anchor_re.finditer(html):
+        out.append(_wrap(html[last:m.start()]))
+        out.append(m.group(0))
+        last = m.end()
+    out.append(_wrap(html[last:]))
+    return "".join(out)
 
 
 def _multiline_html(text: str) -> str:
@@ -1510,20 +1595,42 @@ def _mask_sensitive(text: str) -> str:
     operator, so we mask the local part of addresses and the middle of
     GUIDs while keeping enough context (domain, first block) to stay
     actionable.
+
+    Text inside an ``http(s)://`` URL is left verbatim. A remediation deep
+    link (e.g. Copilot Studio ``.../environments/<env_id>/bots/<bot_id>``)
+    carries GUIDs as path segments; masking them rewrites the ``href`` and
+    the link stops resolving. Those ids already appear in every deep link
+    the report emits, so keeping them in the URL leaks nothing new while
+    keeping the link clickable. Standalone GUIDs / emails in prose are
+    still masked.
     """
     import re
-    # Email / UPN -> keep first char + full domain: j***@contoso.com
-    text = re.sub(
-        r'([A-Za-z0-9])[A-Za-z0-9._%+-]*(@[A-Za-z0-9.-]+\.[A-Za-z]{2,})',
-        r'\1***\2', text,
+    email_re = re.compile(
+        r'([A-Za-z0-9])[A-Za-z0-9._%+-]*(@[A-Za-z0-9.-]+\.[A-Za-z]{2,})'
     )
-    # GUID -> keep first block: 1a2b3c4d-****-****-****-************
-    text = re.sub(
+    guid_re = re.compile(
         r'\b([0-9a-fA-F]{8})-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
-        r'[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b',
-        r'\1-****-****-****-************', text,
+        r'[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b'
     )
-    return text
+    # A URL run: scheme + non-space chars, stopping before a ')' so a
+    # markdown target "[label](url)" ends at its wrapping paren.
+    url_re = re.compile(r'https?://[^\s)]+')
+
+    def _mask_prose(segment: str) -> str:
+        # Email / UPN -> keep first char + full domain: j***@contoso.com
+        segment = email_re.sub(r'\1***\2', segment)
+        # GUID -> keep first block: 1a2b3c4d-****-****-****-************
+        segment = guid_re.sub(r'\1-****-****-****-************', segment)
+        return segment
+
+    out: list[str] = []
+    last = 0
+    for m in url_re.finditer(text):
+        out.append(_mask_prose(text[last:m.start()]))
+        out.append(m.group(0))  # URL kept verbatim so its GUIDs survive
+        last = m.end()
+    out.append(_mask_prose(text[last:]))
+    return "".join(out)
 
 
 def _manual_checklist_items(remediation: str) -> tuple[str, list[str]]:
