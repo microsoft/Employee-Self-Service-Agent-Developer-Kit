@@ -16,7 +16,6 @@ import pytest
 from planner.plan_model import (
     Limits,
     Plan,
-    action_kit_skill,
     assignee_role_id,
     assignee_user_oid,
     context_entry,
@@ -36,7 +35,7 @@ def _plan_with_tasks() -> Plan:
         new_task(
             "T1",
             "Create environment & run setup",
-            action=action_kit_skill("onboarding"),
+            description="Run /setup to onboard the ADK to the deployed agent",
             assigned_to=principal_pool("power-platform-admin"),
             produces=["primaryEnvironment"],
         )
@@ -45,7 +44,7 @@ def _plan_with_tasks() -> Plan:
         new_task(
             "T2",
             "Connect Workday",
-            action=action_kit_skill("connect"),
+            description="Run /connect to connect Workday to the ESS agent",
             assigned_to=principal_pool("integration-owner"),
             consumes=["primaryEnvironment"],
         )
@@ -256,10 +255,14 @@ def test_validate_flags_duplicate_context_key():
     assert any("not unique" in e for e in plan.validate())
 
 
-def test_validate_flags_bad_action_missing_skill():
+def test_task_needs_no_action_to_be_valid():
     plan = Plan.new()
-    plan.add_task(new_task("T", "t", action={"kind": "kitSkill"}))  # missing skill
-    assert any("missing 'skill'" in e for e in plan.validate())
+    # A task is described by title + description only — no action field required.
+    plan.add_task(new_task("T", "Connect Workday",
+                           description="Run /connect to connect Workday",
+                           assigned_to=principal_pool("integration-owner")))
+    assert plan.validate() == []
+    assert "action" not in plan.task("T")
 
 
 def test_validate_flags_invalid_artifact_kind():

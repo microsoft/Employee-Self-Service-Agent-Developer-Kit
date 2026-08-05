@@ -41,10 +41,6 @@ from planner.plan_model import (
     PLAN_PATH,
     SCENARIO_GROUP,
     Plan,
-    action_external,
-    action_kit_skill,
-    action_manual,
-    action_portal,
     new_task,
     plan_artifact,
     principal_person,
@@ -64,18 +60,6 @@ def _load(args: argparse.Namespace) -> Plan:
 
 def _save(plan: Plan, args: argparse.Namespace) -> None:
     plan.save_all(args.plan)
-
-
-def _build_action(args: argparse.Namespace) -> dict:
-    if getattr(args, "skill", None):
-        return action_kit_skill(args.skill)
-    kind = getattr(args, "action_kind", None)
-    ref = getattr(args, "ref", None)
-    if kind == "portal":
-        return action_portal(ref or "")
-    if kind == "external":
-        return action_external(ref)
-    return action_manual(ref)
 
 
 # --------------------------------------------------------------------------- #
@@ -174,7 +158,6 @@ def cmd_add_task(args: argparse.Namespace) -> int:
             args.id,
             args.title,
             description=args.description or "",
-            action=_build_action(args),
             assigned_to=assigned,
             produces=_csv(args.produces),
             consumes=_csv(args.consumes),
@@ -273,11 +256,8 @@ def cmd_task_brief(args: argparse.Namespace) -> int:
         print(json.dumps(brief, indent=2))
         return 0
     print(f"Task {brief['id']}: {brief['title']}")
-    action = brief.get("action") or {}
-    if action.get("kind") == "kitSkill":
-        print(f"  Do it by running: /{action.get('skill')}")
-    elif action.get("ref"):
-        print(f"  How: {action.get('kind')} - {action['ref']}")
+    if brief.get("description"):
+        print(f"  {brief['description']}")
     print(f"  Role: {brief.get('role')}  |  State: {brief.get('state')}")
     if brief.get("roleSource"):
         print(f"  Role grounded in: {brief['roleSource']}")
@@ -436,13 +416,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--source", default="User", choices=["User", "Agent", "Discovered"])
     p.set_defaults(func=cmd_add_system)
 
-    p = sub.add_parser("add-task", help="add an atomic task")
+    p = sub.add_parser("add-task", help="add an atomic task (described by title + description)")
     p.add_argument("--id", required=True)
     p.add_argument("--title", required=True)
-    p.add_argument("--description")
-    p.add_argument("--skill", help="kit skill that performs this task")
-    p.add_argument("--action-kind", choices=["kitSkill", "manual", "portal", "external"])
-    p.add_argument("--ref", help="doc/portal URL for a non-skill action")
+    p.add_argument("--description", help="self-explanatory: what to do and how (incl. which command to run)")
     p.add_argument("--role", help="Learn-grounded role for this task")
     p.add_argument("--role-source", dest="role_source",
                    help="Microsoft Learn URL that grounds the role for this task")

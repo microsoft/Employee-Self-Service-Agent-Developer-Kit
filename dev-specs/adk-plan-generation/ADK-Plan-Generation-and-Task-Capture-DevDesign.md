@@ -41,7 +41,7 @@ Step 1 is the **greenfield** path — an empty tenant, plan from intent. A later
 **Goals**
 
 1. Add a **`/planner`** skill that generates a structured Plan from a sponsor's intent, grounded by **actively researching Microsoft Learn** (§7) and refined by a **bounded interview** (§8).
-2. Represent the Plan as **atomic Tasks**, each performed by a single **action** — *usually* a kit skill, but sometimes a manual/portal/admin or external step with no kit skill — and **assignable to a role, a person, or a person acting as a role** via one extended `Principal` (§9, §10).
+2. Represent the Plan as **atomic Tasks**, each described by a **title + description** (the description says how — which command to run, e.g. `/connect`, or a portal/manual step) and **assignable to a role, a person, or a person acting as a role** via one extended `Principal` (§9, §10).
 3. Support **Flow 1 (assign at creation):** the Task's **role is grounded from the Learn docs** (not named by the sponsor), the ADK lists the people who hold it, the sponsor picks one, and the Task is assigned to that person with the role retained (§10).
 4. Support **Flow 2 (discover my work):** a person asks what they're assigned and sees Tasks **grouped by each role they hold**, covering people with more than one role (§11).
 5. **Capture Task outputs** for each key a Task declares in `produces` (those keys grounded from the Learn doc, §7.6): fill each value either by **observing kit state** (the `/setup` → `environmentId` hand‑off) **or by asking the assignee** to supply it (plus any extra info they give us) — and **pin** them onto the Plan for later Tasks to read (§12).
@@ -126,7 +126,7 @@ Additive, following the existing skill pattern exactly:
 - **Gate** — like every skill, `/planner` first reads `.local/config.json`. But it is the **one skill allowed to precede setup**: on greenfield the environment doesn't exist yet, and the first Task the planner emits is usually "run `/setup`". So if `setup` isn't complete, `/planner` still runs.
 - **Progress** — the skill drives the todo‑list tool for its phases (research → interview → draft → assign → emit).
 
-`/planner` **orchestrates**; it never re‑implements `/setup`, `/connect`, etc. A Task points at an **action** — *usually* an existing kit skill (running it is how the Task gets done), sometimes a manual/portal/external step with a grounded doc pointer (§10). This keeps `/planner` thin and every kit behaviour in one place — the discipline Step‑2 §13.2 applies to the MCP loopback.
+`/planner` **orchestrates**; it never re‑implements `/setup`, `/connect`, etc. A Task's **description** says how it's done — *usually* run an existing kit command (running it is how the Task gets done), sometimes a manual/portal/external step with a grounded doc pointer (§10). This keeps `/planner` thin and every kit behaviour in one place — the discipline Step‑2 §13.2 applies to the MCP loopback.
 
 ---
 
@@ -222,9 +222,9 @@ From each fetched page, extract **structured facts, not raw HTML**, each stamped
 {
   "sources":       [ {url, tocTitle, fetchedAt, relevance} ],        // provenance / citations
   "capabilities":  [ {system, scenario, sourceUrl} ],                // buildable scenario catalogue
-  "prerequisites": [ {forScenarioOrSystem, requirement, role, action, produces, sourceUrl} ], // → Tasks
+  "prerequisites": [ {forScenarioOrSystem, requirement, role, how, produces, sourceUrl} ], // → Tasks
                      // role     = responsible role, GROUNDED FROM THE DOC (not asked of the sponsor) — §10
-                     // action   = how it's done: {kind:"kitSkill"|"manual"|"portal"|"external", skill?, ref?} — §10
+                     // how      = plain-language how it's done (which command to run, or a portal/manual step) — goes into the Task description — §10
                      // produces = output keys this step yields (e.g. "primaryEnvironment","entraApp"),
                      //            GROUNDED FROM THE DOC — filled at completion by observe OR ask (§12)
   "constraints":   [ {note, sourceUrl} ],                            // e.g. "Workday requires Entra SSO"; residency
@@ -232,7 +232,7 @@ From each fetched page, extract **structured facts, not raw HTML**, each stamped
 }
 ```
 
-This maps 1:1 onto the Plan: `capabilities → Context (group scenarioContext)`, `prerequisites → Tasks (task.action + grounded role — both extracted from the docs, §10)`, `constraints → market/acceptance Context entries`, `openItems → interview questions`. Every derived entry carries `provenance.source = "Agent"` + the source URL. The planner **caches** this object (e.g. `workspace/plan/research-context.json`) so a session is deterministic and re‑runs are cheap; it re‑crawls on explicit refresh or when intent changes, and **diffs the live TOC against the vendored snapshot** to flag drift (live wins).
+This maps 1:1 onto the Plan: `capabilities → Context (group scenarioContext)`, `prerequisites → Tasks (description + grounded role — both extracted from the docs, §10)`, `constraints → market/acceptance Context entries`, `openItems → interview questions`. Every derived entry carries `provenance.source = "Agent"` + the source URL. The planner **caches** this object (e.g. `workspace/plan/research-context.json`) so a session is deterministic and re‑runs are cheap; it re‑crawls on explicit refresh or when intent changes, and **diffs the live TOC against the vendored snapshot** to flag drift (live wins).
 
 ### 7.7 Determinism, not search‑for‑its‑own‑sake
 
@@ -328,19 +328,19 @@ workspace/
   //   provenance = { source: User|Agent|Discovered, addedBy: Principal, addedAt, updatedBy?: Principal, updatedAt? }
   // Overwrite-in-place by key: a re-write preserves addedBy/addedAt, refreshes updatedBy/updatedAt.
 
-  // ── Tasks: atomic; one extended Principal each (Step-2 §7.4) ──
+  // ── Tasks: atomic; described by title + description; one extended Principal each (Step-2 §7.4) ──
   "tasks": [
-    { "id": "T1", "title": "Run /setup — onboard the ADK to the deployed agent",
-      "description": "Run /setup: connect the kit to the ESS agent already deployed in the environment and record its details into config.json. (Provisioning the environment + installing ESS is a portal/admin prerequisite on a brand-new tenant.)",
-      "action": { "kind": "kitSkill", "skill": "onboarding" }, // HOW it's done — here a kit skill (§10)
+    { "id": "T1", "title": "Run setup",
+      "description": "Run /setup to onboard the ADK: connect the kit to the ESS agent already deployed in the environment and record its details into config.json. (Provisioning the environment + installing ESS is a portal/admin prerequisite on a brand-new tenant.)",
       "assignedTo": { "type": "User", "id": "<paul oid>",  // assigned to a PERSON…
                       "user": { "oid": "<paul oid>" },
                       "role": { "roleId": "power-platform-admin" } },  // …ACTING AS a Learn-grounded role
+      "roleSource": "https://learn.microsoft.com/…/employee-self-service/install",  // Learn URL that grounded the role
       "state": "NotStarted",                              // NotStarted → InProgress → Completed (+ reopen)
       "produces": ["primaryEnvironment"], "consumes": [] },
 
     { "id": "T2", "title": "Connect Workday",
-      "action": { "kind": "kitSkill", "skill": "connect" },
+      "description": "Run /connect to connect Workday to the ESS agent and follow its steps.",
       "assignedTo": { "type": "Role", "id": "integration-owner",     // OPEN TO A ROLE (pool) — nobody yet
                       "role": { "roleId": "integration-owner" } },
       "state": "NotStarted", "produces": ["workdayConnection","workdayEntraApp"], "consumes": ["primaryEnvironment"],
@@ -350,14 +350,14 @@ workspace/
                      { "label": "Connection verified",  "done": false } ] },
 
     { "id": "T3", "title": "Generate evals",
-      "action": { "kind": "kitSkill", "skill": "evaluations" },
+      "description": "Run /evaluate to generate the eval suite for the agent.",
       "assignedTo": { "type": "User", "id": "<ann oid>", "user": { "oid": "<ann oid>" },
                       "role": { "roleId": "eval-author" } },
       "state": "NotStarted", "produces": ["evalSuite"], "consumes": ["primaryEnvironment"] },
 
     { "id": "T4", "title": "Publish the agent",
-      // NOT a kit skill — a portal/admin step; the planner points at the grounded Learn doc.
-      "action": { "kind": "portal", "ref": "https://learn.microsoft.com/…/employee-self-service/publish" },
+      // NOT a kit command — a portal/admin step; the description points at the grounded Learn doc.
+      "description": "In the Power Platform admin center, publish the agent. See https://learn.microsoft.com/…/employee-self-service/publish",
       "assignedTo": { "type": "Role", "id": "power-platform-admin", "role": { "roleId": "power-platform-admin" } },
       "state": "NotStarted", "produces": [], "consumes": ["primaryEnvironment"] }
   ],
@@ -393,7 +393,7 @@ workspace/
 | `outputs[]` (PlanArtifact) | `Plan.Outputs[]` (§7.3) | `key`, `kind`, `attributes` (pinned), `inventoryRef`, `producedByTaskId`, `provenance`, `state`. |
 | `tasks[].checklist[]` *(optional)* | *(client‑only)* | Read‑back‑only step display, filled by the skill at runtime from its `tasks.md` (§10.1). Not a WeveNova entity/scalar; maps into the Task description or client metadata, or is dropped, on sync. |
 
-The ADK‑only fields are `task.action` and the optional `task.checklist[]` (§10.1). `task.action` is **how** the Task is performed: `{kind: kitSkill|manual|portal|external, skill?, ref?}` — usually a kit skill (`/setup`, `/connect`, `/evaluate`), sometimes a manual/portal/admin or external step with a grounded Learn/portal `ref` (registering an Entra app, publishing the agent). The action, the Task's role, and its `produces` keys are all **grounded from the Learn docs** during research (§7.6), not asked of the sponsor. Both fields are client execution/display detail; on sync they map into the Task description/client metadata, never a WeveNova promoted scalar.
+The only ADK‑only field is the optional `task.checklist[]` (§10.1). **A Task is described by its `title` + `description` — the same fields the WeveNova `Task` entity already has — and nothing else conveys "what to do".** There is deliberately **no** `task.action` field: an execution‑hint field is not part of the WeveNova Task entity and would be **rejected on persist**, so the "how" (which command to run — `/setup`, `/connect`, `/evaluate` — or a portal/manual step with a Learn/portal link) lives in the **description**, in plain language. The Task's role and its `produces` keys are still **grounded from the Learn docs** during research (§7.6), not asked of the sponsor. The **setup task is identified by what it produces** (`primaryEnvironment`), not by any skill/action field; `checklist[]` is client display detail that maps into the Task description or is dropped on sync, never a WeveNova promoted scalar.
 
 ### 9.3 Invariants (mirror Step‑2 §8)
 
@@ -417,13 +417,13 @@ The planner keeps a small vendored file of **non‑Learn facts** (`planner_facts
 
 ---
 
-## 10. Tasks: atomic, performed by an action, assigned by a grounded role (Flow 1)
+## 10. Tasks: atomic, described by title + description, assigned by a grounded role (Flow 1)
 
 ### 10.1 What "atomic" means — and why a Task is not a skill's steps
 
-A Task is the **smallest unit that (a) one owner can complete end‑to‑end and (b) maps to a single action run to completion** — *usually* one kit skill (`/setup`, `/connect`), but sometimes a manual/portal/admin or external step with **no** kit skill (registering an Entra app in the portal, publishing the agent, a data‑residency sign‑off).
+A Task is the **smallest unit that (a) one owner can complete end‑to‑end and (b) is completed in one sitting** — *usually* by running one kit command (`/setup`, `/connect`), but sometimes a manual/portal/admin or external step with **no** kit command (registering an Entra app in the portal, publishing the agent, a data‑residency sign‑off). The "how" is stated in the Task's **description**.
 
-**A Task is not a skill's internal steps.** A kit skill like `connect` is itself a multi‑step procedure with its own checklist (`connect/workday/tasks.md`: *environment configured → admin setup → connection verified*) and step files (`step1/2/3.md`). Those steps sit **one plane below** the Plan — they are how a single assignee *executes* one Task in one session, owned and tracked by the skill (its `.local/connect/workday/tasks.md` state + the todo‑list), not units of the rollout. So "Connect Workday" is **one Plan Task** (`action: kitSkill connect`); its steps do **not** become sibling Tasks, and we do **not** add both "run connect" *and* its checklist items as Tasks (that double‑counts). The Plan records the Task's state and its produced artifacts (`workdayConnection`, `workdayEntraApp`) — stable **however many** internal steps ran.
+**A Task is not a skill's internal steps.** A kit skill like `connect` is itself a multi‑step procedure with its own checklist (`connect/workday/tasks.md`: *environment configured → admin setup → connection verified*) and step files (`step1/2/3.md`). Those steps sit **one plane below** the Plan — they are how a single assignee *executes* one Task in one session, owned and tracked by the skill (its `.local/connect/workday/tasks.md` state + the todo‑list), not units of the rollout. So "Connect Workday" is **one Plan Task** (described as "run `/connect`"); its steps do **not** become sibling Tasks, and we do **not** add both "run connect" *and* its checklist items as Tasks (that double‑counts). The Plan records the Task's state and its produced artifacts (`workdayConnection`, `workdayEntraApp`) — stable **however many** internal steps ran.
 
 Three reasons the Task stays at skill granularity, not step granularity:
 - **One assignee.** Every connect step is done by the *same* person in one sitting; a Task has one assignee, so steps don't earn separate Tasks.
@@ -434,20 +434,20 @@ Three reasons the Task stays at skill granularity, not step granularity:
 
 **Step visibility without making Step first‑class.** "Step is not a first‑class entity" and stays that way — there is no Plan→Task→Step tree (rejected, §16). When the Plan needs to *show* progress inside a Task, the skill fills an optional, read‑back‑only `checklist[]` on the Task (§9.2) at runtime from its `tasks.md` — display state, not addressable entities, with no new entity and no migration.
 
-### 10.2 Task → action + role map (grounded from Learn)
+### 10.2 Task → description + role map (grounded from Learn)
 
-| Task (typical greenfield) | Action (`task.action`) | Produces | Consumes | Role (grounded from Learn) |
+| Task (title) | Description (what & how) | Produces | Consumes | Role (grounded from Learn) |
 |---|---|---|---|---|
-| Run `/setup` — onboard the ADK to the deployed agent (records env & agent details) | kitSkill `onboarding` (`/setup`) | `primaryEnvironment` | — | `power-platform-admin` |
-| Check readiness | kitSkill `flightcheck` (`/flightcheck`) | `readinessReport` | `primaryEnvironment` | `power-platform-admin` |
-| Register Entra app *(if not via connect)* | **portal** (Learn / Azure portal doc) | `entraApp` | `primaryEnvironment` | `entra-admin` |
-| Connect Workday | kitSkill `connect` (`/connect`) | `workdayConnection`, `workdayEntraApp` | `primaryEnvironment` | `integration-owner` |
-| Connect ServiceNow | kitSkill `connect` (`/connect`) | `servicenowConnection` | `primaryEnvironment` | `integration-owner` |
-| Author scenario topics | kitSkill `topics/create` (`/create`) | `topic:<name>` | env + connections | `maker` |
-| Generate evals | kitSkill `evaluations/create` (`/evaluate`) | `evalSuite` | `primaryEnvironment` | `eval-author` |
-| Publish the agent | **portal/admin** (Learn publish doc) | — | built agent | `power-platform-admin` |
+| Run setup | Run `/setup` to onboard the ADK to the deployed agent (records env & agent details) | `primaryEnvironment` | — | `power-platform-admin` |
+| Check readiness | Run `/flightcheck` to validate the environment | `readinessReport` | `primaryEnvironment` | `power-platform-admin` |
+| Register Entra app *(if not via connect)* | In the Azure portal, register the Entra app (see the Learn doc) | `entraApp` | `primaryEnvironment` | `entra-admin` |
+| Connect Workday | Run `/connect` to connect Workday | `workdayConnection`, `workdayEntraApp` | `primaryEnvironment` | `integration-owner` |
+| Connect ServiceNow | Run `/connect` to connect ServiceNow | `servicenowConnection` | `primaryEnvironment` | `integration-owner` |
+| Author scenario topics | Run `/create` to author the scenario topics | `topic:<name>` | env + connections | `maker` |
+| Generate evals | Run `/evaluate` to generate the eval suite | `evalSuite` | `primaryEnvironment` | `eval-author` |
+| Publish the agent | In the Power Platform admin center, publish the agent (Learn publish doc) | — | built agent | `power-platform-admin` |
 
-The planner sequences these actions; **the role in the last column and the `produces` keys are extracted from the Learn docs during research (§7.6), not hardcoded kit defaults and not asked of the sponsor.** Where a kit skill exists the Task runs it; where none does (portal/manual rows) the Task carries a grounded doc `ref` and the assignee follows it. `produces`/`consumes` drive ordering + "blocked until produced" UX (Step‑2 §7.2, phase‑2); each key is what the capture loop (§12) fills and pins.
+The planner sequences these tasks; **the role in the last column and the `produces` keys are extracted from the Learn docs during research (§7.6), not hardcoded kit defaults and not asked of the sponsor.** The description says how (run a kit command, or a portal/manual step with a grounded doc link) in plain language — there is no separate action field. `produces`/`consumes` drive ordering + "blocked until produced" UX (Step‑2 §7.2, phase‑2); each key is what the capture loop (§12) fills and pins. The **setup task is the one that produces `primaryEnvironment`**.
 
 **Role source is recorded on the Task (traceability).** Because the role is *sourced from the Learn link*, the Task keeps the URL that grounded it in an optional `task.roleSource` field (`add-task --role-source <learnUrl>`; surfaced by `task-brief`). This makes "which page said this is a `{role}` task?" auditable, and pairs with the future roles endpoint (§10.3, §11): the **role** stays Learn-grounded, while the external roles API only resolves *which people* hold it.
 
@@ -549,16 +549,16 @@ So `produces` (from the doc) says *what* to capture; observe/ask says *how*; the
 
 ### 12.3 The observe‑mode detector registry
 
-For mode (a), a small **detector per artifact kind** returns the `PlanArtifact`s a Task produced from before/after kit state. Detectors key off the **observed signal, not the action kind** — a portal/manual step that still touches the tenant (e.g. an Entra app registered in the Azure portal) can be observed the same way a kit skill is:
+For mode (a), a small **detector per artifact kind** returns the `PlanArtifact`s a Task produced from before/after kit state. Detectors key off the **observed signal, not how the Task was done** — a portal/manual step that still touches the tenant (e.g. an Entra app registered in the Azure portal) can be observed the same way a kit command is:
 
-| Task action | Detector reads | Artifact(s) pinned |
+| Task (what it does) | Detector reads | Artifact(s) pinned |
 |---|---|---|
-| kitSkill `onboarding` | `config.json` diff (endpoint/env id) | `Environment` |
-| kitSkill `connect` (Workday) | new connection refs + Entra app id | `Connection`, `EntraApp` (appId+objectId+tenantId under one key, Step‑2 §7.2) |
+| `/setup` (onboarding) | `config.json` diff (endpoint/env id) | `Environment` |
+| `/connect` (Workday) | new connection refs + Entra app id | `Connection`, `EntraApp` (appId+objectId+tenantId under one key, Step‑2 §7.2) |
 | portal register Entra app | new app registration id (Graph/BAP) | `EntraApp` |
-| kitSkill `flightcheck` | the readiness report file | `Custom` (readiness snapshot) |
-| kitSkill `evaluations` | new eval `botcomponent` ids under `workspace/agents/<slug>/evaluations/` | `Custom` (eval‑suite id) |
-| kitSkill `topics/create` | new topic files pushed | `Custom` (topic ref) |
+| `/flightcheck` | the readiness report file | `Custom` (readiness snapshot) |
+| `/evaluate` | new eval `botcomponent` ids under `workspace/agents/<slug>/evaluations/` | `Custom` (eval‑suite id) |
+| `/create` (topics) | new topic files pushed | `Custom` (topic ref) |
 
 Each detector is **best‑effort and confirm‑before‑pin**. **When no detector fits (a truly external step) or a detector can't read its signal, capture falls to mode (b) — the ADK asks the assignee for each unresolved `produces` key** rather than leaving it blank. Either way the Plan ends up with a value for every declared key, or an explicit "unresolved" the maker can fill later.
 
@@ -612,7 +612,7 @@ Until WeveNova + these MCP tools are live, the sync layer is a **no‑op stub** 
 - **Rewriting `AssignedTo` from role to person on claim.** Rejected — discards the role + provenance. We retain the role (§10.3), which is also what makes Flow 2 group correctly.
 - **Trusting the agent's narration of what a Task did.** Rejected — we observe kit state (§12).
 - **Auto‑pinning artifacts / auto‑assigning people without confirmation.** Rejected — the requirement is to *ask the person doing the job* and *let the sponsor pick*; silent writes lose provenance.
-- **A bespoke plan JSON optimised for the ADK.** Rejected — divergence makes Step 2 a migration, not a sync. We keep the shapes identical for one small tax (`task.action`).
+- **A bespoke plan JSON optimised for the ADK.** Rejected — divergence makes Step 2 a migration, not a sync. We keep the shapes identical: a Task is just `title` + `description` + `assignedTo` + `produces`/`consumes` (+ optional client‑only `checklist[]`), with **no** ADK‑only scalar to reconcile.
 - **Each skill step as its own Plan Task.** Rejected — a skill's steps share one assignee, aren't knowable at plan time (`connect` detects simplified‑vs‑legacy Workday at runtime, changing the step set), and would blow the ~50‑task cap. One Task per skill run (or per role‑bounded slice); the skill owns its steps (§10.1).
 - **Step as a first‑class entity (a Plan→Task→Step tree).** Rejected — it breaks WeveNova's flat Plan→Task model, needs a new entity + lifecycle, and buys nothing: steps need no independent assignment (all run under one assignee), and if a slice ever needs a distinct owner it becomes its own *Task* on a role boundary (§10.1). Step *visibility* is met by the read‑back‑only `Task.checklist[]` instead.
 - **Naming the command `/plan`.** Rejected — collides with VS Code Plan mode. Renamed to **`/planner`** (the document stays the *Plan*).
@@ -665,17 +665,17 @@ Verified on `origin/main`, HEAD `72a24f8`, worktree cleaned to match `main`:
 
 ## Appendix B — quick reference
 
-**Task → action → artifact → role (grounded from Learn)**
+**Task → description → artifact → role (grounded from Learn)**
 
-| Task | Action | Produces | Consumes | Role (from Learn) | Capture (§12) |
+| Task | Description (what & how) | Produces | Consumes | Role (from Learn) | Capture (§12) |
 |---|---|---|---|---|---|
-| Onboard ADK to the deployed agent (`/setup`) | kitSkill `onboarding` (`/setup`) | `primaryEnvironment` | — | `power-platform-admin` | observe: `config.json` diff |
-| Readiness check | kitSkill `flightcheck` (`/flightcheck`) | `readinessReport` | `primaryEnvironment` | `power-platform-admin` | observe: readiness file |
-| Connect Workday | kitSkill `connect` (`/connect`) | `workdayConnection`, `workdayEntraApp` | `primaryEnvironment` | `integration-owner` | observe: conn refs + app id |
-| Connect ServiceNow | kitSkill `connect` (`/connect`) | `servicenowConnection` | `primaryEnvironment` | `integration-owner` | observe: conn refs |
-| Author topics | kitSkill `topics/create` (`/create`) | `topic:<name>` | env + connections | `maker` | observe: pushed topic files |
-| Generate evals | kitSkill `evaluations/create` (`/evaluate`) | `evalSuite` | `primaryEnvironment` | `eval-author` | observe: new eval ids |
-| Publish the agent | portal/admin (Learn doc) | — | built agent | `power-platform-admin` | ask assignee |
+| Run setup | Run `/setup` to onboard the ADK to the deployed agent | `primaryEnvironment` | — | `power-platform-admin` | observe: `config.json` diff |
+| Readiness check | Run `/flightcheck` | `readinessReport` | `primaryEnvironment` | `power-platform-admin` | observe: readiness file |
+| Connect Workday | Run `/connect` (Workday) | `workdayConnection`, `workdayEntraApp` | `primaryEnvironment` | `integration-owner` | observe: conn refs + app id |
+| Connect ServiceNow | Run `/connect` (ServiceNow) | `servicenowConnection` | `primaryEnvironment` | `integration-owner` | observe: conn refs |
+| Author topics | Run `/create` to author topics | `topic:<name>` | env + connections | `maker` | observe: pushed topic files |
+| Generate evals | Run `/evaluate` | `evalSuite` | `primaryEnvironment` | `eval-author` | observe: new eval ids |
+| Publish the agent | In the portal, publish the agent (Learn doc) | — | built agent | `power-platform-admin` | ask assignee |
 
 **Assignment `Principal` states:** Pool `{type:Role,id:R,role:{R}}` · Claimed/Direct `{type:User,id:P,user:{P},role:{R}}` · Plain person `{type:User,id:P,user:{P}}`.
 

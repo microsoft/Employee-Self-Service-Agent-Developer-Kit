@@ -17,8 +17,9 @@ and pin the environment:
 python scripts/planner/cli.py capture-setup --complete
 ```
 
-`--task` is optional — with it omitted the CLI **auto-detects the plan's `/setup`
-task** (the task whose action runs onboarding) and completes it. `/setup` itself
+`--task` is optional — with it omitted the CLI **auto-detects the plan's setup
+task** (the task that produces `primaryEnvironment`) and completes it. `/setup`
+itself
 now offers this at the end of a run: when setup finishes and a plan exists, it
 asks the maker "mark the setup task complete and save the environment?" and runs
 this for them — so the loop closes without waiting for someone to remember.

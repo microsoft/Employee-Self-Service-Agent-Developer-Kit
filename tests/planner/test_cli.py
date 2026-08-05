@@ -69,14 +69,14 @@ def test_full_flow(tmp_path, capsys):
     assert _run(
         "--plan", plan_path, "add-task",
         "--id", "T1", "--title", "Create env & setup",
-        "--skill", "onboarding", "--role", "power-platform-admin",
+        "--description", "Run /setup to onboard the ADK to the deployed agent",
+        "--role", "power-platform-admin",
         "--produces", "primaryEnvironment",
     ) == 0
     assert _run(
         "--plan", plan_path, "add-task",
         "--id", "T5", "--title", "Publish the agent",
-        "--action-kind", "portal",
-        "--ref", "https://learn.microsoft.com/en-us/microsoft-365/copilot/employee-self-service/publish",
+        "--description", "In the Power Platform admin center, publish the agent",
         "--role", "power-platform-admin",
     ) == 0
     # Flow 1: assign a person to the grounded role.
@@ -105,7 +105,7 @@ def test_capture_setup_no_change_returns_nonzero(tmp_path, capsys):
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({"setup": "pending"}), encoding="utf-8")
     _run("--plan", plan_path, "init")
-    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "setup", "--skill", "onboarding")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "setup", "--description", "Run /setup to onboard the ADK")
     capsys.readouterr()
     rc = _run("--plan", plan_path, "capture-setup", "--task", "T1", "--config", str(config_path), "--before", "{}")
     assert rc == 1
@@ -115,7 +115,7 @@ def test_capture_setup_no_change_returns_nonzero(tmp_path, capsys):
 def test_mine_json_output(tmp_path, capsys):
     plan_path = str(tmp_path / "plan.json")
     _run("--plan", plan_path, "init")
-    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Connect", "--skill", "connect", "--role", "integration-owner")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Connect", "--description", "Run /connect to connect Workday", "--role", "integration-owner")
     capsys.readouterr()
     rc = _run("--plan", plan_path, "mine", "--person", PAUL, "--roles", "integration-owner", "--json")
     assert rc == 0

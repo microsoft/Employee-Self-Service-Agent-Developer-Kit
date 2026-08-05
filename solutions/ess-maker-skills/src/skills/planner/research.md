@@ -63,4 +63,4 @@ Cite the file/URL you used so the sponsor can verify. If the vendored snapshot
 disagrees with live Learn, live wins for planning; note the drift.
 
 When you have a grounded picture — supported scenarios, their prerequisites,
-each prerequisite's role/action/produces — go to Phase 2.
+each prerequisite's role/how/produces — go to Phase 2.
