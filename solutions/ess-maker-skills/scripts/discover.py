@@ -87,6 +87,7 @@ def main():
         from list_environments import (
             get_dataverse_environments,
             print_environment_table,
+            write_environment_markdown,
         )
 
         dv_environments, excluded = get_dataverse_environments()
@@ -101,6 +102,13 @@ def main():
             sys.exit(1)
 
         print_environment_table(dv_environments)
+
+        # Also write a complete Markdown table the onboarding flow can show
+        # the user verbatim, so selection never depends on scraping the
+        # (possibly truncated) terminal output.
+        if args.select is None:
+            md_path = write_environment_markdown(dv_environments)
+            print(f"ENV_TABLE_MARKDOWN:{md_path}")
 
         if args.select is not None:
             idx = args.select
