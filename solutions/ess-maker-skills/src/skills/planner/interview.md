@@ -11,18 +11,34 @@ Every intent answer is stored as a **context entry** (grouped), via:
 python scripts/planner/cli.py set-context --key <k> --value "<v>" --group <group> --description "<why>" --source User
 ```
 
-## The question bank
+## The question bank — scenarios *before* systems
 
-| Ask (grounded example) | Store as |
-|------------------------|----------|
-| "In one sentence — what should this agent do, and for whom?" | `set-context --group objective` |
-| "Which system holds the data for **{area}**?" — ask **per area**; ground the options in the ESS **native integrations** surfaced by Phase‑1 Learn research (currently Workday, ServiceNow HRSD/ITSM, SAP SuccessFactors). Don't improvise the list. | `add-system --area {area} --system "{name}"` |
-| "Which business scenarios are in scope for the first wave?" — capture the maker's own words; ground each against Microsoft Learn (Phase 1). Do **not** offer a fixed menu. | `set-context --group scenarioContext` (keys `area`, `jtbd`) |
-| "Employees only, or managers too?" | `set-context --group scenarioContext` (key `persona`) |
-| "Rolling out to a specific market or wave first (e.g. Germany, a pilot group)?" | `set-context --group market` |
-| "What business outcome measures success (e.g. deflect 30% of HR tickets)?" | `set-context --group businessGoals` |
-| "How will you know a scenario is done — pilot-ready? production-signed-off?" | `set-context --group acceptanceCriteria` |
-| "Is this a brand-new environment, or do you already have ESS running?" | (branch — greenfield vs enrichment) |
+Capture in this order. **Build the scenario context first** — the jobs the team
+should be able to self‑serve — *then* map each scenario to a system. Do **not**
+ask "which system?" first and then reduce the scope to that one system's features:
+that railroads the maker and silently drops whole scenario types (knowledge,
+ticketing) they may have wanted.
+
+| # | Ask | Store as |
+|---|-----|----------|
+| 1 | "In one sentence — what should this agent do, and for whom?" | `set-context --group objective` |
+| 2 | **Scenarios (jobs‑to‑be‑done) — ask this before any system.** "What should your team be able to self‑serve? Think in outcomes, not systems. ESS commonly covers **HR knowledge** (answer policy / FAQ questions), **HR ticketing** (raise & track HR cases), **IT ticketing** (IT support), and **specific data actions** (e.g. view time‑off balance, request time off, view pay). Which of these — in your words? Anything else?" | `set-context --group scenarioContext` (key `jtbd`) + `add-scenario` per area |
+| 3 | **System per scenario — only after scenarios are captured.** "For **{scenario/area}**, which system holds the data?" — ground the options in the ESS native integrations from Phase‑1 research (Workday, ServiceNow HRSD/ITSM, SAP SuccessFactors); SharePoint / M365 content is a knowledge source. | `add-system --area {area} --system "{name}"` |
+| 4 | "Employees only, or managers too?" | `set-context --group scenarioContext` (key `persona`) |
+| 5 | "Rolling out to a specific market or wave first (e.g. India, a pilot group)?" | `set-context --group market` |
+| 6 | "What business outcome measures success (e.g. deflect 30% of HR tickets)?" | `set-context --group businessGoals` |
+| 7 | "How will you know a scenario is done — pilot‑ready? production‑signed‑off?" | `set-context --group acceptanceCriteria` |
+| 8 | "Is this a brand‑new environment, or do you already have ESS running?" | (branch — greenfield vs enrichment) |
+
+**The scenario examples in Q2 (knowledge / HR ticketing / IT ticketing / data
+actions) are prompts, not a fixed catalogue.** They're grounded in what ESS ships
+(HR + IT starters, knowledge sources, ServiceNow HRSD/ITSM) and the PM spec's
+knowledge‑vs‑ticketing framing — use them to help the maker *articulate* their
+scenarios, then capture the maker's own words and confirm each against Microsoft
+Learn (Phase 1). Picking a system (e.g. Workday) does **not** define the scenarios
+— a maker on Workday may still want HR knowledge and IT ticketing too, so ask Q2
+first and let the answer be broader than any one system. If the maker names
+something ESS doesn't support, say so; don't force‑fit.
 
 **Ground the systems in Learn — don't improvise the connector list.** ESS ships
 native integrations (extension packs) for a specific set of systems, each with a
@@ -53,16 +69,18 @@ python scripts/planner/cli.py add-system --area it-ticketing --system "ServiceNo
 
 **Scenarios come from the maker, grounded in Learn — never from a fixed list.**
 Take the scenarios from what the maker describes and confirm them; ground the
-details (prerequisites, roles, systems) against Microsoft Learn (Phase 1). Do not
-present a canonical menu of supported scenarios — there isn't one.
+details (prerequisites, roles, systems) against Microsoft Learn (Phase 1). The Q2
+examples are prompts to help them articulate — capture their own words.
 
-**Required before Phase 3.** Questions 1–3 (objective, **which system per area**,
-**which scenarios**) are **mandatory** — they determine the connect tasks, the
-authoring tasks, and which Learn docs ground the roles. Do not skip them, and do
-not end the interview (or jump to unrelated questions like sponsor/timeframe)
-until systems and scenarios are captured. Ask 4–7 as scope warrants. For each
-chosen system you will emit a connect task in Phase 3; for each scenario you
-register it (below) and author tasks.
+**Required before Phase 3, in this order.** (1) objective, (2) **the scenarios /
+jobs‑to‑be‑done** (knowledge, ticketing, IT, data actions — whatever the maker
+wants), then (3) **the system for each scenario** are **mandatory**. Capture
+scenarios *before* systems — never let a system choice narrow the scenario set.
+These determine the connect tasks, the authoring tasks, and which Learn docs
+ground the roles. Do not skip them, and do not end the interview (or jump to
+sponsor/timeframe) until scenarios and their systems are captured. Ask 4–8 as
+scope warrants. For each chosen system you emit a connect task in Phase 3; for
+each scenario you register it (below) and author tasks.
 
 Questions 1–3 are almost always asked; 4–7 as scope warrants; the last is one
 branch. Use scalar values (one fact per entry); group related facts rather than
