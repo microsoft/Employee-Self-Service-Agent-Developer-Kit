@@ -21,6 +21,7 @@ Scopes:
     workdayextension — Workday extension pack: connection auth, Dataverse conn, REST URL, user-context redirect, firewall (WD-CONN-AUTH-001, DV-CONN-001, WD-REST-*, WD-NET-001)
     topics          — New-topic validation: trigger phrases + definition, integration wiring (TOPIC-TRIGGER-*, TOPIC-INTEGRATION-*)
     external        — Integration discovery (flows)
+    handoff         — Enabled auto-handoff topics set a concrete target agent id, not the shipped placeholder (TOPIC-020)
     workday         — Workday deep validation
     servicenow      — ServiceNow deep validation
     local           — Local agent file validation
@@ -61,6 +62,7 @@ from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
 from flightcheck.checks.entra_app import run_entra_app_checks
 from flightcheck.checks.graph_connector_kb import run_graph_connector_kb_checks
+from flightcheck.checks.agent_handoff import run_handoff_topic_checks
 from flightcheck.checks.workday import run_workday_checks
 from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
@@ -97,6 +99,7 @@ SCOPE_MAP = {
         ("External Systems", run_external_systems_checks),
         ("Graph Connector KB", run_graph_connector_kb_checks),
     ],
+    "handoff": [("Agent Handoff", run_handoff_topic_checks)],
     "servicenow": [
         ("External Systems", run_external_systems_checks),
         ("ServiceNow", run_servicenow_checks),
@@ -120,12 +123,24 @@ FULL_SCOPE = [
     ("Workday Extension", run_workday_extension_checks),
     ("Workday Topics", run_topic_checks),
     ("Graph Connector KB", run_graph_connector_kb_checks),
+    ("Agent Handoff", run_handoff_topic_checks),
     ("ServiceNow", run_servicenow_checks),
     ("Local Files", run_local_file_checks),
     ("Licensing", run_licensing_checks),
     ("Publishing", run_publishing_checks),
     ("Cloud Policies", run_cloud_policy_checks),
 ]
+
+# Scopes whose checks query the Copilot Studio Island Gateway (PVA) and so
+# require PVA authentication in main(). Keep in sync with the SCOPE_MAP checks
+# that read ``runner.pva``:
+#   - local          -> CONFIG-013 (knowledge-source runtime status)
+#   - graphconnector -> Graph Connector KB runtime status
+#   - handoff        -> TOPIC-020 (agent_handoff.run_handoff_topic_checks)
+# "full" always authenticates PVA because it runs all of the above. A scope
+# omitted here gets ``runner.pva = None``, so any PVA-dependent check wired
+# into it silently returns [] without ever querying the tenant.
+PVA_SCOPES = frozenset({"full", "local", "graphconnector", "handoff"})
 
 
 def _endpoint_systems_for_offer(runner) -> list[str]:
@@ -1165,7 +1180,7 @@ def main():
     pva = None
     if infra_only_scope:
         print("Skipping Copilot Studio auth for infrastructure scope.")
-    elif args.scope in ("full", "local", "graphconnector"):
+    elif args.scope in PVA_SCOPES:
         print("Authenticating to Copilot Studio (Island Gateway)...")
         pva = PVAClient(tenant_id, env_url)
         try:
