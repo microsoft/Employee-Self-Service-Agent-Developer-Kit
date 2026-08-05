@@ -254,9 +254,14 @@ def test_verdict_warnings_subline_points_at_manual_section_not_action(tmp_path):
     save_results(result, output_dir=str(tmp_path))
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
 
-    # Find the verdict text block — the subline lives next to the
-    # verdict-warnings class on the banner.
-    m = re.search(r'<div class="verdict verdict-warnings">.*?</div>\s*</div>', html, flags=re.S)
+    # Find the verdict text block — the subline lives in the sibling
+    # verdict-note span next to the verdict-warnings line.
+    m = re.search(
+        r'<div class="verdict verdict-warnings">.*?</div>\s*'
+        r'<span class="verdict-note">.*?</span>',
+        html,
+        flags=re.S,
+    )
     assert m is not None, "verdict-warnings block not found"
     verdict_block = m.group(0)
 
@@ -279,7 +284,12 @@ def test_verdict_not_ready_subline_separates_action_from_verification(tmp_path):
     save_results(result, output_dir=str(tmp_path))
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
 
-    m = re.search(r'<div class="verdict verdict-not-ready">.*?</div>\s*</div>', html, flags=re.S)
+    m = re.search(
+        r'<div class="verdict verdict-not-ready">.*?</div>\s*'
+        r'<span class="verdict-note">.*?</span>',
+        html,
+        flags=re.S,
+    )
     assert m is not None
     verdict_block = m.group(0)
 
@@ -305,7 +315,7 @@ def test_verdict_not_ready_headline_counts_failures_only_not_warnings(tmp_path):
 
     # Headline must read "Not ready — 1 issue need attention" (one
     # failure), NOT "3 issues" (which would include the warnings).
-    m = re.search(r'<h2>Not ready[^<]*</h2>', html)
+    m = re.search(r'<div class="verdict verdict-not-ready">.*?</div>', html, flags=re.S)
     assert m is not None, html
     headline = m.group(0)
     assert "1 issue" in headline, headline
@@ -343,7 +353,10 @@ def test_html_renders_synopsis_grid_and_category_section(tmp_path):
     # Synopsis grid with a tile linking to the category section.
     assert 'class="synopsis"' in html
     assert 'class="syn-grid"' in html
+    assert 'class="syn-stats"' in html
     assert 'href="#cat-test"' in html
+    # Fluent 2 nests the filter tabs and accordion sections in one card.
+    assert 'class="checks-card"' in html
     # One section per category, anchored by a slug of the category name.
     assert 'id="cat-test"' in html
     assert re.search(r'<details class="sec" id="cat-test"', html)
@@ -742,18 +755,18 @@ def test_overall_verdict_error_plus_warning_is_not_ready_not_ready_with_warnings
 
 
 def test_fold_unfold_controls_present(tmp_path):
-    """The report ships Fold all / Unfold all controls (hidden until JS
-    un-hides them) plus the script hooks that open/close every section."""
+    """The report ships a single Expand/Collapse-all toggle in the
+    Fluent tab bar (hidden until JS un-hides it) plus the script hooks
+    that open/close every section."""
     from flightcheck.runner import save_results
     result = _build_run_with([_make_result("P-1", "Passed")])
     save_results(result, output_dir=str(tmp_path))
     html = (tmp_path / "report.html").read_text(encoding="utf-8")
 
-    assert 'id="viewtools"' in html
-    assert 'id="unfoldAll"' in html
-    assert 'id="foldAll"' in html
-    # Hidden in the no-JS view so the buttons aren't dead controls.
-    assert re.search(r'<div class="viewtools" id="viewtools" hidden>', html)
+    assert 'id="filters" hidden' in html
+    assert 'class="fold" data-fold="toggle"' in html
+    # Hidden in the no-JS view so the button isn't a dead control.
+    assert re.search(r'<div class="filters" id="filters" hidden>', html)
 
 
 def test_howto_guide_is_collapsed_and_below_verdict(tmp_path):
@@ -812,6 +825,8 @@ def test_manual_check_renders_completion_checklist(tmp_path):
     assert "Mark as verified" in html
     assert 'class="cl-count">0 / 3<' in html
     assert "Step 1" in html and "Step 2" in html
+    assert 'class="steps"' in html
+    assert 'class="steps-list"' in html
     # Expectation-setting note (mitigation instead of persistence).
     assert "Progress applies to this run only." in html
     # The Manual card must NOT also render the plain "Next step" line.
