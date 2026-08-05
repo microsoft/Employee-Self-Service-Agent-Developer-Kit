@@ -58,8 +58,15 @@ from tests.flightcheck.url_hygiene_rules import (
 # up to the first delimiter (whitespace, quote, backtick, backslash, angle
 # bracket, or a closing paren/bracket); brace chars stay IN the path so a
 # templated path segment (``{WD_TENANT}``) is captured whole.
+#
+# The host is a run of literal domain chars and/or ``{template}`` segments,
+# so a templated *host* with a real dotted suffix
+# (``http://{org}.crm.dynamics.com``) is captured as one host token and
+# still evaluated -- an insecure templated link is still insecure. A bare
+# placeholder (``https://host:8443``, ``https://x``) has no dot and is
+# dropped downstream, so it does not leak into the host token.
 _URL_RE = re.compile(
-    r"""(https?)://([A-Za-z0-9._\-]+|\{[^}]*\})(/[^\s"'`\\<>)\]]*)?"""
+    r"""(https?)://((?:[A-Za-z0-9._\-]+|\{[^}]*\})+)(/[^\s"'`\\<>)\]]*)?"""
 )
 
 # File types scanned. ``.py`` is the check source; data files can carry
@@ -76,29 +83,39 @@ _FLIGHTCHECK_SRC = (
 _TRIM = ".,;:!?"
 
 
+def _urls_in_text(text: str):
+    """Yield (scheme, host, url) for every static http(s) URL in ``text``.
+
+    Shared extraction used by the file scan and by tests. Trailing
+    sentence punctuation is trimmed so a URL written in prose is not
+    treated as malformed. A dotless host (``https://host``,
+    ``https://localhost``, ``https://x``) is skipped -- it is a
+    placeholder/example, not a real fetchable domain. A templated host
+    with a dotted domain suffix (``http://{org}.crm.dynamics.com``) has a
+    dot, so it is kept and still evaluated -- an insecure templated link
+    is still insecure.
+    """
+    for scheme, host, rel in _URL_RE.findall(text):
+        host = host.rstrip(_TRIM)
+        rel = rel.rstrip(_TRIM)
+        if not host:
+            continue
+        if "." not in host:
+            continue  # dotless placeholder (host, localhost, x), not a domain
+        yield scheme, host, f"{scheme}://{host}{rel}"
+
+
 def _iter_source_urls():
     """Yield (path, scheme, host, url) for every static http(s) URL.
 
     ``url`` is the full captured URL (scheme + host + path); ``host`` is
     the authority component (may be a ``{template}`` for a dynamic host).
-    Trailing sentence punctuation is trimmed so a URL written in prose is
-    not treated as malformed. A dotless host (``https://host``,
-    ``https://localhost``) is skipped -- it is a placeholder/example, not
-    a real fetchable domain -- unless the host is a ``{template}`` with a
-    dotted domain suffix, which is kept so an insecure templated link is
-    still evaluated.
+    See ``_urls_in_text`` for the per-text extraction and skip rules.
     """
     for glob in _SCAN_GLOBS:
         for path in sorted(_FLIGHTCHECK_SRC.rglob(glob)):
             text = path.read_text(encoding="utf-8")
-            for scheme, host, rel in _URL_RE.findall(text):
-                host = host.rstrip(_TRIM)
-                rel = rel.rstrip(_TRIM)
-                if not host:
-                    continue
-                if "." not in host:
-                    continue  # dotless placeholder (host, localhost, x), not a domain
-                url = f"{scheme}://{host}{rel}"
+            for scheme, host, url in _urls_in_text(text):
                 yield path, scheme, host, url
 
 
@@ -232,3 +249,24 @@ def test_looks_like_host_rejects_malformed() -> None:
     assert not looks_like_host("host_name.com")   # underscore not DNS-valid
     assert not looks_like_host("-a.b")            # leading hyphen
     assert not looks_like_host("a-.b")            # trailing hyphen
+
+
+def test_scan_captures_templated_host_and_skips_placeholders() -> None:
+    """Scan-level proof for the templated-host claim and the placeholder
+    skip. A templated *host* with a dotted domain suffix over http is
+    captured whole (host token includes the ``{...}`` segment) so the
+    https gate still evaluates it; a bare placeholder (``host:port``,
+    dotless ``x``) does not leak into a host token."""
+    # Templated host with a real dotted suffix is captured, host kept whole.
+    got = list(_urls_in_text("deep link http://{org}.crm.dynamics.com/report"))
+    assert got == [
+        ("http", "{org}.crm.dynamics.com", "http://{org}.crm.dynamics.com/report")
+    ]
+    # And it is treated as insecure (not an exempt identifier URI).
+    assert not is_allowed_http_uri("http://{org}.crm.dynamics.com/report")
+    # A literal host with a templated path is still captured too.
+    assert list(_urls_in_text("iss http://www.workday.com/{WD_TENANT} x")) == [
+        ("http", "www.workday.com", "http://www.workday.com/{WD_TENANT}")
+    ]
+    # Placeholders do not produce a host token.
+    assert list(_urls_in_text("try https://host:8443/x and https://x here")) == []
