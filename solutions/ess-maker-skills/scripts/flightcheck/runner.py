@@ -1510,20 +1510,42 @@ def _mask_sensitive(text: str) -> str:
     operator, so we mask the local part of addresses and the middle of
     GUIDs while keeping enough context (domain, first block) to stay
     actionable.
+
+    Text inside an ``http(s)://`` URL is left verbatim. A remediation deep
+    link (e.g. Copilot Studio ``.../environments/<env_id>/bots/<bot_id>``)
+    carries GUIDs as path segments; masking them rewrites the ``href`` and
+    the link stops resolving. Those ids already appear in every deep link
+    the report emits, so keeping them in the URL leaks nothing new while
+    keeping the link clickable. Standalone GUIDs / emails in prose are
+    still masked.
     """
     import re
-    # Email / UPN -> keep first char + full domain: j***@contoso.com
-    text = re.sub(
-        r'([A-Za-z0-9])[A-Za-z0-9._%+-]*(@[A-Za-z0-9.-]+\.[A-Za-z]{2,})',
-        r'\1***\2', text,
+    email_re = re.compile(
+        r'([A-Za-z0-9])[A-Za-z0-9._%+-]*(@[A-Za-z0-9.-]+\.[A-Za-z]{2,})'
     )
-    # GUID -> keep first block: 1a2b3c4d-****-****-****-************
-    text = re.sub(
+    guid_re = re.compile(
         r'\b([0-9a-fA-F]{8})-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-'
-        r'[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b',
-        r'\1-****-****-****-************', text,
+        r'[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b'
     )
-    return text
+    # A URL run: scheme + non-space chars, stopping before a ')' so a
+    # markdown target "[label](url)" ends at its wrapping paren.
+    url_re = re.compile(r'https?://[^\s)]+')
+
+    def _mask_prose(segment: str) -> str:
+        # Email / UPN -> keep first char + full domain: j***@contoso.com
+        segment = email_re.sub(r'\1***\2', segment)
+        # GUID -> keep first block: 1a2b3c4d-****-****-****-************
+        segment = guid_re.sub(r'\1-****-****-****-************', segment)
+        return segment
+
+    out: list[str] = []
+    last = 0
+    for m in url_re.finditer(text):
+        out.append(_mask_prose(text[last:m.start()]))
+        out.append(m.group(0))  # URL kept verbatim so its GUIDs survive
+        last = m.end()
+    out.append(_mask_prose(text[last:]))
+    return "".join(out)
 
 
 def _manual_checklist_items(remediation: str) -> tuple[str, list[str]]:
