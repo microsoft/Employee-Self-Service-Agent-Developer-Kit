@@ -21,12 +21,11 @@ def test_scenario_dependency_edges_are_sourced_and_not_pm_spec():
     edge = next(
         e for e in edges if e["scenario"] == "hr-ticketing" and e["dependsOn"] == "hr-knowledge"
     )
-    assert edge["kind"] == "requires"
-    # Honest provenance: sourced, NOT attributed to the PM spec, and flagged for
-    # citation confirmation.
+    assert edge["kind"] == "recommends"
+    # Sourced from the vendored ESS scenario catalogue, NOT the PM spec.
     assert edge["source"] and "spec" not in edge["source"].lower()
+    assert "catalogue" in edge["source"].lower()
     assert "deflect" in edge["rationale"].lower()
-    assert "confirm" in edge["rationale"].lower()
 
 
 def test_recognition_lexicons_present():
