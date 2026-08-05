@@ -28,11 +28,13 @@ still shows up under that role in Flow 2, and provenance survives.
 For the MVP, the sponsor often also holds Power Platform admin access, so they
 may take the setup Task themselves. That's a convenience, not a rule — assign to
 whoever actually holds the role; a different admin running the Task produces the
-same result and the same capture (Phase 5).
+same result and the same capture (Phase 6).
 
-When every Task is assigned or pooled, show the summary. The Plan is ready to
-run: each assignee runs the Task's skill (or does the manual/portal step), and
-you capture what it produced in Phase 5.
+When every Task is assigned or pooled, show the summary, then go to **Phase 5**
+to generate the theoretical eval from the sponsor's scenarios
+(`src/skills/planner/evaluate.md`). After that the Plan is ready to run: each
+assignee runs the Task's skill (or does the manual/portal step), and you capture
+what it produced in Phase 6.
 
 ## Future — resolve the person from an external roles API
 

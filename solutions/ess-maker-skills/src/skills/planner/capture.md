@@ -1,4 +1,4 @@
-# Planner — Phase 5: Capture what a Task produced
+# Planner — Phase 6: Capture what a Task produced
 
 A Task declares the output **keys** it should yield (`produces`, grounded from
 Learn). When an assignee finishes a Task, fill a value for each key — then

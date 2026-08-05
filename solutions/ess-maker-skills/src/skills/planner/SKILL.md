@@ -54,7 +54,7 @@ have checked for an existing plan.**
    - Offer next actions: **continue/extend** the plan (add or assign tasks),
      **pick up** one of their tasks (brief them with `task-brief` — if the plan
      has an environment pinned, that nudges them to run `/setup` and connect to it
-     first — then claim → do it → capture what it produced, Phase 5), or
+     first — then claim → do it → capture what it produced, Phase 6), or
      **capture** a completed task's output.
    - Only start over on **explicit** confirmation — `init --force` overwrites the
      plan.
@@ -80,26 +80,32 @@ per **First** above instead of re-running the interview.)
 | 2. Interview | Ask only what research couldn't ground; capture intent | `src/skills/planner/interview.md` |
 | 3. Model | Emit atomic Tasks (title + description + grounded role + produces) | `src/skills/planner/model.md` |
 | 4. Assign | Flow 1 — list holders of each grounded role, sponsor picks a person | `src/skills/planner/assign.md` |
-| 5. Capture | After a Task's work runs, observe/ask and pin what it produced | `src/skills/planner/capture.md` |
+| 5. Evaluate | Once the plan is authored, hand the sponsor's scenarios to the eval skill for a **theoretical, scenario-based** eval (generate-only; the planner invokes, it does not own eval) | `src/skills/planner/evaluate.md` |
+| 6. Capture | After a Task's work runs, observe/ask and pin what it produced | `src/skills/planner/capture.md` |
 
 When a person asks **"what am I assigned?"**, skip to Flow 2:
 read `src/skills/planner/mytasks.md`.
 
-> **Critical — build the whole plan, not just setup.** Run *all five phases in
+> **Critical — build the whole plan, not just setup.** Run *all six phases in
 > order*. Phase 3 must emit the **full task set** grounded in research and the
 > sponsor's chosen systems/scenarios: the setup task **plus** one connect task
 > per system (e.g. Workday, ServiceNow), authoring tasks per scenario, an evals
 > task, and publish — each with a Learn-grounded role and `produces`/`consumes`
 > keys. **Do not stop after adding the "run setup" task.** The interview
 > (Phase 2) must capture *which systems* and *which scenarios* before Phase 3 —
-> those drive the tasks and the roles. After setup runs, use Phase 5 to brief
-> each downstream assignee with what setup produced (the env id) and to commit
-> what they create back onto the plan.
+> those drive the tasks and the roles. Once the tasks are emitted and assigned,
+> **Phase 5 hands the sponsor's scenarios to the eval skill** for a first,
+> theoretical eval — the planner *invokes* it, it does not author the eval itself.
+> After setup runs, use Phase 6 to brief each downstream assignee with what setup
+> produced (the env id) and to commit what they create back onto the plan.
 
 ## Building the plan
 
 When creating a new plan — or extending an existing one — work the phases in
 order. After every phase that changes the plan the CLI regenerates the human view
 (`workspace/plan/summary.md`); at natural checkpoints show the sponsor
-`python scripts/planner/cli.py summary`. (To resume a plan that already exists,
-see **First** above — don't restart the interview.)
+`python scripts/planner/cli.py summary`. When authoring is complete (after
+Phase 4), run **Phase 5** to hand off to the eval skill for a theoretical,
+scenario-based eval; **Phase 6** (capture) runs later as each Task executes. (To
+resume a plan that already exists, see **First** above — don't restart the
+interview.)

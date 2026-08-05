@@ -29,7 +29,7 @@ each role they hold** — which naturally covers a person with more than one rol
    ```
 
 4. From there, they do the Task (as its description says) and you capture its
-   output (Phase 5, `src/skills/planner/capture.md`).
+   output (Phase 6, `src/skills/planner/capture.md`).
 
 ## Before they start — connect their kit to the plan's environment
 
