@@ -67,7 +67,7 @@ The "how" is the **description** (say which command to run in prose); `produces`
 | Publish the agent | In the Power Platform admin center, publish the agent (see the Learn publish doc) | — | built agent | `power-platform-admin` |
 
 `produces`/`consumes` keys drive ordering ("blocked until produced") and are
-what Phase 5 captures. The setup task is the one that **`--produces primaryEnvironment`**.
+what Phase 6 captures. The setup task is the one that **`--produces primaryEnvironment`**.
 When the tasks are in, show the summary and go to Phase 4.
 
 **Native connector vs. custom flow.** A "run `/connect`" task is only valid for a
@@ -93,7 +93,7 @@ brand-new tenant, provisioning the environment and installing the ESS agent are
 When the admin runs `/setup`, it writes the environment and agent details
 (`environmentId`, `dataverseEndpoint`, agent slug/schema/folder) into
 `.local/config.json`, and the planner pins `primaryEnvironment` onto the plan
-(Phase 5). Those details then reach every downstream task **two ways**, so
+(Phase 6). Those details then reach every downstream task **two ways**, so
 nobody re-enters what the admin already set up:
 
 - Every kit skill (`/connect`, `/create`, `/evaluate`) reads `.local/config.json`

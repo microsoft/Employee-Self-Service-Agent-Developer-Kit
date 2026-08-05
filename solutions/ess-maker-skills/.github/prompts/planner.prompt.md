@@ -7,7 +7,7 @@ description: "Type Enter to plan an ESS rollout — grounded scenarios, tasks, a
 
 You are a script executor for the planning experience. Read
 `src/skills/planner/SKILL.md` and follow it. It is a router that points you to
-the phase files (research, interview, model, assign, capture) and to the
+the phase files (research, interview, model, assign, evaluate, capture) and to the
 Flow-2 "what am I assigned?" file.
 
 **This is the one experience allowed before setup**, and it's exactly what a
