@@ -10,7 +10,7 @@ Add each Task with:
 python scripts/planner/cli.py add-task --id <T#> \
   --title "<short imperative title>" \
   --description "<self-explanatory: what to do and how — including which command to run, e.g. 'Run /connect to connect Workday to the ESS agent and follow its steps'>" \
-  --role <grounded-role> --role-source <learnUrl> \
+  --role <grounded-role> \
   [--produces <key,key>] [--consumes <key,key>]
 ```
 
@@ -25,10 +25,10 @@ any skill field.)
 **Every Task is assigned to a role at creation — the role that should be able to
 pick it up — and that role is _sourced from the Learn link_, never invented.** The
 `--role` and `--produces` values come from the **Learn page for that prerequisite**
-(Phase 1; the `research --extract` step surfaces the role candidates). Pass the
-Learn URL that names the role as `--role-source` so the grounding is recorded on
-the Task and auditable. `--role` pools the Task to that role for now (any holder
-can pick it up, Flow 2); Phase 4 assigns the actual person.
+(Phase 1; the `research --extract` step surfaces the role candidates). Keep the
+Learn page URL in your research notes (it lives in the research context, §7.6 —
+not as a task field). `--role` pools the Task to that role for now (any holder can
+pick it up, Flow 2); Phase 4 assigns the actual person.
 
 > **Person comes later.** Today the role is pooled and the sponsor picks a person
 > (Phase 4, Flow 1). A future step resolves *who holds the role* from an external
@@ -118,16 +118,16 @@ that is:
 
 ```
 # 1. PP admin onboards the ADK (records the environment details)
-python scripts/planner/cli.py add-task --id T1 --title "Run setup" --description "Run /setup to onboard the ADK to the deployed agent (records the environment)" --role power-platform-admin --role-source "<Learn setup doc>" --produces primaryEnvironment
+python scripts/planner/cli.py add-task --id T1 --title "Run setup" --description "Run /setup to onboard the ADK to the deployed agent (records the environment)" --role power-platform-admin --produces primaryEnvironment
 # 2. one connect task PER system (role grounded from the connect page + Learn)
-python scripts/planner/cli.py add-task --id T2 --title "Connect Workday" --description "Run /connect to connect Workday to the ESS agent and follow its steps" --role integration-owner --role-source "<Learn workday doc>" --produces "workdayConnection,workdayEntraApp" --consumes primaryEnvironment
-python scripts/planner/cli.py add-task --id T3 --title "Connect ServiceNow" --description "Run /connect to connect ServiceNow to the ESS agent" --role integration-owner --role-source "<Learn servicenow doc>" --produces servicenowConnection --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T2 --title "Connect Workday" --description "Run /connect to connect Workday to the ESS agent and follow its steps" --role integration-owner --produces "workdayConnection,workdayEntraApp" --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T3 --title "Connect ServiceNow" --description "Run /connect to connect ServiceNow to the ESS agent" --role integration-owner --produces servicenowConnection --consumes primaryEnvironment
 # 3. authoring per scenario area (knowledge before ticketing — register the dependency)
-python scripts/planner/cli.py add-task --id T4 --title "Set up HR knowledge" --description "Run /create to author the HR knowledge topics" --role maker --role-source "<Learn knowledge doc>" --produces "topic:hr-knowledge" --consumes primaryEnvironment
-python scripts/planner/cli.py add-task --id T5 --title "Author HR ticketing topics" --description "Run /create to author the HR ticketing topics" --role maker --role-source "<Learn topics doc>" --produces "topic:hr-ticketing" --consumes "primaryEnvironment,servicenowConnection"
+python scripts/planner/cli.py add-task --id T4 --title "Set up HR knowledge" --description "Run /create to author the HR knowledge topics" --role maker --produces "topic:hr-knowledge" --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T5 --title "Author HR ticketing topics" --description "Run /create to author the HR ticketing topics" --role maker --produces "topic:hr-ticketing" --consumes "primaryEnvironment,servicenowConnection"
 # 4. evals + publish
-python scripts/planner/cli.py add-task --id T6 --title "Generate evals" --description "Run /evaluate to generate the eval suite" --role eval-author --role-source "<Learn evals doc>" --produces evalSuite --consumes primaryEnvironment
-python scripts/planner/cli.py add-task --id T7 --title "Publish the agent" --description "In the Power Platform admin center, publish the agent (see the Learn publish doc)" --role power-platform-admin --role-source "<Learn publish doc>" --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T6 --title "Generate evals" --description "Run /evaluate to generate the eval suite" --role eval-author --produces evalSuite --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T7 --title "Publish the agent" --description "In the Power Platform admin center, publish the agent (see the Learn publish doc)" --role power-platform-admin --consumes primaryEnvironment
 ```
 
 Also register the scenarios and their dependencies (see `interview.md`) so the

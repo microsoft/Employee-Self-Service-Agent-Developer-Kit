@@ -335,7 +335,6 @@ workspace/
       "assignedTo": { "type": "User", "id": "<paul oid>",  // assigned to a PERSON…
                       "user": { "oid": "<paul oid>" },
                       "role": { "roleId": "power-platform-admin" } },  // …ACTING AS a Learn-grounded role
-      "roleSource": "https://learn.microsoft.com/…/employee-self-service/install",  // Learn URL that grounded the role
       "state": "NotStarted",                              // NotStarted → InProgress → Completed (+ reopen)
       "produces": ["primaryEnvironment"], "consumes": [] },
 
@@ -369,12 +368,13 @@ workspace/
     //   "attributes":{ "environmentId":"d3f1…", "environmentUrl":"https://…" },
     //   "inventoryRef":"Environment:d3f1…", "producedByTaskId":"T1",
     //   "provenance":{ "source":"Agent", "addedBy":{…}, "addedAt":"…" }, "state":"Active" }
-  ],
-  "notes": []
+  ]
 }
 ```
 
 **Extended `Principal` — the three assignment states (Step‑2 §7.4):**
+
+Per Step‑2 §7.4, `Principal` = `{ Type, Id, DirectoryRef?, Role?:{roleId, directoryRef?}, User?:{oid, directoryRef?} }` — the `directoryRef` on the role/user ref is an optional Step‑2 field (reserved for Group/Role expansion), so it is set only when a roles source provides it.
 
 | State | `assignedTo` shape | Meaning |
 |---|---|---|
@@ -449,7 +449,7 @@ Three reasons the Task stays at skill granularity, not step granularity:
 
 The planner sequences these tasks; **the role in the last column and the `produces` keys are extracted from the Learn docs during research (§7.6), not hardcoded kit defaults and not asked of the sponsor.** The description says how (run a kit command, or a portal/manual step with a grounded doc link) in plain language — there is no separate action field. `produces`/`consumes` drive ordering + "blocked until produced" UX (Step‑2 §7.2, phase‑2); each key is what the capture loop (§12) fills and pins. The **setup task is the one that produces `primaryEnvironment`**.
 
-**Role source is recorded on the Task (traceability).** Because the role is *sourced from the Learn link*, the Task keeps the URL that grounded it in an optional `task.roleSource` field (`add-task --role-source <learnUrl>`; surfaced by `task-brief`). This makes "which page said this is a `{role}` task?" auditable, and pairs with the future roles endpoint (§10.3, §11): the **role** stays Learn-grounded, while the external roles API only resolves *which people* hold it.
+**Role grounding lives in the research context, not on the Task.** The role is *sourced from the Learn link*, but the Task carries **only** the fields the WeveNova `Task` entity defines (title, description, assignedTo, state, produces, consumes) — the grounding page URL is kept in the cached research context (§7.6, `prerequisites[].sourceUrl`), never as an invented `task.roleSource` field. The role stays Learn-grounded; the future roles endpoint (§10.3, §11) only resolves *which people* hold it.
 
 **Greenfield first step & the onboarding correction.** A first-time *"set up ESS — where do I start?"* request routes to the planner (not straight to `/setup`), which emits **the Power Platform admin running `/setup`** as the first task. Be accurate about `/setup` (onboarding): it **connects the kit to an ESS agent already deployed in a Power Platform environment and records its details into `.local/config.json`** — it does *not* create the environment or install ESS. On a brand-new tenant those are **portal/admin prerequisites** (add a `portal` task before `/setup`). What `/setup` records — `environmentId`, `dataverseEndpoint`, and agent slug/schema/folder — is exactly the state that **back-propagates** to later tasks: every kit skill (`/connect`, `/create`, `/evaluate`) reads `.local/config.json` directly, and tasks that `consume primaryEnvironment` read the pinned artifact off the plan (§12).
 
