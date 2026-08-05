@@ -131,6 +131,17 @@ FULL_SCOPE = [
     ("Cloud Policies", run_cloud_policy_checks),
 ]
 
+# Scopes whose checks query the Copilot Studio Island Gateway (PVA) and so
+# require PVA authentication in main(). Keep in sync with the SCOPE_MAP checks
+# that read ``runner.pva``:
+#   - local          -> CONFIG-013 (knowledge-source runtime status)
+#   - graphconnector -> Graph Connector KB runtime status
+#   - handoff        -> TOPIC-020 (agent_handoff.run_handoff_topic_checks)
+# "full" always authenticates PVA because it runs all of the above. A scope
+# omitted here gets ``runner.pva = None``, so any PVA-dependent check wired
+# into it silently returns [] without ever querying the tenant.
+PVA_SCOPES = frozenset({"full", "local", "graphconnector", "handoff"})
+
 
 def _endpoint_systems_for_offer(runner) -> list[str]:
     """External-system names that have a discoverable endpoint, for the consent
@@ -1169,7 +1180,7 @@ def main():
     pva = None
     if infra_only_scope:
         print("Skipping Copilot Studio auth for infrastructure scope.")
-    elif args.scope in ("full", "local", "graphconnector"):
+    elif args.scope in PVA_SCOPES:
         print("Authenticating to Copilot Studio (Island Gateway)...")
         pva = PVAClient(tenant_id, env_url)
         try:

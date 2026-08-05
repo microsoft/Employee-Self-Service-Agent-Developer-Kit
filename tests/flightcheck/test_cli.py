@@ -191,3 +191,79 @@ class TestInfrastructureScopeAuthGating:
 
         assert exc.value.code == 1
 
+
+class _OkClient:
+    """Minimal client stub whose authenticate() succeeds and does nothing."""
+
+    def __init__(self, *args, **kwargs) -> None:
+        pass
+
+    def authenticate(self):
+        return None
+
+
+class _RecordingPVA:
+    """PVAClient stub that records whether main() instantiated it."""
+
+    instantiated = False
+
+    def __init__(self, *args, **kwargs) -> None:
+        type(self).instantiated = True
+        self.is_configured = True
+
+    def authenticate(self):
+        return "pva-token"
+
+
+class TestPvaScopeGating:
+    """Regression coverage for the ``--scope handoff`` PVA-auth gate.
+
+    ``SCOPE_MAP['handoff']`` wires ``run_handoff_topic_checks`` (TOPIC-020),
+    which reads ``runner.pva.get_dialog_components(bot_id)``. If the ``handoff``
+    scope is omitted from the PVA-auth gate in ``main()``, ``runner.pva`` is
+    ``None`` and the check silently returns ``[]`` WITHOUT ever querying the
+    tenant — the run reports 0 checks and looks "ready" while validating
+    nothing. These pin that the handoff scope authenticates Copilot Studio.
+    """
+
+    def test_pva_scopes_includes_every_pva_dependent_scope(self) -> None:
+        # Every scope whose SCOPE_MAP checks read runner.pva must be gated
+        # into PVA auth: local (CONFIG-013), graphconnector (KB status),
+        # handoff (TOPIC-020). "full" runs all of them.
+        assert {"full", "local", "graphconnector", "handoff"} <= cli.PVA_SCOPES
+
+    def test_handoff_scope_authenticates_pva(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        local_dir = tmp_path / ".local"
+        local_dir.mkdir()
+        (local_dir / "config.json").write_text(
+            '{"agents":[],"dataverseEndpoint":"https://org.crm.dynamics.com"}',
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr("auth.authenticate", lambda *_a, **_k: "dv-token")
+        monkeypatch.setattr("auth.discover_tenant", lambda *_a, **_k: "tenant-id")
+        monkeypatch.setattr(cli, "GraphClient", _OkClient)
+        monkeypatch.setattr(cli, "PPAdminClient", _OkClient)
+        monkeypatch.setattr(cli, "derive_environment_id", lambda *_a, **_k: "env-id")
+        _RecordingPVA.instantiated = False
+        monkeypatch.setattr(cli, "PVAClient", _RecordingPVA)
+        monkeypatch.setattr(cli, "FlightCheckRunner", _FakeRunner)
+        monkeypatch.setattr(cli, "_resolve_target_selection", lambda *_a, **_k: None)
+        monkeypatch.setattr(
+            cli, "_apply_runtime_reachability_consent", lambda *_a, **_k: None
+        )
+        monkeypatch.setattr(cli, "_print_prioritized_summary", lambda _result: None)
+        monkeypatch.setattr(cli, "save_results", lambda _result, _output: None)
+        monkeypatch.setattr(
+            "sys.argv",
+            ["cli.py", "--scope", "handoff", "--no-open", "--no-telemetry"],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+
+        assert exc.value.code == 0
+        assert _RecordingPVA.instantiated is True
+
