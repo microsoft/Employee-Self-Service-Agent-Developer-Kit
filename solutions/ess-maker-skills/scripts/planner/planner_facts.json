@@ -1,17 +1,31 @@
 {
   "schemaVersion": 1,
-  "about": "Non-Learn planning facts for the ESS planner. This file is NOT a business-scenario catalogue and MUST NOT enumerate which scenarios exist: per the PM spec (FR-1/FR-3), business scenarios come from the maker's own description grounded in Microsoft Learn. This file holds only the few facts the planner needs that are (a) NOT discoverable on Learn and (b) NOT a scenario list: scenario *dependencies* between two scenarios (applied only when both are named by the maker) and a small *recognition lexicon* used to spot role/output nouns when reading Learn pages. Every entry carries an explicit `source`. Keep this minimal and grounded; do not invent.",
+  "about": "Non-Learn planning facts for the ESS planner. The authoritative scenario list, priority order, and dependency edges live in the vendored ESS scenario catalogue (scripts/planner/scenario_catalogue.md). This file holds only the machine-checkable scenario dependency edges (mirrored from that catalogue, applied when both scenarios are in scope) that the check-deps CLI enforces, plus a small recognition lexicon used to spot role/output nouns when reading Learn pages. Each entry carries an explicit source. Do not invent edges the catalogue does not define; re-sync when the catalogue changes.",
   "scenarioDependencies": [
     {
       "scenario": "hr-ticketing",
       "dependsOn": "hr-knowledge",
+      "kind": "recommends",
+      "source": "ESS scenario catalogue (Dependency order)",
+      "rationale": "Knowledge is the deflection foundation - Ticketing works best after Knowledge; skipping Knowledge means more tickets are created instead of deflected."
+    },
+    {
+      "scenario": "it-ticketing",
+      "dependsOn": "it-knowledge",
+      "kind": "recommends",
+      "source": "ESS scenario catalogue (Dependency order)",
+      "rationale": "Knowledge is the deflection foundation - IT Ticketing works best after IT Knowledge."
+    },
+    {
+      "scenario": "hr-profile-write",
+      "dependsOn": "hr-profile-read",
       "kind": "requires",
-      "source": "ess-design-guidance",
-      "rationale": "Deploy knowledge before ticketing so the agent answers from knowledge first and only opens a ticket when the question is unresolved (deflection). NOTE: not found verbatim in the ADO planner PM spec (pm-spec.md) or spec repo as of 2026-08-04 — confirm the authoritative citation before presenting this as a spec requirement. Applies only when the maker puts both hr-ticketing and hr-knowledge in scope."
+      "source": "ESS scenario catalogue (Dependency order)",
+      "rationale": "Enable a category's reads before its writes (HR Profile Read before HR Profile Write) - governance / least privilege."
     }
   ],
   "recognition": {
-    "about": "Vocabulary the planner uses to RECOGNISE roles/outputs while reading Learn pages. It does not define the roles/outputs — those are read from the page. Extend conservatively.",
+    "about": "Vocabulary the planner uses to RECOGNISE roles/outputs while reading Learn pages. It does not define the roles/outputs - those are read from the page. Extend conservatively.",
     "roles": [
       "Power Platform administrator",
       "Power Platform admin",

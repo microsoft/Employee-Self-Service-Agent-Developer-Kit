@@ -11,6 +11,17 @@ Every intent answer is stored as a **context entry** (grouped), via:
 python scripts/planner/cli.py set-context --key <k> --value "<v>" --group <group> --description "<why>" --source User
 ```
 
+## Ground scenario capture in the ESS catalogue
+
+**Read `scripts/planner/scenario_catalogue.md` first.** It is the authoritative
+scenario‑planning decision layer (a vendored snapshot of the ESS scenario
+catalogue): the **category map**, the **default priority order + tiers**, and the
+**dependency edges**. Capture the sponsor's goal by **mapping it to the
+catalogue's categories** — do not invent a category, edge, priority, or order it
+doesn't define, and don't force‑fit a goal that matches no ESS category (say so).
+Per‑scenario detail (fields, setup, connectors, roles) is fetched from Microsoft
+Learn at render time, never from the catalogue.
+
 ## The question bank — scenarios *before* systems
 
 Capture in this order. **Build the scenario context first** — the jobs the team
@@ -22,7 +33,7 @@ ticketing) they may have wanted.
 | # | Ask | Store as |
 |---|-----|----------|
 | 1 | "In one sentence — what should this agent do, and for whom?" | `set-context --group objective` |
-| 2 | **Scenarios (jobs‑to‑be‑done) — ask this before any system.** "What should your team be able to self‑serve? Think in outcomes, not systems. ESS commonly covers **HR knowledge** (answer policy / FAQ questions), **HR ticketing** (raise & track HR cases), **IT ticketing** (IT support), and **specific data actions** (e.g. view time‑off balance, request time off, view pay). Which of these — in your words? Anything else?" | `set-context --group scenarioContext` (key `jtbd`) + `add-scenario` per area |
+| 2 | **Scenarios (jobs‑to‑be‑done) — ask this before any system.** "What should your team be able to self‑serve? Think in outcomes, not systems." Map their answer to the **catalogue categories**: **HR Knowledge**, **HR Profile** (read/write), **Manager**, **HR Ticketing**, **IT** (knowledge + ticketing), **Handoff** — plus **extensible** scenarios (e.g. Request Time Off). Offer these, capture the sponsor's own words, and confirm which categories are in scope. | `set-context --group scenarioContext` (key `jtbd`) + `add-scenario` per category |
 | 3 | **System per scenario — only after scenarios are captured.** "For **{scenario/area}**, which system holds the data?" — ground the options in the ESS native integrations from Phase‑1 research (Workday, ServiceNow HRSD/ITSM, SAP SuccessFactors); SharePoint / M365 content is a knowledge source. | `add-system --area {area} --system "{name}"` |
 | 4 | "Employees only, or managers too?" | `set-context --group scenarioContext` (key `persona`) |
 | 5 | "Rolling out to a specific market or wave first (e.g. India, a pilot group)?" | `set-context --group market` |
@@ -30,15 +41,16 @@ ticketing) they may have wanted.
 | 7 | "How will you know a scenario is done — pilot‑ready? production‑signed‑off?" | `set-context --group acceptanceCriteria` |
 | 8 | "Is this a brand‑new environment, or do you already have ESS running?" | (branch — greenfield vs enrichment) |
 
-**The scenario examples in Q2 (knowledge / HR ticketing / IT ticketing / data
-actions) are prompts, not a fixed catalogue.** They're grounded in what ESS ships
-(HR + IT starters, knowledge sources, ServiceNow HRSD/ITSM) and the PM spec's
-knowledge‑vs‑ticketing framing — use them to help the maker *articulate* their
-scenarios, then capture the maker's own words and confirm each against Microsoft
-Learn (Phase 1). Picking a system (e.g. Workday) does **not** define the scenarios
-— a maker on Workday may still want HR knowledge and IT ticketing too, so ask Q2
-first and let the answer be broader than any one system. If the maker names
-something ESS doesn't support, say so; don't force‑fit.
+**The catalogue IS the grounded scenario set — map the goal to it, don't invent.**
+The categories above come from `scenario_catalogue.md`; use them to help the maker
+articulate their goal, capture their own words, and confirm each in‑scope category
+against Microsoft Learn (Phase 1). **Priority and order come from the catalogue's
+default order** (Knowledge → Ticketing → Profile read/write → Handoff → sensitive
+topics → multi‑language → mobile) and its tiers — emit that order; don't re‑derive
+it. Picking a system (e.g. Workday) does **not** define the scenarios — a maker on
+Workday may still want HR Knowledge and IT too, so ask Q2 first and let the answer
+be broader than any one system. If a goal matches no ESS category, say so; don't
+force‑fit.
 
 **Ground the systems in Learn — don't improvise the connector list.** ESS ships
 native integrations (extension packs) for a specific set of systems, each with a
@@ -67,63 +79,59 @@ python scripts/planner/cli.py add-system --area hr-ticketing --system "ServiceNo
 python scripts/planner/cli.py add-system --area it-ticketing --system "ServiceNow ITSM"
 ```
 
-**Scenarios come from the maker, grounded in Learn — never from a fixed list.**
-Take the scenarios from what the maker describes and confirm them; ground the
-details (prerequisites, roles, systems) against Microsoft Learn (Phase 1). The Q2
-examples are prompts to help them articulate — capture their own words.
+**Scenarios are the maker's goal mapped to the catalogue categories.** Take the
+scenarios from what the maker describes, map them to `scenario_catalogue.md`
+categories, and confirm; ground each category's per‑scenario detail against
+Microsoft Learn (Phase 1).
 
-**Required before Phase 3, in this order.** (1) objective, (2) **the scenarios /
-jobs‑to‑be‑done** (knowledge, ticketing, IT, data actions — whatever the maker
-wants), then (3) **the system for each scenario** are **mandatory**. Capture
-scenarios *before* systems — never let a system choice narrow the scenario set.
-These determine the connect tasks, the authoring tasks, and which Learn docs
-ground the roles. Do not skip them, and do not end the interview (or jump to
-sponsor/timeframe) until scenarios and their systems are captured. Ask 4–8 as
-scope warrants. For each chosen system you emit a connect task in Phase 3; for
-each scenario you register it (below) and author tasks.
+**Required before Phase 3, in this order.** (1) objective, (2) **the scenarios**
+(the catalogue categories the maker wants — HR Knowledge, HR/IT Ticketing, Profile
+read/write, Manager, Handoff, or an extensible one), then (3) **the system for
+each scenario** are **mandatory**. Capture scenarios *before* systems — never let
+a system choice narrow the scenario set. These determine the connect tasks, the
+authoring tasks, and which Learn docs ground the roles. Do not skip them, and do
+not end the interview (or jump to sponsor/timeframe) until scenarios and their
+systems are captured. Ask 4–8 as scope warrants.
 
-Questions 1–3 are almost always asked; 4–7 as scope warrants; the last is one
-branch. Use scalar values (one fact per entry); group related facts rather than
-nesting.
+Use scalar values (one fact per entry); group related facts rather than nesting.
 
 ## Register the scenarios and expose dependencies
 
-As the sponsor picks scenarios, register each one so the plan knows what's in
-scope. Use a stable, conventional id derived from the maker's own scenario (e.g.
-`hr-knowledge`, `hr-ticketing`, `it-ticketing`) — the id is just a handle, not a
-menu you pick from:
+Register each in‑scope scenario with a stable id derived from the catalogue
+category (e.g. `hr-knowledge`, `hr-profile-read`, `hr-profile-write`,
+`hr-ticketing`, `it-knowledge`, `it-ticketing`, `handoff`):
 
 ```
 python scripts/planner/cli.py add-scenario --id hr-ticketing --label "HR ticketing"
 ```
 
-Then check for **scenario dependencies** — cases where one scenario should be
-deployed before another. The planner ships a small set of *known* dependencies in
-`scripts/planner/planner_facts.json` (each with an explicit `source`). One is
-**knowledge before ticketing** — deploy knowledge first so the agent answers from
-knowledge and only opens a ticket when unresolved (deflection). Treat this as
-design guidance, not a verbatim spec requirement, unless a citation is confirmed.
-Surface any met/unmet dependencies:
+Then surface **scenario dependencies** — the catalogue's prerequisite edges
+(`scenario_catalogue.md` → *Dependency order*), which the planner also ships in
+`scripts/planner/planner_facts.json` (sourced from the catalogue):
+
+- **Knowledge is the deflection foundation** — Ticketing, Profile, and Handoff
+  work best after Knowledge (skipping it means more tickets created, not
+  deflected).
+- **Reads before writes** — enable a category's read before its write (HR Profile
+  Read before HR Profile Write).
+- **Handoff requires a Ticketing category** (HR or IT) — handoff escalates a ticket.
 
 ```
 python scripts/planner/cli.py check-deps
 ```
 
-If a selected scenario depends on one that's not in scope, tell the sponsor in
-plain language — "To get the deflection benefit, deploy HR knowledge before HR
-ticketing — want me to add it?" — and, if they agree, register the prerequisite
-scenario and record the edge (cite the real source; don't attribute it to the PM
-spec unless you can point to it):
+If an in‑scope scenario depends on one that's not in scope, tell the sponsor in
+plain language — "Deploy HR Knowledge before HR Ticketing so the agent deflects —
+want me to add it?" — and, if they agree, register the prerequisite and record the
+edge (cite the catalogue):
 
 ```
 python scripts/planner/cli.py add-scenario --id hr-knowledge --label "HR knowledge"
-python scripts/planner/cli.py add-scenario-dependency --scenario hr-ticketing --depends-on hr-knowledge --kind requires --rationale "Deflection: answer from knowledge before opening a ticket"
+python scripts/planner/cli.py add-scenario-dependency --scenario hr-ticketing --depends-on hr-knowledge --kind recommends --rationale "ess-catalogue.md: Knowledge is the deflection foundation"
 ```
 
-Dependencies are stored as ordinary intent in the open plan and show up in the
-summary with a met / MISSING status, so the ordering is visible to everyone and
-flows into task sequencing (the knowledge task produces what the ticketing work
-consumes).
+Dependencies show up in the summary with a met / MISSING status and flow into task
+sequencing (the knowledge task produces what the ticketing work consumes).
 
 ## Do NOT ask which role a Task needs
 

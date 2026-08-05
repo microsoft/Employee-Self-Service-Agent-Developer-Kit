@@ -102,8 +102,8 @@ def test_in_scope_scenarios_reads_group():
 def test_known_dependency_is_seeded():
     edges = known_scenario_dependencies()
     assert {"scenario": "hr-ticketing", "dependsOn": "hr-knowledge"}.items() <= edges[0].items()
-    assert edges[0]["kind"] == "requires"
-    # Sourced honestly from the facts file — NOT attributed to the PM spec.
+    assert edges[0]["kind"] == "recommends"
+    # Sourced from the vendored ESS catalogue — NOT attributed to the PM spec.
     assert edges[0]["source"] and "spec" not in edges[0]["source"].lower()
     assert "deflect" in edges[0]["rationale"].lower()
 
@@ -217,5 +217,5 @@ def test_cli_check_deps_lists_met_dependencies(tmp_path, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "Met scenario dependencies" in out
-    assert "hr-ticketing requires hr-knowledge" in out
+    assert "hr-ticketing recommends hr-knowledge" in out
     assert "No unmet scenario dependencies" in out
