@@ -193,34 +193,29 @@ Connect your agent to ServiceNow for IT tickets, HR cases, and service catalog i
 
 Connect your agent to Workday for employee data, compensation, time off, and org lookups. Run `/connect workday` to start.
 
-**Two supported install paths** — the kit detects which one applies and routes automatically:
+The kit sets up the **simplified** install — Microsoft's default for new deployments. It uses a single Workday connection (**OAuthUser**, authenticated through Microsoft Entra ID) plus Dataverse: no Integration System User (ISU) accounts, security groups, domain permissions, or custom RaaS reports. Signed-in employee context comes from the Workday REST `/workers/me` endpoint.
 
-- **Simplified** (Microsoft's default for new installs) — just one Workday connection (OAuthUser via Entra ID) plus Dataverse. No ISU service accounts, security groups, or custom reports. User context comes from the Workday REST `/workers/me` endpoint.
-- **Legacy** — the older setup with ISU accounts, security groups, domain permissions, and the `WD_User_Context` RaaS report. Still fully supported for existing installs.
+> The older ISU/RaaS-based setup is in maintenance mode. `/connect workday` targets the simplified path; existing legacy installs continue to run unchanged.
 
-**What the kit sets up (simplified path):**
-- **SSO via Entra ID** — verifies or creates the Entra enterprise app, configures trust with Workday, and pre-authorizes the Power Platform connector
-- **Extension pack installation** — installs the Workday extension in Copilot Studio with the OAuthUser and Dataverse connection references configured (including the Workday REST base URL)
+**What `/connect workday` sets up — guided and verified at every step:**
 
-**What the kit additionally sets up on the legacy path:**
-- **Integration System Users (ISUs)** — automatically creates `ISU_WQL_COPILOT` (for reports) and `ISU_GENERIC_COPILOT` (for API calls) via the Workday SOAP API
-- **Security groups and domain permissions** — guides you through creating `ISSG_WQL_COPILOT` and `ISSG_GENERIC_COPILOT` with the correct domain policies
-- **OAuth API client** — walks you through registering a SAML Bearer Grant client
-- **WD_User_Context RaaS report** — verifies or guides creation of the custom report that maps Workday usernames to employee context data
+1. **Power Platform environment** — verifies (or helps you create) an environment with a Dataverse database and Copilot Studio message capacity, and confirms your DLP policies allow the Workday and Dataverse connectors.
+2. **Employee Self-Service base agent** — verifies the ESS agent solution is installed in the environment.
+3. **Single sign-on (Microsoft Entra)** — configures the Workday SSO enterprise app in SAML mode: exposes the sign-in scope, pre-authorizes the Power Platform Workday connector, grants admin consent, assigns users, maps the NameID claim, sets the SAML signing option, and confirms single-tenant federation.
+4. **Workday tenant configuration** — guides your Workday administrator through registering the API client (SAML Bearer grant with the required functional areas and Workday-owned scope), capturing the connection details, activating the authentication policy, and matching the signing certificate to Entra.
+5. **Workday extension pack** — installs the Workday extension in Copilot Studio and verifies the setup end to end: the Workday connection (Microsoft Entra ID Integrated) and Dataverse connection are bound to your account, the REST base URL is trimmed to `/api`, the Workday cloud flows are enabled, the employee user-context redirect is wired, and the Workday endpoints are allowlisted at your firewall.
+6. **Your first custom Workday topic** — optionally authors and pushes a new Workday scenario end to end using the template config + shared flow pattern.
 
-**Supported auth methods:**
-| Method | Use case |
-|--------|----------|
-| Microsoft Entra ID Integrated | Both paths — employees SSO through Microsoft, token exchange with Workday |
-| Basic auth | Legacy path's ISU connections (`d6081`, `0786a`) |
+**Authentication:** Microsoft Entra ID Integrated — employees sign in with their Microsoft work account and the connection exchanges tokens with Workday on their behalf (per-user, On-Behalf-Of).
 
-**Verify-first approach:** The kit runs API checks against your Workday tenant before asking you to configure anything. On the legacy path, if ISU accounts, auth policies, permissions, or the RaaS report are already set up (common on shared tenants), those tasks are automatically skipped.
+**Verify-first approach:** The kit runs checks against your environment and Workday tenant before asking you to change anything. Steps that are already configured (common on shared tenants) are detected and skipped, and the flow is resume-aware — re-running `/connect workday` picks up at the first unverified step.
 
 **What you can build after connecting:**
 - Look up employee information, compensation, service anniversary, cost center
 - Check time off balances and request time off
 - Query emergency contacts, national IDs, passports, visas, certifications
 - Update email and phone number
+- Manager scenarios — e.g., view direct reports' service anniversaries
 - New scenarios use the **template config + shared flow** pattern — no standalone workflows needed
 
 ### Workday MCP Server
