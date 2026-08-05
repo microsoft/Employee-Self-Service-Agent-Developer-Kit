@@ -83,7 +83,6 @@ class Limits:
     MAX_VALUE_LEN = 2000
     MAX_DESCRIPTION_LEN = 1000
     MAX_ATTRIBUTES = 32
-    MAX_NOTES = 50
 
 
 def now_iso() -> str:
@@ -96,6 +95,7 @@ def now_iso() -> str:
 # --------------------------------------------------------------------------- #
 
 def role_ref(role_id: str, directory_ref: str | None = None) -> dict[str, Any]:
+    # Step-2 §7.4: Principal.Role = { roleId, directoryRef? }.
     ref: dict[str, Any] = {"roleId": role_id}
     if directory_ref:
         ref["directoryRef"] = directory_ref
@@ -103,6 +103,7 @@ def role_ref(role_id: str, directory_ref: str | None = None) -> dict[str, Any]:
 
 
 def user_ref(oid: str, directory_ref: str | None = None) -> dict[str, Any]:
+    # Step-2 §7.4: Principal.User = { oid, directoryRef? }.
     ref: dict[str, Any] = {"oid": oid}
     if directory_ref:
         ref["directoryRef"] = directory_ref
@@ -211,7 +212,6 @@ def new_task(
     produces: Iterable[str] | None = None,
     consumes: Iterable[str] | None = None,
     checklist: list[dict[str, Any]] | None = None,
-    role_source: str = "",
     state: str = "NotStarted",
 ) -> dict[str, Any]:
     task: dict[str, Any] = {
@@ -225,11 +225,6 @@ def new_task(
     }
     if checklist:
         task["checklist"] = list(checklist)
-    if role_source:
-        # The Microsoft Learn URL that grounded this task's role (traceability):
-        # the role a task needs is read off the Learn page for the prerequisite,
-        # never invented — see research.md / model.md.
-        task["roleSource"] = role_source
     return task
 
 
@@ -280,18 +275,14 @@ class Plan:
 
     @classmethod
     def new(cls, *, objective: str | None = None) -> "Plan":
-        ts = now_iso()
         data: dict[str, Any] = {
             "schemaVersion": SCHEMA_VERSION,
-            "generatedAt": ts,
-            "updatedAt": ts,
             "planId": "",
             "projectId": "",
             "status": "Draft",
             "context": [],
             "tasks": [],
             "outputs": [],
-            "notes": [],
         }
         plan = cls(data)
         if objective:
@@ -306,13 +297,11 @@ class Plan:
             data = json.load(fh)
         # Old / partial documents deserialize to sensible empties.
         data.setdefault("schemaVersion", SCHEMA_VERSION)
-        for key in ("context", "tasks", "outputs", "notes"):
+        for key in ("context", "tasks", "outputs"):
             data.setdefault(key, [])
         for key in ("planId", "projectId"):
             data.setdefault(key, "")
         data.setdefault("status", "Draft")
-        data.setdefault("generatedAt", "")
-        data.setdefault("updatedAt", data.get("generatedAt", ""))
         return cls(data)
 
     @classmethod
@@ -330,7 +319,6 @@ class Plan:
         path = os.fspath(path)
         parent = os.path.dirname(path) or "."
         os.makedirs(parent, exist_ok=True)
-        self.data["updatedAt"] = now_iso()
         tmp = path + ".tmp"
         with open(tmp, "w", encoding="utf-8") as fh:
             json.dump(self.data, fh, indent=2, ensure_ascii=False)
@@ -571,7 +559,6 @@ class Plan:
             "title": task.get("title", ""),
             "description": task.get("description", ""),
             "role": assignee_role_id(task.get("assignedTo")),
-            "roleSource": task.get("roleSource", ""),
             "assignee": assignee_user_oid(task.get("assignedTo")),
             "state": task.get("state", ""),
             "kitSetup": self.kit_setup_nudge(task_id),
@@ -820,12 +807,7 @@ class Plan:
         lines.append(f"# Scenario plan — {objective}")
         lines.append("")
         planid = d.get("planId") or "(local, not synced)"
-        generated = d.get("generatedAt", "")
-        updated = d.get("updatedAt", "") or generated
-        stamp = f"Generated: {generated}"
-        if updated and updated != generated:
-            stamp += f"  |  Updated: {updated}"
-        lines.append(f"{stamp}  |  Status: {d.get('status', '')}  |  Plan: {planid}")
+        lines.append(f"Status: {d.get('status', '')}  |  Plan: {planid}")
         lines.append("")
 
         # Intent, grouped.

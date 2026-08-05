@@ -127,16 +127,16 @@ def test_set_system_scopes_keys_per_area():
     }
 
 
-def test_save_bumps_updated_at_and_summary_shows_it(tmp_path):
+def test_plan_has_only_spec_fields():
+    # The plan carries only fields the Step-2 spec (§7.1) defines: schemaVersion
+    # (local file format) + planId/projectId/status + the Context bag + the
+    # Outputs ledger + the local tasks container. No invented generatedAt/
+    # updatedAt (server tracks CreatedAt/UpdatedAt) and no invented `notes`.
     plan = Plan.new(objective="x")
-    created = plan.data["updatedAt"]
-    plan.data["updatedAt"] = "2000-01-01T00:00:00Z"  # simulate an older stamp
-    plan.data["generatedAt"] = "2000-01-01T00:00:00Z"
-    plan.save(tmp_path / "plan.json")
-    assert plan.data["updatedAt"] != "2000-01-01T00:00:00Z"  # bumped on save
-    assert created  # new() set an updatedAt
-    summary = plan.render_summary()
-    assert "Updated:" in summary
+    assert set(plan.data) == {
+        "schemaVersion", "planId", "projectId", "status",
+        "context", "tasks", "outputs",
+    }
 
 
 # --------------------------------------------------------------------------- #

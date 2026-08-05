@@ -74,32 +74,15 @@ def _run(*argv: str) -> int:
     return cli.main(list(argv))
 
 
-def test_role_source_is_recorded_and_briefed(tmp_path, capsys):
-    # new_task stores the Learn URL that grounded the role...
-    t = new_task("T9", "Connect Workday",
-                 description="Run /connect to connect Workday to the ESS agent",
+def test_task_has_only_wevenova_fields():
+    # A task carries only fields that exist on the WeveNova Task entity — no
+    # invented `action` or `roleSource`. The role's Learn provenance lives in the
+    # research context, not on the task.
+    t = new_task("T1", "Connect Workday",
+                 description="Run /connect to connect Workday",
                  assigned_to=principal_pool("integration-owner"),
-                 role_source="https://learn.microsoft.com/.../workday")
-    assert t["roleSource"] == "https://learn.microsoft.com/.../workday"
-    p = Plan.new()
-    p.add_task(t)
-    assert p.task_brief("T9")["roleSource"] == "https://learn.microsoft.com/.../workday"
-
-    # ...and the add-task CLI + task-brief surface it.
-    plan_path = str(tmp_path / "plan.json")
-    _run("--plan", plan_path, "init")
-    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Connect Workday",
-         "--description", "Run /connect to connect Workday", "--role", "integration-owner",
-         "--role-source", "https://learn.microsoft.com/ess/workday")
-    capsys.readouterr()
-    _run("--plan", plan_path, "task-brief", "--task", "T1")
-    out = capsys.readouterr().out
-    assert "Role grounded in: https://learn.microsoft.com/ess/workday" in out
-
-
-def test_role_source_absent_by_default():
-    t = new_task("T1", "x", assigned_to=principal_pool("maker"))
-    assert "roleSource" not in t  # only present when grounded from Learn
+                 produces=["workdayConnection"], consumes=["primaryEnvironment"])
+    assert set(t) == {"id", "title", "description", "assignedTo", "state", "produces", "consumes"}
 
 
 def test_setup_task_id_is_the_env_producer():
