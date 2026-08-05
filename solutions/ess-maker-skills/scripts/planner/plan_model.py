@@ -45,7 +45,12 @@ SCHEMA_VERSION = 1
 # from, same convention as .local/config.json and workspace/agents/).
 PLAN_DIR = os.path.join("workspace", "plan")
 PLAN_PATH = os.path.join(PLAN_DIR, "plan.json")
-SUMMARY_PATH = os.path.join(PLAN_DIR, "summary.md")
+# The plan's human-readable Markdown view. It is an *editable* surface — a Plan
+# editor can revise it directly and the planner reconciles the changes back into
+# plan.json (see src/skills/planner/edit.md) — regenerated from plan.json after
+# every mutation. Named for the editor ("ESS scenario plan"), not "summary".
+SUMMARY_FILENAME = "ESS-scenario-plan.md"
+SUMMARY_PATH = os.path.join(PLAN_DIR, SUMMARY_FILENAME)
 RESEARCH_PATH = os.path.join(PLAN_DIR, "research-context.json")
 
 # Controlled vocabularies. Kept as plain tuples (not Enums) because the values
@@ -337,9 +342,9 @@ class Plan:
         Path(path).write_text(self.render_summary(), encoding="utf-8")
 
     def save_all(self, plan_path: str | os.PathLike[str] = PLAN_PATH) -> None:
-        """Write plan.json and regenerate summary.md alongside it."""
+        """Write plan.json and regenerate the Markdown view alongside it."""
         self.save(plan_path)
-        summary = os.path.join(os.path.dirname(os.fspath(plan_path)) or ".", "summary.md")
+        summary = os.path.join(os.path.dirname(os.fspath(plan_path)) or ".", SUMMARY_FILENAME)
         self.write_summary(summary)
 
     # ---- convenience accessors ------------------------------------------ #
@@ -463,6 +468,41 @@ class Plan:
         """Replace a task's read-back-only step checklist (display state)."""
         task = self._require_task(task_id)
         task["checklist"] = list(items)
+        return task
+
+    def update_task(
+        self,
+        task_id: str,
+        *,
+        title: str | None = None,
+        description: str | None = None,
+        produces: list[str] | None = None,
+        consumes: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Update an existing task's content in place — used when reconciling a
+        Plan editor's Markdown edit back into plan.json (src/skills/planner/edit.md).
+
+        Only the WeveNova ``Task`` content fields (title, description, produces,
+        consumes) are touched here; the assignee/role goes through ``assign_task``
+        and state through ``set_task_state``. A ``None`` argument leaves that field
+        unchanged."""
+        task = self._require_task(task_id)
+        if title is not None:
+            task["title"] = title
+        if description is not None:
+            task["description"] = description
+        if produces is not None:
+            task["produces"] = list(produces)
+        if consumes is not None:
+            task["consumes"] = list(consumes)
+        return task
+
+    def remove_task(self, task_id: str) -> dict[str, Any]:
+        """Remove a task (reconciling a deletion from the Markdown view) and return
+        it. Raises ``KeyError`` on an unknown id so a mistyped id fails loudly
+        rather than silently doing nothing."""
+        task = self._require_task(task_id)
+        self.tasks.remove(task)
         return task
 
     # ---- output ledger --------------------------------------------------- #
@@ -800,7 +840,9 @@ class Plan:
     # ---- rendering ------------------------------------------------------- #
 
     def render_summary(self) -> str:
-        """A human-readable Markdown view of the Plan (never hand-edited)."""
+        """A human-readable Markdown view of the Plan — the editable surface a Plan
+        editor revises directly; edits are reconciled back into plan.json
+        (see src/skills/planner/edit.md)."""
         d = self.data
         lines: list[str] = []
         objective = self.output_value_or_context("objective") or "(objective not set)"

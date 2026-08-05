@@ -77,7 +77,7 @@ def test_save_all_writes_summary(tmp_path):
     plan = _plan_with_tasks()
     path = tmp_path / "plan.json"
     plan.save_all(path)
-    summary = (tmp_path / "summary.md").read_text(encoding="utf-8")
+    summary = (tmp_path / "ESS-scenario-plan.md").read_text(encoding="utf-8")
     assert "Connect Workday" in summary
     assert "## Tasks" in summary
 
@@ -191,6 +191,36 @@ def test_require_task_missing():
     plan = _plan_with_tasks()
     with pytest.raises(KeyError):
         plan.set_task_state("nope", "Completed")
+
+
+def test_update_task_changes_content_only():
+    plan = _plan_with_tasks()
+    plan.update_task(
+        "T1",
+        title="Run setup (revised)",
+        description="new how-to",
+        produces=["primaryEnvironment", "extra"],
+    )
+    t = plan.task("T1")
+    assert t["title"] == "Run setup (revised)"
+    assert t["description"] == "new how-to"
+    assert t["produces"] == ["primaryEnvironment", "extra"]
+    # consumes left untouched (None argument means "unchanged").
+    assert t["consumes"] == []
+    with pytest.raises(KeyError):
+        plan.update_task("nope", title="x")
+
+
+def test_remove_task():
+    plan = _plan_with_tasks()
+    before = len(plan.tasks)
+    removed = plan.remove_task("T1")
+    assert removed["id"] == "T1"
+    assert plan.task("T1") is None
+    assert len(plan.tasks) == before - 1
+    # Removing an unknown (or already-removed) id fails loudly.
+    with pytest.raises(KeyError):
+        plan.remove_task("T1")
 
 
 # --------------------------------------------------------------------------- #

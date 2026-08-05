@@ -1,6 +1,6 @@
 # This folder holds the local, per-maker Plan authored by the /planner skill:
 #   plan.json               the structured Plan (source of truth)
-#   summary.md              a generated human-readable view
+#   ESS-scenario-plan.md    the editable human-readable view (reconciled back to plan.json)
 #   research-context.json   cached Learn-research corpus
 # These are runtime state and are git-ignored (see .gitignore). This .gitkeep
 # keeps the directory in the repo so the skill has somewhere to write.

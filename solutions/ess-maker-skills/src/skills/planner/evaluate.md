@@ -28,7 +28,11 @@ unchanged; this phase just seeds it.
 1. **Read the scenarios off the plan.** Run `python scripts/planner/cli.py summary`
    (or read the plan context). The inputs are:
    - the Context entries in the **`scenario`** group (e.g. `hr-knowledge`,
-     `hr-ticketing`) — the scenarios in scope;
+     `hr-ticketing`) — the scenario areas in scope;
+   - the **`scenarioCapability`** group — the **enabled scenarios per category**
+     (e.g. `hr-ticketing.create-ticket` → "Create HR ticket") the interview
+     captured. **These topic-level scenarios are the unit you write golden prompts
+     for** — one or more prompts per enabled scenario, not just one per category;
    - the sponsor's **`jtbd`** and **`objective`**, and the success measure
      (`businessGoals`);
    - the target system per scenario — the **`system.*`** entries (e.g.
@@ -47,7 +51,8 @@ unchanged; this phase just seeds it.
    (representative employee prompts + expected behaviour), and where a scenario
    targets an external system (`system.*`), the matching integration-data cases.
    Hand it:
-   - the scenario list (ids + display names) from the plan,
+   - the scenario list (ids + display names) **and the enabled scenarios per
+     category** (`scenarioCapability`) from the plan,
    - the sponsor's jtbd / objective / success measure,
    - the target system per scenario,
    - persona + market.

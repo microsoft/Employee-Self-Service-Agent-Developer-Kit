@@ -133,6 +133,37 @@ python scripts/planner/cli.py add-scenario-dependency --scenario hr-ticketing --
 Dependencies show up in the summary with a met / MISSING status and flow into task
 sequencing (the knowledge task produces what the ticketing work consumes).
 
+## Capture the enabled scenarios per category — the eval reads these off the plan
+
+Registering a category (`hr-ticketing`) records the **area**, but not *what it
+enables*. The eval (Phase 5, `src/skills/planner/evaluate.md`) reads scenarios
+**off the plan** to write golden prompts — and "HR ticketing" alone isn't enough to
+generate topic-level prompts (create a ticket, check a case). So for each in-scope
+category, capture the **named scenarios it enables** onto the plan.
+
+**Ground them — don't invent.** The source is the catalogue's **Named scenarios**
+list per category (`scenario_catalogue.md` → *Named scenarios*), confirmed/refined
+against Microsoft Learn for the chosen connector. E.g. **HR Ticketing (#32-34)**
+enables *Read HR tickets*, *Create HR ticket*, *Update HR case*. Show the editor
+what each in-scope category enables, confirm, then capture each enabled scenario as
+a Context entry (group `scenarioCapability`, key `<category>.<slug>`):
+
+```
+python scripts/planner/cli.py set-context --key hr-ticketing.create-ticket --value "Create HR ticket" --group scenarioCapability --description "OOB HR Ticketing scenario (ESS catalogue #32-34)" --source Agent
+python scripts/planner/cli.py set-context --key hr-ticketing.read-ticket   --value "Read HR tickets"  --group scenarioCapability --description "OOB HR Ticketing scenario (ESS catalogue #32-34)" --source Agent
+```
+
+**OOB vs extensible.** Capture the **OOB** named scenarios from the catalogue for
+each in-scope category. Capture an **extensible** scenario (e.g. Request Time Off,
+or a Workday pay/payslip specific) **only if the editor explicitly pins it** — and
+then label it as extensible/custom, grounded from Learn per the connector; never
+fold it into the OOB set and never invent one. Per-scenario *setup* detail (fields,
+steps, connector config) still comes from Learn at render time — only the enabled
+scenario **names** are captured here, as the eval's grounding.
+
+These enabled scenarios appear in the plan (Intent → `scenarioCapability`) and are
+exactly what the eval turns into golden prompts (Phase 5).
+
 ## Do NOT ask which role a Task needs
 
 The **role** for each Task comes from the Learn docs (Phase 1), not the sponsor.

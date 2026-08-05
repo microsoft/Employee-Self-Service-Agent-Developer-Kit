@@ -40,6 +40,7 @@ from planner.plan_model import (
     ARTIFACT_KINDS,
     PLAN_PATH,
     SCENARIO_GROUP,
+    SUMMARY_FILENAME,
     Plan,
     new_task,
     plan_artifact,
@@ -165,6 +166,28 @@ def cmd_add_task(args: argparse.Namespace) -> int:
     )
     _save(plan, args)
     print(f"Added task {args.id!r}: {args.title!r}")
+    return 0
+
+
+def cmd_update_task(args: argparse.Namespace) -> int:
+    plan = _load(args)
+    plan.update_task(
+        args.id,
+        title=args.title,
+        description=args.description,
+        produces=_csv(args.produces) if args.produces is not None else None,
+        consumes=_csv(args.consumes) if args.consumes is not None else None,
+    )
+    _save(plan, args)
+    print(f"Updated task {args.id!r}")
+    return 0
+
+
+def cmd_remove_task(args: argparse.Namespace) -> int:
+    plan = _load(args)
+    plan.remove_task(args.id)
+    _save(plan, args)
+    print(f"Removed task {args.id!r}")
     return 0
 
 
@@ -350,7 +373,7 @@ def _extract_signals_for(selected: list[dict[str, str]]) -> dict[str, list[dict[
 
 def cmd_summary(args: argparse.Namespace) -> int:
     plan = _load(args)
-    plan.write_summary(os.path.join(os.path.dirname(args.plan) or ".", "summary.md"))
+    plan.write_summary(os.path.join(os.path.dirname(args.plan) or ".", SUMMARY_FILENAME))
     print(plan.render_summary())
     return 0
 
@@ -423,6 +446,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--consumes", help="comma-separated consumed keys")
     p.set_defaults(func=cmd_add_task)
 
+    p = sub.add_parser("update-task", help="update an existing task's content (title/description/produces/consumes)")
+    p.add_argument("--id", required=True)
+    p.add_argument("--title")
+    p.add_argument("--description")
+    p.add_argument("--produces", help="comma-separated output keys (replaces; empty string clears)")
+    p.add_argument("--consumes", help="comma-separated consumed keys (replaces; empty string clears)")
+    p.set_defaults(func=cmd_update_task)
+
+    p = sub.add_parser("remove-task", help="remove a task (reconciling a deletion from the plan's Markdown view)")
+    p.add_argument("--id", required=True)
+    p.set_defaults(func=cmd_remove_task)
+
     p = sub.add_parser("assign", help="assign a task to a role and/or person (Flow 1)")
     p.add_argument("--task", required=True)
     p.add_argument("--role")
@@ -478,7 +513,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--budget", type=int, default=18)
     p.set_defaults(func=cmd_research)
 
-    p = sub.add_parser("summary", help="render summary.md and print it")
+    p = sub.add_parser("summary", help="render the plan's Markdown view (ESS-scenario-plan.md) and print it")
     p.set_defaults(func=cmd_summary)
 
     p = sub.add_parser("validate", help="validate the plan")
