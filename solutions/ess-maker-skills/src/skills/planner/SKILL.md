@@ -78,7 +78,7 @@ per **First** above instead of re-running the interview.)
 |-------|------|------|
 | 1. Research | Ground on Microsoft Learn (TOC crawl) → capabilities, prerequisites, roles, produced keys | `src/skills/planner/research.md` |
 | 2. Interview | Ask only what research couldn't ground; capture intent | `src/skills/planner/interview.md` |
-| 3. Model | Emit atomic Tasks (grounded role + action + produces) | `src/skills/planner/model.md` |
+| 3. Model | Emit atomic Tasks (title + description + grounded role + produces) | `src/skills/planner/model.md` |
 | 4. Assign | Flow 1 — list holders of each grounded role, sponsor picks a person | `src/skills/planner/assign.md` |
 | 5. Capture | After a Task's work runs, observe/ask and pin what it produced | `src/skills/planner/capture.md` |
 

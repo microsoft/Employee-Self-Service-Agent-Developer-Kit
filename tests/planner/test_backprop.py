@@ -11,7 +11,6 @@ import json
 from planner import cli
 from planner.plan_model import (
     Plan,
-    action_kit_skill,
     new_task,
     plan_artifact,
     principal_pool,
@@ -20,10 +19,12 @@ from planner.plan_model import (
 
 def _plan() -> Plan:
     p = Plan.new()
-    p.add_task(new_task("T1", "setup", action=action_kit_skill("onboarding"),
+    p.add_task(new_task("T1", "Run setup",
+                        description="Run /setup to onboard the ADK to the deployed agent",
                         assigned_to=principal_pool("power-platform-admin"),
                         produces=["primaryEnvironment"]))
-    p.add_task(new_task("T2", "Connect Workday", action=action_kit_skill("connect"),
+    p.add_task(new_task("T2", "Connect Workday",
+                        description="Run /connect to connect Workday to the ESS agent",
                         assigned_to=principal_pool("integration-owner"),
                         produces=["workdayConnection", "workdayEntraApp"],
                         consumes=["primaryEnvironment"]))
@@ -42,7 +43,8 @@ def test_task_brief_shape():
     p.add_output(plan_artifact("primaryEnvironment", "Environment", {"environmentId": "e1", "environmentUrl": "u"}, produced_by_task_id="T1"))
     b = p.task_brief("T2")
     assert b["id"] == "T2"
-    assert b["action"]["skill"] == "connect"
+    assert b["title"] == "Connect Workday"
+    assert "action" not in b  # brief is described by title/description, not action
     assert b["role"] == "integration-owner"
     assert b["consumes"]["primaryEnvironment"]["environmentId"] == "e1"
     assert b["produces"] == ["workdayConnection", "workdayEntraApp"]
@@ -58,9 +60,10 @@ def test_kit_setup_nudge_is_plan_env_driven():
     assert p.kit_setup_nudge("T2") == {"environmentId": "e1", "environmentUrl": "u"}
     # The setup task itself is never nudged.
     assert p.kit_setup_nudge("T1") is None
-    # A non-kit task (portal/manual) is never nudged, even with an env pinned.
-    from planner.plan_model import action_portal
-    p.add_task(new_task("T3", "Publish", action=action_portal("https://doc"),
+    # A task that doesn't consume the environment is never nudged, even with an
+    # env pinned.
+    p.add_task(new_task("T3", "Publish the agent",
+                        description="In the Power Platform admin center, publish the agent",
                         assigned_to=principal_pool("power-platform-admin")))
     assert p.kit_setup_nudge("T3") is None
     # task_brief surfaces the nudge for the connect task.
@@ -73,7 +76,8 @@ def _run(*argv: str) -> int:
 
 def test_role_source_is_recorded_and_briefed(tmp_path, capsys):
     # new_task stores the Learn URL that grounded the role...
-    t = new_task("T9", "Connect Workday", action=action_kit_skill("connect"),
+    t = new_task("T9", "Connect Workday",
+                 description="Run /connect to connect Workday to the ESS agent",
                  assigned_to=principal_pool("integration-owner"),
                  role_source="https://learn.microsoft.com/.../workday")
     assert t["roleSource"] == "https://learn.microsoft.com/.../workday"
@@ -85,7 +89,7 @@ def test_role_source_is_recorded_and_briefed(tmp_path, capsys):
     plan_path = str(tmp_path / "plan.json")
     _run("--plan", plan_path, "init")
     _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Connect Workday",
-         "--skill", "connect", "--role", "integration-owner",
+         "--description", "Run /connect to connect Workday", "--role", "integration-owner",
          "--role-source", "https://learn.microsoft.com/ess/workday")
     capsys.readouterr()
     _run("--plan", plan_path, "task-brief", "--task", "T1")
@@ -98,17 +102,19 @@ def test_role_source_absent_by_default():
     assert "roleSource" not in t  # only present when grounded from Learn
 
 
-def test_setup_task_id_picks_the_onboarding_task():
+def test_setup_task_id_is_the_env_producer():
     p = Plan.new()
-    from planner.plan_model import action_portal
-    # A portal "provision" task is NOT the setup task; the onboarding-skill task is.
-    p.add_task(new_task("T1", "Provision env", action=action_portal("https://doc"),
+    # A portal "provision" task is NOT the setup task; the task that PRODUCES the
+    # environment is.
+    p.add_task(new_task("T1", "Provision env",
+                        description="In the portal, provision the environment",
                         assigned_to=principal_pool("power-platform-admin")))
-    p.add_task(new_task("T2", "Run setup", action=action_kit_skill("onboarding"),
+    p.add_task(new_task("T2", "Run setup",
+                        description="Run /setup to onboard the ADK",
                         assigned_to=principal_pool("power-platform-admin"),
                         produces=["primaryEnvironment"]))
     assert p.setup_task_id() == "T2"
-    assert Plan.new().setup_task_id() is None  # no setup task -> None
+    assert Plan.new().setup_task_id() is None  # no task produces the env -> None
 
 
 def test_capture_setup_autodetects_setup_task(tmp_path):
@@ -119,10 +125,10 @@ def test_capture_setup_autodetects_setup_task(tmp_path):
                                "environmentId": "env-7"}), encoding="utf-8")
     _run("--plan", plan_path, "init")
     _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Provision env",
-         "--action-kind", "portal", "--ref", "https://doc", "--role", "power-platform-admin")
+         "--description", "In the portal, provision the environment", "--role", "power-platform-admin")
     _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Run setup",
-         "--skill", "onboarding", "--role", "power-platform-admin", "--produces", "primaryEnvironment")
-    # No --task: capture-setup finds the plan's /setup task (T2), pins env, completes it.
+         "--description", "Run /setup to onboard the ADK", "--role", "power-platform-admin", "--produces", "primaryEnvironment")
+    # No --task: capture-setup finds the plan's setup task (T2 produces the env), pins env, completes it.
     rc = _run("--plan", plan_path, "capture-setup", "--config", str(cfg), "--before", "{}", "--complete")
     assert rc == 0
     p = Plan.load(plan_path)
@@ -135,7 +141,7 @@ def test_cli_pin_output_commits_artifact(tmp_path, capsys):
     plan_path = str(tmp_path / "plan.json")
     _run("--plan", plan_path, "init")
     _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Connect Workday",
-         "--skill", "connect", "--role", "integration-owner", "--produces", "workdayConnection")
+         "--description", "Run /connect to connect Workday", "--role", "integration-owner", "--produces", "workdayConnection")
     capsys.readouterr()
     rc = _run("--plan", plan_path, "pin-output", "--task", "T2", "--key", "workdayConnection",
               "--kind", "Connection", "--attr", "connectionId=wd-1",
@@ -154,24 +160,34 @@ def test_cli_task_brief_shows_env_and_steps(tmp_path, capsys):
     cfg = tmp_path / "config.json"
     cfg.write_text(json.dumps({"setup": "complete", "dataverseEndpoint": "https://o.crm.dynamics.com", "environmentId": "env-9"}), encoding="utf-8")
     _run("--plan", plan_path, "init")
-    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "setup", "--skill", "onboarding", "--role", "power-platform-admin", "--produces", "primaryEnvironment")
-    _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Connect Workday", "--skill", "connect", "--role", "integration-owner", "--produces", "workdayConnection", "--consumes", "primaryEnvironment")
-    _run("--plan", plan_path, "capture-setup", "--task", "T1", "--config", str(cfg), "--before", "{}", "--complete")
+    # New pattern: title + description carry the "how" (no --skill/action field);
+    # setup detection is via --produces primaryEnvironment.
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "Run setup",
+         "--description", "Run /setup to onboard the ADK to the deployed agent",
+         "--role", "power-platform-admin", "--produces", "primaryEnvironment")
+    _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Connect Workday",
+         "--description", "Run /connect to connect Workday to the ESS agent",
+         "--role", "integration-owner", "--produces", "workdayConnection", "--consumes", "primaryEnvironment")
+    _run("--plan", plan_path, "capture-setup", "--config", str(cfg), "--before", "{}", "--complete")
     capsys.readouterr()
     rc = _run("--plan", plan_path, "task-brief", "--task", "T2")
     assert rc == 0
     out = capsys.readouterr().out
-    assert "/connect" in out             # which skill to run
+    assert "/connect" in out             # which command to run (from the description)
     assert "env-9" in out                # the env id back-propagated from setup
     assert "/setup" in out               # nudged to connect their kit to the plan env
     assert "integration-owner" in out    # role
     assert "workdayConnection" in out    # what to capture
 
+    # The task carries no `action` field — it's described by title + description.
+    p = Plan.load(plan_path)
+    assert "action" not in p.task("T2")
+
 
 def test_task_brief_blocked_when_consumed_not_produced(tmp_path, capsys):
     plan_path = str(tmp_path / "plan.json")
     _run("--plan", plan_path, "init")
-    _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Connect Workday", "--skill", "connect", "--role", "integration-owner", "--consumes", "primaryEnvironment")
+    _run("--plan", plan_path, "add-task", "--id", "T2", "--title", "Connect Workday", "--description", "Run /connect to connect Workday", "--role", "integration-owner", "--consumes", "primaryEnvironment")
     capsys.readouterr()
     _run("--plan", plan_path, "task-brief", "--task", "T2")
     assert "not produced yet" in capsys.readouterr().out

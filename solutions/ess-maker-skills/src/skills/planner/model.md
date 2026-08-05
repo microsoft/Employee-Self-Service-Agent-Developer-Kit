@@ -1,18 +1,26 @@
 # Planner — Phase 3: Model the Tasks
 
 Turn the grounded prerequisite graph (Phase 1) into **atomic Tasks**. A Task is
-the smallest unit one owner can complete end-to-end, and it maps to a single
-**action** — *usually* a kit skill, but sometimes a manual/portal/admin step
-with no kit skill.
+the smallest unit one owner can complete end-to-end. Each Task is described by a
+**title** and a **description** — nothing else is needed to understand it.
 
 Add each Task with:
 
 ```
-python scripts/planner/cli.py add-task --id <T#> --title "<title>" \
-  [--skill <kitSkill> | --action-kind <portal|manual|external> --ref <docUrl>] \
+python scripts/planner/cli.py add-task --id <T#> \
+  --title "<short imperative title>" \
+  --description "<self-explanatory: what to do and how — including which command to run, e.g. 'Run /connect to connect Workday to the ESS agent and follow its steps'>" \
   --role <grounded-role> --role-source <learnUrl> \
   [--produces <key,key>] [--consumes <key,key>]
 ```
+
+**Title + description must be self-explanatory.** A reader (or the assignee)
+should know exactly what to do from those two alone — including which kit command
+to run (say it in the description, e.g. "run `/connect`", "in the Power Platform
+admin center, register an Entra app…"). **Do not** encode the "how" in structured
+fields like an action/kit-skill type — those are not task data; the description
+carries it. (The setup task is identified by what it **produces**, below — not by
+any skill field.)
 
 **Every Task is assigned to a role at creation — the role that should be able to
 pick it up — and that role is _sourced from the Learn link_, never invented.** The
@@ -45,24 +53,28 @@ step.
 
 ## Typical greenfield backbone
 
-| Task | Action | Produces | Consumes | Role (grounded) |
+The "how" is the **description** (say which command to run in prose); `produces`/
+`consumes` drive ordering and capture; the role is grounded from Learn.
+
+| Task (title) | Description (what & how) | Produces | Consumes | Role (grounded) |
 |------|--------|----------|----------|-----------------|
-| Run `/setup` — onboard the ADK to the deployed agent (records the environment & agent details) | `--skill onboarding` | `primaryEnvironment` | — | `power-platform-admin` |
-| Check readiness | `--skill flightcheck` | `readinessReport` | `primaryEnvironment` | `power-platform-admin` |
-| Connect Workday | `--skill connect` | `workdayConnection,workdayEntraApp` | `primaryEnvironment` | `integration-owner` |
-| Connect ServiceNow | `--skill connect` | `servicenowConnection` | `primaryEnvironment` | `integration-owner` |
-| Author scenario topics | `--skill topics` | `topic:<name>` | env + connections | `maker` |
-| Generate evals | `--skill evaluations` | `evalSuite` | `primaryEnvironment` | `eval-author` |
-| Publish the agent | `--action-kind portal --ref <publish doc>` | — | built agent | `power-platform-admin` |
+| Run setup | Run `/setup` to onboard the ADK to the deployed agent (records the environment & agent details) | `primaryEnvironment` | — | `power-platform-admin` |
+| Check readiness | Run `/flightcheck` to validate the environment | `readinessReport` | `primaryEnvironment` | `power-platform-admin` |
+| Connect Workday | Run `/connect` to connect Workday to the agent | `workdayConnection,workdayEntraApp` | `primaryEnvironment` | `integration-owner` |
+| Connect ServiceNow | Run `/connect` to connect ServiceNow | `servicenowConnection` | `primaryEnvironment` | `integration-owner` |
+| Author scenario topics | Run `/create` to author the scenario topics | `topic:<name>` | env + connections | `maker` |
+| Generate evals | Run `/evaluate` to generate the eval suite | `evalSuite` | `primaryEnvironment` | `eval-author` |
+| Publish the agent | In the Power Platform admin center, publish the agent (see the Learn publish doc) | — | built agent | `power-platform-admin` |
 
 `produces`/`consumes` keys drive ordering ("blocked until produced") and are
-what Phase 5 captures. When the tasks are in, show the summary and go to Phase 4.
+what Phase 5 captures. The setup task is the one that **`--produces primaryEnvironment`**.
+When the tasks are in, show the summary and go to Phase 4.
 
-**Native connector vs. custom flow.** A `--skill connect` task is only valid for a
+**Native connector vs. custom flow.** A "run `/connect`" task is only valid for a
 system ESS has a **native integration** for (Workday, ServiceNow HRSD/ITSM, SAP
 SuccessFactors — confirm from Phase‑1 Learn research). For a captured system with
-**no** native connector (e.g. ADP, Jira, Dynamics 365, custom HTTP API), emit a
-**`--skill create`** (custom Power Automate flow) task instead — do not fabricate a
+**no** native connector (e.g. ADP, Jira, Dynamics 365, custom HTTP API), describe a
+**"run `/create`" (custom Power Automate flow)** task instead — do not fabricate a
 `connect` task for it. SharePoint / M365 content is a **knowledge source**, so it's
 the topics/knowledge task, not a connect task.
 
@@ -73,7 +85,7 @@ Be accurate about what `/setup` (onboarding) does: it **connects the kit to an
 ESS agent that is already deployed in a Power Platform environment and records
 its details** — it does *not* create the environment or install ESS. For a
 brand-new tenant, provisioning the environment and installing the ESS agent are
-**portal/admin prerequisites**; add a `--action-kind portal` task before
+**portal/admin prerequisites**; add a task described as a portal/admin step before
 `/setup` if they don't exist yet.
 
 ## Back-propagation — how the admin's setup details flow to later tasks
@@ -106,16 +118,16 @@ that is:
 
 ```
 # 1. PP admin onboards the ADK (records the environment details)
-python scripts/planner/cli.py add-task --id T1 --title "Run /setup - onboard the ADK to the deployed agent" --skill onboarding --role power-platform-admin --produces primaryEnvironment
-# 2. one connect task PER system (grounded role from the connect skill + Learn)
-python scripts/planner/cli.py add-task --id T2 --title "Connect Workday" --skill connect --role integration-owner --produces "workdayConnection,workdayEntraApp" --consumes primaryEnvironment
-python scripts/planner/cli.py add-task --id T3 --title "Connect ServiceNow" --skill connect --role integration-owner --produces servicenowConnection --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T1 --title "Run setup" --description "Run /setup to onboard the ADK to the deployed agent (records the environment)" --role power-platform-admin --role-source "<Learn setup doc>" --produces primaryEnvironment
+# 2. one connect task PER system (role grounded from the connect page + Learn)
+python scripts/planner/cli.py add-task --id T2 --title "Connect Workday" --description "Run /connect to connect Workday to the ESS agent and follow its steps" --role integration-owner --role-source "<Learn workday doc>" --produces "workdayConnection,workdayEntraApp" --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T3 --title "Connect ServiceNow" --description "Run /connect to connect ServiceNow to the ESS agent" --role integration-owner --role-source "<Learn servicenow doc>" --produces servicenowConnection --consumes primaryEnvironment
 # 3. authoring per scenario area (knowledge before ticketing — register the dependency)
-python scripts/planner/cli.py add-task --id T4 --title "Set up HR knowledge" --skill topics --role maker --produces "topic:hr-knowledge" --consumes primaryEnvironment
-python scripts/planner/cli.py add-task --id T5 --title "Author HR ticketing topics" --skill topics --role maker --produces "topic:hr-ticketing" --consumes "primaryEnvironment,servicenowConnection"
+python scripts/planner/cli.py add-task --id T4 --title "Set up HR knowledge" --description "Run /create to author the HR knowledge topics" --role maker --role-source "<Learn knowledge doc>" --produces "topic:hr-knowledge" --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T5 --title "Author HR ticketing topics" --description "Run /create to author the HR ticketing topics" --role maker --role-source "<Learn topics doc>" --produces "topic:hr-ticketing" --consumes "primaryEnvironment,servicenowConnection"
 # 4. evals + publish
-python scripts/planner/cli.py add-task --id T6 --title "Generate evals" --skill evaluations --role eval-author --produces evalSuite --consumes primaryEnvironment
-python scripts/planner/cli.py add-task --id T7 --title "Publish the agent" --action-kind portal --ref "<Learn publish doc>" --role power-platform-admin --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T6 --title "Generate evals" --description "Run /evaluate to generate the eval suite" --role eval-author --role-source "<Learn evals doc>" --produces evalSuite --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T7 --title "Publish the agent" --description "In the Power Platform admin center, publish the agent (see the Learn publish doc)" --role power-platform-admin --role-source "<Learn publish doc>" --consumes primaryEnvironment
 ```
 
 Also register the scenarios and their dependencies (see `interview.md`) so the

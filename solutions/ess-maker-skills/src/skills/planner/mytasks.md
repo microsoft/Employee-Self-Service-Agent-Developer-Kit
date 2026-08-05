@@ -28,8 +28,8 @@ each role they hold** — which naturally covers a person with more than one rol
    python scripts/planner/cli.py claim --task <T#> --person <oid>
    ```
 
-4. From there, they run the Task's action and you capture its output (Phase 5,
-   `src/skills/planner/capture.md`).
+4. From there, they do the Task (as its description says) and you capture its
+   output (Phase 5, `src/skills/planner/capture.md`).
 
 ## Before they start — connect their kit to the plan's environment
 

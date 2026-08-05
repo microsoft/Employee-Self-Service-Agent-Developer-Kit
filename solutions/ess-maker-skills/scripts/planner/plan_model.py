@@ -56,11 +56,11 @@ ARTIFACT_STATES = ("Active", "Superseded")
 PRINCIPAL_TYPES = ("User", "Role")
 CONTEXT_SOURCES = ("User", "Agent", "Discovered")
 ARTIFACT_KINDS = ("Environment", "Connection", "EntraApp", "KnowledgeSource", "Custom")
-ACTION_KINDS = ("kitSkill", "manual", "portal", "external")
-# Kit skills that ARE the /setup step (they connect a kit to the environment).
-# A task using one of these is the setup task itself, not a task that needs the
-# kit already connected.
-ONBOARDING_SKILLS = ("onboarding", "setup")
+# The ledger key the /setup task produces and downstream tasks consume — the
+# grounded signal used to identify the setup task and env-dependent tasks. A Task
+# is described only by its title + description (matching the WeveNova Task
+# entity); there is no execution-hint/action field.
+PRIMARY_ENVIRONMENT_KEY = "primaryEnvironment"
 DEPENDENCY_KINDS = ("requires", "recommends")
 # Scenario dependency lives in the open Context bag (no new typed collection),
 # consistent with the "one Context bag" model. A scenario in scope is a Context
@@ -145,28 +145,6 @@ def assignee_user_oid(assigned_to: dict[str, Any] | None) -> str | None:
     return assigned_to.get("id")
 
 
-def action_kit_skill(skill: str) -> dict[str, Any]:
-    return {"kind": "kitSkill", "skill": skill}
-
-
-def action_portal(ref: str) -> dict[str, Any]:
-    return {"kind": "portal", "ref": ref}
-
-
-def action_manual(ref: str | None = None) -> dict[str, Any]:
-    a: dict[str, Any] = {"kind": "manual"}
-    if ref:
-        a["ref"] = ref
-    return a
-
-
-def action_external(ref: str | None = None) -> dict[str, Any]:
-    a: dict[str, Any] = {"kind": "external"}
-    if ref:
-        a["ref"] = ref
-    return a
-
-
 def provenance(
     source: str,
     added_by: dict[str, Any] | None = None,
@@ -229,7 +207,6 @@ def new_task(
     title: str,
     *,
     description: str = "",
-    action: dict[str, Any] | None = None,
     assigned_to: dict[str, Any] | None = None,
     produces: Iterable[str] | None = None,
     consumes: Iterable[str] | None = None,
@@ -241,7 +218,6 @@ def new_task(
         "id": task_id,
         "title": title,
         "description": description,
-        "action": action or action_manual(),
         "assignedTo": assigned_to or {},
         "state": state,
         "produces": list(produces or []),
@@ -536,14 +512,14 @@ class Plan:
         return resolved
 
     def setup_task_id(self) -> str | None:
-        """The plan's setup task id — the task whose action runs ``/setup``
-        (onboarding). Prefers the first not-yet-Completed such task, else the
-        first one; ``None`` if the plan has no setup task. Lets the capture step
-        auto-target the right task after ``/setup`` finishes."""
+        """The plan's setup task id — the task that **produces** the primary
+        environment (`primaryEnvironment`), i.e. the ``/setup`` task. Prefers the
+        first not-yet-Completed such task, else the first one; ``None`` if no task
+        produces it. Keyed on the grounded ``produces`` signal, not on any
+        execution-hint field."""
         candidates = [
             t for t in self.tasks
-            if (t.get("action") or {}).get("kind") == "kitSkill"
-            and (t.get("action") or {}).get("skill") in ONBOARDING_SKILLS
+            if PRIMARY_ENVIRONMENT_KEY in (t.get("produces") or [])
         ]
         if not candidates:
             return None
@@ -557,24 +533,26 @@ class Plan:
         kit to the plan's environment before starting.
 
         The Power Platform admin's setup task decides or creates the environment
-        and pins ``primaryEnvironment``. Every *other* kit-skill task runs against
-        that same environment, but each assignee's local kit must be connected to
-        it first (via ``/setup``) — a per-person step the pinned plan value can't
-        do for them. So:
+        and pins ``primaryEnvironment``. Every *other* task that **consumes**
+        `primaryEnvironment` runs against that same environment, but each
+        assignee's local kit must be connected to it first (via ``/setup``) — a
+        per-person step the pinned plan value can't do for them. So:
 
-        - Returns ``{environmentId, environmentUrl}`` when the task is a kit skill
-          *other than* setup/onboarding **and** the plan already has an
-          environment pinned — nudge this persona to run ``/setup`` and connect to
-          that env.
-        - Returns ``None`` for the setup task itself, for non-kit tasks, or when no
-          environment is pinned yet (then the setup task is the prerequisite, not a
-          nudge).
+        - Returns ``{environmentId, environmentUrl}`` when the task **consumes**
+          `primaryEnvironment` (needs the env), does **not** produce it, and the
+          plan already has an environment pinned — nudge this persona to run
+          ``/setup`` and connect to that env.
+        - Returns ``None`` for the setup task itself (it produces the env), for
+          tasks that don't need the env, or when no environment is pinned yet.
         """
         task = self._require_task(task_id)
-        action = task.get("action", {}) or {}
-        if action.get("kind") != "kitSkill" or action.get("skill") in ONBOARDING_SKILLS:
-            return None
-        env = self.output("primaryEnvironment")
+        produces = task.get("produces") or []
+        consumes = task.get("consumes") or []
+        if PRIMARY_ENVIRONMENT_KEY in produces:
+            return None  # this IS the setup task
+        if PRIMARY_ENVIRONMENT_KEY not in consumes:
+            return None  # doesn't need the connected environment
+        env = self.output(PRIMARY_ENVIRONMENT_KEY)
         if not env:
             return None
         attrs = env.get("attributes", {})
@@ -584,14 +562,14 @@ class Plan:
         }
 
     def task_brief(self, task_id: str) -> dict[str, Any]:
-        """A briefing for a task's assignee: how to do it (action), the role, the
-        resolved values it consumes (e.g. the env id to use), and the keys to
-        capture when done."""
+        """A briefing for a task's assignee: what to do (title + description), the
+        role, the resolved values it consumes (e.g. the env id to use), and the
+        keys to capture when done."""
         task = self._require_task(task_id)
         return {
             "id": task["id"],
             "title": task.get("title", ""),
-            "action": task.get("action", {}),
+            "description": task.get("description", ""),
             "role": assignee_role_id(task.get("assignedTo")),
             "roleSource": task.get("roleSource", ""),
             "assignee": assignee_user_oid(task.get("assignedTo")),
@@ -780,7 +758,6 @@ class Plan:
             seen_task.add(tid)
             if task.get("state") not in TASK_STATES:
                 errors.append(f"task {tid!r} invalid state: {task.get('state')!r}")
-            errors.extend(self._validate_action(tid, task.get("action")))
             errors.extend(self._validate_assignee(tid, task.get("assignedTo")))
             if len(task.get("produces", [])) > Limits.MAX_PRODUCES:
                 errors.append(f"task {tid!r} too many produces keys")
@@ -811,18 +788,6 @@ class Plan:
             if count > 1:
                 errors.append(f"output key {key!r} has {count} Active artifacts (max 1)")
 
-        return errors
-
-    @staticmethod
-    def _validate_action(tid: str, action: Any) -> list[str]:
-        errors: list[str] = []
-        if not action:
-            return errors  # action optional on a draft task
-        kind = action.get("kind")
-        if kind not in ACTION_KINDS:
-            errors.append(f"task {tid!r} invalid action kind: {kind!r}")
-        if kind == "kitSkill" and not action.get("skill"):
-            errors.append(f"task {tid!r} kitSkill action missing 'skill'")
         return errors
 
     @staticmethod
@@ -876,16 +841,16 @@ class Plan:
                     lines.append(f"- {entry.get('key')}: {entry.get('value')}")
                 lines.append("")
 
-        # Tasks.
+        # Tasks — described by title + role; the "how" lives in each task's
+        # description (shown in task-brief), keeping the table scannable.
         lines.append("## Tasks")
         lines.append("")
         if self.tasks:
-            lines.append("| # | Task | Action | Assigned to | State |")
-            lines.append("|---|------|--------|-------------|-------|")
+            lines.append("| # | Task | Role / owner | State |")
+            lines.append("|---|------|--------------|-------|")
             for task in self.tasks:
                 lines.append(
                     f"| {task.get('id')} | {task.get('title')} | "
-                    f"{_render_action(task.get('action'))} | "
                     f"{_render_assignee(task.get('assignedTo'))} | {task.get('state')} |"
                 )
         else:
@@ -935,15 +900,6 @@ class Plan:
             if entry.get("key") == key:
                 return entry.get("value")
         return None
-
-
-def _render_action(action: dict[str, Any] | None) -> str:
-    if not action:
-        return "—"
-    kind = action.get("kind", "?")
-    if kind == "kitSkill":
-        return f"kit: {action.get('skill', '?')}"
-    return kind
 
 
 def _render_assignee(assigned: dict[str, Any] | None) -> str:
