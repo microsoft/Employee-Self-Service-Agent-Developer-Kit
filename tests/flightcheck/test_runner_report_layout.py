@@ -899,3 +899,72 @@ def test_manual_checklist_masks_sensitive_data(tmp_path):
 
     assert "jdoe@contoso.com" not in html
     assert "j***@contoso.com" in html
+
+
+def test_mask_sensitive_keeps_guid_inside_url():
+    """A GUID that is a path segment of a deep link stays intact so the
+    link resolves, while a standalone GUID in prose is still masked."""
+    from flightcheck.runner import _mask_sensitive
+
+    env = "1a2b3c4d-1111-2222-3333-444455556666"
+    bot = "99998888-aaaa-bbbb-cccc-dddddddddddd"
+    text = (
+        f"Env {env} is bound. Open "
+        f"https://copilotstudio.microsoft.com/environments/{env}/bots/{bot}/overview"
+    )
+    masked = _mask_sensitive(text)
+    # URL keeps both real GUIDs.
+    assert f"/environments/{env}/bots/{bot}/overview" in masked
+    # The prose GUID before the URL is still masked.
+    assert "Env 1a2b3c4d-****-****-****-************ is bound" in masked
+
+
+def test_mask_sensitive_keeps_guid_inside_markdown_link_target():
+    """A markdown deep link "[label](url)" keeps the GUIDs in its target
+    so the rendered href resolves."""
+    from flightcheck.runner import _mask_sensitive
+
+    env = "1a2b3c4d-1111-2222-3333-444455556666"
+    text = (
+        "Open the agent in "
+        f"[Copilot Studio](https://make.powerapps.com/environments/{env}/solutions)."
+    )
+    masked = _mask_sensitive(text)
+    assert f"environments/{env}/solutions" in masked
+
+
+def test_manual_deeplink_href_keeps_guids_but_masks_prose(tmp_path):
+    """End-to-end: a MANUAL check whose remediation carries a Copilot Studio
+    deep link renders a clickable href with the real GUIDs, while a UPN in
+    the same remediation is still masked."""
+    from flightcheck.runner import FlightCheckRunner, CheckResult, save_results
+
+    env = "1a2b3c4d-1111-2222-3333-444455556666"
+    bot = "99998888-aaaa-bbbb-cccc-dddddddddddd"
+    url = (
+        f"https://copilotstudio.microsoft.com/environments/{env}/bots/{bot}/overview"
+    )
+    runner = FlightCheckRunner(scope="test")
+    runner.register("Publishing", lambda _r: [
+        CheckResult(
+            checkpoint_id="QA-001", category="Publishing",
+            priority="Medium", status="Manual",
+            description="Run evals",
+            result="Not witnessed",
+            remediation=(
+                f"Owner jdoe@contoso.com should open the agent in "
+                f"[Copilot Studio]({url}) to run evals."
+            ),
+        ),
+    ])
+    result = runner.run()
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    # Deep-link href keeps the real GUIDs so the link resolves.
+    assert f'href="{url}"' in html
+    # No masked GUID leaked anywhere (the only GUIDs are the URL's, kept whole).
+    assert "1a2b3c4d-****" not in html
+    # The UPN in prose is still masked.
+    assert "jdoe@contoso.com" not in html
+    assert "j***@contoso.com" in html
