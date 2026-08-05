@@ -90,6 +90,7 @@ def _handoff_dialog_component(
     display_name: str = "Mock Display Name",
     status: str = "Active",
     expression_text: str = '"AgentIdentifier"',
+    value_node: dict[str, Any] | None = None,
     include_setvariable: bool = True,
 ) -> dict[str, Any]:
     """Build a handoff DialogComponent as returned by
@@ -106,18 +107,26 @@ def _handoff_dialog_component(
     ``status`` and ``expression_text`` are the two captured field VALUES the
     tests vary — the cassette ships ``status == "Inactive"`` and
     ``expressionText == '"AgentIdentifier"'``.
+
+    ``value_node`` overrides the entire SetVariable ``value`` dict for tests
+    that need a non-literal assignment (e.g. a ``variableReference`` value,
+    whose shape is grounded in the same cassette's sibling SetVariables:
+    ``{"$kind": "ValueExpression", "variableReference": "System.User.FirstName"}``).
+    When ``None`` the value defaults to the captured literal shape
+    ``{"$kind": "ValueExpression", "expressionText": expression_text}``.
     """
     actions: list[dict[str, Any]] = []
     if include_setvariable:
+        value = value_node if value_node is not None else {
+            "$kind": "ValueExpression",
+            "expressionText": expression_text,
+        }
         actions.append(
             {
                 "$kind": "SetVariable",
                 "id": "setVariable_7l2dng",
                 "variable": "Topic.HandoffAgentId",
-                "value": {
-                    "$kind": "ValueExpression",
-                    "expressionText": expression_text,
-                },
+                "value": value,
             }
         )
     return {
@@ -338,3 +347,81 @@ class TestHandoffIdentity:
         runner = _build_runner(pva=_FakePVA(dialog_components=[comp]))
         r = _result_by_id(run_handoff_topic_checks(runner), "TOPIC-020-001")
         assert r.status == "Passed"
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Non-literal assignment (variable reference / PowerFx formula) → MANUAL
+# ───────────────────────────────────────────────────────────────────────
+
+
+class TestReferenceOrExpressionValue:
+    """PR #218 review point 2 — a handoff id assigned via a variable
+    reference or a PowerFx formula (no quoted string literal) must NOT be
+    reported as a false-positive blank/placeholder FAILED.
+
+    Before the fix, ``_resolved_agent_id`` read only ``expressionText`` and
+    treated a missing/non-literal value as ``""`` -> "blank" -> FAILED, which
+    fails a correctly-configured topic. The check now returns MANUAL: the
+    value is definitively not the shipped placeholder literal, but the kit
+    cannot statically resolve what the expression evaluates to at runtime, so
+    the operator must confirm the resolved target id. MANUAL does not fail
+    readiness.
+
+    The ``variableReference`` value-node shape is grounded in the validated
+    cassette ``island_gateway_botcomponents.yaml``, whose sibling SetVariables
+    use ``{"$kind": "ValueExpression", "variableReference": "System.User.FirstName"}``.
+    """
+
+    def test_variable_reference_value_is_manual_not_failed(self):
+        comp = _handoff_dialog_component(
+            status="Active",
+            value_node={
+                "$kind": "ValueExpression",
+                "variableReference": "Global.ESS_HandoffAgentId",
+            },
+        )
+        runner = _build_runner(pva=_FakePVA(dialog_components=[comp]))
+        r = _result_by_id(run_handoff_topic_checks(runner), "TOPIC-020-001")
+        assert r.status == "Manual"
+        # Must not be the old false-positive blank/placeholder FAILED text.
+        assert "blank" not in r.result
+        assert "AgentIdentifier" not in r.result
+        # result names the observed dynamic shape; remediation says how to fix.
+        assert "reference" in r.result.lower() or "expression" in r.result.lower()
+        assert "Topic.HandoffAgentId" in r.result
+        assert "GPT ID" in r.remediation
+        assert "disable the topic" in r.remediation
+        assert r.doc_link.endswith("agent-handoff.md")
+
+    def test_nonliteral_expression_formula_is_manual(self):
+        # expressionText present but NOT a quoted string literal — a PowerFx
+        # formula the kit cannot statically resolve to a concrete id.
+        comp = _handoff_dialog_component(
+            status="Active",
+            expression_text='If(Global.UseWorkday, "T_workday", "T_servicenow")',
+        )
+        runner = _build_runner(pva=_FakePVA(dialog_components=[comp]))
+        r = _result_by_id(run_handoff_topic_checks(runner), "TOPIC-020-001")
+        assert r.status == "Manual"
+        assert "blank" not in r.result
+
+    def test_reference_topic_does_not_fail_readiness_with_placeholder_sibling(self):
+        # A reference-configured topic (MANUAL) alongside a still-placeholder
+        # topic (FAILED): the reference one must not be swept into FAILED.
+        c1 = _handoff_dialog_component(
+            status="Active",
+            value_node={
+                "$kind": "ValueExpression",
+                "variableReference": "Global.ESS_HandoffAgentId",
+            },
+        )
+        c2 = _handoff_dialog_component(
+            schema_name="msdyn_copilotforemployeeselfservicehr.topic.Agenthandoff-second",
+            status="Active",
+            expression_text='"AgentIdentifier"',
+        )
+        runner = _build_runner(pva=_FakePVA(dialog_components=[c1, c2]))
+        results = run_handoff_topic_checks(runner)
+        assert len(results) == 2
+        assert _result_by_id(results, "TOPIC-020-001").status == "Manual"
+        assert _result_by_id(results, "TOPIC-020-002").status == "Failed"

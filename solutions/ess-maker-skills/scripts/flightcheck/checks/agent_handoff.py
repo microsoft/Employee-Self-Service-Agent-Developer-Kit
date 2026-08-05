@@ -96,16 +96,36 @@ def _find_handoff_setvariable(node) -> dict | None:
     return None
 
 
-def _resolved_agent_id(setvariable: dict) -> str:
-    """Extract and normalize the assigned handoff agent id.
+def _resolved_agent_id(setvariable: dict) -> str | None:
+    """Extract the assigned handoff agent id when it is a static literal.
 
-    The value is a PowerFx ValueExpression whose ``expressionText`` is a
-    quoted string literal. Strip the surrounding PowerFx quotes so the
-    caller can compare the concrete id against the placeholder.
+    The maker can assign ``Topic.HandoffAgentId`` two different ways:
+
+    - **Static PowerFx string literal** — the value node carries an
+      ``expressionText`` that is a quoted string, e.g.
+      ``'"AgentIdentifier"'``, ``'"T_<guid>..."'``, or the shipped empty
+      literal ``'""'``. This is the only shape the placeholder/blank
+      comparison applies to. Returns the unquoted id (``""`` for the empty
+      literal ``'""'``).
+    - **Variable reference or PowerFx formula** — the value is bound to
+      another variable (``variableReference``) or is a non-literal
+      expression, with no quoted string literal to read (``expressionText``
+      is absent or not a quoted string). The captured cassette shows
+      sibling SetVariables using ``variableReference`` (e.g.
+      ``System.Activity.Text``) with no ``expressionText``. The kit cannot
+      statically resolve what such an expression evaluates to at runtime,
+      so there is no literal to compare against the placeholder. Returns
+      ``None`` — the caller reports MANUAL rather than a false-positive
+      blank/placeholder FAILED.
     """
-    value = setvariable.get("value", {})
-    expr = value.get("expressionText", "")
-    return expr.strip().strip('"').strip()
+    value = setvariable.get("value", {}) or {}
+    expr = value.get("expressionText")
+    if not isinstance(expr, str):
+        return None
+    expr = expr.strip()
+    if len(expr) >= 2 and expr.startswith('"') and expr.endswith('"'):
+        return expr[1:-1].strip()
+    return None
 
 
 def _is_placeholder_id(agent_id: str) -> bool:
@@ -179,7 +199,42 @@ def run_handoff_topic_checks(runner) -> list[CheckResult]:
 
         agent_id = _resolved_agent_id(setvariable)
 
-        if not agent_id or _is_placeholder_id(agent_id):
+        if agent_id is None:
+            # Assigned via a variable reference / PowerFx expression, not a
+            # static string literal. The value is definitively NOT the shipped
+            # placeholder literal, but the kit cannot statically resolve what
+            # it evaluates to at runtime, so it cannot confirm a concrete
+            # target id either. Report MANUAL (observed programmatically, the
+            # final comparison is the operator's) rather than a false-positive
+            # blank/placeholder FAILED. MANUAL does not fail readiness.
+            results.append(CheckResult(
+                roles=[Role.ESS_MAKER.value],
+                checkpoint_id=cid,
+                category=CATEGORY,
+                priority=Priority.HIGH.value,
+                status=Status.MANUAL.value,
+                description=f"Handoff target agent id: {name}",
+                result=(
+                    f"Handoff topic '{name}' is enabled and sets "
+                    f"{_HANDOFF_VAR} from a Power Fx expression or variable "
+                    "reference, not a typed-in string value. It is not the "
+                    "shipped placeholder, but the kit cannot statically "
+                    "resolve the expression, so it could not confirm the "
+                    "resolved target agent id."
+                ),
+                remediation=(
+                    "Confirm the handoff resolves to a valid target agent id. "
+                    "In Copilot Studio, open the topic, find the node that "
+                    f"sets {_HANDOFF_VAR}, and verify the expression or "
+                    "variable it reads from evaluates to the GPT ID of the "
+                    "intended target agent (agent-handoff.md Step 4 'Set "
+                    "Handoff Agent ID' and 'Locate the GPT ID of an agent'). "
+                    "If you did not intend to enable this handoff, disable the "
+                    "topic to return it to its default out-of-the-box state."
+                ),
+                doc_link=DOC_LINK,
+            ))
+        elif not agent_id or _is_placeholder_id(agent_id):
             if agent_id:
                 detail = (
                     f"{_HANDOFF_VAR} still holds the shipped placeholder "

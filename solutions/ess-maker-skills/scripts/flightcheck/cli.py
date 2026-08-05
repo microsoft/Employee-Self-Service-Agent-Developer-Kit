@@ -21,6 +21,7 @@ Scopes:
     workdayextension — Workday extension pack: connection auth, Dataverse conn, REST URL, user-context redirect, firewall (WD-CONN-AUTH-001, DV-CONN-001, WD-REST-*, WD-NET-001)
     topics          — New-topic validation: trigger phrases + definition, integration wiring (TOPIC-TRIGGER-*, TOPIC-INTEGRATION-*)
     external        — Integration discovery (flows)
+    handoff         — Enabled auto-handoff topics set a concrete target agent id, not the shipped placeholder (TOPIC-020)
     workday         — Workday deep validation
     servicenow      — ServiceNow deep validation
     local           — Local agent file validation
