@@ -756,7 +756,7 @@ also add:
 }
 ```
 
-Update `.local/connect/servicenow/tasks.md` — change step 2 from
+Update `.local/connect/servicenow/steps.md` — change step 2 from
 `- [ ]` to `- [x]`.
 
 **Message:**

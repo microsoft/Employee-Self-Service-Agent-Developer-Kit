@@ -9,7 +9,7 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 
 Build a list of connected integrations (if any):
 
-- **ServiceNow** — connected if `.local/connect/servicenow/tasks.md` exists and
+- **ServiceNow** — connected if `.local/connect/servicenow/steps.md` exists and
   all items are checked.
 - **Workday** — connected if `.local/connect/workday/config.json` exists and its
   `setupStatus` shows every setup row (`S1.1` … `S6.2`) in state `done` (the
@@ -55,7 +55,7 @@ Wait for the user to respond.
 
 ### If the user chose ServiceNow (1 or "servicenow")
 
-Check if `.local/connect/servicenow/tasks.md` exists.
+Check if `.local/connect/servicenow/steps.md` exists.
 
 **If it exists and all items are checked:**
 
@@ -108,7 +108,7 @@ Update `.local/connect/servicenow/config.json` — set `authType` to the new
 value. Set `status` to `"in-progress"`. Reset all pack statuses in
 `packs` from `"installed"` to `"pending"`.
 
-Update `.local/connect/servicenow/tasks.md` — reset steps 2, 3, and 4 from
+Update `.local/connect/servicenow/steps.md` — reset steps 2, 3, and 4 from
 `- [x]` to `- [ ]`.
 
 Update `.local/config.json` — remove the `connections.ServiceNow` entry (it
@@ -138,12 +138,12 @@ other values. Then route by the new SNOW_AUTH:
 
 **If the user chose 3 (reconnect from scratch):**
 
-Reset `.local/connect/servicenow/tasks.md` — all steps to `- [ ]`.
+Reset `.local/connect/servicenow/steps.md` — all steps to `- [ ]`.
 
 Delete `.local/connect/servicenow/config.json`.
 
-Copy `src/skills/connect/servicenow/tasks.md` to
-`.local/connect/servicenow/tasks.md`.
+Copy `src/skills/connect/servicenow/steps.md` to
+`.local/connect/servicenow/steps.md`.
 
 **Message:**
 
@@ -162,7 +162,7 @@ Now read `src/skills/connect/servicenow/step1.md` and follow it.
 
 **If it exists and some items are unchecked:**
 
-Show the checklist from `.local/connect/servicenow/tasks.md` (✅ for checked,
+Show the checklist from `.local/connect/servicenow/steps.md` (✅ for checked,
 ⬜ for unchecked) followed by "Picking up where we left off."
 
 Read `.local/connect/servicenow/config.json` to restore saved values
@@ -186,8 +186,8 @@ step and route as follows:
 
 **If it does not exist:**
 
-Copy `src/skills/connect/servicenow/tasks.md` to
-`.local/connect/servicenow/tasks.md`.
+Copy `src/skills/connect/servicenow/steps.md` to
+`.local/connect/servicenow/steps.md`.
 
 **Message:**
 

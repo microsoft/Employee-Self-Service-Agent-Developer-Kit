@@ -44,7 +44,7 @@ Wait for the script to complete. Check the output for:
 
 ### If template configs > 0 AND new ServiceNow topics are visible
 
-Update `.local/connect/servicenow/tasks.md` — change step 4 from
+Update `.local/connect/servicenow/steps.md` — change step 4 from
 `- [ ]` to `- [x]`.
 
 Update `.local/connect/servicenow/config.json` — set `"status": "connected"`.

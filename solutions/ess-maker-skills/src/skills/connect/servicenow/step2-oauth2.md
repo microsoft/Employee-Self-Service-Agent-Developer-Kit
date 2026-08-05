@@ -212,7 +212,7 @@ Update `.local/connect/servicenow/config.json` — add an `oauth` object:
 
 Do NOT store the client secret in config.json.
 
-Update `.local/connect/servicenow/tasks.md` — change step 2 from
+Update `.local/connect/servicenow/steps.md` — change step 2 from
 `- [ ]` to `- [x]`.
 
 **Message:**
