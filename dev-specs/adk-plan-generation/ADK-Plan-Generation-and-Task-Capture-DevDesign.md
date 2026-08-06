@@ -261,12 +261,11 @@ Intent answers become **`Context` entries** (§9.2), grouped:
 | 5 | "Rolling out to a specific market or wave first (e.g. Germany, pilot group)?" | `market` |
 | 6 | "What business outcome measures success (e.g. deflect 30% of HR tickets)?" | `businessGoals` |
 | 7 | "How will you know a scenario is done — pilot‑ready? production‑signed‑off?" | `acceptanceCriteria` |
-| 8 | "Brand‑new environment, or do you already have ESS running?" | (greenfield vs enrichment branch, §14) |
 
 **Assignment question (Flow 1, per Task — §10).** The planner does **not** ask the sponsor which role a Task needs — the **role is grounded from the Learn docs** during research (§7.6). The only assignment question is *who*:
 - 9. *"{title} is a **{grounded role}** task. People with that role: {list from the roles endpoint}. Assign to whom — or leave it open to the {role} pool?"* → assign a person (role retained) or leave pooled.
 
-Questions **1–3** are almost always asked; **4–7** as scope warrants; **8** is one branch; **9** runs per Task during the assignment pass. A typical greenfield interview is **4–6 intent turns + a quick per‑task assignment pass**.
+Questions **1–3** are almost always asked; **4–7** as scope warrants; **9** runs per Task during the assignment pass. A typical greenfield interview is **4–6 intent turns + a quick per‑task assignment pass**.
 
 ### 8.3 The "both satisfied" stop condition
 
@@ -656,7 +655,7 @@ Until WeveNova + these MCP tools are live, the sync layer is a **no‑op stub** 
 6. **Research refresh cadence & cache home.** Every run, or cached with a TTL + explicit "re‑research"? Sidecar `research-context.json` vs folded into Context provenance. Owner: ADK.
 7. **Detector coverage & confidence.** Which Task kinds get automatic detectors in P0 (env only?) vs later, and how to signal low‑confidence detections (§12.3). Owner: ADK.
 8. **Claiming semantics on sync.** When a pooled Task is claimed locally then synced, confirm the WeveNova write is the claimed `Principal` (`type:User, role retained`) and reconciles under If‑Match. Owner: ADK + WeveNova.
-9. **Greenfield vs enrichment detection.** How the planner decides greenfield vs improving an existing deployment before an inventory/`/discover` contract exists — ask (§8 Q8), or probe the environment? Owner: ADK + PM.
+9. **Greenfield vs enrichment detection — resolved: detect, don't ask.** The planner does **not** ask the sponsor; the greenfield-vs-existing distinction is resolved by **detection** at execution time. The always‑emitted setup prerequisites are idempotent — `/setup` reads/writes `.local/config.json` (§12), and the install pre‑check reports an already‑installed ESS as `PASSED` — so an existing deployment simply no‑ops the already‑satisfied Tasks without a dedicated interview question (the §8 Q8 branch was dropped for this reason). A future inventory/`/discover` contract (§14) can additionally *skip* such Tasks up front and pre‑fill readiness, but is not required for correctness. Owner: ADK + PM.
 10. **Grounding confidence for role / action / `produces`.** These are extracted from the Learn docs per Task (§7.6, §10, §12). When a doc doesn't clearly state the responsible role, whether a step is a kit skill vs a portal action, or what it produces, what's the fallback — a conservative default (e.g. `power-platform-admin`, `manual`, empty `produces` then ask the assignee), or ask the sponsor? Owner: ADK + PM.
 11. **Step visibility — skill‑local vs `Task.checklist[]`.** Keep step progress ephemeral in the skill's own todo‑list / `.local` state (Option A, simplest), or persist it as the read‑back‑only `Task.checklist[]` filled at runtime (Option B, visible on the Plan after the session)? And if B, does the checklist sync to WeveNova or stay client‑only? Owner: ADK.
 

@@ -39,7 +39,6 @@ ticketing) they may have wanted.
 | 5 | "Rolling out to a specific market or wave first (e.g. India, a pilot group)?" | `set-context --group market` |
 | 6 | "What business outcome measures success (e.g. deflect 30% of HR tickets)?" | `set-context --group businessGoals` |
 | 7 | "How will you know a scenario is done — pilot‑ready? production‑signed‑off?" | `set-context --group acceptanceCriteria` |
-| 8 | "Is this a brand‑new environment, or do you already have ESS running?" | (branch — greenfield vs enrichment) |
 
 **The catalogue IS the grounded scenario set — map the goal to it, don't invent.**
 The categories above come from `scenario_catalogue.md`; use them to help the maker
@@ -91,7 +90,7 @@ each scenario** are **mandatory**. Capture scenarios *before* systems — never 
 a system choice narrow the scenario set. These determine the connect tasks, the
 authoring tasks, and which Learn docs ground the roles. Do not skip them, and do
 not end the interview (or jump to sponsor/timeframe) until scenarios and their
-systems are captured. Ask 4–8 as scope warrants.
+systems are captured. Ask 4–7 as scope warrants.
 
 Use scalar values (one fact per entry); group related facts rather than nesting.
 
