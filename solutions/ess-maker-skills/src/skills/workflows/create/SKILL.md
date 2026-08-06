@@ -20,7 +20,8 @@ If the user asks to create a workflow for ServiceNow, Workday, or SAP, redirect 
 extension pack. Instead of creating a new workflow, I'll create a topic that uses
 the existing shared flow with a template configuration in Dataverse. This is the
 recommended ESS pattern."
-Then read `src/skills/topics/create/SKILL.md` and follow the template config path.
+Then read `src/skills/topics/create/SKILL.md` and follow the template-config
+path. Integration topics remain on the existing path in this PR.
 
 ## Rules
 
@@ -117,4 +118,5 @@ After the workflow is created, the user needs a topic to call it. Tell them:
 - "Your workflow is ready with ID `{GUID}`. To use it from a topic, add an `InvokeFlowAction` with `flowId: {GUID}`."
 - "Would you like me to create a topic that calls this workflow?"
 
-If they say yes, hand off to the topic creation skill (`src/skills/topics/create/SKILL.md`).
+If they say yes, hand off to the existing topic creation skill
+(`src/skills/topics/create/SKILL.md`).

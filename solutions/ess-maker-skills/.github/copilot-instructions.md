@@ -287,9 +287,9 @@ After a successful push, `.baseline/` is updated to match the new state.
 |-------------|--------------|
 | Provision/connect the Workday setup environment (`/connect workday`) | `src/skills/setup/SKILL.md` |
 | Connect to ServiceNow/Workday | `src/skills/connect/SKILL.md` |
-| Create a topic | `src/skills/topics/create/SKILL.md` |
+| Create a topic | `src/skills/topics/create-eval-driven/SKILL.md` |
 | Create a workflow | `src/skills/workflows/create/SKILL.md` |
-| Update/modify a topic | `src/skills/topics/update/SKILL.md` |
+| Update/modify a topic | `src/skills/topics/update-eval-driven/SKILL.md` |
 | Update/modify a workflow | `src/skills/workflows/update/SKILL.md` |
 | Delete/remove a topic | `src/skills/topics/delete/SKILL.md` |
 | Delete/remove a workflow | `src/skills/workflows/delete/SKILL.md` |
@@ -340,15 +340,19 @@ before continuing. Do NOT proceed to review and push until the subagent
 has returned. Do NOT invoke the validate subagent after entire test set
 delete operations or after deleting the last remaining case in a category.
 
-**Topic review invocation:** When the maker runs `/create` **directly**, at
-**step 6.5 of the topic create flow** (`src/skills/topics/create/SKILL.md`) —
-after the scan and before the dry run/push — invoke `runSubagent` (the VS Code
+**Topic review invocation:** When the maker runs `/create` or `/update`
+**directly**, at step 6 of the corresponding eval-driven topic flow
+(`src/skills/topics/create-eval-driven/SKILL.md` or
+`src/skills/topics/update-eval-driven/SKILL.md`) — after the scan and before
+the dry run/push — invoke `runSubagent` (the VS Code
 Copilot Chat tool) pointing the subagent to read
 `src/skills/topics/review/SKILL.md` as its first action, scoped to the **single
-topic just created** (pass the agent slug from `.local/config.json` and the
+single topic just created or updated (pass the agent slug from
+`.local/config.json` and the
 topic stem — the filename without `.mcs.yml`) and asking it to present the
 **maker-facing report**. Running this review is **mandatory** in the direct
-`/create` flow: wait for the subagent to return, then paste its full report
+eval-driven `/create` and `/update` flows: wait for the subagent to return,
+then paste its full report
 verbatim into the chat. Do NOT proceed to the dry run or push until the review
 has returned and its report is shown. The findings themselves are **advisory**
 — they never block the push; when findings exist, pause and let the maker

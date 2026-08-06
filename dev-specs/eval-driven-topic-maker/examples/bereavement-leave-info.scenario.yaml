@@ -1,0 +1,33 @@
+# Worked example: fixed informational topic (Phase 1, no integration).
+# Based on the PM proposal's "Create a fixed informational topic" interaction.
+# The topic must use only the maker-provided response and link, and answer only
+# about bereavement leave. Missing source content blocks generation.
+
+schemaVersion: 2
+
+id: bereavement-leave-info
+name: Bereavement leave guidance
+intent: Explain the approved bereavement-leave steps and provide the HR support link, using only the response and link the maker provides.
+topicType: informational
+phase: 1
+persona: employee
+sourceContent: The approved bereavement-leave steps and HR support link, provided verbatim by the maker.
+
+dependencyChecks:
+  - condition: missing-source-content
+    blocks: generation
+    behavior: Block generation and identify that the approved response or HR link was not provided.
+
+evals:
+  - category: directTrigger
+    input: What should I do if I need bereavement leave?
+    expectedOutput: Returns the approved bereavement-leave response and the HR support link.
+    threshold: 0.7
+  - category: paraphrase
+    input: I had a death in my family and need time away.
+    expectedOutput: Returns the same approved bereavement-leave guidance and link.
+    threshold: 0.7
+  - category: nonTrigger
+    input: How much vacation do I have?
+    expectedOutput: Does not invoke the bereavement topic.
+    threshold: 0.7

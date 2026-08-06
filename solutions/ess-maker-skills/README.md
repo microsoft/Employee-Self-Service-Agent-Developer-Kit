@@ -36,11 +36,19 @@ The agent uses this knowledge automatically when generating topics, workflows, o
 
 ### ✏️ Create, Update & Delete Topics
 
-Build new conversation topics from a plain-English description. The agent generates the full topic YAML — trigger phrases, model descriptions, action chains, adaptive cards, variable bindings — and writes it to your agent folder.
+Create or update simple conversation topics from plain English, an approved
+eval scenario, or existing evaluation files. The agent first creates an eval
+contract, then writes the topic YAML and matching native evaluations.
 
-- **Create** (`/create`) — Describe the scenario and the agent builds the topic, including template config records for ServiceNow/Workday integrations
-- **Update** (`/update`) — Modify trigger phrases, messages, conditions, or conversation flow in existing topics
+- **Create** (`/create`) — Approve the intended evals, then generate a new
+  simple informational, clarification, routing, or handoff topic
+- **Update** (`/update`) — Approve updated and regression evals, then modify an
+  existing simple topic and create or refresh its generated evals
 - **Delete** (`/delete`) — Remove topics cleanly with dependency checking
+
+Workday, ServiceNow, SAP, connector-backed, and flow-backed topics continue to
+use the existing create and update behavior. Eval-driven integration support is
+planned separately.
 
 The agent handles the full pipeline: checkpoint → local edit → error scan → dry-run diff → push to Copilot Studio → verify.
 
@@ -299,8 +307,8 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 |---------|-------------|
 | `/setup` | First-time environment setup — authenticate, discover agent, extract, configure |
 | `/connect` | Connect an external system (ServiceNow, Workday) — guided setup with MCP verification |
-| `/create` | Create a new topic or workflow |
-| `/update` | Modify an existing topic or workflow |
+| `/create` | Create an eval-driven topic, workflow, or evaluation test set |
+| `/update` | Update a simple topic with evals, or modify an existing workflow |
 | `/delete` | Delete a topic or workflow from your agent |
 | `/scan` | Scan your agent for compile errors and fix them |
 | `/evaluate` | Generate evaluation test sets for your agent |

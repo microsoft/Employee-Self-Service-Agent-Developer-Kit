@@ -9,3 +9,4 @@ vcrpy>=6.0,<8.0
 responses>=0.25,<1.0
 respx>=0.21,<1.0
 PyYAML>=6.0,<7.0
+jsonschema>=4.0,<5.0

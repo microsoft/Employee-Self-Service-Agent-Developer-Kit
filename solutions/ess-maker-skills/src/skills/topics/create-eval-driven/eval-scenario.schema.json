@@ -1,0 +1,208 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Eval-driven topic scenario",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schemaVersion",
+    "id",
+    "name",
+    "intent",
+    "topicType",
+    "phase",
+    "persona",
+    "evals"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "const": 2
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1
+    },
+    "intent": {
+      "type": "string",
+      "minLength": 1
+    },
+    "topicType": {
+      "type": "string",
+      "enum": ["informational", "clarification", "routing", "handoff"]
+    },
+    "phase": {
+      "type": "integer",
+      "const": 1
+    },
+    "persona": {
+      "type": "string",
+      "enum": ["employee", "manager", "admin", "support"]
+    },
+    "references": {
+      "oneOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      ]
+    },
+    "sourceContent": {
+      "type": "string",
+      "minLength": 1
+    },
+    "dependencyChecks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["condition", "behavior"],
+        "properties": {
+          "condition": {
+            "type": "string",
+            "minLength": 1
+          },
+          "blocks": {
+            "type": "string",
+            "enum": ["generation", "push"]
+          },
+          "behavior": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "evals": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["category"],
+        "properties": {
+          "category": {
+            "type": "string",
+            "enum": [
+              "directTrigger",
+              "paraphrase",
+              "nonTrigger",
+              "clarification",
+              "missingInput",
+              "correctedInput",
+              "confirmation",
+              "cancellation",
+              "disambiguation",
+              "notFound",
+              "emptyOptionalField",
+              "identityBoundary",
+              "authorizationFailure",
+              "actionBoundary",
+              "downstreamError",
+              "successWithData",
+              "successNoData",
+              "regression",
+              "configuredValue"
+            ]
+          },
+          "input": {
+            "type": "string",
+            "minLength": 1
+          },
+          "turns": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 6,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["input"],
+              "properties": {
+                "input": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 500
+                },
+                "expectedOutput": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            }
+          },
+          "condition": {
+            "type": "string",
+            "minLength": 1
+          },
+          "expectedOutput": {
+            "type": "string",
+            "minLength": 1
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "threshold": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        },
+        "oneOf": [
+          {
+            "required": ["input", "expectedOutput"],
+            "not": {
+              "anyOf": [
+                {"required": ["turns"]},
+                {"required": ["condition"]}
+              ]
+            }
+          },
+          {
+            "required": ["turns"],
+            "not": {
+              "anyOf": [
+                {"required": ["input"]},
+                {"required": ["condition"]}
+              ]
+            }
+          },
+          {
+            "required": ["condition", "expectedOutput"],
+            "not": {
+              "anyOf": [
+                {"required": ["input"]},
+                {"required": ["turns"]}
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "topicType": {
+            "const": "informational"
+          }
+        },
+        "required": ["topicType"]
+      },
+      "then": {
+        "required": ["sourceContent"]
+      }
+    }
+  ]
+}

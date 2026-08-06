@@ -1,6 +1,6 @@
 ---
 mode: agent
-description: "Type Enter to create a new topic, workflow, or evaluation test set"
+description: "Create a simple topic with evals, a workflow, or an evaluation test set"
 ---
 
 # Create
@@ -15,13 +15,40 @@ and STOP. Otherwise proceed.
 
 **IMPORTANT: When the user just types `/create` with no additional text, do NOT silently route anywhere. Ask the user what they want to create first.**
 
+## Routing additional text
+
+When `/create` includes additional text, explicit component intent always wins:
+
+1. If the user explicitly asks to create or generate an **evaluation** or
+   **test set**, route to `src/skills/evaluations/create/SKILL.md`. Do this even
+   when the request also contains evaluation file paths.
+2. If the user explicitly asks to create a **workflow**, route to
+   `src/skills/workflows/create/SKILL.md`.
+3. If the user explicitly asks to create a **topic** involving Workday,
+   ServiceNow, SAP, a connector, a cloud flow, or another external system,
+   route to `src/skills/topics/create/SKILL.md` to preserve the existing
+   integration behavior.
+4. If the user explicitly asks to create a **simple topic**, clearly describes
+   a new informational, clarification, routing, or handoff topic, says to
+   create a topic from evals, or supplies a Phase 1 scenario YAML file, route
+   to `src/skills/topics/create-eval-driven/SKILL.md`.
+5. If the input only points to evaluation YAML files and does not say whether
+   the user wants a topic or an evaluation test set, ask:
+   "Would you like to create a **topic from these evals**, or create an
+   **evaluation test set**?"
+6. Ask the general component question below only when the remaining text is
+   still ambiguous.
+
 ## Flow
 
 1. Ask the user: "What would you like to create - a **topic**, a **workflow**, or an **evaluation** test set?"
 2. Wait for the user to answer.
 3. Route based on their answer:
    - **topic** (e.g., "topic", "a topic", "new topic")
-     -> Read `src/skills/topics/create/SKILL.md` and follow its instructions.
+     -> Read `src/skills/topics/create-eval-driven/SKILL.md` and follow its instructions.
+       This path accepts a plain-language request, a scenario YAML file, or
+      existing evaluation YAML files for simple topics. It delegates
+      integration topics to the existing topic-create skill.
    - **workflow** (e.g., "workflow", "a workflow", "new workflow")
      -> Read `src/skills/workflows/create/SKILL.md` and follow its instructions.
    - **evaluation** (e.g., "evaluation", "test set", "eval")

@@ -22,6 +22,7 @@ test = [
     "responses>=0.25,<1.0",
     "respx>=0.21,<1.0",            # for httpx-based code (src/mcp/workday/client.py)
     "PyYAML>=6.0,<7.0",
+    "jsonschema>=4.0,<5.0",
 ]
 
 # This project is a *test harness*, not a distributable package: it ships no
