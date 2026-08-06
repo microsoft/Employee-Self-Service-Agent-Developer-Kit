@@ -936,6 +936,39 @@ _REPORT_SCRIPT = """
       }
     });
   })();
+
+  // Manual-check completion checklist: tick a step to advance the counter,
+  // fill the progress bar, and strike through the item. Delegated so it
+  // covers every .checklist without per-card wiring. Progress is in-page
+  // only (no persistence) and each .checklist is scoped independently.
+  (function(){
+    function refresh(cl){
+      var boxes = Array.prototype.slice.call(
+        cl.querySelectorAll('.cl-item input[type=checkbox]'));
+      var total = boxes.length;
+      if(!total) return;
+      var done = 0;
+      boxes.forEach(function(b){
+        var item = b.closest('.cl-item');
+        if(item){ item.classList.toggle('done', b.checked); }
+        if(b.checked){ done++; }
+      });
+      var count = cl.querySelector('.cl-count');
+      if(count){
+        count.textContent = done + ' / ' + total;
+        count.classList.toggle('done', done === total);
+      }
+      var bar = cl.querySelector('.cl-bar > i');
+      if(bar){ bar.style.width = Math.round(done / total * 100) + '%'; }
+    }
+    document.addEventListener('change', function(e){
+      var box = e.target;
+      if(!box || box.type !== 'checkbox') return;
+      var cl = box.closest && box.closest('.checklist');
+      if(!cl) return;
+      refresh(cl);
+    });
+  })();
 """
 
 # Filter bar markup. Rendered hidden; the filter IIFE un-hides it when JS runs
@@ -1495,7 +1528,7 @@ def _render_check_card(res: CheckResult) -> str:
     if res.result:
         parts.append(
             '        <dl class="kv"><dt>Detail</dt>'
-            f'<dd class="detail">{_multiline_html(res.result)}</dd></dl>\n'
+            f'<dd class="detail">{_multiline_html(_mask_sensitive(res.result))}</dd></dl>\n'
         )
     if res.remediation:
         if res.status == Status.MANUAL.value:
@@ -1503,7 +1536,7 @@ def _render_check_card(res: CheckResult) -> str:
         else:
             parts.append(
                 '        <div class="next"><b>Next step</b>'
-                f'{_md_links_to_html(res.remediation)}</div>\n'
+                f'{_md_links_to_html(_mask_sensitive(res.remediation))}</div>\n'
             )
     if res.doc_link:
         link_text = _html_escape(res.doc_label) if res.doc_label else "Docs"
@@ -1549,9 +1582,11 @@ def _render_howto() -> str:
         '      <p style="margin:12px 0 0">The <b>manual section</b> lists the '
         'numbered steps to clear each sign-off \u2014 complete them, then '
         're-run FlightCheck.</p>\n'
-        '      <p style="margin:8px 0 0"><b>Sensitive values are masked</b> '
-        '(secrets, IDs, tenant domains) so the report is safe to share and '
-        'screenshot \u2014 retrieve full values from the source system.</p>\n'
+        '      <p style="margin:8px 0 0"><b>Identifying values are masked</b> '
+        '\u2014 user emails and resource GUIDs in the report text are partly '
+        'redacted so a shared report doesn\u2019t leak them. IDs inside links '
+        'are kept so the links still resolve; retrieve full values from the '
+        'source system.</p>\n'
         '    </div>\n'
         '  </details>\n'
     )

@@ -833,6 +833,56 @@ def test_manual_check_renders_completion_checklist(tmp_path):
     assert "Next step" not in html
 
 
+def test_report_script_wires_completion_checklist_handler(tmp_path):
+    """The embedded report script must wire a change handler for the
+    completion checklist. Without it the counter, progress bar, and
+    strikethrough are dead markup (regression guard: the handler was
+    dropped once and no test caught it because none inspected the JS)."""
+    from flightcheck.runner import FlightCheckRunner, save_results
+
+    runner = FlightCheckRunner(scope="test")
+    runner.register("Authentication", lambda _r: [_manual_with_steps()])
+    result = runner.run()
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    # A change listener that recomputes the checklist state must be present.
+    assert "addEventListener('change'" in html
+    # It must scope to the containing .checklist and drive all three signals.
+    assert ".checklist" in html
+    assert ".cl-count" in html
+    assert ".cl-bar > i" in html
+    assert ".cl-item" in html
+
+
+def test_non_manual_check_masks_detail_and_next_step(tmp_path):
+    """The how-to guide promises identifying values are masked, so a
+    non-manual (Warning/Failed) check must also mask a UPN or GUID that
+    surfaces in its Detail or Next step, not just Manual checks."""
+    from flightcheck.runner import FlightCheckRunner, CheckResult, save_results
+
+    runner = FlightCheckRunner(scope="test")
+    runner.register("Environment", lambda _r: [
+        CheckResult(
+            checkpoint_id="ENV-004", category="Environment",
+            priority="High", status="Warning",
+            description="Connection owner mismatch",
+            result="Owned by jdoe@contoso.com",
+            remediation="Rebind: object 1a2b3c4d-1111-2222-3333-444455556666.",
+        ),
+    ])
+    result = runner.run()
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    # Detail UPN masked.
+    assert "jdoe@contoso.com" not in html
+    assert "j***@contoso.com" in html
+    # Next-step GUID masked.
+    assert "1a2b3c4d-1111-2222-3333-444455556666" not in html
+    assert "1a2b3c4d-****-****-****-************" in html
+
+
 def test_manual_check_without_steps_gets_single_verify_item(tmp_path):
     """A Manual check whose remediation has no "Step N" markers still
     gets a checklist, but with only the explicit "Mark as verified"
