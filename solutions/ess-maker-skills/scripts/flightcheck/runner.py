@@ -865,6 +865,8 @@ _REPORT_SCRIPT = """
       });
       listEl.parentNode.insertBefore(btn, listEl.nextSibling);
     }
+    makeCollapsible(document.querySelector('.ap-list'), '.ap-item', 'action item');
+    makeCollapsible(document.querySelector('.ap-review ul'), 'li', 'warning');
   })();
 
   (function(){

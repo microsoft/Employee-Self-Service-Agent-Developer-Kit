@@ -855,6 +855,27 @@ def test_report_script_wires_completion_checklist_handler(tmp_path):
     assert ".cl-item" in html
 
 
+def test_report_script_invokes_action_list_collapse(tmp_path):
+    """The report script defines makeCollapsible to fold long action-item and
+    warning lists behind a "Show N more" control. It must also CALL it for
+    both lists; the function was defined but never invoked once, so long lists
+    silently rendered fully expanded and no test caught it (this is a static
+    guard because pytest cannot execute the embedded JS)."""
+    from flightcheck.runner import FlightCheckRunner, save_results
+
+    runner = FlightCheckRunner(scope="test")
+    runner.register("Authentication", lambda _r: [_manual_with_steps()])
+    result = runner.run()
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    # The helper must exist and be invoked for both the blocker list (.ap-list)
+    # and the warning list (.ap-review ul), or long lists never collapse.
+    assert "function makeCollapsible(" in html
+    assert "makeCollapsible(document.querySelector('.ap-list')" in html
+    assert "makeCollapsible(document.querySelector('.ap-review ul')" in html
+
+
 def test_non_manual_check_masks_detail_and_next_step(tmp_path):
     """The how-to guide promises identifying values are masked, so a
     non-manual (Warning/Failed) check must also mask a UPN or GUID that
