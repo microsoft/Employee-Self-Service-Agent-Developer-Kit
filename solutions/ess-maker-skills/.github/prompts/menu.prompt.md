@@ -13,6 +13,7 @@ Here's what I can help you with:
 
 | Command | What it does |
 |---------|-------------|
+| `/planner` | Type Enter to plan an ESS rollout — grounded scenarios, tasks, and owners (works before setup) |
 | `/connect` | Type Enter to connect ServiceNow or Workday to your agent |
 | `/create` | Type Enter to create a new topic or workflow |
 | `/update` | Type Enter to modify an existing topic or workflow |
