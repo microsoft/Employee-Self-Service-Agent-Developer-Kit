@@ -883,6 +883,37 @@ def test_non_manual_check_masks_detail_and_next_step(tmp_path):
     assert "1a2b3c4d-****-****-****-************" in html
 
 
+def test_non_manual_link_url_with_guid_still_resolves(tmp_path):
+    """A GUID that is a path segment of a maker-portal deep link in a
+    non-manual check's remediation must survive masking so the rendered
+    href still resolves. _mask_sensitive keeps http(s) URL runs verbatim;
+    this pins that the non-manual render path (which now routes through
+    _mask_sensitive) does not mangle env_id GUIDs inside link targets."""
+    from flightcheck.runner import FlightCheckRunner, CheckResult, save_results
+
+    env_id = "abc12345-1111-2222-3333-444455556666"
+    url = f"https://make.powerautomate.com/environments/{env_id}/flows"
+    runner = FlightCheckRunner(scope="test")
+    runner.register("Environment", lambda _r: [
+        CheckResult(
+            checkpoint_id="ENV-004", category="Environment",
+            priority="High", status="Warning",
+            description="Flows need review",
+            result="Review the flows in this environment.",
+            remediation=f"Open [flows]({url}).",
+        ),
+    ])
+    result = runner.run()
+    save_results(result, output_dir=str(tmp_path))
+    html = (tmp_path / "report.html").read_text(encoding="utf-8")
+
+    # The href keeps the real env_id so the deep link resolves.
+    assert f'href="{url}"' in html
+    assert f"environments/{env_id}/flows" in html
+    # No masked GUID leaked from inside the URL.
+    assert "abc12345-****" not in html
+
+
 def test_manual_check_without_steps_gets_single_verify_item(tmp_path):
     """A Manual check whose remediation has no "Step N" markers still
     gets a checklist, but with only the explicit "Mark as verified"
