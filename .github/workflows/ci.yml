@@ -78,3 +78,35 @@ jobs:
     - name: Run installer smoke tests
       shell: pwsh
       run: ./setup/Install-EssAdk.Tests.ps1
+
+  flightcheck-tests:
+    name: FlightCheck offline test suite
+    runs-on: ubuntu-latest
+
+    # Runs the whole FlightCheck pytest suite. Every test is offline: network
+    # calls are mocked (responses / respx) or replayed from committed VCR
+    # cassettes, and `live`-marked tests are skipped unless opted in with
+    # --run-live. This is the job that actually enforces the FlightCheck tests
+    # on every PR (previously none of them ran in CI). It includes the offline
+    # URL hygiene gate (tests/flightcheck/test_url_hygiene.py), which asserts
+    # fetchable report URLs use https. It does NOT verify a path is live (that
+    # a learn.microsoft.com article still exists) — stale-path detection is a
+    # separate, networked concern kept out of this deterministic job.
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.11'
+
+    - name: Install runtime and test dependencies
+      # Runtime deps (msal/requests/PyYAML/defusedxml) are imported by the
+      # check modules the tests exercise; test deps (pytest/responses/respx/
+      # vcrpy) come from the [test] extra in pyproject.toml.
+      run: |
+        pip install -r solutions/ess-maker-skills/scripts/requirements.txt
+        pip install -e .[test]
+
+    - name: Run FlightCheck offline test suite
+      run: python -m pytest tests/flightcheck -q

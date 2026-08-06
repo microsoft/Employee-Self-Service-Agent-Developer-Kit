@@ -1,3 +1,9 @@
+# Explicit build backend so `pip install -e .[test]` is deterministic across
+# pip/setuptools versions and honors the [tool.setuptools] config below.
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "ess-maker-kit-tests"
 version = "0.0.0"
@@ -17,6 +23,16 @@ test = [
     "respx>=0.21,<1.0",            # for httpx-based code (src/mcp/workday/client.py)
     "PyYAML>=6.0,<7.0",
 ]
+
+# This project is a *test harness*, not a distributable package: it ships no
+# importable package of its own (the code under test is put on sys.path via
+# [tool.pytest.ini_options].pythonpath below). Without this, `pip install -e .`
+# triggers setuptools flat-layout auto-discovery, which errors with "Multiple
+# top-level packages discovered" on the repo's top-level dirs (setup/, samples/,
+# solutions/, ...). Declaring an empty module list makes the editable install a
+# deps-only no-op, which is exactly what `pip install -e .[test]` needs.
+[tool.setuptools]
+py-modules = []
 
 # Ruff configuration for the repo-root Python sources (solutions/ess-maker-skills/
 # scripts + src/mcp, and tests/). The ESS NextGen Migration Toolkit under
