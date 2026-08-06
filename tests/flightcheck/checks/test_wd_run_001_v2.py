@@ -125,9 +125,9 @@ class TestWorkdayActiveProbeMatrix:
         row = _run_single(_runner())
 
         assert row.status == Status.PASSED.value
-        assert "shared_workdaysoap managed-connector path" in row.result
-        assert "ISU / service-account connection" in row.result
-        assert "plugin-tunneled generic SOAP was not tested" in row.result
+        assert "retrieved data from Workday" in row.result
+        assert "Workday service-account connection" in row.result
+        assert "did not test custom SOAP integrations" in row.result
         assert row.remediation == ""
 
     @responses.activate
@@ -141,7 +141,7 @@ class TestWorkdayActiveProbeMatrix:
         row = _run_single(_runner())
 
         assert row.status == Status.FAILED.value
-        assert "Layer: network layer (DNS)" in row.result
+        assert "name resolution failed" in row.result
         assert "no HTTP status" in row.result
 
     @responses.activate
@@ -155,7 +155,7 @@ class TestWorkdayActiveProbeMatrix:
         row = _run_single(_runner())
 
         assert row.status == Status.FAILED.value
-        assert "Layer: network layer (TLS certificate)" in row.result
+        assert "TLS failed" in row.result
 
     @responses.activate
     def test_firewall_dlp_block_names_network_firewall_dlp_layer(self) -> None:
@@ -168,7 +168,7 @@ class TestWorkdayActiveProbeMatrix:
         row = _run_single(_runner())
 
         assert row.status == Status.FAILED.value
-        assert "Layer: network layer (firewall / DLP)" in row.result
+        assert "traffic was blocked" in row.result
 
     @responses.activate
     def test_endpoint_misconfig_names_endpoint_configuration_layer(self) -> None:
@@ -184,7 +184,7 @@ class TestWorkdayActiveProbeMatrix:
         row = _run_single(_runner())
 
         assert row.status == Status.FAILED.value
-        assert "Layer: endpoint configuration layer" in row.result
+        assert "endpoint or operation was not found" in row.result
         assert "HTTP 404" in row.result
 
     @responses.activate
@@ -198,7 +198,7 @@ class TestWorkdayActiveProbeMatrix:
         row = _run_single(_runner())
 
         assert row.status == Status.FAILED.value
-        assert "Layer: authorization layer" in row.result
+        assert "authorization rejected the request" in row.result
         assert "HTTP 403" in row.result
 
     @responses.activate
@@ -217,7 +217,7 @@ class TestWorkdayActiveProbeMatrix:
         row = _run_single(_runner())
 
         assert row.status == Status.FAILED.value
-        assert "(indeterminate)" in row.result
+        assert "cannot distinguish a wrong endpoint" in row.result
         assert "HTTP 400" in row.result
 
     @responses.activate
@@ -233,7 +233,7 @@ class TestWorkdayActiveProbeMatrix:
         row = _run_single(_runner())
 
         assert row.status == Status.FAILED.value
-        assert "Layer: connector runtime / Workday backend layer" in row.result
+        assert "returned a server error" in row.result
         assert "HTTP 500" in row.result
 
     def test_consent_declined_falls_back_to_passive_run_history(self) -> None:
@@ -244,15 +244,15 @@ class TestWorkdayActiveProbeMatrix:
 
         assert row.status == Status.PASSED.value
         assert "All 1 most recent Workday flow run(s) succeeded" in row.result
-        assert "active probe fallback" in row.result
-        assert "passive run-history fallback" in row.result
+        assert "live Workday connection test was not run" in row.result
+        assert "recent Workday connector run history" in row.result
 
     def test_no_connection_is_not_configured_not_failed(self) -> None:
         row = _run_single(_runner(pp_client=_PP(connections=[])))
 
         assert row.status == Status.NOT_CONFIGURED.value
         assert "no Workday managed-connector connection was found" in row.result
-        assert "Identity path exercised: none" in row.result
+        assert "live Workday connection test did not run" in row.result
 
     @responses.activate
     def test_cleanup_on_invoke_error_deletes_created_flow(self) -> None:
@@ -275,7 +275,7 @@ class TestWorkdayActiveProbeMatrix:
         row = _run_single(_runner())
 
         assert row.status == Status.PASSED.value
-        assert "active connector probe was indeterminate at invoke" in row.result
+        assert "could not complete" in row.result
         assert any(c.request.method == "DELETE" for c in responses.calls)
 
     def test_oauth_invoker_only_connection_falls_back_to_passive(self) -> None:
@@ -287,4 +287,4 @@ class TestWorkdayActiveProbeMatrix:
 
         assert row.status == Status.PASSED.value
         assert "OAuth-invoker Workday connections" in row.result
-        assert "passive run-history fallback" in row.result
+        assert "recent Workday connector run history" in row.result

@@ -3459,9 +3459,10 @@ def _with_wd_run_passive_context(
     results: list[CheckResult], *, reason: str
 ) -> list[CheckResult]:
     suffix = (
-        "\n\nWD-RUN-001 v2 active probe fallback: "
-        f"{reason}. Identity path exercised: passive run-history fallback; "
-        "no new Workday connector call was triggered."
+        "\n\nThe live Workday connection test was not run "
+        f"({reason}). Readiness was instead assessed from recent Workday "
+        "connector run history on this environment. No new Workday call was "
+        "made."
     )
     for row in results:
         if row.checkpoint_id == "WD-RUN-001" and suffix not in row.result:
@@ -3475,13 +3476,12 @@ def _workday_probe_not_configured(reason: str) -> list[CheckResult]:
         priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
         description="Workday active connector runtime health",
         result=(
-            "No active Workday connector probe ran. "
-            f"{reason}. Identity path exercised: none."
+            f"The live Workday connection test did not run: {reason}."
         ),
         remediation=(
             "Connect Workday in Power Platform first, then re-run "
-            "/flightcheck with --runtime-reachability to exercise the "
-            "managed-connector path. This is a clean pre-deployment state, "
+            "/flightcheck with --runtime-reachability to test the live "
+            "Workday connection. This is a clean pre-deployment state, "
             "not a runtime failure."
         ),
         doc_link=f"{DOC_BASE}/workday",
@@ -3529,7 +3529,7 @@ def _workday_probe_layer(res: live_egress_probe.ConnectorProbeResult) -> tuple[s
 def _workday_probe_failure_result(
     res: live_egress_probe.ConnectorProbeResult, connection_name: str
 ) -> list[CheckResult]:
-    layer, cause = _workday_probe_layer(res)
+    _layer, cause = _workday_probe_layer(res)
     status_text = f"HTTP {res.status_code}" if res.status_code else "no HTTP status"
     code_text = f"; connector code {res.error_code}" if res.error_code else ""
     return [CheckResult(
@@ -3537,11 +3537,11 @@ def _workday_probe_failure_result(
         priority=Priority.HIGH.value, status=Status.FAILED.value,
         description="Workday active connector runtime health",
         result=(
-            "Active Workday connector probe failed. "
-            f"Layer: {layer}. Connector result: {status_text}{code_text}. "
-            "Identity path exercised: ISU / service-account connection "
-            f"'{connection_name}'. Scope: RaaS / REST managed-connector "
-            "operation path only; plugin-tunneled generic SOAP was not tested."
+            "The live Workday connection test failed. "
+            f"{cause[:1].upper() + cause[1:]} ({status_text}{code_text}). "
+            "Tested using the Workday service-account connection "
+            f"'{connection_name}'. This tested the standard Workday "
+            "data-retrieval path; it did not test custom SOAP integrations."
         ),
         remediation=_infra_003_directive(
             cause=cause,
@@ -3552,10 +3552,11 @@ def _workday_probe_failure_result(
             ),
             next_steps=(
                 "Open the transient probe or matching Workday connector run in "
-                "Power Automate, then fix the named layer. For authorization, "
-                "check the ISU/service account's Workday security domains. For "
-                "endpoint configuration, check the Workday URL and operation. "
-                "For network blocks, check DLP, firewall, DNS, and TLS."
+                "Power Automate, then fix the cause named above. For "
+                "authorization, check the ISU/service account's Workday "
+                "security domains. For endpoint configuration, check the "
+                "Workday URL and operation. For network blocks, check DLP, "
+                "firewall, DNS, and TLS."
             ),
             responsible_role=(
                 f"{Role.WORKDAY_ADMIN.value} / {Role.POWER_PLATFORM_ADMIN.value}"
@@ -3623,12 +3624,12 @@ def _check_workday_active_run_health(runner) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="Workday active connector runtime health",
             result=(
-                "Active Workday connector probe succeeded over the real "
-                "shared_workdaysoap managed-connector path "
-                f"({res.detail}). Identity path exercised: ISU / "
-                f"service-account connection '{connection_id}'. "
-                "Scope: RaaS / REST managed-connector operation path only; "
-                "plugin-tunneled generic SOAP was not tested."
+                "The live test successfully retrieved data from Workday "
+                "through the agent's Workday connection "
+                f"({res.detail}). Tested using the Workday service-account "
+                f"connection '{connection_id}'. This tested the standard "
+                "Workday data-retrieval path; it did not test custom SOAP "
+                "integrations."
             ),
             remediation="",
             doc_link=f"{DOC_BASE}/workday",
@@ -3638,7 +3639,7 @@ def _check_workday_active_run_health(runner) -> list[CheckResult]:
         return _workday_probe_failure_result(res, connection_id)
     return _with_wd_run_passive_context(
         _check_workday_run_health_passive(runner),
-        reason=f"active connector probe was indeterminate at {res.stage}: {res.detail}",
+        reason=f"the live Workday test could not complete (it did not return a clear pass or fail): {res.detail}",
     )
 
 
