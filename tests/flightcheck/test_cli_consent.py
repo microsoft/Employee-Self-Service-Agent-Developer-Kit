@@ -48,6 +48,7 @@ def _args(**kw) -> SimpleNamespace:
 
 
 _INFRA_CHECKS = [("Infrastructure", cli.run_infrastructure_checks)]
+_WD_CHECKS = [("Workday", cli.run_workday_checks)]
 _NON_INFRA_CHECKS = [("Local", lambda runner: [])]
 
 _WD = {"Workday": {"baseUrl": "https://wd.example.com"}}
@@ -250,6 +251,60 @@ class TestInfraNotInScope:
             _args(runtime_reachability=flag), runner, _NON_INFRA_CHECKS
         )
         assert runner.runtime_reachability is expected
+        assert runner.runtime_reachability_declined is False
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Workday scope (WD-RUN-001 v2 active probe): consent is surfaced even when
+# INFRA-003 is not in scope, so a Workday-only run asks first and NO -> passive.
+# ───────────────────────────────────────────────────────────────────────
+
+
+class TestWorkdayScopeSurfacesConsent:
+    def test_interactive_yes_enables_the_probe_on_workday_scope(
+        self, monkeypatch
+    ):
+        _force_tty(monkeypatch, interactive=True)
+        monkeypatch.setattr(cli.consent, "ask_yes_no", lambda label: True)
+        runner = _runner(_WD)
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=None, scope="workday"), runner, _WD_CHECKS
+        )
+
+        assert runner.runtime_reachability is True
+        assert runner.runtime_reachability_declined is False
+
+    def test_interactive_no_declines_and_falls_back_on_workday_scope(
+        self, monkeypatch, capsys
+    ):
+        _force_tty(monkeypatch, interactive=True)
+        monkeypatch.setattr(cli.consent, "ask_yes_no", lambda label: False)
+        runner = _runner(_WD)
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=None, scope="workday"), runner, _WD_CHECKS
+        )
+
+        assert runner.runtime_reachability is False
+        assert runner.runtime_reachability_declined is True
+        assert "Connectivity check skipped" in capsys.readouterr().out
+
+    def test_adk_workday_scope_defers_to_skill_no_prompt(self, monkeypatch):
+        _force_tty(monkeypatch, interactive=True)
+
+        def _boom(label):  # noqa: ANN001
+            raise AssertionError("ADK path must not prompt; the skill asks the user")
+
+        monkeypatch.setattr(cli.consent, "ask_yes_no", _boom)
+        runner = _runner(_WD)
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=None, scope="workday", invocation_source="adk"),
+            runner,
+            _WD_CHECKS,
+        )
+        assert runner.runtime_reachability is False
         assert runner.runtime_reachability_declined is False
 
 

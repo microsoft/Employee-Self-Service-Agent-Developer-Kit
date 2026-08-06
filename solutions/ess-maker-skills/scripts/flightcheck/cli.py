@@ -159,9 +159,15 @@ def _apply_runtime_reachability_consent(args, runner, checks) -> None:
     # getattr keeps this robust for callers that build args without the flag.
     flag = getattr(args, "runtime_reachability", None)
 
-    # The egress probe only lives inside the Infrastructure category (INFRA-003).
+    # The egress probe lives in the Infrastructure category (INFRA-003) and in
+    # the Workday category (WD-RUN-001 v2 active connector probe). Consent must
+    # be surfaced whenever EITHER mutating probe is in scope, so a Workday-only
+    # readiness check asks first and falls back to the passive run-history path
+    # on NO, instead of silently requiring the --runtime-reachability flag.
     infra_in_scope = any(fn is run_infrastructure_checks for _, fn in checks)
-    if not infra_in_scope:
+    workday_in_scope = any(fn is run_workday_checks for _, fn in checks)
+    active_probe_in_scope = infra_in_scope or workday_in_scope
+    if not active_probe_in_scope:
         runner.runtime_reachability = flag is True
         return
 
