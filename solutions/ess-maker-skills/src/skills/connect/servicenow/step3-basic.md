@@ -108,7 +108,7 @@ Go back to section 3.2 with CURRENT_PACK set to `hrsd`.
 
 **Otherwise (single pack, or second pack just finished):**
 
-Update `.local/connect/servicenow/tasks.md` — change step 3 from
+Update `.local/connect/servicenow/steps.md` — change step 3 from
 `- [ ]` to `- [x]`.
 
 Update `.local/connect/servicenow/config.json` — set the status of each
@@ -118,7 +118,7 @@ installed pack from `"pending"` to `"installed"` in the `packs` object.
 
 ✅ Extension installed.
 
-| # | Task | Status |
+| # | Step | Status |
 |---|------|--------|
 | 1 | Instance configured | ✅ |
 | 2 | Connection secured | ✅ |

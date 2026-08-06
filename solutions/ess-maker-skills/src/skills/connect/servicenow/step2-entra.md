@@ -322,7 +322,7 @@ If CREATED_USER_SYS_ID was set (user was created in step 2.3), also add:
 }
 ```
 
-Update `.local/connect/servicenow/tasks.md` — change step 2 from
+Update `.local/connect/servicenow/steps.md` — change step 2 from
 `- [ ]` to `- [x]`.
 
 **Message:**
@@ -330,7 +330,7 @@ Update `.local/connect/servicenow/tasks.md` — change step 2 from
 ✅ Entra ID connection secured — app registered and ServiceNow OIDC
 configured.
 
-| # | Task | Status |
+| # | Step | Status |
 |---|------|--------|
 | 1 | Instance configured | ✅ |
 | 2 | Connection secured | ✅ |

@@ -245,14 +245,14 @@ query_table(table="sys_user", query="user_name=admin", fields="sys_id,user_name,
 
 **If the query succeeds** (returns at least one record):
 
-Update `.local/connect/servicenow/tasks.md` — change step 1 from
+Update `.local/connect/servicenow/steps.md` — change step 1 from
 `- [ ]` to `- [x]`.
 
 **Message:**
 
 ✅ Instance configured — connected to `{INSTANCE_NAME}`.
 
-| # | Task | Status |
+| # | Step | Status |
 |---|------|--------|
 | 1 | Instance configured | ✅ |
 | 2 | Connection secured | ⬜ |
@@ -286,7 +286,7 @@ Route by SNOW_AUTH for the Power Platform connector:
   Read `src/skills/connect/servicenow/step2-oauth2.md` and follow it.
 
 - If SNOW_AUTH is `basic`:
-  Update step 2 from `- [ ]` to `- [x]` in `.local/connect/servicenow/tasks.md`.
+  Update step 2 from `- [ ]` to `- [x]` in `.local/connect/servicenow/steps.md`.
   Read `src/skills/connect/servicenow/step3-basic.md` and follow it.
 
 When the Power Platform flow completes (step 4 finishes), check

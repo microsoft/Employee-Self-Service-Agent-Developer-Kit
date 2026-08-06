@@ -29,7 +29,7 @@ and runs setup.py automatically. No MCP queries needed.
 If the script fails with an auth error, tell the user to check they selected
 the correct account with access to the environment, and re-run the command.
 
-When the script completes successfully, update `workspace/onboarding/tasks.md` —
+When the script completes successfully, update `workspace/onboarding/steps.md` —
 change step 3 from `- [ ]` to `- [x]`.
 
 **Message:**
@@ -41,7 +41,7 @@ change step 3 from `- [ ]` to `- [x]`.
 One more step — we need to start the Dataverse MCP server so the kit can
 work with your environment going forward.
 
-| # | Task | Status |
+| # | Step | Status |
 |---|------|--------|
 | 1 | Dataverse configured | ✅ |
 | 2 | Agent discovered | ✅ |
@@ -73,13 +73,13 @@ Wait for the user to respond.
 
 ## 2.3 — Finish
 
-Update `workspace/onboarding/tasks.md` — change step 4 from `- [ ]` to `- [x]`.
+Update `workspace/onboarding/steps.md` — change step 4 from `- [ ]` to `- [x]`.
 
 **Message:**
 
 ✅ Core setup complete!
 
-| # | Task | Status |
+| # | Step | Status |
 |---|------|--------|
 | 1 | Dataverse configured | ✅ |
 | 2 | Agent discovered | ✅ |

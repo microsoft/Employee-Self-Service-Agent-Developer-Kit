@@ -70,14 +70,14 @@ Find the line starting with `SELECTED_AGENT_JSON:` in the output. Parse the
 JSON after the colon to get BOT_ID (`botid`), BOT_NAME (`name`),
 SCHEMA_NAME (`schemaname`), and IS_MANAGED (`ismanaged`).
 
-Update `workspace/onboarding/tasks.md` — change both step 1 and step 2 from
+Update `workspace/onboarding/steps.md` — change both step 1 and step 2 from
 `- [ ]` to `- [x]`.
 
 **Message:**
 
 ✅ Selected **{BOT_NAME}**.
 
-| # | Task | Status |
+| # | Step | Status |
 |---|------|--------|
 | 1 | Dataverse configured | ✅ |
 | 2 | Agent discovered | ✅ |

@@ -8,13 +8,13 @@ or what files you are reading.
 
 ## Start
 
-Read `workspace/onboarding/tasks.md`.
+Read `workspace/onboarding/steps.md`.
 
-If the file does not exist, copy `src/skills/onboarding/tasks.md` to
-`workspace/onboarding/tasks.md` and go to Fresh Start below.
+If the file does not exist, copy `src/skills/onboarding/steps.md` to
+`workspace/onboarding/steps.md` and go to Fresh Start below.
 
 If the file exists but mentions "Copilot Studio extension", "Clone agent", or
-"PAC CLI", delete it, re-copy from `src/skills/onboarding/tasks.md`, and show:
+"PAC CLI", delete it, re-copy from `src/skills/onboarding/steps.md`, and show:
 
 **Message:**
 
@@ -43,7 +43,7 @@ by "Picking up at Step {N}." Then go to the matching step below.
 
 **Message:**
 
-| # | Task | Status |
+| # | Step | Status |
 |---|------|--------|
 | 1 | Dataverse configured | ⬜ |
 | 2 | Agent discovered | ⬜ |

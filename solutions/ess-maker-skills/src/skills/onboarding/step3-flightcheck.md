@@ -27,7 +27,7 @@ Use the `vscode_askQuestions` tool:
 
 **If they choose "Skip":**
 
-Do NOT update `workspace/onboarding/tasks.md`. Step 5 stays unchecked so
+Do NOT update `workspace/onboarding/steps.md`. Step 5 stays unchecked so
 `/setup` will offer the readiness check again on the next run.
 
 **Message:**
@@ -61,7 +61,7 @@ python scripts/flightcheck/cli.py --scope full --invocation-source adk
 
 Wait for the script to finish.
 
-Update `workspace/onboarding/tasks.md` — change step 5 from `- [ ]` to `- [x]`.
+Update `workspace/onboarding/steps.md` — change step 5 from `- [ ]` to `- [x]`.
 
 ---
 
@@ -74,7 +74,7 @@ exactly.
 
 After the results, always append the setup completion table:
 
-| # | Task | Status |
+| # | Step | Status |
 |---|------|--------|
 | 1 | Dataverse configured | ✅ |
 | 2 | Agent discovered | ✅ |

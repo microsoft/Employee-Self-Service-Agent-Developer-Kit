@@ -30,8 +30,8 @@ Each integration routes differently — ServiceNow has its own step files;
 Workday delegates to the setup orchestrator:
 
 - **ServiceNow**: `src/skills/connect/servicenow/`
-  - Tasks template: `src/skills/connect/servicenow/tasks.md`
-  - State file: `.local/connect/servicenow/tasks.md`
+  - Steps template: `src/skills/connect/servicenow/steps.md`
+  - State file: `.local/connect/servicenow/steps.md`
   - Config file: `.local/connect/servicenow/config.json`
   - Step 1: `step1.md` — instance info, MCP setup, connectivity check
   - Step 2 (Entra): `step2-entra.md` — create Entra app registration for user login
@@ -51,6 +51,6 @@ Workday delegates to the setup orchestrator:
   a resume-aware spine, and persists state under `.local/setup/workday/tasks.md`
   + `setupStatus` in `.local/connect/workday/config.json`.
 
-Each integration's tasks.md and config.json persist after completion.
+Each integration's steps.md and config.json persist after completion.
 Running `/connect` again lets the user add a different integration
 without losing existing ones.
