@@ -240,6 +240,20 @@ def build_connector_probe_clientdata(action: ConnectorProbeAction) -> str:
                 "kind": "Http",
                 "inputs": {
                     "statusCode": 200,
+                    # Synchronous signals available from a Failed connector
+                    # action, live-verified against a real Workday managed
+                    # connection (Sunbreak Sandbox, 2026-08):
+                    #   @actions('X')?['status']  -> Succeeded / Failed
+                    #   @outputs('X')?['statusCode'] -> 200 / 400 / 500
+                    #   @actions('X')?['code']    -> OK / BadRequest /
+                    #                                InternalServerError
+                    # The human-readable connector error.message is NOT
+                    # reachable here: for a Failed action @outputs('X') and
+                    # @actions('X')?['error'] resolve to null; the message
+                    # only exists behind the SAS-signed outputsLink, which
+                    # FlightCheck deliberately never fetches. errorMessage is
+                    # kept best-effort (it populates only for Logic Apps
+                    # pre-connector action errors, not connector HTTP faults).
                     "body": {
                         "connectorActionStatus": (
                             f"@actions('{action.action_name}')?['status']"
@@ -251,7 +265,7 @@ def build_connector_probe_clientdata(action: ConnectorProbeAction) -> str:
                             f"@actions('{action.action_name}')?['error']?['message']"
                         ),
                         "connectorErrorCode": (
-                            f"@actions('{action.action_name}')?['error']?['code']"
+                            f"@actions('{action.action_name}')?['code']"
                         ),
                         "workdayActionStatus": (
                             f"@actions('{action.action_name}')?['status']"
@@ -263,7 +277,7 @@ def build_connector_probe_clientdata(action: ConnectorProbeAction) -> str:
                             f"@actions('{action.action_name}')?['error']?['message']"
                         ),
                         "errorCode": (
-                            f"@actions('{action.action_name}')?['error']?['code']"
+                            f"@actions('{action.action_name}')?['code']"
                         ),
                     },
                 },

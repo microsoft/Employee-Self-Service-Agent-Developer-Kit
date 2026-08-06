@@ -3490,6 +3490,14 @@ def _workday_probe_not_configured(reason: str) -> list[CheckResult]:
 
 
 def _workday_probe_layer(res: live_egress_probe.ConnectorProbeResult) -> tuple[str, str]:
+    # Classification keys off the two signals the connector's synchronous
+    # response actually exposes (live-verified, Sunbreak Sandbox 2026-08):
+    # HTTP status (@outputs statusCode) and the action code (@actions code).
+    # The human-readable error.message is NOT available synchronously, so a
+    # wrong endpoint/operation and a Workday business/validation fault BOTH
+    # surface as HTTP 400 / BadRequest and cannot be split here -- they share
+    # one honest "indeterminate" bucket. status None / 401 / 403 sub-splits
+    # are documented assumptions (not live-captured).
     code = (res.error_code or "").lower()
     status = res.status_code
     if status is None:
@@ -3504,10 +3512,17 @@ def _workday_probe_layer(res: live_egress_probe.ConnectorProbeResult) -> tuple[s
         return "authorization layer", "Workday or connector authorization rejected the request"
     if status in (404, 405) or any(t in code for t in ("notfound", "invalidurl", "endpoint")):
         return "endpoint configuration layer", "the configured Workday endpoint or operation was not found"
-    if any(t in code for t in ("business", "validation", "fault", "badrequest")):
-        return "Workday business-rule layer", "Workday processed the request and returned a business fault"
-    if status in (400, 409, 422):
+    if status == 400 or "badrequest" in code:
+        return (
+            "endpoint-configuration or Workday business-rule layer (indeterminate)",
+            "Workday rejected the request with HTTP 400; the connector's "
+            "synchronous response cannot distinguish a wrong endpoint / "
+            "operation from a Workday business or validation fault",
+        )
+    if status in (409, 422):
         return "Workday business-rule layer", "Workday processed the request and rejected its inputs"
+    if status == 500 or "internalservererror" in code or "servererror" in code:
+        return "connector runtime / Workday backend layer", "the Workday connector or backend returned a server error"
     return "connector runtime layer", "the Workday connector action failed"
 
 

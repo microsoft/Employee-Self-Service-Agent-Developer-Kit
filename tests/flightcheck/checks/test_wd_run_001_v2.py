@@ -172,6 +172,9 @@ class TestWorkdayActiveProbeMatrix:
 
     @responses.activate
     def test_endpoint_misconfig_names_endpoint_configuration_layer(self) -> None:
+        # Defensive 404 branch. Live Workday endpoint-not-found actually
+        # returns HTTP 400 / BadRequest (see the indeterminate test below);
+        # this 404 path is a documented assumption, not a live-captured shape.
         _register_connector_lifecycle(
             action_status="Failed",
             status_code=404,
@@ -199,18 +202,39 @@ class TestWorkdayActiveProbeMatrix:
         assert "HTTP 403" in row.result
 
     @responses.activate
-    def test_workday_business_error_names_business_rule_layer(self) -> None:
+    def test_http_400_badrequest_names_indeterminate_layer(self) -> None:
+        # Live-verified: a wrong endpoint/operation ("Unrecognized service
+        # definition for path") and a Workday business fault ("You must
+        # provide valid XML for the SOAP request body") BOTH surface as
+        # HTTP 400 / BadRequest with no distinguishing synchronous signal.
+        # They share one honest indeterminate bucket.
         _register_connector_lifecycle(
             action_status="Failed",
             status_code=400,
-            error_code="WorkdayBusinessFault",
+            error_code="BadRequest",
         )
 
         row = _run_single(_runner())
 
         assert row.status == Status.FAILED.value
-        assert "Layer: Workday business-rule layer" in row.result
+        assert "(indeterminate)" in row.result
         assert "HTTP 400" in row.result
+
+    @responses.activate
+    def test_server_error_names_connector_runtime_backend_layer(self) -> None:
+        # Live-verified: an unhealthy/expired connection returns HTTP 500 /
+        # InternalServerError from the connector runtime / Workday backend.
+        _register_connector_lifecycle(
+            action_status="Failed",
+            status_code=500,
+            error_code="InternalServerError",
+        )
+
+        row = _run_single(_runner())
+
+        assert row.status == Status.FAILED.value
+        assert "Layer: connector runtime / Workday backend layer" in row.result
+        assert "HTTP 500" in row.result
 
     def test_consent_declined_falls_back_to_passive_run_history(self) -> None:
         row = _run_single(_runner(

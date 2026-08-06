@@ -249,13 +249,18 @@ def invoke_workday_connector_probe(
       - flightcheck/checks/workday.py:_check_workday_active_run_health
 
     Source (validated):
-      tests/fixtures/cassettes/flightcheck_wd_connector_probe.yaml.
-      The green cassette captured create 201, activate 204, listCallbackUrl
-      200, invoke 200, and delete 204 for read-only Workday operation
-      GetWorkerMe over shared_workdaysoap. Its synchronous invoke body was
+      tests/fixtures/cassettes/flightcheck_wd_connector_probe.yaml plus the
+      live error-ladder captures against a real Workday managed connection
+      (Sunbreak Sandbox, oauth, 2026-08). The green invoke body was
       {"workdayActionStatus":"Succeeded","workdayStatusCode":200,
-      "errorMessage":null,"errorCode":null}. Tests vary the action-level
-      fields for deterministic negative branches.
+      "errorCode":"OK","errorMessage":null}. Live-verified failure signal:
+      only workdayStatusCode (200/400/500) and errorCode -- the action code
+      via @actions('X')?['code'] (OK / BadRequest / InternalServerError) --
+      are available synchronously. errorMessage is null for connector HTTP
+      faults (the message lives behind the SAS outputsLink FlightCheck never
+      fetches). A wrong endpoint and a Workday business fault BOTH return
+      HTTP 400 / BadRequest. Tests vary the action-level fields for
+      deterministic negative branches.
     """
     return {
         "method": "POST",
