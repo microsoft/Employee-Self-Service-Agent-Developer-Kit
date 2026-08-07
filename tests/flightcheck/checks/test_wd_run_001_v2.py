@@ -53,13 +53,14 @@ def _workday_connection(
     *,
     connection_name: str = _CONNECTION_ID,
     runtime_source: str | None = "embedded",
+    display_name: str = "Workday SOAP ISU",
 ) -> dict[str, Any]:
     extra = {}
     if runtime_source is not None:
         extra["runtimeSource"] = runtime_source
     conn = pp.workday_connection(
         connection_name=connection_name,
-        display_name="Workday SOAP ISU",
+        display_name=display_name,
     )
     conn["properties"].update(extra)
     return conn
@@ -317,6 +318,27 @@ class TestWorkdayActiveProbeMatrix:
         assert row.status == Status.PASSED.value
         assert "OAuth-invoker Workday connections" in row.result
         assert "recent Workday connector run history" in row.result
+
+    @responses.activate
+    def test_service_account_selection_is_deterministic_by_guid(self) -> None:
+        # BAP does not guarantee connection list order. With more than one ISU /
+        # service-account Workday connection, the probe must pick the same one
+        # every run (lexicographically-first GUID), not whichever BAP happened
+        # to return first. Passing the connections in reverse order must still
+        # select connection "aaa".
+        _register_connector_lifecycle()
+        conn_a = _workday_connection(
+            connection_name="wd-conn-aaa", display_name="Workday ISU A"
+        )
+        conn_b = _workday_connection(
+            connection_name="wd-conn-bbb", display_name="Workday ISU B"
+        )
+
+        row = _run_single(_runner(pp_client=_PP(connections=[conn_b, conn_a])))
+
+        assert row.status == Status.PASSED.value
+        assert "Workday ISU A" in row.result
+        assert "Workday ISU B" not in row.result
 
     def test_passive_fallback_without_history_does_not_claim_history(
         self,

@@ -3430,6 +3430,11 @@ def _select_workday_probe_connection(
             "probe would exercise the maker/employee identity instead of the "
             "ISU / service-account path"
         ), False
+    # BAP does not document a stable order for the connection list, so pick
+    # deterministically by connection name (the immutable GUID). Without this,
+    # a tenant with more than one ISU / service-account Workday connection could
+    # silently probe a different connection between runs.
+    service_account.sort(key=lambda c: c.get("name") or "")
     return service_account[0], "", False
 
 
