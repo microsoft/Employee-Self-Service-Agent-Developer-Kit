@@ -8,12 +8,18 @@ Validates ServiceNow connection references, flow status, template configurations
 in Dataverse, and local agent topic files for ServiceNow HRSD/ITSM scenarios.
 """
 
+import json
 import os
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 from ..runner import CheckResult, Priority, Role, Status
-from .connections import check_connector_connections
+from .connections import (
+    check_connector_connections,
+    filter_connections_by_connector,
+    get_connection_status,
+)
 from .external_systems import _categorize_servicenow_flows
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
@@ -23,7 +29,7 @@ EXPECTED_TEMPLATE_CONFIGS = {
     "hrsd": [
         "ServiceNowHRSDCreateCase",
         "ServiceNowHRSDGetCaseDetails",
-        "ServiceNowHRSDGetCasesList",
+        "ServiceNowHRSDGetUserCases",
     ],
     "itsm": [
         "ServiceNowITSMCreateTicket",
@@ -72,8 +78,14 @@ def run_servicenow_checks(runner) -> list[CheckResult]:
 
     print("\n  Running ServiceNow deep validation...")
 
+    # --- Pre-install connection objects (SN-CONN-OBJECTS-001, S6.0) ---
+    results.extend(_check_connection_objects(runner))
+
     # --- Connection References ---
     results.extend(_check_connections(runner))
+
+    # --- Dataverse connection reference binding (SN-DV-CONN-001, S6.2) ---
+    results.extend(_check_dataverse_connection(runner))
 
     # --- Flow Status ---
     results.extend(_check_flow_status(runner, sn_flows))
@@ -81,8 +93,14 @@ def run_servicenow_checks(runner) -> list[CheckResult]:
     # --- Run health (runtime failures connection-status can't see) ---
     results.extend(_check_servicenow_run_health(runner))
 
+    # --- Extension pack install verification (SN-PKG-001, S6.1) ---
+    results.extend(_check_pack_install(runner))
+
     # --- Template Configurations (Dataverse) ---
     results.extend(_check_template_configs(runner))
+
+    # --- Portal Base URL (SN-BASEURL-001, S6.6) ---
+    results.extend(_check_portal_base_url(runner))
 
     # --- Local Topic Files ---
     results.extend(_check_local_topics(runner))
@@ -135,6 +153,709 @@ def _check_connections(runner) -> list[CheckResult]:
         not_found_remediation="Configure ServiceNow connections in the environment. Run /connect servicenow.",
         doc_link=f"{DOC_BASE}/servicenow",
         connection_pin=getattr(runner, "servicenow_connection_pin", "") or "",
+    )
+
+
+def _check_connection_objects(runner) -> list[CheckResult]:
+    """Verify the pre-install ServiceNow and Dataverse connection objects."""
+    roles = [Role.POWER_PLATFORM_ADMIN.value]
+    pp = getattr(runner, "pp_admin", None)
+    env_id = getattr(runner, "env_id", None)
+    description = "ServiceNow and Dataverse connection objects are connected"
+
+    if pp is None or not env_id:
+        return [CheckResult(
+            checkpoint_id="SN-CONN-OBJECTS-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.MANUAL.value,
+            description=description,
+            result="Power Platform Admin API not available — connection objects could not be verified.",
+            roles=roles,
+        )]
+
+    try:
+        connections = pp.get_connections(env_id)
+    except Exception as exc:  # noqa: BLE001 — report an actionable warning
+        connections = {"_error": str(exc)}
+
+    if isinstance(connections, dict) and "_error" in connections:
+        return [CheckResult(
+            checkpoint_id="SN-CONN-OBJECTS-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.MANUAL.value,
+            description=description,
+            result=f"Unable to list Power Platform connections: {connections['_error']}",
+            remediation="Run FlightCheck as a Power Platform Administrator, then retry.",
+            roles=roles,
+        )]
+
+    required = {
+        "ServiceNow": ["shared_service-now", "service-now", "servicenow"],
+        "Microsoft Dataverse": ["shared_commondataserviceforapps"],
+    }
+    states = {}
+    for label, keywords in required.items():
+        matches = filter_connections_by_connector(connections or [], keywords)
+        connected = [conn for conn in matches if get_connection_status(conn) == "Connected"]
+        states[label] = (matches, connected)
+
+    missing = [label for label, (matches, _) in states.items() if not matches]
+    unhealthy = [
+        label for label, (matches, connected) in states.items()
+        if matches and not connected
+    ]
+    if missing:
+        return [CheckResult(
+            checkpoint_id="SN-CONN-OBJECTS-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            description=description,
+            result=f"Missing required connection object(s): {', '.join(missing)}.",
+            remediation="Create the missing connection(s) in Power Apps > Connections, then retry.",
+            doc_link=f"{DOC_BASE}/servicenow", roles=roles,
+        )]
+    if unhealthy:
+        return [CheckResult(
+            checkpoint_id="SN-CONN-OBJECTS-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            description=description,
+            result=f"No connected connection object found for: {', '.join(unhealthy)}.",
+            remediation="Re-authenticate the unhealthy connection(s) in Power Apps > Connections, then retry.",
+            doc_link=f"{DOC_BASE}/servicenow", roles=roles,
+        )]
+
+    return [CheckResult(
+        checkpoint_id="SN-CONN-OBJECTS-001", category="ServiceNow",
+        priority=Priority.HIGH.value, status=Status.PASSED.value,
+        description=description,
+        result="Connected ServiceNow and Microsoft Dataverse connection objects were found in this environment.",
+        doc_link=f"{DOC_BASE}/servicenow", roles=roles,
+    )]
+
+
+def run_servicenow_connection_object_checks(runner) -> list[CheckResult]:
+    """Self-contained emitter for the pre-install connection-object gate."""
+    return _check_connection_objects(runner)
+
+
+# ─────────────────────────────────────────────────────────────────────
+# SN-DV-CONN-001 — Dataverse connection reference binding (S6.2, PASS/FAIL).
+#
+# The ServiceNow extension pack ships its OWN Microsoft Dataverse connection
+# reference (e.g. ``new_sharedcommondataserviceforapps_41c83``) alongside the
+# ESS base agent's (``msdyn_Dataverse``). Both carry the
+# ``shared_commondataserviceforapps`` connector. This checkpoint validates only
+# the SERVICENOW PACK's Dataverse reference — identified by the
+# ``sharedcommondataserviceforapps`` marker in its logical name — and verifies
+# it is bound to an ACTIVE connection (owner echoed).
+#
+# It deliberately does NOT verify the base agent's ``msdyn_Dataverse`` reference:
+# that reference belongs to the ESS base agent (installed in an earlier step),
+# routinely ships unbound in a healthy ServiceNow setup, and is out of scope for
+# the ServiceNow S6.2 step. Matching every ``shared_commondataserviceforapps``
+# reference by connector alone would false-fail this ServiceNow check whenever an
+# unrelated base-agent/system Dataverse reference is unbound.
+#
+# This is also NOT the Workday-family ``DV-CONN-001``: that check keys on the
+# Workday pack's ``…_92b66`` logical-name suffix, so in a ServiceNow-only
+# environment it reports NotConfigured (its reference is absent) even though the
+# ServiceNow pack's own Dataverse reference is perfectly bound. Matching by the
+# connector-generic ``sharedcommondataserviceforapps`` marker (not a hardcoded
+# hex suffix) avoids repeating that coupling while still scoping to the pack.
+# ─────────────────────────────────────────────────────────────────────
+
+_DV_CONNECTOR_SUFFIX = "/apis/shared_commondataserviceforapps"
+# Logical-name marker that scopes the check to the ServiceNow pack's own
+# Dataverse reference (``<prefix>_sharedcommondataserviceforapps_<suffix>``),
+# excluding the base agent's ``msdyn_Dataverse`` and other system references.
+_SN_DV_LOGICALNAME_MARKER = "sharedcommondataserviceforapps"
+_SN_DV_DESC = "Dataverse connection reference(s) bound to an active connection you own"
+
+# ServiceNow Portal Base URL (SN-BASEURL-001, S6.6). The extension packs never
+# populate it, but the agent needs it to turn case/ticket references into working
+# links. It lives in the Dataverse template-config table on each product's parent
+# record (msdyn_ServiceNowHRSD / msdyn_ServiceNowITSM) as a JSON blob in
+# msdyn_value under this key.
+_SN_BASEURL_DESC = "ServiceNow Portal Base URL set so case/ticket links resolve"
+_SN_PORTAL_URI_KEY = "ServiceNowPortalBaseURI"
+_SN_PORTAL_PARENT_RECORDS = {
+    "hrsd": "msdyn_ServiceNowHRSD",
+    "itsm": "msdyn_ServiceNowITSM",
+}
+
+
+def _resolve_conn_owner(props: dict) -> str:
+    """Best-effort owner identity from a BAP connection's properties."""
+    account = props.get("accountName")
+    if account:
+        return account
+    created_by = props.get("createdBy") or {}
+    return (
+        created_by.get("userPrincipalName")
+        or created_by.get("displayName")
+        or "(unknown owner)"
+    )
+
+
+def _dv_owner_note(runner, connection_id) -> str:
+    """Return an owner-confirmation note for ``connection_id`` (best-effort).
+
+    Owner echo only — never the basis for a PASS/FAIL verdict. Degrades to an
+    empty string whenever the Power Platform admin client is unavailable.
+    """
+    pp = getattr(runner, "pp_admin", None)
+    env_id = getattr(runner, "env_id", None)
+    if pp is None or not env_id or not connection_id:
+        return ""
+    try:
+        conns = pp.get_connections(env_id)
+    except Exception:  # noqa: BLE001 — owner echo is best-effort
+        return ""
+    if isinstance(conns, dict) and "_error" in conns:
+        return ""
+    for conn in conns or []:
+        if conn.get("name") == connection_id:
+            owner = _resolve_conn_owner(conn.get("properties", {}) or {})
+            return f" Owner: {owner} — confirm this is your own account."
+    return ""
+
+
+def _check_dataverse_connection(runner) -> list[CheckResult]:
+    """Verify the ServiceNow pack's Dataverse connection reference(s) are bound.
+
+    Connector-generic sibling of the Workday-family ``DV-CONN-001``: it matches
+    the ServiceNow pack's own Dataverse reference by the connector-family marker
+    ``sharedcommondataserviceforapps`` in its logical name
+    (``new_sharedcommondataserviceforapps_<suffix>``) rather than a hardcoded
+    hex suffix. It deliberately EXCLUDES the base agent's ``msdyn_Dataverse``
+    reference and other system Dataverse references, which are out of scope for
+    the ServiceNow S6.2 step and routinely ship unbound in a healthy setup.
+
+    Documented-tier Dataverse ``connectionreferences`` read (no cassette
+    required; tests stub ``query_all``). Never raises a verdict from the owner
+    echo — that is a best-effort Power Platform admin read.
+    """
+    roles = [Role.ESS_MAKER.value]
+    env_url = getattr(runner, "env_url", None)
+    dv_token = getattr(runner, "dv_token", None)
+    if not env_url or not dv_token:
+        return [CheckResult(roles=roles,
+            checkpoint_id="SN-DV-CONN-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=_SN_DV_DESC,
+            result="Dataverse token not available — skipping the Dataverse connection-reference check.",
+        )]
+
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+        from auth import query_all
+
+        rows = query_all(
+            env_url, dv_token, "connectionreferences",
+            "connectionreferencelogicalname,connectionreferencedisplayname,"
+            "connectorid,connectionid,statuscode",
+        )
+    except Exception as e:  # noqa: BLE001 — degrade to WARNING, never abort
+        return [CheckResult(roles=roles,
+            checkpoint_id="SN-DV-CONN-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=_SN_DV_DESC,
+            result=f"Unable to read Dataverse connection references: {e}.",
+            remediation="Confirm the FlightCheck identity has Dataverse read access on connectionreferences.",
+        )]
+
+    dv_refs = [
+        r for r in (rows or [])
+        if str(r.get("connectorid") or "").lower().endswith(_DV_CONNECTOR_SUFFIX)
+        and _SN_DV_LOGICALNAME_MARKER
+        in str(r.get("connectionreferencelogicalname") or "").lower()
+    ]
+
+    def _names(refs):
+        return ", ".join(
+            str(r.get("connectionreferencelogicalname") or "?") for r in refs
+        )
+
+    if not dv_refs:
+        return [CheckResult(roles=roles,
+            checkpoint_id="SN-DV-CONN-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            description=_SN_DV_DESC,
+            result=(
+                "No ServiceNow pack Microsoft Dataverse connection reference "
+                "(logical name containing 'sharedcommondataserviceforapps') was "
+                "found in this environment."
+            ),
+            remediation=(
+                "Install the ServiceNow extension pack so its Dataverse "
+                "connection reference is created, then bind it in Copilot Studio "
+                "> your agent > Connections."
+            ),
+            doc_link=f"{DOC_BASE}/servicenow",
+        )]
+
+    unbound = [r for r in dv_refs if not r.get("connectionid")]
+    if unbound:
+        return [CheckResult(roles=roles,
+            checkpoint_id="SN-DV-CONN-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            description=_SN_DV_DESC,
+            result=(
+                f"{len(unbound)} of {len(dv_refs)} Dataverse connection "
+                f"reference(s) are unbound (connectionid=null): {_names(unbound)}."
+            ),
+            remediation=(
+                "Bind the Dataverse reference to an active connection you own in "
+                "Copilot Studio > your agent > Connections."
+            ),
+            doc_link=f"{DOC_BASE}/servicenow",
+        )]
+
+    inactive = [r for r in dv_refs if r.get("statuscode") != 1]
+    if inactive:
+        return [CheckResult(roles=roles,
+            checkpoint_id="SN-DV-CONN-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            description=_SN_DV_DESC,
+            result=(
+                f"{len(inactive)} of {len(dv_refs)} Dataverse connection "
+                f"reference(s) are bound but inactive: {_names(inactive)}."
+            ),
+            remediation=(
+                "Re-authenticate or re-bind the Dataverse connection so its "
+                "status is active, using an account you own."
+            ),
+            doc_link=f"{DOC_BASE}/servicenow",
+        )]
+
+    owner_note = _dv_owner_note(runner, dv_refs[0].get("connectionid"))
+    return [CheckResult(roles=roles,
+        checkpoint_id="SN-DV-CONN-001", category="ServiceNow",
+        priority=Priority.HIGH.value, status=Status.PASSED.value,
+        description=_SN_DV_DESC,
+        result=(
+            f"All {len(dv_refs)} Dataverse connection reference(s) are bound to "
+            f"an active connection ({_names(dv_refs)})." + owner_note
+        ),
+        doc_link=f"{DOC_BASE}/servicenow",
+    )]
+
+
+def run_servicenow_dataverse_checks(runner) -> list[CheckResult]:
+    """Self-contained emitter for ``SN-DV-CONN-001``.
+
+    Unlike :func:`run_servicenow_checks` (which is gated on ServiceNow flow
+    discovery), this wrapper has no ``_servicenow_flows`` dependency, so the
+    checkpoint is independently runnable via ``--checkpoint SN-DV-CONN-001``
+    (mirroring how ``SN-FLOWCONN-001`` is self-contained). The deep
+    ``run_servicenow_checks`` path calls :func:`_check_dataverse_connection`
+    directly, so scope runs still surface it once (no double emit here).
+    """
+    return _check_dataverse_connection(runner)
+
+
+def _portal_uri(value) -> str:
+    """Extract the ServiceNow portal base URI from a template-config ``msdyn_value``.
+
+    ``value`` is the JSON string stored on the parent record. Returns the trimmed
+    URI or ``""`` when the blob is missing, unparseable, or the key is empty.
+    """
+    try:
+        data = json.loads(value) if isinstance(value, str) else (value or {})
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get(_SN_PORTAL_URI_KEY) or "").strip()
+
+
+def _normalize_portal_url(value) -> str:
+    """Normalize a portal URL for equality comparison.
+
+    Lower-cases the scheme and host (case-insensitive per RFC 3986), preserves
+    the path (ServiceNow portal suffixes like ``/sp`` are case-sensitive), and
+    strips surrounding whitespace and any trailing slash. Returns ``""`` for an
+    empty/whitespace value so callers can treat "no confirmed value" uniformly.
+    """
+    raw = str(value or "").strip().rstrip("/")
+    if not raw:
+        return ""
+    parsed = urlparse(raw)
+    if not parsed.scheme or not parsed.netloc:
+        # Not an absolute URL — return the trimmed form so a malformed stored
+        # value never accidentally equals a malformed confirmed value.
+        return raw.lower()
+    return f"{parsed.scheme.lower()}://{parsed.netloc.lower()}{parsed.path}"
+
+
+def _check_portal_base_url(runner) -> list[CheckResult]:
+    """Verify the ServiceNow Portal Base URL is set for each installed product.
+
+    The extension packs create per-product parent config records
+    (``msdyn_ServiceNowHRSD`` / ``msdyn_ServiceNowITSM``) but leave the portal
+    base URL empty, so the case/ticket links the agent returns don't resolve
+    until a maker sets it. FAILS when a present product's URL is empty, is not an
+    ``http(s)`` URL, or — when a confirmed ``portalBaseUrl`` is recorded in the
+    local ServiceNow connect config — does not match that confirmed value
+    (normalized). NOT_CONFIGURED when no product config record exists (pack not
+    installed). Same documented Dataverse read as the template-config check.
+    """
+    roles = [Role.ESS_MAKER.value]
+    env_url = getattr(runner, "env_url", None)
+    dv_token = getattr(runner, "dv_token", None)
+    if not env_url or not dv_token:
+        return [CheckResult(roles=roles,
+            checkpoint_id="SN-BASEURL-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=_SN_BASEURL_DESC,
+            result="Dataverse token not available — skipping the portal base URL check.",
+        )]
+
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+        from auth import query_all
+
+        rows = query_all(
+            env_url, dv_token, "msdyn_employeeselfservicetemplateconfigs",
+            "msdyn_name,msdyn_value",
+            filter_expr=(
+                "msdyn_name eq 'msdyn_ServiceNowHRSD' or "
+                "msdyn_name eq 'msdyn_ServiceNowITSM'"
+            ),
+        )
+    except Exception as e:  # noqa: BLE001 — degrade to WARNING, never abort
+        return [CheckResult(roles=roles,
+            checkpoint_id="SN-BASEURL-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=_SN_BASEURL_DESC,
+            result=f"Unable to read ServiceNow template configs: {e}.",
+            remediation="Confirm the FlightCheck identity has Dataverse read access.",
+        )]
+
+    valid_records = set(_SN_PORTAL_PARENT_RECORDS.values())
+    parents = {
+        r.get("msdyn_name"): r for r in (rows or [])
+        if r.get("msdyn_name") in valid_records
+    }
+    if not parents:
+        return [CheckResult(roles=roles,
+            checkpoint_id="SN-BASEURL-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            description=_SN_BASEURL_DESC,
+            result=(
+                "No ServiceNow product config record (msdyn_ServiceNowHRSD / "
+                "msdyn_ServiceNowITSM) was found — the extension pack is not installed."
+            ),
+            remediation=(
+                "Install the ServiceNow extension pack (S6.1), then set the portal "
+                "base URL on the product config in Copilot Studio."
+            ),
+            doc_link=f"{DOC_BASE}/servicenow",
+        )]
+
+    label_by_record = {v: k.upper() for k, v in _SN_PORTAL_PARENT_RECORDS.items()}
+
+    # The maker confirms one Portal Base URL and applies it to every in-scope
+    # pack (P6.6). Compare each product's stored Dataverse value against that
+    # confirmed value so a stale/wrong-but-absolute URL can't pass while the run
+    # claims the confirmed URL was deployed. When no confirmed value is recorded
+    # yet, fall back to presence/format validation only.
+    cfg = _load_sn_connect_config() or {}
+    confirmed_raw = str(cfg.get("portalBaseUrl") or "").strip()
+    confirmed = _normalize_portal_url(confirmed_raw)
+
+    unset: list[str] = []
+    malformed: list[str] = []
+    mismatched: list[str] = []
+    ok: list[str] = []
+    for record_name, row in parents.items():
+        label = label_by_record.get(record_name, record_name)
+        uri = _portal_uri(row.get("msdyn_value"))
+        if not uri:
+            unset.append(label)
+        elif not uri.lower().startswith(("http://", "https://")):
+            malformed.append(f"{label} ({uri})")
+        elif confirmed and _normalize_portal_url(uri) != confirmed:
+            mismatched.append(f"{label}: expected {confirmed_raw}, found {uri}")
+        else:
+            ok.append(f"{label} ({uri})")
+
+    if unset or malformed or mismatched:
+        problems = []
+        if unset:
+            problems.append(f"empty for {', '.join(unset)}")
+        if malformed:
+            problems.append(f"not a URL for {', '.join(malformed)}")
+        if mismatched:
+            problems.append(
+                "does not match the confirmed URL for " + "; ".join(mismatched)
+            )
+        remediation = (
+            "In Copilot Studio, open each in-scope ServiceNow product config "
+            "and set the Portal Base URL to your Service Portal, e.g. "
+            "https://<instance>.service-now.com/sp."
+        )
+        if mismatched and confirmed_raw:
+            remediation = (
+                "In Copilot Studio, open each in-scope ServiceNow product config "
+                f"and set the Portal Base URL to the confirmed value "
+                f"{confirmed_raw} on every in-scope pack."
+            )
+        return [CheckResult(roles=roles,
+            checkpoint_id="SN-BASEURL-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            description=_SN_BASEURL_DESC,
+            result=(
+                "ServiceNow Portal Base URL is " + "; ".join(problems)
+                + ". Case and ticket links will not resolve correctly for employees."
+            ),
+            remediation=remediation,
+            doc_link=f"{DOC_BASE}/servicenow",
+        )]
+
+    non_portal = [u for u in ok if "/sp" not in u.lower()]
+    note = ""
+    if non_portal:
+        note = (
+            " Note: " + ", ".join(non_portal)
+            + " does not point at a Service Portal path (…/sp)."
+        )
+    match_note = (
+        f" Matches the confirmed URL ({confirmed_raw})." if confirmed else ""
+    )
+    return [CheckResult(roles=roles,
+        checkpoint_id="SN-BASEURL-001", category="ServiceNow",
+        priority=Priority.HIGH.value, status=Status.PASSED.value,
+        description=_SN_BASEURL_DESC,
+        result=(
+            f"Portal base URL set for {len(ok)} product(s): {', '.join(ok)}."
+            + match_note + note
+        ),
+        doc_link=f"{DOC_BASE}/servicenow",
+    )]
+
+
+def run_servicenow_portal_checks(runner) -> list[CheckResult]:
+    """Self-contained emitter for ``SN-BASEURL-001``.
+
+    Like :func:`run_servicenow_dataverse_checks`, this wrapper has no
+    ``_servicenow_flows`` gate, so the checkpoint is independently runnable via
+    ``--checkpoint SN-BASEURL-001``. The deep ``run_servicenow_checks`` path calls
+    :func:`_check_portal_base_url` directly, so scope runs surface it once.
+    """
+    return _check_portal_base_url(runner)
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# Skill-3 capture gates (S3.1 / S3.2 / S3.3). These run BEFORE any pack is
+# installed, so they read only the local ServiceNow connect config
+# (.local/connect/servicenow/config.json) — no Dataverse, Graph, or live
+# ServiceNow tenant. They were specified by capture-servicenow-config.md and
+# tasks.md (checkpoints SN-CONFIG-001 / SN-PERM-001 / SN-USER-001) but never
+# implemented, so a faithful resume into skill-3 hit "unknown checkpoint" and
+# stalled. Emitted by run_servicenow_capture_checks (self-contained, ungated by
+# flow discovery) rather than run_servicenow_checks, which is the post-install,
+# flow-gated deep run.
+# ─────────────────────────────────────────────────────────────────────────
+
+_SN_CONFIG_DESC = "ServiceNow instance, product scope, connector, and sign-in method captured"
+_SN_PERM_DESC = "Maker has the Entra and ServiceNow permissions the rest of setup needs"
+_SN_USER_DESC = "Signed-in identity resolves to an active ServiceNow user record"
+
+# authType values the sign-in flow supports (capture-servicenow-config.md P3.3).
+_VALID_AUTH_TYPES = {"entra_user", "entra_certificate"}
+
+
+def _load_sn_connect_config():
+    """Read ``.local/connect/servicenow/config.json``.
+
+    Returns ``None`` when the file is absent (skill-3 hasn't started), or the
+    parsed dict (``{}`` when empty/corrupt) otherwise.
+    """
+    path = os.path.join(".local", "connect", "servicenow", "config.json")
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _is_servicenow_instance(url: str) -> bool:
+    """True for an ``https://<instance>.service-now.com`` base URL."""
+    u = url.strip().lower()
+    return u.startswith("https://") and ".service-now.com" in u
+
+
+def _check_config_basics(runner) -> list[CheckResult]:
+    """SN-CONFIG-001 (S3.1, prog) — validate the captured ServiceNow basics.
+
+    Purely local: confirms the connect config records a valid instance URL, at
+    least one in-scope product (HRSD/ITSM), a connector type, and a supported
+    sign-in method. These are the inputs every later ServiceNow step depends on.
+    """
+    roles = [Role.ESS_MAKER.value]
+    cfg = _load_sn_connect_config()
+    if cfg is None:
+        return [CheckResult(roles=roles,
+            checkpoint_id="SN-CONFIG-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            description=_SN_CONFIG_DESC,
+            result="No ServiceNow connection config has been captured yet.",
+            remediation="Run /setup servicenow (skill 3) to capture your instance, product scope, connector, and sign-in method.",
+            doc_link=f"{DOC_BASE}/servicenow",
+        )]
+
+    missing = []
+    instance = str(cfg.get("instanceUrl") or "").strip()
+    if not _is_servicenow_instance(instance):
+        missing.append("a valid ServiceNow instance URL (https://<instance>.service-now.com)")
+    scope = cfg.get("scope") if isinstance(cfg.get("scope"), dict) else {}
+    in_scope = [p.upper() for p in ("hrsd", "itsm") if scope.get(p)]
+    if not in_scope:
+        missing.append("at least one product in scope (HRSD or ITSM)")
+    connector = str(cfg.get("connectorType") or "").strip()
+    if not connector:
+        missing.append("the connector type")
+    auth_type = str(cfg.get("authType") or "").strip()
+    if auth_type not in _VALID_AUTH_TYPES:
+        missing.append("a supported sign-in method (Entra user sign-in or Entra certificate)")
+
+    if missing:
+        return [CheckResult(roles=roles,
+            checkpoint_id="SN-CONFIG-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            description=_SN_CONFIG_DESC,
+            result="ServiceNow basics are incomplete: missing " + "; ".join(missing) + ".",
+            remediation="Re-run the ServiceNow capture step (skill 3) and provide the missing values.",
+            doc_link=f"{DOC_BASE}/servicenow",
+        )]
+
+    return [CheckResult(roles=roles,
+        checkpoint_id="SN-CONFIG-001", category="ServiceNow",
+        priority=Priority.HIGH.value, status=Status.PASSED.value,
+        description=_SN_CONFIG_DESC,
+        result=(
+            f"Captured instance {instance}, scope {'+'.join(in_scope)}, "
+            f"connector {connector}, sign-in {auth_type}."
+        ),
+        doc_link=f"{DOC_BASE}/servicenow",
+    )]
+
+
+def _check_maker_permissions(runner) -> list[CheckResult]:
+    """SN-PERM-001 (S3.2, prog/manual) — validate the maker-permission summary.
+
+    Reads the ``makerPermissions`` summary skill-3 persists after its read-only
+    Graph role probe and the ServiceNow-admin availability question. A
+    ServiceNow admin is mandatory (only they can register the OIDC provider), so
+    its absence FAILS. Entra admin confirmed programmatically PASSES; anything
+    less (not held / probe unavailable) degrades to MANUAL — the Entra app and
+    admin-consent steps may need an escalation, which the operator attests to.
+    """
+    roles = [Role.ESS_MAKER.value]
+    cfg = _load_sn_connect_config()
+    perms = (cfg or {}).get("makerPermissions")
+    if cfg is None or not isinstance(perms, dict) or not perms:
+        return [CheckResult(roles=roles,
+            checkpoint_id="SN-PERM-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            description=_SN_PERM_DESC,
+            result="Maker permissions haven't been probed yet.",
+            remediation="Run /setup servicenow (skill 3) so it can probe your Entra role and confirm ServiceNow admin availability.",
+            doc_link=f"{DOC_BASE}/servicenow",
+        )]
+
+    sn_admin = perms.get("serviceNowAdmin")
+    entra_admin = perms.get("entraAdmin")
+    entra_evidence = str(perms.get("entraAdminEvidence") or "unconfirmed").strip()
+
+    if sn_admin is False:
+        return [CheckResult(roles=roles,
+            checkpoint_id="SN-PERM-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
+            description=_SN_PERM_DESC,
+            result="No ServiceNow administrator is available. Registering the Entra OIDC provider in ServiceNow is a ServiceNow-admin-only action, so setup cannot complete without one.",
+            remediation="Arrange access to someone who can administer this ServiceNow instance (register an OIDC provider and elevate to security_admin), then re-run this step.",
+            doc_link=f"{DOC_BASE}/servicenow",
+        )]
+
+    if sn_admin is not True:
+        return [CheckResult(roles=roles,
+            checkpoint_id="SN-PERM-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.MANUAL.value,
+            description=_SN_PERM_DESC,
+            result="ServiceNow admin availability hasn't been confirmed.",
+            remediation="Confirm a ServiceNow administrator is available for the OIDC-provider and user-mapping steps, then attest to continue.",
+            doc_link=f"{DOC_BASE}/servicenow",
+        )]
+
+    if entra_admin is True:
+        return [CheckResult(roles=roles,
+            checkpoint_id="SN-PERM-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
+            description=_SN_PERM_DESC,
+            result="Entra admin capability confirmed programmatically and a ServiceNow admin is available.",
+            doc_link=f"{DOC_BASE}/servicenow",
+        )]
+
+    return [CheckResult(roles=roles,
+        checkpoint_id="SN-PERM-001", category="ServiceNow",
+        priority=Priority.HIGH.value, status=Status.MANUAL.value,
+        description=_SN_PERM_DESC,
+        result=(
+            "A ServiceNow admin is available, but Entra admin capability wasn't "
+            f"confirmed programmatically ({entra_evidence})."
+        ),
+        remediation="The Entra app-registration and admin-consent steps may need an account with an app/consent admin role. Confirm you can complete them (or have help), then attest to continue.",
+        doc_link=f"{DOC_BASE}/servicenow",
+    )]
+
+
+def _check_user_record(runner) -> list[CheckResult]:
+    """SN-USER-001 (S3.3, attest) — the mapped ServiceNow user record.
+
+    The kit holds no ServiceNow-tenant credentials on this path, so it cannot
+    programmatically prove the record exists; the row is an attestation. PASSES
+    only once the operator has confirmed it (persisted as
+    ``userRecord.activeUserConfirmed``); otherwise MANUAL with the check to run.
+    """
+    roles = [Role.ESS_MAKER.value]
+    cfg = _load_sn_connect_config()
+    user = (cfg or {}).get("userRecord")
+    user = user if isinstance(user, dict) else {}
+    if user.get("activeUserConfirmed") is True:
+        mapped = str(user.get("mappedField") or "the mapped identity field").strip()
+        return [CheckResult(roles=roles,
+            checkpoint_id="SN-USER-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
+            description=_SN_USER_DESC,
+            result=f"You confirmed the signed-in identity maps to an active ServiceNow user ({mapped}).",
+            doc_link=f"{DOC_BASE}/servicenow",
+        )]
+
+    return [CheckResult(roles=roles,
+        checkpoint_id="SN-USER-001", category="ServiceNow",
+        priority=Priority.HIGH.value, status=Status.MANUAL.value,
+        description=_SN_USER_DESC,
+        result="The signed-in person's ServiceNow user record hasn't been confirmed.",
+        remediation="In ServiceNow, confirm the person who signs in exists as an ACTIVE user whose mapped field (e.g. email) matches their Microsoft identity — otherwise requests come back empty — then attest to continue.",
+        doc_link=f"{DOC_BASE}/servicenow",
+    )]
+
+
+def run_servicenow_capture_checks(runner) -> list[CheckResult]:
+    """Self-contained emitter for the skill-3 capture gates.
+
+    Emits SN-CONFIG-001, SN-PERM-001 and SN-USER-001 from the local ServiceNow
+    connect config only (no Dataverse/Graph), so each is independently runnable
+    via ``--checkpoint`` before any pack is installed. Deliberately NOT wired
+    into :func:`run_servicenow_checks` (the flow-gated post-install deep run),
+    which stays unchanged.
+    """
+    return (
+        _check_config_basics(runner)
+        + _check_maker_permissions(runner)
+        + _check_user_record(runner)
     )
 
 
@@ -558,6 +1279,173 @@ def _validate_expected_configs(
             roles=[Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
         ))
     # If none found, the pack likely isn't installed — don't flag as error
+
+
+# ─────────────────────────────────────────────────────────────────────
+# SN-PKG-001 — ServiceNow extension-pack install verification (S6.1).
+#
+# Installing a ServiceNow extension pack in Copilot Studio creates that product's
+# Dataverse template-config scenario records (EXPECTED_TEMPLATE_CONFIGS). Their
+# presence is the deterministic, auditable evidence that the pack CONTENT landed
+# for a product — the same artifact SN-CFG reads, but surfaced here as a
+# first-class per-product INSTALL gate so S6.1 has a real checkpoint instead of
+# improvising install evidence from unrelated flow/config rows.
+#
+# Emits a summary ``SN-PKG-001`` (whose result names each product's state so the
+# single-row ``--checkpoint SN-PKG-001`` read carries per-product evidence) plus
+# one per-product row (``SN-PKG-010`` HRSD, ``SN-PKG-020`` ITSM). Per product:
+#   all expected configs present -> Passed        (installed)
+#   some present                 -> Failed        (partial / mid-install or
+#                                                  corrupt — reinstall the pack)
+#   none present                 -> NotConfigured (pack not installed)
+# The summary is PASSED when at least one product is fully installed and none is
+# partial (so an HR-only or IT-only scope passes with the other product absent),
+# WARNING when any product is partially installed, and NotConfigured when no
+# ServiceNow pack content exists at all.
+#
+# Self-contained (no ServiceNow-flow gate) via run_servicenow_pack_checks so it
+# is independently runnable via ``--checkpoint SN-PKG-001`` and reports
+# "not installed" BEFORE any flow exists. The deep run_servicenow_checks path
+# also calls _check_pack_install directly, so scope runs surface it once.
+# ─────────────────────────────────────────────────────────────────────
+
+_SN_PKG_DESC = "ServiceNow extension pack content installed (per-product template configs present)"
+_SN_PKG_PRODUCT_CIDS = {"hrsd": "SN-PKG-010", "itsm": "SN-PKG-020"}
+
+
+def _check_pack_install(runner) -> list[CheckResult]:
+    """Verify each ServiceNow extension pack's content landed in Dataverse."""
+    roles = [Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value]
+    env_url = getattr(runner, "env_url", None)
+    dv_token = getattr(runner, "dv_token", None)
+    if not env_url or not dv_token:
+        return [CheckResult(roles=roles,
+            checkpoint_id="SN-PKG-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=_SN_PKG_DESC,
+            result="Dataverse token not available — skipping the ServiceNow pack install check.",
+        )]
+
+    try:
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+        from auth import query_all
+
+        configs = query_all(
+            env_url, dv_token,
+            "msdyn_employeeselfservicetemplateconfigs",
+            "msdyn_name",
+            filter_expr="contains(msdyn_name,'ServiceNow')",
+        )
+    except Exception as e:  # noqa: BLE001 — degrade to WARNING, never abort
+        return [CheckResult(roles=roles,
+            checkpoint_id="SN-PKG-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=_SN_PKG_DESC,
+            result=f"Unable to read ServiceNow template configs: {e}.",
+            remediation="Confirm the FlightCheck identity has Dataverse read access.",
+        )]
+
+    config_names = [str(c.get("msdyn_name", "")).lower() for c in (configs or [])]
+
+    per_product: list[CheckResult] = []
+    installed: list[str] = []
+    partial: list[str] = []
+    absent: list[str] = []
+    for product in ("hrsd", "itsm"):
+        expected = EXPECTED_TEMPLATE_CONFIGS.get(product, [])
+        found = [s for s in expected if any(s.lower() in n for n in config_names)]
+        missing = [s for s in expected if s not in found]
+        label = product.upper()
+        cid = _SN_PKG_PRODUCT_CIDS[product]
+        if found and not missing:
+            installed.append(label)
+            per_product.append(CheckResult(roles=roles,
+                checkpoint_id=cid, category="ServiceNow",
+                priority=Priority.HIGH.value, status=Status.PASSED.value,
+                description=f"ServiceNow {label} extension pack installed",
+                result=f"All {len(expected)} {label} template config(s) present — pack installed.",
+                doc_link=f"{DOC_BASE}/servicenow",
+            ))
+        elif found:
+            partial.append(label)
+            per_product.append(CheckResult(roles=roles,
+                checkpoint_id=cid, category="ServiceNow",
+                priority=Priority.HIGH.value, status=Status.FAILED.value,
+                description=f"ServiceNow {label} extension pack installed",
+                result=(
+                    f"{len(found)}/{len(expected)} {label} template config(s) present — "
+                    f"partial install; missing: {', '.join(missing)}."
+                ),
+                remediation=(
+                    f"Reinstall the ServiceNow {label} extension pack in Copilot Studio so all "
+                    "its template configs are recreated."
+                ),
+                doc_link=f"{DOC_BASE}/servicenow",
+            ))
+        else:
+            absent.append(label)
+            per_product.append(CheckResult(roles=roles,
+                checkpoint_id=cid, category="ServiceNow",
+                priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+                description=f"ServiceNow {label} extension pack installed",
+                result=f"No {label} template configs found — the {label} extension pack is not installed.",
+                remediation=(
+                    f"If {label} is in scope, install the ServiceNow {label} extension pack in "
+                    "Copilot Studio; template configs are created automatically during install."
+                ),
+                doc_link=f"{DOC_BASE}/servicenow",
+            ))
+
+    if partial:
+        summary = CheckResult(roles=roles,
+            checkpoint_id="SN-PKG-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=_SN_PKG_DESC,
+            result=(
+                f"ServiceNow pack partially installed for {', '.join(partial)} (missing template "
+                "configs)."
+                + (f" Installed: {', '.join(installed)}." if installed else "")
+                + (f" Not installed: {', '.join(absent)}." if absent else "")
+            ),
+            remediation="Reinstall the partially-installed ServiceNow pack(s) in Copilot Studio.",
+            doc_link=f"{DOC_BASE}/servicenow",
+        )
+    elif installed:
+        summary = CheckResult(roles=roles,
+            checkpoint_id="SN-PKG-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
+            description=_SN_PKG_DESC,
+            result=(
+                f"ServiceNow extension pack installed for {', '.join(installed)}."
+                + (f" Not installed: {', '.join(absent)}." if absent else "")
+            ),
+            doc_link=f"{DOC_BASE}/servicenow",
+        )
+    else:
+        summary = CheckResult(roles=roles,
+            checkpoint_id="SN-PKG-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            description=_SN_PKG_DESC,
+            result="No ServiceNow extension pack content found in Dataverse — no pack is installed.",
+            remediation=(
+                "Install the in-scope ServiceNow extension pack(s) (HR and/or IT) in Copilot "
+                "Studio; template configs are created automatically during install."
+            ),
+            doc_link=f"{DOC_BASE}/servicenow",
+        )
+    return [summary] + per_product
+
+
+def run_servicenow_pack_checks(runner) -> list[CheckResult]:
+    """Self-contained emitter for ``SN-PKG-001`` (+ per-product SN-PKG-010/020).
+
+    Like :func:`run_servicenow_dataverse_checks` / :func:`run_servicenow_portal_checks`,
+    this wrapper has no ``_servicenow_flows`` gate, so the checkpoint is
+    independently runnable via ``--checkpoint SN-PKG-001`` and can report the
+    not-installed state before any flow exists. The deep ``run_servicenow_checks``
+    path calls :func:`_check_pack_install` directly, so scope runs surface it once.
+    """
+    return _check_pack_install(runner)
 
 
 def _check_local_topics(runner) -> list[CheckResult]:

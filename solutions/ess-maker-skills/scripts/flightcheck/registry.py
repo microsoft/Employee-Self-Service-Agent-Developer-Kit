@@ -48,6 +48,17 @@ from flightcheck.checks.environment import (
     run_environment_checks,
     run_preferred_solution_check,
 )
+from flightcheck.checks.servicenow_entra import run_servicenow_entra_checks
+from flightcheck.checks.servicenow import (
+    run_servicenow_capture_checks,
+    run_servicenow_connection_object_checks,
+    run_servicenow_dataverse_checks,
+    run_servicenow_pack_checks,
+    run_servicenow_portal_checks,
+)
+from flightcheck.checks.servicenow_flow_binding import (
+    run_servicenow_flow_binding_checks,
+)
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
 from flightcheck.checks.workday import run_workday_checks
@@ -92,6 +103,8 @@ CATEGORY_ORDER = [
     "Workday Topics",
     "Graph Connector KB",
     "ServiceNow",
+    "ServiceNow Entra App",
+    "ServiceNow Flow Binding",
     "Local Files",
     "Licensing",
     "Publishing",
@@ -373,6 +386,167 @@ _SPECS: list[CheckpointSpec] = [
         priority=Priority.CRITICAL.value,
         roles=(Role.ENTRA_ADMIN.value,),
     ),
+    # ServiceNow Entra-app checkpoints (setup skills 4/5). Graph-only, no
+    # Dataverse and no live ServiceNow tenant — emitted by
+    # checks/servicenow_entra.run_servicenow_entra_checks. "SN-ENTRA" is in
+    # OWNED_PREFIXES, so the drift test forces these entries to exist.
+    CheckpointSpec(
+        key="SN-ENTRA-SCOPE-001",
+        category_fn=run_servicenow_entra_checks,
+        category_label="ServiceNow Entra App",
+        clients=frozenset({GRAPH}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.CRITICAL.value,
+        roles=(Role.ENTRA_ADMIN.value,),
+    ),
+    CheckpointSpec(
+        key="SN-ENTRA-CONSENT-001",
+        category_fn=run_servicenow_entra_checks,
+        category_label="ServiceNow Entra App",
+        clients=frozenset({GRAPH}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.CRITICAL.value,
+        roles=(Role.ENTRA_ADMIN.value,),
+    ),
+    CheckpointSpec(
+        key="SN-ENTRA-CERT-001",
+        category_fn=run_servicenow_entra_checks,
+        category_label="ServiceNow Entra App",
+        clients=frozenset({GRAPH}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.CRITICAL.value,
+        roles=(Role.ENTRA_ADMIN.value,),
+    ),
+    # ServiceNow flow invoker-connection binding (setup skill 6). Relates to
+    # S6.4 (connect), which the maker performs and attests manually. Emitted
+    # by checks/servicenow_flow_binding.run_servicenow_flow_binding_checks. It
+    # verifies the Copilot Studio "Connections" Connected state (a per-flow
+    # object distinct from the Dataverse connection reference). Needs the BAP
+    # environment id (PP_ADMIN) to derive the Power Platform API host; the check
+    # itself authenticates that host silently via the pac client and degrades to
+    # SKIPPED when no cached token exists. "SN-FLOWCONN" is in OWNED_PREFIXES, so
+    # the drift test forces this entry to exist.
+    CheckpointSpec(
+        key="SN-FLOWCONN-001",
+        category_fn=run_servicenow_flow_binding_checks,
+        category_label="ServiceNow Flow Binding",
+        clients=frozenset({PP_ADMIN}),
+        requires_config=True,
+        requires_dataverse_endpoint=True,
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    # ServiceNow extension-pack install verification (setup skill 6, S6.1).
+    # Emitted by checks/servicenow.run_servicenow_pack_checks — a self-contained
+    # wrapper (no ServiceNow-flow gate) so it is independently runnable via
+    # --checkpoint and can report the not-installed state BEFORE any flow exists.
+    # Reads the per-product template-config scenario records the pack install
+    # creates, so it needs a Dataverse endpoint. Registered with an exact key so
+    # the drift test resolves the emitted ID and S6.1 finally has a real gate
+    # (previously this ID was referenced in the playbook only, with no
+    # implementation, so the agent improvised install evidence). The per-product
+    # SN-PKG-010/020 rows share this category function; --checkpoint SN-PKG-001
+    # reports the summary row, whose result names each product's install state.
+    CheckpointSpec(
+        key="SN-PKG-001",
+        category_fn=run_servicenow_pack_checks,
+        category_label="ServiceNow",
+        clients=frozenset({DATAVERSE}),
+        requires_config=True,
+        requires_dataverse_endpoint=True,
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value),
+    ),
+    # Pre-install ServiceNow + Dataverse connection objects (setup skill 6,
+    # S6.0). Uses the Power Platform admin connection inventory and is separate
+    # from S6.2, which verifies the pack's connection-reference binding.
+    CheckpointSpec(
+        key="SN-CONN-OBJECTS-001",
+        category_fn=run_servicenow_connection_object_checks,
+        category_label="ServiceNow",
+        clients=frozenset({PP_ADMIN}),
+        requires_config=True,
+        requires_dataverse_endpoint=True,
+        priority=Priority.HIGH.value,
+        roles=(Role.POWER_PLATFORM_ADMIN.value,),
+    ),
+    # ServiceNow Dataverse connection reference binding (setup skill 6, S6.2).
+    # Emitted by checks/servicenow.run_servicenow_dataverse_checks — a
+    # self-contained wrapper (no ServiceNow-flow gate) so it is independently
+    # runnable via --checkpoint. Connector-generic sibling of DV-CONN-001: it
+    # matches the Dataverse reference by connector (shared_commondataserviceforapps)
+    # instead of the Workday pack's hardcoded ..._92b66 logical-name suffix, so it
+    # sees the ServiceNow pack's own Dataverse reference. Registered with an exact
+    # key so the drift test resolves the emitted ID.
+    CheckpointSpec(
+        key="SN-DV-CONN-001",
+        category_fn=run_servicenow_dataverse_checks,
+        category_label="ServiceNow",
+        clients=frozenset({DATAVERSE, PP_ADMIN}),
+        requires_config=True,
+        requires_dataverse_endpoint=True,
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    # ServiceNow Portal Base URL (setup skill 6, S6.6). Emitted by
+    # checks/servicenow.run_servicenow_portal_checks — a self-contained wrapper
+    # (no ServiceNow-flow gate) so it is independently runnable via --checkpoint.
+    # Reads the per-product parent template-config record's msdyn_value JSON, so
+    # it needs a Dataverse endpoint. Registered with an exact key so the drift
+    # test resolves the emitted ID and P6.6 finally has a real gate (previously
+    # this ID was referenced in docs only, with no implementation).
+    CheckpointSpec(
+        key="SN-BASEURL-001",
+        category_fn=run_servicenow_portal_checks,
+        category_label="ServiceNow",
+        clients=frozenset({DATAVERSE}),
+        requires_config=True,
+        requires_dataverse_endpoint=True,
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    # ServiceNow capture gates (setup skill 3, S3.1/S3.2/S3.3). Emitted by
+    # checks/servicenow.run_servicenow_capture_checks — self-contained and
+    # CONFIG-ONLY (no clients, no Dataverse endpoint): they read
+    # .local/connect/servicenow/config.json before any pack is installed. The
+    # capture playbook and tasks.md drove these IDs, but they were never
+    # implemented, so a faithful resume into skill 3 hit "unknown checkpoint".
+    # Registered with exact keys so --checkpoint resolves them and the drift
+    # test sees them (they use non-owned prefixes SN-CONFIG/SN-PERM/SN-USER, so
+    # they are not force-required by OWNED_PREFIXES).
+    CheckpointSpec(
+        key="SN-CONFIG-001",
+        category_fn=run_servicenow_capture_checks,
+        category_label="ServiceNow",
+        clients=frozenset(),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    CheckpointSpec(
+        key="SN-PERM-001",
+        category_fn=run_servicenow_capture_checks,
+        category_label="ServiceNow",
+        clients=frozenset(),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    CheckpointSpec(
+        key="SN-USER-001",
+        category_fn=run_servicenow_capture_checks,
+        category_label="ServiceNow",
+        clients=frozenset(),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.HIGH.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
     CheckpointSpec(
         key="WD-ENTRA-NAMEID-001",
         category_fn=run_entra_app_checks,
@@ -568,6 +742,8 @@ OWNED_PREFIXES: tuple = (
     "WD-ENV",
     "WD-ENTRA",
     "WD-ASSIGN",
+    "SN-ENTRA",
+    "SN-FLOWCONN",
     "WD-TENANT",
     "WD-API-CLIENT",
     "WD-REST",

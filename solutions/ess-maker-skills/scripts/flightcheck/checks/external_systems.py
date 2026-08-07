@@ -29,14 +29,24 @@ def _match_flows(flows: list, patterns: tuple) -> list:
 
 
 def _categorize_servicenow_flows(flows: list) -> tuple[list, list, list]:
-    """Split ServiceNow flows into HRSD, ITSM, and Other."""
+    """Split ServiceNow flows into HRSD, ITSM, and Other.
+
+    Classify strictly by the explicit product token in the flow name
+    (``ServiceNow ITSM`` / ``ServiceNow HRSD``, or the bare ``ITSM`` / ``HRSD``
+    token), matched case-insensitively. The host-agent prefix (e.g. ``ESS HR``)
+    is NOT a product signal: a name like ``ESS HR ServiceNow ITSM Common
+    Orchestrator`` contains the substring ``HR Service`` (from "HR ServiceNow")
+    yet is an ITSM flow, so the prefix must never steer it to HRSD. Check ITSM
+    before HRSD so an explicit ITSM token wins even if a name mentions both.
+    """
     hrsd, itsm, other = [], [], []
     for f in flows:
         name = f.get("properties", {}).get("displayName", f.get("displayName", ""))
-        if any(k in name for k in ("HRSD", "HR Service")):
-            hrsd.append(f)
-        elif any(k in name for k in ("ITSM", "Incident", "Ticket")):
+        low = name.lower()
+        if "itsm" in low:
             itsm.append(f)
+        elif "hrsd" in low:
+            hrsd.append(f)
         else:
             other.append(f)
     return hrsd, itsm, other

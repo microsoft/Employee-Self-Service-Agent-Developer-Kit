@@ -89,9 +89,11 @@ class TestSetupRouter:
         assert "connect/workday/step" not in skill, (
             "connect/SKILL.md must not reference the retired monolith step files"
         )
-        # ServiceNow routing must remain intact.
-        assert "src/skills/connect/servicenow/" in skill, (
-            "connect/SKILL.md must still route ServiceNow"
+        # ServiceNow now also delegates to its own setup orchestrator (parallel
+        # to Workday); connect/SKILL.md must route ServiceNow there rather than
+        # to a connect/servicenow/ step sequence.
+        assert "src/skills/setup/servicenow/SKILL.md" in skill, (
+            "connect/SKILL.md must route ServiceNow to its setup orchestrator"
         )
 
     def test_router_dispatches_to_skill1_playbook(self):

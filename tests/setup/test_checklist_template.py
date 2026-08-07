@@ -179,9 +179,17 @@ class TestChecklistTemplate:
         )
 
     def test_cross_doc_step_ids_subset(self):
-        # Every Step ID the shared docs cite in examples must exist in the
-        # template (the docs treat the template as the row source of truth).
+        # Every Step ID the shared docs cite in examples must exist in a
+        # connector template. The shared docs (config-schema.md,
+        # checklist-updater.md) serve BOTH connectors, so validate against the
+        # union of the Workday and ServiceNow templates.
         template_steps = {meta["id"] for meta in _parse_items()}
+        sn_template = (
+            _SOLUTION / "src" / "skills" / "setup" / "servicenow" / "tasks.md"
+        )
+        template_steps.update(
+            re.findall(r"id:\s*(S\d+\.\d+)", sn_template.read_text(encoding="utf-8"))
+        )
         cited: set[str] = set()
         for name in ("config-schema.md", "checklist-updater.md"):
             text = (_SHARED / name).read_text(encoding="utf-8")

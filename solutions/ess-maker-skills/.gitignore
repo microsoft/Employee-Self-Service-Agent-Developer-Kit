@@ -1,3 +1,6 @@
+# Local MCP server config (may carry tenant-specific server URLs/keys; never commit)
+.vscode/mcp.json
+
 # Ignore everything in workspace/ and .local/ EXCEPT the .gitkeep scaffolds
 workspace/**
 !workspace/

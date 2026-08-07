@@ -24,6 +24,7 @@ Scopes:
     handoff         — Enabled auto-handoff topics set a concrete target agent id, not the shipped placeholder (TOPIC-020)
     workday         — Workday deep validation
     servicenow      — ServiceNow deep validation
+    servicenowentra — ServiceNow Entra app: scope, admin consent, certificate (SN-ENTRA-*)
     local           — Local agent file validation
     publishing      — Publishing/QA checklist
     cloudpolicy     — Cloud Policy feedback checks (POL-FB-*)
@@ -68,6 +69,10 @@ from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
 from flightcheck.checks.topics import run_topic_checks
 from flightcheck.checks.servicenow import run_servicenow_checks
+from flightcheck.checks.servicenow_entra import run_servicenow_entra_checks
+from flightcheck.checks.servicenow_flow_binding import (
+    run_servicenow_flow_binding_checks,
+)
 from flightcheck.checks.local_files import run_local_file_checks
 from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.checks.licensing import run_licensing_checks
@@ -103,6 +108,11 @@ SCOPE_MAP = {
     "servicenow": [
         ("External Systems", run_external_systems_checks),
         ("ServiceNow", run_servicenow_checks),
+        ("ServiceNow Entra App", run_servicenow_entra_checks),
+        ("ServiceNow Flow Binding", run_servicenow_flow_binding_checks),
+    ],
+    "servicenowentra": [
+        ("ServiceNow Entra App", run_servicenow_entra_checks),
     ],
     "local": [("Local Files", run_local_file_checks)],
     "publishing": [("Publishing", run_publishing_checks)],
@@ -125,6 +135,8 @@ FULL_SCOPE = [
     ("Graph Connector KB", run_graph_connector_kb_checks),
     ("Agent Handoff", run_handoff_topic_checks),
     ("ServiceNow", run_servicenow_checks),
+    ("ServiceNow Entra App", run_servicenow_entra_checks),
+    ("ServiceNow Flow Binding", run_servicenow_flow_binding_checks),
     ("Local Files", run_local_file_checks),
     ("Licensing", run_licensing_checks),
     ("Publishing", run_publishing_checks),
@@ -787,6 +799,7 @@ def _run_single_checkpoint(args):
     runner.pva = pva
     runner.powerplatform = powerplatform
     runner.azure_arm = None
+    runner.tenant_id = tenant_id
 
     # No runtime-reachability consent here: INFRA-003 is not individually
     # targetable in single-checkpoint mode (there is no INFRA CheckpointSpec in
@@ -1255,6 +1268,7 @@ def main():
     runner.pva = pva
     runner.powerplatform = powerplatform
     runner.azure_arm = azure_arm
+    runner.tenant_id = tenant_id
 
     # --- Target selection (standalone scope runs only) ---
     # Pin the Workday SSO app / ServiceNow connection the operator wants this

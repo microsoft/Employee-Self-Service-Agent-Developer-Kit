@@ -20,12 +20,20 @@ not narrate tool calls.
   `config-schema.md`).
 - `ACK` — *(manual/attest rows only)* `true` once the user has explicitly
   acknowledged the step and any evidence has been captured; otherwise `false`.
+- `PRODUCT` — *(per-product rows only)* the scope key of the product the row
+  belongs to (`"hrsd"` \| `"itsm"`), taken from the row's hidden `product:` tag.
+  Omit / leave `null` for shared rows (every row without a `product:` tag). It
+  selects the mirror block in U.3: per-product rows mirror under
+  `productStatus.<PRODUCT>`, shared rows under the flat `setupStatus`.
 
 **Outputs:**
 - The matching checklist item in `.local/setup/workday/tasks.md` is updated in
   place (checkbox + hidden `status:` field).
-- The mirror record `setupStatus["{STEP_ID}"]` in
-  `.local/connect/workday/config.json` is updated (see `config-schema.md`).
+- The mirror record in `.local/connect/workday/config.json` is updated (see
+  `config-schema.md`): `setupStatus["{STEP_ID}"]` for a shared row, or
+  `productStatus["{PRODUCT}"]["{STEP_ID}"]` for a per-product row (one carrying a
+  hidden `product:` tag, e.g. the ServiceNow `S6.1` install, `S6.3` turn-on-flows,
+  `S6.4` connect-invoker, `S6.5` share, and `S6.6` portal rows).
 
 ---
 
@@ -150,7 +158,11 @@ Rules:
 ## U.1 — Locate the item
 
 Read `.local/setup/workday/tasks.md` (render from the template first if absent).
-Find the checklist item whose hidden comment has `id:` equal to `STEP_ID`.
+Find the checklist item whose hidden comment has `id:` equal to `STEP_ID`. When a
+`STEP_ID` is rendered **once per product** (per-product rows expanded from the
+template — the hidden comment carries a `product:` tag), match on **both** `id:`
+equal to `STEP_ID` **and** `product:` equal to `PRODUCT`, so you update the right
+product's checkbox and not its sibling.
 
 - If no such item exists, **stop and report** — a skill must not invent items. The
   canonical item set lives in the checklist template
@@ -232,7 +244,10 @@ lost — the orchestrator resumes from the first non-`done` row in `setupStatus`
    Leave the visible title/description and every other item untouched. Do not add
    any Step ID, checkpoint ID, or status text to the visible line — the checkbox is
    the only at-a-glance marker the user sees.
-2. Update the mirror in `.local/connect/workday/config.json`:
+2. Update the mirror in `.local/connect/workday/config.json`. For a **shared**
+   row (no `product:` tag) write under the flat `setupStatus` block; for a
+   **per-product** row (has a `product:` tag) write under
+   `productStatus["{PRODUCT}"]` instead — same entry shape either way:
    ```json
    {
      "setupStatus": {
@@ -240,13 +255,22 @@ lost — the orchestrator resumes from the first non-`done` row in `setupStatus`
          "state": "<resulting status>",
          "checkpoint": "<the item's checkpoint ID>",
          "gate": "<prog|manual|attest|advisory>",
-         "verifiedBy": "<programmatic|attested|null>"
+         "verifiedBy": "<programmatic|attested|null>",
+         "note": "<optional one-line description of what this stage is about>"
        }
      }
    }
    ```
-   Merge — do not drop other `setupStatus` keys (round-trip contract in
-   `config-schema.md`).
+   A per-product row instead merges:
+   ```json
+   { "productStatus": { "{PRODUCT}": { "{STEP_ID}": { "state": "…", "checkpoint": "…", "gate": "…", "verifiedBy": "…", "note": "…" } } } }
+   ```
+   Merge — do not drop other `setupStatus` / `productStatus` keys (round-trip
+   contract in `config-schema.md`), and never drop the sibling product's block.
+   `note` is optional; when you include it, use the item's
+   visible description (the text after the em dash on the checklist line) so the
+   record is self-explaining. Omit the key rather than writing an empty string,
+   and never overwrite an existing note with a blank one.
 
 Return control to the calling file. Do not announce file paths or internal
 mechanics to the user.

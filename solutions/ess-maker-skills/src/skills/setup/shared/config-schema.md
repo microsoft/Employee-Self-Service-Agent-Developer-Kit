@@ -88,6 +88,48 @@ view of the same data.
   `checklist-updater.md` and `permission-gate.md`). An `advisory` row (no
   checkpoint) completes with `verifiedBy: "reviewed"` once its report has been
   shown; it never blocks.
+- `note` (optional) — a human-readable one-liner describing what the stage is
+  about (typically the checklist item's visible description). Omit the key rather
+  than storing an empty string; writers must merge it without clobbering an
+  existing note with a blank value.
+
+### Per-product status fields (`productStatus`, ServiceNow multi-product)
+
+ServiceNow can install **both** products on one agent (HRSD **and** ITSM). Most
+group-6 setup steps are per-product rather than shared: the extension-pack install
+(`S6.1`), turning on the pack's cloud flows (`S6.3`), binding the flow invoker
+(`S6.4`), sharing the connection parameters (`S6.5`), the Portal Base URL (`S6.6`),
+and future HR-only steps (e.g. the `sn_hr_core` plugin) — each pack ships and
+enables its **own** flows, invoker binding, and portal URL. Those mirror under a
+`productStatus` object keyed by the scope short name (`hrsd` / `itsm`), then by
+Step ID — same entry shape as `setupStatus`. Only the **shared connection** step
+(`S6.2`, one ServiceNow connection bound for all packs) — plus the up-front
+connection creation (`S6.0`) — stay in the flat `setupStatus` block.
+
+```json
+{
+  "productStatus": {
+    "hrsd": {
+      "S6.1": { "state": "done",    "checkpoint": "SN-PKG-001",    "gate": "prog", "verifiedBy": "programmatic", "note": "Install the ServiceNow HRSD extension pack into the agent." },
+      "S6.3": { "state": "done",    "checkpoint": "SN-FLOW-*",     "gate": "prog", "verifiedBy": "programmatic", "note": "Turn on the ServiceNow HRSD cloud flows." },
+      "S6.4": { "state": "pending", "checkpoint": "maker-attested", "gate": "attest", "verifiedBy": null },
+      "S6.5": { "state": "pending", "checkpoint": "maker-attested", "gate": "attest", "verifiedBy": null },
+      "S6.6": { "state": "pending", "checkpoint": "SN-BASEURL-001", "gate": "prog", "verifiedBy": null }
+    },
+    "itsm": {
+      "S6.1": { "state": "done",    "checkpoint": "SN-PKG-001",    "gate": "prog", "verifiedBy": "programmatic", "note": "Install the ServiceNow ITSM extension pack into the agent." }
+    }
+  }
+}
+```
+
+- Only in-scope products get a block; a row is complete for a product when its
+  `productStatus.<product>.<Step>.state` is `done`.
+- **Resume model:** a product is fully set up when the shared `setupStatus` steps
+  **and** that product's `productStatus.<product>` steps are all `done`.
+- Writers merge deeply — never drop the sibling product's block (round-trip
+  contract below). Connectors without a product dimension (Workday) never write
+  `productStatus`.
 
 ### Optional ready-made-topics state (owned by the OOTB-topics installer)
 

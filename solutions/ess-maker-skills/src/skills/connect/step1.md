@@ -9,8 +9,10 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 
 Build a list of connected integrations (if any):
 
-- **ServiceNow** — connected if `.local/connect/servicenow/tasks.md` exists and
-  all items are checked.
+- **ServiceNow** — connected if `.local/connect/servicenow/config.json` exists and
+  its `setupStatus` shows every applicable setup row (`S1.1` … `S7.2`, counting only
+  the auth-path group that matches the captured `authType`) in state `done` (the
+  ServiceNow setup orchestrator owns this state).
 - **Workday** — connected if `.local/connect/workday/config.json` exists and its
   `setupStatus` shows every setup row (`S1.1` … `S6.2`) in state `done` (the
   setup orchestrator owns this state).
@@ -55,154 +57,19 @@ Wait for the user to respond.
 
 ### If the user chose ServiceNow (1 or "servicenow")
 
-Check if `.local/connect/servicenow/tasks.md` exists.
+ServiceNow connection is handled by the **ServiceNow setup orchestrator**, which
+provisions the Power Platform environment, installs the ESS base agent, captures the
+instance/scope/sign-in method, provisions the Entra sign-in app (user or certificate
+path), guides the ServiceNow-side OIDC registration (attested — never automated),
+installs the extension pack, binds the connections, sets the Portal Base URL, turns
+on the flows, and validates end to end. It is resume-aware: it renders a working
+checklist to `.local/setup/servicenow/tasks.md`, persists `setupStatus` in
+`.local/connect/servicenow/config.json`, picks up at the first unverified step, and
+fast-forwards steps that are already done. Changing the sign-in method or reconnecting
+is handled inside its first skill (capture-servicenow-config, S3.1); only `entra_user`
+and `entra_certificate` are supported (the legacy oauth2/basic/graph paths were retired).
 
-**If it exists and all items are checked:**
-
-Read `.local/connect/servicenow/config.json` to get the current `authType`.
-Map it to a display name:
-- `entra` → "Entra ID (interactive sign-in)"
-- `certificate` → "Certificate (service-to-service)"
-- `oauth2` → "OAuth2 (ServiceNow credentials)"
-- `basic` → "Basic auth"
-
-**Message:**
-
-ServiceNow is already connected using **{display name}**.
-
-1. **Keep current setup** — run `/create` to start building topics
-2. **Change authentication** — switch to a different auth method
-3. **Reconnect from scratch** — reset everything and start over
-
-**End message.**
-
-Wait for the user.
-
-**If the user chose 1 (keep):** Stop here.
-
-**If the user chose 2 (change auth):**
-
-Use the `vscode_askQuestions` tool:
-
-```json
-[
-  {
-    "header": "Authentication",
-    "question": "Which authentication method do you want to switch to?",
-    "options": [
-      { "label": "Microsoft account (Entra ID)", "description": "Employees use their Microsoft work account" },
-      { "label": "Certificate (service-to-service)", "description": "Non-interactive, uses Entra app certificate" },
-      { "label": "ServiceNow username and password", "description": "Separate ServiceNow login" },
-      { "label": "Dev/test instance", "description": "Simplest setup" }
-    ],
-    "allowFreeformInput": false
-  }
-]
-```
-
-Map the answer to SNOW_AUTH using the same rules as
-`src/skills/connect/servicenow/step1.md` section 1.1 (the per-product
-step1, NOT this top-level routing file).
-
-Update `.local/connect/servicenow/config.json` — set `authType` to the new
-value. Set `status` to `"in-progress"`. Reset all pack statuses in
-`packs` from `"installed"` to `"pending"`.
-
-Update `.local/connect/servicenow/tasks.md` — reset steps 2, 3, and 4 from
-`- [x]` to `- [ ]`.
-
-Update `.local/config.json` — remove the `connections.ServiceNow` entry (it
-will be re-created by step 4 with the new auth type after verification).
-
-**Message:**
-
-| # | Task | Status |
-|---|------|--------|
-| 1 | Instance configured | ✅ |
-| 2 | Connection secured | ⬜ |
-| 3 | Extension installed | ⬜ |
-| 4 | Connection verified | ⬜ |
-
-Switching to **{new auth display name}**. Picking up from step 2.
-
-**End message.**
-
-Read `.local/connect/servicenow/config.json` to restore INSTANCE_NAME and
-other values. Then route by the new SNOW_AUTH:
-
-- If `entra` → read `src/skills/connect/servicenow/step2-entra.md`
-- If `certificate` → read `src/skills/connect/servicenow/step2-certificate.md`
-- If `oauth2` → read `src/skills/connect/servicenow/step2-oauth2.md`
-- If `federated` → read `src/skills/connect/servicenow/step2-graph.md`
-- If `basic` → mark step 2 complete, read `src/skills/connect/servicenow/step3-basic.md`
-
-**If the user chose 3 (reconnect from scratch):**
-
-Reset `.local/connect/servicenow/tasks.md` — all steps to `- [ ]`.
-
-Delete `.local/connect/servicenow/config.json`.
-
-Copy `src/skills/connect/servicenow/tasks.md` to
-`.local/connect/servicenow/tasks.md`.
-
-**Message:**
-
-| # | Task | Status |
-|---|------|--------|
-| 1 | Instance configured | ⬜ |
-| 2 | Connection secured | ⬜ |
-| 3 | Extension installed | ⬜ |
-| 4 | Connection verified | ⬜ |
-
-Starting fresh. Let's reconnect ServiceNow to your agent.
-
-**End message.**
-
-Now read `src/skills/connect/servicenow/step1.md` and follow it.
-
-**If it exists and some items are unchecked:**
-
-Show the checklist from `.local/connect/servicenow/tasks.md` (✅ for checked,
-⬜ for unchecked) followed by "Picking up where we left off."
-
-Read `.local/connect/servicenow/config.json` to restore saved values
-(INSTANCE_NAME, SNOW_USAGE, SNOW_AUTH, etc.). Then find the first unchecked
-step and route as follows:
-
-- **Step 1 unchecked** → read `src/skills/connect/servicenow/step1.md`
-- **Step 2 unchecked** → check `authType` in config.json:
-  - If `entra` → read `src/skills/connect/servicenow/step2-entra.md`
-  - If `certificate` → read `src/skills/connect/servicenow/step2-certificate.md`
-  - If `oauth2` → read `src/skills/connect/servicenow/step2-oauth2.md`
-  - If `federated` → read `src/skills/connect/servicenow/step2-graph.md`
-  - If `basic` → mark step 2 complete, then route to step 3
-- **Step 3 unchecked** → check `authType` in config.json:
-  - If `entra` → read `src/skills/connect/servicenow/step3-entra.md`
-  - If `certificate` → read `src/skills/connect/servicenow/step3-certificate.md`
-  - If `oauth2` → read `src/skills/connect/servicenow/step3-oauth2.md`
-  - If `federated` → read `src/skills/connect/servicenow/step3-graph.md`
-  - If `basic` → read `src/skills/connect/servicenow/step3-basic.md`
-- **Step 4 unchecked** → read `src/skills/connect/servicenow/step4.md`
-
-**If it does not exist:**
-
-Copy `src/skills/connect/servicenow/tasks.md` to
-`.local/connect/servicenow/tasks.md`.
-
-**Message:**
-
-| # | Task | Status |
-|---|------|--------|
-| 1 | Instance configured | ⬜ |
-| 2 | Connection secured | ⬜ |
-| 3 | Extension installed | ⬜ |
-| 4 | Connection verified | ⬜ |
-
-Let's connect ServiceNow to your agent.
-
-**End message.**
-
-Now read `src/skills/connect/servicenow/step1.md` and follow it.
+Now read `src/skills/setup/servicenow/SKILL.md` and follow it.
 
 ### If the user chose Workday (2 or "workday")
 
