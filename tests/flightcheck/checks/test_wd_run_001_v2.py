@@ -288,3 +288,22 @@ class TestWorkdayActiveProbeMatrix:
         assert row.status == Status.PASSED.value
         assert "OAuth-invoker Workday connections" in row.result
         assert "recent Workday connector run history" in row.result
+
+    def test_passive_fallback_without_history_does_not_claim_history(
+        self,
+    ) -> None:
+        runner = _runner(
+            runtime_reachability=False,
+            runtime_reachability_declined=True,
+        )
+        runner._workday_flows = []  # passive cannot read any run history
+
+        row = _run_single(runner)
+
+        assert row.status == Status.SKIPPED.value
+        assert "live Workday connection test was not run" in row.result
+        assert "could not be assessed either" in row.result
+        assert (
+            "assessed from recent Workday connector run history"
+            not in row.result
+        )

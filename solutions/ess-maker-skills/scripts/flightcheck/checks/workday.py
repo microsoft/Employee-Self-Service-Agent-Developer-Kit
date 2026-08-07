@@ -3473,14 +3473,28 @@ def _workday_probe_config(runner) -> tuple[str | None, dict[str, Any], str | Non
 def _with_wd_run_passive_context(
     results: list[CheckResult], *, reason: str
 ) -> list[CheckResult]:
-    suffix = (
-        "\n\nThe live Workday connection test was not run "
-        f"({reason}). Readiness was instead assessed from recent Workday "
-        "connector run history on this environment. No new Workday call was "
-        "made."
-    )
+    # The passive fallback only truly assessed run history when it reached a
+    # PASSED/FAILED verdict. When it came back SKIPPED / NOT_CONFIGURED it could
+    # not read history at all, so we must NOT claim it did -- the row's own
+    # result already states why (no flows, no runs, or an API error).
+    history_assessed = {Status.PASSED.value, Status.FAILED.value}
     for row in results:
-        if row.checkpoint_id == "WD-RUN-001" and suffix not in row.result:
+        if row.checkpoint_id != "WD-RUN-001":
+            continue
+        if row.status in history_assessed:
+            suffix = (
+                "\n\nThe live Workday connection test was not run "
+                f"({reason}). Readiness was instead assessed from recent "
+                "Workday connector run history on this environment. No new "
+                "Workday call was made."
+            )
+        else:
+            suffix = (
+                "\n\nThe live Workday connection test was not run "
+                f"({reason}), and recent Workday run history could not be "
+                "assessed either (see above). No new Workday call was made."
+            )
+        if suffix not in row.result:
             row.result += suffix
     return results
 
