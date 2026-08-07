@@ -3528,8 +3528,10 @@ def _workday_probe_failure_cause(
     # error.message is NOT available synchronously, so a wrong endpoint/operation
     # and a Workday business/validation fault BOTH surface as HTTP 400 /
     # BadRequest and cannot be split here -- they share one honest
-    # "indeterminate" cause. status None / 401 / 403 sub-splits are documented
-    # assumptions (not live-captured).
+    # "indeterminate" cause. Only status 200 / 400 / 500 were live-captured; the
+    # 401/403, 404/405 and 409/422 buckets below are inferred from the HTTP
+    # status alone (not live-captured), so their copy attributes the likely cause
+    # to the status code rather than asserting the underlying fault as observed.
     code = (res.error_code or "").lower()
     status = res.status_code
     if status is None:
@@ -3541,9 +3543,15 @@ def _workday_probe_failure_cause(
             return "the connector got no HTTP response because traffic was blocked"
         return "the connector got no HTTP response"
     if status in (401, 403) or any(t in code for t in ("unauthor", "forbidden")):
-        return "Workday or connector authorization rejected the request"
+        return (
+            f"the connector returned HTTP {status}, which typically means Workday "
+            "or connector authorization rejected the request"
+        )
     if status in (404, 405) or any(t in code for t in ("notfound", "invalidurl", "endpoint")):
-        return "the configured Workday endpoint or operation was not found"
+        return (
+            f"the connector returned HTTP {status}, which typically means the "
+            "configured Workday endpoint or operation was not found"
+        )
     if status == 400 or "badrequest" in code:
         return (
             "Workday rejected the request with HTTP 400; the connector's "
@@ -3551,7 +3559,10 @@ def _workday_probe_failure_cause(
             "operation from a Workday business or validation fault"
         )
     if status in (409, 422):
-        return "Workday processed the request and rejected its inputs"
+        return (
+            f"the connector returned HTTP {status}, which typically means Workday "
+            "processed the request and rejected its inputs"
+        )
     if status == 500 or "internalservererror" in code or "servererror" in code:
         return "the Workday connector or backend returned a server error"
     return "the Workday connector action failed"
