@@ -195,8 +195,9 @@ def main():
 
     if not all_ready:
         print("Some flows are not fully registered. If you authored + pushed "
-              "the flow, run `python push.py --repair` (optionally pass a flow "
-              "name) once the connector is reachable to complete registration.")
+              "the flow, run `python push.py --repair --yes` (optionally pass a "
+              "flow name) once the connector is reachable to complete "
+              "registration.")
         if _validate_is_gating(name_filter, strict):
             sys.exit(1)
         print(

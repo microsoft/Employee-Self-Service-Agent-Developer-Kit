@@ -43,6 +43,14 @@ from http_errors import APIError, raise_api_error  # noqa: E402
 # Scope: user_impersonation only (delegated, no admin consent).
 CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d"
 
+# Delegated scope for the Power Automate Flow Management API
+# (https://api.flow.microsoft.com). The double slash is required — the resource
+# URI ends in "/" and the scope name is appended, yielding a token whose `aud`
+# claim is `https://service.flow.microsoft.com/`. The PAC public client above is
+# broadly consented for Power Platform, so no separate app registration is
+# needed. Used by the flow run-history inspection tooling.
+FLOW_API_SCOPE = "https://service.flow.microsoft.com//user_impersonation"
+
 # Kit-internal state directory (token cache, component maps, config).
 # Renamed from "my/" -> ".local/" in PR #2 to separate kit-internal state
 # from user-edited files (which live under "workspace/").
@@ -212,29 +220,7 @@ def authenticate(env_url):
     # Persist cache with strict 0o600 permissions on POSIX. The cache holds
     # MSAL refresh tokens; default umask (0o644) would expose them to other
     # users on shared dev VMs.
-    if cache.has_state_changed:
-        os.makedirs(LOCAL_STATE_DIR, exist_ok=True)
-        try:
-            os.chmod(LOCAL_STATE_DIR, 0o700)
-        except OSError:
-            # Windows ignores chmod for directories - that's expected.
-            pass
-        # Use os.open with explicit mode so the file is created with 0o600
-        # rather than written under default umask first and chmodded after.
-        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-        if hasattr(os, "O_BINARY"):
-            flags |= os.O_BINARY
-        fd = os.open(cache_path, flags, 0o600)
-        try:
-            with os.fdopen(fd, "w", encoding="utf-8") as f:
-                f.write(cache.serialize())
-        finally:
-            # Re-chmod is a defense-in-depth no-op on POSIX where O_CREAT mode
-            # already set 0o600, and a no-op on Windows where chmod is limited.
-            try:
-                os.chmod(cache_path, stat.S_IRUSR | stat.S_IWUSR)
-            except OSError:
-                pass
+    _persist_token_cache(cache, cache_path)
 
     # Record the tenant + start a telemetry session. No developer identity is
     # collected; active-install counts dedupe on a random instance_id.
@@ -265,6 +251,92 @@ def authenticate(env_url):
     except Exception:  # noqa: BLE001 — telemetry must never break auth
         pass
 
+    return result["access_token"]
+
+
+def _persist_token_cache(cache, cache_path):
+    """Write an MSAL token cache to disk with strict 0o600 permissions.
+
+    The cache holds MSAL refresh tokens; default umask (0o644) would expose them
+    to other users on shared dev VMs. No-op when the cache is unchanged. Shared
+    by ``authenticate`` (Dataverse scope) and ``get_flow_token`` (Flow scope),
+    which write the same cache file — MSAL keys entries by scope, so the two
+    tokens coexist.
+    """
+    if not cache.has_state_changed:
+        return
+    os.makedirs(LOCAL_STATE_DIR, exist_ok=True)
+    try:
+        os.chmod(LOCAL_STATE_DIR, 0o700)
+    except OSError:
+        # Windows ignores chmod for directories - that's expected.
+        pass
+    # Use os.open with explicit mode so the file is created with 0o600
+    # rather than written under default umask first and chmodded after.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+    fd = os.open(cache_path, flags, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(cache.serialize())
+    finally:
+        # Re-chmod is a defense-in-depth no-op on POSIX where O_CREAT mode
+        # already set 0o600, and a no-op on Windows where chmod is limited.
+        try:
+            os.chmod(cache_path, stat.S_IRUSR | stat.S_IWUSR)
+        except OSError:
+            pass
+
+
+def get_flow_token(env_url):
+    """Get a Flow Management API access token via MSAL interactive browser auth.
+
+    The kit's ``authenticate`` acquires a *Dataverse*-scoped token; the Flow
+    Management API (https://api.flow.microsoft.com) needs a different audience,
+    so this acquires a Flow-scoped token (``FLOW_API_SCOPE``) using the same
+    public client, tenant, and on-disk token cache. MSAL keys cache entries by
+    scope, so the Flow token coexists with any Dataverse token — a silent
+    acquisition succeeds without re-prompting once either has been obtained in
+    the same tenant.
+
+    ``env_url`` is used only to discover the tenant to sign into; the Flow scope
+    itself is tenant-global.
+    """
+    _validate_https_url(env_url)
+    tenant = discover_tenant(env_url)
+    authority = f"https://login.microsoftonline.com/{tenant}"
+    cache = msal.SerializableTokenCache()
+    cache_path = os.path.join(LOCAL_STATE_DIR, ".token_cache.bin")
+
+    if os.path.exists(cache_path):
+        with open(cache_path, "r") as f:
+            cache.deserialize(f.read())
+
+    app = msal.PublicClientApplication(
+        CLIENT_ID, authority=authority, token_cache=cache
+    )
+
+    accounts = app.get_accounts()
+    result = None
+    if accounts:
+        result = app.acquire_token_silent([FLOW_API_SCOPE], account=accounts[0])
+
+    if not result or "access_token" not in result:
+        print(f"Opening browser for sign-in (tenant: {tenant})...")
+        print("Please select the account that has access to the flows.")
+        result = app.acquire_token_interactive(
+            [FLOW_API_SCOPE], prompt="select_account"
+        )
+
+    if "access_token" not in result:
+        # Don't echo error_description - it can include tenant IDs (CWE-209).
+        error = result.get("error", "unknown_error")
+        print(f"ERROR: Flow authentication failed ({error}).")
+        print("Verify you have access to this environment's flows and try again.")
+        sys.exit(1)
+
+    _persist_token_cache(cache, cache_path)
     return result["access_token"]
 
 

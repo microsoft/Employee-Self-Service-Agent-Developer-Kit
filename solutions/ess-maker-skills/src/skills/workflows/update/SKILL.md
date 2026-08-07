@@ -111,7 +111,11 @@ python scripts/push.py --yes
 >
 > [Open Copilot Studio](https://copilotstudio.microsoft.com/)
 
-## Step 9: Offer Next Steps
+## Step 9: Continue into test, or offer next steps
 
+Offer to continue straight into debugging the change — and if the user says yes, **do it in the same flow, don't make them start over**:
+
+- "Want to check it works? I can exercise **{WorkflowName}** now and read its run history."
+  - On yes: read `src/skills/workflows/test/SKILL.md` and run its debug-and-validate loop **scoped to {WorkflowName}** — you already know the component (this was a workflow update), so **skip the "topic or workflow?" question**. Exercise the flow's failure inputs (missing record, unauthorized, malformed) alongside the valid request, then inspect the run.
 - "Would you like to make another change?"
 - "Type `/menu` to see all available commands."
