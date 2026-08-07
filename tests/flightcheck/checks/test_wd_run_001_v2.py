@@ -127,6 +127,9 @@ class TestWorkdayActiveProbeMatrix:
         assert row.status == Status.PASSED.value
         assert "retrieved data from Workday" in row.result
         assert "Workday service-account connection" in row.result
+        # Shows the connection's display name, not the opaque BAP GUID (N2).
+        assert "Workday SOAP ISU" in row.result
+        assert _CONNECTION_ID not in row.result
         assert "did not test custom SOAP integrations" in row.result
         assert row.remediation == ""
 
@@ -202,12 +205,16 @@ class TestWorkdayActiveProbeMatrix:
         assert "HTTP 403" in row.result
 
     @responses.activate
-    def test_http_400_badrequest_names_indeterminate_layer(self) -> None:
+    def test_http_400_badrequest_degrades_to_passive_not_failed(self) -> None:
         # Live-verified: a wrong endpoint/operation ("Unrecognized service
         # definition for path") and a Workday business fault ("You must
         # provide valid XML for the SOAP request body") BOTH surface as
         # HTTP 400 / BadRequest with no distinguishing synchronous signal.
-        # They share one honest indeterminate bucket.
+        # A 400 reached Workday and got a structured rejection, so it cannot
+        # prove the maker's connection is unhealthy (the default GetWorkerMe
+        # operation may simply be unsupported in this tenant). It must degrade
+        # to the passive run-history signal, NOT emit a FAILED that blames the
+        # connection.
         _register_connector_lifecycle(
             action_status="Failed",
             status_code=400,
@@ -216,9 +223,31 @@ class TestWorkdayActiveProbeMatrix:
 
         row = _run_single(_runner())
 
-        assert row.status == Status.FAILED.value
-        assert "cannot distinguish a wrong endpoint" in row.result
+        # Falls back to passive run history (1 recent Succeeded run) -> PASSED,
+        # never FAILED.
+        assert row.status != Status.FAILED.value
+        assert row.status == Status.PASSED.value
+        assert "inconclusive" in row.result
         assert "HTTP 400" in row.result
+        assert "cannot prove the connection is unhealthy" in row.result
+        # A Workday call WAS made, so the copy must not claim otherwise.
+        assert "No new Workday call was made" not in row.result
+
+    @responses.activate
+    def test_http_400_without_history_does_not_fabricate_verdict(self) -> None:
+        # A 400 with no assessable run history must not claim history was read
+        # and must not FAIL the connection.
+        _register_connector_lifecycle(
+            action_status="Failed",
+            status_code=400,
+            error_code="BadRequest",
+        )
+
+        row = _run_single(_runner(pp_client=_PP(runs=[])))
+
+        assert row.status != Status.FAILED.value
+        assert "inconclusive" in row.result
+        assert "could not be assessed either" in row.result
 
     @responses.activate
     def test_server_error_names_connector_runtime_backend_layer(self) -> None:

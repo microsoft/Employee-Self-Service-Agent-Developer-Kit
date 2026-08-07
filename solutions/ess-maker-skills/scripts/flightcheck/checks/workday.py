@@ -3471,17 +3471,41 @@ def _workday_probe_config(runner) -> tuple[str | None, dict[str, Any], str | Non
 
 
 def _with_wd_run_passive_context(
-    results: list[CheckResult], *, reason: str
+    results: list[CheckResult], *, reason: str, probe_reached: bool = False
 ) -> list[CheckResult]:
     # The passive fallback only truly assessed run history when it reached a
     # PASSED/FAILED verdict. When it came back SKIPPED / NOT_CONFIGURED it could
     # not read history at all, so we must NOT claim it did -- the row's own
     # result already states why (no flows, no runs, or an API error).
+    #
+    # ``probe_reached`` distinguishes the two ways we land on the passive path:
+    #   False -- the live probe never ran or never reached Workday (declined, no
+    #            connection, invoke error before the call). No Workday call was
+    #            made, so the copy says so.
+    #   True  -- the live probe DID run and reach Workday but returned an
+    #            inconclusive result we must not score as a connection failure
+    #            (the indeterminate HTTP 400 bucket; see
+    #            _wd_probe_result_indeterminate). A Workday call WAS made, so the
+    #            copy must not claim otherwise.
     history_assessed = {Status.PASSED.value, Status.FAILED.value}
     for row in results:
         if row.checkpoint_id != "WD-RUN-001":
             continue
-        if row.status in history_assessed:
+        if probe_reached:
+            if row.status in history_assessed:
+                suffix = (
+                    "\n\nThe live Workday connection test ran but its result "
+                    f"was inconclusive ({reason}). Readiness was instead "
+                    "assessed from recent Workday connector run history on this "
+                    "environment."
+                )
+            else:
+                suffix = (
+                    "\n\nThe live Workday connection test ran but its result "
+                    f"was inconclusive ({reason}), and recent Workday run "
+                    "history could not be assessed either (see above)."
+                )
+        elif row.status in history_assessed:
             suffix = (
                 "\n\nThe live Workday connection test was not run "
                 f"({reason}). Readiness was instead assessed from recent "
@@ -3568,6 +3592,25 @@ def _workday_probe_failure_cause(
     return "the Workday connector action failed"
 
 
+def _wd_probe_result_indeterminate(
+    res: live_egress_probe.ConnectorProbeResult,
+) -> bool:
+    # A synchronous HTTP 400 / BadRequest is the one connector failure outcome
+    # that cannot prove the maker's connection is unhealthy. It means the probe
+    # reached Workday and Workday returned a structured rejection -- so egress,
+    # DNS, TLS, DLP and authorization all worked -- but a wrong DEFAULT endpoint
+    # / operation (the probe picks GetWorkerMe when the maker configured none)
+    # and a genuine Workday business / validation fault are indistinguishable in
+    # the synchronous response (see _workday_probe_failure_cause). Scoring that
+    # as a FAILED would blame the maker's connection for a verdict the probe
+    # cannot actually establish, so the caller degrades to the passive
+    # run-history path instead. Every other status (401/403, 404/405, 409/422,
+    # 500, and the no-HTTP network bucket) is a real, attributable failure and
+    # stays FAILED.
+    code = (res.error_code or "").lower()
+    return res.status_code == 400 or "badrequest" in code
+
+
 def _workday_probe_failure_result(
     res: live_egress_probe.ConnectorProbeResult, connection_name: str
 ) -> list[CheckResult]:
@@ -3637,6 +3680,11 @@ def _check_workday_active_run_health(runner) -> list[CheckResult]:
         )
 
     connection_id = conn.get("name") or ""
+    # Maker-facing copy shows the connection's display name, not the opaque BAP
+    # GUID; the GUID (connection_id) is still what the probe action targets.
+    connection_label = (
+        conn.get("properties", {}).get("displayName") or connection_id
+    )
     action = live_egress_probe.ConnectorProbeAction(
         connector_api_id=_WD_CONNECTOR_API_ID,
         connection_id=connection_id,
@@ -3669,7 +3717,7 @@ def _check_workday_active_run_health(runner) -> list[CheckResult]:
                 "The live test successfully retrieved data from Workday "
                 "through the agent's Workday connection "
                 f"({res.detail}). Tested using the Workday service-account "
-                f"connection '{connection_id}'. This tested the standard "
+                f"connection '{connection_label}'. This tested the standard "
                 "Workday data-retrieval path; it did not test custom SOAP "
                 "integrations."
             ),
@@ -3678,7 +3726,29 @@ def _check_workday_active_run_health(runner) -> list[CheckResult]:
             roles=[Role.WORKDAY_ADMIN.value, Role.POWER_PLATFORM_ADMIN.value],
         )]
     if res.succeeded is False:
-        return _workday_probe_failure_result(res, connection_id)
+        # An HTTP 400 / BadRequest cannot prove the connection is unhealthy (it
+        # reached Workday and got a structured rejection, but a wrong default
+        # operation and a Workday business fault are indistinguishable here), so
+        # degrade to passive run history rather than emitting a FAILED that
+        # blames the maker's connection. Every other failure is attributable and
+        # stays FAILED.
+        if _wd_probe_result_indeterminate(res):
+            status_text = (
+                f"HTTP {res.status_code}" if res.status_code else "HTTP 400"
+            )
+            return _with_wd_run_passive_context(
+                _check_workday_run_health_passive(runner),
+                reason=(
+                    "the connector reached Workday and got a structured "
+                    f"rejection ({status_text}), but a wrong default endpoint / "
+                    "operation and a Workday business or validation fault are "
+                    "indistinguishable in the synchronous response, so it "
+                    "cannot prove the connection is unhealthy; open the "
+                    "transient probe run in Power Automate for the exact message"
+                ),
+                probe_reached=True,
+            )
+        return _workday_probe_failure_result(res, connection_label)
     return _with_wd_run_passive_context(
         _check_workday_run_health_passive(runner),
         reason=f"the live Workday test could not complete (it did not return a clear pass or fail): {res.detail}",

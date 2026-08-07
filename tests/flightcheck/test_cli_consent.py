@@ -288,7 +288,29 @@ class TestWorkdayScopeSurfacesConsent:
 
         assert runner.runtime_reachability is False
         assert runner.runtime_reachability_declined is True
-        assert "Connectivity check skipped" in capsys.readouterr().out
+        out = capsys.readouterr().out
+        assert "Connectivity check skipped" in out
+        # Workday-only decline auto-falls-back to passive run history, so the
+        # INFRA-003 manual IP-allowlist block must NOT be printed (N3; SKILL.md
+        # says no manual step is required for the Workday active probe).
+        assert "Prefer to verify manually" not in out
+        assert cli.consent.OUTBOUND_IP_ARTICLE_URL not in out
+
+    def test_forced_off_workday_scope_declines_without_manual_ip_block(
+        self, capsys
+    ):
+        runner = _runner(_WD)
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=False, scope="workday"), runner, _WD_CHECKS
+        )
+
+        assert runner.runtime_reachability is False
+        assert runner.runtime_reachability_declined is True
+        out = capsys.readouterr().out
+        assert "Connectivity check skipped" in out
+        assert "Prefer to verify manually" not in out
+        assert cli.consent.OUTBOUND_IP_ARTICLE_URL not in out
 
     def test_adk_workday_scope_defers_to_skill_no_prompt(self, monkeypatch):
         _force_tty(monkeypatch, interactive=True)

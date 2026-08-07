@@ -186,6 +186,14 @@ def _apply_runtime_reachability_consent(args, runner, checks) -> None:
         runner.runtime_reachability = flag is True
         return
 
+    # The manual IP-allowlist fallback (build_manual_fallback) is an INFRA-003
+    # remedy: confirm the environment's egress IP ranges are whitelisted on the
+    # external endpoint. When ONLY the Workday active probe is in scope,
+    # WD-RUN-001 auto-falls-back to the passive run-history signal on a decline,
+    # so no manual step is required (see SKILL.md). Printing the IP-allowlist
+    # block there is misdirected, so suppress it for the Workday-only case.
+    workday_only = workday_in_scope and not infra_in_scope
+
     systems = _endpoint_systems_for_offer(runner)
     # Name EVERY discovered system, not just the first: the probe tests all of
     # them, so consent must cover all of them (PR #197 review).
@@ -213,7 +221,8 @@ def _apply_runtime_reachability_consent(args, runner, checks) -> None:
         # Explicit opt-out: surface the skip + manual-verification guidance.
         runner.runtime_reachability_declined = True
         print(consent.build_skip_message(label))
-        print(consent.build_manual_fallback(label))
+        if not workday_only:
+            print(consent.build_manual_fallback(label))
         return
 
     # --- No flag: consent must be surfaced (flag is None). --------------------
@@ -245,7 +254,8 @@ def _apply_runtime_reachability_consent(args, runner, checks) -> None:
         # No TTY (CI / piped): we cannot ask a human. Stay read-only, but explain
         # what did not run and how to opt in (the flag doubles as consent).
         print(consent.build_cannot_prompt_message(label))
-        print(consent.build_manual_fallback(label))
+        if not workday_only:
+            print(consent.build_manual_fallback(label))
         return
 
     # Interactive terminal: ALWAYS ask before touching the tenant.
@@ -260,7 +270,8 @@ def _apply_runtime_reachability_consent(args, runner, checks) -> None:
 
     if decision.declined:
         print(consent.build_skip_message(label))
-        print(consent.build_manual_fallback(label))
+        if not workday_only:
+            print(consent.build_manual_fallback(label))
 
 
 def open_report_in_browser(output_dir):
