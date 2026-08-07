@@ -189,6 +189,17 @@ def _apply_runtime_reachability_consent(args, runner, checks) -> None:
     systems = _endpoint_systems_for_offer(runner)
     # Name EVERY discovered system, not just the first: the probe tests all of
     # them, so consent must cover all of them (PR #197 review).
+    #
+    # WD-RUN-001's active probe reaches Workday through the managed connector it
+    # selects from the BAP connection list (pp.get_connections), a source that is
+    # independent of the .local/config.json ``connections`` map that
+    # _endpoint_systems_for_offer reads. A Workday BAP connection that was never
+    # recorded in that config (e.g. connected outside the kit's /connect skill)
+    # would otherwise be probed without Workday appearing in the consent prompt.
+    # Name Workday explicitly whenever the Workday active probe is in scope so
+    # the consent copy can never omit a system the probe will contact.
+    if workday_in_scope:
+        systems = [*systems, "Workday"]
     label = consent.systems_label(systems)
 
     # --- Explicit flag wins; the flag is the consent, but never silent. -------

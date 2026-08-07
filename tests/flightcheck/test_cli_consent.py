@@ -307,6 +307,50 @@ class TestWorkdayScopeSurfacesConsent:
         assert runner.runtime_reachability is False
         assert runner.runtime_reachability_declined is False
 
+    def test_consent_names_workday_even_when_absent_from_config_connections(
+        self, monkeypatch
+    ):
+        # PR #197 defect class: the Workday active probe selects its connection
+        # from the BAP connection list, independent of the config.connections
+        # map that _endpoint_systems_for_offer reads. If a Workday connection is
+        # not recorded in config.connections (e.g. connected outside /connect),
+        # the consent copy must still name Workday, because the probe will
+        # contact it. Here config.connections names only ServiceNow, yet the
+        # Workday active probe is in scope.
+        _force_tty(monkeypatch, interactive=True)
+        seen = {}
+
+        def _capture(label):  # noqa: ANN001
+            seen["label"] = label
+            return True
+
+        monkeypatch.setattr(cli.consent, "ask_yes_no", _capture)
+        runner = _runner({"ServiceNow": {"baseUrl": "https://sn.example.com"}})
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=None, scope="workday"), runner, _WD_CHECKS
+        )
+
+        assert runner.runtime_reachability is True
+        assert "Workday" in seen["label"]
+        assert "ServiceNow" in seen["label"]
+
+    def test_forced_on_notice_names_workday_when_not_in_config_connections(
+        self, capsys
+    ):
+        # Same defect class on the explicit-flag path: passing the flag IS
+        # consent, and the forced-on notice must still name Workday so the
+        # tenant mutation against Workday is never a surprise.
+        runner = _runner({"ServiceNow": {"baseUrl": "https://sn.example.com"}})
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=True, scope="workday"), runner, _WD_CHECKS
+        )
+
+        assert runner.runtime_reachability is True
+        out = capsys.readouterr().out
+        assert "Workday" in out
+
 
 # ───────────────────────────────────────────────────────────────────────
 # --scope infrastructure: no auth unless the flag is explicit, so no offer
