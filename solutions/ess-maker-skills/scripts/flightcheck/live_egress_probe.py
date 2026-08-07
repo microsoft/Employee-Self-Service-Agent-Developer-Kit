@@ -189,7 +189,7 @@ def build_connector_probe_clientdata(action: ConnectorProbeAction) -> str:
     The flow uses the same trigger/response lifecycle as INFRA-003, but swaps
     the native HTTP action for one managed-connector ``OpenApiConnection``
     action. ``connectionReferences`` uses the validated Embedded-by-connection
-    GUID shape from the WD-RUN-001 v2 spike.
+    GUID shape from the WD-RUN-001 spike.
     """
     ref_key = action.connection_ref_key or action.connection_id
     definition = {

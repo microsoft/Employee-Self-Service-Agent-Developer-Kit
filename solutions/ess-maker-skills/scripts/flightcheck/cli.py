@@ -175,7 +175,7 @@ def _apply_runtime_reachability_consent(args, runner, checks) -> None:
     flag = getattr(args, "runtime_reachability", None)
 
     # The egress probe lives in the Infrastructure category (INFRA-003) and in
-    # the Workday category (WD-RUN-001 v2 active connector probe). Consent must
+    # the Workday category (WD-RUN-001 active connector probe). Consent must
     # be surfaced whenever EITHER mutating probe is in scope, so a Workday-only
     # readiness check asks first and falls back to the passive run-history path
     # on NO, instead of silently requiring the --runtime-reachability flag.

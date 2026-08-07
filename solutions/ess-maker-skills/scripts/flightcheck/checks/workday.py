@@ -3387,24 +3387,39 @@ def _is_workday_connection(conn: dict) -> bool:
     return _WD_CONNECTOR_NAME in str(api_id).lower()
 
 
-def _select_workday_probe_connection(runner) -> tuple[dict | None, str]:
+def _select_workday_probe_connection(
+    runner,
+) -> tuple[dict | None, str, bool]:
+    # Returns (connection, reason, not_configured). ``not_configured`` is True
+    # only for the clean pre-deployment state where no Workday connector exists
+    # at all; the caller reports that as NOT_CONFIGURED. Every other None result
+    # is a transient/environmental miss that should fall back to the passive
+    # run-history signal. Callers branch on this flag, never on ``reason`` text.
     pp = getattr(runner, "pp_admin", None)
     env_id = getattr(runner, "env_id", None)
     if pp is None or not env_id:
-        return None, "missing Power Platform admin client or environment id"
+        return None, "missing Power Platform admin client or environment id", False
     try:
         conns = pp.get_connections(env_id)
     except Exception as exc:  # noqa: BLE001 - fallback path must not fail the check
-        return None, f"could not list Power Platform connections ({type(exc).__name__})"
+        return (
+            None,
+            f"could not list Power Platform connections ({type(exc).__name__})",
+            False,
+        )
     if not isinstance(conns, list):
-        return None, "Power Platform connection list was unavailable"
+        return None, "Power Platform connection list was unavailable", False
 
     workday = [c for c in conns if isinstance(c, dict) and _is_workday_connection(c)]
     connected = [c for c in workday if get_connection_status(c) == "Connected"]
     if not workday:
-        return None, "no Workday managed-connector connection was found"
+        return None, "no Workday managed-connector connection was found", True
     if not connected:
-        return None, "no Connected Workday managed-connector connection was found"
+        return (
+            None,
+            "no Connected Workday managed-connector connection was found",
+            False,
+        )
 
     service_account = [
         c for c in connected if _workday_runtime_source(c) != "invoker"
@@ -3414,8 +3429,8 @@ def _select_workday_probe_connection(runner) -> tuple[dict | None, str]:
             "only OAuth-invoker Workday connections were found; the active "
             "probe would exercise the maker/employee identity instead of the "
             "ISU / service-account path"
-        )
-    return service_account[0], ""
+        ), False
+    return service_account[0], "", False
 
 
 def _workday_probe_config(runner) -> tuple[str | None, dict[str, Any], str | None]:
@@ -3489,47 +3504,49 @@ def _workday_probe_not_configured(reason: str) -> list[CheckResult]:
     )]
 
 
-def _workday_probe_layer(res: live_egress_probe.ConnectorProbeResult) -> tuple[str, str]:
-    # Classification keys off the two signals the connector's synchronous
-    # response actually exposes (live-verified, Sunbreak Sandbox 2026-08):
-    # HTTP status (@outputs statusCode) and the action code (@actions code).
-    # The human-readable error.message is NOT available synchronously, so a
-    # wrong endpoint/operation and a Workday business/validation fault BOTH
-    # surface as HTTP 400 / BadRequest and cannot be split here -- they share
-    # one honest "indeterminate" bucket. status None / 401 / 403 sub-splits
-    # are documented assumptions (not live-captured).
+def _workday_probe_failure_cause(
+    res: live_egress_probe.ConnectorProbeResult,
+) -> str:
+    # Returns the plain-language cause shown to the maker. Classification keys
+    # off the two signals the connector's synchronous response actually exposes
+    # (live-verified, Sunbreak Sandbox 2026-08): HTTP status (@outputs
+    # statusCode) and the action code (@actions code). The human-readable
+    # error.message is NOT available synchronously, so a wrong endpoint/operation
+    # and a Workday business/validation fault BOTH surface as HTTP 400 /
+    # BadRequest and cannot be split here -- they share one honest
+    # "indeterminate" cause. status None / 401 / 403 sub-splits are documented
+    # assumptions (not live-captured).
     code = (res.error_code or "").lower()
     status = res.status_code
     if status is None:
         if "tls" in code or "cert" in code:
-            return "network layer (TLS certificate)", "the connector got no HTTP response because TLS failed"
+            return "the connector got no HTTP response because TLS failed"
         if "dns" in code or "name" in code:
-            return "network layer (DNS)", "the connector got no HTTP response because name resolution failed"
+            return "the connector got no HTTP response because name resolution failed"
         if "dlp" in code or "firewall" in code or "blocked" in code:
-            return "network layer (firewall / DLP)", "the connector got no HTTP response because traffic was blocked"
-        return "network layer (DNS / TLS / firewall / DLP)", "the connector got no HTTP response"
+            return "the connector got no HTTP response because traffic was blocked"
+        return "the connector got no HTTP response"
     if status in (401, 403) or any(t in code for t in ("unauthor", "forbidden")):
-        return "authorization layer", "Workday or connector authorization rejected the request"
+        return "Workday or connector authorization rejected the request"
     if status in (404, 405) or any(t in code for t in ("notfound", "invalidurl", "endpoint")):
-        return "endpoint configuration layer", "the configured Workday endpoint or operation was not found"
+        return "the configured Workday endpoint or operation was not found"
     if status == 400 or "badrequest" in code:
         return (
-            "endpoint-configuration or Workday business-rule layer (indeterminate)",
             "Workday rejected the request with HTTP 400; the connector's "
             "synchronous response cannot distinguish a wrong endpoint / "
-            "operation from a Workday business or validation fault",
+            "operation from a Workday business or validation fault"
         )
     if status in (409, 422):
-        return "Workday business-rule layer", "Workday processed the request and rejected its inputs"
+        return "Workday processed the request and rejected its inputs"
     if status == 500 or "internalservererror" in code or "servererror" in code:
-        return "connector runtime / Workday backend layer", "the Workday connector or backend returned a server error"
-    return "connector runtime layer", "the Workday connector action failed"
+        return "the Workday connector or backend returned a server error"
+    return "the Workday connector action failed"
 
 
 def _workday_probe_failure_result(
     res: live_egress_probe.ConnectorProbeResult, connection_name: str
 ) -> list[CheckResult]:
-    _layer, cause = _workday_probe_layer(res)
+    cause = _workday_probe_failure_cause(res)
     status_text = f"HTTP {res.status_code}" if res.status_code else "no HTTP status"
     code_text = f"; connector code {res.error_code}" if res.error_code else ""
     return [CheckResult(
@@ -3580,9 +3597,9 @@ def _check_workday_active_run_health(runner) -> list[CheckResult]:
             _check_workday_run_health_passive(runner), reason=reason
         )
 
-    conn, conn_reason = _select_workday_probe_connection(runner)
+    conn, conn_reason, not_configured = _select_workday_probe_connection(runner)
     if conn is None:
-        if "no Workday" in conn_reason:
+        if not_configured:
             return _workday_probe_not_configured(conn_reason)
         return _with_wd_run_passive_context(
             _check_workday_run_health_passive(runner), reason=conn_reason
@@ -3714,7 +3731,7 @@ def _compute_run_failure_signal(window: list[dict]) -> dict[str, bool]:
 
 
 def _check_workday_run_health(runner) -> list[CheckResult]:
-    """WD-RUN-001 v2 — active connector probe with passive run-history fallback."""
+    """WD-RUN-001 — active connector probe with passive run-history fallback."""
     return _check_workday_active_run_health(runner)
 
 
