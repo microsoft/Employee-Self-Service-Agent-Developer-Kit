@@ -1,0 +1,720 @@
+interactions:
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      OData-MaxVersion:
+      - '4.0'
+      OData-Version:
+      - '4.0'
+      User-Agent:
+      - python-requests/2.34.2
+    method: GET
+    uri: https://orgmocktenant.crm.dynamics.com/api/data/v9.2/workflows?%24select=workflowid%2Cname%2Cstatecode&%24filter=name+eq+%27flightcheck-wd-run-001-probe%27+and+category+eq+5
+  response:
+    body:
+      string: '{"@odata.context":"https://orgmocktenant.crm.dynamics.com/api/data/v9.2/$metadata#workflows(workflowid,name,statecode)","value":[]}'
+    headers:
+      Allow:
+      - OPTIONS,GET,HEAD,POST
+      AuthActivityId:
+      - REDACTED
+      Cache-Control:
+      - no-cache
+      Content-Type:
+      - application/json; odata.metadata=minimal
+      Date:
+      - Wed, 05 Aug 2026 20:22:36 GMT
+      Expires:
+      - '-1'
+      OData-Version:
+      - '4.0'
+      Public:
+      - OPTIONS,GET,HEAD,POST
+      REQ_ID:
+      - REDACTED
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Vary:
+      - Accept-Encoding
+      X-Content-Type-Options:
+      - nosniff
+      X-Source:
+      - REDACTED
+      content-length:
+      - '129'
+      x-ms-dop-hint:
+      - '48'
+      x-ms-ratelimit-burst-remaining-xrm-requests:
+      - '7999'
+      x-ms-ratelimit-time-remaining-xrm-requests:
+      - 1,200.00
+      x-ms-service-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: '{"category":5,"name":"flightcheck-wd-run-001-probe","type":1,"description":"FlightCheck
+      WD-RUN-001 v2 AC9 spike connector probe.","primaryentity":"none","clientdata":"{\"properties\":
+      {\"connectionReferences\": {\"shared_workdaysoap\": {\"connectionName\": \"00000000000000000000000000000000\",
+      \"source\": \"Embedded\", \"id\": \"/providers/Microsoft.PowerApps/apis/shared_workdaysoap\",
+      \"tier\": \"Integrated\"}}, \"definition\": {\"$schema\": \"https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#\",
+      \"contentVersion\": \"1.0.0.0\", \"parameters\": {\"$connections\": {\"defaultValue\":
+      {}, \"type\": \"Object\"}, \"$authentication\": {\"defaultValue\": {}, \"type\":
+      \"SecureObject\"}}, \"triggers\": {\"manual\": {\"metadata\": {}, \"type\":
+      \"Request\", \"kind\": \"Http\", \"inputs\": {\"schema\": {\"type\": \"object\",
+      \"properties\": {}, \"required\": []}}}}, \"actions\": {\"Probe_Workday\": {\"runAfter\":
+      {}, \"metadata\": {}, \"type\": \"OpenApiConnection\", \"inputs\": {\"parameters\":
+      {}, \"host\": {\"apiId\": \"/providers/Microsoft.PowerApps/apis/shared_workdaysoap\",
+      \"operationId\": \"GetWorkerMe\", \"connectionName\": \"shared_workdaysoap\"}}},
+      \"Respond\": {\"runAfter\": {\"Probe_Workday\": [\"Succeeded\", \"Failed\",
+      \"TimedOut\", \"Skipped\"]}, \"metadata\": {}, \"type\": \"Response\", \"kind\":
+      \"Http\", \"inputs\": {\"statusCode\": 200, \"body\": {\"workdayActionStatus\":
+      \"@actions(''Probe_Workday'')?[''status'']\", \"workdayStatusCode\": \"@outputs(''Probe_Workday'')?[''statusCode'']\",
+      \"errorMessage\": \"@actions(''Probe_Workday'')?[''error'']?[''message'']\",
+      \"errorCode\": \"@actions(''Probe_Workday'')?[''error'']?[''code'']\"}}}}}},
+      \"schemaVersion\": \"1.0.0.0\"}"}'
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '1758'
+      Content-Type:
+      - application/json
+      OData-MaxVersion:
+      - '4.0'
+      OData-Version:
+      - '4.0'
+      Prefer:
+      - return=representation
+      User-Agent:
+      - python-requests/2.34.2
+    method: POST
+    uri: https://orgmocktenant.crm.dynamics.com/api/data/v9.2/workflows
+  response:
+    body:
+      string: '{"@odata.context":"https://orgmocktenant.crm.dynamics.com/api/data/v9.2/$metadata#workflows/$entity","@odata.etag":"W/\"14724659\"","iscrmuiworkflow":false,"createstage":null,"istransacted":true,"modernflowtype":0,"xaml":null,"category":5,"componentstate":0,"suspensionreasondetails":null,"businessprocesstype":0,"_plugintypeid_value":null,"entityimage":null,"statuscode":1,"_createdby_value":"00000000-0000-0000-0000-000000001111","entityimage_url":null,"trustedaccess":false,"name":"flightcheck-wd-run-001-probe","_owninguser_value":"00000000-0000-0000-0000-000000001111","clientdataiscompressed":false,"scope":4,"_flowgroup_value":null,"overwritetime":"1900-01-01T00:00:00Z","_modifiedby_value":"00000000-0000-0000-0000-000000001111","billingcontext":null,"processroleassignment":null,"type":1,"languagecode":null,"dynamicssolutioncontext":null,"_licensee_value":null,"ondemand":false,"_licenseentitledby_value":null,"resourceid":null,"desktopflowmodules":null,"inputparameters":null,"_modifiedonbehalfby_value":null,"_ownerid_value":"00000000-0000-0000-0000-000000001111","entityimageid":null,"rank":null,"description":"FlightCheck
+        WD-RUN-001 v2 AC9 spike connector probe.","clientdata":"{\"properties\":{\"connectionReferences\":{\"shared_workdaysoap\":{\"connectionName\":\"00000000000000000000000000000000\",\"source\":\"Embedded\",\"id\":\"/providers/Microsoft.PowerApps/apis/shared_workdaysoap\",\"tier\":\"Integrated\"}},\"definition\":{\"$schema\":\"https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#\",\"contentVersion\":\"1.0.0.0\",\"parameters\":{\"$connections\":{\"defaultValue\":{},\"type\":\"Object\"},\"$authentication\":{\"defaultValue\":{},\"type\":\"SecureObject\"}},\"triggers\":{\"manual\":{\"metadata\":{},\"type\":\"Request\",\"kind\":\"Http\",\"inputs\":{\"schema\":{\"type\":\"object\",\"properties\":{},\"required\":[]}}}},\"actions\":{\"Probe_Workday\":{\"runAfter\":{},\"metadata\":{},\"type\":\"OpenApiConnection\",\"inputs\":{\"parameters\":{},\"host\":{\"apiId\":\"/providers/Microsoft.PowerApps/apis/shared_workdaysoap\",\"operationId\":\"GetWorkerMe\",\"connectionName\":\"shared_workdaysoap\"}}},\"Respond\":{\"runAfter\":{\"Probe_Workday\":[\"Succeeded\",\"Failed\",\"TimedOut\",\"Skipped\"]},\"metadata\":{},\"type\":\"Response\",\"kind\":\"Http\",\"inputs\":{\"statusCode\":200,\"body\":{\"workdayActionStatus\":\"@actions(''Probe_Workday'')?[''status'']\",\"workdayStatusCode\":\"@outputs(''Probe_Workday'')?[''statusCode'']\",\"errorMessage\":\"@actions(''Probe_Workday'')?[''error'']?[''message'']\",\"errorCode\":\"@actions(''Probe_Workday'')?[''error'']?[''code'']\"}}}}}},\"schemaVersion\":\"1.0.0.0\"}","inputs":null,"modifiedon":"2026-08-05T20:22:38Z","createmetadata":null,"rendererobjecttypecode":null,"processtriggerscope":null,"_createdonbehalfby_value":null,"processorder":null,"definition":null,"updatestage":null,"triggeronupdateattributelist":null,"mode":0,"resourcecontainer":null,"workflowid":"00000000-0000-0000-0000-000000001111","metadata":null,"runas":1,"_owningteam_value":null,"planverified":false,"_owningbusinessunit_value":"00000000-0000-0000-0000-000000001111","deletestage":null,"statecode":0,"syncworkflowlogonfailure":false,"_parentworkflowid_value":null,"dependencies":null,"_activeworkflowid_value":null,"triggerondelete":false,"ismanaged":false,"throttlingbehavior":null,"introducedversion":"1.0","workflowidunique":"00000000-0000-0000-0000-000000001111","uiflowtype":null,"claims":null,"schemaversion":null,"primaryentity":"none","uidata":null,"processtriggerformid":null,"modifymetadata":null,"outputs":null,"solutionid":"00000000-0000-0000-0000-000000001111","formid":null,"uniquename":null,"asyncautodelete":false,"subprocess":false,"triggeroncreate":false,"credentials":null,"connectionreferences":null,"createdon":"2026-08-05T20:22:38Z","_sdkmessageid_value":null,"entityimage_timestamp":null,"versionnumber":14724659,"iscustomizable":{"Value":true,"CanBeChanged":true,"ManagedPropertyLogicalName":"iscustomizableanddeletable"},"iscustomprocessingstepallowedforotherpublishers":{"Value":true,"CanBeChanged":true,"ManagedPropertyLogicalName":"canbedeleted"}}'
+    headers:
+      Allow:
+      - OPTIONS,GET,HEAD,POST
+      AuthActivityId:
+      - REDACTED
+      Cache-Control:
+      - no-cache
+      Content-Length:
+      - '4170'
+      Content-Type:
+      - application/json; odata.metadata=minimal
+      Date:
+      - Wed, 05 Aug 2026 20:22:43 GMT
+      Expires:
+      - '-1'
+      OData-Version:
+      - '4.0'
+      Preference-Applied:
+      - return=representation
+      Public:
+      - OPTIONS,GET,HEAD,POST
+      REQ_ID:
+      - REDACTED
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      X-Content-Type-Options:
+      - nosniff
+      X-Source:
+      - REDACTED
+      x-ms-dop-hint:
+      - '48'
+      x-ms-ratelimit-burst-remaining-xrm-requests:
+      - '7998'
+      x-ms-ratelimit-time-remaining-xrm-requests:
+      - 1,199.67
+      x-ms-service-request-id:
+      - REDACTED
+    status:
+      code: 201
+      message: Created
+- request:
+    body: '{"statecode":1}'
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '16'
+      Content-Type:
+      - application/json
+      If-Match:
+      - '*'
+      OData-MaxVersion:
+      - '4.0'
+      OData-Version:
+      - '4.0'
+      User-Agent:
+      - python-requests/2.34.2
+    method: PATCH
+    uri: https://orgmocktenant.crm.dynamics.com/api/data/v9.2/workflows(00000000-0000-0000-0000-000000001111)
+  response:
+    body:
+      string: ''
+    headers:
+      Allow:
+      - OPTIONS,GET,HEAD,POST
+      AuthActivityId:
+      - REDACTED
+      Cache-Control:
+      - no-cache
+      Content-Type:
+      - text/html; charset=utf-8
+      Date:
+      - Wed, 05 Aug 2026 20:23:00 GMT
+      Expires:
+      - '-1'
+      Location:
+      - https://orgmocktenant.crm.dynamics.com/api/data/v9.2/workflows(00000000-0000-0000-0000-000000001111)
+      OData-EntityId:
+      - https://orgmocktenant.crm.dynamics.com/api/data/v9.2/workflows(00000000-0000-0000-0000-000000001111)
+      OData-Version:
+      - '4.0'
+      Public:
+      - OPTIONS,GET,HEAD,POST
+      REQ_ID:
+      - REDACTED
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      X-Content-Type-Options:
+      - nosniff
+      X-Source:
+      - REDACTED
+      x-ms-dop-hint:
+      - '48'
+      x-ms-ratelimit-burst-remaining-xrm-requests:
+      - '7997'
+      x-ms-ratelimit-time-remaining-xrm-requests:
+      - 1,194.87
+      x-ms-service-request-id:
+      - REDACTED
+    status:
+      code: 204
+      message: No Content
+- request:
+    body: '{}'
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '2'
+      Content-Type:
+      - application/json
+      User-Agent:
+      - python-requests/2.34.2
+    method: POST
+    uri: https://api.flow.microsoft.com/providers/Microsoft.ProcessSimple/environments/00000000-0000-0000-0000-000000001111/flows/00000000-0000-0000-0000-000000001111/triggers/manual/listCallbackUrl?api-version=2016-11-01
+  response:
+    body:
+      string: '{"response":{"value":"https://mockenv.00.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/02/workflows/00000000000000000000000000000000/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=REDACTED_SAS_SIG","method":"POST","basePath":"https://mockenv.00.environment.api.powerplatform.com/powerautomate/automations/direct/cu/02/workflows/00000000000000000000000000000000/triggers/manual/paths/invoke","queries":{"api-version":"1","sp":"/triggers/manual/run","sv":"1.0","sig":"IE84dk-TmcEVpuV0QLuJg-Di8ZS3EG8ogLx5kZ4x-p8"}},"httpStatusCode":"OK"}'
+    headers:
+      Cache-Control:
+      - no-cache, no-store
+      Content-Length:
+      - '673'
+      Content-Type:
+      - application/json; charset=utf-8
+      Date:
+      - Wed, 05 Aug 2026 20:23:08 GMT
+      Server-Timing:
+      - x-ms-igw-upstream-headers;dur=7287.1,x-ms-igw-req-overhead;dur=0.3
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      X-Content-Type-Options:
+      - nosniff
+      mise-correlation-id:
+      - 00000000-0000-0000-0000-000000001111
+      x-ms-activity-vector:
+      - '00'
+      x-ms-armresiliency:
+      - 'True'
+      x-ms-correlation-id:
+      - REDACTED
+      x-ms-correlation-request-id:
+      - 00000000-0000-0000-0000-000000001111
+      x-ms-flow-mobile-ios-version:
+      - 3.0.421
+      x-ms-flow-routing-request-id:
+      - WESTUS:20260805T202309Z:00000000-0000-0000-0000-000000001111
+      x-ms-igw-tracking-id:
+      - a58d4f9a-f844-4afe-a0a5-d3b063cd0b8720260805202301_prdcm001wusgb0_4
+      x-ms-islandgateway:
+      - _prdcm001wusgb0_4
+      x-ms-request-id:
+      - REDACTED
+      x-ms-service-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: '{}'
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '2'
+      Content-Type:
+      - application/json
+      Prefer:
+      - wait
+      User-Agent:
+      - python-requests/2.34.2
+    method: POST
+    uri: https://mockenv.00.environment.api.powerplatform.com/powerautomate/automations/direct/cu/02/workflows/00000000000000000000000000000000/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=REDACTED_SAS_SIG
+  response:
+    body:
+      string: '{"workdayActionStatus":"Succeeded","workdayStatusCode":200,"errorMessage":null,"errorCode":null}'
+    headers:
+      Cache-Control:
+      - no-cache, no-store
+      Content-Length:
+      - '96'
+      Content-Type:
+      - application/json; charset=utf-8
+      Date:
+      - Wed, 05 Aug 2026 20:23:10 GMT
+      Server-Timing:
+      - x-ms-igw-upstream-headers;dur=1635.5,x-ms-igw-req-overhead;dur=0.1
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      X-Content-Type-Options:
+      - nosniff
+      x-ms-activity-vector:
+      - 00.00.00
+      x-ms-client-tracking-id:
+      - 08584156454954429753818488723CU10
+      x-ms-correlation-id:
+      - REDACTED
+      x-ms-execution-location:
+      - westus
+      x-ms-gateway-clusters:
+      - prdil107wus
+      x-ms-igw-tracking-id:
+      - 8d7d2c42-dbdf-47eb-8e37-657e3075fb3420260805202309_prdil107wusgb0_0
+      x-ms-islandgateway:
+      - _prdil107wusgb0_0
+      x-ms-ppapigateway:
+      - _prdil107wusgb0_1
+      x-ms-ratelimit-burst-remaining-workflow-writes:
+      - '11249'
+      x-ms-ratelimit-remaining-workflow-download-contentsize:
+      - '402653088'
+      x-ms-ratelimit-remaining-workflow-upload-contentsize:
+      - '402653182'
+      x-ms-ratelimit-time-remaining-directapirequests:
+      - '37498466'
+      x-ms-request-id:
+      - REDACTED
+      x-ms-service-request-id:
+      - REDACTED
+      x-ms-tracking-id:
+      - 00000000-0000-0000-0000-000000001111
+      x-ms-trigger-history-name:
+      - 08584156454954429753818488723CU10
+      x-ms-workflow-id:
+      - '00000000000000000000000000000000'
+      x-ms-workflow-name:
+      - 00000000-0000-0000-0000-000000001111
+      x-ms-workflow-run-id:
+      - 08584156454954429753818488723CU10
+      x-ms-workflow-system-id:
+      - /locations/westus/scaleunits/prod-02/workflows/00000000000000000000000000000000
+      x-ms-workflow-version:
+      - 08584156455070579805
+      x-servicefabric:
+      - NoRetry
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.34.2
+    method: GET
+    uri: https://api.flow.microsoft.com/providers/Microsoft.ProcessSimple/environments/00000000-0000-0000-0000-000000001111/flows/00000000-0000-0000-0000-000000001111/runs?api-version=2016-11-01
+  response:
+    body:
+      string: '{"value":[{"name":"08584156454954429753818488723CU10","id":"/providers/Microsoft.ProcessSimple/environments/00000000-0000-0000-0000-000000001111/flows/00000000-0000-0000-0000-000000001111/runs/08584156454954429753818488723CU10","type":"Microsoft.ProcessSimple/environments/flows/runs","properties":{"startTime":"2026-08-05T20:23:10.0356697Z","endTime":"2026-08-05T20:23:11.5501468Z","status":"Succeeded","correlation":{"clientTrackingId":"08584156454954429753818488723CU10"},"trigger":{"name":"manual","inputsLink":{"uri":"https://mockenv.00.environment.api.powerplatformusercontent.com/powerautomate/automations/direct/workflows/00000000000000000000000000000000/runs/08584156454954429753818488723CU10/contents/TriggerInputs?api-version=1&islandNumber=107&se=2026-08-06T00%3A00%3A00.0000000Z&sp=%2Fruns%2F08584156454954429753818488723CU10%2Fcontents%2FTriggerInputs%2Fread&sv=1.0&sig=REDACTED_SAS_SIG","contentVersion":"/T5WXAj3fj0rTPrCL3IKcg==","contentSize":58,"contentHash":{"algorithm":"md5","value":"/T5WXAj3fj0rTPrCL3IKcg=="}},"outputsLink":{"uri":"https://mockenv.00.environment.api.powerplatformusercontent.com/powerautomate/automations/direct/workflows/00000000000000000000000000000000/runs/08584156454954429753818488723CU10/contents/TriggerOutputs?api-version=1&islandNumber=107&se=2026-08-06T00%3A00%3A00.0000000Z&sp=%2Fruns%2F08584156454954429753818488723CU10%2Fcontents%2FTriggerOutputs%2Fread&sv=1.0&sig=REDACTED_SAS_SIG","contentVersion":"43quy99BQ+mOI4Sot64NpQ==","contentSize":1638,"contentHash":{"algorithm":"md5","value":"43quy99BQ+mOI4Sot64NpQ=="}},"startTime":"2026-08-05T20:23:10.0349591Z","endTime":"2026-08-05T20:23:10.0349591Z","originHistoryName":"08584156454954429753818488723CU10","correlation":{"clientTrackingId":"08584156454954429753818488723CU10"},"status":"Succeeded"},"response":{"name":"Respond","outputsLink":{"uri":"https://mockenv.00.environment.api.powerplatformusercontent.com:443/powerautomate/automations/direct/workflows/00000000000000000000000000000000/runs/08584156454954429753818488723CU10/contents/ResponseOutputs?api-version=1&islandNumber=107&se=2026-08-06T00%3A00%3A00.0000000Z&sp=%2Fruns%2F08584156454954429753818488723CU10%2Fcontents%2FResponseOutputs%2Fread&sv=1.0&sig=REDACTED_SAS_SIG","contentVersion":"LDnW8R6IGti82lU8iSNvVA==","contentSize":124,"contentHash":{"algorithm":"md5","value":"LDnW8R6IGti82lU8iSNvVA=="}},"startTime":"2026-08-05T20:23:10.0356977Z","endTime":"2026-08-05T20:23:11.4755752Z","correlation":{"clientTrackingId":"08584156454954429753818488723CU10"},"code":"OK","status":"Succeeded"},"isAborted":false},"isMigrationSource":false}]}'
+    headers:
+      Cache-Control:
+      - no-cache, no-store
+      Content-Length:
+      - '2758'
+      Content-Type:
+      - application/json; charset=utf-8
+      Date:
+      - Wed, 05 Aug 2026 20:23:13 GMT
+      Server-Timing:
+      - x-ms-igw-upstream-headers;dur=1716.2,x-ms-igw-req-overhead;dur=0.3
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      X-Content-Type-Options:
+      - nosniff
+      mise-correlation-id:
+      - 00000000-0000-0000-0000-000000001111
+      x-ms-activity-vector:
+      - '00'
+      x-ms-armresiliency:
+      - 'True'
+      x-ms-correlation-id:
+      - REDACTED
+      x-ms-correlation-request-id:
+      - 00000000-0000-0000-0000-000000001111
+      x-ms-flow-mobile-ios-version:
+      - 3.0.421
+      x-ms-flow-routing-request-id:
+      - WESTUS:20260805T202313Z:00000000-0000-0000-0000-000000001111
+      x-ms-igw-tracking-id:
+      - cda27bc4-3dcc-47ce-a880-3b9cbb0e0a9e20260805202312_prdcm001wusgb0_1
+      x-ms-islandgateway:
+      - _prdcm001wusgb0_1
+      x-ms-request-id:
+      - REDACTED
+      x-ms-service-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.34.2
+    method: GET
+    uri: https://api.flow.microsoft.com/providers/Microsoft.ProcessSimple/environments/00000000-0000-0000-0000-000000001111/flows/00000000-0000-0000-0000-000000001111/runs/08584156454954429753818488723CU10/actions?api-version=2016-11-01
+  response:
+    body:
+      string: '{"value":[{"runName":"08584156454954429753818488723CU10","name":"Probe_Workday","id":"/providers/Microsoft.ProcessSimple/environments/00000000-0000-0000-0000-000000001111/flows/00000000-0000-0000-0000-000000001111/runs/08584156454954429753818488723CU10/actions/Probe_Workday","type":"Microsoft.ProcessSimple/environments/flows/runs/actions","properties":{"startTime":"2026-08-05T20:23:10.2773128Z","endTime":"2026-08-05T20:23:11.4659125Z","status":"Succeeded","code":"OK","correlation":{"actionTrackingId":"00000000-0000-0000-0000-000000001111","clientTrackingId":"08584156454954429753818488723CU10"},"inputsLink":{"uri":"https://mockenv.00.environment.api.powerplatformusercontent.com/powerautomate/automations/direct/workflows/00000000000000000000000000000000/runs/08584156454954429753818488723CU10/actions/Probe_Workday/contents/ActionInputs?api-version=1&islandNumber=107&se=2026-08-06T00%3A00%3A00.0000000Z&sp=%2Fruns%2F08584156454954429753818488723CU10%2Factions%2FProbe_Workday%2Fcontents%2FActionInputs%2Fread&sv=1.0&sig=REDACTED_SAS_SIG","contentVersion":"17hRr24dnIyy9xTgM80Wmg==","contentSize":246,"contentHash":{"algorithm":"md5","value":"17hRr24dnIyy9xTgM80Wmg=="}},"outputsLink":{"uri":"https://mockenv.00.environment.api.powerplatformusercontent.com/powerautomate/automations/direct/workflows/00000000000000000000000000000000/runs/08584156454954429753818488723CU10/actions/Probe_Workday/contents/ActionOutputs?api-version=1&islandNumber=107&se=2026-08-06T00%3A00%3A00.0000000Z&sp=%2Fruns%2F08584156454954429753818488723CU10%2Factions%2FProbe_Workday%2Fcontents%2FActionOutputs%2Fread&sv=1.0&sig=REDACTED_SAS_SIG","contentVersion":"kqScs8SmSS8KlgDXv0ao0Q==","contentSize":2280,"contentHash":{"algorithm":"md5","value":"kqScs8SmSS8KlgDXv0ao0Q=="}}}},{"runName":"08584156454954429753818488723CU10","name":"Respond","id":"/providers/Microsoft.ProcessSimple/environments/00000000-0000-0000-0000-000000001111/flows/00000000-0000-0000-0000-000000001111/runs/08584156454954429753818488723CU10/actions/Respond","type":"Microsoft.ProcessSimple/environments/flows/runs/actions","properties":{"startTime":"2026-08-05T20:23:11.4750304Z","endTime":"2026-08-05T20:23:11.4964476Z","status":"Succeeded","code":"OK","correlation":{"actionTrackingId":"00000000-0000-0000-0000-000000001111","clientTrackingId":"08584156454954429753818488723CU10"},"inputsLink":{"uri":"https://mockenv.00.environment.api.powerplatformusercontent.com/powerautomate/automations/direct/workflows/00000000000000000000000000000000/runs/08584156454954429753818488723CU10/actions/Respond/contents/ActionInputs?api-version=1&islandNumber=107&se=2026-08-06T00%3A00%3A00.0000000Z&sp=%2Fruns%2F08584156454954429753818488723CU10%2Factions%2FRespond%2Fcontents%2FActionInputs%2Fread&sv=1.0&sig=REDACTED_SAS_SIG","contentVersion":"LDnW8R6IGti82lU8iSNvVA==","contentSize":124,"contentHash":{"algorithm":"md5","value":"LDnW8R6IGti82lU8iSNvVA=="}},"outputsLink":{"uri":"https://mockenv.00.environment.api.powerplatformusercontent.com/powerautomate/automations/direct/workflows/00000000000000000000000000000000/runs/08584156454954429753818488723CU10/actions/Respond/contents/ActionOutputs?api-version=1&islandNumber=107&se=2026-08-06T00%3A00%3A00.0000000Z&sp=%2Fruns%2F08584156454954429753818488723CU10%2Factions%2FRespond%2Fcontents%2FActionOutputs%2Fread&sv=1.0&sig=REDACTED_SAS_SIG","contentVersion":"LDnW8R6IGti82lU8iSNvVA==","contentSize":124,"contentHash":{"algorithm":"md5","value":"LDnW8R6IGti82lU8iSNvVA=="}}}}]}'
+    headers:
+      Cache-Control:
+      - no-cache, no-store
+      Content-Length:
+      - '3680'
+      Content-Type:
+      - application/json; charset=utf-8
+      Date:
+      - Wed, 05 Aug 2026 20:23:15 GMT
+      Server-Timing:
+      - x-ms-igw-upstream-headers;dur=1733.1,x-ms-igw-req-overhead;dur=0.3
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      X-Content-Type-Options:
+      - nosniff
+      mise-correlation-id:
+      - 00000000-0000-0000-0000-000000001111
+      x-ms-activity-vector:
+      - '00'
+      x-ms-armresiliency:
+      - 'True'
+      x-ms-correlation-id:
+      - REDACTED
+      x-ms-correlation-request-id:
+      - 00000000-0000-0000-0000-000000001111
+      x-ms-flow-mobile-ios-version:
+      - 3.0.421
+      x-ms-flow-routing-request-id:
+      - WESTUS:20260805T202316Z:00000000-0000-0000-0000-000000001111
+      x-ms-igw-tracking-id:
+      - 3af95cd5-219e-40e9-ac43-b11d55bb1dde20260805202314_prdcm001wusgb0_1
+      x-ms-islandgateway:
+      - _prdcm001wusgb0_1
+      x-ms-request-id:
+      - REDACTED
+      x-ms-service-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.34.2
+    method: GET
+    uri: https://mockenv.00.environment.api.powerplatformusercontent.com/powerautomate/automations/direct/workflows/00000000000000000000000000000000/runs/08584156454954429753818488723CU10/actions/Probe_Workday/contents/ActionOutputs?api-version=1&islandNumber=107&se=2026-08-06T00%3A00%3A00.0000000Z&sp=%2Fruns%2F08584156454954429753818488723CU10%2Factions%2FProbe_Workday%2Fcontents%2FActionOutputs%2Fread&sv=1.0&sig=REDACTED_SAS_SIG
+  response:
+    body:
+      string: '{"statusCode":200,"headers":{"Cache-Control":"no-store, no-cache","Pragma":"no-cache","Strict-Transport-Security":"max-age=31536000;
+        includeSubDomains","x-ms-islandgateway":"_prdil101wusgb0_3","x-ms-igw-tracking-id":"432cdacb-bf11-4094-bff2-94e306561dfa20260805202311_prdil101wusgb0_3","mise-correlation-id":"00000000-0000-0000-0000-000000001111","wd-stat-request-id":"00000000-0000-0000-0000-000000001111","x-ms-request-id":"00000000-0000-0000-0000-000000001111","x-ms-correlation-id":"00000000-0000-0000-0000-000000001111","X-Content-Type-Options":"nosniff","X-Frame-Options":"DENY","Server-Timing":"x-ms-igw-upstream-headers;dur=339.8,x-ms-igw-req-overhead;dur=1.0","x-ms-service-request-id":"00000000-0000-0000-0000-000000001111","x-ms-activity-vector":"00.00.IN.0G.00","x-ms-environment-id":"00000000-0000-0000-0000-000000001111","x-ms-tenant-id":"00000000-0000-0000-0000-000000001111","x-ms-subscription-id":"00000000-0000-0000-0000-000000001111","x-ms-dlp-re":"-|-|-","x-ms-dlp-gu":"-|-","x-ms-dlp-ef":"-|-/-|-|-|-|-","x-ms-mip-sl":"-|-|-|-","x-ms-au-creator-id":"00000000-0000-0000-0000-000000001111","Timing-Allow-Origin":"*","x-ms-apihub-cached-response":"false","x-ms-apihub-obo":"false","x-ms-plex-failed":"false","Date":"Wed,
+        05 Aug 2026 20:23:10 GMT","Content-Length":"919","Content-Type":"application/json;
+        charset=UTF-8","Expires":"-1"},"body":{"id":"00000000000000000000000000000000","descriptor":"Mock
+        Descriptor","href":"https://wd2-impl-services1.workday.com/api/api/v1/microsoft_dpt6/workers/00000000000000000000000000000000","businessTitle":"Mock
+        Title","yearsOfService":5,"primaryWorkPhone":"+1 555-555-0100","isManager":true,"primaryWorkAddressText":"1
+        Mock Street, Mocktown, MC 00000","supervisoryOrganizationsManaged":"https://wd2-impl-services1.workday.com/api/api/v1/microsoft_dpt6/workers/00000000000000000000000000000000/supervisoryOrganizationsManaged","primaryWorkEmail":"mock.user@contoso.com","primarySupervisoryOrganization":{"descriptor":"Mock
+        Descriptor","id":"00000000000000000000000000000000","href":"https://wd2-impl-services1.workday.com/api/api/v1/microsoft_dpt6/supervisoryOrganizations/00000000000000000000000000000000"},"location":{"descriptor":"Mock
+        Descriptor","id":"00000000000000000000000000000000"}}}'
+    headers:
+      Cache-Control:
+      - max-age=13002, private
+      Content-Length:
+      - '2280'
+      Content-Type:
+      - application/json; charset=utf-8
+      Date:
+      - Wed, 05 Aug 2026 20:23:17 GMT
+      Server-Timing:
+      - x-ms-igw-upstream-headers;dur=138.5,x-ms-igw-req-overhead;dur=43.8
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      X-Content-Type-Options:
+      - nosniff
+      x-ms-activity-vector:
+      - 00.00.00
+      x-ms-correlation-id:
+      - REDACTED
+      x-ms-gateway-clusters:
+      - prdil107wus
+      x-ms-igw-tracking-id:
+      - 96fc90a5-b5a0-4e32-8efa-87493ab2e81120260805202317_prdil107wusgb0_4
+      x-ms-islandgateway:
+      - _prdil107wusgb0_4
+      x-ms-ppapigateway:
+      - _prdil107wusgb0_2
+      x-ms-ratelimit-burst-remaining-workflow-reads:
+      - '12499'
+      x-ms-ratelimit-remaining-workflow-download-contentsize:
+      - '402650904'
+      x-ms-ratelimit-time-remaining-directapirequests:
+      - '37499916'
+      x-ms-request-id:
+      - REDACTED
+      x-ms-service-request-id:
+      - REDACTED
+      x-servicefabric:
+      - NoRetry
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      User-Agent:
+      - python-requests/2.34.2
+    method: GET
+    uri: https://mockenv.00.environment.api.powerplatformusercontent.com/powerautomate/automations/direct/workflows/00000000000000000000000000000000/runs/08584156454954429753818488723CU10/actions/Respond/contents/ActionOutputs?api-version=1&islandNumber=107&se=2026-08-06T00%3A00%3A00.0000000Z&sp=%2Fruns%2F08584156454954429753818488723CU10%2Factions%2FRespond%2Fcontents%2FActionOutputs%2Fread&sv=1.0&sig=REDACTED_SAS_SIG
+  response:
+    body:
+      string: '{"statusCode":"200","body":{"workdayActionStatus":"Succeeded","workdayStatusCode":200,"errorMessage":null,"errorCode":null}}'
+    headers:
+      Cache-Control:
+      - max-age=13001, private
+      Content-Length:
+      - '124'
+      Content-Type:
+      - application/json; charset=utf-8
+      Date:
+      - Wed, 05 Aug 2026 20:23:17 GMT
+      Server-Timing:
+      - x-ms-igw-upstream-headers;dur=71.5,x-ms-igw-req-overhead;dur=0.1
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      X-Content-Type-Options:
+      - nosniff
+      x-ms-activity-vector:
+      - 00.00.00
+      x-ms-correlation-id:
+      - REDACTED
+      x-ms-gateway-clusters:
+      - prdil107wus
+      x-ms-igw-tracking-id:
+      - 4f520478-02d8-4474-b6cb-b8693b55ab1220260805202317_prdil107wusgb0_3
+      x-ms-islandgateway:
+      - _prdil107wusgb0_3
+      x-ms-ppapigateway:
+      - _prdil107wusgb0_4
+      x-ms-ratelimit-burst-remaining-workflow-reads:
+      - '12499'
+      x-ms-ratelimit-remaining-workflow-download-contentsize:
+      - '402653060'
+      x-ms-ratelimit-time-remaining-directapirequests:
+      - '37499978'
+      x-ms-request-id:
+      - REDACTED
+      x-ms-service-request-id:
+      - REDACTED
+      x-servicefabric:
+      - NoRetry
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      OData-MaxVersion:
+      - '4.0'
+      OData-Version:
+      - '4.0'
+      User-Agent:
+      - python-requests/2.34.2
+    method: GET
+    uri: https://orgmocktenant.crm.dynamics.com/api/data/v9.2/workflows?%24select=workflowid%2Cname%2Cstatecode&%24filter=name+eq+%27flightcheck-wd-run-001-probe%27+and+category+eq+5
+  response:
+    body:
+      string: '{"@odata.context":"https://orgmocktenant.crm.dynamics.com/api/data/v9.2/$metadata#workflows(workflowid,name,statecode)","value":[{"@odata.etag":"W/\"14724701\"","name":"flightcheck-wd-run-001-probe","workflowid":"00000000-0000-0000-0000-000000001111","statecode":1}]}'
+    headers:
+      Allow:
+      - OPTIONS,GET,HEAD,POST
+      AuthActivityId:
+      - REDACTED
+      Cache-Control:
+      - no-cache
+      Content-Type:
+      - application/json; odata.metadata=minimal
+      Date:
+      - Wed, 05 Aug 2026 20:23:18 GMT
+      Expires:
+      - '-1'
+      OData-Version:
+      - '4.0'
+      Public:
+      - OPTIONS,GET,HEAD,POST
+      REQ_ID:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Vary:
+      - Accept-Encoding
+      X-Content-Type-Options:
+      - nosniff
+      X-Source:
+      - REDACTED
+      content-length:
+      - '265'
+      x-ms-dop-hint:
+      - '48'
+      x-ms-ratelimit-burst-remaining-xrm-requests:
+      - '7996'
+      x-ms-ratelimit-time-remaining-xrm-requests:
+      - 1,177.61
+      x-ms-service-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '0'
+      OData-MaxVersion:
+      - '4.0'
+      OData-Version:
+      - '4.0'
+      User-Agent:
+      - python-requests/2.34.2
+    method: DELETE
+    uri: https://orgmocktenant.crm.dynamics.com/api/data/v9.2/workflows(00000000-0000-0000-0000-000000001111)
+  response:
+    body:
+      string: ''
+    headers:
+      Allow:
+      - OPTIONS,GET,HEAD,POST
+      AuthActivityId:
+      - REDACTED
+      Cache-Control:
+      - no-cache
+      Content-Type:
+      - text/html; charset=utf-8
+      Date:
+      - Wed, 05 Aug 2026 20:23:24 GMT
+      Expires:
+      - '-1'
+      OData-Version:
+      - '4.0'
+      Public:
+      - OPTIONS,GET,HEAD,POST
+      REQ_ID:
+      - REDACTED
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      X-Content-Type-Options:
+      - nosniff
+      X-Source:
+      - REDACTED
+      x-ms-dop-hint:
+      - '48'
+      x-ms-ratelimit-burst-remaining-xrm-requests:
+      - '7995'
+      x-ms-ratelimit-time-remaining-xrm-requests:
+      - 1,177.61
+      x-ms-service-request-id:
+      - REDACTED
+    status:
+      code: 204
+      message: No Content
+version: 1

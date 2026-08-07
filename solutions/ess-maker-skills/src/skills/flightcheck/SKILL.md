@@ -132,9 +132,15 @@ Because it mutates the environment, you **MUST** ask for consent **before** you 
 the check. Do not run first and ask later. The terminal CLI cannot prompt you in
 chat (it is a non-interactive subprocess), so **you own the consent question**.
 
-**This gate applies only when the scope is `full`** — that is the only scope that
-runs INFRA-003. For Workday-only, ServiceNow-only, Local-files-only, or
-Prerequisites-only scopes, skip this gate and go straight to Step 2b.
+The **same** `--runtime-reachability` probe also powers **WD-RUN-001** (the Workday
+active connector check): it stands up the same kind of transient flow, makes one
+read-only Workday call through the maker's connection, then deletes the flow. So
+the consent gate is required whenever **either** mutating probe is in scope.
+
+**This gate applies when the scope runs a mutating probe: `full` (INFRA-003 and
+WD-RUN-001), `workday`, or `workdayextension` (WD-RUN-001).** For ServiceNow-only,
+Local-files-only, or Prerequisites-only scopes, skip this gate and go straight to
+Step 2b.
 
 Ask using this exact wording, swapping `<SYSTEM>` for the system being checked
 (Workday / ServiceNow / SAP SuccessFactors / custom HTTP — use the connected
@@ -150,8 +156,13 @@ Keep them in whatever phrasing you use.
 
 - **If the user says YES** → run the check **with** `--runtime-reachability` (Step 2b).
 - **If the user says NO** → run the check **without** the flag (Step 2b), then in the
-  summary note that the connectivity probe was skipped by choice, and offer the
-  manual verification path:
+  summary note that the connectivity probe was skipped by choice. The passive
+  fallback depends on scope:
+  - **Workday scope (WD-RUN-001)** → the check falls back to the **passive
+    run-history** signal (recent Workday connector runs on the environment). No
+    manual step is required; just note that the active probe was declined.
+  - **INFRA-003 (full scope)** → INFRA-003 returns **Manual** guidance. Offer the
+    manual verification path:
 
 > Prefer to verify manually? You can confirm the connection is whitelisted:
 >

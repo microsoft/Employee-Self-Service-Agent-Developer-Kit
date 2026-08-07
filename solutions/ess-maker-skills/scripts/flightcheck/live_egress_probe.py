@@ -88,6 +88,31 @@ TRIGGER_NAME = "manual"
 _HTTP_TIMEOUT = 60
 
 
+@dataclass(frozen=True)
+class ConnectorProbeAction:
+    """A read-only managed-connector action to run inside a probe flow."""
+
+    connector_api_id: str
+    connection_id: str
+    operation_id: str
+    parameters: dict[str, Any]
+    action_name: str = "Probe_Connector"
+    connection_ref_key: str | None = None
+
+
+@dataclass
+class ConnectorProbeResult:
+    """Outcome of one connector-bound probe action."""
+
+    succeeded: bool | None
+    action_status: str | None = None
+    status_code: int | None = None
+    error_code: str | None = None
+    error_message: str | None = None
+    stage: str = ""
+    detail: str = ""
+
+
 def build_probe_clientdata(target_url: str) -> str:
     """Return the ``clientdata`` string for the transient probe flow.
 
@@ -158,6 +183,136 @@ def build_probe_clientdata(target_url: str) -> str:
     return json.dumps(clientdata)
 
 
+def build_connector_probe_clientdata(action: ConnectorProbeAction) -> str:
+    """Return ``clientdata`` for a connector-bound transient probe flow.
+
+    The flow uses the same trigger/response lifecycle as INFRA-003, but swaps
+    the native HTTP action for one managed-connector ``OpenApiConnection``
+    action. ``connectionReferences`` uses the validated Embedded-by-connection
+    GUID shape from the WD-RUN-001 spike.
+    """
+    ref_key = action.connection_ref_key or action.connection_id
+    definition = {
+        "$schema": (
+            "https://schema.management.azure.com/providers/"
+            "Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#"
+        ),
+        "contentVersion": "1.0.0.0",
+        "parameters": {
+            "$connections": {"defaultValue": {}, "type": "Object"},
+            "$authentication": {"defaultValue": {}, "type": "SecureObject"},
+        },
+        "triggers": {
+            TRIGGER_NAME: {
+                "metadata": {},
+                "type": "Request",
+                "kind": "Http",
+                "inputs": {
+                    "schema": {"type": "object", "properties": {}, "required": []}
+                },
+            }
+        },
+        "actions": {
+            action.action_name: {
+                "runAfter": {},
+                "metadata": {},
+                "type": "OpenApiConnection",
+                "inputs": {
+                    "parameters": action.parameters,
+                    "host": {
+                        "apiId": action.connector_api_id,
+                        "operationId": action.operation_id,
+                        "connectionName": ref_key,
+                    },
+                },
+            },
+            "Respond": {
+                "runAfter": {
+                    action.action_name: [
+                        "Succeeded",
+                        "Failed",
+                        "TimedOut",
+                        "Skipped",
+                    ]
+                },
+                "metadata": {},
+                "type": "Response",
+                "kind": "Http",
+                "inputs": {
+                    "statusCode": 200,
+                    # Synchronous signals available from a Failed connector
+                    # action, live-verified against a real Workday managed
+                    # connection (Sunbreak Sandbox, 2026-08):
+                    #   @actions('X')?['status']  -> Succeeded / Failed
+                    #   @outputs('X')?['statusCode'] -> 200 / 400 / 500
+                    #   @actions('X')?['code']    -> OK / BadRequest /
+                    #                                InternalServerError
+                    # The human-readable connector error.message is NOT
+                    # reachable here: for a Failed action @outputs('X') and
+                    # @actions('X')?['error'] resolve to null; the message
+                    # only exists behind the SAS-signed outputsLink, which
+                    # FlightCheck deliberately never fetches. errorMessage is
+                    # kept best-effort (it populates only for Logic Apps
+                    # pre-connector action errors, not connector HTTP faults).
+                    "body": {
+                        # The response body carries every synchronous signal
+                        # twice, under a connector* name and a legacy workday*
+                        # name, both resolving to the identical Logic Apps
+                        # expression. The connector* keys are the current names;
+                        # the workday* aliases (and errorMessage/errorCode) are
+                        # retained for backward compatibility with the recorded
+                        # cassette (flightcheck_wd_connector_probe.yaml), whose
+                        # captured body used the workday*/errorCode keys.
+                        # interpret_connector_probe_response reads connector*
+                        # first and falls back to workday*, so the fallback is
+                        # load-bearing for cassette replay -- do not drop either
+                        # set without re-recording the cassette.
+                        "connectorActionStatus": (
+                            f"@actions('{action.action_name}')?['status']"
+                        ),
+                        "connectorStatusCode": (
+                            f"@outputs('{action.action_name}')?['statusCode']"
+                        ),
+                        "connectorErrorMessage": (
+                            f"@actions('{action.action_name}')?['error']?['message']"
+                        ),
+                        "connectorErrorCode": (
+                            f"@actions('{action.action_name}')?['code']"
+                        ),
+                        "workdayActionStatus": (
+                            f"@actions('{action.action_name}')?['status']"
+                        ),
+                        "workdayStatusCode": (
+                            f"@outputs('{action.action_name}')?['statusCode']"
+                        ),
+                        "errorMessage": (
+                            f"@actions('{action.action_name}')?['error']?['message']"
+                        ),
+                        "errorCode": (
+                            f"@actions('{action.action_name}')?['code']"
+                        ),
+                    },
+                },
+            },
+        },
+    }
+    clientdata = {
+        "properties": {
+            "connectionReferences": {
+                ref_key: {
+                    "connectionName": action.connection_id,
+                    "source": "Embedded",
+                    "id": action.connector_api_id,
+                    "tier": "Integrated",
+                }
+            },
+            "definition": definition,
+        },
+        "schemaVersion": "1.0.0.0",
+    }
+    return json.dumps(clientdata)
+
+
 @dataclass
 class LiveProbeResult:
     """Outcome of one live egress probe.
@@ -195,7 +350,11 @@ def _workflows_url(env_url: str, key: str = "") -> str:
 
 
 def find_probe_flow_ids(
-    env_url: str, dv_token: str, *, session: requests.Session | None = None
+    env_url: str,
+    dv_token: str,
+    *,
+    probe_flow_name: str = PROBE_FLOW_NAME,
+    session: requests.Session | None = None,
 ) -> list[str]:
     """Return the workflowids of every probe flow matching PROBE_FLOW_NAME.
 
@@ -207,7 +366,7 @@ def find_probe_flow_ids(
         headers=_dv_headers(dv_token),
         params={
             "$select": "workflowid,name,statecode",
-            "$filter": f"name eq '{PROBE_FLOW_NAME}' and category eq {FLOW_CATEGORY}",
+            "$filter": f"name eq '{probe_flow_name}' and category eq {FLOW_CATEGORY}",
         },
         timeout=_HTTP_TIMEOUT,
     )
@@ -253,13 +412,28 @@ def delete_probe_flow(
 
 
 def cleanup_orphan_probe_flows(
-    env_url: str, dv_token: str, *, session: requests.Session | None = None
+    env_url: str,
+    dv_token: str,
+    *,
+    probe_flow_name: str = PROBE_FLOW_NAME,
+    session: requests.Session | None = None,
 ) -> int:
     """Delete every leftover probe flow matching PROBE_FLOW_NAME. Returns the
     count deleted. Best-effort; never raises. Call before/after probing so a
-    crashed prior run cannot leave a residual flow."""
+    crashed prior run cannot leave a residual flow.
+
+    Concurrency caveat: the sweep matches on the shared probe-flow name, not on
+    a per-run identifier, so two FlightCheck runs probing the same environment
+    at the same time can delete each other's in-flight probe flow (the losing
+    run may then report a spurious probe failure). This is the same
+    single-operator assumption INFRA-003 accepts: FlightCheck is a
+    pre-deployment tool run by one operator per environment. If concurrent runs
+    become a real use case, scope the flow name (or the delete filter) with a
+    per-run token so the sweep only reaps its own leftovers."""
     try:
-        ids = find_probe_flow_ids(env_url, dv_token, session=session)
+        ids = find_probe_flow_ids(
+            env_url, dv_token, probe_flow_name=probe_flow_name, session=session
+        )
     except requests.RequestException:
         return 0
     deleted = 0
@@ -270,17 +444,23 @@ def cleanup_orphan_probe_flows(
 
 
 def _create_probe_flow(
-    env_url: str, dv_token: str, target_url: str, session: requests.Session
+    env_url: str,
+    dv_token: str,
+    clientdata: str,
+    session: requests.Session,
+    *,
+    probe_flow_name: str = PROBE_FLOW_NAME,
+    description: str = "FlightCheck transient reachability probe.",
 ) -> str | None:
     """POST the probe flow to the Dataverse workflow table. Returns the new
     workflowid (from the representation body or OData-EntityId header)."""
     body = {
         "category": FLOW_CATEGORY,
-        "name": PROBE_FLOW_NAME,
+        "name": probe_flow_name,
         "type": FLOW_TYPE_DEFINITION,
-        "description": "FlightCheck INFRA-003 transient reachability probe.",
+        "description": description,
         "primaryentity": "none",
-        "clientdata": build_probe_clientdata(target_url),
+        "clientdata": clientdata,
     }
     resp = session.post(
         _workflows_url(env_url),
@@ -408,6 +588,68 @@ def interpret_probe_response(body: Any) -> LiveProbeResult:
     )
 
 
+def interpret_connector_probe_response(body: Any) -> ConnectorProbeResult:
+    """Map a synchronous connector-probe response body to a result."""
+    # Each field is read from the current connector* key first, falling back to
+    # the legacy workday*/errorCode key. The fallback is load-bearing: the
+    # recorded cassette (flightcheck_wd_connector_probe.yaml) captured a body
+    # that only carried the workday*/errorCode names, so removing the fallback
+    # would break cassette replay. See build_connector_probe_clientdata, which
+    # emits both name sets for the same expressions.
+    if not isinstance(body, dict):
+        return ConnectorProbeResult(
+            succeeded=None,
+            stage="done",
+            detail="connector probe response could not be parsed",
+        )
+    action_status = body.get("connectorActionStatus", body.get("workdayActionStatus"))
+    status_code = body.get("connectorStatusCode", body.get("workdayStatusCode"))
+    if isinstance(status_code, bool):
+        status_code = None
+    if not isinstance(status_code, int):
+        status_code = None
+    error_code = body.get("connectorErrorCode", body.get("errorCode"))
+    error_message = body.get("connectorErrorMessage", body.get("errorMessage"))
+    if not isinstance(error_code, str):
+        error_code = None
+    if not isinstance(error_message, str):
+        error_message = None
+    if action_status == "Succeeded":
+        return ConnectorProbeResult(
+            succeeded=True,
+            action_status=action_status,
+            status_code=status_code,
+            error_code=error_code,
+            error_message=error_message,
+            stage="done",
+            detail=f"connector action succeeded (HTTP {status_code})"
+            if status_code
+            else "connector action succeeded",
+        )
+    if action_status in {"Failed", "TimedOut", "Skipped"} or error_code or error_message:
+        detail_bits = [f"connector action {action_status or 'failed'}"]
+        if status_code:
+            detail_bits.append(f"HTTP {status_code}")
+        if error_code:
+            detail_bits.append(f"code {error_code}")
+        return ConnectorProbeResult(
+            succeeded=False,
+            action_status=action_status if isinstance(action_status, str) else None,
+            status_code=status_code,
+            error_code=error_code,
+            error_message=error_message,
+            stage="done",
+            detail=", ".join(detail_bits),
+        )
+    return ConnectorProbeResult(
+        succeeded=None,
+        action_status=action_status if isinstance(action_status, str) else None,
+        status_code=status_code,
+        stage="done",
+        detail="connector probe response missing action status",
+    )
+
+
 def run_live_probe(
     *,
     env_url: str,
@@ -428,7 +670,13 @@ def run_live_probe(
     workflow_id: str | None = None
     stage = "create"
     try:
-        workflow_id = _create_probe_flow(env_url, dv_token, target_url, sess)
+        workflow_id = _create_probe_flow(
+            env_url,
+            dv_token,
+            build_probe_clientdata(target_url),
+            sess,
+            description="FlightCheck INFRA-003 transient reachability probe.",
+        )
         if not workflow_id:
             return LiveProbeResult(
                 reachable=None, stage=stage, detail="flow create returned no id"
@@ -459,6 +707,71 @@ def run_live_probe(
             reachable=None,
             stage=stage,
             detail=f"egress probe {stage} failed: {type(exc).__name__}",
+        )
+    finally:
+        if workflow_id:
+            delete_probe_flow(env_url, dv_token, workflow_id, session=sess)
+
+
+def run_connector_probe(
+    *,
+    env_url: str,
+    dv_token: str,
+    env_id: str,
+    flow_headers: dict,
+    action: ConnectorProbeAction,
+    probe_flow_name: str,
+    description: str,
+    session: requests.Session | None = None,
+) -> ConnectorProbeResult:
+    """Run one transient flow with a managed-connector action.
+
+    Uses the same create / activate / listCallbackUrl / invoke / delete
+    lifecycle as ``run_live_probe``. The caller supplies a read-only connector
+    action and owns product-specific result mapping.
+    """
+    sess = session or requests
+    workflow_id: str | None = None
+    stage = "create"
+    try:
+        workflow_id = _create_probe_flow(
+            env_url,
+            dv_token,
+            build_connector_probe_clientdata(action),
+            sess,
+            probe_flow_name=probe_flow_name,
+            description=description,
+        )
+        if not workflow_id:
+            return ConnectorProbeResult(
+                succeeded=None, stage=stage, detail="flow create returned no id"
+            )
+
+        stage = "activate"
+        _activate_probe_flow(env_url, dv_token, workflow_id, sess)
+
+        stage = "callback"
+        callback_url = _list_callback_url(flow_headers, env_id, workflow_id, sess)
+        if not callback_url:
+            return ConnectorProbeResult(
+                succeeded=None, stage=stage, detail="no trigger callback URL returned"
+            )
+
+        stage = "invoke"
+        trig = sess.post(
+            callback_url, json={}, headers={"Prefer": "wait"}, timeout=_HTTP_TIMEOUT
+        )
+        trig.raise_for_status()
+        try:
+            body = trig.json()
+        except ValueError:
+            body = None
+        return interpret_connector_probe_response(body)
+    except requests.RequestException as exc:
+        return ConnectorProbeResult(
+            succeeded=None,
+            stage=stage,
+            detail=f"connector probe {stage} failed: {type(exc).__name__}",
         )
     finally:
         if workflow_id:

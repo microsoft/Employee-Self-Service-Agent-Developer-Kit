@@ -174,15 +174,40 @@ def _apply_runtime_reachability_consent(args, runner, checks) -> None:
     # getattr keeps this robust for callers that build args without the flag.
     flag = getattr(args, "runtime_reachability", None)
 
-    # The egress probe only lives inside the Infrastructure category (INFRA-003).
+    # The egress probe lives in the Infrastructure category (INFRA-003) and in
+    # the Workday category (WD-RUN-001 active connector probe). Consent must
+    # be surfaced whenever EITHER mutating probe is in scope, so a Workday-only
+    # readiness check asks first and falls back to the passive run-history path
+    # on NO, instead of silently requiring the --runtime-reachability flag.
     infra_in_scope = any(fn is run_infrastructure_checks for _, fn in checks)
-    if not infra_in_scope:
+    workday_in_scope = any(fn is run_workday_checks for _, fn in checks)
+    active_probe_in_scope = infra_in_scope or workday_in_scope
+    if not active_probe_in_scope:
         runner.runtime_reachability = flag is True
         return
+
+    # The manual IP-allowlist fallback (build_manual_fallback) is an INFRA-003
+    # remedy: confirm the environment's egress IP ranges are whitelisted on the
+    # external endpoint. When ONLY the Workday active probe is in scope,
+    # WD-RUN-001 auto-falls-back to the passive run-history signal on a decline,
+    # so no manual step is required (see SKILL.md). Printing the IP-allowlist
+    # block there is misdirected, so suppress it for the Workday-only case.
+    workday_only = workday_in_scope and not infra_in_scope
 
     systems = _endpoint_systems_for_offer(runner)
     # Name EVERY discovered system, not just the first: the probe tests all of
     # them, so consent must cover all of them (PR #197 review).
+    #
+    # WD-RUN-001's active probe reaches Workday through the managed connector it
+    # selects from the BAP connection list (pp.get_connections), a source that is
+    # independent of the .local/config.json ``connections`` map that
+    # _endpoint_systems_for_offer reads. A Workday BAP connection that was never
+    # recorded in that config (e.g. connected outside the kit's /connect skill)
+    # would otherwise be probed without Workday appearing in the consent prompt.
+    # Name Workday explicitly whenever the Workday active probe is in scope so
+    # the consent copy can never omit a system the probe will contact.
+    if workday_in_scope:
+        systems = [*systems, "Workday"]
     label = consent.systems_label(systems)
 
     # --- Explicit flag wins; the flag is the consent, but never silent. -------
@@ -196,7 +221,8 @@ def _apply_runtime_reachability_consent(args, runner, checks) -> None:
         # Explicit opt-out: surface the skip + manual-verification guidance.
         runner.runtime_reachability_declined = True
         print(consent.build_skip_message(label))
-        print(consent.build_manual_fallback(label))
+        if not workday_only:
+            print(consent.build_manual_fallback(label))
         return
 
     # --- No flag: consent must be surfaced (flag is None). --------------------
@@ -228,7 +254,8 @@ def _apply_runtime_reachability_consent(args, runner, checks) -> None:
         # No TTY (CI / piped): we cannot ask a human. Stay read-only, but explain
         # what did not run and how to opt in (the flag doubles as consent).
         print(consent.build_cannot_prompt_message(label))
-        print(consent.build_manual_fallback(label))
+        if not workday_only:
+            print(consent.build_manual_fallback(label))
         return
 
     # Interactive terminal: ALWAYS ask before touching the tenant.
@@ -243,7 +270,8 @@ def _apply_runtime_reachability_consent(args, runner, checks) -> None:
 
     if decision.declined:
         print(consent.build_skip_message(label))
-        print(consent.build_manual_fallback(label))
+        if not workday_only:
+            print(consent.build_manual_fallback(label))
 
 
 def open_report_in_browser(output_dir):

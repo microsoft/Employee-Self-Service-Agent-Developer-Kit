@@ -30,7 +30,10 @@ from tests.mocks import power_automate as pa
 from flightcheck.checks.infrastructure import (
     check_external_endpoint_reachability,
 )
-from flightcheck.live_egress_probe import interpret_probe_response
+from flightcheck.live_egress_probe import (
+    interpret_connector_probe_response,
+    interpret_probe_response,
+)
 from flightcheck.runner import Priority, Role, Status
 
 require_validated_mock(pa)
@@ -292,3 +295,78 @@ class TestInterpretProbeResponse:
     def test_bool_status_is_undetermined(self):
         # bool is an int subclass but is not a valid HTTP status code.
         assert interpret_probe_response({"reachableStatusCode": True}).reachable is None
+
+
+class TestInterpretConnectorProbeResponse:
+    """interpret_connector_probe_response maps a synchronous connector-probe
+    body to a tri-state result. Only a Succeeded action is a pass; a failed
+    action (or any error signal) is a fail; an absent/malformed body is
+    undetermined (succeeded None), never a false fail."""
+
+    def test_succeeded_action_passes_with_status(self):
+        result = interpret_connector_probe_response(
+            {"connectorActionStatus": "Succeeded", "connectorStatusCode": 200}
+        )
+
+        assert result.succeeded is True
+        assert result.status_code == 200
+        assert "HTTP 200" in result.detail
+
+    def test_failed_action_fails_with_status_and_code(self):
+        result = interpret_connector_probe_response(
+            {
+                "connectorActionStatus": "Failed",
+                "connectorStatusCode": 400,
+                "connectorErrorCode": "BadRequest",
+            }
+        )
+
+        assert result.succeeded is False
+        assert result.status_code == 400
+        assert result.error_code == "BadRequest"
+
+    def test_skipped_action_is_failure(self):
+        # A Skipped connector action means the probe did not exercise egress
+        # cleanly; treat it as a failure signal, not a pass.
+        result = interpret_connector_probe_response(
+            {"connectorActionStatus": "Skipped"}
+        )
+
+        assert result.succeeded is False
+
+    def test_error_signal_without_status_is_failure(self):
+        # No action status, but an error code is present -> fail, not undetermined.
+        result = interpret_connector_probe_response(
+            {"connectorErrorCode": "InternalServerError"}
+        )
+
+        assert result.succeeded is False
+        assert result.error_code == "InternalServerError"
+
+    def test_missing_action_status_is_undetermined(self):
+        # Dict body but no action status and no error signal: contract not
+        # satisfied -> undetermined, never a false fail.
+        assert interpret_connector_probe_response({}).succeeded is None
+
+    def test_non_dict_body_is_undetermined(self):
+        assert interpret_connector_probe_response(None).succeeded is None
+        assert interpret_connector_probe_response("not-json").succeeded is None
+
+    def test_bool_status_is_ignored(self):
+        # bool is an int subclass but is not a valid HTTP status code.
+        result = interpret_connector_probe_response(
+            {"connectorActionStatus": "Succeeded", "connectorStatusCode": True}
+        )
+
+        assert result.succeeded is True
+        assert result.status_code is None
+
+    def test_workday_prefixed_keys_are_read_as_fallback(self):
+        # The live green body used workday* keys; the parser must accept them
+        # when the connector* keys are absent.
+        result = interpret_connector_probe_response(
+            {"workdayActionStatus": "Succeeded", "workdayStatusCode": 200}
+        )
+
+        assert result.succeeded is True
+        assert result.status_code == 200

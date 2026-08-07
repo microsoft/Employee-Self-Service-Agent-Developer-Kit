@@ -48,6 +48,7 @@ def _args(**kw) -> SimpleNamespace:
 
 
 _INFRA_CHECKS = [("Infrastructure", cli.run_infrastructure_checks)]
+_WD_CHECKS = [("Workday", cli.run_workday_checks)]
 _NON_INFRA_CHECKS = [("Local", lambda runner: [])]
 
 _WD = {"Workday": {"baseUrl": "https://wd.example.com"}}
@@ -251,6 +252,126 @@ class TestInfraNotInScope:
         )
         assert runner.runtime_reachability is expected
         assert runner.runtime_reachability_declined is False
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Workday scope (WD-RUN-001 v2 active probe): consent is surfaced even when
+# INFRA-003 is not in scope, so a Workday-only run asks first and NO -> passive.
+# ───────────────────────────────────────────────────────────────────────
+
+
+class TestWorkdayScopeSurfacesConsent:
+    def test_interactive_yes_enables_the_probe_on_workday_scope(
+        self, monkeypatch
+    ):
+        _force_tty(monkeypatch, interactive=True)
+        monkeypatch.setattr(cli.consent, "ask_yes_no", lambda label: True)
+        runner = _runner(_WD)
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=None, scope="workday"), runner, _WD_CHECKS
+        )
+
+        assert runner.runtime_reachability is True
+        assert runner.runtime_reachability_declined is False
+
+    def test_interactive_no_declines_and_falls_back_on_workday_scope(
+        self, monkeypatch, capsys
+    ):
+        _force_tty(monkeypatch, interactive=True)
+        monkeypatch.setattr(cli.consent, "ask_yes_no", lambda label: False)
+        runner = _runner(_WD)
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=None, scope="workday"), runner, _WD_CHECKS
+        )
+
+        assert runner.runtime_reachability is False
+        assert runner.runtime_reachability_declined is True
+        out = capsys.readouterr().out
+        assert "Connectivity check skipped" in out
+        # Workday-only decline auto-falls-back to passive run history, so the
+        # INFRA-003 manual IP-allowlist block must NOT be printed (N3; SKILL.md
+        # says no manual step is required for the Workday active probe).
+        assert "Prefer to verify manually" not in out
+        assert cli.consent.OUTBOUND_IP_ARTICLE_URL not in out
+
+    def test_forced_off_workday_scope_declines_without_manual_ip_block(
+        self, capsys
+    ):
+        runner = _runner(_WD)
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=False, scope="workday"), runner, _WD_CHECKS
+        )
+
+        assert runner.runtime_reachability is False
+        assert runner.runtime_reachability_declined is True
+        out = capsys.readouterr().out
+        assert "Connectivity check skipped" in out
+        assert "Prefer to verify manually" not in out
+        assert cli.consent.OUTBOUND_IP_ARTICLE_URL not in out
+
+    def test_adk_workday_scope_defers_to_skill_no_prompt(self, monkeypatch):
+        _force_tty(monkeypatch, interactive=True)
+
+        def _boom(label):  # noqa: ANN001
+            raise AssertionError("ADK path must not prompt; the skill asks the user")
+
+        monkeypatch.setattr(cli.consent, "ask_yes_no", _boom)
+        runner = _runner(_WD)
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=None, scope="workday", invocation_source="adk"),
+            runner,
+            _WD_CHECKS,
+        )
+        assert runner.runtime_reachability is False
+        assert runner.runtime_reachability_declined is False
+
+    def test_consent_names_workday_even_when_absent_from_config_connections(
+        self, monkeypatch
+    ):
+        # PR #197 defect class: the Workday active probe selects its connection
+        # from the BAP connection list, independent of the config.connections
+        # map that _endpoint_systems_for_offer reads. If a Workday connection is
+        # not recorded in config.connections (e.g. connected outside /connect),
+        # the consent copy must still name Workday, because the probe will
+        # contact it. Here config.connections names only ServiceNow, yet the
+        # Workday active probe is in scope.
+        _force_tty(monkeypatch, interactive=True)
+        seen = {}
+
+        def _capture(label):  # noqa: ANN001
+            seen["label"] = label
+            return True
+
+        monkeypatch.setattr(cli.consent, "ask_yes_no", _capture)
+        runner = _runner({"ServiceNow": {"baseUrl": "https://sn.example.com"}})
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=None, scope="workday"), runner, _WD_CHECKS
+        )
+
+        assert runner.runtime_reachability is True
+        assert "Workday" in seen["label"]
+        assert "ServiceNow" in seen["label"]
+
+    def test_forced_on_notice_names_workday_when_not_in_config_connections(
+        self, capsys
+    ):
+        # Same defect class on the explicit-flag path: passing the flag IS
+        # consent, and the forced-on notice must still name Workday so the
+        # tenant mutation against Workday is never a surprise.
+        runner = _runner({"ServiceNow": {"baseUrl": "https://sn.example.com"}})
+
+        cli._apply_runtime_reachability_consent(
+            _args(runtime_reachability=True, scope="workday"), runner, _WD_CHECKS
+        )
+
+        assert runner.runtime_reachability is True
+        out = capsys.readouterr().out
+        assert "Workday" in out
 
 
 # ───────────────────────────────────────────────────────────────────────

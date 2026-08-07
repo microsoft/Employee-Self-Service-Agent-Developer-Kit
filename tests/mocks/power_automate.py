@@ -53,6 +53,7 @@ TRIGGER_NAME = "manual"
 MOCK_ENV_URL = "https://orgmocktenant.crm.dynamics.com"
 MOCK_ENV_ID = "00000000-0000-0000-0000-000000001111"
 MOCK_WORKFLOW_ID = "00000000-0000-0000-0000-000000001111"
+MOCK_WORKDAY_PROBE_FLOW_NAME = "flightcheck-wd-run-001-probe"
 MOCK_CALLBACK_URL = (
     "https://mockenv.00.environment.api.powerplatform.com/powerautomate/"
     "automations/direct/cu/04/workflows/00000000000000000000000000000000/"
@@ -227,6 +228,52 @@ def invoke_probe(
         "json": {
             "reachableStatusCode": reachable_status_code,
             "actionStatus": action_status,
+        },
+        "status": status,
+    }
+
+
+def invoke_workday_connector_probe(
+    *,
+    callback_url: str = MOCK_CALLBACK_URL,
+    action_status: str | None = "Succeeded",
+    status_code: int | None = 200,
+    error_code: str | None = None,
+    error_message: str | None = None,
+    status: int = 200,
+) -> dict[str, Any]:
+    """Mock POST <SAS callback URL> for the WD-RUN-001 connector-bound probe.
+
+    Cited consumers:
+      - flightcheck/live_egress_probe.py:build_connector_probe_clientdata
+      - flightcheck/checks/workday.py:_check_workday_active_run_health
+
+    Source (validated):
+      tests/fixtures/cassettes/flightcheck_wd_connector_probe.yaml plus the
+      live error-ladder captures against a real Workday managed connection
+      (Sunbreak Sandbox, oauth, 2026-08). The green invoke body was
+      {"workdayActionStatus":"Succeeded","workdayStatusCode":200,
+      "errorCode":"OK","errorMessage":null}. Live-verified failure signal:
+      only workdayStatusCode (200/400/500) and errorCode -- the action code
+      via @actions('X')?['code'] (OK / BadRequest / InternalServerError) --
+      are available synchronously. errorMessage is null for connector HTTP
+      faults (the message lives behind the SAS outputsLink FlightCheck never
+      fetches). A wrong endpoint and a Workday business fault BOTH return
+      HTTP 400 / BadRequest. Tests vary the action-level fields for
+      deterministic negative branches.
+    """
+    return {
+        "method": "POST",
+        "url": callback_url,
+        "json": {
+            "connectorActionStatus": action_status,
+            "connectorStatusCode": status_code,
+            "connectorErrorCode": error_code,
+            "connectorErrorMessage": error_message,
+            "workdayActionStatus": action_status,
+            "workdayStatusCode": status_code,
+            "errorCode": error_code,
+            "errorMessage": error_message,
         },
         "status": status,
     }
