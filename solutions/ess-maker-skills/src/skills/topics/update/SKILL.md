@@ -139,13 +139,13 @@ After a successful push, tell the user:
 
 > ✅ **{TopicName}** has been updated in Copilot Studio.
 
-Topic (botcomponent) changes only go live once the agent is **published** (flow `clientdata` edits are live immediately). Offer to publish for them:
+Topic (botcomponent) changes only go live once the agent is **published** (flow `clientdata` edits are live immediately). Ask **once** in chat whether to publish; on yes, run it **non-interactively** so the CLI's own confirmation never surfaces to the maker:
 
 ```
-python scripts/publish.py
+python scripts/publish.py --yes
 ```
 
-If the change added or modified a ServiceNow ITSM flow (e.g. the runtime dependent-dropdowns options flow), also offer to confirm the flow is agent-invocable — this verifies it is activated, `modernflowtype=1`, has kind:Skills Response actions, a bound flow-scoped connection reference, and a system-topic link:
+If the change added or modified a ServiceNow ITSM flow (e.g. the runtime dependent-dropdowns options flow), also run `validate.py` to confirm the flow is agent-invocable — this is **read-only** (it only reads registration state), so just run it without asking. It verifies the flow is activated, `modernflowtype=1`, has kind:Skills Response actions, a bound flow-scoped connection reference, and a system-topic link:
 
 ```
 python scripts/validate.py "<flow name>"
@@ -153,8 +153,12 @@ python scripts/validate.py "<flow name>"
 
 If the user prefers to publish manually instead, point them at [Copilot Studio](https://copilotstudio.microsoft.com/).
 
-## Step 9: Offer Next Steps
+## Step 9: Continue into test, or offer next steps
 
+Offer to continue straight into a debug drive of the change — and if the user says yes, **do it in the same flow, don't make them start over**:
+
+- "Want to check it works? I can drive **{TopicName}** now and exercise its happy path and failure handling."
+  - On yes: read `src/skills/topics/test/SKILL.md` and run its debug-and-validate loop **scoped to {TopicName}** — you already know the component (this was a topic update), so **skip the "topic or workflow?" question**, and reuse the signed-in test-pane session if one is already open (only do the launch → sign-in handoff if no browser is ready). Build the probe set (failure paths first) for {TopicName} and drive it.
 - "Would you like to make another change?"
 - "Type `/scan` to check for errors."
 - "Type `/menu` to see all available commands."

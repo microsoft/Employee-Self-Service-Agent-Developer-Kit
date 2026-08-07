@@ -85,7 +85,7 @@ Order of grounding sources (highest to lowest):
 2. `src/examples/ess-samples/` - vendored snapshot of the
    microsoft/CopilotStudioSamples Employee Self-Service Agent samples.
 3. `src/skills/` - kit-shipped skill instructions for /create, /update,
-   /delete, /scan, /evaluate, /push, /flightcheck,
+   /delete, /test, /scan, /evaluate, /push, /flightcheck,
    /backup-template-configs, /restore-template-configs.
 4. `src/reference/` (other subfolders) - additional kit-shipped guidance.
 5. Web fetch / general knowledge - only when none of the above answer the
@@ -293,6 +293,8 @@ After a successful push, `.baseline/` is updated to match the new state.
 | Update/modify a workflow | `src/skills/workflows/update/SKILL.md` |
 | Delete/remove a topic | `src/skills/topics/delete/SKILL.md` |
 | Delete/remove a workflow | `src/skills/workflows/delete/SKILL.md` |
+| Test/debug a topic | `src/skills/topics/test/SKILL.md` |
+| Test/debug a workflow | `src/skills/workflows/test/SKILL.md` |
 | Run pre-deployment readiness check | `src/skills/flightcheck/SKILL.md` |
 | Fix compile errors | `src/skills/cleanup/SKILL.md` |
 | Generate evaluation test sets | `src/skills/evaluations/create/SKILL.md` |

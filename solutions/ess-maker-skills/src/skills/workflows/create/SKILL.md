@@ -116,5 +116,7 @@ python scripts/emit_capability.py workflow_create
 After the workflow is created, the user needs a topic to call it. Tell them:
 - "Your workflow is ready with ID `{GUID}`. To use it from a topic, add an `InvokeFlowAction` with `flowId: {GUID}`."
 - "Would you like me to create a topic that calls this workflow?"
+- "Want to check it works? I can exercise **{WorkflowName}** now and read its run history."
+  - On yes: read `src/skills/workflows/test/SKILL.md` and run its debug-and-validate loop **scoped to {WorkflowName}** — you already know the component (you just created this workflow), so **skip the "topic or workflow?" question**. Exercise the flow's failure inputs (missing record, unauthorized, malformed) alongside the valid request, then inspect the run.
 
 If they say yes, hand off to the topic creation skill (`src/skills/topics/create/SKILL.md`).
