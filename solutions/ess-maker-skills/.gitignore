@@ -13,6 +13,10 @@ workspace/**
 # from the scripts dir (e.g. `python adk_telemetry.py --selftest`). Never commit.
 scripts/.local/
 
+# Generated local MCP configuration and Copilot worktrees
+.vscode/mcp.json
+copilot-worktrees/
+
 # ISV reference docs synced from an internal ESS reference source (never committed)
 src/reference/ess-docs/isv/
 

@@ -97,15 +97,12 @@ Run:
 python scripts/discover.py --list-environments
 ```
 
-Build a choice per environment row (label = environment name, description = URL +
-type) and ask the user to pick one with `vscode_askQuestions`. Then confirm the
-selection:
+Build a choice per environment row (label = `{environment name} — {URL}`,
+description = type) and ask the user to pick one with `vscode_askQuestions`. Parse
+`ENVIRONMENT_LIST_JSON:` from the same command and select the corresponding
+object by exact URL without listing environments again.
 
-```
-python scripts/discover.py --list-environments --select {NUMBER}
-```
-
-Parse the `SELECTED_ENV_JSON:` line; take `instanceUrl`, **strip any trailing
+Take `instanceUrl`, **strip any trailing
 slash**, and save it as `dataverseEndpoint` in `.local/config.json` (merge — do
 not drop other keys). Go to P1.3.
 

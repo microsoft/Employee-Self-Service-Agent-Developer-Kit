@@ -5,6 +5,26 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 
 ---
 
+## 0.9 — Reuse the foundation environment
+
+Run:
+
+```text
+python scripts/setup_state.py show --view report
+```
+
+Parse the printed state. If `connect_ready` is true and `environment.locked` is
+true:
+
+1. Set ENV_URL to `environment.tenant_endpoint`, stripping any trailing slash.
+2. Do not list environments, ask how to provide an environment, or ask the
+   maker to select it again.
+3. Set FOUNDATION_REUSED to true.
+4. Continue directly to section 1.2.
+
+Only continue to section 1.0 when no completed foundation state with a locked
+environment exists.
+
 ## 1.0 — Ask how to provide the environment
 
 Use the `vscode_askQuestions` tool:
@@ -54,9 +74,10 @@ A browser window will open for sign-in. Wait for the script to finish.
 
 ## 1.1a — Ask the user to pick an environment
 
-Build options from the script's environment table. Each row becomes an
-option with the environment name as the label and the URL + type as
-the description.
+Build options from the script's environment table. Each row becomes an option
+with `{environment name} — {URL}` as the label and the environment type as the
+description. Including the URL in the label keeps duplicate display names
+unambiguous.
 
 Use the `vscode_askQuestions` tool:
 
@@ -66,29 +87,22 @@ Use the `vscode_askQuestions` tool:
     "header": "Select environment",
     "question": "Which environment is your ESS agent deployed in?",
     "options": [
-      { "label": "{env 1 name}", "description": "{URL} [{type}]" },
-      { "label": "{env 2 name}", "description": "{URL} [{type}]" }
+      { "label": "{env 1 name} — {URL}", "description": "{type}" },
+      { "label": "{env 2 name} — {URL}", "description": "{type}" }
     ],
     "allowFreeformInput": false
   }
 ]
 ```
 
-Map the selected environment name back to its row number from the script
-output.
+Map the selected URL to the unique matching `instanceUrl` in
+`ENVIRONMENT_LIST_JSON:` from the same script output.
 
 ---
 
-## 1.1b — Confirm selection
+## 1.1b — Use selection
 
-Run the selection command in the terminal:
-
-```
-python scripts/discover.py --list-environments --select {NUMBER}
-```
-
-Find the line starting with `SELECTED_ENV_JSON:` in the output. Parse the
-JSON after the colon to get the `instanceUrl` field. Save it as ENV_URL.
+Read the selected object's `instanceUrl` field. Save it as ENV_URL.
 **Strip any trailing slash** from ENV_URL before using it (e.g.,
 `https://org.crm.dynamics.com/` becomes `https://org.crm.dynamics.com`).
 
@@ -104,7 +118,7 @@ Use the `vscode_askQuestions` tool:
 [
   {
     "header": "Environment URL",
-    "question": "What's your Power Platform environment URL? (e.g. https://yourorg.crm.dynamics.com — find it in the Power Platform admin center)"
+    "question": "What's your Power Platform environment URL? Example: `https://yourorg.crm.dynamics.com`. Find it in the Power Platform admin center."
   }
 ]
 ```
@@ -133,24 +147,30 @@ Create `.vscode/mcp.json` with this exact content (replace the entire
 }
 ```
 
-Then immediately show:
+If FOUNDATION_REUSED is true, do not rerun the Allowed MCP Client prerequisite;
+it already passed in foundation `SETUP-02.2`. Continue directly to section 1.3.
 
-**Message:**
+Check the server-side Allowed MCP Client record:
 
-Done. Now there's a one-time admin step to enable the Dataverse connector:
+```text
+python scripts/check_dataverse_mcp.py --url "{ENV_URL}"
+```
 
-1. Go to [Power Platform admin center](https://admin.powerplatform.microsoft.com/environments)
-   → your environment → **Settings** → **Product** → **Features**
-2. Turn on **"Allow MCP clients to interact with Dataverse MCP server
-   (GA version)"** and click **Save**
-3. Click **"Go to Advanced Settings"** → find **"Microsoft GitHub Copilot"**
-   → set **Is Enabled** to **Yes** → **Save & Close**
+Parse `DATAVERSE_MCP_STATUS_JSON:`:
 
-Type **done** when that's set up, or **skip** if it's already enabled.
-
-**End message.**
-
-Wait for the user.
+- If `status` is `enabled`, continue immediately to section 1.3 without asking
+  the user.
+- If `status` is `disabled` or `missing`, show the Power Platform admin center
+  steps below and ask only whether to **Check again**:
+  1. Open [Power Platform admin center](https://admin.powerplatform.microsoft.com/environments).
+  2. Select the `{ENVIRONMENT_NAME}` environment.
+  3. Open `Settings` → `Product` → `Features`.
+  4. Turn on **Allow MCP clients to interact with Dataverse MCP server**.
+  5. Open `Advanced Settings`.
+  6. Open **Microsoft GitHub Copilot** and set `Is Enabled` to `Yes`.
+  7. Choose `Save & Close`, then select **Check again** here.
+- If the command fails, show its exact error and stop. Do not ask the user to
+  attest that the setting is enabled.
 
 ## 1.3 — Proceed to agent discovery
 

@@ -18,6 +18,8 @@ codified it has been removed.
 
 from __future__ import annotations
 
+from unittest.mock import Mock
+
 import pytest
 import responses
 
@@ -25,6 +27,88 @@ from tests.conftest import require_validated_mock
 from tests.mocks import pp_admin as pp
 
 require_validated_mock(pp)
+
+
+class TestAuthenticationScope:
+    def test_bap_only_auth_skips_flow_token(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        from flightcheck import pp_admin_client
+
+        monkeypatch.chdir(tmp_path)
+        acquired_scopes = []
+
+        cache = Mock()
+        cache.has_state_changed = False
+        app = Mock()
+        app.get_accounts.return_value = []
+
+        def acquire_interactive(scopes, prompt):
+            acquired_scopes.append((scopes, prompt))
+            return {"access_token": f"token-{len(acquired_scopes)}"}
+
+        app.acquire_token_interactive.side_effect = acquire_interactive
+        monkeypatch.setattr(
+            pp_admin_client.msal,
+            "SerializableTokenCache",
+            lambda: cache,
+        )
+        monkeypatch.setattr(
+            pp_admin_client.msal,
+            "PublicClientApplication",
+            lambda *args, **kwargs: app,
+        )
+
+        client = pp_admin_client.PPAdminClient("organizations")
+        token = client.authenticate(include_flow=False)
+
+        assert token == "token-1"
+        assert acquired_scopes == [
+            ([pp_admin_client.PP_SCOPE], "select_account"),
+        ]
+        assert client._flow_token is None
+
+    def test_default_auth_still_acquires_flow_token(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path,
+    ) -> None:
+        from flightcheck import pp_admin_client
+
+        monkeypatch.chdir(tmp_path)
+        acquired_scopes = []
+
+        cache = Mock()
+        cache.has_state_changed = False
+        app = Mock()
+        app.get_accounts.return_value = []
+
+        def acquire_interactive(scopes, prompt):
+            acquired_scopes.append((scopes, prompt))
+            return {"access_token": f"token-{len(acquired_scopes)}"}
+
+        app.acquire_token_interactive.side_effect = acquire_interactive
+        monkeypatch.setattr(
+            pp_admin_client.msal,
+            "SerializableTokenCache",
+            lambda: cache,
+        )
+        monkeypatch.setattr(
+            pp_admin_client.msal,
+            "PublicClientApplication",
+            lambda *args, **kwargs: app,
+        )
+
+        client = pp_admin_client.PPAdminClient("organizations")
+        client.authenticate()
+
+        assert acquired_scopes == [
+            ([pp_admin_client.PP_SCOPE], "select_account"),
+            ([pp_admin_client.FLOW_SCOPE], "select_account"),
+        ]
+        assert client._flow_token == "token-2"
 
 
 @pytest.fixture

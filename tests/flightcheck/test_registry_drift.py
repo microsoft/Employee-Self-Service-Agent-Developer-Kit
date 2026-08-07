@@ -117,7 +117,7 @@ class TestRegistryDrift:
         # IDs from other integrations must NOT be flagged even though they don't
         # resolve in the setup registry — they are validated via --scope.
         for foreign in ("SN-CONN-003", "EXT-002-ACL", "SAP-001",
-                        "ENV-004-OR-001", "ENV-009", "AUTH-005"):
+                        "ENV-004-OR-001", "AUTH-005"):
             assert registry.resolve(_probe(foreign)) is None
             assert not _is_owned(_probe(foreign)), (
                 f"{foreign} should be outside the owned allow-list"

@@ -18,6 +18,8 @@ Contracts pinned:
   * requires_dataverse_endpoint, no endpoint  -> SystemExit code 1
   * plan producing a PASSED row               -> SystemExit code 0
   * plan producing a FAILED row               -> SystemExit code 1
+  * plan producing an ERROR row                -> SystemExit code 1
+  * exact checkpoint producing no row          -> SystemExit code 1
 """
 
 from __future__ import annotations
@@ -37,6 +39,7 @@ def _args(
     environment_url: str | None = None,
     no_telemetry: bool = True,
     invocation_source: str | None = None,
+    quiet_auth: bool = False,
 ) -> argparse.Namespace:
     return argparse.Namespace(
         checkpoint=checkpoint,
@@ -45,6 +48,7 @@ def _args(
         output=str(tmp_path / "out"),
         no_telemetry=no_telemetry,
         invocation_source=invocation_source,
+        quiet_auth=quiet_auth,
     )
 
 
@@ -69,6 +73,19 @@ def _silence_output(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestGates:
+    def test_environment_checkpoints_accept_explicit_foundation_context(
+        self,
+    ) -> None:
+        for checkpoint in (
+            "ENV-001",
+            "ENV-002",
+            "ENV-009",
+            "ENV-CAPACITY-001",
+        ):
+            plan = registry.transitive_requirements(checkpoint)
+            assert plan.requires_config is False
+            assert plan.requires_dataverse_endpoint is True
+
     def test_unknown_checkpoint_exits_2(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
@@ -119,6 +136,7 @@ class TestHermeticRun:
     ) -> None:
         class _Spec:
             category_label = "Fake"
+            is_family = False
 
         class _Plan:
             clients = frozenset()
@@ -161,6 +179,56 @@ class TestHermeticRun:
         with pytest.raises(SystemExit) as exc:
             cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
         assert exc.value.code == 1
+
+    def test_error_row_exits_1(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        self._install_fake_plan(
+            monkeypatch,
+            [_row("FAKE-ERR", Status.ERROR.value)],
+        )
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(_args("FAKE-ERR", tmp_path))
+        assert exc.value.code == 1
+
+    def test_exact_checkpoint_without_result_exits_1(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        self._install_fake_plan(monkeypatch, [])
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(_args("FAKE-EMPTY", tmp_path))
+        assert exc.value.code == 1
+
+    def test_quiet_auth_suppresses_routine_checkpoint_chatter(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        self._install_fake_plan(
+            monkeypatch,
+            [_row("FAKE-001", Status.PASSED.value)],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(
+                _args("FAKE-001", tmp_path, quiet_auth=True)
+            )
+
+        assert exc.value.code == 0
+        output = capsys.readouterr().out
+        assert "Single Checkpoint" not in output
+        assert "Running checkpoint" not in output
 
 
 class TestCheckpointTelemetry:

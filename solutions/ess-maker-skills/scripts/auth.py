@@ -175,6 +175,25 @@ def discover_tenant(env_url):
     return "organizations"
 
 
+def _dataverse_accepts_token(env_url, token):
+    """Return False only when Dataverse explicitly rejects the token."""
+    try:
+        resp = _SESSION.get(
+            f"{env_url}/api/data/v9.2/WhoAmI",
+            headers={
+                **HEADERS_BASE,
+                "Authorization": f"Bearer {token}",
+            },
+            timeout=30,
+            verify=True,
+        )
+    except requests.RequestException:
+        # Authentication should not turn a transient connectivity failure into
+        # a forced sign-in. The caller's real operation will surface it.
+        return True
+    return resp.status_code != 401
+
+
 def authenticate(env_url):
     """Get a Dataverse access token via MSAL interactive browser auth.
 
@@ -201,6 +220,23 @@ def authenticate(env_url):
     result = None
     if accounts:
         result = app.acquire_token_silent([scope], account=accounts[0])
+
+    if (
+        result
+        and "access_token" in result
+        and not _dataverse_accepts_token(env_url, result["access_token"])
+    ):
+        print("Dataverse rejected the cached session. Refreshing sign-in...")
+        clear_token_cache(
+            env_url,
+            cache=cache,
+            app=app,
+            account=accounts[0],
+        )
+        app = msal.PublicClientApplication(
+            CLIENT_ID, authority=authority, token_cache=cache
+        )
+        result = None
 
     if not result or "access_token" not in result:
         print(f"Opening browser for sign-in (tenant: {tenant})...")
@@ -287,6 +323,45 @@ def _persist_token_cache(cache, cache_path):
             os.chmod(cache_path, stat.S_IRUSR | stat.S_IWUSR)
         except OSError:
             pass
+
+
+def clear_token_cache(env_url=None, *, cache=None, app=None, account=None):
+    """Remove only the rejected account from the shared MSAL token cache."""
+    cache_path = os.path.join(LOCAL_STATE_DIR, ".token_cache.bin")
+    if cache is None:
+        cache = msal.SerializableTokenCache()
+        try:
+            with open(cache_path, "r", encoding="utf-8") as cache_file:
+                cache.deserialize(cache_file.read())
+        except FileNotFoundError:
+            return
+
+    if account is None:
+        if not env_url:
+            return
+        tenant = discover_tenant(env_url)
+        if app is None:
+            app = msal.PublicClientApplication(
+                CLIENT_ID,
+                authority=f"https://login.microsoftonline.com/{tenant}",
+                token_cache=cache,
+            )
+        accounts = app.get_accounts()
+        if not accounts:
+            return
+        account = accounts[0]
+
+    if app is None:
+        if not env_url:
+            return
+        tenant = discover_tenant(env_url)
+        app = msal.PublicClientApplication(
+            CLIENT_ID,
+            authority=f"https://login.microsoftonline.com/{tenant}",
+            token_cache=cache,
+        )
+    app.remove_account(account)
+    _persist_token_cache(cache, cache_path)
 
 
 def get_flow_token(env_url):
@@ -468,6 +543,37 @@ def dataverse_get(env_url, token, path, params=None):
         raise AuthExpiredError(response=resp)
     resp.raise_for_status()
     return resp.json()
+
+
+def execute_action(env_url, token, action_name, data):
+    """Execute an unbound Dataverse Web API action via POST."""
+    _validate_https_url(env_url)
+    if not action_name or "/" in action_name:
+        raise ValueError("action_name must be a non-empty unbound action name")
+    headers = {
+        **HEADERS_BASE,
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+    }
+    url = f"{env_url}/api/data/v9.2/{action_name}"
+    _start = time.perf_counter()
+    resp = _SESSION.post(
+        url,
+        headers=headers,
+        json=data,
+        timeout=60,
+        verify=True,
+    )
+    _emit_api_call(action_name, "execute", _start, status=resp.status_code)
+    if resp.status_code == 401:
+        raise AuthExpiredError(response=resp)
+    raise_api_error(resp, resource_name=action_name, operation="execute")
+    if not resp.content:
+        return {}
+    try:
+        return resp.json()
+    except ValueError:
+        return {}
 
 
 def update_record(env_url, token, entity_set, record_id, data):

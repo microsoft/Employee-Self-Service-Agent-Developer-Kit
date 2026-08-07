@@ -22,14 +22,10 @@ step and the capability shows up on the dashboards.
 Design rules (match adk_telemetry.py):
   * Fail-open. Telemetry must NEVER break a skill. Any error is swallowed and
     we exit 0 regardless, so a skill step that runs this can't fail the flow.
-  * Non-blocking for the maker, but synchronous emit. This is a short-lived
-    CLI process, so we pass ``block=True`` (emit on the calling thread);
-    otherwise the daemon emit thread would be killed when the interpreter
-    exits and the event would be lost.
-  * Consent-aware. ``emit_capability_use`` already no-ops when telemetry is
-    disabled (``ESS_ADK_TELEMETRY=off`` or opted out via
-    ``python scripts/adk_telemetry.py off``), so no extra gating is needed
-    here.
+  * Non-blocking for the maker. The command launches a detached worker that
+    performs the synchronous emit after the caller has already returned.
+  * Consent-aware. The parent checks consent before launching a worker so an
+    opted-out maker does not incur a process launch for a no-op.
 
 Usage:
     python scripts/emit_capability.py topic_create
@@ -41,7 +37,9 @@ canonical value-list). An unknown value is still emitted, but normalized to
 """
 
 import os
+import subprocess
 import sys
+import threading
 
 # Add scripts/ to path so we can import adk_telemetry, mirroring the
 # sibling-import pattern used by discover.py / evaluate_evals.py.
@@ -72,17 +70,50 @@ def main(argv: list[str]) -> int:
             print(cap)
         return 0
 
+    if args[0] == "--worker":
+        if len(args) < 2:
+            return 0
+        try:
+            adk_telemetry.emit_capability_use(args[1].strip(), block=True)
+        except Exception:  # noqa: BLE001 — telemetry must never break a skill
+            pass
+        return 0
+
     capability = args[0].strip()
+    if not adk_telemetry.telemetry_enabled():
+        return 0
+
+    if adk_telemetry._SYNC:
+        try:
+            adk_telemetry.emit_capability_use(capability, block=True)
+        except Exception:  # noqa: BLE001 — telemetry must never break a skill
+            pass
+        return 0
 
     try:
-        # block=True: short-lived CLI process — emit synchronously so the
-        # event isn't dropped when the interpreter exits and kills a daemon
-        # thread. This posts on the calling thread and flushes the on-disk
-        # buffer, so no explicit flush() is needed (flush() only joins async
-        # emit threads, of which block=True creates none). Matches the other
-        # inline hooks (backup/restore_template_configs.py, fetch_and_setup.py).
-        # emit_capability_use() no-ops when telemetry is disabled.
-        adk_telemetry.emit_capability_use(capability, block=True)
+        kwargs = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "close_fds": True,
+        }
+        if os.name == "nt":
+            kwargs["creationflags"] = (
+                subprocess.DETACHED_PROCESS
+                | subprocess.CREATE_NEW_PROCESS_GROUP
+                | subprocess.CREATE_NO_WINDOW
+            )
+        else:
+            kwargs["start_new_session"] = True
+        worker = subprocess.Popen(
+            [sys.executable, os.path.abspath(__file__), "--worker", capability],
+            **kwargs,
+        )
+        threading.Thread(
+            target=worker.wait,
+            name="adk-capability-worker-reaper",
+            daemon=True,
+        ).start()
     except Exception:  # noqa: BLE001 — telemetry must never break a skill
         pass
 

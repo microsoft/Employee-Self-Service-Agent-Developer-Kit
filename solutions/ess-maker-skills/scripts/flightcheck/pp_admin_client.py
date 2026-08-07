@@ -142,17 +142,18 @@ class PPAdminClient:
     def __init__(self, tenant_id: str):
         self.tenant_id = tenant_id
         self._token: str | None = None
+        self._flow_token: str | None = None
 
-    def authenticate(self) -> str:
+    def authenticate(self, *, include_flow: bool = True) -> str:
         """Acquire Power Platform access tokens.
 
-        Acquires BOTH the PowerApps audience token (used for BAP / BAP
-        admin / PowerApps connections / DLP) and the Flow audience
-        token (used for the Power Automate admin flow-listing
-        endpoint at api.flow.microsoft.com). The two endpoints live
-        on different hosts and require different audience tokens —
-        acquiring only the PowerApps token leaves the flow endpoints
-        returning AuthenticationFailed.
+        Always acquires the PowerApps audience token used for BAP, PowerApps
+        connections, and DLP. By default it also acquires the separate Flow
+        audience token used by Power Automate admin endpoints.
+
+        Set ``include_flow=False`` for BAP-only operations such as environment
+        discovery. This avoids an unnecessary second interactive sign-in while
+        preserving the existing default for callers that query flows.
 
         Returns the PowerApps token for backwards compatibility.
         """
@@ -187,7 +188,11 @@ class PPAdminClient:
             return result["access_token"]
 
         pp_token = acquire(PP_SCOPE, "PowerApps/BAP")
-        flow_token = acquire(FLOW_SCOPE, "Power Automate (Flow)")
+        flow_token = (
+            acquire(FLOW_SCOPE, "Power Automate (Flow)")
+            if include_flow
+            else None
+        )
 
         if cache.has_state_changed:
             os.makedirs(".local", exist_ok=True)

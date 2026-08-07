@@ -82,35 +82,36 @@ def test_failed_when_zero_capacity_no_payg():
     assert "Manage capacity" in r.remediation
 
 
-def test_warns_zero_capacity_with_payg():
+def test_fails_zero_capacity_with_payg():
     r = _run(_runner(powerplatform=_FakePP([]), payg=True))
-    assert r.status == "Warning"
-    assert "Pay-as-you-go billing is configured" in r.result
-
-
-def test_warns_zero_capacity_unknown_payg():
-    # No _payg_configured on the runner (PRE-005 did not run this scope).
-    r = _run(_runner(powerplatform=_FakePP([])))
-    assert r.status == "Warning"
-    assert "not determined" in r.result
-
-
-def test_manual_when_no_powerplatform_client():
-    # No licensing client wired -> allocation unreadable -> MANUAL attestation.
-    r = _run(_runner(powerplatform=None, payg=False))
-    assert r.status == "Manual"
-    assert "could not be read" in r.result
+    assert r.status == "Failed"
+    assert "does not satisfy" in r.result
     assert "Manage capacity" in r.remediation
 
 
-def test_manual_when_allocation_read_denied():
+def test_fails_zero_capacity_unknown_payg():
+    # No _payg_configured on the runner (PRE-005 did not run this scope).
+    r = _run(_runner(powerplatform=_FakePP([])))
+    assert r.status == "Failed"
+    assert "not determined" in r.result
+    assert "cannot continue" in r.remediation.lower()
+
+
+def test_fails_when_no_powerplatform_client():
+    r = _run(_runner(powerplatform=None, payg=False))
+    assert r.status == "Failed"
+    assert "could not be verified" in r.result
+    assert "Manage capacity" in r.remediation
+
+
+def test_fails_when_allocation_read_denied():
     pp_denied = _FakePP({"_error": "insufficient_permissions", "_status": 403})
     r = _run(_runner(powerplatform=pp_denied, payg=False))
-    assert r.status == "Manual"
-    assert "could not be read" in r.result
+    assert r.status == "Failed"
+    assert "could not be verified" in r.result
 
 
-def test_manual_when_no_env_id():
+def test_fails_when_no_env_id():
     r = _run(_runner(powerplatform=_FakePP(_mcs(10)), env_id=None))
-    assert r.status == "Manual"
+    assert r.status == "Failed"
     assert "Environment ID is unavailable" in r.result

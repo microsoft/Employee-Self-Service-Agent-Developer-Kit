@@ -32,6 +32,10 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from auth import authenticate, query_all
 from http_errors import APIError
+from install_ess_agent import (
+    build_installation_options,
+    load_installation_config,
+)
 
 
 def discover_agents(env_url, token):
@@ -50,6 +54,41 @@ def discover_agents(env_url, token):
             "ismanaged": r.get("ismanaged", False),
         })
     return agents
+
+
+def build_ess_agent_inventory(agents, config):
+    """Classify supported ESS bots and list products that remain installable."""
+    options = build_installation_options(config)
+    options_by_schema = {
+        option["schemaName"].casefold(): option
+        for option in options
+    }
+    ess_agents = []
+    installed_keys = set()
+
+    for agent in agents:
+        schema_name = agent.get("schemaname")
+        if not isinstance(schema_name, str):
+            continue
+        option = options_by_schema.get(schema_name.casefold())
+        if option is None:
+            continue
+        ess_agents.append({
+            **agent,
+            "installationKey": option["key"],
+            "configKey": option["configKey"],
+        })
+        installed_keys.add(option["key"])
+
+    return {
+        "agents": ess_agents,
+        "installedInstallationKeys": sorted(installed_keys),
+        "availableInstallations": [
+            option
+            for option in options
+            if option["key"] not in installed_keys
+        ],
+    }
 
 
 def print_agent_table(agents):
@@ -78,9 +117,31 @@ def main():
                         help="Power Platform environment URL")
     parser.add_argument("--list-environments", action="store_true",
                         help="List all environments in the tenant (no URL needed)")
+    parser.add_argument(
+        "--resolve-environment-url",
+        help="Resolve one environment URL to its Power Platform metadata",
+    )
+    parser.add_argument(
+        "--inventory-only",
+        action="store_true",
+        help="Output ESS agent inventory JSON without requiring an installed agent",
+    )
     parser.add_argument("--select", type=int, default=None,
                         help="Select agent by number and output JSON")
     args = parser.parse_args()
+
+    if args.resolve_environment_url:
+        from list_environments import resolve_environment_for_user
+
+        selected = resolve_environment_for_user(args.resolve_environment_url)
+        if selected is None:
+            print(
+                "ERROR: The provided URL did not match a Dataverse-linked "
+                "Power Platform environment available to the signed-in account."
+            )
+            sys.exit(1)
+        print(f"SELECTED_ENV_JSON:{json.dumps(selected)}")
+        return
 
     # --- Environment listing mode ---
     if args.list_environments:
@@ -101,6 +162,7 @@ def main():
             sys.exit(1)
 
         print_environment_table(dv_environments)
+        print(f"ENVIRONMENT_LIST_JSON:{json.dumps(dv_environments)}")
 
         if args.select is not None:
             idx = args.select
@@ -120,23 +182,30 @@ def main():
 
     env_url = args.url.rstrip("/")
 
-    print("Authenticating to Dataverse...")
     token = authenticate(env_url)
-    print("Authenticated.\n")
-
-    print("Discovering agents...")
     try:
-        agents = discover_agents(env_url, token)
+        inventory = build_ess_agent_inventory(
+            discover_agents(env_url, token),
+            load_installation_config(),
+        )
     except APIError as e:
         print(e.format_for_terminal())
         sys.exit(1)
-
-    if not agents:
-        print("No agents found in this environment.")
-        print("Make sure your ESS agent is installed in Copilot Studio.")
+    except (OSError, ValueError) as e:
+        print(f"ERROR: Could not load ESS installation catalog: {e}")
         sys.exit(1)
 
-    print(f"Found {len(agents)} agent(s):")
+    print(f"ESS_AGENT_DISCOVERY_JSON:{json.dumps(inventory)}")
+    agents = inventory["agents"]
+
+    if args.inventory_only:
+        return
+
+    if not agents:
+        print("No supported ESS agents found in this environment.")
+        sys.exit(1)
+
+    print(f"Found {len(agents)} supported ESS agent(s):")
     print_agent_table(agents)
 
     if args.select is not None:

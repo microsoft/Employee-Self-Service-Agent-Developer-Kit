@@ -17,11 +17,14 @@ Usage (standalone):
 import json
 import os
 import sys
+from urllib.parse import urlparse
 
 # Add scripts/ to path so we can import shared modules
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from flightcheck.pp_admin_client import PPAdminClient
+from flightcheck.powerplatform_client import PowerPlatformClient
+from auth import discover_tenant
 
 
 def parse_raw_environments(raw_envs):
@@ -67,7 +70,7 @@ def list_environments():
     print("A browser window will open for sign-in.")
     pp_admin = PPAdminClient("organizations")
     try:
-        pp_admin.authenticate()
+        pp_admin.authenticate(include_flow=False)
     except Exception as e:
         print(f"ERROR: Power Platform authentication failed - {e}")
         print("Ensure you have Power Platform environment access.")
@@ -92,6 +95,61 @@ def get_dataverse_environments():
     dv_environments = [e for e in environments if e["instanceUrl"]]
     excluded = len(environments) - len(dv_environments)
     return dv_environments, excluded
+
+
+def find_environment_by_url(environments, env_url):
+    """Return the environment whose Dataverse hostname matches env_url."""
+    target_host = (urlparse(env_url.rstrip("/")).hostname or "").casefold()
+    if not target_host:
+        return None
+
+    for environment in environments:
+        instance_url = environment.get("instanceUrl", "")
+        instance_host = (
+            urlparse(instance_url.rstrip("/")).hostname or ""
+        ).casefold()
+        if instance_host == target_host:
+            return environment
+    return None
+
+
+def resolve_environment_for_user(env_url):
+    """Resolve one Dataverse URL through the user-scoped Power Platform API."""
+    try:
+        client = PowerPlatformClient(discover_tenant(env_url))
+        client.authenticate()
+    except (OSError, RuntimeError, ValueError) as exc:
+        print(f"ERROR: Power Platform authentication failed - {exc}")
+        sys.exit(1)
+
+    raw_environments = client.list_environments_for_user()
+    if isinstance(raw_environments, dict) and "_error" in raw_environments:
+        print(
+            "ERROR: Could not read the Power Platform environments available "
+            "to the signed-in account."
+        )
+        sys.exit(1)
+
+    environments = []
+    for environment in raw_environments:
+        url = environment.get("url", "")
+        domain_name = environment.get("domainName", "")
+        if not url and domain_name:
+            url = f"https://{domain_name}"
+        environments.append({
+            "id": environment.get("id", ""),
+            "displayName": environment.get("displayName", "Unknown"),
+            "type": environment.get("type", "Unknown"),
+            "state": environment.get("state", "Unknown"),
+            "instanceUrl": url.rstrip("/"),
+            "region": (
+                environment.get("geo")
+                or environment.get("azureRegion")
+                or ""
+            ),
+        })
+
+    return find_environment_by_url(environments, env_url)
 
 
 def print_environment_table(environments):

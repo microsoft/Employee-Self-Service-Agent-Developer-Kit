@@ -2,7 +2,7 @@
 # Licensed under the MIT License.
 
 """
-Mock response builders for the Power Platform API (Licensing / Billing Policy).
+Mock response builders for the Power Platform API.
 
 # ─────────────────────────────────────────────────────────────────
 # MOCK_STATUS = "documented"
@@ -18,6 +18,12 @@ Mock response builders for the Power Platform API (Licensing / Billing Policy).
 #     https://learn.microsoft.com/en-us/rest/api/power-platform/licensing/billing-policy-environment/list-billing-policy-environments
 #   Get Currency Allocation By Environment:
 #     https://learn.microsoft.com/en-us/rest/api/power-platform/licensing/currency-allocation/get-currency-allocation-by-environment
+#   List Environments For User:
+#     https://learn.microsoft.com/en-us/rest/api/power-platform/environmentmanagement/environments/list-environments-for-user
+#   Get Environment Application Package:
+#     https://learn.microsoft.com/en-us/rest/api/power-platform/appmanagement/applications/get-environment-application-package
+#   Install Application Package:
+#     https://learn.microsoft.com/en-us/rest/api/power-platform/appmanagement/applications/install-application-package
 # ─────────────────────────────────────────────────────────────────
 
 Used by FlightCheck integration tests for PRE-005 (Pay-As-You-Go) via
@@ -59,6 +65,44 @@ guessed):
   collection):
     | environmentId        | string                      |
     | currencyAllocations  | CurrencyAllocationModelV1[] |
+
+  EnvironmentList:
+    | @odata.nextlink  | string (uri)                    |
+    | value            | EnvironmentResponse[]           |
+
+  EnvironmentResponse (fields consumed by setup):
+    | id               | string                          |
+    | displayName      | string                          |
+    | type             | string                          |
+    | state            | string                          |
+    | url              | string                          |
+    | domainName       | string                          |
+    | geo              | string                          |
+    | azureRegion      | string                          |
+
+  ApplicationPackageContinuationResponse:
+    | @odata.nextLink  | string                          |
+    | value            | ApplicationPackage[]            |
+
+  ApplicationPackage (fields consumed by setup):
+    | applicationName  | string                          |
+    | uniqueName       | string                          |
+    | state            | InstancePackageState            |
+    | lastError        | ErrorDetails                     |
+
+  InstancePackage (fields consumed by setup):
+    | packageUniqueName| string                          |
+    | packageVersion   | string                          |
+    | lastOperation    | InstancePackageOperation         |
+
+  InstancePackageOperation:
+    | operationId      | string (uuid)                   |
+    | state            | InstancePackageState            |
+    | statusMessage    | string                          |
+    | errorDetails     | ErrorDetails                     |
+
+  TpsInstallRequestPayload:
+    | payloadValue     | string                          |
 """
 
 from __future__ import annotations
@@ -72,6 +116,10 @@ PP_API_BASE = "https://api.powerplatform.com"
 
 MOCK_ENV_ID = "Default-00000000-0000-0000-0000-000000001111"
 MOCK_POLICY_ID = "00000000-0000-0000-0000-00000000b111"
+MOCK_APPLICATION_ID = "00000000-0000-0000-0000-00000000a111"
+MOCK_PACKAGE_ID = "00000000-0000-0000-0000-00000000a222"
+MOCK_OPERATION_ID = "00000000-0000-0000-0000-00000000a333"
+MOCK_PACKAGE_UNIQUE_NAME = "msdyn_CopilotForEmployeeSelfServiceDAHR"
 MOCK_SUBSCRIPTION_ID = "291bba3f-e0a5-47bc-a099-3bdcb2a50a05"
 MOCK_RESOURCE_GROUP = "rg-ess-payg"
 
@@ -125,6 +173,148 @@ def collection(items: Iterable[dict], *, next_link: str | None = None) -> dict[s
     if next_link:
         payload["@odata.nextLink"] = next_link
     return payload
+
+
+def environment(
+    *,
+    environment_id: str = MOCK_ENV_ID,
+    display_name: str = "ESS Development",
+    environment_type: str = "Sandbox",
+    state: str = "Ready",
+    domain_name: str = "essdev.crm.dynamics.com",
+    geo: str = "unitedstates",
+    azure_region: str = "westus",
+) -> dict[str, Any]:
+    """Build the documented ``EnvironmentResponse`` fields setup consumes."""
+    return {
+        "id": environment_id,
+        "displayName": display_name,
+        "type": environment_type,
+        "state": state,
+        "url": f"https://{domain_name}",
+        "domainName": domain_name,
+        "geo": geo,
+        "azureRegion": azure_region,
+    }
+
+
+def list_environments_for_user(
+    *,
+    environments: Iterable[dict] | None = None,
+    next_link: str | None = None,
+    status: int = 200,
+) -> dict[str, Any]:
+    """Build a response for GET /environmentmanagement/environments."""
+    url = f"{PP_API_BASE}/environmentmanagement/environments"
+    if status in (401, 403):
+        return {
+            "method": "GET",
+            "url": url,
+            "json": {"error": {"code": "AuthorizationFailed"}},
+            "status": status,
+        }
+    payload = {"value": list(environments if environments is not None else [])}
+    if next_link:
+        payload["@odata.nextlink"] = next_link
+    return {
+        "method": "GET",
+        "url": url,
+        "json": payload,
+        "status": 200,
+    }
+
+
+def application_package(
+    *,
+    unique_name: str = MOCK_PACKAGE_UNIQUE_NAME,
+    state: str = "None",
+    application_name: str = "Employee Self-Service HR",
+    last_error: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the documented ``ApplicationPackage`` fields setup consumes."""
+    return {
+        "applicationName": application_name,
+        "uniqueName": unique_name,
+        "state": state,
+        "lastError": last_error,
+    }
+
+
+def list_application_packages(
+    *,
+    environment_id: str = MOCK_ENV_ID,
+    packages: Iterable[dict] | None = None,
+    status: int = 200,
+) -> dict[str, Any]:
+    """Build a response for the application-package collection GET."""
+    url = (
+        f"{PP_API_BASE}/appmanagement/environments/{environment_id}"
+        "/applicationPackages"
+    )
+    if status in (401, 403):
+        return {
+            "method": "GET",
+            "url": url,
+            "json": {"error": {"code": "AuthorizationFailed"}},
+            "status": status,
+        }
+    return {
+        "method": "GET",
+        "url": url,
+        "json": collection(packages if packages is not None else []),
+        "status": 200,
+    }
+
+
+def instance_package_operation(
+    *,
+    operation_id: str = MOCK_OPERATION_ID,
+    state: str = "InstallRequested",
+    status_message: str = "Installation requested",
+    error_details: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the documented ``InstancePackageOperation`` fields."""
+    return {
+        "operationId": operation_id,
+        "state": state,
+        "statusMessage": status_message,
+        "errorDetails": error_details,
+    }
+
+
+def install_application_package(
+    *,
+    environment_id: str = MOCK_ENV_ID,
+    unique_name: str = MOCK_PACKAGE_UNIQUE_NAME,
+    operation: dict[str, Any] | None = None,
+    status: int = 200,
+) -> dict[str, Any]:
+    """Build a response for the durable application-package install POST."""
+    url = (
+        f"{PP_API_BASE}/appmanagement/environments/{environment_id}"
+        f"/applicationPackages/{unique_name}/install"
+    )
+    if status in (401, 403):
+        return {
+            "method": "POST",
+            "url": url,
+            "json": {"error": {"code": "AuthorizationFailed"}},
+            "status": status,
+        }
+    if status == 202:
+        return {"method": "POST", "url": url, "body": "", "status": 202}
+    return {
+        "method": "POST",
+        "url": url,
+        "json": {
+            "id": MOCK_PACKAGE_ID,
+            "applicationId": MOCK_APPLICATION_ID,
+            "packageUniqueName": unique_name,
+            "packageVersion": "1.0.0.0",
+            "lastOperation": operation or instance_package_operation(),
+        },
+        "status": 200,
+    }
 
 
 def list_billing_policies(

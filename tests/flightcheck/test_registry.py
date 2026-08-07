@@ -158,7 +158,8 @@ class TestTransitiveRequirements:
         plan = registry.transitive_requirements("ENV-002")
         # Single category function (run_environment_checks) covers both.
         assert len(plan.ordered_fns) == 1
-        assert plan.requires_config is True
+        assert plan.requires_config is False
+        assert plan.requires_dataverse_endpoint is True
 
     def test_env_capacity_001_resolves_and_unions_powerplatform(self):
         spec = registry.resolve("ENV-CAPACITY-001")
@@ -171,6 +172,15 @@ class TestTransitiveRequirements:
         assert registry.POWERPLATFORM in plan.clients
         assert plan.requires_dataverse_endpoint is True
         # Shares run_environment_checks with its ENV-001 prereq -> one fn.
+        assert len(plan.ordered_fns) == 1
+
+    def test_env009_is_individually_targetable_with_dataverse_only(self):
+        spec = registry.resolve("ENV-009")
+        assert spec is not None and spec.key == "ENV-009"
+        assert spec.clients == frozenset({registry.DATAVERSE})
+        plan = registry.transitive_requirements("ENV-009")
+        assert plan.requires_config is False
+        assert plan.requires_dataverse_endpoint is True
         assert len(plan.ordered_fns) == 1
 
     def test_ess_soln_001_resolves_and_pulls_env_prereqs(self):

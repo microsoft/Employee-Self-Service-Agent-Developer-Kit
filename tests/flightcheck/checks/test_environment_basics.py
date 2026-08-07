@@ -104,9 +104,9 @@ def test_env_002_fails_when_no_dataverse():
     assert "Enable Dataverse database" in env002.remediation
 
 
-def test_env_001_warns_on_api_error():
+def test_env_001_fails_on_api_error():
     results = _run(_FakePPAdmin(env_error="403 Forbidden"))
     env001 = _by_id(results, "ENV-001")
-    assert env001.status == "Warning"
+    assert env001.status == "Failed"
     assert "Unable to query environment" in env001.result
     assert "Power Platform Administrator role" in env001.remediation

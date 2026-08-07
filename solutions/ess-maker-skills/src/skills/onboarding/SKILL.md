@@ -4,9 +4,25 @@ Every **Message** block is the exact text to show the user. Copy it verbatim.
 Do not rephrase, add commentary, or tell the user what tools you are calling
 or what files you are reading.
 
+Follow `src/reference/ui-formatting-guidelines.md` for every user-facing
+instruction in this flow. Resolve its examples with the actual environment,
+agent, product, and connector names before displaying them.
+
 ---
 
 ## Start
+
+Run `python scripts/setup_state.py show --view current`. When `connect_ready` is
+true, this is workspace bootstrap after foundation setup:
+
+1. Initialize `workspace/onboarding/tasks.md` from the template only when it is
+   missing.
+2. Do not render another setup checklist or repeat foundation prerequisites.
+3. Resume from the first unchecked workspace-bootstrap task.
+4. Go directly to **Step 1 and Step 2** below.
+
+Only use the legacy standalone onboarding messages below when foundation setup
+is not complete.
 
 Read `workspace/onboarding/tasks.md`.
 
@@ -24,6 +40,10 @@ current flow. Let's start fresh.
 **End message.**
 
 Then go to Fresh Start.
+
+If the file contains a `Readiness check` row, delete only that row. Preserve
+the completion state of the four remaining onboarding tasks. The legacy
+optional FlightCheck is no longer part of `/setup`.
 
 If the file exists and all items are checked, show:
 
@@ -49,10 +69,8 @@ by "Picking up at Step {N}." Then go to the matching step below.
 | 2 | Agent discovered | ⬜ |
 | 3 | Agent extracted | ⬜ |
 | 4 | MCP server started | ⬜ |
-| 5 | Readiness check (optional) | ⬜ |
 
-Let's get your environment set up. The first 4 steps take about 5 minutes;
-the optional readiness check at the end is another 2-3 minutes.
+Let's get your environment set up. These four steps take about 5 minutes.
 
 **End message.**
 
@@ -73,9 +91,3 @@ read step2.md, which extracts the agent and starts the MCP server.)
 ## Step 3 or Step 4
 
 Read `src/skills/onboarding/step2.md` and follow it.
-
----
-
-## Step 5
-
-Read `src/skills/onboarding/step3-flightcheck.md` and follow it.

@@ -647,7 +647,7 @@ def _run_single_checkpoint(args):
     relies on the runner's target filter to keep just the requested rows.
 
     Always calls sys.exit(): 0 when the checkpoint passes / is manual /
-    not-configured, 1 when it fails, 2 for an unknown ID.
+    not-configured, 1 when it fails or errors, 2 for an unknown ID.
     """
     from flightcheck import registry
 
@@ -675,18 +675,19 @@ def _run_single_checkpoint(args):
         print("ERROR: No dataverseEndpoint in .local/config.json.")
         sys.exit(1)
 
-    # --- Banner ---
-    print()
-    print("=" * 64)
-    print("  ESS FLIGHTCHECK — Single Checkpoint")
-    print("=" * 64)
-    print(f"  Checkpoint:  {target}")
-    print(f"  Category:    {spec.category_label}")
-    if env_url:
-        print(f"  Environment: {env_url}")
-    print(f"  Clients:     {', '.join(sorted(needed)) or '(none)'}")
-    print("=" * 64)
-    print()
+    quiet_auth = getattr(args, "quiet_auth", False)
+    if not quiet_auth:
+        print()
+        print("=" * 64)
+        print("  ESS FLIGHTCHECK — Single Checkpoint")
+        print("=" * 64)
+        print(f"  Checkpoint:  {target}")
+        print(f"  Category:    {spec.category_label}")
+        if env_url:
+            print(f"  Environment: {env_url}")
+        print(f"  Clients:     {', '.join(sorted(needed)) or '(none)'}")
+        print("=" * 64)
+        print()
 
     dv_token = None
     tenant_id = None
@@ -713,30 +714,36 @@ def _run_single_checkpoint(args):
 
     if registry.DATAVERSE in needed and env_url:
         from auth import authenticate
-        print("Authenticating to Dataverse...")
+        if not quiet_auth:
+            print("Authenticating to Dataverse...")
         try:
             dv_token = authenticate(env_url)
-            print("  Dataverse: OK")
+            if not quiet_auth:
+                print("  Dataverse: OK")
         except Exception as e:
             print(f"  Dataverse: WARNING — {e}")
             dv_token = None
 
     if registry.GRAPH in needed:
-        print("Authenticating to Microsoft Graph...")
+        if not quiet_auth:
+            print("Authenticating to Microsoft Graph...")
         graph = GraphClient(tenant_id)
         try:
             graph.authenticate()
-            print("  Graph: OK")
+            if not quiet_auth:
+                print("  Graph: OK")
         except Exception as e:
             print(f"  Graph: WARNING — {e}")
             graph = None
 
     if registry.PP_ADMIN in needed:
-        print("Authenticating to Power Platform Admin API...")
+        if not quiet_auth:
+            print("Authenticating to Power Platform Admin API...")
         pp_admin = PPAdminClient(tenant_id)
         try:
             pp_admin.authenticate()
-            print("  Power Platform: OK")
+            if not quiet_auth:
+                print("  Power Platform: OK")
         except Exception as e:
             print(f"  Power Platform: WARNING — {e}")
             pp_admin = None
@@ -749,21 +756,25 @@ def _run_single_checkpoint(args):
             env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
 
     if registry.PVA in needed:
-        print("Authenticating to Copilot Studio (Island Gateway)...")
+        if not quiet_auth:
+            print("Authenticating to Copilot Studio (Island Gateway)...")
         pva = PVAClient(tenant_id, env_url)
         try:
             pva.authenticate()
-            print("  Copilot Studio: OK")
+            if not quiet_auth:
+                print("  Copilot Studio: OK")
         except Exception as e:
             print(f"  Copilot Studio: WARNING — {e}")
             pva = None
 
     if registry.POWERPLATFORM in needed:
-        print("Authenticating to Power Platform API (capacity allocation)...")
+        if not quiet_auth:
+            print("Authenticating to Power Platform API (capacity allocation)...")
         powerplatform = PowerPlatformClient(tenant_id)
         try:
             powerplatform.authenticate()
-            print("  Power Platform API: OK")
+            if not quiet_auth:
+                print("  Power Platform API: OK")
         except Exception as e:
             print(f"  Power Platform API: WARNING — {e}")
             powerplatform = None
@@ -793,7 +804,8 @@ def _run_single_checkpoint(args):
     for label, fn in plan.ordered_fns:
         runner.register(label, fn)
 
-    print("\nRunning checkpoint...\n")
+    if not quiet_auth:
+        print("\nRunning checkpoint...\n")
     result = runner.run()
 
     _print_prioritized_summary(result, verbose_manual=True)
@@ -802,6 +814,8 @@ def _run_single_checkpoint(args):
     if not result.results:
         print(f"\nNOTE: checkpoint {target} produced no result rows (the owning "
               "check may have skipped it for this tenant state).")
+        if not getattr(spec, "is_family", False):
+            sys.exit(1)
 
     # --- Emit anonymous outcome telemetry (best-effort; never affects exit) ---
     # Single-checkpoint mode never auto-opens the HTML report; results.json /
@@ -884,7 +898,7 @@ def _run_single_checkpoint(args):
         except Exception:  # noqa: BLE001 — adk telemetry must never break the run
             pass
 
-    sys.exit(1 if result.failed > 0 else 0)
+    sys.exit(1 if result.failed > 0 or result.errors > 0 else 0)
 
 
 def main():
@@ -933,6 +947,12 @@ def main():
     parser.add_argument(
         "--no-telemetry", action="store_true",
         help="Don't emit anonymous FlightCheck outcome telemetry",
+    )
+    parser.add_argument(
+        "--quiet-auth",
+        action="store_true",
+        help="Suppress routine authentication and single-checkpoint banner output; "
+             "interactive prompts, refresh notices, warnings, and failures remain.",
     )
     parser.add_argument(
         "--runtime-reachability",

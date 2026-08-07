@@ -2,10 +2,10 @@
 # Licensed under the MIT License.
 
 """
-ESS Maker Kit — Power Platform API (Licensing / Billing Policy) Client
+ESS Maker Kit — Power Platform API Client
 
-Provides authenticated read access to the Power Platform API billing-policy
-surface for FlightCheck PRE-005 (Pay-As-You-Go binding detection).
+Provides authenticated access to the Power Platform API for FlightCheck
+licensing checks and the foundation setup environment/application workflow.
 
 This is a DIFFERENT host and audience from the BAP admin client in
 ``pp_admin_client.py``:
@@ -18,9 +18,9 @@ This is a DIFFERENT host and audience from the BAP admin client in
 Authentication reuses the same MSAL token cache as auth.py /
 graph_client.py / pp_admin_client.py (``.local/.token_cache.bin``).
 
-API contract tier: ``documented`` — see the "API tier registry" in
-``tests/fixtures/cassettes/INDEX.md``. Response shapes verified against
-the MS Learn references cited on each method.
+API contract tier: ``documented`` — see the per-surface entries in the
+"API tier registry" in ``tests/fixtures/cassettes/INDEX.md``. Response shapes
+are verified against the Microsoft Learn references cited on each method.
 """
 
 import os
@@ -159,9 +159,24 @@ class PowerPlatformClient:
             resp.raise_for_status()
             data = resp.json()
             items.extend(data.get("value", []))
-            url = data.get("@odata.nextLink") or data.get("nextLink")
+            url = (
+                data.get("@odata.nextLink")
+                or data.get("@odata.nextlink")
+                or data.get("nextLink")
+            )
             params = None
         return items
+
+    def list_environments_for_user(self) -> list | dict:
+        """List environments available to the authenticated user.
+
+        Microsoft Learn:
+        https://learn.microsoft.com/en-us/rest/api/power-platform/environmentmanagement/environments/list-environments-for-user
+        """
+        return self._get_all(
+            "/environmentmanagement/environments",
+            params={"api-version": API_VERSION},
+        )
 
     def list_billing_policies(self) -> list | dict:
         """List all billing policies for the tenant.
@@ -232,3 +247,65 @@ class PowerPlatformClient:
         resp.raise_for_status()
         data = resp.json()
         return data.get("currencyAllocations", []) or []
+
+    def list_environment_application_packages(
+        self,
+        environment_id: str,
+    ) -> list | dict:
+        """List Marketplace application packages available to an environment.
+
+        Microsoft Learn:
+        https://learn.microsoft.com/en-us/rest/api/power-platform/appmanagement/applications/get-environment-application-package
+        """
+        return self._get_all(
+            f"/appmanagement/environments/{environment_id}/applicationPackages",
+            params={"api-version": API_VERSION},
+        )
+
+    def install_application_package(
+        self,
+        environment_id: str,
+        unique_name: str,
+    ) -> dict:
+        """Start installing a Marketplace application package.
+
+        Microsoft Learn:
+        https://learn.microsoft.com/en-us/rest/api/power-platform/appmanagement/applications/install-application-package
+
+        This is an intentional durable tenant write. Callers must first read
+        the package state and skip this POST when the package is installed or
+        already installing. The module-level retry policy excludes POST, so a
+        lost response is never replayed automatically.
+        """
+        url = (
+            f"{PP_API_BASE}/appmanagement/environments/{environment_id}"
+            f"/applicationPackages/{unique_name}/install"
+        )
+        resp = _SESSION.post(
+            url,
+            headers={**self.headers, "Content-Type": "application/json"},
+            params={"api-version": API_VERSION},
+            json={"payloadValue": ""},
+            timeout=60,
+        )
+        if resp.status_code in (401, 403):
+            return {
+                "_error": "insufficient_permissions",
+                "_status": resp.status_code,
+            }
+        if resp.status_code not in (200, 202):
+            resp.raise_for_status()
+
+        data = resp.json() if resp.content else {}
+        if not isinstance(data, dict):
+            data = {}
+        operation_id = (
+            data.get("lastOperation", {}).get("operationId")
+            if isinstance(data, dict)
+            else None
+        )
+        return {
+            **data,
+            "_async": resp.status_code == 202,
+            "_operationId": operation_id,
+        }
