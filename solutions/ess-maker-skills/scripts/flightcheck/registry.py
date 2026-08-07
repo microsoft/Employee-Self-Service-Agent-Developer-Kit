@@ -265,6 +265,26 @@ _SPECS: list[CheckpointSpec] = [
         priority=Priority.HIGH.value,
         roles=(Role.ENTRA_ADMIN.value, Role.WORKDAY_ADMIN.value),
     ),
+    # ---- Workday: active connector runtime health (WD-RUN-001) ----
+    # Emitted by run_workday_checks (_check_workday_run_health ->
+    # _check_workday_active_run_health). The active, consent-gated probe reads
+    # BAP connections + creates a transient Dataverse probe flow, and the
+    # passive run-history fallback reads flow runs via pp_admin over the flows
+    # WD-001 hydrates onto runner._workday_flows — so the plan needs both
+    # PP_ADMIN and DATAVERSE and pulls WD-001 as a prereq. Fixed ID (not a
+    # family): registering it makes `--checkpoint WD-RUN-001` resolve instead
+    # of raising RegistryError.
+    CheckpointSpec(
+        key="WD-RUN-001",
+        category_fn=run_workday_checks,
+        category_label="Workday",
+        clients=frozenset({PP_ADMIN, DATAVERSE}),
+        requires_config=True,
+        requires_dataverse_endpoint=True,
+        prereqs=("WD-001",),
+        priority=Priority.HIGH.value,
+        roles=(Role.WORKDAY_ADMIN.value, Role.ESS_MAKER.value),
+    ),
     # ---- Workday: connection-reference binding completeness ----
     # Reads cached refs from WD-PKG-001 and needs _workday_flows (WD-001).
     CheckpointSpec(
@@ -563,6 +583,7 @@ OWNED_PREFIXES: tuple = (
     "ESS-SOLN",
     "WD-PKG",
     "WD-CONN",
+    "WD-RUN",
     "WD-FLOW",
     "WD-WF",
     "WD-ENV",

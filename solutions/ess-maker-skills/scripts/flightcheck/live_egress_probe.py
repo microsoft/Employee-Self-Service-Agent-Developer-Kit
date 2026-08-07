@@ -420,7 +420,16 @@ def cleanup_orphan_probe_flows(
 ) -> int:
     """Delete every leftover probe flow matching PROBE_FLOW_NAME. Returns the
     count deleted. Best-effort; never raises. Call before/after probing so a
-    crashed prior run cannot leave a residual flow."""
+    crashed prior run cannot leave a residual flow.
+
+    Concurrency caveat: the sweep matches on the shared probe-flow name, not on
+    a per-run identifier, so two FlightCheck runs probing the same environment
+    at the same time can delete each other's in-flight probe flow (the losing
+    run may then report a spurious probe failure). This is the same
+    single-operator assumption INFRA-003 accepts: FlightCheck is a
+    pre-deployment tool run by one operator per environment. If concurrent runs
+    become a real use case, scope the flow name (or the delete filter) with a
+    per-run token so the sweep only reaps its own leftovers."""
     try:
         ids = find_probe_flow_ids(
             env_url, dv_token, probe_flow_name=probe_flow_name, session=session
