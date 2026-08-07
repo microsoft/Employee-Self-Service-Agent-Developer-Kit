@@ -307,3 +307,34 @@ class TestWorkdayActiveProbeMatrix:
             "assessed from recent Workday connector run history"
             not in row.result
         )
+
+    def test_passive_failed_still_claims_history_assessed(self) -> None:
+        row = _run_single(_runner(
+            runtime_reachability=False,
+            runtime_reachability_declined=True,
+            pp_client=_PP(runs=[
+                pp.flow_run(run_id="bad", flow_id=_FLOW_ID, status="Failed"),
+            ]),
+        ))
+
+        assert row.status == Status.FAILED.value
+        assert "live Workday connection test was not run" in row.result
+        assert "assessed from recent Workday connector run history" in row.result
+
+    def test_passive_not_configured_does_not_claim_history_assessed(
+        self,
+    ) -> None:
+        row = _run_single(_runner(
+            runtime_reachability=False,
+            runtime_reachability_declined=True,
+            pp_client=_PP(runs=[]),
+        ))
+
+        assert row.status == Status.NOT_CONFIGURED.value
+        assert "No recent Workday flow runs found" in row.result
+        assert "live Workday connection test was not run" in row.result
+        assert "could not be assessed either" in row.result
+        assert (
+            "assessed from recent Workday connector run history"
+            not in row.result
+        )
