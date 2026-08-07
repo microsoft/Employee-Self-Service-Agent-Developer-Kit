@@ -255,6 +255,18 @@ def build_connector_probe_clientdata(action: ConnectorProbeAction) -> str:
                     # kept best-effort (it populates only for Logic Apps
                     # pre-connector action errors, not connector HTTP faults).
                     "body": {
+                        # The response body carries every synchronous signal
+                        # twice, under a connector* name and a legacy workday*
+                        # name, both resolving to the identical Logic Apps
+                        # expression. The connector* keys are the current names;
+                        # the workday* aliases (and errorMessage/errorCode) are
+                        # retained for backward compatibility with the recorded
+                        # cassette (flightcheck_wd_connector_probe.yaml), whose
+                        # captured body used the workday*/errorCode keys.
+                        # interpret_connector_probe_response reads connector*
+                        # first and falls back to workday*, so the fallback is
+                        # load-bearing for cassette replay -- do not drop either
+                        # set without re-recording the cassette.
                         "connectorActionStatus": (
                             f"@actions('{action.action_name}')?['status']"
                         ),
@@ -569,6 +581,12 @@ def interpret_probe_response(body: Any) -> LiveProbeResult:
 
 def interpret_connector_probe_response(body: Any) -> ConnectorProbeResult:
     """Map a synchronous connector-probe response body to a result."""
+    # Each field is read from the current connector* key first, falling back to
+    # the legacy workday*/errorCode key. The fallback is load-bearing: the
+    # recorded cassette (flightcheck_wd_connector_probe.yaml) captured a body
+    # that only carried the workday*/errorCode names, so removing the fallback
+    # would break cassette replay. See build_connector_probe_clientdata, which
+    # emits both name sets for the same expressions.
     if not isinstance(body, dict):
         return ConnectorProbeResult(
             succeeded=None,
