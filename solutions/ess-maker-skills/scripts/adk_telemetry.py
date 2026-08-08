@@ -88,6 +88,28 @@ EVENT_FLIGHTCHECK_RUN = "adk.flightcheck.run"
 EVENT_FLIGHTCHECK_RESULT = "adk.flightcheck.result"
 EVENT_FLIGHTCHECK_ERROR = "adk.flightcheck.error"
 
+# Analytics pointer events (September 2026 MVP — see analytics_pointer.py
+# module docstring and ADO PR 5465946). All five events carry the common
+# dimensions plus ``env_id``, ``agent_id``, and (where relevant) an
+# ``outcome`` / ``unresolved_reason`` enum. No new tenant / PII dimensions:
+# env_id and agent_id are opaque GUIDs already emitted by adk.agent.deploy.
+EVENT_ANALYTICS_POINTER_SHOWN = "adk.analytics.pointer.shown"
+EVENT_ANALYTICS_POINTER_CLICKED = "adk.analytics.pointer.clicked"
+EVENT_ANALYTICS_POINTER_DISMISSED = "adk.analytics.pointer.dismissed"
+EVENT_ANALYTICS_POINTER_RESOLUTION_FAILED = "adk.analytics.pointer.resolution_failed"
+EVENT_ANALYTICS_POINTER_REPAIR_ATTEMPTED = "adk.analytics.pointer.repair_attempted"
+
+# ``outcome`` enum for the analytics pointer .shown event.
+ANALYTICS_OUTCOME_RESOLVED = "resolved"
+ANALYTICS_OUTCOME_UNRESOLVED = "unresolved"
+
+# ``unresolved_reason`` enum. MUST stay in sync with the REASON_* constants
+# in analytics_pointer.py — the resolver produces the value, this enum names
+# the dimension the dashboards filter on.
+ANALYTICS_REASON_FLAG_OFF = "feature_flag_off"
+ANALYTICS_REASON_MISSING_ASSOCIATION = "missing_association"
+ANALYTICS_REASON_VALIDATION_FAILED = "validation_failed"
+
 # --- Canonical ADK capability value-list (single source of truth) ---------
 # Every ``adk_capability`` value emitted anywhere in the kit MUST be one of
 # these. This is the ONE place the taxonomy is defined: the synthetic
@@ -774,6 +796,104 @@ def emit_flightcheck_error(
     data.update({"agent_id": agent_id})
     _apply_error_fields(data, "server_error", error_code, error_message, error_category)
     return _emit(EVENT_FLIGHTCHECK_ERROR, data, block=block)
+
+
+# --- Analytics pointer emitters (ADO PR 5465946) --------------------------
+# One emitter per event in the analytics pointer catalog. They mirror
+# emit_capability_use / emit_flightcheck_run exactly: get the session id,
+# assemble common_dimensions, add the pointer-specific fields, dispatch on a
+# daemon thread. The ``adk_capability`` is hard-set to a synthetic
+# ``"analytics_pointer"`` bucket that is NOT in ADK_CAPABILITIES (so it
+# normalizes to CAPABILITY_UNKNOWN today). That's deliberate: the analytics
+# pointer is intentionally a distinct dashboard slice — carried on the event
+# name, not the capability dimension — and adding it to the capability
+# donut is a separate PM decision.
+
+
+def emit_analytics_pointer_shown(
+    *,
+    env_id: str = "",
+    agent_id: str = "",
+    outcome: str = ANALYTICS_OUTCOME_RESOLVED,
+    unresolved_reason: str = "",
+    surface: str = SURFACE_CLI,
+    block: bool = False,
+) -> dict[str, Any]:
+    """Emit ``adk.analytics.pointer.shown``.
+
+    ``outcome`` is one of :data:`ANALYTICS_OUTCOME_RESOLVED` /
+    :data:`ANALYTICS_OUTCOME_UNRESOLVED`. When ``unresolved``, callers set
+    ``unresolved_reason`` to one of the ``ANALYTICS_REASON_*`` enum values so
+    the dashboards can slice flag-off vs missing-association vs
+    validation-failed independently.
+    """
+    sid, _ = get_session(surface)
+    data = common_dimensions(surface, session_id=sid)
+    data.update({
+        "env_id": env_id,
+        "agent_id": agent_id,
+        "outcome": outcome,
+        "unresolved_reason": unresolved_reason,
+    })
+    return _emit(EVENT_ANALYTICS_POINTER_SHOWN, data, block=block)
+
+
+def emit_analytics_pointer_clicked(
+    *,
+    env_id: str = "",
+    agent_id: str = "",
+    surface: str = SURFACE_CLI,
+    block: bool = False,
+) -> dict[str, Any]:
+    sid, _ = get_session(surface)
+    data = common_dimensions(surface, session_id=sid)
+    data.update({"env_id": env_id, "agent_id": agent_id})
+    return _emit(EVENT_ANALYTICS_POINTER_CLICKED, data, block=block)
+
+
+def emit_analytics_pointer_dismissed(
+    *,
+    env_id: str = "",
+    agent_id: str = "",
+    surface: str = SURFACE_CLI,
+    block: bool = False,
+) -> dict[str, Any]:
+    sid, _ = get_session(surface)
+    data = common_dimensions(surface, session_id=sid)
+    data.update({"env_id": env_id, "agent_id": agent_id})
+    return _emit(EVENT_ANALYTICS_POINTER_DISMISSED, data, block=block)
+
+
+def emit_analytics_pointer_resolution_failed(
+    *,
+    env_id: str = "",
+    agent_id: str = "",
+    unresolved_reason: str = "",
+    surface: str = SURFACE_CLI,
+    block: bool = False,
+) -> dict[str, Any]:
+    sid, _ = get_session(surface)
+    data = common_dimensions(surface, session_id=sid)
+    data.update({
+        "env_id": env_id,
+        "agent_id": agent_id,
+        "outcome": ANALYTICS_OUTCOME_UNRESOLVED,
+        "unresolved_reason": unresolved_reason,
+    })
+    return _emit(EVENT_ANALYTICS_POINTER_RESOLUTION_FAILED, data, block=block)
+
+
+def emit_analytics_pointer_repair_attempted(
+    *,
+    env_id: str = "",
+    agent_id: str = "",
+    surface: str = SURFACE_CLI,
+    block: bool = False,
+) -> dict[str, Any]:
+    sid, _ = get_session(surface)
+    data = common_dimensions(surface, session_id=sid)
+    data.update({"env_id": env_id, "agent_id": agent_id})
+    return _emit(EVENT_ANALYTICS_POINTER_REPAIR_ATTEMPTED, data, block=block)
 
 
 # --- CLI: opt-out controls + synthetic emit for validation ----------------
