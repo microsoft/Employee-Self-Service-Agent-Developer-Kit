@@ -83,10 +83,10 @@ per **First** above instead of re-running the interview.)
 | Phase | What | Read |
 |-------|------|------|
 | 1. Research | Ground on Microsoft Learn (TOC crawl) → capabilities, prerequisites, roles, produced keys | `src/skills/planner/research.md` |
-| 2. Interview | Ask only what research couldn't ground; capture intent | `src/skills/planner/interview.md` |
+| 2. Interview | Ask only what research couldn't ground; capture intent — then **eagerly render an eval preview** (golden prompts) once scenarios + goals are captured | `src/skills/planner/interview.md` |
 | 3. Model | Emit atomic Tasks (title + description + grounded role + produces) | `src/skills/planner/model.md` |
 | 4. Assign | Flow 1 — list holders of each grounded role, sponsor picks a person | `src/skills/planner/assign.md` |
-| 5. Evaluate | Once the plan is authored, hand the sponsor's scenarios to the eval skill for a **theoretical, scenario-based** eval (generate-only; the planner invokes, it does not own eval) | `src/skills/planner/evaluate.md` |
+| 5. Evaluate (preview) | Render a scenario-based eval **preview** (golden prompts) — **render-only, generates nothing**; invoked **eagerly from Phase 2** once scenarios + goals are captured | `src/skills/planner/evaluate.md` |
 | 6. Capture | After a Task's work runs, observe/ask and pin what it produced | `src/skills/planner/capture.md` |
 
 When a person asks **"what am I assigned?"**, skip to Flow 2:
@@ -99,9 +99,9 @@ read `src/skills/planner/mytasks.md`.
 > task, and publish — each with a Learn-grounded role and `produces`/`consumes`
 > keys. **Do not stop after adding the "run setup" task.** The interview
 > (Phase 2) must capture *which systems* and *which scenarios* before Phase 3 —
-> those drive the tasks and the roles. Once the tasks are emitted and assigned,
-> **Phase 5 hands the sponsor's scenarios to the eval skill** for a first,
-> theoretical eval — the planner *invokes* it, it does not author the eval itself.
+> those drive the tasks and the roles. As soon as scenarios + goals are captured
+> (Phase 2), the **eager eval preview** (Phase 5) renders them as golden prompts —
+> **render-only: it generates nothing and doesn't touch the eval skill**.
 > After setup runs, use Phase 6 to brief each downstream assignee with what setup
 > produced (the env id) and to commit what they create back onto the plan.
 
@@ -110,10 +110,11 @@ read `src/skills/planner/mytasks.md`.
 When creating a new plan — or extending an existing one — work the phases in
 order. After every phase that changes the plan the CLI regenerates the human view
 (`workspace/plan/ESS-scenario-plan.md`); at natural checkpoints show the sponsor
-`python scripts/planner/cli.py summary`. When authoring is complete (after
-Phase 4), run **Phase 5** to hand off to the eval skill for a theoretical,
-scenario-based eval; **Phase 6** (capture) runs later as each Task executes. Once
-the plan exists, hand the editor the **ESS scenario plan** Markdown as an editable
-file — they can revise it directly or say what to change, and you reconcile it
-back into the plan (`src/skills/planner/edit.md`). (To resume a plan that already
-exists, see **First** above — don't restart the interview.)
+`python scripts/planner/cli.py summary`. During the interview (Phase 2), once
+scenarios + goals are captured, render the **eager eval preview** (Phase 5,
+`src/skills/planner/evaluate.md`) — render-only, it generates nothing; **Phase 6**
+(capture) runs later as each Task executes. Once the plan exists, hand the editor
+the **ESS scenario plan** Markdown as an editable file — they can revise it directly
+or say what to change, and you reconcile it back into the plan
+(`src/skills/planner/edit.md`). (To resume a plan that already exists, see **First**
+above — don't restart the interview.)

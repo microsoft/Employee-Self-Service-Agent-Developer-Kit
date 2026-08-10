@@ -161,7 +161,7 @@ steps, connector config) still comes from Learn at render time — only the enab
 scenario **names** are captured here, as the eval's grounding.
 
 These enabled scenarios appear in the plan (Intent → `scenarioCapability`) and are
-exactly what the eval turns into golden prompts (Phase 5).
+exactly what the eager eval preview renders as golden prompts (below).
 
 ## Do NOT ask which role a Task needs
 
@@ -170,6 +170,20 @@ The sponsor's only assignment decision is *who* the person is (Phase 4). If a
 prerequisite's role is genuinely unclear from the docs, fall back to a
 conservative default (e.g. `power-platform-admin`) and note it — don't turn it
 into an interview question.
+
+## Eager eval preview — render golden prompts once scenarios + goals are captured
+
+**As soon as the sponsor's scenarios and goals are captured** (the `scenario` +
+`scenarioCapability` groups and their `objective` / `businessGoals`), and **before**
+you move on to modelling tasks (Phase 3), **render a preview of the eval** so the
+sponsor sees the acceptance bar up front — exactly what "good" looks like, the way
+the finished agent will be judged. Read `src/skills/planner/evaluate.md` and render
+the golden prompts grouped by scenario category.
+
+This preview **renders only — it generates nothing**: it displays the golden prompts
+in chat but writes no file, creates no eval records, and pushes nothing. Actual eval
+generation stays with the *Generate evaluation tests* task (topic-driven, later).
+It is **non-blocking**: after rendering, continue to the stop condition and Phase 3.
 
 ## Stop condition — both satisfied
 

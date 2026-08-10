@@ -1,27 +1,32 @@
-# Planner — Phase 5: Generate the theoretical eval (hand off to the eval skill)
+# Planner — Phase 5: Preview the scenario eval (render golden prompts — don't generate)
 
-The moment the plan is authored (Phases 1–4 done — tasks emitted and assigned),
-automatically produce a **first, theoretical evaluation** from the **scenarios the
-sponsor chose**, before anything is built. This turns the sponsor's intent into
-concrete acceptance tests up front, so they can see what "good" looks like.
+As soon as the sponsor's **scenarios and goals** are captured, render a **preview**
+of the evaluation — the golden prompts the finished agent will be judged on — so the
+sponsor sees the **acceptance bar up front**, before anything is built. This is
+invoked **eagerly** from the interview (Phase 2, before modelling tasks), and can be
+re-shown at plan-authored time if the scope changed.
+
+**Render-only — nothing is generated.** This preview *displays* the golden prompts in
+chat. It **writes no files, creates no eval records, and pushes nothing.** It is a
+picture of "what good looks like", not the eval itself. The **actual** eval is
+generated later by the plan's *Generate evaluation tests* task (topic-driven), once
+topics are built — that task is unchanged; this preview just shows the bar early.
 
 ## Ownership — the planner does not own the eval skill
 
-The planner **only invokes** the eval skill and hands it the scenarios. It does
-**not** author eval content, does **not** reimplement eval logic, and does **not**
-edit any eval files. Generating the tests is the eval skill's job
-(`src/skills/evaluations/create/SKILL.md`); the planner just orchestrates the
-hand-off (SKILL.md: "orchestrates; never re-implements").
+The planner does **not** author eval content, does **not** run the eval skill's
+generate/scan/push pipeline, and does **not** edit any eval files
+(`src/skills/evaluations/create/SKILL.md` stays untouched). It only **renders a
+preview** from the scenarios the plan already captured (SKILL.md: "orchestrates;
+never re-implements"). Real generation belongs to the eval skill / the
+*Generate evaluation tests* task.
 
-## What "theoretical" means
+## What it's grounded in
 
-There is no built agent or topics yet (greenfield), so this eval is grounded in
-the **scenarios captured in the plan** — not in topic trigger phrases. It answers:
-*for each scenario the sponsor picked, what should an employee be able to ask, and
-how should the agent respond?* The later **Generate evaluation tests** task in the
-plan is the *topic-driven* eval the eval author runs once topics exist — this
-Phase-5 eval is the *scenario-driven* seed that precedes it. The task list is
-unchanged; this phase just seeds it.
+There is no built agent or topics yet (greenfield), so the preview is grounded in the
+**scenarios captured in the plan** — not in topic trigger phrases. It answers: *for
+each scenario the sponsor picked, what would an employee ask, and how should the agent
+respond?*
 
 ## Steps
 
@@ -40,50 +45,78 @@ unchanged; this phase just seeds it.
    - **`persona`** and **`market`** for tone/context.
 
 2. **Tell the sponsor, in plain language, what's about to happen** — e.g. *"I'll
-   turn the scenarios you picked into a first set of evaluation tests, so you can
+   turn the scenarios you picked into a first set of example test prompts, so you can
    see what 'good' looks like before we build."* Never mention skills, files, the
    CLI, or command names to the sponsor.
 
-3. **Invoke the eval skill, seeded with the plan's scenarios.** Read
-   `src/skills/evaluations/create/SKILL.md` and follow it, but supply the plan's
-   **scenarios as the source of truth in place of built topics** (there are none
-   yet): for each scenario, generate scenario-based Topic-Triggering-style tests
-   (representative employee prompts + expected behaviour), and where a scenario
-   targets an external system (`system.*`), the matching integration-data cases.
-   Hand it:
-   - the scenario list (ids + display names) **and the enabled scenarios per
-     category** (`scenarioCapability`) from the plan,
-   - the sponsor's jtbd / objective / success measure,
-   - the target system per scenario,
-   - persona + market.
+3. **Render the golden prompts, grouped by scenario category.** For each in-scope
+   category, write **2–5 natural employee prompts per enabled scenario**
+   (`scenarioCapability`) — phrased the way a real employee would ask, grounded in
+   `persona` / `market`; where a scenario targets an external system (`system.*`),
+   include an integration-flavoured prompt. **Bias selection to the goals**
+   (`objective` / `businessGoals` / `jtbd`) and **drop anything the sponsor put out
+   of scope** (e.g. "no manager scenarios", "writes beyond phone/email off the
+   table"). Aim for a compact set (~15–25 prompts for a typical 3–4 category
+   rollout). Give each group a human label from the category + its enabled scenarios
+   (e.g. **HR KNOWLEDGE**, **HR TICKETING**, **PROFILE UPDATES**, **HANDOFF**).
 
-   **Run it generate-only.** Because there is no environment or built agent at
-   planning time, produce the test sets into the local eval workspace and **stop
-   before the Dataverse push** — do not push. (The topic-driven run pushes later.)
+   Then render it in chat — a short "thinking" line, the grouped prompts, a
+   dependencies note, and next steps:
 
-4. **Summarise for the sponsor** — how many scenarios were covered — and set
-   expectations: this is a **first, theoretical** eval; it will be **refined and
-   run against the real agent later**, which is the plan's *Generate evaluation
-   tests* task, once the topics are built.
+   > Thinking — turning your {N} scenario areas + goals into example test prompts…
+   >
+   > Here's a set of **{total} example prompts** across your {N} areas — this is the
+   > bar your agent will be judged against. Tell me if you want to edit, cut, or add.
+   >
+   > **{CATEGORY 1 LABEL}**
+   > "{prompt}"
+   > "{prompt}"
+   >
+   > **{CATEGORY 2 LABEL}**
+   > "{prompt}"
+   > …
+   >
+   > **Quick note on dependencies** (from `check-deps` / the catalogue):
+   > - {e.g. "Profile writes need governance sign-off before they'll pass."}
+   >
+   > **Next:** if the scope looks right I'll finish the deployment plan; otherwise
+   > tell me what to change.
+
+   **Render-only — persist nothing.** Do **not** write a CSV or any file, do **not**
+   create eval records, and do **not** push to Dataverse. This is a visual preview;
+   the actual eval is generated later by the *Generate evaluation tests* task.
+
+4. **Set expectations, and let them edit.** Say this is a **preview** of the
+   acceptance bar — the actual tests get **generated and run against the real agent
+   later** by the plan's *Generate evaluation tests* task, once topics are built. If
+   the sponsor wants to add/cut/reword prompts, just **re-render** the updated list —
+   still persisting nothing.
+
+## When it runs — eagerly, and non-blocking
+
+Render this the moment scenarios + goals are captured (invoked from the interview,
+`src/skills/planner/interview.md`, before Phase 3), so the sponsor sees the bar
+early. It is **non-blocking**: after rendering, continue authoring the plan. You may
+re-render at plan-authored time if the scope changed.
 
 ## Do / don't
 
-- **Do** hand the eval skill the **scenarios** — that is the whole point of a
-  theoretical eval.
-- **Do** keep it generate-only at planning time (no environment yet → no push).
-- **Don't** author eval YAML yourself or change the eval skill — you are invoking
-  it, not owning it.
-- **Don't** block plan creation on the eval. If in this build the eval skill
-  strictly needs a built agent/topics and cannot run theoretically, say so plainly
-  and note the eval will instead be produced by the *Generate evaluation tests*
-  task — the plan is still complete. Then continue.
+- **Do** render the preview from the **scenarios the plan already captured** — don't
+  ask the sponsor to repeat them.
+- **Do** keep it **render-only**: no files, no eval records, no push.
+- **Don't** run or modify the eval skill's generate/scan/push pipeline, and don't
+  author eval YAML — the eval skill stays untouched; you are previewing, not
+  generating.
+- **Don't** block the plan on it. If you can't render a useful preview, say so
+  plainly and move on — the *Generate evaluation tests* task still covers the real
+  eval.
 
 ## Relationship to the "Generate evaluation tests" task
 
-| | When | Grounded in | Push |
+| | When | Grounded in | Generates? |
 |---|---|---|---|
-| **Phase 5 (here)** | plan authored (planning time) | the sponsor's **scenarios** | generate-only |
-| **Generate evaluation tests task** | run time, after topics built | the built **topics** | pushes to Dataverse |
+| **This preview** | scenarios+goals captured (planning time) | the sponsor's **scenarios** | **No** — renders only |
+| **Generate evaluation tests task** | run time, after topics built | the built **topics** | Yes — generates + pushes |
 
-Phase 5 is the acceptance-tests **seed**; the task is the topic-driven **refine +
-run**. Do not remove or duplicate the task — this phase precedes it.
+The preview shows the bar early; the task does the real generation. Do not remove or
+duplicate the task — this preview precedes it.

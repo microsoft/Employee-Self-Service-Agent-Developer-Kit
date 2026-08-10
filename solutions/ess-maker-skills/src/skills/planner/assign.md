@@ -30,11 +30,11 @@ may take the setup Task themselves. That's a convenience, not a rule — assign 
 whoever actually holds the role; a different admin running the Task produces the
 same result and the same capture (Phase 6).
 
-When every Task is assigned or pooled, show the summary, then go to **Phase 5**
-to generate the theoretical eval from the sponsor's scenarios
-(`src/skills/planner/evaluate.md`). After that the Plan is ready to run: each
-assignee runs the Task's skill (or does the manual/portal step), and you capture
-what it produced in Phase 6.
+When every Task is assigned or pooled, show the summary. (The eval **preview** was
+already rendered eagerly during the interview — Phase 5, `src/skills/planner/evaluate.md`;
+re-render it here if the scope changed. It is render-only and generates nothing.)
+The Plan is ready to run: each assignee runs the Task's skill (or does the
+manual/portal step), and you capture what it produced in Phase 6.
 
 ## Future — resolve the person from an external roles API
 
