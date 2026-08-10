@@ -19,7 +19,7 @@ A sponsor tells the ESS Maker Kit what they want — *"I want ESS to handle HR t
 
 Step 1 adds that missing brain: a new **`/planner` skill** that
 
-1. **actively researches Microsoft Learn** — crawling the ESS documentation section via its Table of Contents (`toc.json`) — to build a fresh, grounded picture of what ESS can actually do and what each scenario requires (§7);
+1. **actively researches Microsoft Learn** — crawling the ESS documentation section via its Table of Contents (`toc.json`) — **and reads the tenant inventory in WeveNova (if present, include it; if empty, leave it)** to build a fresh, grounded picture of what ESS can do, what each scenario requires, and what already exists in the tenant (§7);
 2. runs a short **grounded interview** to scope the rollout (§8);
 3. emits a **Plan**: the sponsor's intent captured as a single open **Context bag**, plus a handful of **atomic Tasks** — *create an environment, connect Workday, author topics, generate evals* — each **assigned to a role and (optionally) a specific person** (§9, §10);
 4. lets a person ask **"what am I assigned?"** and answers grouped by the roles they hold (§11); and
@@ -81,7 +81,7 @@ The sponsor and the assignee never talk directly — they meet at **the Plan** a
 flowchart LR
   subgraph SPONSOR["Sponsor flow — author the plan"]
     direction TB
-    A(["set up ESS for my team"]) --> R["1 · Research<br/>Learn TOC + tenant-inventory scan (what already exists)"]
+    A(["set up ESS for my team"]) --> R["1 · Research<br/>Learn TOC + WeveNova tenant inventory<br/>(if present include it, if empty leave it)"]
     R --> I["2 · Interview<br/>objective · scenarios · enabled scenarios · systems · goals"]
     I --> PV["Eager EVAL PREVIEW · render-only<br/>golden prompts by category · generates nothing"]
     PV --> M["3 · Model — atomic Tasks<br/>title + description + grounded role + produces/consumes"]
@@ -294,9 +294,9 @@ This maps 1:1 onto the Plan: `capabilities → Context (group scenarioContext)`,
 
 Mirrors Step‑2 §7.7. The value of research is a **consistent** Plan for the same intent — the planner grounds on decided facts (this integration, these supported scenarios, this prerequisite) instead of re‑inferring and drifting. Research narrows; the interview decides; the Plan records. People/role facts are **never** sourced from web research — they come from the roles endpoint + Work IQ (§10.4).
 
-### 7.8 Research also scans the tenant inventory
+### 7.8 Research also reads the tenant inventory in WeveNova
 
-Alongside the Learn crawl, the planner **reads the tenant inventory** — the durable, cross‑plan record of what already exists in the tenant (held in WeveNova, §14, and backed by the controlled Dataverse APIs). This is a *research* input: it tells the planner what is already in place (an environment, a connection, an installed starter) so it can detect **greenfield vs. an existing deployment** and pre‑fill known produced state, instead of proposing Tasks for things that already exist. It stays **absent‑safe**: with no inventory (a true greenfield tenant, or WeveNova/Dataverse unreachable) research falls back to Learn‑only and the Plan is built purely from intent. Field visibility and access are the inventory's / Dataverse's concern, never the ADK's (§12.1, §12.3).
+Alongside the Learn crawl, the planner **reads the tenant inventory in WeveNova** — the durable, cross‑plan record of what already exists in the tenant. The rule is simple: **if the inventory is present (populated), include it; if it is empty (or absent), leave it and move on.** When present, it tells the planner what is already in place (an environment, a connection, an installed starter) so it can detect **greenfield vs. an existing deployment** and pre‑fill known produced state, instead of proposing Tasks for things that already exist. When empty — a first‑time/greenfield tenant, or WeveNova unreachable — research is **Learn‑only** and the Plan is built purely from intent; nothing blocks on the inventory. Reading it is best‑effort and non‑blocking; **field visibility and access remain the inventory's / Dataverse's concern, never the ADK's** (§12.1, §12.3).
 
 ---
 
