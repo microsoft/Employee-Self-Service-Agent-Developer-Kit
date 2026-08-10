@@ -23,14 +23,14 @@ Step 1 adds that missing brain: a new **`/planner` skill** that
 2. runs a short **grounded interview** to scope the rollout (§8);
 3. emits a **Plan**: the sponsor's intent captured as a single open **Context bag**, plus a handful of **atomic Tasks** — *create an environment, connect Workday, author topics, generate evals* — each **assigned to a role and (optionally) a specific person** (§9, §10);
 4. lets a person ask **"what am I assigned?"** and answers grouped by the roles they hold (§11); and
-5. **captures what each Task produced** by scanning the tenant inventory (WeveNova) + the controlled Dataverse APIs — observing local kit state or asking the assignee as fallbacks — pinning artifacts (the `/setup` → `environmentId` hand‑off is canonical) onto the Plan so a later Task reads them straight off it (§12).
+5. **captures what each Task produced** by reading the **tenant inventory** — a WeveNova artifact that stores facts about the tenant (fetched from the distinct controlled Dataverse APIs) — falling back to observing local kit state or asking the assignee, and pinning artifacts (the `/setup` → `environmentId` hand‑off is canonical) onto the Plan so a later Task reads them straight off it (§12).
 
 Four ideas run through the design:
 
 - **Learn is researched at planning time, not treated as a static cache.** The planner crawls the live Learn TOC every run; the kit's vendored doc snapshot is only a seed hint and an offline safety net (§7). *(This design was written after confirming the vendored ESS Learn URL has already moved — see §7.1 — which is exactly why live research is primary.)*
 - **The Plan is a local‑first, structured document with the same shape WeveNova will store.** It lives on disk under `workspace/plan/plan.json`; Step 2 lifts that shape into WeveNova with no re‑modelling (§5, §9, §15).
 - **Assignment is role‑first, person‑optional, both retained.** A Task carries one extended `Principal` that can name a role, a person, or a person *acting as* a role — the model Step‑2 §7.4 settled (§10).
-- **The Plan is kept honest by reading reality, not by trusting narration.** A completing Task's real side effect is **scanned from the tenant inventory (WeveNova) / Dataverse** — or observed from local kit state — and pinned, mirroring Step‑2 §7.3/§9 (§12).
+- **The Plan is kept honest by reading reality, not by trusting narration.** A completing Task's real side effect is **read from the tenant inventory** (the WeveNova record of tenant facts, fetched from the distinct Dataverse APIs) — or observed from local kit state — and pinned, mirroring Step‑2 §7.3/§9 (§12).
 
 Step 1 is the **greenfield** path — plan from intent — but it **reads and writes the tenant inventory** (WeveNova) when present: research reads it to detect an existing deployment (§7.8), and capture reads/writes it to fill produced values (§12). The *proactive* enrichment — pruning Tasks whose prerequisites already exist, and a standalone `/discover` crawl — is the later flow this doc keeps a clean seam for (§14) but does not build.
 
@@ -105,7 +105,7 @@ flowchart LR
     BR --> DO["Do the work — example: run /setup"]
     DO --> SU["/setup produces artifacts:<br/>environmentId · dataverseEndpoint · agent slug"]
     SU --> TG{"Completion: planner asks 'done?'<br/>OR assignee says 'done'"}
-    TG --> SC["SCAN the task's produces keys —<br/>tenant inventory (WeveNova) + Dataverse"]
+    TG --> SC["Read the task's produces keys<br/>from the WeveNova tenant inventory (a source)"]
     SC --> POP["Populate produces (value or presence-only)<br/>ask only the gaps"]
   end
 
@@ -114,20 +114,20 @@ flowchart LR
     WN["Inventory record<br/>per field: safe-to-read → value · else presence-only"]
   end
 
-  DV[("Respective Dataverse APIs — access enforced by Dataverse, NOT by us:<br/>caller has access → 200 · else → 403")]
+  DV[("Controlled Dataverse APIs — the source the inventory's facts are fetched from<br/>access enforced by Dataverse, NOT by us: 200 if caller has access · else 403")]
 
   ASG ==>|"① emit tasks: produces/consumes + role"| TASKS
   TASKS ==>|"② role-gated 'my tasks' (Flow 2)"| Q
-  SU ==>|"⑥ WRITE — /setup artifacts persisted"| WN
-  WN ==>|"⑦ READ — safe fields → value, else presence-only"| SC
-  DV ==>|"⑧ live READ — 200 if caller has access, else 403"| SC
+  SU ==>|"⑥ WRITE — /setup's produced facts recorded"| WN
+  DV ==>|"⑦ facts fetched from Dataverse (200/403) → stored in inventory"| WN
+  WN ==>|"⑧ planner READS the inventory — value if safe, else presence-only"| SC
   POP ==>|"③ pin values / presence as PlanArtifacts"| OUT
   OUT -.->|"inventoryRef"| WN
   OUT ==>|"④ consume: env id · connections · topics → unblock downstream"| TASKS
   MD ==>|"⑤ progress + artifacts shown back"| A
 ```
 
-**Information transfer (the numbered arrows).** ① the sponsor emits Tasks (`produces`/`consumes` + grounded role) → ② the Plan hands each assignee their role‑gated Tasks (Flow 2) → ③ on completion the scan pins the produced values as `PlanArtifact`s → ④ downstream Tasks consume them and unblock (back‑propagation) → ⑤ the updated Plan is shown back to the sponsor. For capture the sources are: ⑥ `/setup`'s artifacts are **written** to the WeveNova tenant inventory; ⑦ the planner **reads** them back from WeveNova — value if safe for everyone, else **presence‑only**; ⑧ any actual‑value read hits the **respective Dataverse API directly**, where **Dataverse** (not the ADK) enforces access: `200` if the caller has it, `403` if not.
+**Information transfer (the numbered arrows).** ① the sponsor emits Tasks (`produces`/`consumes` + grounded role) → ② the Plan hands each assignee their role‑gated Tasks (Flow 2) → ③ on completion the produced facts are pinned as `PlanArtifact`s → ④ downstream Tasks consume them and unblock (back‑propagation) → ⑤ the updated Plan is shown back to the sponsor. For capture, the **tenant inventory (a WeveNova artifact that stores tenant facts) is the source the planner reads**: ⑥ `/setup`'s produced facts are **recorded** into the inventory; ⑦ those facts are **fetched from the distinct Dataverse APIs** into the inventory, where **Dataverse** (not the ADK) enforces access — `200` if the caller has it, `403` if not; ⑧ the planner **reads the inventory**, which returns each fact's **value if safe for everyone, else presence‑only**.
 
 ---
 
@@ -294,9 +294,9 @@ This maps 1:1 onto the Plan: `capabilities → Context (group scenarioContext)`,
 
 Mirrors Step‑2 §7.7. The value of research is a **consistent** Plan for the same intent — the planner grounds on decided facts (this integration, these supported scenarios, this prerequisite) instead of re‑inferring and drifting. Research narrows; the interview decides; the Plan records. People/role facts are **never** sourced from web research — they come from the roles endpoint + Work IQ (§10.4).
 
-### 7.8 Research also reads the tenant inventory in WeveNova
+### 7.8 The tenant inventory is another source (alongside Learn and Dataverse)
 
-Alongside the Learn crawl, the planner **reads the tenant inventory in WeveNova** — the durable, cross‑plan record of what already exists in the tenant. The rule is simple: **if the inventory is present (populated), include it; if it is empty (or absent), leave it and move on.** When present, it tells the planner what is already in place (an environment, a connection, an installed starter) so it can detect **greenfield vs. an existing deployment** and pre‑fill known produced state, instead of proposing Tasks for things that already exist. When empty — a first‑time/greenfield tenant, or WeveNova unreachable — research is **Learn‑only** and the Plan is built purely from intent; nothing blocks on the inventory. Reading it is best‑effort and non‑blocking; **field visibility and access remain the inventory's / Dataverse's concern, never the ADK's** (§12.1, §12.3).
+The planner grounds on **several sources**, reading from whichever are available: the **Learn links** (what ESS can do, §7.1–7.7), the **tenant inventory**, and the **Dataverse APIs** directly (if available). The **tenant inventory is a WeveNova artifact (we are implementing) that stores facts about the tenant** — an environment, a connection, an installed starter — and is **distinct from** the Dataverse APIs those facts are fetched from. It **acts as a source** the planner reads: **if the inventory is present (populated), include it; if it is empty (or absent), leave it and move on.** When present, it lets the planner detect **greenfield vs. an existing deployment** and pre‑fill known produced state instead of proposing Tasks for things that already exist; when empty — a first‑time tenant, or WeveNova unreachable — research falls back to Learn (and Dataverse if reachable) and the Plan is built from intent. Reading it is best‑effort and non‑blocking; **field visibility is the inventory's policy and access is Dataverse's (`200`/`403`), never the ADK's** (§12.1, §12.3).
 
 ---
 
@@ -600,15 +600,15 @@ Because `Principal.Role = R` is retained in **both** pooled and claimed/direct s
 
 ## 12. Capturing Task outputs & updating the Plan as work progresses
 
-The heart of Step 1: a Task declares (from the Learn doc) the output **keys** it produces, and when the assignee finishes, the ADK fills each key — by **scanning the tenant inventory (WeveNova) and the controlled Dataverse APIs** for what the Task actually produced, falling back to **observing local kit state** or **asking the assignee** — and pins each onto the Plan, always confirming with the person doing the job.
+The heart of Step 1: a Task declares (from the Learn doc) the output **keys** it produces, and when the assignee finishes, the ADK fills each key — by **reading the tenant inventory** (the WeveNova artifact that stores tenant facts, fetched from the distinct controlled Dataverse APIs), falling back to **observing local kit state** or **asking the assignee** — and pins each onto the Plan, always confirming with the person doing the job.
 
 ### 12.1 What drives capture: the `produces` keys, filled by observe **or** ask
 
 Every Task declares the output **keys** it should yield in `produces`, and those keys are **grounded from the Learn doc** during research (§7.6) — not invented at completion. Capture is triggered the moment the Task is done — whether the **planner prompts** *"is it done?"* or the **assignee reports** it done — and fills a value for each declared key, then confirms before pinning, by whichever source resolves it:
 
-- **(a) Scan** *(primary).* The planner **scans the tenant inventory (WeveNova) and the respective controlled Dataverse APIs** for the records the Task produced (a new environment, connection, Entra app, topic, eval suite) and reads each `produces` key. Two rules the ADK does **not** own:
-  - **Field visibility is the tenant inventory's call.** WeveNova returns a field's **value when it is safe to read by everyone**, otherwise a **presence‑only** view — the record *exists*, but the value is withheld. The Plan pins the value when given one, else pins **presence** (`exists:true`) so downstream ordering still works.
-  - **Access is Dataverse's call, not ours.** For an actual‑value read the caller hits the respective **Dataverse API directly**; **Dataverse enforces the caller's own permissions** — `200` (access, value returned) or `403` (no access). The ADK never gates access; it records what the API returns. Pinned with `provenance.source:"Discovered"`.
+- **(a) Scan** *(primary).* The planner **reads the tenant inventory** — the **WeveNova artifact that stores facts about the tenant, fetched from the distinct controlled Dataverse APIs** — for the records the Task produced (a new environment, connection, Entra app, topic, eval suite) and reads each `produces` key. Two rules the ADK does **not** own:
+  - **Field visibility is the tenant inventory's (WeveNova's) call.** The inventory returns a fact's **value when it is safe to read by everyone**, otherwise a **presence‑only** view — the record *exists*, but the value is withheld. The Plan pins the value when given one, else pins **presence** (`exists:true`) so downstream ordering still works.
+  - **The facts come from the distinct Dataverse APIs, and access is Dataverse's call, not ours.** The inventory's facts are fetched from the respective **Dataverse API**, which **enforces the caller's own permissions** — `200` (fetched) or `403` (denied). The ADK never gates access; it records what the inventory returns. Pinned with `provenance.source:"Discovered"`.
 - **(b) Observe** *(local fallback for a kit‑skill Task that leaves a local signal).* A detector reads the value from local kit state the action changed — `/setup` → `environmentId` from `.local/config.json` — when the inventory/Dataverse isn't reachable. Pinned with `provenance.source:"Agent"`.
 - **(c) Ask** *(for a manual/portal/external output the scan can't resolve).* The ADK **asks the assignee to supply the value** — *"what's the Entra app id you registered?"* — accepting any extra info they volunteer. Pinned with `provenance.source:"User"`.
 
@@ -618,18 +618,18 @@ So `produces` (from the doc) says *what* to capture; scan → observe → ask sa
 
 1. **Before.** Planner snapshots the current environment (from `config.json` + `list_environments.py`/`pp_admin_client.py`). T1 is `NotStarted`; `outputs:[]`.
 2. **The assignee runs `/setup`.** It connects the kit to the ESS agent already deployed in the environment (it does **not** create the environment), **atomically writes `.local/config.json`** (`setup:"complete"`, `dataverseEndpoint`, agent slug/schema/folder), and its side effect — the bound environment — **is what the WeveNova tenant inventory records** (the durable, cross‑plan record the planner reads back in step 3).
-3. **The ADK detects the change.** On return to `/planner`, it **scans the tenant inventory (WeveNova) — backed by the controlled Dataverse APIs** — for the environment `/setup` recorded, falling back to a local `config.json` diff when the inventory/Dataverse isn't reachable. WeveNova returns the environment's fields per its visibility policy (value if safe for all, else presence‑only); a live GUID read is subject to the caller's own Dataverse access (`200`/`403`). *(Where `config.json` lacks a raw `environmentId` GUID, resolve it once from the endpoint via the existing PP/BAP client — §18.)*
+3. **The ADK detects the change.** On return to `/planner`, it **reads the tenant inventory (WeveNova)** for the environment `/setup` recorded — the inventory stores that fact, fetched from the distinct Dataverse APIs — falling back to a local `config.json` diff when the inventory isn't reachable. The inventory returns the environment's fields per its visibility policy (value if safe for all, else presence‑only); the underlying fetch from Dataverse is gated by the caller's own access (`200`/`403`). *(Where `config.json` lacks a raw `environmentId` GUID, resolve it once from the endpoint via the existing PP/BAP client — §18.)*
 4. **Confirm with the person doing the job.** The planner does **not** silently write. It asks the assignee (person P, acting as the role): *"I see `/setup` recorded environment `d3f1…` (`https://…`). Pin it to the plan as T1's output?"* — the "ask the role who did the job" the requirement calls for.
 5. **Pin onto the ledger.** On yes, append a `PlanArtifact` to `outputs[]` (`key:primaryEnvironment`, `kind:Environment`, `attributes:{environmentId, environmentUrl}`, `inventoryRef`, `producedByTaskId:T1`, `provenance.source:Agent`, `state:Active`); T1 → `Completed`; `ESS-scenario-plan.md` re‑renders. Supersede‑by‑key handles a re‑run.
 6. **Downstream reads off the Plan.** T3 (evals), a possibly different role, reads `outputs["primaryEnvironment"].attributes.environmentId` straight from `plan.json` — no re‑discovery. The reproducible hand‑off (Step‑2 §11), realised locally.
 
 ### 12.3 The observe‑mode detector registry
 
-A small **detector per artifact kind** returns the `PlanArtifact`s a Task produced. Each detector reads from the **tenant inventory (WeveNova) / respective Dataverse API first** (mode a — subject to the inventory's presence‑only visibility and Dataverse's own `200`/`403`), and from **local kit state** as a fallback (mode b). Detectors key off the **produced record, not how the Task was done** — a portal/manual step that still touches the tenant (e.g. an Entra app registered in the Azure portal) is scanned the same way a kit command is:
+A small **detector per artifact kind** returns the `PlanArtifact`s a Task produced. Each detector reads from the **tenant inventory (WeveNova) first** — the store of tenant facts fetched from the distinct Dataverse APIs (mode a — subject to the inventory's presence‑only visibility and Dataverse's own `200`/`403` on the fetch) — and from **local kit state** as a fallback (mode b). Detectors key off the **produced record, not how the Task was done** — a portal/manual step that still touches the tenant (e.g. an Entra app registered in the Azure portal) is scanned the same way a kit command is:
 
 | Task (what it does) | Detector reads | Artifact(s) pinned |
 |---|---|---|
-| `/setup` (onboarding) | WeveNova inventory / `config.json` diff (endpoint/env id) | `Environment` |
+| `/setup` (onboarding) | WeveNova tenant inventory (env fact) · `config.json` fallback | `Environment` |
 | `/connect` (Workday) | new connection refs + Entra app id | `Connection`, `EntraApp` (appId+objectId+tenantId under one key, Step‑2 §7.2) |
 | portal register Entra app | new app registration id (Graph/BAP) | `EntraApp` |
 | `/flightcheck` | the readiness report file | `Custom` (readiness snapshot) |
@@ -658,7 +658,7 @@ Each detector is **best‑effort and confirm‑before‑pin**. **When no detecto
 
 ## 14. The tenant inventory (WeveNova) — durable record now; `/discover` enrichment later
 
-- **The tenant inventory is a first‑class, absent‑safe seam.** It is the durable, cross‑plan record of what exists in the tenant, held in WeveNova and backed by the controlled Dataverse APIs. The planner **reads** it during research (§7.8 — greenfield‑vs‑existing detection, pre‑fill) and **reads/writes** it during capture (§12): a completing Task's side effect (e.g. `/setup`'s environment) is recorded to the inventory, and the scan reads produced values back from it. **Visibility and access are the inventory's / Dataverse's concern, not the ADK's** — WeveNova returns a value only when it is safe to read by everyone, else **presence‑only**, and any actual‑value read is gated by **Dataverse's own `200`/`403`** on the caller.
+- **The tenant inventory is a first‑class, absent‑safe seam.** It is a **WeveNova artifact (we are implementing) that stores facts about the tenant** — the durable, cross‑plan record of what exists — **fetched from the distinct controlled Dataverse APIs**. The inventory is *not* the Dataverse APIs; it is the WeveNova‑side store of those facts, and it **acts as a source** the planner reads (alongside Learn and Dataverse). The planner **reads** it during research (§7.8) and **reads/writes** it during capture (§12): a completing Task's side effect (e.g. `/setup`'s environment) is recorded to the inventory, and the scan reads produced facts back from it. **Visibility is the inventory's policy and access is Dataverse's, not the ADK's** — the inventory returns a value only when it is safe to read by everyone, else **presence‑only**, and the underlying fetch from Dataverse is gated by **Dataverse's own `200`/`403`** on the caller.
 - **Absent‑safe.** When the inventory/WeveNova/Dataverse is unavailable, the planner falls back to local observe (`config.json`) + ask (§12.1), and research runs Learn‑only (§7.8). The Plan is complete and correct with the inventory absent — the decoupling guarantee (§13) holds.
 - **`/discover` enrichment (future).** Proactively **pruning** the Task list from the inventory — *"you already have a Workday connection ✓, skipping that Task"* — and a standalone `/discover` crawl remain a later workstream. The planner already pins from inventory the same way it pins from a Task (a `PlanArtifact` with `provenance.source:"Discovered"`), so adding proactive skip‑existing later touches only the adapter, never `plan.json`'s schema or the read path.
 - **Decoupling guarantee (Step‑2 §5/§12).** The Plan holds only opaque `{kind}:{naturalKey}` refs + pinned attributes (or a presence marker); it never imports the inventory's (or the roles source's) types. Greenfield ships with these contracts absent (local fallbacks), so the Plan is complete alone. Swapping in real implementations later touches only the adapters, never `plan.json`'s schema or the read path.
