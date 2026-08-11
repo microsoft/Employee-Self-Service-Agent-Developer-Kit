@@ -8,13 +8,21 @@ Validates ServiceNow connection references, flow status, template configurations
 in Dataverse, and local agent topic files for ServiceNow HRSD/ITSM scenarios.
 """
 
+import json
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from ..runner import CheckResult, Priority, Role, Status
-from .connections import check_connector_connections
+from .. import live_egress_probe
+from .connections import check_connector_connections, get_connection_status
 from .external_systems import _categorize_servicenow_flows
+from .infrastructure import (
+    _infra_003_directive,
+    _infra_003_probe_layer_note,
+    _live_probe_context,
+)
 
 DOC_BASE = "https://learn.microsoft.com/en-us/copilot/microsoft-365/employee-self-service"
 
@@ -79,7 +87,10 @@ def run_servicenow_checks(runner) -> list[CheckResult]:
     results.extend(_check_flow_status(runner, sn_flows))
 
     # --- Run health (runtime failures connection-status can't see) ---
-    results.extend(_check_servicenow_run_health(runner))
+    # SN-RUN-001 dispatches to the active connector probe when
+    # --runtime-reachability is opted in, and falls back to the passive
+    # run-history read otherwise (or on declined consent / no connection).
+    results.extend(_check_servicenow_active_run_health(runner))
 
     # --- Template Configurations (Dataverse) ---
     results.extend(_check_template_configs(runner))
@@ -456,6 +467,361 @@ def _check_servicenow_run_health(runner) -> list[CheckResult]:
         doc_link=f"{DOC_BASE}/servicenow",
         roles=roles,
     )]
+
+
+# ─────────────────────────────────────────────────────────────────────────
+# SN-RUN-001 (active) — on-demand ServiceNow managed-connector probe
+# ─────────────────────────────────────────────────────────────────────────
+#
+# The passive run-history read above answers nothing when no ServiceNow run
+# happened recently, and even with data it only exposes the flow's run status
+# and Response-action name — never the real ServiceNow faultstring (that sits
+# behind a SAS-signed outputsLink FlightCheck deliberately never fetches). The
+# active probe closes that gap: it stands up one throwaway Power Automate flow
+# bound to the maker's own managed ServiceNow connection, runs ONE read-only
+# ServiceNow operation through the real managed connector (the AzureConnectors
+# egress path the agent actually uses — NOT the native-HTTP / LogicApps path
+# the INFRA-003 probe travels), reads the synchronous result, then deletes the
+# flow. It reuses the INFRA-003 transient-flow lifecycle (create / activate /
+# listCallbackUrl / invoke / delete, consent gating, deterministic naming, and
+# orphan sweep) from live_egress_probe. This mirrors the Workday WD-RUN-001
+# active probe 1:1; only the ServiceNow connector binding and error map differ.
+#
+# On declined consent, an infeasible test, or an OAuth-invoker-only install,
+# it falls back to the passive run-history read above. A no-connection /
+# pre-deployment state is a clean NOT-CONFIGURED, never FAIL.
+
+_SN_CONNECTOR_API_ID = "/providers/Microsoft.PowerApps/apis/shared_service-now"
+_SN_CONNECTOR_NAME = "shared_service-now"
+_SN_PROBE_FLOW_NAME = "flightcheck-sn-run-001-probe"
+_SN_PROBE_ACTION_NAME = "Probe_ServiceNow"
+
+# TODO(SN-RUN-001 AC13): confirm the exact read-only ServiceNow connector
+# operation id and its required parameters against the shared_service-now
+# connector API definition via a live-capture spike BEFORE treating this as
+# production-final. "GetRecords" (List Records) is the documented read-only
+# default and is not yet live-verified against a real ServiceNow connection.
+# The read-only allowlist below is the safety gate that keeps an operator
+# override (env / config) from selecting a mutating operation.
+_SN_DEFAULT_READ_OPERATION = "GetRecords"
+_SN_READ_OPERATION_PREFIXES = ("get", "list", "read")
+_SN_MUTATING_OPERATION_PREFIXES = (
+    "add", "create", "delete", "edit", "insert", "modify", "patch",
+    "post", "put", "remove", "set", "submit", "update", "write",
+)
+
+
+def _servicenow_runtime_source(conn: dict) -> str:
+    props = conn.get("properties", {}) if isinstance(conn, dict) else {}
+    candidates = [
+        props.get("runtimeSource"),
+        props.get("runtime_source"),
+        (props.get("connectionRuntime") or {}).get("runtimeSource")
+        if isinstance(props.get("connectionRuntime"), dict)
+        else None,
+    ]
+    for candidate in candidates:
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip().lower()
+    return ""
+
+
+def _is_servicenow_connection(conn: dict) -> bool:
+    props = conn.get("properties", {}) if isinstance(conn, dict) else {}
+    api_id = props.get("apiId") or (props.get("api") or {}).get("name", "")
+    text = str(api_id).lower()
+    return "service-now" in text or "servicenow" in text
+
+
+def _select_servicenow_probe_connection(runner) -> tuple[dict | None, str]:
+    """Pick the ServiceNow managed connection the active probe binds to.
+
+    Prefers a Connected service-account (non-invoker) connection so the probe
+    exercises the ServiceNow integration-user / service-account identity path
+    (AC9). Returns ``(None, reason)`` when no usable connection exists; the
+    caller maps a "no ServiceNow ..." reason to a clean NOT_CONFIGURED and any
+    other reason to the passive run-history fallback.
+    """
+    pp = getattr(runner, "pp_admin", None)
+    env_id = getattr(runner, "env_id", None)
+    if pp is None or not env_id:
+        return None, "missing Power Platform admin client or environment id"
+    try:
+        conns = pp.get_connections(env_id)
+    except Exception as exc:  # noqa: BLE001 - fallback path must not fail the check
+        return None, f"could not list Power Platform connections ({type(exc).__name__})"
+    if not isinstance(conns, list):
+        return None, "Power Platform connection list was unavailable"
+
+    servicenow = [c for c in conns if isinstance(c, dict) and _is_servicenow_connection(c)]
+    connected = [c for c in servicenow if get_connection_status(c) == "Connected"]
+    if not servicenow:
+        return None, "no ServiceNow managed-connector connection was found"
+    if not connected:
+        return None, "no Connected ServiceNow managed-connector connection was found"
+
+    service_account = [
+        c for c in connected if _servicenow_runtime_source(c) != "invoker"
+    ]
+    if not service_account:
+        return None, (
+            "only OAuth-invoker ServiceNow connections were found; the active "
+            "probe would exercise the maker/employee identity instead of the "
+            "integration-user / service-account path"
+        )
+    return service_account[0], ""
+
+
+def _servicenow_probe_config(runner) -> tuple[str | None, dict[str, Any], str | None]:
+    """Resolve the read-only operation id and parameters for the probe.
+
+    Order of precedence: ESS_SN_PROBE_OPERATION_ID env var, then the
+    ``serviceNowConnectorProbe`` config block, then the read-only default.
+    Rejects any operation outside the read-only allowlist so an override can
+    never trigger a mutating ServiceNow call (AC7).
+    """
+    config = getattr(runner, "config", {}) or {}
+    probe_cfg: dict[str, Any] = {}
+    if isinstance(config.get("serviceNowConnectorProbe"), dict):
+        probe_cfg = config["serviceNowConnectorProbe"]
+    elif isinstance(config.get("flightcheck"), dict) and isinstance(
+        config["flightcheck"].get("serviceNowConnectorProbe"), dict
+    ):
+        probe_cfg = config["flightcheck"]["serviceNowConnectorProbe"]
+
+    operation_id = (
+        os.environ.get("ESS_SN_PROBE_OPERATION_ID", "").strip()
+        or str(probe_cfg.get("operationId") or _SN_DEFAULT_READ_OPERATION).strip()
+    )
+    params: dict[str, Any] = {}
+    raw_params = os.environ.get("ESS_SN_PROBE_PARAMS_JSON", "").strip()
+    if raw_params:
+        try:
+            parsed = json.loads(raw_params)
+        except json.JSONDecodeError:
+            return None, {}, "ESS_SN_PROBE_PARAMS_JSON is not valid JSON"
+        if not isinstance(parsed, dict):
+            return None, {}, "ESS_SN_PROBE_PARAMS_JSON must be a JSON object"
+        params = parsed
+    elif isinstance(probe_cfg.get("parameters"), dict):
+        params = dict(probe_cfg["parameters"])
+
+    op_lower = operation_id.lower()
+    if op_lower.startswith(_SN_MUTATING_OPERATION_PREFIXES):
+        return None, {}, f"operation '{operation_id}' is not read-only"
+    if not op_lower.startswith(_SN_READ_OPERATION_PREFIXES):
+        return None, {}, (
+            f"operation '{operation_id}' is not in the read-only allowlist"
+        )
+    return operation_id, params, None
+
+
+def _with_sn_run_passive_context(
+    results: list[CheckResult], *, reason: str
+) -> list[CheckResult]:
+    suffix = (
+        "\n\nThe live ServiceNow connection test was not run "
+        f"({reason}). Readiness was instead assessed from recent ServiceNow "
+        "connector run history on this environment. No new ServiceNow call was "
+        "made."
+    )
+    for row in results:
+        if row.checkpoint_id == "SN-RUN-001" and suffix not in row.result:
+            row.result += suffix
+    return results
+
+
+def _servicenow_probe_not_configured(reason: str) -> list[CheckResult]:
+    return [CheckResult(
+        checkpoint_id="SN-RUN-001", category="ServiceNow",
+        priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+        description="ServiceNow active connector runtime health",
+        result=(
+            f"The live ServiceNow connection test did not run: {reason}."
+        ),
+        remediation=(
+            "Connect ServiceNow in Power Platform first, then re-run "
+            "/flightcheck with --runtime-reachability to test the live "
+            "ServiceNow connection. This is a clean pre-deployment state, "
+            "not a runtime failure."
+        ),
+        doc_link=f"{DOC_BASE}/servicenow",
+        roles=[Role.SERVICENOW_ADMIN.value, Role.POWER_PLATFORM_ADMIN.value],
+    )]
+
+
+def _servicenow_probe_layer(res: live_egress_probe.ConnectorProbeResult) -> tuple[str, str]:
+    # Classification keys off the two signals the connector's synchronous
+    # response exposes: HTTP status (@outputs statusCode) and the action code
+    # (@actions code). The human-readable error.message is NOT available
+    # synchronously (it lives behind the SAS-signed outputsLink FlightCheck
+    # never fetches), so a wrong endpoint/table/operation and a ServiceNow
+    # business/validation fault can BOTH surface as HTTP 400 / BadRequest and
+    # cannot be split here — they share one honest "indeterminate" bucket. The
+    # status None sub-splits (TLS / DNS / DLP) and the 401 / 403 / 404 / 429
+    # branches are documented assumptions pending the AC13 ServiceNow live
+    # capture, not yet live-verified error shapes.
+    code = (res.error_code or "").lower()
+    status = res.status_code
+    if status is None:
+        if "tls" in code or "cert" in code or "ssl" in code:
+            return "network layer (TLS certificate)", "the connector got no HTTP response because TLS failed"
+        if "dns" in code or "name" in code:
+            return "network layer (DNS)", "the connector got no HTTP response because name resolution failed"
+        if "dlp" in code or "firewall" in code or "blocked" in code:
+            return "network layer (firewall / DLP)", "the connector got no HTTP response because traffic was blocked"
+        return "network layer (DNS / TLS / firewall / DLP)", "the connector got no HTTP response"
+    if status in (401, 403) or any(t in code for t in ("unauthor", "forbidden")):
+        return (
+            "authorization layer",
+            "ServiceNow or the connector rejected the request; the integration "
+            "user's ServiceNow role/ACL likely does not permit this operation",
+        )
+    if status in (404, 405) or any(t in code for t in ("notfound", "invalidurl", "endpoint")):
+        return (
+            "endpoint configuration layer",
+            "the configured ServiceNow instance URL, table, or operation was not found",
+        )
+    if status == 429 or any(t in code for t in ("toomanyrequests", "ratelimit", "throttl")):
+        return "ServiceNow rate-limit layer", "ServiceNow throttled the request (HTTP 429)"
+    if status == 400 or "badrequest" in code:
+        return (
+            "endpoint-configuration or ServiceNow business-rule layer (indeterminate)",
+            "ServiceNow rejected the request with HTTP 400; the connector's "
+            "synchronous response cannot distinguish a wrong endpoint / table / "
+            "operation from a ServiceNow business or validation fault",
+        )
+    if status in (409, 422):
+        return "ServiceNow business-rule layer", "ServiceNow processed the request and rejected its inputs"
+    if status == 500 or "internalservererror" in code or "servererror" in code:
+        return "connector runtime / ServiceNow backend layer", "the ServiceNow connector or backend returned a server error"
+    return "connector runtime layer", "the ServiceNow connector action failed"
+
+
+def _servicenow_probe_failure_result(
+    res: live_egress_probe.ConnectorProbeResult, connection_name: str
+) -> list[CheckResult]:
+    _layer, cause = _servicenow_probe_layer(res)
+    status_text = f"HTTP {res.status_code}" if res.status_code else "no HTTP status"
+    code_text = f"; connector code {res.error_code}" if res.error_code else ""
+    return [CheckResult(
+        checkpoint_id="SN-RUN-001", category="ServiceNow",
+        priority=Priority.HIGH.value, status=Status.FAILED.value,
+        description="ServiceNow active connector runtime health",
+        result=(
+            "The live ServiceNow connection test failed. "
+            f"{cause[:1].upper() + cause[1:]} ({status_text}{code_text}). "
+            "Tested using the ServiceNow service-account connection "
+            f"'{connection_name}'. This tested the standard ServiceNow REST "
+            "data-retrieval path; it did not test custom scripted REST APIs."
+        ),
+        remediation=_infra_003_directive(
+            cause=cause,
+            scope="ServiceNow managed connector / Power Platform environment egress",
+            implies=(
+                "The agent's ServiceNow REST connector path can fail at "
+                "runtime even if connection status is Connected."
+            ),
+            next_steps=(
+                "Open the transient probe or matching ServiceNow connector run "
+                "in Power Automate, then fix the cause named above. For "
+                "authorization, check the integration user's ServiceNow "
+                "roles/ACLs. For endpoint configuration, check the ServiceNow "
+                "instance URL and the table/operation. For network blocks, "
+                "check DLP, firewall, DNS, and TLS."
+            ),
+            responsible_role=(
+                f"{Role.SERVICENOW_ADMIN.value} / {Role.POWER_PLATFORM_ADMIN.value}"
+            ),
+            probe_layer_note=_infra_003_probe_layer_note(),
+        ),
+        doc_link=f"{DOC_BASE}/servicenow",
+        roles=[Role.SERVICENOW_ADMIN.value, Role.POWER_PLATFORM_ADMIN.value],
+    )]
+
+
+def _check_servicenow_active_run_health(runner) -> list[CheckResult]:
+    """SN-RUN-001 — active ServiceNow connector probe with passive fallback.
+
+    Dispatches to the on-demand managed-connector probe when the operator opts
+    into --runtime-reachability and a Connected service-account ServiceNow
+    connection exists. On declined consent, missing prerequisites, an
+    OAuth-invoker-only install, or a bad operation override, it falls back to
+    the passive run-history read (_check_servicenow_run_health). A missing
+    ServiceNow connection is reported as a clean NOT_CONFIGURED, never FAIL.
+    """
+    ctx, live_env = _live_probe_context(runner)
+    if not (ctx.live_ran and live_env is not None):
+        reason = (
+            "operator declined the runtime-reachability probe"
+            if ctx.declined_by_user
+            else ctx.unavailable_reason or "runtime-reachability was not opted in"
+        )
+        return _with_sn_run_passive_context(
+            _check_servicenow_run_health(runner), reason=reason
+        )
+
+    conn, conn_reason = _select_servicenow_probe_connection(runner)
+    if conn is None:
+        if "no ServiceNow" in conn_reason:
+            return _servicenow_probe_not_configured(conn_reason)
+        return _with_sn_run_passive_context(
+            _check_servicenow_run_health(runner), reason=conn_reason
+        )
+
+    operation_id, params, op_error = _servicenow_probe_config(runner)
+    if op_error:
+        return _with_sn_run_passive_context(
+            _check_servicenow_run_health(runner), reason=op_error
+        )
+
+    connection_id = conn.get("name") or ""
+    action = live_egress_probe.ConnectorProbeAction(
+        connector_api_id=_SN_CONNECTOR_API_ID,
+        connection_id=connection_id,
+        operation_id=operation_id or _SN_DEFAULT_READ_OPERATION,
+        parameters=params,
+        action_name=_SN_PROBE_ACTION_NAME,
+        connection_ref_key=_SN_CONNECTOR_NAME,
+    )
+    try:
+        live_egress_probe.cleanup_orphan_probe_flows(
+            live_env["env_url"], live_env["dv_token"], probe_flow_name=_SN_PROBE_FLOW_NAME
+        )
+        res = live_egress_probe.run_connector_probe(
+            **live_env,
+            action=action,
+            probe_flow_name=_SN_PROBE_FLOW_NAME,
+            description="FlightCheck SN-RUN-001 transient ServiceNow connector probe.",
+        )
+    finally:
+        live_egress_probe.cleanup_orphan_probe_flows(
+            live_env["env_url"], live_env["dv_token"], probe_flow_name=_SN_PROBE_FLOW_NAME
+        )
+
+    if res.succeeded is True:
+        return [CheckResult(
+            checkpoint_id="SN-RUN-001", category="ServiceNow",
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
+            description="ServiceNow active connector runtime health",
+            result=(
+                "The live test successfully retrieved data from ServiceNow "
+                "through the agent's ServiceNow connection "
+                f"({res.detail}). Tested using the ServiceNow service-account "
+                f"connection '{connection_id}'. This tested the standard "
+                "ServiceNow REST data-retrieval path; it did not test custom "
+                "scripted REST APIs."
+            ),
+            remediation="",
+            doc_link=f"{DOC_BASE}/servicenow",
+            roles=[Role.SERVICENOW_ADMIN.value, Role.POWER_PLATFORM_ADMIN.value],
+        )]
+    if res.succeeded is False:
+        return _servicenow_probe_failure_result(res, connection_id)
+    return _with_sn_run_passive_context(
+        _check_servicenow_run_health(runner),
+        reason=f"the live ServiceNow test could not complete (it did not return a clear pass or fail): {res.detail}",
+    )
 
 
 def _check_template_configs(runner) -> list[CheckResult]:
