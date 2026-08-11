@@ -51,11 +51,20 @@ def read_config(path: str | os.PathLike[str] = CONFIG_PATH) -> dict[str, Any]:
 
 
 def config_snapshot(config: dict[str, Any]) -> dict[str, Any]:
-    """The subset of config.json the environment detector diffs on."""
+    """The subset of config.json the setup detectors diff on — the environment
+    and the agent that ``/setup`` clones."""
+    agent = config.get("agent") or {}
     return {
         "setup": config.get("setup"),
         "dataverseEndpoint": config.get("dataverseEndpoint"),
         "environmentId": config.get("environmentId"),
+        "agent": {
+            "botId": agent.get("botId"),
+            "name": agent.get("name"),
+            "schemaName": agent.get("schemaName"),
+            "folder": agent.get("folder"),
+            "slug": agent.get("slug"),
+        },
     }
 
 
@@ -107,6 +116,46 @@ def detect_environment(
     return plan_artifact(
         key,
         "Environment",
+        attributes,
+        produced_by_task_id=task_id,
+        inventory_ref=inventory_ref,
+        source="Agent",
+    )
+
+
+def detect_agent(
+    before: dict[str, Any],
+    after: dict[str, Any],
+    *,
+    task_id: str,
+    key: str = "essAgent",
+) -> dict[str, Any] | None:
+    """Detect the ESS **Agent** artifact from a ``config.json`` before/after diff.
+
+    ``/setup`` connects to the deployed ESS agent and **clones it** — recording
+    the agent identity (``botId``, ``schemaName``, ``name``, local ``folder`` /
+    ``slug``) into ``.local/config.json`` and its components under
+    ``workspace/agents/<slug>/``. Returns an ``Agent`` ``PlanArtifact`` when that
+    identity appears or changes, else ``None`` (nothing to pin). This is the
+    second half of the ``/setup`` capture — the environment is :func:`detect_environment`.
+    """
+    agent = after.get("agent") or {}
+    bot_id = agent.get("botId")
+    if not bot_id and not agent.get("schemaName"):
+        return None
+    if agent == (before.get("agent") or {}):
+        return None  # unchanged
+
+    attributes: dict[str, Any] = {
+        k: agent[k] for k in ("botId", "schemaName", "name", "folder", "slug")
+        if agent.get(k)
+    }
+    if not attributes:
+        return None
+    inventory_ref = f"Agent:{bot_id}" if bot_id else ""
+    return plan_artifact(
+        key,
+        "Agent",
         attributes,
         produced_by_task_id=task_id,
         inventory_ref=inventory_ref,

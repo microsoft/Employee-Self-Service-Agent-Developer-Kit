@@ -103,7 +103,7 @@ flowchart LR
     RO --> LS["Role-gated tasks (assigned + open-to-role)"]
     LS --> CL["Claim"] --> BR["Task brief · enrich from Learn<br/>kit skill OR Learn walkthrough"]
     BR --> DO["Do the work — example: run /setup"]
-    DO --> SU["/setup produces artifacts:<br/>environmentId · dataverseEndpoint · agent slug"]
+    DO --> SU["/setup produces artifacts → pinned to plan:<br/>Environment (environmentId · dataverseEndpoint)<br/>Agent (botId · schemaName · slug — the cloned agent)"]
     SU --> TG{"Completion: planner asks 'done?'<br/>OR assignee says 'done'"}
     TG --> DISC["Assignee runs /discover —<br/>crawls Dataverse for system details"]
     SC["Planner reads ids + names<br/>(from .local/config.json for now)"] --> POP["Populate produces (value or presence-only)<br/>ask only the gaps"]
@@ -403,13 +403,15 @@ workspace/
                       "user": { "oid": "<paul oid>" },
                       "role": { "roleId": "power-platform-admin" } },  // …ACTING AS a Learn-grounded role
       "state": "NotStarted",                              // NotStarted → InProgress → Completed (+ reopen)
-      "produces": ["primaryEnvironment"], "consumes": [] },
+      "produces": ["primaryEnvironment","essAgent"], "consumes": [] },  // /setup also clones the agent → essAgent
 
-    { "id": "T2", "title": "Connect Workday",
-      "description": "Run /connect to connect Workday to the ESS agent and follow its steps.",
-      "assignedTo": { "type": "Role", "id": "integration-owner",     // OPEN TO A ROLE (pool) — nobody yet
-                      "role": { "roleId": "integration-owner" } },
-      "state": "NotStarted", "produces": ["workdayConnection","workdayEntraApp"], "consumes": ["primaryEnvironment"],
+    // Workday is MULTI-ROLE (§10.1): SSO = App/Cloud App Admin, tenant = Workday Administrator,
+    // pack+connect = Environment Maker, firewall = InfoSec/IT — one Task PER role. Shown here: the connect slice.
+    { "id": "T2", "title": "Install Workday pack & connect",
+      "description": "Run /connect to install the Workday extension pack and create the connection (setup/workday/tasks.md §5).",
+      "assignedTo": { "type": "Role", "id": "Environment Maker",      // OPEN TO A ROLE (pool) — nobody yet
+                      "role": { "roleId": "Environment Maker" } },    // role read verbatim from the checklist role:
+      "state": "NotStarted", "produces": ["workdayConnection"], "consumes": ["primaryEnvironment","workdayEntraApp","workdayTenantConfig"],
       // OPTIONAL read-back-only step display — the skill fills this at RUNTIME from its tasks.md (§10.1).
       // Not a sub-entity, not promoted, not the Task boundary; empty until the skill runs.
       "checklist": [ { "label": "Admin setup complete", "done": false },
@@ -434,7 +436,11 @@ workspace/
     // { "key":"primaryEnvironment", "kind":"Environment",
     //   "attributes":{ "environmentId":"d3f1…", "environmentUrl":"https://…" },
     //   "inventoryRef":"Environment:d3f1…", "producedByTaskId":"T1",
-    //   "provenance":{ "source":"Agent", "addedBy":{…}, "addedAt":"…" }, "state":"Active" }
+    //   "provenance":{ "source":"Agent", "addedBy":{…}, "addedAt":"…" }, "state":"Active" },
+    // { "key":"essAgent", "kind":"Agent",   // /setup clones the agent (§12.2)
+    //   "attributes":{ "botId":"bot-9", "schemaName":"ess_agent", "name":"ESS Agent", "folder":"agents/ess" },
+    //   "inventoryRef":"Agent:bot-9", "producedByTaskId":"T1",
+    //   "provenance":{ "source":"Agent", … }, "state":"Active" }
   ]
 }
 ```
@@ -500,14 +506,14 @@ The human view (`workspace/plan/ESS-scenario-plan.md`, §9.1) is not read‑only
 
 A Task is the **smallest unit that (a) one owner can complete end‑to‑end and (b) is completed in one sitting** — *usually* by running one kit command (`/setup`, `/connect`), but sometimes a manual/portal/admin or external step with **no** kit command (registering an Entra app in the portal, publishing the agent, a data‑residency sign‑off). The "how" is stated in the Task's **description**.
 
-**A Task is not a skill's internal steps.** A kit skill like `connect` is itself a multi‑step procedure with its own checklist (`connect/workday/tasks.md`: *environment configured → admin setup → connection verified*) and step files (`step1/2/3.md`). Those steps sit **one plane below** the Plan — they are how a single assignee *executes* one Task in one session, owned and tracked by the skill (its `.local/connect/workday/tasks.md` state + the todo‑list), not units of the rollout. So "Connect Workday" is **one Plan Task** (described as "run `/connect`"); its steps do **not** become sibling Tasks, and we do **not** add both "run connect" *and* its checklist items as Tasks (that double‑counts). The Plan records the Task's state and its produced artifacts (`workdayConnection`, `workdayEntraApp`) — stable **however many** internal steps ran.
+**A Task is not a skill's internal steps.** A kit skill like `connect` is itself a multi‑step procedure with its own checklist (`connect/workday/tasks.md`: *environment configured → admin setup → connection verified*) and step files (`step1/2/3.md`). Those steps sit **one plane below** the Plan — they are how a single assignee *executes* one Task in one session, owned and tracked by the skill (its `.local/connect/workday/tasks.md` state + the todo‑list), not units of the rollout. So a skill's *steps* do **not** become sibling Tasks, and we do **not** add both "run connect" *and* its checklist items as Tasks (that double‑counts). **But Task granularity is the role, not the skill:** where one skill's setup spans several roles, it becomes several Tasks (see the next paragraph — Workday is the canonical multi‑role case). The Plan records each Task's state and its produced artifacts (e.g. `workdayConnection`, `workdayEntraApp`) — stable **however many** internal steps ran.
 
 Three reasons the Task stays at skill granularity, not step granularity:
 - **One assignee.** Every connect step is done by the *same* person in one sitting; a Task has one assignee, so steps don't earn separate Tasks.
 - **Steps are runtime‑variable and unknowable at plan time.** `connect` detects *simplified vs legacy* Workday in step1 and branches to very different step counts — you can't enumerate the steps when the Plan is authored.
 - **Stability + one home for behaviour.** If the skill adds/removes a step the Plan is unaffected; the skill owns its procedure once (§6).
 
-**The one reason to split a Task — a role boundary, never a step boundary.** Split "Connect Workday" into more than one Plan Task **only** when a portion needs a *different owner*. Research grounds a role per prerequisite (§7.6), so if the docs put *register the Entra app* on an `entra-admin`, the *Workday API‑client / ISU / security* work on a `workday-admin`, and *create the connection & verify* on an `integration-owner`, those become separate Tasks (each a slice of the skill, or a portal step). If one admin holds all of it (the MVP soft assumption, §3) it collapses to a single "Connect Workday" Task. **Role boundary = Task boundary; the skill's steps are never the boundary.**
+**The one reason to split a Task — a role boundary, never a step boundary.** Split a system's setup into more than one Plan Task **whenever a portion needs a *different owner*.** The planner reads the system's own setup checklist and role map — `src/skills/setup/workday/tasks.md` + `src/reference/ess-docs/setup/role-gating.md`, where every item carries a `role:` — and emits **one Task per distinct role**. **Workday is genuinely multi‑role**, so it is **never** a single "Connect Workday" Task: the SSO/Entra work is an **App/Cloud App Admin** (S3.1–S3.7), the API‑client / tenant config is a **Workday Administrator** (S4.1–S4.4), installing the extension pack & creating the connection is an **Environment Maker** (S5.1–S5.7), and the egress allowlist is **InfoSec/IT** (S5.8). The MVP soft assumption (§3) grants the planner **Power Platform admin** access only — it does **not** fold the Workday‑admin, Entra‑admin, or InfoSec roles into that one person, so these stay separate Tasks. **Role boundary = Task boundary; the skill's steps are never the boundary.**
 
 **Step visibility without making Step first‑class.** "Step is not a first‑class entity" and stays that way — there is no Plan→Task→Step tree (rejected, §16). When the Plan needs to *show* progress inside a Task, the skill fills an optional, read‑back‑only `checklist[]` on the Task (§9.2) at runtime from its `tasks.md` — display state, not addressable entities, with no new entity and no migration.
 
@@ -515,16 +521,19 @@ Three reasons the Task stays at skill granularity, not step granularity:
 
 | Task (title) | Description (what & how) | Produces | Consumes | Role (grounded from Learn) |
 |---|---|---|---|---|
-| Run setup | Run `/setup` to onboard the ADK to the deployed agent (records env & agent details) | `primaryEnvironment` | — | `power-platform-admin` |
+| Run setup | Run `/setup` to onboard the ADK to the deployed agent — records the environment **and clones the agent** | `primaryEnvironment`, `essAgent` | — | `power-platform-admin` |
 | Check readiness | Run `/flightcheck` to validate the environment | `readinessReport` | `primaryEnvironment` | `power-platform-admin` |
 | Register Entra app *(if not via connect)* | In the Azure portal, register the Entra app (see the Learn doc) | `entraApp` | `primaryEnvironment` | `entra-admin` |
-| Connect Workday | Run `/connect` to connect Workday | `workdayConnection`, `workdayEntraApp` | `primaryEnvironment` | `integration-owner` |
-| Connect ServiceNow | Run `/connect` to connect ServiceNow | `servicenowConnection` | `primaryEnvironment` | `integration-owner` |
+| Set up Workday SSO (Entra) | Register/configure the Workday enterprise app for SSO — `setup/workday/tasks.md` §3 | `workdayEntraApp` | `primaryEnvironment` | `App/Cloud App Admin` |
+| Configure the Workday tenant | Create the API client & tenant config in Workday — §4 | `workdayTenantConfig` | `primaryEnvironment` | `Workday Administrator` |
+| Install Workday pack & connect | Run `/connect` — install the extension pack & create the connection — §5 | `workdayConnection` | `workdayEntraApp`, `workdayTenantConfig` | `Environment Maker` |
+| Allow Workday through the firewall | Attest the Workday egress allowlist — §5 (S5.8) | `workdayNetworkAllowlist` | — | `InfoSec/IT` |
+| Connect ServiceNow | Run `/connect` — decompose per its own checklist `role:` items | `servicenowConnection` | `primaryEnvironment` | *(roles per its checklist)* |
 | Author scenario topics | Run `/create` to author the scenario topics | `topic:<name>` | env + connections | `maker` |
 | Generate evals | Run `/evaluate` to generate the eval suite | `evalSuite` | `primaryEnvironment` | `eval-author` |
 | Publish the agent | In the Power Platform admin center, publish the agent (Learn publish doc) | — | built agent | `power-platform-admin` |
 
-The planner sequences these tasks; **the role in the last column and the `produces` keys are extracted from the Learn docs during research (§7.6), not hardcoded kit defaults and not asked of the sponsor.** The description says how (run a kit command, or a portal/manual step with a grounded doc link) in plain language — there is no separate action field. `produces`/`consumes` drive ordering + "blocked until produced" UX (Step‑2 §7.2, phase‑2); each key is what the capture loop (§12) fills and pins. The **setup task is the one that produces `primaryEnvironment`**.
+The planner sequences these tasks; **the role in the last column and the `produces` keys are extracted from the Learn docs during research (§7.6), not hardcoded kit defaults and not asked of the sponsor.** The description says how (run a kit command, or a portal/manual step with a grounded doc link) in plain language — there is no separate action field. `produces`/`consumes` drive ordering + "blocked until produced" UX (Step‑2 §7.2, phase‑2); each key is what the capture loop (§12) fills and pins. The **setup task is the one that produces `primaryEnvironment` and `essAgent`** (both pinned from `config.json`, §12.2).
 
 **Role grounding lives in the research context, not on the Task.** The role is *sourced from the Learn link*, but the Task carries **only** the fields the WeveNova `Task` entity defines (title, description, assignedTo, state, produces, consumes) — the grounding page URL is kept in the cached research context (§7.6, `prerequisites[].sourceUrl`), never as an invented `task.roleSource` field. The role stays Learn-grounded; the future roles endpoint (§10.3, §11) only resolves *which people* hold it.
 
@@ -622,13 +631,13 @@ Every Task declares the output **keys** it should yield in `produces`, and those
 
 So `produces` (from the doc) says *what* to capture; scan → observe → ask says *how*, in that order; the assignee's confirmation gates every pin. No mode trusts free‑text narration — the scan reads reality (subject to the caller's Dataverse access), observe reads local state, ask records an explicit answer the assignee stands behind.
 
-### 12.2 Observe mode, worked: the `/setup` → `environmentId` hand‑off
+### 12.2 Observe mode, worked: the `/setup` → `environmentId` + `essAgent` hand‑off
 
 1. **Before.** Planner snapshots the current environment (from `config.json` + `list_environments.py`/`pp_admin_client.py`). T1 is `NotStarted`; `outputs:[]`.
 2. **The assignee runs `/setup`.** It connects the kit to the ESS agent already deployed in the environment (it does **not** create the environment), **atomically writes `.local/config.json`** (`setup:"complete"`, `dataverseEndpoint`, agent slug/schema/folder), and its side effect — the bound environment — **is what the WeveNova tenant inventory records** (the durable, cross‑plan record the planner reads back in step 3).
-3. **The ADK detects the change.** On return to `/planner`, it **reads the environment ids + names from `.local/config.json`** — which `/setup` (and, for other systems, the envisioned `/discover`) wrote — diffing a before/after snapshot; `/discover` also persists these to the WeveNova inventory, from which the planner will read via an MCP once its read surface stabilises (§14). *(Where `config.json` lacks a raw `environmentId` GUID, resolve it once from the endpoint via the existing PP/BAP client — §18.)*
-4. **Confirm with the person doing the job.** The planner does **not** silently write. It asks the assignee (person P, acting as the role): *"I see `/setup` recorded environment `d3f1…` (`https://…`). Pin it to the plan as T1's output?"* — the "ask the role who did the job" the requirement calls for.
-5. **Pin onto the ledger.** On yes, append a `PlanArtifact` to `outputs[]` (`key:primaryEnvironment`, `kind:Environment`, `attributes:{environmentId, environmentUrl}`, `inventoryRef`, `producedByTaskId:T1`, `provenance.source:Agent`, `state:Active`); T1 → `Completed`; `ESS-scenario-plan.md` re‑renders. Supersede‑by‑key handles a re‑run.
+3. **The ADK detects the change.** On return to `/planner`, it **reads the environment *and the cloned agent* ids + names from `.local/config.json`** — which `/setup` (and, for other systems, the envisioned `/discover`) wrote — diffing a before/after snapshot; `/discover` also persists these to the WeveNova inventory, from which the planner will read via an MCP once its read surface stabilises (§14). *(Where `config.json` lacks a raw `environmentId` GUID, resolve it once from the endpoint via the existing PP/BAP client — §18.)*
+4. **Confirm with the person doing the job.** The planner does **not** silently write. It asks the assignee (person P, acting as the role): *"I see `/setup` recorded environment `d3f1…` (`https://…`) and cloned agent `ess_agent` (botId `bot‑9`). Pin them to the plan as T1's outputs?"* — the "ask the role who did the job" the requirement calls for.
+5. **Pin onto the ledger.** On yes, append **two** `PlanArtifact`s to `outputs[]`: the environment (`key:primaryEnvironment`, `kind:Environment`, `attributes:{environmentId, environmentUrl}`) **and the cloned agent** (`key:essAgent`, `kind:Agent`, `attributes:{botId, schemaName, name, folder}`) — each with `inventoryRef`, `producedByTaskId:T1`, `provenance.source:Agent`, `state:Active`; T1 → `Completed`; `ESS-scenario-plan.md` re‑renders. Supersede‑by‑key handles a re‑run. Detectors: `capture.detect_environment` + `capture.detect_agent`.
 6. **Downstream reads off the Plan.** T3 (evals), a possibly different role, reads `outputs["primaryEnvironment"].attributes.environmentId` straight from `plan.json` — no re‑discovery. The reproducible hand‑off (Step‑2 §11), realised locally.
 
 ### 12.3 The observe‑mode detector registry
@@ -637,7 +646,7 @@ A small **detector per artifact kind** returns the `PlanArtifact`s a Task produc
 
 | Task (what it does) | Detector reads | Artifact(s) pinned |
 |---|---|---|
-| `/setup` (onboarding) | WeveNova tenant inventory (env fact) · `config.json` fallback | `Environment` |
+| `/setup` (onboarding) | `config.json` diff (env + cloned agent) · WeveNova tenant inventory (env fact) later | `Environment`, `Agent` |
 | `/connect` (Workday) | new connection refs + Entra app id | `Connection`, `EntraApp` (appId+objectId+tenantId under one key, Step‑2 §7.2) |
 | portal register Entra app | new app registration id (Graph/BAP) | `EntraApp` |
 | `/flightcheck` | the readiness report file | `Custom` (readiness snapshot) |
@@ -709,10 +718,10 @@ Until WeveNova + these MCP tools are live, the sync layer is a **no‑op stub** 
 1. Sponsor: *"ESS HR ticketing for employees on ServiceNow, plus read profile from Workday. Germany first."*
 2. **Research.** `/planner` seeds the ESS Learn URL → follows the 301 to the current base → fetches `toc.json` (59 nodes) → selects `overview`, `prerequisites`, `deploy-overview-alm`, `install`, `commands-reference`, the **Workday** subtree, and **ServiceNow** (`servicenow`, `servicenow-hrsd-itsm`); skips SAP + facilities (title‑only). Extracts capabilities + prerequisites + constraints (Workday needs Entra SSO; a data‑residency note for DE), caches `research-context.json`.
 3. **Interview.** 4 intent turns → Context entries (`objective`, `businessGoals:[deflect 30%]`, `scenarioContext:[HR-Ticketing, ServiceNow HRSD, Workday, Employee]`, `market:DE`, `acceptanceCriteria`). Sponsor accepts.
-4. **Emit + assign (Flow 1).** Tasks T1 `/setup`, T2 `/connect ServiceNow`, T3 `/connect Workday`, T4 `/evaluate`, and T5 *Publish the agent* (a **portal/admin** step — no kit skill). **Each Task's role and `produces` keys come from the Learn docs** (research grounded `power-platform-admin` for setup/publish, `integration-owner` for connect, `eval-author` for evals) — the sponsor is not asked to name roles. The ADK lists holders of each grounded role; the sponsor assigns **Paul** to T1, **pools** T2/T3 to `integration-owner`, assigns **Ann** to T4, pools T5 to `power-platform-admin`. `plan.json` + `ESS-scenario-plan.md` written. **As soon as the interview captured the scenarios + goals (before modelling), `/planner` rendered an eager scenario-based eval **preview** — the golden prompts (HR‑Ticketing, profile‑read) grouped by category — so the sponsor saw "what good looks like" before build. It is render‑only: nothing was generated or pushed. The real generation runs later at T4.**
-5. **Run + capture.** Paul runs `/setup` → env `d3f1…` → planner detects the `config.json` diff, asks Paul to confirm, pins the `Environment` artifact; T1 → Completed.
-6. **Discover (Flow 2).** A holder of `integration-owner` asks "what am I assigned?" → sees, under *Integration owner*, T2 + T3 "(open to your role)" → claims T2 → runs `/connect` → connection/app artifacts pinned; T4 unblocks.
-7. **Read‑through.** Ann runs `/evaluate`; it reads `outputs["primaryEnvironment"].environmentId` off the Plan — no re‑discovery. Eval artifact pins; T4 completes.
+4. **Emit + assign (Flow 1).** Tasks: T1 `/setup`; **the Workday connect, decomposed by role per §10.1** — T2 SSO/Entra (`App/Cloud App Admin`), T3 Workday tenant config (`Workday Administrator`), T4 install pack & connect (`Environment Maker`); T5 `/connect ServiceNow` (split per its own checklist `role:`); T6 `/evaluate`; and T7 *Publish the agent* (a **portal/admin** step — no kit skill). **Each Task's role and `produces` keys come from the Learn docs / the system's setup checklist** (`setup/workday/tasks.md` grounds the Workday roles) — the sponsor is not asked to name roles. The ADK lists holders of each grounded role; the sponsor assigns **Paul** to T1, **pools** T2–T5 to their roles, assigns **Ann** to T6, pools T7 to `power-platform-admin`. `plan.json` + `ESS-scenario-plan.md` written. **As soon as the interview captured the scenarios + goals (before modelling), `/planner` rendered an eager scenario-based eval preview — the golden prompts (HR‑Ticketing, profile‑read) grouped by category — so the sponsor saw "what good looks like" before build. It is render‑only: nothing was generated or pushed. The real generation runs later at T6.**
+5. **Run + capture.** Paul runs `/setup` → env `d3f1…` + cloned agent `ess_agent` → planner detects the `config.json` diff, asks Paul to confirm, pins the `Environment` **and** `Agent` artifacts; T1 → Completed.
+6. **Discover (Flow 2).** A holder of `Environment Maker` asks "what am I assigned?" → sees, under *Environment Maker*, T4 "(open to your role)" → claims T4 → runs `/connect` → the Workday connection artifact pins (consuming the SSO + tenant outputs from T2/T3); T6 unblocks once its inputs are satisfied.
+7. **Read‑through.** Ann runs `/evaluate`; it reads `outputs["primaryEnvironment"].environmentId` off the Plan — no re‑discovery. Eval artifact pins; T6 completes.
 8. *(When WeveNova is live)* every write best‑effort‑syncs (§15); until then it all runs locally.
 
 ---
@@ -755,10 +764,13 @@ Verified on `origin/main`, HEAD `72a24f8`, worktree cleaned to match `main`:
 
 | Task | Description (what & how) | Produces | Consumes | Role (from Learn) | Capture (§12) |
 |---|---|---|---|---|---|
-| Run setup | Run `/setup` to onboard the ADK to the deployed agent | `primaryEnvironment` | — | `power-platform-admin` | observe: `config.json` diff |
+| Run setup | Run `/setup` to onboard the ADK to the deployed agent (records env + clones agent) | `primaryEnvironment`, `essAgent` | — | `power-platform-admin` | observe: `config.json` diff (env + agent) |
 | Readiness check | Run `/flightcheck` | `readinessReport` | `primaryEnvironment` | `power-platform-admin` | observe: readiness file |
-| Connect Workday | Run `/connect` (Workday) | `workdayConnection`, `workdayEntraApp` | `primaryEnvironment` | `integration-owner` | observe: conn refs + app id |
-| Connect ServiceNow | Run `/connect` (ServiceNow) | `servicenowConnection` | `primaryEnvironment` | `integration-owner` | observe: conn refs |
+| Set up Workday SSO (Entra) | Register/configure the Workday enterprise app for SSO (§3) | `workdayEntraApp` | `primaryEnvironment` | `App/Cloud App Admin` | observe: app id |
+| Configure the Workday tenant | Create the API client & tenant config (§4) | `workdayTenantConfig` | `primaryEnvironment` | `Workday Administrator` | ask/attest |
+| Install Workday pack & connect | Run `/connect` (Workday) — pack + connection (§5) | `workdayConnection` | `workdayEntraApp`, `workdayTenantConfig` | `Environment Maker` | observe: conn refs |
+| Allow Workday through firewall | Attest the Workday egress allowlist (S5.8) | `workdayNetworkAllowlist` | — | `InfoSec/IT` | ask/attest |
+| Connect ServiceNow | Run `/connect` (ServiceNow) — split per its checklist `role:` items | `servicenowConnection` | `primaryEnvironment` | *(roles per its checklist)* | observe: conn refs |
 | Author topics | Run `/create` to author topics | `topic:<name>` | env + connections | `maker` | observe: pushed topic files |
 | Generate evals | Run `/evaluate` | `evalSuite` | `primaryEnvironment` | `eval-author` | observe: new eval ids |
 | Publish the agent | In the portal, publish the agent (Learn doc) | — | built agent | `power-platform-admin` | ask assignee |

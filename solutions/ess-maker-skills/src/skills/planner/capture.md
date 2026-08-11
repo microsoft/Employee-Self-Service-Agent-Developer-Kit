@@ -9,9 +9,11 @@ ways to fill a value:
 
 Preferred for kit-skill Tasks that leave a signal. The canonical case is the
 setup hand-off: after `/setup` runs (onboarding the ADK to the deployed agent),
-it **records** the environment & agent details into `.local/config.json` — it
-connects to the environment and records its id/URL; it doesn't create it. Detect
-and pin the environment:
+it **records** the environment **and clones the agent** into `.local/config.json`
+— it connects to the environment and records its id/URL, and it clones the
+deployed agent (`botId`, `schemaName`, name, local folder/slug) into the
+workspace. It doesn't create the environment. Detect and pin **both** the
+environment and the agent:
 
 ```
 python scripts/planner/cli.py capture-setup --complete
@@ -24,10 +26,11 @@ now offers this at the end of a run: when setup finishes and a plan exists, it
 asks the maker "mark the setup task complete and save the environment?" and runs
 this for them — so the loop closes without waiting for someone to remember.
 
-This reads the current `.local/config.json`, and — if an environment appeared
-that wasn't there before — prints the artifact it will pin (the `environmentId`
-and URL). Show the assignee the detected value and confirm before it's saved.
-`--complete` also marks the Task done.
+This reads the current `.local/config.json`, and — if an environment and/or the
+cloned agent appeared that weren't there before — prints the artifact(s) it will
+pin: an `Environment` (the `environmentId` and URL) **and** an `Agent` (the
+`botId`, `schemaName`, name, folder). Show the assignee the detected values and
+confirm before they're saved. `--complete` also marks the Task done.
 
 Do **not** trust the agent's narration ("I created env X"); the value is read
 from real state the action changed.

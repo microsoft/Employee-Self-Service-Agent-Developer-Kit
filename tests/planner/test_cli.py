@@ -78,6 +78,7 @@ def test_full_flow(tmp_path, capsys):
                 "setup": "complete",
                 "dataverseEndpoint": "https://org123.crm.dynamics.com",
                 "environmentId": "d3f10000-0000-1111-2222-333344445555",
+                "agent": {"botId": "bot-9", "name": "ESS Agent", "schemaName": "ess_agent", "slug": "ess"},
             }
         ),
         encoding="utf-8",
@@ -114,6 +115,12 @@ def test_full_flow(tmp_path, capsys):
     plan = Plan.load(plan_path)
     assert plan.task("T1")["state"] == "Completed"
     assert plan.output("primaryEnvironment")["attributes"]["environmentId"] == "d3f10000-0000-1111-2222-333344445555"
+    # /setup also clones the agent -> pinned as an Agent artifact on the same task.
+    agent = plan.output("essAgent")
+    assert agent is not None
+    assert agent["kind"] == "Agent"
+    assert agent["attributes"]["botId"] == "bot-9"
+    assert agent["producedByTaskId"] == "T1"
 
     # Validate is clean.
     assert _run("--plan", plan_path, "validate") == 0
@@ -128,7 +135,7 @@ def test_capture_setup_no_change_returns_nonzero(tmp_path, capsys):
     capsys.readouterr()
     rc = _run("--plan", plan_path, "capture-setup", "--task", "T1", "--config", str(config_path), "--before", "{}")
     assert rc == 1
-    assert "No environment change" in capsys.readouterr().err
+    assert "No environment or agent change" in capsys.readouterr().err
 
 
 def test_mine_json_output(tmp_path, capsys):

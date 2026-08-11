@@ -35,7 +35,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from planner import research
-from planner.capture import detect_environment, snapshot_config
+from planner.capture import detect_agent, detect_environment, snapshot_config
 from planner.plan_model import (
     ARTIFACT_KINDS,
     PLAN_PATH,
@@ -217,11 +217,12 @@ def cmd_set_state(args: argparse.Namespace) -> int:
 
 
 def cmd_capture_setup(args: argparse.Namespace) -> int:
-    """Observe-mode capture for the /setup -> environmentId hand-off.
+    """Observe-mode capture for the ``/setup`` hand-off — pins BOTH the
+    environment and the ESS **agent** ``/setup`` clones.
 
     Reads the current .local/config.json as the "after" snapshot; the "before"
     is empty (setup has just run). The skill confirms with the assignee before
-    this is called, then shows the pinned artifact.
+    this is called, then shows the pinned artifact(s).
     """
     plan = _load(args)
     task_id = args.task or plan.setup_task_id()
@@ -230,15 +231,22 @@ def cmd_capture_setup(args: argparse.Namespace) -> int:
         return 1
     before = json.loads(args.before) if args.before else {}
     after = snapshot_config(args.config)
-    artifact = detect_environment(before, after, task_id=task_id, key=args.key)
-    if artifact is None:
-        print("No environment change detected in config.json; nothing to pin.", file=sys.stderr)
+    pinned: list[dict] = []
+    env_artifact = detect_environment(before, after, task_id=task_id, key=args.key)
+    if env_artifact is not None:
+        plan.add_output(env_artifact)
+        pinned.append(env_artifact)
+    agent_artifact = detect_agent(before, after, task_id=task_id)
+    if agent_artifact is not None:
+        plan.add_output(agent_artifact)
+        pinned.append(agent_artifact)
+    if not pinned:
+        print("No environment or agent change detected in config.json; nothing to pin.", file=sys.stderr)
         return 1
-    plan.add_output(artifact)
     if args.complete:
         plan.set_task_state(task_id, "Completed")
     _save(plan, args)
-    print(json.dumps(artifact, indent=2))
+    print(json.dumps(pinned, indent=2))
     return 0
 
 

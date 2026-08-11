@@ -60,7 +60,7 @@ TASK_STATES = ("NotStarted", "InProgress", "Completed", "Blocked")
 ARTIFACT_STATES = ("Active", "Superseded")
 PRINCIPAL_TYPES = ("User", "Role")
 CONTEXT_SOURCES = ("User", "Agent", "Discovered")
-ARTIFACT_KINDS = ("Environment", "Connection", "EntraApp", "KnowledgeSource", "Custom")
+ARTIFACT_KINDS = ("Environment", "Connection", "EntraApp", "KnowledgeSource", "Agent", "Custom")
 # The ledger key the /setup task produces and downstream tasks consume — the
 # grounded signal used to identify the setup task and env-dependent tasks. A Task
 # is described only by its title + description (matching the WeveNova Task
