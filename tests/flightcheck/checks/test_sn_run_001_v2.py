@@ -310,3 +310,50 @@ class TestServiceNowActiveProbeMatrix:
         assert row.status == Status.PASSED.value
         assert "OAuth-invoker ServiceNow connections" in row.result
         assert "recent ServiceNow connector run history" in row.result
+
+
+class TestServiceNowProbeConfig:
+    """Lock the AC13 live-verified read-only default (PROD, 2026-08-11):
+    GetRecords with {tableType: sys_user, sysparm_limit: 1} returned HTTP 200
+    from a real ServiceNow instance through the managed connector."""
+
+    def test_default_operation_and_params_are_the_live_verified_read(self) -> None:
+        from flightcheck.checks.servicenow import (
+            _SN_DEFAULT_READ_OPERATION,
+            _servicenow_probe_config,
+        )
+
+        operation_id, params, error = _servicenow_probe_config(_runner())
+
+        assert error is None
+        assert operation_id == _SN_DEFAULT_READ_OPERATION == "GetRecords"
+        assert params == {"tableType": "sys_user", "sysparm_limit": "1"}
+
+    def test_env_override_operation_and_params_win(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from flightcheck.checks.servicenow import _servicenow_probe_config
+
+        monkeypatch.setenv("ESS_SN_PROBE_OPERATION_ID", "ListRecords")
+        monkeypatch.setenv(
+            "ESS_SN_PROBE_PARAMS_JSON", '{"tableType": "incident"}'
+        )
+
+        operation_id, params, error = _servicenow_probe_config(_runner())
+
+        assert error is None
+        assert operation_id == "ListRecords"
+        assert params == {"tableType": "incident"}
+
+    def test_mutating_operation_override_is_rejected(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from flightcheck.checks.servicenow import _servicenow_probe_config
+
+        monkeypatch.setenv("ESS_SN_PROBE_OPERATION_ID", "CreateRecord")
+
+        operation_id, _params, error = _servicenow_probe_config(_runner())
+
+        assert operation_id is None
+        assert error is not None
+        assert "read-only" in error

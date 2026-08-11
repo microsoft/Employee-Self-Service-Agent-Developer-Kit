@@ -496,14 +496,16 @@ _SN_CONNECTOR_NAME = "shared_service-now"
 _SN_PROBE_FLOW_NAME = "flightcheck-sn-run-001-probe"
 _SN_PROBE_ACTION_NAME = "Probe_ServiceNow"
 
-# TODO(SN-RUN-001 AC13): confirm the exact read-only ServiceNow connector
-# operation id and its required parameters against the shared_service-now
-# connector API definition via a live-capture spike BEFORE treating this as
-# production-final. "GetRecords" (List Records) is the documented read-only
-# default and is not yet live-verified against a real ServiceNow connection.
-# The read-only allowlist below is the safety gate that keeps an operator
-# override (env / config) from selecting a mutating operation.
+# SN-RUN-001 AC13 (live-verified 2026-08-11, PROD): "GetRecords" (List
+# Records) with parameters {tableType: sys_user, sysparm_limit: 1} returned
+# HTTP 200 from a real ServiceNow instance through the managed connector. It
+# is the confirmed read-only default. The read-only allowlist below is the
+# safety gate that keeps an operator override (env / config) from selecting a
+# mutating operation. sys_user is a core table present in every ServiceNow
+# instance; sysparm_limit=1 keeps the read to a single record, and the record
+# body is never surfaced in the probe Response.
 _SN_DEFAULT_READ_OPERATION = "GetRecords"
+_SN_DEFAULT_READ_PARAMS: dict[str, Any] = {"tableType": "sys_user", "sysparm_limit": "1"}
 _SN_READ_OPERATION_PREFIXES = ("get", "list", "read")
 _SN_MUTATING_OPERATION_PREFIXES = (
     "add", "create", "delete", "edit", "insert", "modify", "patch",
@@ -605,6 +607,11 @@ def _servicenow_probe_config(runner) -> tuple[str | None, dict[str, Any], str | 
         params = parsed
     elif isinstance(probe_cfg.get("parameters"), dict):
         params = dict(probe_cfg["parameters"])
+    elif operation_id == _SN_DEFAULT_READ_OPERATION:
+        # No override supplied: use the live-verified default parameters so the
+        # default GetRecords call has the tableType the connector requires
+        # (an empty parameter set returns HTTP 400 / BadRequest).
+        params = dict(_SN_DEFAULT_READ_PARAMS)
 
     op_lower = operation_id.lower()
     if op_lower.startswith(_SN_MUTATING_OPERATION_PREFIXES):
@@ -655,12 +662,16 @@ def _servicenow_probe_layer(res: live_egress_probe.ConnectorProbeResult) -> tupl
     # response exposes: HTTP status (@outputs statusCode) and the action code
     # (@actions code). The human-readable error.message is NOT available
     # synchronously (it lives behind the SAS-signed outputsLink FlightCheck
-    # never fetches), so a wrong endpoint/table/operation and a ServiceNow
+    # never fetches; live capture confirmed connectorErrorMessage=null on both
+    # a 200 and a 400), so a wrong endpoint/table/operation and a ServiceNow
     # business/validation fault can BOTH surface as HTTP 400 / BadRequest and
-    # cannot be split here — they share one honest "indeterminate" bucket. The
-    # status None sub-splits (TLS / DNS / DLP) and the 401 / 403 / 404 / 429
-    # branches are documented assumptions pending the AC13 ServiceNow live
-    # capture, not yet live-verified error shapes.
+    # cannot be split here — they share one honest "indeterminate" bucket.
+    # AC13 live capture (PROD, 2026-08-11) confirmed the two ends of the map: a
+    # valid read returns 200 / OK, and an invalid table returns 400 /
+    # BadRequest with the connector reporting stage=done (it ran and rejected
+    # the request). The status None sub-splits (TLS / DNS / DLP) and the 401 /
+    # 403 / 404 / 429 branches remain documented assumptions, not yet
+    # separately captured error shapes.
     code = (res.error_code or "").lower()
     status = res.status_code
     if status is None:
