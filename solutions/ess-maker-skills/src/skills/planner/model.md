@@ -100,10 +100,13 @@ The "how" is the **description** (say which command to run in prose); `produces`
 | Generate evals | Run `/evaluate` to generate the eval suite | `evalSuite` | `primaryEnvironment` | `eval-author` |
 | Publish the agent | In the Power Platform admin center, publish the agent (see the Learn publish doc) | — | built agent | `power-platform-admin` |
 
-`produces`/`consumes` keys drive ordering ("blocked until produced") and are
-what Phase 6 captures. The setup task is the one that **`--produces
-primaryEnvironment,essAgent`** — Phase 6 pins **both** the environment and the
-cloned agent from `.local/config.json` (see `capture.md`).
+`produces`/`consumes` keys are the **expected** outputs, and drive ordering
+("blocked until produced"). Phase 6 capture is **generic** — the setup task lists
+`--produces primaryEnvironment,essAgent`, but `capture-setup` diffs the whole
+`.local/config.json` and pins **every** id + name (and any other artifact a skill
+recorded) — the environment, the cloned agent, and anything else the run wrote
+(a connection, an app…) — even outputs the task didn't pre-declare (see
+`capture.md`).
 When the tasks are in, show the summary and go to Phase 4.
 
 **Native connector vs. custom flow.** A "run `/connect`" task is only valid for a

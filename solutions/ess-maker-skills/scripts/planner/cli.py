@@ -35,7 +35,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from planner import research
-from planner.capture import detect_agent, detect_environment, snapshot_config
+from planner.capture import detect_config_artifacts, snapshot_config
 from planner.plan_model import (
     ARTIFACT_KINDS,
     PLAN_PATH,
@@ -217,8 +217,10 @@ def cmd_set_state(args: argparse.Namespace) -> int:
 
 
 def cmd_capture_setup(args: argparse.Namespace) -> int:
-    """Observe-mode capture for the ``/setup`` hand-off — pins BOTH the
-    environment and the ESS **agent** ``/setup`` clones.
+    """Observe-mode capture for the ``/setup`` (and any config-writing skill)
+    hand-off — pins **every** id + name artifact ``config.json`` recorded: the
+    environment, the cloned agent, and any other object a skill wrote (a
+    connection, an app, an unknown shape), not just one value.
 
     Reads the current .local/config.json as the "after" snapshot; the "before"
     is empty (setup has just run). The skill confirms with the assignee before
@@ -231,18 +233,12 @@ def cmd_capture_setup(args: argparse.Namespace) -> int:
         return 1
     before = json.loads(args.before) if args.before else {}
     after = snapshot_config(args.config)
-    pinned: list[dict] = []
-    env_artifact = detect_environment(before, after, task_id=task_id, key=args.key)
-    if env_artifact is not None:
-        plan.add_output(env_artifact)
-        pinned.append(env_artifact)
-    agent_artifact = detect_agent(before, after, task_id=task_id)
-    if agent_artifact is not None:
-        plan.add_output(agent_artifact)
-        pinned.append(agent_artifact)
+    pinned = detect_config_artifacts(before, after, task_id=task_id, env_key=args.key)
     if not pinned:
-        print("No environment or agent change detected in config.json; nothing to pin.", file=sys.stderr)
+        print("No new id/name artifacts detected in config.json; nothing to pin.", file=sys.stderr)
         return 1
+    for artifact in pinned:
+        plan.add_output(artifact)
     if args.complete:
         plan.set_task_state(task_id, "Completed")
     _save(plan, args)
@@ -482,7 +478,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--state", required=True, choices=["NotStarted", "InProgress", "Completed", "Blocked"])
     p.set_defaults(func=cmd_set_state)
 
-    p = sub.add_parser("capture-setup", help="observe /setup output and pin the environment")
+    p = sub.add_parser("capture-setup", help="observe /setup output and pin every id+name artifact in config.json")
     p.add_argument("--task", help="setup task id (default: auto-detect the plan's /setup task)")
     p.add_argument("--key", default="primaryEnvironment")
     p.add_argument("--config", default=os.path.join(".local", "config.json"))

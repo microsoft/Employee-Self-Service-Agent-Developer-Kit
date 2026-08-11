@@ -135,7 +135,7 @@ def test_capture_setup_no_change_returns_nonzero(tmp_path, capsys):
     capsys.readouterr()
     rc = _run("--plan", plan_path, "capture-setup", "--task", "T1", "--config", str(config_path), "--before", "{}")
     assert rc == 1
-    assert "No environment or agent change" in capsys.readouterr().err
+    assert "No new id/name artifacts" in capsys.readouterr().err
 
 
 def test_mine_json_output(tmp_path, capsys):

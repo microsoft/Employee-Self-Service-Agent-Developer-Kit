@@ -9,11 +9,12 @@ ways to fill a value:
 
 Preferred for kit-skill Tasks that leave a signal. The canonical case is the
 setup hand-off: after `/setup` runs (onboarding the ADK to the deployed agent),
-it **records** the environment **and clones the agent** into `.local/config.json`
-— it connects to the environment and records its id/URL, and it clones the
-deployed agent (`botId`, `schemaName`, name, local folder/slug) into the
-workspace. It doesn't create the environment. Detect and pin **both** the
-environment and the agent:
+it **records ids + names into `.local/config.json`** — the environment it
+connected to (id/URL), the agent it clones into the workspace (`botId`,
+`schemaName`, name, folder/slug), and anything else the run wrote. It doesn't
+create the environment. `capture-setup` is **generic**: it diffs the whole
+`config.json` and pins **every** id + name (and any other artifact a skill
+recorded), not just a single value:
 
 ```
 python scripts/planner/cli.py capture-setup --complete
@@ -23,14 +24,18 @@ python scripts/planner/cli.py capture-setup --complete
 task** (the task that produces `primaryEnvironment`) and completes it. `/setup`
 itself
 now offers this at the end of a run: when setup finishes and a plan exists, it
-asks the maker "mark the setup task complete and save the environment?" and runs
+asks the maker "mark the setup task complete and save what it produced?" and runs
 this for them — so the loop closes without waiting for someone to remember.
 
-This reads the current `.local/config.json`, and — if an environment and/or the
-cloned agent appeared that weren't there before — prints the artifact(s) it will
-pin: an `Environment` (the `environmentId` and URL) **and** an `Agent` (the
-`botId`, `schemaName`, name, folder). Show the assignee the detected values and
-confirm before they're saved. `--complete` also marks the Task done.
+This reads the current `.local/config.json` and prints **every** artifact it will
+pin from what changed — e.g. an `Environment` (the `environmentId` + URL), an
+`Agent` (the cloned agent's `botId`, `schemaName`, name, folder), and any other
+id + name object a skill wrote (a `Connection`, an `EntraApp`, or an unknown
+shape captured as `Custom`). Known shapes get a nice kind/key; everything else is
+captured generically. Show the assignee the detected values and confirm before
+they're saved. `--complete` also marks the Task done. (Artifacts a skill writes
+*outside* `config.json` are handled by ask-mode `pin-output` or their own
+detectors — see below.)
 
 Do **not** trust the agent's narration ("I created env X"); the value is read
 from real state the action changed.
