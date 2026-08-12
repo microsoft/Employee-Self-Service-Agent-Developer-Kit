@@ -67,6 +67,7 @@ def _servicenow_connection(
     *,
     connection_name: str = _CONNECTION_ID,
     runtime_source: str | None = "embedded",
+    owner_upn: str | None = None,
 ) -> dict[str, Any]:
     conn = pp.servicenow_connection(
         connection_name=connection_name,
@@ -74,6 +75,17 @@ def _servicenow_connection(
     )
     if runtime_source is not None:
         conn["properties"].update({"runtimeSource": runtime_source})
+    if owner_upn is not None:
+        # owner_upn="" models a record that does not expose its owner
+        # (createdBy absent), which the selector treats as "owner unknown".
+        if owner_upn == "":
+            conn["properties"].pop("createdBy", None)
+        else:
+            conn["properties"]["createdBy"] = {
+                "userPrincipalName": owner_upn,
+                "email": owner_upn,
+                "type": "User",
+            }
     return conn
 
 
@@ -83,6 +95,7 @@ def _runner(
     runtime_reachability_declined: bool = False,
     pp_client: Any | None = None,
     config: dict[str, Any] | None = None,
+    operator_upn: str = "",
 ) -> SimpleNamespace:
     return SimpleNamespace(
         pp_admin=pp_client if pp_client is not None else _PP(),
@@ -92,6 +105,7 @@ def _runner(
         runtime_reachability=runtime_reachability,
         runtime_reachability_declined=runtime_reachability_declined,
         config=config or {},
+        _operator_upn=operator_upn,
         _servicenow_flows=[pp.flow(flow_id=_FLOW_ID, display_name="ESS HR ServiceNow")],
     )
 
@@ -328,6 +342,64 @@ class TestServiceNowProbeConfig:
         assert error is None
         assert operation_id == _SN_DEFAULT_READ_OPERATION == "GetRecords"
         assert params == {"tableType": "sys_user", "sysparm_limit": "1"}
+
+
+class TestServiceNowProbeConnectionOwnership:
+    """AC3/AC9 ownership selection through the shared
+    select_operator_owned_connection helper. A transient probe flow only
+    activates with a connection the /flightcheck operator owns (confirmed live,
+    PROD 2026-08-11: a non-owned connection returns ConnectionAuthorizationFailed
+    at activate). These lock the three ownership outcomes."""
+
+    _OPERATOR = "operator@essagentic.onmicrosoft.com"
+    _OTHER = "someone.else@essagentic.onmicrosoft.com"
+
+    @responses.activate
+    def test_operator_owned_connection_runs_active_probe(self) -> None:
+        _register_connector_lifecycle()
+
+        row = _run_single(_runner(
+            operator_upn=self._OPERATOR,
+            pp_client=_PP(connections=[
+                _servicenow_connection(owner_upn=self._OTHER),
+                _servicenow_connection(owner_upn=self._OPERATOR),
+            ]),
+        ))
+
+        assert row.status == Status.PASSED.value
+        assert "retrieved data from ServiceNow" in row.result
+
+    def test_all_connections_owned_by_others_fall_back_to_passive(self) -> None:
+        # No @responses.activate: the active probe must NOT be attempted when
+        # the operator owns none of the connections. It falls back to the
+        # passive run-history read, and must NOT report NOT_CONFIGURED.
+        row = _run_single(_runner(
+            operator_upn=self._OPERATOR,
+            pp_client=_PP(connections=[
+                _servicenow_connection(owner_upn=self._OTHER),
+            ]),
+        ))
+
+        assert row.status == Status.PASSED.value
+        assert row.status != Status.NOT_CONFIGURED.value
+        assert "does not own" in row.result
+        assert "recent ServiceNow connector run history" in row.result
+
+    @responses.activate
+    def test_unknown_owner_connection_is_tried_not_blocked(self) -> None:
+        # Owner not exposed on the record: try rather than block (no regression
+        # on tenants that hide createdBy). The active probe still runs.
+        _register_connector_lifecycle()
+
+        row = _run_single(_runner(
+            operator_upn=self._OPERATOR,
+            pp_client=_PP(connections=[
+                _servicenow_connection(owner_upn=""),
+            ]),
+        ))
+
+        assert row.status == Status.PASSED.value
+        assert "retrieved data from ServiceNow" in row.result
 
     def test_env_override_operation_and_params_win(
         self, monkeypatch: pytest.MonkeyPatch

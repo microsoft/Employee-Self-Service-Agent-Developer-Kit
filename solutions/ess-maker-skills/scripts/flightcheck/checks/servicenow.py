@@ -16,7 +16,11 @@ from typing import Any
 
 from ..runner import CheckResult, Priority, Role, Status
 from .. import live_egress_probe
-from .connections import check_connector_connections, get_connection_status
+from .connections import (
+    check_connector_connections,
+    get_operator_upn,
+    select_operator_owned_connection,
+)
 from .external_systems import _categorize_servicenow_flows
 from .infrastructure import (
     _infra_003_directive,
@@ -538,11 +542,13 @@ def _is_servicenow_connection(conn: dict) -> bool:
 def _select_servicenow_probe_connection(runner) -> tuple[dict | None, str]:
     """Pick the ServiceNow managed connection the active probe binds to.
 
-    Prefers a Connected service-account (non-invoker) connection so the probe
-    exercises the ServiceNow integration-user / service-account identity path
-    (AC9). Returns ``(None, reason)`` when no usable connection exists; the
-    caller maps a "no ServiceNow ..." reason to a clean NOT_CONFIGURED and any
-    other reason to the passive run-history fallback.
+    Delegates the vendor-agnostic selection (Connected + service-account +
+    operator-owned, with a passive-fallback reason otherwise) to the shared
+    ``select_operator_owned_connection`` helper, passing only the
+    ServiceNow-specific connection filter and runtime-source reader. The
+    ownership preference is what lets the transient flow activate; a connection
+    owned by another maker returns ConnectionAuthorizationFailed at activate
+    (confirmed live, PROD 2026-08-11).
     """
     pp = getattr(runner, "pp_admin", None)
     env_id = getattr(runner, "env_id", None)
@@ -555,23 +561,14 @@ def _select_servicenow_probe_connection(runner) -> tuple[dict | None, str]:
     if not isinstance(conns, list):
         return None, "Power Platform connection list was unavailable"
 
-    servicenow = [c for c in conns if isinstance(c, dict) and _is_servicenow_connection(c)]
-    connected = [c for c in servicenow if get_connection_status(c) == "Connected"]
-    if not servicenow:
-        return None, "no ServiceNow managed-connector connection was found"
-    if not connected:
-        return None, "no Connected ServiceNow managed-connector connection was found"
-
-    service_account = [
-        c for c in connected if _servicenow_runtime_source(c) != "invoker"
-    ]
-    if not service_account:
-        return None, (
-            "only OAuth-invoker ServiceNow connections were found; the active "
-            "probe would exercise the maker/employee identity instead of the "
-            "integration-user / service-account path"
-        )
-    return service_account[0], ""
+    return select_operator_owned_connection(
+        connections=conns,
+        is_target=_is_servicenow_connection,
+        runtime_source=_servicenow_runtime_source,
+        operator_upn=get_operator_upn(runner),
+        vendor_label="ServiceNow",
+        identity_path_label="integration-user / service-account path",
+    )
 
 
 def _servicenow_probe_config(runner) -> tuple[str | None, dict[str, Any], str | None]:
