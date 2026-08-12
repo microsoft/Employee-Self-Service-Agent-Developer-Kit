@@ -109,6 +109,50 @@ def _read_params() -> dict:
     return parsed
 
 
+def _read_shapes() -> list[tuple[str, str, dict]]:
+    """Fault-sweep shapes for the deeper AC13 capture (open question 2).
+
+    ESS_SN_PROBE_SHAPES_JSON is a JSON array of objects, each with a ``label``,
+    an ``operationId`` and its own ``params``. Each shape runs as its own
+    transient-flow probe so one authenticated run records the full fault matrix
+    (healthy read, wrong table, wrong record id, restricted table, ...) with
+    the (HTTP status, connector code) the connector actually returns for each.
+    All shapes MUST be read-only; the recorder never sends a mutating op.
+
+    Returns [] when unset, so the single-operation happy-path mode is unchanged.
+    """
+    raw = os.environ.get("ESS_SN_PROBE_SHAPES_JSON", "").strip()
+    if not raw:
+        return []
+    parsed = json.loads(raw)
+    if not isinstance(parsed, list):
+        raise SystemExit("ESS_SN_PROBE_SHAPES_JSON must be a JSON array.")
+    shapes: list[tuple[str, str, dict]] = []
+    for i, entry in enumerate(parsed):
+        if not isinstance(entry, dict):
+            raise SystemExit(f"ESS_SN_PROBE_SHAPES_JSON[{i}] must be an object.")
+        op = str(entry.get("operationId") or "").strip()
+        if not op:
+            raise SystemExit(f"ESS_SN_PROBE_SHAPES_JSON[{i}] missing operationId.")
+        if op.lower().startswith((
+            "add", "create", "delete", "edit", "insert", "modify", "patch",
+            "post", "put", "remove", "set", "submit", "update", "write",
+        )):
+            raise SystemExit(
+                f"ESS_SN_PROBE_SHAPES_JSON[{i}] operationId '{op}' is not read-only."
+            )
+        shape_params = entry.get("params") or {}
+        if not isinstance(shape_params, dict):
+            raise SystemExit(f"ESS_SN_PROBE_SHAPES_JSON[{i}].params must be an object.")
+        label = str(entry.get("label") or op).strip()
+        shapes.append((label, op, shape_params))
+    return shapes
+
+
+def _cassette_name() -> str:
+    return os.environ.get("ESS_SN_PROBE_CASSETTE", "").strip() or "flightcheck_sn_connector_probe"
+
+
 def main() -> None:
     announce("flightcheck_sn_connector_probe (SN-RUN-001 active, AC13)")
 
@@ -127,9 +171,21 @@ def main() -> None:
 
     operations = _read_operations()
     params = _read_params()
+    shapes = _read_shapes()
+    cassette_name = _cassette_name()
+    if shapes:
+        # Deeper fault-sweep: each shape carries its own operation + params so a
+        # single authenticated run records the full (status, code) fault matrix.
+        shape_list = shapes
+    else:
+        shape_list = [(op, op, params) for op in operations]
     print(f"  Dataverse URL: {env_url}")
-    print(f"  Operation(s):  {', '.join(operations)}")
-    print(f"  Parameters:    {params or '(none)'}")
+    if shapes:
+        print(f"  Fault shapes:  {', '.join(lbl for lbl, _, _ in shape_list)}")
+    else:
+        print(f"  Operation(s):  {', '.join(operations)}")
+        print(f"  Parameters:    {params or '(none)'}")
+    print(f"  Cassette:      {cassette_name}.yaml")
     print("  Endpoint:      managed ServiceNow connector via transient Power Automate flow")
     print()
     confirm_or_exit()
@@ -198,21 +254,21 @@ def main() -> None:
     }
 
     summary: list[tuple[str, object]] = []
-    with build_cassette("flightcheck_sn_connector_probe"):
+    with build_cassette(cassette_name):
         # Sweep any orphan from a crashed prior run (AC7 idempotency).
         live_egress_probe.cleanup_orphan_probe_flows(
             env_url, dv_token, probe_flow_name=_PROBE_FLOW_NAME
         )
-        for op in operations:
+        for label, op, shape_params in shape_list:
             action = live_egress_probe.ConnectorProbeAction(
                 connector_api_id=_SN_CONNECTOR_API_ID,
                 connection_id=connection_id,
                 operation_id=op,
-                parameters=params,
+                parameters=shape_params,
                 action_name=_SN_PROBE_ACTION_NAME,
                 connection_ref_key=_SN_CONNECTOR_NAME,
             )
-            print(f"\n  >>> probing operation '{op}'...")
+            print(f"\n  >>> probing shape '{label}' (op={op}, params={shape_params or '(none)'})...")
             try:
                 res = live_egress_probe.run_connector_probe(
                     **live_env,
@@ -230,10 +286,10 @@ def main() -> None:
             )
             print(f"      -> {line}")
             print(f"      -> detail: {res.detail}")
-            summary.append((op, line))
+            summary.append((label, line))
 
     print()
-    print("Cassette written: tests/fixtures/cassettes/flightcheck_sn_connector_probe.yaml")
+    print(f"Cassette written: tests/fixtures/cassettes/{cassette_name}.yaml")
     print()
     print("AC13 open-question evidence (record the go / no-go from this):")
     print(f"  identity path exercised: {identity_path}")

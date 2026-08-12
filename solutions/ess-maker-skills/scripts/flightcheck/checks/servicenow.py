@@ -606,8 +606,11 @@ def _servicenow_probe_config(runner) -> tuple[str | None, dict[str, Any], str | 
         params = dict(probe_cfg["parameters"])
     elif operation_id == _SN_DEFAULT_READ_OPERATION:
         # No override supplied: use the live-verified default parameters so the
-        # default GetRecords call has the tableType the connector requires
-        # (an empty parameter set returns HTTP 400 / BadRequest).
+        # default GetRecords call carries the tableType the connector requires.
+        # Live-verified (PROD 2026-08-12): GetRecords with empty parameters
+        # fails at flow ACTIVATE (the required connector parameter is missing
+        # from the flow definition), before any ServiceNow call — so supplying
+        # these defaults is what lets the default probe reach the connector.
         params = dict(_SN_DEFAULT_READ_PARAMS)
 
     op_lower = operation_id.lower()
@@ -659,16 +662,29 @@ def _servicenow_probe_layer(res: live_egress_probe.ConnectorProbeResult) -> tupl
     # response exposes: HTTP status (@outputs statusCode) and the action code
     # (@actions code). The human-readable error.message is NOT available
     # synchronously (it lives behind the SAS-signed outputsLink FlightCheck
-    # never fetches; live capture confirmed connectorErrorMessage=null on both
-    # a 200 and a 400), so a wrong endpoint/table/operation and a ServiceNow
-    # business/validation fault can BOTH surface as HTTP 400 / BadRequest and
-    # cannot be split here — they share one honest "indeterminate" bucket.
-    # AC13 live capture (PROD, 2026-08-11) confirmed the two ends of the map: a
-    # valid read returns 200 / OK, and an invalid table returns 400 /
-    # BadRequest with the connector reporting stage=done (it ran and rejected
-    # the request). The status None sub-splits (TLS / DNS / DLP) and the 401 /
-    # 403 / 404 / 429 branches remain documented assumptions, not yet
-    # separately captured error shapes.
+    # never fetches; live capture confirmed connectorErrorMessage=null on a
+    # 200, a 400, and a 404), so a wrong endpoint/table/operation and a
+    # ServiceNow business/validation fault can BOTH surface as HTTP 400 /
+    # BadRequest and cannot be split here — they share one honest
+    # "indeterminate" bucket.
+    #
+    # Live-verified (PROD, deeper fault-capture pass 2026-08-12,
+    # tests/fixtures/cassettes/flightcheck_sn_connector_probe_faults.yaml):
+    #   * GetRecords on a valid table (sys_user)        -> 200 / OK
+    #   * GetRecords on an invalid table                -> 400 / BadRequest
+    #   * GetRecords on a restricted table (sys_user_password)
+    #                                                   -> 400 / BadRequest
+    #     (NOT 403: ServiceNow table/row ACL denial collapses into 400 here,
+    #     so the 401/403 branch below is a connector-AUTH assumption, not how
+    #     ACL denial actually surfaces)
+    #   * GetRecord with a non-existent sys_id          -> 404 / NotFound
+    #     (404 IS reachable and distinct — the connector does not collapse
+    #     everything into 400)
+    #   * GetRecords with empty required params fails at flow ACTIVATE, before
+    #     the connector runs (status None, stage=activate), not as a 400.
+    # The status-None sub-splits (TLS / DNS / DLP), 401 / 403, 429, and 500
+    # branches remain documented assumptions, not yet separately captured
+    # (they cannot be induced non-destructively against a healthy tenant).
     code = (res.error_code or "").lower()
     status = res.status_code
     if status is None:
@@ -686,9 +702,13 @@ def _servicenow_probe_layer(res: live_egress_probe.ConnectorProbeResult) -> tupl
             "user's ServiceNow role/ACL likely does not permit this operation",
         )
     if status in (404, 405) or any(t in code for t in ("notfound", "invalidurl", "endpoint")):
+        # Live-verified 404 / NotFound (PROD 2026-08-12). HTTP 404 alone cannot
+        # distinguish a not-found record from a not-found table, operation, or
+        # instance URL, so the cause names all of them honestly.
         return (
             "endpoint configuration layer",
-            "the configured ServiceNow instance URL, table, or operation was not found",
+            "a ServiceNow record, table, operation, or the configured instance "
+            "URL was not found (HTTP 404)",
         )
     if status == 429 or any(t in code for t in ("toomanyrequests", "ratelimit", "throttl")):
         return "ServiceNow rate-limit layer", "ServiceNow throttled the request (HTTP 429)"

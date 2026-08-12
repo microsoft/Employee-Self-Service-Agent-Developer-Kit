@@ -198,19 +198,20 @@ class TestServiceNowActiveProbeMatrix:
 
     @responses.activate
     def test_endpoint_misconfig_names_endpoint_configuration_layer(self) -> None:
-        # Defensive 404 branch. The live ServiceNow endpoint-not-found shape is
-        # a documented assumption pending the AC13 live capture, not yet a
-        # live-verified error code.
+        # HTTP 404 / NotFound is live-verified (PROD 2026-08-12 deeper
+        # fault-capture: GetRecord with a non-existent sys_id returned 404).
+        # 404 alone cannot distinguish record vs table vs operation vs
+        # instance-URL not-found, so the cause names all of them.
         _register_connector_lifecycle(
             action_status="Failed",
             status_code=404,
-            error_code="EndpointNotFound",
+            error_code="NotFound",
         )
 
         row = _run_single(_runner())
 
         assert row.status == Status.FAILED.value
-        assert "table, or operation was not found" in row.result
+        assert "was not found" in row.result
         assert "HTTP 404" in row.result
 
     @responses.activate
@@ -231,7 +232,8 @@ class TestServiceNowActiveProbeMatrix:
     def test_servicenow_business_error_names_indeterminate_layer(self) -> None:
         # HTTP 400 / BadRequest cannot distinguish a wrong endpoint / table /
         # operation from a ServiceNow business or validation fault; they share
-        # one honest indeterminate bucket (mirrors the WD live-verified 400).
+        # one honest indeterminate bucket (live-verified: an invalid table
+        # returned 400, PROD 2026-08-11).
         _register_connector_lifecycle(
             action_status="Failed",
             status_code=400,
@@ -243,6 +245,25 @@ class TestServiceNowActiveProbeMatrix:
         assert row.status == Status.FAILED.value
         assert "cannot distinguish a wrong endpoint" in row.result
         assert "HTTP 400" in row.result
+
+    @responses.activate
+    def test_restricted_table_acl_denial_collapses_to_indeterminate_400(self) -> None:
+        # Live-verified (PROD 2026-08-12): GetRecords on a restricted table
+        # (sys_user_password) returned 400 / BadRequest, NOT 403. ServiceNow
+        # table/row ACL denial collapses into the indeterminate 400 bucket, so
+        # the probe must not claim an authorization-layer diagnosis from it.
+        _register_connector_lifecycle(
+            action_status="Failed",
+            status_code=400,
+            error_code="BadRequest",
+        )
+
+        row = _run_single(_runner())
+
+        assert row.status == Status.FAILED.value
+        assert "cannot distinguish a wrong endpoint" in row.result
+        assert "HTTP 400" in row.result
+        assert "role/ACL" not in row.result
 
     @responses.activate
     def test_rate_limit_names_servicenow_throttle_layer(self) -> None:

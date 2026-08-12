@@ -44,6 +44,28 @@ A transient flow bound to a ServiceNow connection by connection-id (Embedded sou
 
 The earlier reading that Q3 was a general no-go was wrong. It was caused by the probe auto-picking the first Connected connection, which happened to be owned by a different user, not by an inherent platform block. The same ownership constraint applies to the Workday WD-RUN-001 v2 active probe, whose positive capture ran as the connection owner.
 
+## Deeper fault-capture pass (PROD, 2026-08-12)
+
+The 2026-08-11 capture confirmed the two ends of the map (200 valid, 400 invalid table). A follow-up sweep pushed five read-only shapes through one operator-owned connection to characterize the fault granularity more precisely. Cassette: tests/fixtures/cassettes/flightcheck_sn_connector_probe_faults.yaml (recorder env ESS_SN_PROBE_SHAPES_JSON).
+
+| Shape | Operation / params | Connector result |
+| --- | --- | --- |
+| Healthy read | GetRecords, {tableType: sys_user, sysparm_limit: 1} | 200 / OK |
+| Invalid table | GetRecords, {tableType: <nonexistent>} | 400 / BadRequest |
+| Restricted table | GetRecords, {tableType: sys_user_password} | 400 / BadRequest |
+| Non-existent record | GetRecord, {tableType: sys_user, sysId: <all-zero GUID>} | 404 / NotFound |
+| Empty required params | GetRecords, {} | fails at flow activate, before the connector runs |
+
+Findings:
+
+1. The connector does NOT collapse every failure into 400. HTTP 404 is reachable and distinct (non-existent record). The error map's separate 404 branch is therefore live-verified, not assumed. 404 alone cannot distinguish a not-found record from a not-found table, operation, or instance URL, so the cause names all of them.
+
+2. ServiceNow table/row ACL denial does NOT surface as 403. Reading a restricted table returned 400 / BadRequest, the same status as an invalid table. So the 401/403 authorization branch in the error map is a connector-AUTH assumption (token/credential rejection), NOT how ServiceNow ACL denial actually appears. A restricted-table failure lands in the indeterminate 400 bucket, and the probe must not claim an authorization-layer diagnosis from a 400.
+
+3. Empty required parameters fail at flow activate (the required connector parameter is missing from the flow definition), before any ServiceNow call, not as a connector 400. This is why the default probe always supplies _SN_DEFAULT_READ_PARAMS.
+
+Layers still NOT live-verified (documented assumptions only): the no-response network split (DNS / TLS / firewall / DLP), 401/403 connector-auth, 429 throttle, and 500 backend error. None can be induced non-destructively against a healthy production tenant (they require breaking auth, a throttle storm, or a network/backend fault). The error map keeps honest named branches for them, marked as assumptions in the code comment, per the fidelity-honesty ACs (AC4, AC10).
+
 ## Required code change (selection fix)
 
 _select_servicenow_probe_connection must prefer a Connected ServiceNow connection owned by the running operator identity, comparing the connection's createdBy.userPrincipalName to the operator UPN. Only an operator-owned (or operator-shared) connection can activate the transient flow. When no operator-owned Connected connection exists, the probe must fall back to the passive run-history read with a clear reason (operator does not own a ServiceNow connection in this environment), not attempt an activation that will deterministically fail with ConnectionAuthorizationFailed.
