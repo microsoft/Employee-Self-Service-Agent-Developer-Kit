@@ -75,6 +75,14 @@ Dependencies are connector/readiness prerequisites — distinct from priority.
 - **Knowledge Retrieval is the deflection foundation** — Ticketing, Profile, and Handoff all work best after it; skipping Knowledge means more tickets are created instead of deflected.
 - **Enable a category's reads before its writes** (HR Profile Read before HR Profile Write).
 
+> **Machine-checkable coverage (`planner_facts.json`).** The pairwise
+> `scenarioDependsOn` facts encode the fixed A→B edges (Knowledge foundation,
+> read-before-write). The **Handoff → *any* Ticketing category** rule above is an
+> *any-of* prerequisite the current pairwise model can't express, so `check-deps`
+> does **not** flag a handoff-only plan — a known limitation (a richer any-of
+> dependency model is a follow-up). Apply the Handoff rule from this catalogue
+> during modelling regardless.
+
 **Connector/readiness prerequisites:**
 
 - Knowledge scenarios (#1‑3, #35) → SharePoint or ServiceNow Graph knowledge source configured.

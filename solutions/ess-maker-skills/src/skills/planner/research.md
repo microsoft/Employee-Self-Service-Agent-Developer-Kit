@@ -66,3 +66,9 @@ disagrees with live Learn, live wins for planning; note the drift.
 
 When you have a grounded picture — supported scenarios, their prerequisites,
 each prerequisite's role/how/produces — go to Phase 2.
+
+> **Where the research context lives (today).** It is held in your working notes
+> for this planning session — there is **no** persisted `research-context.json`
+> sidecar yet (a design follow-up, §18). Task briefs (Phase 6, `mytasks.md`)
+> therefore re-read the grounding Learn page **live** at brief time rather than
+> replaying a stored anchor, so a manual task is still enriched from its source.

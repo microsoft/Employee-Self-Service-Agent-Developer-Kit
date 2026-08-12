@@ -31,14 +31,20 @@ overwrite their edits**:
 1. **Read both.** Read the edited `ESS-scenario-plan.md` and the current plan
    (`python scripts/planner/cli.py summary`). The Tasks table is keyed by task
    **id** (the `#` column) — use it to line rows up.
-2. **Diff by id.** Work out, per task, what changed:
+2. **Diff by id.** Work out, per task, what changed. The Tasks table shows
+   **title**, **role / owner**, and **state** (plus the Intent and Scenario
+   dependencies sections) — those are what a direct file edit can change:
    - **Added** row (no existing id / a new one) → a new task.
    - **Removed** row → a deletion.
-   - **Retitled / re-described** → a content edit.
+   - **Retitled** → a title edit.
    - **Role / owner** column changed → a reassignment.
    - **State** column changed (e.g. a ticked checkbox → Completed) → a state change.
    - Changes under **Intent** (scenarios, systems, goals) or **Scenario
      dependencies** → context edits.
+
+   A task's **description / produces / consumes are not columns in the table**,
+   so they can't be edited in the file — to change those, have the editor say so
+   in chat (the chat-intent path) and apply `update-task`.
 3. **Apply each change through the CLI** so writes stay atomic and validated —
    never hand-edit `plan.json`:
 

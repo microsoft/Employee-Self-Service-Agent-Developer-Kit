@@ -138,6 +138,65 @@ def test_capture_setup_no_change_returns_nonzero(tmp_path, capsys):
     assert "No new id/name artifacts" in capsys.readouterr().err
 
 
+def test_capture_setup_dry_run_saves_nothing(tmp_path, capsys):
+    plan_path = str(tmp_path / "plan.json")
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps({"setup": "complete", "dataverseEndpoint": "https://o.crm.dynamics.com", "environmentId": "e-1"}),
+        encoding="utf-8",
+    )
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "setup", "--description", "Run /setup",
+         "--role", "power-platform-admin", "--produces", "primaryEnvironment")
+    capsys.readouterr()
+    rc = _run("--plan", plan_path, "capture-setup", "--task", "T1", "--config", str(config_path), "--dry-run")
+    assert rc == 0
+    assert "[dry-run]" in capsys.readouterr().err
+    assert Plan.load(plan_path).output("primaryEnvironment") is None  # nothing pinned
+
+
+def test_summary_is_read_only(tmp_path):
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    md = tmp_path / "ESS-scenario-plan.md"
+    md.write_text("MY UNRECONCILED EDITS", encoding="utf-8")
+    _run("--plan", plan_path, "summary")
+    assert md.read_text(encoding="utf-8") == "MY UNRECONCILED EDITS"  # summary didn't clobber
+
+
+def test_pin_output_rejects_malformed_attr(tmp_path, capsys):
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "t", "--role", "maker")
+    capsys.readouterr()
+    rc = _run("--plan", plan_path, "pin-output", "--task", "T1", "--key", "k", "--kind", "Custom", "--attr", "connectionId", "--complete")
+    assert rc == 1
+    assert "Invalid --attr" in capsys.readouterr().err
+    assert Plan.load(plan_path).task("T1")["state"] != "Completed"  # not completed on error
+
+
+def test_complete_refused_with_unresolved_produces(tmp_path, capsys):
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "t", "--role", "maker", "--produces", "a,b")
+    capsys.readouterr()
+    rc = _run("--plan", plan_path, "pin-output", "--task", "T1", "--key", "a", "--kind", "Custom", "--attr", "x=1", "--complete")
+    assert rc == 1
+    assert "unresolved produces" in capsys.readouterr().err
+    assert Plan.load(plan_path).task("T1")["state"] != "Completed"
+
+
+def test_save_refuses_invalid_plan_orphan_artifact(tmp_path, capsys):
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "t", "--role", "maker")
+    capsys.readouterr()
+    rc = _run("--plan", plan_path, "pin-output", "--task", "TX", "--key", "k", "--kind", "Custom", "--attr", "x=1")
+    assert rc == 1
+    assert "unknown task" in capsys.readouterr().err.lower()
+    assert Plan.load(plan_path).output("k") is None  # nothing persisted
+
+
 def test_mine_json_output(tmp_path, capsys):
     plan_path = str(tmp_path / "plan.json")
     _run("--plan", plan_path, "init")

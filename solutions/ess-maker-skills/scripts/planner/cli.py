@@ -13,7 +13,7 @@ Usage (run from the kit root):
 
     python scripts/planner/cli.py init [--objective "..."]
     python scripts/planner/cli.py set-context --key market --value DE --group market
-    python scripts/planner/cli.py add-task --id T1 --title "..." --skill onboarding --role power-platform-admin --produces primaryEnvironment
+    python scripts/planner/cli.py add-task --id T1 --title "..." --role power-platform-admin --produces primaryEnvironment
     python scripts/planner/cli.py assign --task T1 --role power-platform-admin --person <oid>
     python scripts/planner/cli.py set-state --task T1 --state Completed
     python scripts/planner/cli.py capture-setup --task T1
@@ -40,7 +40,6 @@ from planner.plan_model import (
     ARTIFACT_KINDS,
     PLAN_PATH,
     SCENARIO_GROUP,
-    SUMMARY_FILENAME,
     Plan,
     new_task,
     plan_artifact,
@@ -59,7 +58,21 @@ def _load(args: argparse.Namespace) -> Plan:
     return Plan.load_or_new(args.plan)
 
 
+class PlanInvalidError(Exception):
+    """Raised when a mutation would persist an invalid plan (blocks the write)."""
+
+    def __init__(self, errors: list[str]) -> None:
+        self.errors = errors
+        super().__init__("; ".join(errors))
+
+
 def _save(plan: Plan, args: argparse.Namespace) -> None:
+    """Validate, then atomically persist — never overwrite the authoritative
+    plan with a document that ``validate`` would reject (over-limit collections,
+    invalid artifact kinds/states, orphan artifacts, ...)."""
+    errors = plan.validate()
+    if errors:
+        raise PlanInvalidError(errors)
     plan.save_all(args.plan)
 
 
@@ -231,19 +244,43 @@ def cmd_capture_setup(args: argparse.Namespace) -> int:
     if not task_id:
         print("No setup task found on the plan; pass --task <T#>.", file=sys.stderr)
         return 1
-    before = json.loads(args.before) if args.before else {}
+    if args.before_file:
+        with open(args.before_file, "r", encoding="utf-8") as fh:
+            before = json.load(fh)
+    elif args.before:
+        before = json.loads(args.before)
+    else:
+        before = {}
     after = snapshot_config(args.config)
     pinned = detect_config_artifacts(before, after, task_id=task_id, env_key=args.key)
     if not pinned:
         print("No new id/name artifacts detected in config.json; nothing to pin.", file=sys.stderr)
         return 1
+    if args.dry_run:
+        print(json.dumps(pinned, indent=2))
+        print(
+            f"[dry-run] detected {len(pinned)} artifact(s); nothing saved. "
+            "Confirm with the assignee, then re-run without --dry-run to pin.",
+            file=sys.stderr,
+        )
+        return 0
     for artifact in pinned:
         plan.add_output(artifact)
+    complete_ok = True
     if args.complete:
-        plan.set_task_state(task_id, "Completed")
+        missing = plan.unresolved_produces(task_id)
+        if missing:
+            complete_ok = False
+            print(
+                f"Pinned; NOT completing {task_id} — unresolved produces {missing}. "
+                "Pin the rest, then complete.",
+                file=sys.stderr,
+            )
+        else:
+            plan.set_task_state(task_id, "Completed")
     _save(plan, args)
     print(json.dumps(pinned, indent=2))
-    return 0
+    return 0 if complete_ok else 1
 
 
 def cmd_pin_output(args: argparse.Namespace) -> int:
@@ -256,9 +293,11 @@ def cmd_pin_output(args: argparse.Namespace) -> int:
     plan = _load(args)
     attrs: dict = {}
     for kv in (args.attr or []):
-        if "=" in kv:
-            k, v = kv.split("=", 1)
-            attrs[k.strip()] = v.strip()
+        key, sep, val = kv.partition("=")
+        if not sep or not key.strip():
+            print(f"Invalid --attr {kv!r}; expected a non-empty key=value pair.", file=sys.stderr)
+            return 1
+        attrs[key.strip()] = val.strip()
     art = plan_artifact(
         args.key, args.kind, attrs,
         produced_by_task_id=args.task,
@@ -266,10 +305,29 @@ def cmd_pin_output(args: argparse.Namespace) -> int:
         source=args.source,
     )
     plan.add_output(art)
+    complete_ok = True
     if args.complete:
-        plan.set_task_state(args.task, "Completed")
+        missing = plan.unresolved_produces(args.task)
+        if missing:
+            complete_ok = False
+            print(
+                f"Pinned; NOT completing {args.task} — unresolved produces {missing}. "
+                "Pin the rest, then complete.",
+                file=sys.stderr,
+            )
+        else:
+            plan.set_task_state(args.task, "Completed")
     _save(plan, args)
     print(json.dumps(art, indent=2))
+    return 0 if complete_ok else 1
+
+
+def cmd_snapshot_config(args: argparse.Namespace) -> int:
+    """Print the current config.json snapshot as JSON. Capture this **before** a
+    skill runs and pass it to ``capture-setup --before-file`` so the generic
+    id+name sweep only pins what actually changed (pre-existing config isn't
+    mis-attributed as produced by the task)."""
+    print(json.dumps(snapshot_config(args.config), indent=2))
     return 0
 
 
@@ -376,8 +434,11 @@ def _extract_signals_for(selected: list[dict[str, str]]) -> dict[str, list[dict[
 
 
 def cmd_summary(args: argparse.Namespace) -> int:
+    """Render and print the plan's Markdown view. **Read-only** — it does NOT
+    rewrite ``ESS-scenario-plan.md`` (mutating commands already regenerate it via
+    ``save_all``), so running ``summary`` after a Plan editor revises that file
+    never clobbers their edits before they can be reconciled (`edit.md`)."""
     plan = _load(args)
-    plan.write_summary(os.path.join(os.path.dirname(args.plan) or ".", SUMMARY_FILENAME))
     print(plan.render_summary())
     return 0
 
@@ -483,8 +544,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--key", default="primaryEnvironment")
     p.add_argument("--config", default=os.path.join(".local", "config.json"))
     p.add_argument("--before", help="JSON snapshot taken before setup (optional)")
+    p.add_argument("--before-file", dest="before_file", help="path to a JSON snapshot taken before the action (enables the generic id+name sweep)")
+    p.add_argument("--dry-run", dest="dry_run", action="store_true", help="detect and print artifacts without saving (preview for confirm-before-pin)")
     p.add_argument("--complete", action="store_true", help="mark the task Completed")
     p.set_defaults(func=cmd_capture_setup)
+
+    p = sub.add_parser("snapshot-config", help="print the config.json snapshot (capture before an action for capture-setup --before-file)")
+    p.add_argument("--config", default=os.path.join(".local", "config.json"))
+    p.set_defaults(func=cmd_snapshot_config)
 
     p = sub.add_parser("pin-output", help="commit what a task produced onto the plan (ask-mode capture)")
     p.add_argument("--task", required=True)
@@ -540,7 +607,13 @@ def main(argv: list[str] | None = None) -> int:
     _configure_io()
     parser = build_parser()
     args = parser.parse_args(argv)
-    return args.func(args)
+    try:
+        return args.func(args)
+    except PlanInvalidError as exc:
+        print("Refusing to save — the plan would be invalid:", file=sys.stderr)
+        for err in exc.errors:
+            print(f"  - {err}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":

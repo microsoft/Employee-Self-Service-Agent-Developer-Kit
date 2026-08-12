@@ -5,7 +5,8 @@ the sponsor's intent, a set of atomic Tasks each owned by a role and a person,
 and a ledger of what each Task produced. It grounds itself by *researching
 Microsoft Learn*, interviews the sponsor for what it can't ground, assigns the
 work, and captures Task outputs (starting with the environment `/setup`
-creates) so later Tasks read them straight off the Plan.
+**connects to** — it records an already-deployed agent/environment, it does not
+create one) so later Tasks read them straight off the Plan.
 
 The Plan lives at `workspace/plan/plan.json`. Its human view —
 `workspace/plan/ESS-scenario-plan.md` — is an **editable** surface a Plan editor

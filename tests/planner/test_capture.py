@@ -81,7 +81,9 @@ def test_detect_config_artifacts_env_and_agent():
 
 
 def test_detect_config_artifacts_generic_connection_and_custom():
-    before = {}
+    # A real before-snapshot is required for the generic sweep; the connection
+    # and widget are new since `before`, so they are pinned.
+    before = config_snapshot({"setup": "pending"})
     after = config_snapshot({
         "setup": "complete",
         "connection": {"connectionId": "conn-1", "name": "Workday conn"},
@@ -100,7 +102,7 @@ def test_detect_config_artifacts_generic_connection_and_custom():
 
 
 def test_detect_config_artifacts_list_of_objects():
-    before = {}
+    before = config_snapshot({"setup": "pending"})
     after = config_snapshot({"connections": [
         {"connectionId": "c-1", "name": "One"},
         {"connectionId": "c-2", "name": "Two"},
@@ -109,6 +111,34 @@ def test_detect_config_artifacts_list_of_objects():
     keys = sorted(a["key"] for a in arts)
     assert keys == ["connections.c-1", "connections.c-2"]
     assert all(a["kind"] == "Connection" for a in arts)
+
+
+def test_detect_config_artifacts_empty_before_skips_generic_sweep():
+    # With NO before-snapshot we can't tell new from pre-existing config, so the
+    # generic sweep is skipped — only the recognised /setup outputs are pinned.
+    after = config_snapshot({
+        "setup": "complete",
+        "dataverseEndpoint": ENDPOINT,
+        "environmentId": ENV_ID,
+        "agent": AGENT,
+        "connection": {"connectionId": "conn-1", "name": "Workday conn"},
+    })
+    arts = detect_config_artifacts({}, after, task_id="T1")
+    keys = {a["key"] for a in arts}
+    assert keys == {"primaryEnvironment", "essAgent"}  # connection NOT swept
+
+
+def test_detect_config_artifacts_never_sweeps_agents_list():
+    # The discovered-agent list mirrors the active agent; it must never be swept.
+    before = config_snapshot({"setup": "pending"})
+    after = config_snapshot({
+        "setup": "complete",
+        "agent": AGENT,
+        "agents": [AGENT, {"botId": "bot-2", "name": "Other", "schemaName": "other"}],
+    })
+    arts = detect_config_artifacts(before, after, task_id="T1")
+    keys = {a["key"] for a in arts}
+    assert keys == {"essAgent"}  # only the active agent, never agents.<id>
 
 
 def test_detect_config_artifacts_only_changed():

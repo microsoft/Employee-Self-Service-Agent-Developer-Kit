@@ -21,11 +21,10 @@ python scripts/planner/cli.py capture-setup --complete
 ```
 
 `--task` is optional — with it omitted the CLI **auto-detects the plan's setup
-task** (the task that produces `primaryEnvironment`) and completes it. `/setup`
-itself
-now offers this at the end of a run: when setup finishes and a plan exists, it
-asks the maker "mark the setup task complete and save what it produced?" and runs
-this for them — so the loop closes without waiting for someone to remember.
+task** (the task that produces `primaryEnvironment`) and completes it. **You (the
+planner) run this after `/setup` returns** — the unchanged setup/onboarding flow
+does not call it, so confirm the detected values with the assignee and invoke
+`capture-setup` yourself (use `--dry-run` first to preview, then re-run to pin).
 
 This reads the current `.local/config.json` and prints **every** artifact it will
 pin from what changed — e.g. an `Environment` (the `environmentId` + URL), an

@@ -16,8 +16,9 @@ copy, not a re-model:
   * Each Task carries one extended ``assignedTo`` Principal that can name a
     role, a person, or a person acting as a role (the pool / claimed /
     direct-for-role states).
-  * A Task's ``action`` says HOW it is performed — usually a kit skill,
-    sometimes a manual / portal / external step.
+  * A Task is described by its ``title`` + ``description`` — the "how" (which
+    kit command, or a portal/manual step) lives in the ``description``; there is
+    deliberately **no** separate ``action`` field.
   * Produced artifacts land in a single ``outputs`` ledger, keyed and
     supersede-on-rewrite, each stamped with the producing task id.
   * An optional, read-back-only ``checklist`` on a Task carries step-level
@@ -451,9 +452,18 @@ class Plan:
 
     def claim_task(self, task_id: str, person_oid: str) -> dict[str, Any]:
         """A holder of the task's role picks it up (pool -> claimed). The role
-        is retained so the task still groups under it in Flow 2."""
+        is retained so the task still groups under it in Flow 2. Only an **open
+        role pool** can be claimed — claiming a task already assigned to a person
+        (or one with no role) is rejected so an existing owner is never silently
+        replaced and the role is never erased."""
         task = self._require_task(task_id)
-        role = assignee_role_id(task.get("assignedTo"))
+        assigned = task.get("assignedTo") or {}
+        role = assignee_role_id(assigned)
+        if assigned.get("type") != "Role" or not role:
+            raise ValueError(
+                f"task {task_id!r} is not an open role pool "
+                f"(assignedTo.type={assigned.get('type')!r}); only pooled tasks can be claimed"
+            )
         task["assignedTo"] = principal_person(person_oid, role_id=role)
         return task
 
@@ -523,6 +533,17 @@ class Plan:
             if art.get("key") == key and art.get("state") == "Active":
                 return art
         return None
+
+    def unresolved_produces(self, task_id: str) -> list[str]:
+        """A task's declared ``produces`` keys that have no Active artifact yet.
+
+        A task should not be marked ``Completed`` while its declared outputs are
+        still unresolved — otherwise it becomes a completed producer while
+        downstream consumers stay blocked."""
+        task = self.task(task_id)
+        if not task:
+            return []
+        return [k for k in (task.get("produces") or []) if self.output(k) is None]
 
     def outputs_of_task(self, task_id: str) -> list[dict[str, Any]]:
         """"This task's outputs" = the ledger filtered by producing id (no copy)."""
@@ -726,6 +747,8 @@ class Plan:
         role_set = set(roles)
         grouped: dict[str, list[dict[str, Any]]] = {}
         for task in self.tasks:
+            if task.get("state") == "Completed":
+                continue  # Flow 2 surfaces work still waiting, not finished tasks
             assigned = task.get("assignedTo") or {}
             role = assignee_role_id(assigned) or "(no role)"
             owner = assignee_user_oid(assigned)
@@ -803,6 +826,11 @@ class Plan:
                 errors.append(f"outputs[{art.get('key')!r}] invalid state: {art.get('state')!r}")
             if not art.get("producedByTaskId"):
                 errors.append(f"outputs[{art.get('key')!r}] missing producedByTaskId")
+            elif art.get("producedByTaskId") not in seen_task:
+                errors.append(
+                    f"outputs[{art.get('key')!r}] references unknown task "
+                    f"{art.get('producedByTaskId')!r}"
+                )
             if len(art.get("attributes", {})) > Limits.MAX_ATTRIBUTES:
                 errors.append(f"outputs[{art.get('key')!r}] too many attributes")
 
@@ -881,22 +909,17 @@ class Plan:
             lines.append("_No tasks yet._")
         lines.append("")
 
-        # Scenario dependencies (read from the Context bag).
-        deps = self.scenario_dependencies()
-        unmet = self.unmet_scenario_dependencies()
-        if deps or unmet:
-            in_scope = set(self.in_scope_scenarios())
+        # Scenario dependencies — show BOTH satisfied and unmet edges (whose
+        # dependent scenario is in scope) so a met dependency doesn't silently
+        # disappear from the view while `check-deps` still reports it.
+        status_edges = self.scenario_dependency_status()
+        if status_edges:
             lines.append("## Scenario dependencies")
             lines.append("")
             lines.append("| Scenario | Depends on | Kind | Status |")
             lines.append("|----------|-----------|------|--------|")
-            shown: set[tuple[str, str]] = set()
-            for edge in deps + unmet:
-                pair = (edge["scenario"], edge["dependsOn"])
-                if pair in shown:
-                    continue
-                shown.add(pair)
-                status = "met" if edge["dependsOn"] in in_scope else "MISSING — add it first"
+            for edge in status_edges:
+                status = "met" if edge.get("met") else "MISSING — add it first"
                 lines.append(
                     f"| {edge['scenario']} | {edge['dependsOn']} | {edge.get('kind')} | {status} |"
                 )

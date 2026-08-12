@@ -13,9 +13,11 @@ Public surface:
 
   * :mod:`planner.plan_model` — the Plan document (schema, atomic IO,
     validation, summary render, Flow-2 grouping).
-  * :mod:`planner.roles` — the absent-safe roles-source seam (``IRoleDirectory``).
+  * :mod:`planner.roles` — the absent-safe roles-source seam (``RoleDirectory``
+    over the ``RoleSource`` protocol).
   * :mod:`planner.capture` — observe-mode detectors that read what a Task
-    produced from local kit state (the ``/setup`` -> environmentId hand-off).
+    produced from local kit state (the generic ``/setup`` config.json capture —
+    environment, agent, and any other id+name a skill recorded).
   * :mod:`planner.research` — the Table-of-Contents-first Learn research
     selection logic (parse ``toc.json`` -> relevance-select hrefs to fetch).
 

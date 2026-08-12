@@ -284,7 +284,20 @@ def detect_config_artifacts(
     if agent is not None:
         artifacts.append(agent)
     handled.add("agent")
+    # The discovered-agent *list* (`agents`) mirrors the active `agent` and is
+    # tenant inventory, not a per-task output — never sweep it into task outputs
+    # (that would duplicate the agent and attribute every discovered agent here).
+    handled.add("agents")
 
+    # The generic sweep of any OTHER id-bearing object requires a **real
+    # before-snapshot** so "changed since before" is meaningful. With no snapshot
+    # we cannot tell a freshly-produced artifact from pre-existing config, so we
+    # pin only the recognised /setup outputs (environment + agent) and skip the
+    # sweep — otherwise every pre-existing connection/app on an existing kit
+    # config would be falsely attributed to this task. Capture a snapshot before
+    # the action (CLI ``snapshot-config``) and pass it as ``before`` to enable it.
+    if not before:
+        return artifacts
     for key, value in after.items():
         if key in handled:
             continue

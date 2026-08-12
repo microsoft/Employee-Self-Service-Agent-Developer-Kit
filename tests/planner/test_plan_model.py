@@ -315,3 +315,36 @@ def test_validate_flags_too_many_tasks():
     for i in range(Limits.MAX_TASKS + 1):
         plan.tasks.append(new_task(f"T{i}", "t"))
     assert any("too many tasks" in e for e in plan.validate())
+
+
+def test_claim_rejects_task_not_open_to_a_role():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "no assignee"))  # unassigned -> not a pool
+    with pytest.raises(ValueError):
+        plan.claim_task("T1", PAUL)
+    plan.assign_task("T1", role_id="maker", person_oid=PAUL)  # now owned by a person
+    with pytest.raises(ValueError):
+        plan.claim_task("T1", ANN)  # cannot steal an owned task
+
+
+def test_tasks_for_person_excludes_completed():
+    plan = _plan_with_tasks()
+    plan.assign_task("T1", role_id="power-platform-admin", person_oid=PAUL)
+    plan.set_task_state("T1", "Completed")
+    grouped = plan.tasks_for_person(PAUL, ["power-platform-admin"])
+    flat = [it["task"]["id"] for items in grouped.values() for it in items]
+    assert "T1" not in flat  # Flow 2 surfaces waiting work, not finished tasks
+
+
+def test_unresolved_produces_tracks_active_outputs():
+    plan = _plan_with_tasks()  # T1 produces primaryEnvironment
+    assert plan.unresolved_produces("T1") == ["primaryEnvironment"]
+    plan.add_output(plan_artifact("primaryEnvironment", "Environment", {"environmentId": "e"}, produced_by_task_id="T1"))
+    assert plan.unresolved_produces("T1") == []
+
+
+def test_validate_flags_orphan_artifact_task_ref():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "t"))
+    plan.outputs.append(plan_artifact("k", "Custom", {"a": 1}, produced_by_task_id="TX"))
+    assert any("unknown task" in e for e in plan.validate())
