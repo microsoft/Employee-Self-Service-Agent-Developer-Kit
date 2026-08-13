@@ -1,7 +1,7 @@
 # Design Decision: SN-RUN-001 ServiceNow Active Connector Probe
 
 Status: AC13 live-capture spike complete (PROD), GO with one required selection fix
-Decision: Active managed-connector probe mirroring WD-RUN-001 v2, with passive run-history fallback
+Decision: Active managed-connector probe mirroring WD-RUN-001, with passive run-history fallback
 Date: 2026-08-11
 Owner: ESS FlightCheck (Dawn Jeong)
 
@@ -9,7 +9,7 @@ Owner: ESS FlightCheck (Dawn Jeong)
 
 The passive SN-RUN-001 read (checks/servicenow.py:_check_servicenow_run_health) answers nothing when no ServiceNow flow has run recently, and even with data it only exposes the flow run status and Response-action name, never the real ServiceNow faultstring (that sits behind a SAS-signed outputsLink FlightCheck never fetches).
 
-The active probe closes that gap: it stands up one throwaway Power Automate flow bound to the maker's existing managed ServiceNow connection, runs one read-only ServiceNow operation through the real managed connector (the AzureConnectors egress path the agent actually uses), reads the synchronous result, then deletes the flow. It mirrors the Workday WD-RUN-001 v2 active probe. Only the ServiceNow connection binding and error map are ServiceNow-specific.
+The active probe closes that gap: it stands up one throwaway Power Automate flow bound to the maker's existing managed ServiceNow connection, runs one read-only ServiceNow operation through the real managed connector (the AzureConnectors egress path the agent actually uses), reads the synchronous result, then deletes the flow. It mirrors the Workday WD-RUN-001 active probe. Only the ServiceNow connection binding and error map are ServiceNow-specific.
 
 ## AC13 live-capture spike (PROD, 2026-08-11)
 
@@ -42,7 +42,7 @@ The connector surfaces distinct HTTP statuses per fault class: a valid read retu
 Q3 (whether a FlightCheck-authored transient flow can resolve the maker's connection under the running identity): ANSWERED. GO, conditional on connection ownership.
 A transient flow bound to a ServiceNow connection by connection-id (Embedded source) activates and invokes the connector only when the /flightcheck operator owns that connection (or the owner has shared it in the flow context). Run 1 proves the GO path: as the connection owner, activation succeeded and the connector executed a real 200. Run 3 proves the failure mode: bound to a connection owned by a different user, activation fails with ConnectionAuthorizationFailed before the connector runs.
 
-The earlier reading that Q3 was a general no-go was wrong. It was caused by the probe auto-picking the first Connected connection, which happened to be owned by a different user, not by an inherent platform block. The same ownership constraint applies to the Workday WD-RUN-001 v2 active probe, whose positive capture ran as the connection owner.
+The earlier reading that Q3 was a general no-go was wrong. It was caused by the probe auto-picking the first Connected connection, which happened to be owned by a different user, not by an inherent platform block. The same ownership constraint applies to the Workday WD-RUN-001 active probe, whose positive capture ran as the connection owner.
 
 ## Deeper fault-capture pass (PROD, 2026-08-12)
 

@@ -1,12 +1,11 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""AC12 coverage for SN-RUN-001 v2 active ServiceNow connector probe.
+"""AC12 coverage for the SN-RUN-001 active ServiceNow connector probe.
 
-Mirrors tests/flightcheck/checks/test_wd_run_001_v2.py. Only the ServiceNow
-connection binding and error-map assertions differ; the transient-flow
-lifecycle, consent gating, and orphan sweep are the shared harness exercised
-identically for both vendors.
+Mirrors the Workday active-probe test. Only the ServiceNow connection binding
+and error-map assertions differ; the transient-flow lifecycle, consent gating,
+and orphan sweep are the shared harness exercised identically for both vendors.
 """
 
 from __future__ import annotations
