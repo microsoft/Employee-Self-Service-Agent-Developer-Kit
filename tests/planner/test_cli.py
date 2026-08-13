@@ -186,6 +186,19 @@ def test_complete_refused_with_unresolved_produces(tmp_path, capsys):
     assert Plan.load(plan_path).task("T1")["state"] != "Completed"
 
 
+def test_set_state_completed_refused_with_unresolved_produces(tmp_path, capsys):
+    # The invariant is enforced in the model, so the direct `set-state --state
+    # Completed` path (not just capture/pin) is guarded too.
+    plan_path = str(tmp_path / "plan.json")
+    _run("--plan", plan_path, "init")
+    _run("--plan", plan_path, "add-task", "--id", "T1", "--title", "t", "--role", "maker", "--produces", "primaryEnvironment")
+    capsys.readouterr()
+    rc = _run("--plan", plan_path, "set-state", "--task", "T1", "--state", "Completed")
+    assert rc == 1
+    assert "unresolved produces" in capsys.readouterr().err
+    assert Plan.load(plan_path).task("T1")["state"] != "Completed"
+
+
 def test_save_refuses_invalid_plan_orphan_artifact(tmp_path, capsys):
     plan_path = str(tmp_path / "plan.json")
     _run("--plan", plan_path, "init")

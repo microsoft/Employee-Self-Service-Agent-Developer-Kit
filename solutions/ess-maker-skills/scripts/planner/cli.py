@@ -223,7 +223,11 @@ def cmd_claim(args: argparse.Namespace) -> int:
 
 def cmd_set_state(args: argparse.Namespace) -> int:
     plan = _load(args)
-    plan.set_task_state(args.task, args.state)
+    try:
+        plan.set_task_state(args.task, args.state)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
     _save(plan, args)
     print(f"Task {args.task!r} -> {args.state}")
     return 0

@@ -405,12 +405,12 @@ workspace/
       "state": "NotStarted",                              // NotStarted → InProgress → Completed (+ reopen)
       "produces": ["primaryEnvironment","essAgent"], "consumes": [] },  // /setup also clones the agent → essAgent
 
-    // Workday is MULTI-ROLE (§10.1): SSO = App/Cloud App Admin, tenant = Workday Administrator,
-    // pack+connect = Environment Maker, firewall = InfoSec/IT — one Task PER role. Shown here: the connect slice.
+    // Workday is MULTI-ROLE (§10.1): SSO = app-cloud-app-admin, tenant = workday-administrator,
+    // pack+connect = environment-maker, firewall = infosec-it — one Task PER role. Shown here: the connect slice.
     { "id": "T2", "title": "Install Workday pack & connect",
       "description": "Run /connect to install the Workday extension pack and create the connection (setup/workday/tasks.md §5).",
-      "assignedTo": { "type": "Role", "id": "Environment Maker",      // OPEN TO A ROLE (pool) — nobody yet
-                      "role": { "roleId": "Environment Maker" } },    // role read verbatim from the checklist role:
+      "assignedTo": { "type": "Role", "id": "environment-maker",      // OPEN TO A ROLE (pool) — nobody yet
+                      "role": { "roleId": "environment-maker" } },    // stable id (slugify of the checklist role: "Environment Maker")
       "state": "NotStarted", "produces": ["workdayConnection"], "consumes": ["primaryEnvironment","workdayEntraApp","workdayTenantConfig"],
       // OPTIONAL read-back-only step display — the skill fills this at RUNTIME from its tasks.md (§10.1).
       // Not a sub-entity, not promoted, not the Task boundary; empty until the skill runs.
@@ -524,10 +524,10 @@ Three reasons the Task stays at skill granularity, not step granularity:
 | Run setup | Run `/setup` to onboard the ADK to the deployed agent — records the environment **and clones the agent** | `primaryEnvironment`, `essAgent` | — | `power-platform-admin` |
 | Check readiness | Run `/flightcheck` to validate the environment | `readinessReport` | `primaryEnvironment` | `power-platform-admin` |
 | Register Entra app *(if not via connect)* | In the Azure portal, register the Entra app (see the Learn doc) | `entraApp` | `primaryEnvironment` | `entra-admin` |
-| Set up Workday SSO (Entra) | Register/configure the Workday enterprise app for SSO — `setup/workday/tasks.md` §3 | `workdayEntraApp` | `primaryEnvironment` | `App/Cloud App Admin` |
-| Configure the Workday tenant | Create the API client & tenant config in Workday — §4 | `workdayTenantConfig` | `primaryEnvironment` | `Workday Administrator` |
-| Install Workday pack & connect | Run `/connect` — install the extension pack & create the connection — §5 | `workdayConnection` | `workdayEntraApp`, `workdayTenantConfig` | `Environment Maker` |
-| Allow Workday through the firewall | Attest the Workday egress allowlist — §5 (S5.8) | `workdayNetworkAllowlist` | — | `InfoSec/IT` |
+| Set up Workday SSO (Entra) | Register/configure the Workday enterprise app for SSO — `setup/workday/tasks.md` §3 | `workdayEntraApp` | `primaryEnvironment` | `app-cloud-app-admin` |
+| Configure the Workday tenant | Create the API client & tenant config in Workday — §4 | `workdayTenantConfig` | `primaryEnvironment` | `workday-administrator` |
+| Install Workday pack & connect | Run `/connect` — install the extension pack & create the connection — §5 | `workdayConnection` | `workdayEntraApp`, `workdayTenantConfig` | `environment-maker` |
+| Allow Workday through the firewall | Attest the Workday egress allowlist — §5 (S5.8) | `workdayNetworkAllowlist` | — | `infosec-it` |
 | Connect ServiceNow | Run `/connect` — decompose per its own checklist `role:` items | `servicenowConnection` | `primaryEnvironment` | *(roles per its checklist)* |
 | Author scenario topics | Run `/create` to author the scenario topics | `topic:<name>` | env + connections | `maker` |
 | Generate evals | Run `/evaluate` to generate the eval suite | `evalSuite` | `primaryEnvironment` | `eval-author` |
@@ -718,9 +718,9 @@ Until WeveNova + these MCP tools are live, the sync layer is a **no‑op stub** 
 1. Sponsor: *"ESS HR ticketing for employees on ServiceNow, plus read profile from Workday. Germany first."*
 2. **Research.** `/planner` seeds the ESS Learn URL → follows the 301 to the current base → fetches `toc.json` (59 nodes) → selects `overview`, `prerequisites`, `deploy-overview-alm`, `install`, `commands-reference`, the **Workday** subtree, and **ServiceNow** (`servicenow`, `servicenow-hrsd-itsm`); skips SAP + facilities (title‑only). Extracts capabilities + prerequisites + constraints (Workday needs Entra SSO; a data‑residency note for DE), caches `research-context.json`.
 3. **Interview.** 4 intent turns → Context entries (`objective`, `businessGoals:[deflect 30%]`, `scenarioContext:[HR-Ticketing, ServiceNow HRSD, Workday, Employee]`, `market:DE`, `acceptanceCriteria`). Sponsor accepts.
-4. **Emit + assign (Flow 1).** Tasks: T1 `/setup`; **the Workday connect, decomposed by role per §10.1** — T2 SSO/Entra (`App/Cloud App Admin`), T3 Workday tenant config (`Workday Administrator`), T4 install pack & connect (`Environment Maker`); T5 `/connect ServiceNow` (split per its own checklist `role:`); T6 `/evaluate`; and T7 *Publish the agent* (a **portal/admin** step — no kit skill). **Each Task's role and `produces` keys come from the Learn docs / the system's setup checklist** (`setup/workday/tasks.md` grounds the Workday roles) — the sponsor is not asked to name roles. The ADK lists holders of each grounded role; the sponsor assigns **Paul** to T1, **pools** T2–T5 to their roles, assigns **Ann** to T6, pools T7 to `power-platform-admin`. `plan.json` + `ESS-scenario-plan.md` written. **As soon as the interview captured the scenarios + goals (before modelling), `/planner` rendered an eager scenario-based eval preview — the golden prompts (HR‑Ticketing, profile‑read) grouped by category — so the sponsor saw "what good looks like" before build. It is render‑only: nothing was generated or pushed. The real generation runs later at T6.**
+4. **Emit + assign (Flow 1).** Tasks: T1 `/setup`; **the Workday connect, decomposed by role per §10.1** — T2 SSO/Entra (`app-cloud-app-admin`), T3 Workday tenant config (`workday-administrator`), T4 install pack & connect (`environment-maker`); T5 `/connect ServiceNow` (split per its own checklist `role:`); T6 `/evaluate`; and T7 *Publish the agent* (a **portal/admin** step — no kit skill). **Each Task's role id is the `slugify` of the setup checklist's `role:`** (`setup/workday/tasks.md` grounds the Workday roles; the human label is kept as the display name) — the sponsor is not asked to name roles. The ADK lists holders of each grounded role; the sponsor assigns **Paul** to T1, **pools** T2–T5 to their roles, assigns **Ann** to T6, pools T7 to `power-platform-admin`. `plan.json` + `ESS-scenario-plan.md` written. **As soon as the interview captured the scenarios + goals (before modelling), `/planner` rendered an eager scenario-based eval preview — the golden prompts (HR‑Ticketing, profile‑read) grouped by category — so the sponsor saw "what good looks like" before build. It is render‑only: nothing was generated or pushed. The real generation runs later at T6.**
 5. **Run + capture.** Paul runs `/setup` → env `d3f1…` + cloned agent `ess_agent` → planner diffs `config.json` and pins **every id + name it recorded** (here an `Environment` + an `Agent`; any connection/app the run wrote would pin too), asks Paul to confirm; T1 → Completed.
-6. **Discover (Flow 2).** A holder of `Environment Maker` asks "what am I assigned?" → sees, under *Environment Maker*, T4 "(open to your role)" → claims T4 → runs `/connect` → the Workday connection artifact pins (consuming the SSO + tenant outputs from T2/T3); T6 unblocks once its inputs are satisfied.
+6. **Discover (Flow 2).** A holder of `environment-maker` asks "what am I assigned?" → sees, under *Environment Maker*, T4 "(open to your role)" → claims T4 → runs `/connect` → the Workday connection artifact pins (consuming the SSO + tenant outputs from T2/T3); T6 unblocks once its inputs are satisfied.
 7. **Read‑through.** Ann runs `/evaluate`; it reads `outputs["primaryEnvironment"].environmentId` off the Plan — no re‑discovery. Eval artifact pins; T6 completes.
 8. *(When WeveNova is live)* every write best‑effort‑syncs (§15); until then it all runs locally.
 
@@ -766,10 +766,10 @@ Verified on `origin/main`, HEAD `72a24f8`, worktree cleaned to match `main`:
 |---|---|---|---|---|---|
 | Run setup | Run `/setup` to onboard the ADK to the deployed agent (records env + clones agent) | `primaryEnvironment`, `essAgent` | — | `power-platform-admin` | observe: `config.json` diff (env + agent) |
 | Readiness check | Run `/flightcheck` | `readinessReport` | `primaryEnvironment` | `power-platform-admin` | observe: readiness file |
-| Set up Workday SSO (Entra) | Register/configure the Workday enterprise app for SSO (§3) | `workdayEntraApp` | `primaryEnvironment` | `App/Cloud App Admin` | observe: app id |
-| Configure the Workday tenant | Create the API client & tenant config (§4) | `workdayTenantConfig` | `primaryEnvironment` | `Workday Administrator` | ask/attest |
-| Install Workday pack & connect | Run `/connect` (Workday) — pack + connection (§5) | `workdayConnection` | `workdayEntraApp`, `workdayTenantConfig` | `Environment Maker` | observe: conn refs |
-| Allow Workday through firewall | Attest the Workday egress allowlist (S5.8) | `workdayNetworkAllowlist` | — | `InfoSec/IT` | ask/attest |
+| Set up Workday SSO (Entra) | Register/configure the Workday enterprise app for SSO (§3) | `workdayEntraApp` | `primaryEnvironment` | `app-cloud-app-admin` | observe: app id |
+| Configure the Workday tenant | Create the API client & tenant config (§4) | `workdayTenantConfig` | `primaryEnvironment` | `workday-administrator` | ask/attest |
+| Install Workday pack & connect | Run `/connect` (Workday) — pack + connection (§5) | `workdayConnection` | `workdayEntraApp`, `workdayTenantConfig` | `environment-maker` | observe: conn refs |
+| Allow Workday through firewall | Attest the Workday egress allowlist (S5.8) | `workdayNetworkAllowlist` | — | `infosec-it` | ask/attest |
 | Connect ServiceNow | Run `/connect` (ServiceNow) — split per its checklist `role:` items | `servicenowConnection` | `primaryEnvironment` | *(roles per its checklist)* | observe: conn refs |
 | Author topics | Run `/create` to author topics | `topic:<name>` | env + connections | `maker` | observe: pushed topic files |
 | Generate evals | Run `/evaluate` | `evalSuite` | `primaryEnvironment` | `eval-author` | observe: new eval ids |

@@ -181,10 +181,17 @@ def test_assign_requires_something():
 
 def test_set_state_validates():
     plan = _plan_with_tasks()
-    plan.set_task_state("T1", "Completed")
-    assert plan.task("T1")["state"] == "Completed"
+    # Invalid state is rejected.
     with pytest.raises(ValueError):
         plan.set_task_state("T1", "Bogus")
+    # Cannot Complete while a declared `produces` is unresolved (invariant enforced
+    # in the model, so every caller — not just the capture CLI — is covered).
+    with pytest.raises(ValueError):
+        plan.set_task_state("T1", "Completed")
+    # After pinning the produced output, Complete succeeds.
+    plan.add_output(plan_artifact("primaryEnvironment", "Environment", {"environmentId": "e"}, produced_by_task_id="T1"))
+    plan.set_task_state("T1", "Completed")
+    assert plan.task("T1")["state"] == "Completed"
 
 
 def test_require_task_missing():
@@ -330,6 +337,7 @@ def test_claim_rejects_task_not_open_to_a_role():
 def test_tasks_for_person_excludes_completed():
     plan = _plan_with_tasks()
     plan.assign_task("T1", role_id="power-platform-admin", person_oid=PAUL)
+    plan.add_output(plan_artifact("primaryEnvironment", "Environment", {"environmentId": "e"}, produced_by_task_id="T1"))
     plan.set_task_state("T1", "Completed")
     grouped = plan.tasks_for_person(PAUL, ["power-platform-admin"])
     flat = [it["task"]["id"] for items in grouped.values() for it in items]

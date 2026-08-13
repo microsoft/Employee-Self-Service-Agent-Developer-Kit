@@ -32,13 +32,31 @@ import re
 from typing import Any, Protocol, runtime_checkable
 
 # A well-formed role id is a lowercase, hyphen-joined token, e.g.
-# "power-platform-admin", "integration-owner", "eval-author".
+# "power-platform-admin", "integration-owner", "eval-author". A role's
+# human-readable label (e.g. "App/Cloud App Admin" from a Learn checklist's
+# `role:`) is a **display name**, not the id — slugify it to a stable id with
+# :func:`slugify_role_id`, and keep the label as the display name (Flow 1/2 show
+# the label; the plan/WeveNova carry the id).
 _ROLE_ID_RE = re.compile(r"^[a-z][a-z0-9]*(-[a-z0-9]+)*$")
 
 
 def is_well_formed_role_id(role_id: str) -> bool:
     """True if ``role_id`` looks like a role handle (the absent-safe check)."""
     return bool(role_id) and bool(_ROLE_ID_RE.match(role_id))
+
+
+def slugify_role_id(label: str) -> str:
+    """Turn a human role **label** into a stable, well-formed role **id**.
+
+    Grounded role names read verbatim from a Learn checklist's ``role:`` (e.g.
+    ``"App/Cloud App Admin"``, ``"Workday Administrator"``, ``"InfoSec/IT"``) are
+    *display names*; this derives the stable id the plan and WeveNova carry
+    (``app-cloud-app-admin``, ``workday-administrator``, ``infosec-it``). Lower-
+    cases, replaces any run of non-alphanumerics with a single hyphen, and trims
+    leading/trailing hyphens. The result satisfies :func:`is_well_formed_role_id`.
+    """
+    slug = re.sub(r"[^a-z0-9]+", "-", (label or "").lower()).strip("-")
+    return slug
 
 
 @runtime_checkable

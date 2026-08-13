@@ -9,6 +9,7 @@ from planner.roles import (
     RoleDirectory,
     StaticRoleSource,
     is_well_formed_role_id,
+    slugify_role_id,
 )
 
 ANN = "00000000-0000-0000-0000-0000000000b2"
@@ -21,6 +22,20 @@ def test_well_formed_role_id():
     assert not is_well_formed_role_id("Power Platform Admin")  # spaces/caps
     assert not is_well_formed_role_id("-leading")
     assert not is_well_formed_role_id("")
+
+
+def test_slugify_role_id_from_checklist_labels():
+    # The verbatim Workday checklist labels slugify to stable, well-formed ids.
+    cases = {
+        "App/Cloud App Admin": "app-cloud-app-admin",
+        "Workday Administrator": "workday-administrator",
+        "Environment Maker": "environment-maker",
+        "InfoSec/IT": "infosec-it",
+        "Power Platform Administrator": "power-platform-administrator",
+    }
+    for label, expected in cases.items():
+        assert slugify_role_id(label) == expected
+        assert is_well_formed_role_id(slugify_role_id(label))  # always valid
 
 
 def test_directory_absent_safe_defaults():

@@ -471,6 +471,16 @@ class Plan:
         if state not in TASK_STATES:
             raise ValueError(f"invalid task state: {state!r}")
         task = self._require_task(task_id)
+        # Invariant enforced for EVERY caller (not just the capture CLI): a task
+        # cannot be Completed while its declared `produces` have no Active
+        # artifact — that would leave a completed producer with blocked consumers.
+        if state == "Completed":
+            missing = self.unresolved_produces(task_id)
+            if missing:
+                raise ValueError(
+                    f"task {task_id!r} cannot be Completed — unresolved produces {missing}; "
+                    "pin those outputs first (capture-setup / pin-output)"
+                )
         task["state"] = state
         return task
 

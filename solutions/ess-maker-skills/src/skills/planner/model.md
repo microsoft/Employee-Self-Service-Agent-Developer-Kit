@@ -69,17 +69,19 @@ checklist and its role gating (`src/skills/setup/<system>/tasks.md` and
 Workday spans several roles (grounded from `setup/workday/tasks.md`), so it
 decomposes into role-based Tasks:
 
-| Task (title) | Role (verbatim from the checklist `role:`) | Grounded in | Produces |
-|---|---|---|---|
-| Set up Workday single sign-on (Entra) | `App/Cloud App Admin` (consent may need Privileged Role Admin / GA) | S3.1–S3.7 | `workdayEntraApp` |
-| Configure the Workday tenant | `Workday Administrator` | S4.1–S4.4 | `workdayTenantConfig` |
-| Install the Workday extension pack & connect | `Environment Maker` | S5.1–S5.7 | `workdayConnection` |
-| Allow Workday egress through the firewall | `InfoSec/IT` | S5.8 | `workdayNetworkAllowlist` |
+| Task (title) | Role id (`slugify` of the checklist `role:`) | Role display name | Grounded in | Produces |
+|---|---|---|---|---|
+| Set up Workday single sign-on (Entra) | `app-cloud-app-admin` | App/Cloud App Admin (consent may need Privileged Role Admin / GA) | S3.1–S3.7 | `workdayEntraApp` |
+| Configure the Workday tenant | `workday-administrator` | Workday Administrator | S4.1–S4.4 | `workdayTenantConfig` |
+| Install the Workday extension pack & connect | `environment-maker` | Environment Maker | S5.1–S5.7 | `workdayConnection` |
+| Allow Workday egress through the firewall | `infosec-it` | InfoSec/IT | S5.8 | `workdayNetworkAllowlist` |
 
-Each role is taken **verbatim from the checklist item's `role:`**, not invented;
-the exact set is whatever that skill lists for the tenant's path (simplified vs
-legacy). Order them by `produces`/`consumes` (SSO + tenant config before
-connect). A system whose setup is genuinely single-role stays one Task — but
+Each role is grounded from the checklist item's `role:` — use the **stable
+`slugify` id** (lowercase, hyphen-joined: `App/Cloud App Admin` →
+`app-cloud-app-admin`) as the `--role`, and keep the human label as the display
+name. This keeps role ids well-formed (the roles seam validates them) and stable
+across the plan and WeveNova, while the label stays Learn-grounded. The exact set
+is whatever that skill lists for the tenant's path (simplified vs
 confirm that from its checklist; never assume it.
 
 ## Typical greenfield backbone
@@ -91,10 +93,10 @@ The "how" is the **description** (say which command to run in prose); `produces`
 |------|--------|----------|----------|-----------------|
 | Run setup | Run `/setup` to onboard the ADK to the deployed agent — records the environment **and clones the agent** into the workspace | `primaryEnvironment, essAgent` | — | `power-platform-admin` |
 | Check readiness | Run `/flightcheck` to validate the environment | `readinessReport` | `primaryEnvironment` | `power-platform-admin` |
-| Set up Workday SSO (Entra) | Register/configure the Workday enterprise app for SSO — `setup/workday/tasks.md` §3 | `workdayEntraApp` | `primaryEnvironment` | `App/Cloud App Admin` |
-| Configure the Workday tenant | Create the API client & tenant config in Workday — §4 | `workdayTenantConfig` | `primaryEnvironment` | `Workday Administrator` |
-| Install Workday pack & connect | Run `/connect` — install the Workday extension pack and create the connection — §5 | `workdayConnection` | `workdayEntraApp, workdayTenantConfig` | `Environment Maker` |
-| Allow Workday through the firewall | Attest the Workday egress allowlist — §5 (S5.8) | `workdayNetworkAllowlist` | — | `InfoSec/IT` |
+| Set up Workday SSO (Entra) | Register/configure the Workday enterprise app for SSO — `setup/workday/tasks.md` §3 | `workdayEntraApp` | `primaryEnvironment` | `app-cloud-app-admin` |
+| Configure the Workday tenant | Create the API client & tenant config in Workday — §4 | `workdayTenantConfig` | `primaryEnvironment` | `workday-administrator` |
+| Install Workday pack & connect | Run `/connect` — install the Workday extension pack and create the connection — §5 | `workdayConnection` | `workdayEntraApp, workdayTenantConfig` | `environment-maker` |
+| Allow Workday through the firewall | Attest the Workday egress allowlist — §5 (S5.8) | `workdayNetworkAllowlist` | — | `infosec-it` |
 | Connect ServiceNow | Run `/connect` — decompose per its own checklist `role:` items (read `setup/servicenow/tasks.md`) | `servicenowConnection` | `primaryEnvironment` | *(roles per its checklist)* |
 | Author scenario topics | Run `/create` to author the scenario topics | `topic:<name>` | env + connections | `maker` |
 | Generate evals | Run `/evaluate` to generate the eval suite | `evalSuite` | `primaryEnvironment` | `eval-author` |
@@ -159,12 +161,12 @@ that is:
 # 1. PP admin onboards the ADK (records the environment AND clones the agent)
 python scripts/planner/cli.py add-task --id T1 --title "Run setup" --description "Run /setup to onboard the ADK to the deployed agent (records the environment and clones the agent)" --role power-platform-admin --produces "primaryEnvironment,essAgent"
 # 2. Workday is MULTI-ROLE — read setup/workday/tasks.md and emit one task per role
-python scripts/planner/cli.py add-task --id T2 --title "Set up Workday SSO (Entra)" --description "Register/configure the Workday enterprise app for SSO (setup/workday/tasks.md S3.1-S3.7)" --role "App/Cloud App Admin" --produces workdayEntraApp --consumes primaryEnvironment
-python scripts/planner/cli.py add-task --id T3 --title "Configure the Workday tenant" --description "Create the API client and tenant config in Workday (S4.1-S4.4)" --role "Workday Administrator" --produces workdayTenantConfig --consumes primaryEnvironment
-python scripts/planner/cli.py add-task --id T4 --title "Install Workday pack & connect" --description "Run /connect to install the Workday extension pack and create the connection (S5.1-S5.7)" --role "Environment Maker" --produces workdayConnection --consumes "workdayEntraApp,workdayTenantConfig"
-python scripts/planner/cli.py add-task --id T5 --title "Allow Workday through the firewall" --description "Attest the Workday egress allowlist (S5.8)" --role "InfoSec/IT" --produces workdayNetworkAllowlist
+python scripts/planner/cli.py add-task --id T2 --title "Set up Workday SSO (Entra)" --description "Register/configure the Workday enterprise app for SSO — role: App/Cloud App Admin (setup/workday/tasks.md S3.1-S3.7)" --role app-cloud-app-admin --produces workdayEntraApp --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T3 --title "Configure the Workday tenant" --description "Create the API client and tenant config in Workday — role: Workday Administrator (S4.1-S4.4)" --role workday-administrator --produces workdayTenantConfig --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T4 --title "Install Workday pack & connect" --description "Run /connect to install the Workday extension pack and create the connection — role: Environment Maker (S5.1-S5.7)" --role environment-maker --produces workdayConnection --consumes "workdayEntraApp,workdayTenantConfig"
+python scripts/planner/cli.py add-task --id T5 --title "Allow Workday through the firewall" --description "Attest the Workday egress allowlist — role: InfoSec/IT (S5.8)" --role infosec-it --produces workdayNetworkAllowlist
 # 3. ServiceNow — decompose per its OWN checklist role: items (read setup/servicenow/tasks.md); shown here collapsed
-python scripts/planner/cli.py add-task --id T6 --title "Connect ServiceNow" --description "Run /connect to connect ServiceNow (split per its checklist role: items)" --role "Environment Maker" --produces servicenowConnection --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T6 --title "Connect ServiceNow" --description "Run /connect to connect ServiceNow (split per its checklist role: items)" --role environment-maker --produces servicenowConnection --consumes primaryEnvironment
 # 4. authoring per scenario area (knowledge before ticketing — register the dependency)
 python scripts/planner/cli.py add-task --id T7 --title "Set up HR knowledge" --description "Run /create to author the HR knowledge topics" --role maker --produces "topic:hr-knowledge" --consumes primaryEnvironment
 python scripts/planner/cli.py add-task --id T8 --title "Author HR ticketing topics" --description "Run /create to author the HR ticketing topics" --role maker --produces "topic:hr-ticketing" --consumes "primaryEnvironment,servicenowConnection"
