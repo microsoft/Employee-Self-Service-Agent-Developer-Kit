@@ -696,10 +696,18 @@ def _servicenow_probe_layer(res: live_egress_probe.ConnectorProbeResult) -> tupl
             return "network layer (firewall / DLP)", "the connector got no HTTP response because traffic was blocked"
         return "network layer (DNS / TLS / firewall / DLP)", "the connector got no HTTP response"
     if status in (401, 403) or any(t in code for t in ("unauthor", "forbidden")):
+        # A synchronous 401/403 here is the managed connector's OWN credential
+        # being rejected (the ServiceNow connection's stored OAuth token or
+        # basic credential is invalid, expired, or revoked) — NOT a ServiceNow
+        # table/row ACL denial. Live capture (PROD 2026-08-12) confirmed
+        # ServiceNow ACL denial surfaces as 400 / BadRequest, which the
+        # indeterminate 400 branch below owns; the role/ACL guidance lives
+        # there, not here.
         return (
-            "authorization layer",
-            "ServiceNow or the connector rejected the request; the integration "
-            "user's ServiceNow role/ACL likely does not permit this operation",
+            "connector-connection credential layer",
+            "the ServiceNow managed-connector connection's stored credential "
+            "was rejected; re-authenticate the ServiceNow connection in Power "
+            "Platform",
         )
     if status in (404, 405) or any(t in code for t in ("notfound", "invalidurl", "endpoint")):
         # Live-verified 404 / NotFound (PROD 2026-08-12). HTTP 404 alone cannot
@@ -752,11 +760,13 @@ def _servicenow_probe_failure_result(
             ),
             next_steps=(
                 "Open the transient probe or matching ServiceNow connector run "
-                "in Power Automate, then fix the cause named above. For "
-                "authorization, check the integration user's ServiceNow "
-                "roles/ACLs. For endpoint configuration, check the ServiceNow "
-                "instance URL and the table/operation. For network blocks, "
-                "check DLP, firewall, DNS, and TLS."
+                "in Power Automate, then fix the cause named above. For a "
+                "rejected connector credential, re-authenticate the ServiceNow "
+                "connection in Power Platform. For authorization, check the "
+                "integration user's ServiceNow roles/ACLs. For endpoint "
+                "configuration, check the ServiceNow instance URL and the "
+                "table/operation. For network blocks, check DLP, firewall, "
+                "DNS, and TLS."
             ),
             responsible_role=(
                 f"{Role.SERVICENOW_ADMIN.value} / {Role.POWER_PLATFORM_ADMIN.value}"

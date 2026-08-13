@@ -214,7 +214,12 @@ class TestServiceNowActiveProbeMatrix:
         assert "HTTP 404" in row.result
 
     @responses.activate
-    def test_authz_fail_names_authorization_layer(self) -> None:
+    def test_authz_fail_names_connector_credential_layer(self) -> None:
+        # A synchronous 401/403 is the managed connector's OWN stored
+        # credential being rejected, NOT a ServiceNow role/ACL denial (ACL
+        # denial collapses into the indeterminate 400 bucket, live-verified
+        # PROD 2026-08-12). The cause must point at re-authenticating the
+        # connection, and must NOT claim a ServiceNow role/ACL diagnosis.
         _register_connector_lifecycle(
             action_status="Failed",
             status_code=403,
@@ -224,8 +229,10 @@ class TestServiceNowActiveProbeMatrix:
         row = _run_single(_runner())
 
         assert row.status == Status.FAILED.value
-        assert "role/ACL" in row.result
+        assert "credential was rejected" in row.result
+        assert "re-authenticate the ServiceNow connection" in row.result
         assert "HTTP 403" in row.result
+        assert "role/ACL" not in row.result
 
     @responses.activate
     def test_servicenow_business_error_names_indeterminate_layer(self) -> None:

@@ -32,15 +32,18 @@ shared infrastructure rather than any one consumer's plumbing.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 import responses
 
 from tests.conftest import require_validated_mock
+from tests.mocks import dataverse as dv
 from tests.mocks import pp_admin as pp
 
 require_validated_mock(pp)
+require_validated_mock(dv)
 
 
 # ───────────────────────────────────────────────────────────────────────
@@ -588,3 +591,130 @@ class TestCheckConnectorConnectionsMetadataPassthrough:
         assert summary.doc_link == "https://docs.example.test/zzz"
         # Per-connection row uses the same prefix continuation.
         assert any(r.checkpoint_id == "ZZZ-002" for r in results)
+
+
+# ───────────────────────────────────────────────────────────────────────
+# get_operator_upn / _resolve_operator_upn_live — live Dataverse identity
+# resolution (the SN-RUN-001 / WD-RUN-001 ownership-gating linchpin).
+#
+# Every SN-RUN-001 / WD-RUN-001 test pre-seeds ``runner._operator_upn`` and
+# so hits the cache — the live WhoAmI -> systemusers lookup was never
+# exercised. If its URL, status handling, or ``domainname`` parse were wrong
+# it would silently return "", which by design DISABLES ownership gating and
+# regresses selection to "first eligible" — the exact bug the active probe
+# exists to fix. These tests pin the live path.
+# ───────────────────────────────────────────────────────────────────────
+
+_DV_BASE = "https://orgmocktenant.crm.dynamics.com"
+_OPERATOR_DOMAINNAME = "operator@essagentic.onmicrosoft.com"
+
+
+def _systemusers_domainname(
+    *, user_id: str, domainname: str | None, status: int = 200
+) -> dict[str, Any]:
+    """Register ``GET systemusers({id})?$select=domainname``.
+
+    Mirrors the second hop production performs after WhoAmI():
+    ``{env}/api/data/v9.2/systemusers({UserId})?$select=domainname``. The
+    ``domainname`` attribute is the Azure AD UPN in Dataverse. Documented
+    tier — see ``tests/mocks/dataverse.py`` ``MOCK_STATUS`` and the Dataverse
+    Web API row in ``tests/fixtures/cassettes/INDEX.md``.
+    """
+    body: dict[str, Any] = {
+        "@odata.context": f"{_DV_BASE}/api/data/v9.2/$metadata#systemusers/$entity",
+    }
+    if domainname is not None:
+        body["domainname"] = domainname
+    return {
+        "method": responses.GET,
+        "url": f"{_DV_BASE}/api/data/v9.2/systemusers({user_id})?$select=domainname",
+        "json": body,
+        "status": status,
+    }
+
+
+def _operator_runner() -> SimpleNamespace:
+    """A runner WITHOUT a pre-seeded ``_operator_upn`` so the live resolve
+    path actually runs (the SN-RUN-001 harness always seeds it and never
+    reaches here)."""
+    return SimpleNamespace(env_url=_DV_BASE, dv_token="dv-token")
+
+
+class TestGetOperatorUpnLiveResolution:
+    @responses.activate
+    def test_whoami_then_systemusers_returns_domainname(self) -> None:
+        from flightcheck.checks.connections import get_operator_upn
+        responses.add(**dv.whoami(base_url=_DV_BASE))
+        responses.add(**_systemusers_domainname(
+            user_id=dv.MOCK_USER_ID, domainname=_OPERATOR_DOMAINNAME,
+        ))
+
+        runner = _operator_runner()
+        assert get_operator_upn(runner) == _OPERATOR_DOMAINNAME
+        # Cached on the runner so production pays the lookup once.
+        assert runner._operator_upn == _OPERATOR_DOMAINNAME
+
+    @responses.activate
+    def test_result_is_cached_no_second_network_call(self) -> None:
+        from flightcheck.checks.connections import get_operator_upn
+        responses.add(**dv.whoami(base_url=_DV_BASE))
+        responses.add(**_systemusers_domainname(
+            user_id=dv.MOCK_USER_ID, domainname=_OPERATOR_DOMAINNAME,
+        ))
+
+        runner = _operator_runner()
+        assert get_operator_upn(runner) == _OPERATOR_DOMAINNAME
+        assert get_operator_upn(runner) == _OPERATOR_DOMAINNAME
+        # WhoAmI hit exactly once — the second call reads the cache.
+        whoami_calls = [
+            c for c in responses.calls if c.request.url.endswith("WhoAmI()")
+        ]
+        assert len(whoami_calls) == 1
+
+    @responses.activate
+    def test_whoami_401_returns_empty_and_disables_gating(self) -> None:
+        # WhoAmI rejected: resolution returns "" and callers MUST treat "" as
+        # "ownership unknown, do not gate" — no regression to first-eligible.
+        from flightcheck.checks.connections import get_operator_upn
+        responses.add(
+            responses.GET,
+            f"{_DV_BASE}/api/data/v9.2/WhoAmI()",
+            status=401,
+            json={"error": {"code": "0x80072560", "message": "Unauthorized"}},
+        )
+
+        assert get_operator_upn(_operator_runner()) == ""
+
+    @responses.activate
+    def test_systemusers_non_200_returns_empty(self) -> None:
+        from flightcheck.checks.connections import get_operator_upn
+        responses.add(**dv.whoami(base_url=_DV_BASE))
+        responses.add(**_systemusers_domainname(
+            user_id=dv.MOCK_USER_ID, domainname=None, status=403,
+        ))
+
+        assert get_operator_upn(_operator_runner()) == ""
+
+    @responses.activate
+    def test_missing_domainname_field_returns_empty(self) -> None:
+        # 200 but the record hides domainname (a tenant that doesn't expose
+        # it): returns "" so gating is disabled rather than crashing.
+        from flightcheck.checks.connections import get_operator_upn
+        responses.add(**dv.whoami(base_url=_DV_BASE))
+        responses.add(**_systemusers_domainname(
+            user_id=dv.MOCK_USER_ID, domainname=None, status=200,
+        ))
+
+        assert get_operator_upn(_operator_runner()) == ""
+
+    def test_non_https_env_url_short_circuits_without_network(self) -> None:
+        # No @responses.activate: the guard in _resolve_operator_upn_live must
+        # short-circuit before any HTTP when env_url is not https.
+        from flightcheck.checks.connections import get_operator_upn
+        runner = SimpleNamespace(env_url="http://insecure.example", dv_token="t")
+        assert get_operator_upn(runner) == ""
+
+    def test_missing_token_short_circuits_without_network(self) -> None:
+        from flightcheck.checks.connections import get_operator_upn
+        runner = SimpleNamespace(env_url=_DV_BASE, dv_token="")
+        assert get_operator_upn(runner) == ""
