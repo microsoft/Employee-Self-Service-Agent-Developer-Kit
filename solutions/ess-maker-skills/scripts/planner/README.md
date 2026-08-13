@@ -31,7 +31,8 @@ workspace/plan/research-context.json   cached Learn-research corpus
 
 ## Design & tests
 
-- Design: `dev-specs/adk-plan-generation/ADK-Plan-Generation-and-Task-Capture-DevDesign.md`.
+- Dev plan: `dev-specs/adk-plan-generation/adk-plan-generation-dev-plan.md`.
+- Design detail: `dev-specs/adk-plan-generation/ADK-Plan-Generation-and-Task-Capture-DevDesign.md`.
 - Tests: `tests/planner/` (pure logic + local IO; no network, no cassettes).
   Run from the repo root: `python -m pytest tests/planner`.
 
