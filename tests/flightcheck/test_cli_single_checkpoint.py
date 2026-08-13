@@ -315,3 +315,82 @@ class TestCheckpointTelemetry:
                 _args("FAKE-001", tmp_path, no_telemetry=True)
             )
         assert captured["called"] is False
+
+    def test_tenant_name_falls_back_to_cache_when_graph_unavailable(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        """When ``graph is None`` (infra-only scope, or Graph auth failed),
+        ``cli`` must fall back to the persisted ``.local/.tenant_name`` cache
+        so previously-resolved tenants keep their name on FlightCheck events
+        instead of emitting blank. Regression guard for the split observed in
+        prod telemetry where the same tenant emitted both blank and named
+        runs on the same ADK version.
+        """
+        monkeypatch.chdir(tmp_path)
+        from flightcheck import telemetry as _tele_mod
+        from flightcheck import registry as _reg
+
+        cached_tid = "11111111-1111-1111-1111-111111111111"
+        _tele_mod.cache_tenant_name(cached_tid, "Contoso Cached")
+
+        # Make the plan require GRAPH so the code reaches the tenant_id
+        # discovery path and then tries to build a Graph client.
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+
+        class _Plan:
+            clients = frozenset({_reg.GRAPH})
+            requires_config = False
+            requires_dataverse_endpoint = False
+
+            def __init__(self, fns: list) -> None:
+                self.ordered_fns = fns
+
+        def _fn(runner):  # noqa: ARG001
+            return [_row("FAKE-001", Status.PASSED.value)]
+
+        monkeypatch.setattr(_reg, "resolve", lambda target: _Spec())
+        monkeypatch.setattr(
+            _reg, "transitive_requirements", lambda target: _Plan([("Fake", _fn)])
+        )
+
+        # Force tenant_id to our seeded cache key and make Graph fail so the
+        # code sets ``graph = None`` — the exact scenario we're guarding.
+        import auth as _auth
+
+        monkeypatch.setattr(_auth, "discover_tenant", lambda *a, **k: cached_tid)
+
+        class _NoGraph:
+            def __init__(self, *a, **k):
+                pass
+
+            def authenticate(self):
+                raise RuntimeError("no graph in this test")
+
+            def get_organization(self):
+                raise RuntimeError("no graph in this test")
+
+        monkeypatch.setattr(cli, "GraphClient", _NoGraph, raising=False)
+        import flightcheck.graph_client as _gc
+
+        monkeypatch.setattr(_gc, "GraphClient", _NoGraph)
+
+        captured = self._capture(monkeypatch)
+        with pytest.raises(SystemExit):
+            cli._run_single_checkpoint(
+                _args(
+                    "FAKE-001",
+                    tmp_path,
+                    no_telemetry=False,
+                    environment_url="https://contoso.crm.dynamics.com",
+                )
+            )
+        assert captured["called"] is True
+        # Regression assertion: with graph unavailable, the cache must be
+        # consulted so a previously-seen tenant still gets its display name.
+        assert captured["kwargs"]["tenant_name"] == "Contoso Cached"
+        assert captured["kwargs"]["tenant_id"] == cached_tid
