@@ -237,7 +237,163 @@ def test_authenticate_replaces_dataverse_rejected_cached_token(
     ) == "refreshed"
 
 
-class TestQueryAll:
+def test_authenticate_resolves_tenant_name_before_start_session(
+    tmp_path, monkeypatch
+) -> None:
+    """The ADK telemetry bootstrap in ``authenticate`` must resolve the
+    tenant display name via SILENT-ONLY Graph BEFORE emitting the first
+    ``adk.session.start`` event, so that first event carries ``tenant_name``.
+
+    Before this ordering fix, ``start_session`` fired first, so the very
+    first session_start on a fresh install always went out with blank
+    tenant_name (only later events -- once FlightCheck interactively
+    resolved and cached the name -- picked it up). This is a regression
+    test for that ordering: silent resolution runs first, its result is
+    fed to ``set_identity``, and only then does ``start_session`` emit.
+    """
+    import auth
+
+    class FakeCache:
+        has_state_changed = False
+
+        def deserialize(self, value: str) -> None:
+            pass
+
+        def serialize(self) -> str:
+            return ""
+
+    class FakeApp:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def get_accounts(self) -> list[dict]:
+            return []
+
+        def acquire_token_silent(self, scopes, account):
+            return None
+
+        def acquire_token_interactive(self, scopes, prompt):
+            return {
+                "access_token": "fresh-token",
+                "id_token_claims": {"tid": "tenant-id"},
+            }
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(auth, "discover_tenant", lambda _url: "tenant-id")
+    monkeypatch.setattr(auth, "_dataverse_accepts_token", lambda _url, _tok: True)
+    monkeypatch.setattr(auth.msal, "SerializableTokenCache", FakeCache)
+    monkeypatch.setattr(auth.msal, "PublicClientApplication", FakeApp)
+
+    # Instrument ADK telemetry + Graph resolver to record call order.
+    import adk_telemetry
+    from flightcheck import graph_client
+
+    calls: list[tuple[str, tuple, dict]] = []
+
+    def record(name):
+        def _rec(*args, **kwargs):
+            calls.append((name, args, kwargs))
+
+        return _rec
+
+    monkeypatch.setattr(adk_telemetry, "maybe_print_notice", record("notice"))
+    monkeypatch.setattr(adk_telemetry, "set_identity", record("set_identity"))
+    monkeypatch.setattr(adk_telemetry, "start_session", record("start_session"))
+    monkeypatch.setattr(
+        graph_client,
+        "resolve_tenant_display_name_silent",
+        lambda tid: "Contoso Ltd" if tid == "tenant-id" else "",
+    )
+
+    token = auth.authenticate("https://example.crm.dynamics.com")
+    assert token == "fresh-token"
+
+    names = [c[0] for c in calls]
+    # set_identity(tenant_name=...) must happen BEFORE start_session so the
+    # first session_start emit picks up the resolved name from _IDENTITY.
+    assert "set_identity" in names, names
+    assert "start_session" in names, names
+    assert names.index("set_identity") < names.index("start_session"), names
+
+    # The resolved name from silent Graph is what got stored.
+    si = next(c for c in calls if c[0] == "set_identity")
+    assert si[2].get("tenant_name") == "Contoso Ltd"
+    assert si[2].get("tenant_id") == "tenant-id"
+
+    # start_session receives tenant_id so common_dimensions can pair the
+    # name (already in _IDENTITY) with the raw tenant GUID.
+    ss = next(c for c in calls if c[0] == "start_session")
+    assert ss[2].get("tenant_id") == "tenant-id"
+
+
+def test_authenticate_still_emits_when_silent_graph_returns_blank(
+    tmp_path, monkeypatch
+) -> None:
+    """When silent Graph resolution yields no name (both scopes admin-only
+    or unconsented), the bootstrap must still emit ``adk.session.start`` --
+    just without ``set_identity`` overriding tenant_name. Telemetry stays
+    best-effort and non-blocking; the missing-name case degrades to blank
+    (recoverable when the maker later runs FlightCheck).
+    """
+    import auth
+
+    class FakeCache:
+        has_state_changed = False
+
+        def deserialize(self, value: str) -> None:
+            pass
+
+        def serialize(self) -> str:
+            return ""
+
+    class FakeApp:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def get_accounts(self) -> list[dict]:
+            return []
+
+        def acquire_token_silent(self, scopes, account):
+            return None
+
+        def acquire_token_interactive(self, scopes, prompt):
+            return {
+                "access_token": "fresh-token",
+                "id_token_claims": {"tid": "tenant-id"},
+            }
+
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(auth, "discover_tenant", lambda _url: "tenant-id")
+    monkeypatch.setattr(auth, "_dataverse_accepts_token", lambda _url, _tok: True)
+    monkeypatch.setattr(auth.msal, "SerializableTokenCache", FakeCache)
+    monkeypatch.setattr(auth.msal, "PublicClientApplication", FakeApp)
+
+    import adk_telemetry
+    from flightcheck import graph_client
+
+    calls: list[str] = []
+    monkeypatch.setattr(adk_telemetry, "maybe_print_notice", lambda: calls.append("notice"))
+    monkeypatch.setattr(
+        adk_telemetry, "set_identity", lambda **kw: calls.append("set_identity")
+    )
+    monkeypatch.setattr(
+        adk_telemetry, "start_session", lambda **kw: calls.append("start_session")
+    )
+    # Silent resolver returns "" (Organization.Read.All + User.Read both
+    # silently unavailable, as happens for a large fraction of enterprise
+    # tenants on first Dataverse sign-in).
+    monkeypatch.setattr(
+        graph_client, "resolve_tenant_display_name_silent", lambda tid: ""
+    )
+
+    token = auth.authenticate("https://example.crm.dynamics.com")
+    assert token == "fresh-token"
+
+    # start_session still fires; set_identity is NOT called (blank names
+    # would overwrite whatever the cache-fallback in common_dimensions
+    # might otherwise pick up).
+    assert "start_session" in calls
+    assert "set_identity" not in calls
     """Drives scripts/auth.py:query_all through the mock.
 
     query_all is the FlightCheck-relevant slice of auth.py — it's used by

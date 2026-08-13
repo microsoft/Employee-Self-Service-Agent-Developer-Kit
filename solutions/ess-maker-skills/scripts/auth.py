@@ -267,15 +267,15 @@ def authenticate(env_url):
         claims = result.get("id_token_claims", {}) or {}
         tenant_id = claims.get("tid", "") or tenant
         adk_telemetry.maybe_print_notice()
-        adk_telemetry.start_session(
-            tenant_id=tenant_id,
-        )
-        # Best-effort: resolve the tenant's org display name via a SILENT-ONLY
-        # Graph token (never prompts) and record it so ADK telemetry carries
-        # tenant_name even when the maker never runs FlightCheck. The Dataverse
-        # sign-in above usually leaves a first-party (FOCI) refresh token that
-        # silently satisfies the read scope; set_identity caches the name for
-        # later ADK processes. Silent failure just leaves tenant_name empty.
+        # Resolve the tenant's display name via a SILENT-ONLY Graph token
+        # BEFORE emitting adk.session.start, so the very first ADK event on a
+        # fresh install carries tenant_name (instead of blank until FlightCheck
+        # is later run). The Dataverse sign-in above usually leaves a
+        # first-party (FOCI) refresh token that silently satisfies at least
+        # one of Organization.Read.All / User.Read; the graph_client helper
+        # tries both. Silent failure is fine — set_identity is only called on
+        # success, so start_session below still emits with a blank name in the
+        # (increasingly rare) case where no Graph scope is silently redeemable.
         try:
             from flightcheck.graph_client import resolve_tenant_display_name_silent
 
@@ -284,6 +284,9 @@ def authenticate(env_url):
                 adk_telemetry.set_identity(tenant_id=tenant_id, tenant_name=_tname)
         except Exception:  # noqa: BLE001 — name resolution is best-effort
             pass
+        adk_telemetry.start_session(
+            tenant_id=tenant_id,
+        )
     except Exception:  # noqa: BLE001 — telemetry must never break auth
         pass
 

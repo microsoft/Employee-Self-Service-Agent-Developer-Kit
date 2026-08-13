@@ -99,6 +99,16 @@ def _persist_token_cache(cache: "msal.SerializableTokenCache", cache_path: str) 
 # Dataverse login in auth.py — silently satisfies it with no prompt.
 _ORG_READ_SCOPE = ["https://graph.microsoft.com/Organization.Read.All"]
 
+# Fallback scope for the silent lookup. ``User.Read`` is user-consentable (no
+# admin consent required) and is granted as a "default" static permission for
+# most first-party Microsoft app sign-ins, so a fresh Dataverse-only sign-in
+# still tends to have a redeemable FOCI refresh token for it. When
+# Organization.Read.All silent redemption fails (admin consent required and
+# not granted — very common in enterprise), we can still learn the tenant
+# display label from ``/me?$select=companyName`` in the many tenants where
+# admins populate the user's Company Name attribute with the tenant name.
+_USER_READ_SCOPE = ["https://graph.microsoft.com/User.Read"]
+
 
 def resolve_tenant_display_name_silent(tenant_id: str) -> str:
     """Return the tenant's org displayName via a SILENT-ONLY Graph token.
@@ -109,6 +119,20 @@ def resolve_tenant_display_name_silent(tenant_id: str) -> str:
     prompting. Because the Graph CLI Tools app and the Power Platform CLI app
     (auth.py) are first-party FOCI apps sharing that cache, a prior Dataverse
     sign-in is usually enough for this to succeed with no second prompt.
+
+    Two-stage resolution to maximise coverage:
+
+    1. Try ``/organization`` with ``Organization.Read.All`` -- returns the
+       authoritative tenant display name. Requires admin consent; in tenants
+       where the admin hasn't pre-consented it (common in enterprise), this
+       silently fails and we fall through to step 2.
+    2. Try ``/me?$select=companyName`` with ``User.Read`` -- user-consent-only
+       scope typically granted as a "default" static permission at first-party
+       sign-in, so the FOCI refresh token usually redeems it without a prompt.
+       ``companyName`` is the signed-in user's Entra profile attribute;
+       enterprise admins routinely set it to the tenant display name, so this
+       recovers a useful label for the many customers that would otherwise
+       report as blank.
 
     Used by the ADK auth bootstrap so ``tenant_name`` is populated for ADK
     telemetry even when the maker never runs FlightCheck. Returns ``""`` on any
@@ -129,11 +153,22 @@ def resolve_tenant_display_name_silent(tenant_id: str) -> str:
         accounts = app.get_accounts()
         if not accounts:
             return ""
-        result = app.acquire_token_silent(_ORG_READ_SCOPE, account=accounts[0])
-        if not result or "access_token" not in result:
-            return ""
+        name = _try_organization_lookup(app, accounts[0])
+        if not name:
+            name = _try_me_company_name_lookup(app, accounts[0])
         # Persist any silently-refreshed token so later processes stay silent.
         _persist_token_cache(cache, cache_path)
+        return name or ""
+    except Exception:  # noqa: BLE001 — name resolution is strictly best-effort
+        return ""
+
+
+def _try_organization_lookup(app, account) -> str:
+    """Silent ``/organization`` via ``Organization.Read.All``; ``""`` on any error."""
+    try:
+        result = app.acquire_token_silent(_ORG_READ_SCOPE, account=account)
+        if not result or "access_token" not in result:
+            return ""
         resp = _SESSION.get(
             f"{GRAPH_BASE}/organization",
             headers={
@@ -146,7 +181,36 @@ def resolve_tenant_display_name_silent(tenant_id: str) -> str:
             return ""
         orgs = (resp.json() or {}).get("value", []) or []
         return (orgs[0].get("displayName", "") if orgs else "") or ""
-    except Exception:  # noqa: BLE001 — name resolution is strictly best-effort
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _try_me_company_name_lookup(app, account) -> str:
+    """Silent ``/me?$select=companyName`` via ``User.Read``; ``""`` on any error.
+
+    ``companyName`` is the signed-in user's Entra profile attribute, not the
+    literal tenant display name. Admins routinely populate it with the tenant
+    display name, so it is a useful fallback. Classification-wise it is OII —
+    the same classification we already have for ``tenant_name`` — and never
+    EUPI: we only read a single organizational attribute, not the user's
+    name / UPN / id.
+    """
+    try:
+        result = app.acquire_token_silent(_USER_READ_SCOPE, account=account)
+        if not result or "access_token" not in result:
+            return ""
+        resp = _SESSION.get(
+            f"{GRAPH_BASE}/me?$select=companyName",
+            headers={
+                "Authorization": f"Bearer {result['access_token']}",
+                "Accept": "application/json",
+            },
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return ""
+        return ((resp.json() or {}).get("companyName", "") or "").strip()
+    except Exception:  # noqa: BLE001
         return ""
 
 
