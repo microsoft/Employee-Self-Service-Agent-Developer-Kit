@@ -46,6 +46,7 @@ _EDGE_PATHS = (
 
 # Candidate selectors for the test-pane message input (first visible wins).
 INPUT_CANDIDATES = [
+    'textarea[data-testid="send box text area"]',
     'textarea[placeholder*="Ask" i]',
     'textarea[aria-label*="message" i]',
     '[contenteditable="true"][aria-label*="message" i]',
@@ -399,7 +400,10 @@ def _drive_turn(page, text, timeout_s, *, arm_window_s=10, quiet_s=1.5, poll_ms=
 
     box.click()
     box.fill(text)
-    box.press("Enter")
+    # Send from the focused element rather than re-resolving the locator: a
+    # placeholder-based selector stops matching once the box has text, so
+    # box.press() would time out on a box that was just filled successfully.
+    page.keyboard.press("Enter")
     if _DEBUG:
         print(f"  [drive] {text!r}", file=sys.stderr)
 
