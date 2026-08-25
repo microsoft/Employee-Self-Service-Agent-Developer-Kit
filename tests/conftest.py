@@ -12,10 +12,35 @@ can stay focused on the behavior they're verifying.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any, Iterator
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _disable_adk_telemetry(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fail-closed guard so the test suite can never emit real telemetry.
+
+    Some tests exercise ``main()`` end-to-end (auth → discover → session
+    start → capability use), and if a helper is monkey-patched without
+    also stubbing ``adk_telemetry.set_identity`` / ``emit_*`` the ambient
+    process still opens a background HTTP socket to the Aria collector
+    and ships fake events to prod. Historical fallout (P30D at the time
+    of writing): 391 ``adk.api.call`` + 88 ``adk.capability.use`` events
+    stamped ``tenant_id="tenant-id"`` — the ``test_discover`` fixture
+    string — polluted the customer bucket and inflated
+    ``backup_template_configs`` / ``restore_template_configs`` counts.
+
+    Setting ``ESS_ADK_TELEMETRY=off`` short-circuits every emit path
+    (async and sync) at ``telemetry_enabled()``. ``ESS_ADK_TELEMETRY_SYNC=1``
+    is belt-and-braces so any accidental leak is at least synchronous —
+    inspectable in-process instead of racing off the event loop after
+    the test tears down.
+    """
+    monkeypatch.setenv("ESS_ADK_TELEMETRY", "off")
+    monkeypatch.setenv("ESS_ADK_TELEMETRY_SYNC", "1")
 
 
 # Stable fake values used everywhere a test needs an "identity". These match

@@ -39,25 +39,35 @@ then maintainers **must file a new release request** in the [Open Source Portal]
 
 This toolkit:
 
-- **Collects no telemetry.** Microsoft does not receive any data from your use of this kit. There is no telemetry SDK, no usage reporting, no crash reporting, and no opt-in/opt-out switch because there is nothing to switch off.
-- **Stores no data on Microsoft systems.** All data flows are between your local VS Code workspace and your own Power Platform / Copilot Studio tenant.
-- **Processes no personal data on Microsoft's behalf.** Any customer data you author or test against (topic content, evaluation prompts, sample employee records) stays in your tenant under your existing Copilot Studio / Power Platform license terms.
+- **Collects pseudonymous usage telemetry** (enabled by default) to help us understand which capabilities are used and where they fail, so we can improve the product. What is emitted is a random per-install `instance_id`, the tenant GUID and organization display name (OII, not developer identity), capability names (e.g. `setup`, `connect`, `topic_create`), FlightCheck run outcomes, latency, and scrubbed error codes. **No developer/user identifier, agent content, credentials, prompts, or personal data is collected.** A one-time notice is printed the first time you run a CLI command. See [Telemetry & Privacy](solutions/ess-maker-skills/README.md#telemetry--privacy) for the full data model and event catalog.
+- **Opt out any time** via either of:
+  - `python scripts/adk_telemetry.py off` (from `solutions/ess-maker-skills`), or
+    - the `ESS_ADK_TELEMETRY` environment variable set to `off` (or `0` / `false`). Set it in your shell before running any ADK command — e.g. `export ESS_ADK_TELEMETRY=off` (bash/zsh), `$env:ESS_ADK_TELEMETRY = "off"` (PowerShell), or `set ESS_ADK_TELEMETRY=off` (cmd.exe). Adding it to your shell profile (`~/.bashrc`, `~/.zshrc`, PowerShell `$PROFILE`) or to your CI environment makes it persist. The env-var overrides the config-file setting.
+- **Stores no customer data on Microsoft systems by default.** Data flows for authoring and testing (topic content, sample employee records) go between your local VS Code workspace and your own Power Platform / Copilot Studio tenant under your existing license terms.
+- **Optional eval-quality judge sends eval content to GitHub Copilot.** If you run `scripts/evaluate_evals.py`, the evaluation YAML you're grading (test-case inputs and expected outputs) is sent to `api.githubcopilot.com` for LLM scoring under your GitHub Copilot license and its data-use terms. Do not run this script on evaluation sets you are not licensed to share with GitHub Copilot. Skipping the script skips this data flow entirely.
+- **Processes no personal data on Microsoft's behalf.** The telemetry above is product-improvement usage data, not customer content — no customer data (Copilot Studio topics, workflow definitions, employee records) is ever transmitted to Microsoft by this toolkit outside of what you explicitly push to your own tenant or send to the optional judge above.
 
 For privacy questions about Copilot Studio, Power Platform, or GitHub Copilot themselves, see the [Microsoft Privacy Statement](https://privacy.microsoft.com).
 
 ## Service dependencies
 
-The toolkit's scripts call the following Microsoft services on your behalf. Every call goes from your machine to your own tenant under your existing license - no data is sent to Microsoft beyond standard authentication exchanges with the services listed below.
+The toolkit's scripts call the following services on your behalf. With telemetry enabled and the optional eval judge skipped, every call is either against your own tenant under your existing license or against Microsoft's Aria/1DS collector for the pseudonymous telemetry described under [Privacy](#privacy). The optional `evaluate_evals.py` judge additionally sends eval YAML content to GitHub Copilot under your Copilot license.
 
 | Service | Purpose | Auth | Tenant |
 |---|---|---|---|
 | Power Platform / Dataverse Web API | Read agent components, push template config records | MSAL (delegated, your identity) | Your Power Platform environment |
 | Copilot Studio (via Dataverse) | Read/update topics, push changes | MSAL (delegated) | Your Copilot Studio environment |
+| Power Platform API (`api.powerplatform.com`) | Read licensing/billing policies and PayG environment linkage during `/flightcheck` prerequisite checks | MSAL (delegated) | Your Power Platform tenant |
+| BAP / Power Apps / Power Automate APIs (`api.bap.microsoft.com`, `api.powerapps.com`, `api.flow.microsoft.com`) | Enumerate environments, inspect flow runs, and validate connector wiring during `/flightcheck` | MSAL (delegated) | Your Power Platform tenant |
+| Azure Resource Manager (`management.azure.com`) | Read subscription state and Consumption budgets for the PayG-linked subscription during `/flightcheck` PRE-005 | MSAL (delegated) | Your Azure subscription |
+| Microsoft Graph (optional) | Resolve tenant display name for telemetry. Tries `/organization` under `Organization.Read.All` (silent); falls back to `/me?$select=companyName`, which reads the **signed-in user's Entra profile attribute** (admin-populated in many enterprise tenants) — not tenant metadata. `""` on any failure. | MSAL (delegated) | Your Entra tenant |
+| GitHub Copilot API (`api.githubcopilot.com`, optional) | Eval-set quality judging via `scripts/evaluate_evals.py`. Sends the eval YAML being graded to the Copilot chat completions endpoint under your Copilot license. Not called by any other script. | `gh auth token` | GitHub Copilot service |
+| Aria / 1DS OneCollector | Pseudonymous usage telemetry (see [Privacy](#privacy); opt out with `python scripts/adk_telemetry.py off` or `ESS_ADK_TELEMETRY=off`) | Instrumentation key, no user auth | N/A — Microsoft telemetry service |
 | ServiceNow REST API (optional) | Topic integration testing | User-provided OAuth / basic | Your ServiceNow tenant |
 | Workday SOAP / REST API (optional) | Topic integration testing | User-provided | Your Workday tenant |
 | GitHub Copilot (in VS Code) | LLM that reads prompt and instruction files and generates content | GitHub Copilot license | N/A - GitHub Copilot service |
 
-The toolkit does not call any other Microsoft services.
+Aside from the services listed above, the toolkit does not call other Microsoft or third-party services on your behalf.
 
 ## Validating your changes
 

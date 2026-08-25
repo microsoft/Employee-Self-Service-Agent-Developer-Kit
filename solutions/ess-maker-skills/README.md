@@ -368,10 +368,22 @@ CLI command.
   active installs and DAU/WAU/MAU. It is **not** tied to your identity.
 - Your **tenant ID** (the Entra tenant GUID) — identifies the enterprise tenant,
   not an individual user.
-- A derived **tenant class** (`internal` or `customer`) — a coarse, two-value
-  flag computed from the tenant ID so we can report Microsoft-internal dogfood
-  usage separately from external customer usage. It is non-identifying and lower
-  sensitivity than the tenant ID it is derived from.
+- The **tenant display name** (organization display name for that tenant ID) —
+  resolved best-effort via a Microsoft Graph lookup on the auth path. Tries
+  `/organization` under `Organization.Read.All` (silent) first; if that isn't
+  admin-consented, falls back to `/me?$select=companyName`, which reads the
+  **signed-in user's Entra profile `companyName` attribute** (a user-profile
+  field, not tenant metadata — enterprise admins routinely populate it with the
+  tenant display name, so it is a useful label when the authoritative
+  `/organization` call is blocked). This is org-level Organization Identifiable
+  Information (OII), not a personal identifier. Left blank when neither call
+  succeeds silently. See
+  [Service dependencies](../../CONTRIBUTING.md#service-dependencies) for the
+  Graph call details.
+- A derived **tenant class** (`internal`, `customer`, or `unknown`) — a coarse,
+  three-value flag computed from the tenant ID so we can report Microsoft-internal
+  dogfood usage separately from external customer usage. It is non-identifying and
+  lower sensitivity than the tenant ID it is derived from.
 - Non-identifying context: ADK version, surface, session ID, event name, and
   per-event enums/metrics (e.g. FlightCheck verdicts, durations, check categories).
 - Scrubbed, non-sensitive **error categories** when something fails.
@@ -399,10 +411,23 @@ python scripts/adk_telemetry.py on       # re-enable telemetry
 python scripts/adk_telemetry.py status   # show current setting
 ```
 
-You can also set an environment variable, which takes precedence:
+You can also set an environment variable, which takes precedence over the
+config file. Syntax varies by shell:
 
 ```bash
-ESS_ADK_TELEMETRY=off
+# bash / zsh — one-shot inline, current session, or persistent in ~/.bashrc:
+ESS_ADK_TELEMETRY=off python scripts/adk_telemetry.py status
+export ESS_ADK_TELEMETRY=off
+```
+
+```powershell
+# PowerShell — current session (add to $PROFILE to persist):
+$env:ESS_ADK_TELEMETRY = "off"
+```
+
+```cmd
+:: cmd.exe — current session; use `setx` to persist across new shells:
+set ESS_ADK_TELEMETRY=off
 ```
 
 **Storage, retention & deletion**

@@ -62,13 +62,24 @@ def _isolate(monkeypatch, tmp_path):
     # these on _fc at runtime, so patching them here redirects the cache dir.
     _cache_dir = str(tmp_path / ".local")
     _real_cache, _real_get = _fc.cache_tenant_name, _fc.get_cached_tenant_name
+    _real_cache_id, _real_get_id = _fc.cache_tenant_id, _fc.get_cached_tenant_id
     monkeypatch.setattr(
         _fc, "cache_tenant_name",
-        lambda tid, name, local_dir=_cache_dir: _real_cache(tid, name, local_dir=local_dir),
+        lambda tid, name, local_dir=_cache_dir, source="organization": _real_cache(
+            tid, name, local_dir=local_dir, source=source
+        ),
     )
     monkeypatch.setattr(
         _fc, "get_cached_tenant_name",
         lambda tid, local_dir=_cache_dir: _real_get(tid, local_dir=local_dir),
+    )
+    monkeypatch.setattr(
+        _fc, "cache_tenant_id",
+        lambda tid, local_dir=_cache_dir: _real_cache_id(tid, local_dir=local_dir),
+    )
+    monkeypatch.setattr(
+        _fc, "get_cached_tenant_id",
+        lambda local_dir=_cache_dir: _real_get_id(local_dir=local_dir),
     )
 
     for var in (
@@ -98,16 +109,16 @@ def captured_post(monkeypatch):
 # --- identity (instance_id; no developer identity) ------------------------
 def test_set_identity_stores_instance_and_raw_tenant(monkeypatch):
     monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
-    ident = adk.set_identity(tenant_id="tenant-Z")
+    ident = adk.set_identity(tenant_id="00000000-0000-0000-0000-0000000000ab")
     # No developer/user identifier is ever collected.
     assert "developer_id" not in ident
     assert ident["instance_id"] == "install-guid-1"
-    assert ident["tenant_id"] == "tenant-Z"
+    assert ident["tenant_id"] == "00000000-0000-0000-0000-0000000000ab"
 
 
 def test_set_identity_stores_tenant_name(monkeypatch):
     monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
-    ident = adk.set_identity(tenant_id="tenant-Z", tenant_name="Contoso")
+    ident = adk.set_identity(tenant_id="00000000-0000-0000-0000-0000000000ab", tenant_name="Contoso")
     assert ident["tenant_name"] == "Contoso"
     # Flows into every event's common dimensions (OII; privacy-approved).
     dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
@@ -115,29 +126,29 @@ def test_set_identity_stores_tenant_name(monkeypatch):
     # Once resolved, the name is cached per-tenant and reused by later ADK
     # events that lack a Graph token to resolve it live (persist-and-reuse),
     # even when set_identity is later called for the same tenant without it.
-    adk.set_identity(tenant_id="tenant-Z")
+    adk.set_identity(tenant_id="00000000-0000-0000-0000-0000000000ab")
     assert adk.common_dimensions(adk.SURFACE_CLI)["tenant_name"] == "Contoso"
 
 
 def test_tenant_name_empty_when_never_resolved(monkeypatch):
     # No Graph-capable flow ever resolved a name for this tenant -> stays "".
     monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
-    adk.set_identity(tenant_id="tenant-Z")
+    adk.set_identity(tenant_id="00000000-0000-0000-0000-0000000000ab")
     assert adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")["tenant_name"] == ""
 
 
 def test_tenant_name_cache_not_reused_across_tenants(monkeypatch):
-    # A name cached for tenant-Z must never be stamped on a different tenant's
+    # A name cached for 00000000-0000-0000-0000-0000000000ab must never be stamped on a different tenant's
     # events (the cache is keyed by tenant_id). Simulates a maker who resolved
-    # tenant-Z via FlightCheck, then runs an ADK flow authenticated as tenant-Y.
+    # 00000000-0000-0000-0000-0000000000ab via FlightCheck, then runs an ADK flow authenticated as 00000000-0000-0000-0000-0000000000cd.
     monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
-    adk.set_identity(tenant_id="tenant-Z", tenant_name="Contoso")  # seeds cache
+    adk.set_identity(tenant_id="00000000-0000-0000-0000-0000000000ab", tenant_name="Contoso")  # seeds cache
     monkeypatch.setattr(
         adk, "_IDENTITY", {"instance_id": "", "tenant_id": "", "tenant_name": ""}
     )
-    adk.set_identity(tenant_id="tenant-Y")  # different tenant, no name available
+    adk.set_identity(tenant_id="00000000-0000-0000-0000-0000000000cd")  # different tenant, no name available
     dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
-    assert dims["tenant_id"] == "tenant-Y"
+    assert dims["tenant_id"] == "00000000-0000-0000-0000-0000000000cd"
     assert dims["tenant_name"] == ""
 
 
@@ -146,33 +157,95 @@ def test_tenant_name_reused_by_later_process_without_identity(monkeypatch):
     # set_identity should still pick up a name a prior FlightCheck run cached
     # for the same tenant, via the common_dimensions fallback.
     monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
-    adk.set_identity(tenant_id="tenant-Z", tenant_name="Contoso")  # FlightCheck run
+    adk.set_identity(tenant_id="00000000-0000-0000-0000-0000000000ab", tenant_name="Contoso")  # FlightCheck run
     # Later process: fresh identity, no set_identity call, but tenant_id known.
     monkeypatch.setattr(
         adk, "_IDENTITY", {"instance_id": "", "tenant_id": "", "tenant_name": ""}
     )
-    dims = adk.common_dimensions(adk.SURFACE_CLI, tenant_id="tenant-Z")
+    dims = adk.common_dimensions(adk.SURFACE_CLI, tenant_id="00000000-0000-0000-0000-0000000000ab")
     assert dims["tenant_name"] == "Contoso"
+
+
+def test_tenant_id_reused_by_fresh_subprocess_without_identity(monkeypatch):
+    # Reproduces the emit_capability.py shim scenario: SKILL.md steps launch
+    # `python scripts/emit_capability.py <cap>` as a *fresh* Python subprocess,
+    # which never calls set_identity. Without the on-disk tenant_id fallback,
+    # such a subprocess emits with tenant_id="" -> classify_tenant("")=="unknown",
+    # so the capability event never appears on the customer-filtered External
+    # dashboard even though the maker's earlier auth flow knew the tenant.
+    monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
+    # Auth flow (parent process) persists tenant_id.
+    adk.set_identity(tenant_id="00000000-0000-0000-0000-0000000000ab")
+    # Subprocess simulation: brand-new interpreter -> empty _IDENTITY, no
+    # set_identity call.
+    monkeypatch.setattr(
+        adk, "_IDENTITY", {"instance_id": "", "tenant_id": "", "tenant_name": ""}
+    )
+    dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
+    # The persisted GUID is picked up and the event classifies as customer,
+    # not unknown.
+    assert dims["tenant_id"] == "00000000-0000-0000-0000-0000000000ab"
+    assert dims["tenant_class"] == _fc.TENANT_CLASS_CUSTOMER
+
+
+def test_tenant_id_explicit_kwarg_wins_over_cached(monkeypatch):
+    # An explicit tenant_id passed by the caller must always win, even when a
+    # different tenant_id sits in the on-disk cache (e.g. subprocess is
+    # emitting on behalf of a specific tenant that isn't the last-cached one).
+    monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
+    adk.set_identity(tenant_id="00000000-0000-0000-0000-0000000000ab")  # writes 00000000-0000-0000-0000-0000000000ab to disk
+    monkeypatch.setattr(
+        adk, "_IDENTITY", {"instance_id": "", "tenant_id": "", "tenant_name": ""}
+    )
+    dims = adk.common_dimensions(adk.SURFACE_CLI, tenant_id="00000000-0000-0000-0000-0000000000cd")
+    assert dims["tenant_id"] == "00000000-0000-0000-0000-0000000000cd"
+
+
+def test_tenant_id_explicit_empty_kwarg_does_not_fall_back(monkeypatch):
+    # An explicit empty tenant_id (caller genuinely knows there is none)
+    # must NOT be overridden by the disk cache — that would leak a stale
+    # tenant_id onto an event the caller deliberately marked anonymous.
+    monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
+    adk.set_identity(tenant_id="00000000-0000-0000-0000-0000000000ab")
+    monkeypatch.setattr(
+        adk, "_IDENTITY", {"instance_id": "", "tenant_id": "", "tenant_name": ""}
+    )
+    dims = adk.common_dimensions(adk.SURFACE_CLI, tenant_id="")
+    assert dims["tenant_id"] == ""
+
+
+def test_cache_tenant_id_round_trip_and_guards(tmp_path):
+    d = str(tmp_path / "state")
+    _fc.cache_tenant_id("00000000-0000-0000-0000-0000000000ab", local_dir=d)
+    assert _fc.get_cached_tenant_id(local_dir=d) == "00000000-0000-0000-0000-0000000000ab"
+    # Missing dir/file -> "".
+    assert _fc.get_cached_tenant_id(local_dir=str(tmp_path / "nope")) == ""
+    # Empty tenant_id is a no-op (never overwrite a valid cache with "").
+    _fc.cache_tenant_id("", local_dir=d)
+    assert _fc.get_cached_tenant_id(local_dir=d) == "00000000-0000-0000-0000-0000000000ab"
+    # Whitespace is stripped on write.
+    _fc.cache_tenant_id("  00000000-0000-0000-0000-0000000000cd  ", local_dir=d)
+    assert _fc.get_cached_tenant_id(local_dir=d) == "00000000-0000-0000-0000-0000000000cd"
 
 
 def test_cache_tenant_name_round_trip_and_guards(tmp_path):
     d = str(tmp_path / "state")
     # Round-trip for a matching tenant.
-    _fc.cache_tenant_name("tenant-Z", "Contoso", local_dir=d)
-    assert _fc.get_cached_tenant_name("tenant-Z", local_dir=d) == "Contoso"
+    _fc.cache_tenant_name("00000000-0000-0000-0000-0000000000ab", "Contoso", local_dir=d)
+    assert _fc.get_cached_tenant_name("00000000-0000-0000-0000-0000000000ab", local_dir=d) == "Contoso"
     # Mismatched tenant never inherits the cached name.
-    assert _fc.get_cached_tenant_name("tenant-Y", local_dir=d) == ""
+    assert _fc.get_cached_tenant_name("00000000-0000-0000-0000-0000000000cd", local_dir=d) == ""
     # Missing dir/file -> "".
-    assert _fc.get_cached_tenant_name("tenant-Z", local_dir=str(tmp_path / "nope")) == ""
+    assert _fc.get_cached_tenant_name("00000000-0000-0000-0000-0000000000ab", local_dir=str(tmp_path / "nope")) == ""
     # Malformed / non-dict cache content -> "" (defensive; never raises).
     import os as _os
     _os.makedirs(str(tmp_path / "bad"), exist_ok=True)
     with open(str(tmp_path / "bad" / _fc._TENANT_NAME_FILE), "w", encoding="utf-8") as _f:
         _f.write("not-json{{")
-    assert _fc.get_cached_tenant_name("tenant-Z", local_dir=str(tmp_path / "bad")) == ""
+    assert _fc.get_cached_tenant_name("00000000-0000-0000-0000-0000000000ab", local_dir=str(tmp_path / "bad")) == ""
     with open(str(tmp_path / "bad" / _fc._TENANT_NAME_FILE), "w", encoding="utf-8") as _f:
         _f.write("[1, 2, 3]")
-    assert _fc.get_cached_tenant_name("tenant-Z", local_dir=str(tmp_path / "bad")) == ""
+    assert _fc.get_cached_tenant_name("00000000-0000-0000-0000-0000000000ab", local_dir=str(tmp_path / "bad")) == ""
     # Empty inputs are no-ops (nothing cached, nothing returned).
     _fc.cache_tenant_name("", "Contoso", local_dir=d)
     _fc.cache_tenant_name("tenant-W", "", local_dir=d)
@@ -182,18 +255,18 @@ def test_cache_tenant_name_round_trip_and_guards(tmp_path):
 
 def test_explicit_instance_id_overrides_persisted(monkeypatch):
     monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
-    ident = adk.set_identity(tenant_id="tenant-Z", instance_id="explicit-2")
+    ident = adk.set_identity(tenant_id="00000000-0000-0000-0000-0000000000ab", instance_id="explicit-2")
     assert ident["instance_id"] == "explicit-2"
 
 
 def test_identity_flows_into_dimensions(monkeypatch):
     monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
-    adk.set_identity(tenant_id="tenant-Z", instance_id="inst-9")
+    adk.set_identity(tenant_id="00000000-0000-0000-0000-0000000000ab", instance_id="inst-9")
     dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
     assert "developer_id" not in dims
     assert dims["instance_id"] == "inst-9"
     # tenant_id is emitted RAW (approved Data Profile: OII, no transformation).
-    assert dims["tenant_id"] == "tenant-Z"
+    assert dims["tenant_id"] == "00000000-0000-0000-0000-0000000000ab"
 
 
 # --- tenant_class (internal vs customer; ADO 7558661) ---------------------
@@ -221,6 +294,64 @@ def test_classify_tenant_env_allowlist_extends(monkeypatch):
     assert _fc.classify_tenant(_fc.MICROSOFT_CORP_TENANT_ID) == "internal"
     # an unrelated tenant is still customer
     assert _fc.classify_tenant("11111111-1111-1111-1111-111111111111") == "customer"
+
+
+def test_classify_tenant_non_guid_maps_to_unknown():
+    # Defense-in-depth: a non-empty tenant_id that isn't a canonical Entra
+    # tenant GUID must NEVER classify as "customer" — otherwise the External
+    # dashboard silently absorbs fixture / placeholder / garbage values into
+    # the customer bucket (the exact regression that produced 391 fixture
+    # leak events in prod before the autouse conftest guard landed). This is
+    # a second safety net on top of _sanitize_tenant_id at set_identity
+    # ingress: even if a bad value bypasses the sanitizer (test that
+    # overrides ESS_ADK_TELEMETRY, hand-edited cache file, future caller
+    # that skips set_identity entirely), classify_tenant still labels it
+    # "unknown" so it's excluded from customer usage counts.
+    assert _fc.classify_tenant("tenant-id") == "unknown"       # fixture leak
+    assert _fc.classify_tenant("unknown") == "unknown"          # sentinel
+    assert _fc.classify_tenant("Contoso") == "unknown"          # display name
+    assert _fc.classify_tenant("11111111-1111-1111-1111-11111") == "unknown"  # short
+
+
+def test_guid_re_matches_adk_telemetry():
+    # adk_telemetry._GUID_RE and flightcheck.telemetry._GUID_RE must stay in
+    # lock-step (this module cannot import from adk_telemetry, so the regex
+    # is duplicated). A drift would let one entry point accept a value the
+    # other rejects.
+    assert adk._GUID_RE.pattern == _fc._GUID_RE.pattern
+
+
+def test_get_cached_tenant_id_rejects_non_guid_legacy_string(tmp_path):
+    # The legacy raw-string compatibility shim in get_cached_tenant_id must
+    # validate against _GUID_RE before returning — otherwise a torn /
+    # hand-edited / garbage .tenant_id file would ride onto real events.
+    d = tmp_path / "state"
+    d.mkdir()
+    (d / _fc._TENANT_ID_FILE).write_text("tenant-id", encoding="utf-8")
+    assert _fc.get_cached_tenant_id(local_dir=str(d)) == ""
+    # A canonical raw-string GUID (older ADK builds) is still honored.
+    (d / _fc._TENANT_ID_FILE).write_text(
+        "ABCDEF01-2345-6789-abcd-ef0123456789", encoding="utf-8"
+    )
+    assert (
+        _fc.get_cached_tenant_id(local_dir=str(d))
+        == "abcdef01-2345-6789-abcd-ef0123456789"
+    )
+
+
+def test_common_dimensions_sanitizes_explicit_tenant_id_kwarg(monkeypatch):
+    # Single choke point: EVERY tenant_id source (explicit kwarg included)
+    # is sanitized in common_dimensions, so an emit_* helper that forwards
+    # a caller-supplied non-GUID never lands in the customer bucket.
+    monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
+    dims = adk.common_dimensions(adk.SURFACE_CLI, tenant_id="tenant-id")
+    assert dims["tenant_id"] == ""
+    assert dims["tenant_class"] == _fc.TENANT_CLASS_UNKNOWN
+    # A well-formed GUID is preserved (and lowercased).
+    dims = adk.common_dimensions(
+        adk.SURFACE_CLI, tenant_id="ABCDEF01-2345-6789-abcd-ef0123456789"
+    )
+    assert dims["tenant_id"] == "abcdef01-2345-6789-abcd-ef0123456789"
 
 
 def test_tenant_class_flows_into_dimensions(monkeypatch):
@@ -592,3 +723,147 @@ def test_classify_deploy_target_unknown_or_empty_defaults_to_production():
 def test_classify_deploy_target_is_case_and_whitespace_insensitive():
     assert adk.classify_deploy_target("  sAnDbOx  ") == "sandbox"
     assert adk.classify_deploy_target(" PRODUCTION ") == "production"
+
+
+# --- subprocess-spawn regression (SKILL.md shim path) ---------------------
+def test_emit_capability_shim_subprocess_stamps_cached_tenant_id(tmp_path):
+    """A *fresh* subprocess launched by SKILL.md must stamp tenant_id.
+
+    Reproduces the regression that motivated PR #237: SKILL.md invokes
+    ``python scripts/emit_capability.py <cap>`` from the maker's shell — a
+    brand-new interpreter that never calls ``set_identity`` yet must still
+    emit ``adk.capability.use`` events carrying the maker's tenant_id so
+    they land on the customer-filtered dashboard. The on-disk
+    ``.local/.tenant_id`` cache written by an earlier ``set_identity`` call
+    (in the parent auth flow) is the only bridge across the process
+    boundary. If we ever regress the ``common_dimensions`` fallback (e.g.
+    someone re-adds a "tenant_id is None -> return ''" short-circuit),
+    this test catches it end-to-end without any monkeypatching of the
+    telemetry module.
+
+    Transport is intentionally broken by pointing ``HTTPS_PROXY`` at a dead
+    localhost port so the POST fails and the event lands in the on-disk
+    ``telemetry-buffer.ndjson`` where we can inspect ``.data.tenant_id``.
+    Sync mode keeps the emit on the calling thread — no daemon-thread race.
+    """
+    import os as _os
+    import subprocess as _sp
+
+    scripts_dir = _os.path.abspath(
+        _os.path.join(
+            _os.path.dirname(__file__),
+            "..",
+            "solutions",
+            "ess-maker-skills",
+            "scripts",
+        )
+    )
+    shim = _os.path.join(scripts_dir, "emit_capability.py")
+    assert _os.path.exists(shim), shim
+
+    # Parent flow: seed the on-disk tenant_id cache with a canonical GUID.
+    local_dir = tmp_path / ".local"
+    local_dir.mkdir()
+    (local_dir / _fc._TENANT_ID_FILE).write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "tenant_id": "00000000-0000-0000-0000-0000000000ab",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    home = tmp_path / "home"
+    home.mkdir()
+    env = {
+        **_os.environ,
+        "USERPROFILE": str(home),
+        "HOME": str(home),
+        # Force POST to fail so the event is buffered to disk (where we
+        # can read it back).
+        "HTTPS_PROXY": "http://127.0.0.1:1",
+        "HTTP_PROXY": "http://127.0.0.1:1",
+        "ESS_ADK_TELEMETRY": "on",
+        "ESS_ADK_TELEMETRY_SYNC": "1",
+        "ESS_ADK_ARIA_ENV": "dev",
+    }
+    # Some CI hosts inject a NO_PROXY that would exempt the OneCollector
+    # endpoint from the fake proxy — drop it so HTTPS_PROXY actually applies.
+    env.pop("NO_PROXY", None)
+    env.pop("no_proxy", None)
+
+    result = _sp.run(
+        [__import__("sys").executable, shim, "setup"],
+        cwd=str(tmp_path),
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert result.returncode == 0, (result.stdout, result.stderr)
+
+    buf_path = home / ".adk" / "telemetry-buffer.ndjson"
+    assert buf_path.exists(), (
+        f"expected {buf_path} to be created by the shim; stdout={result.stdout!r}"
+        f" stderr={result.stderr!r}"
+    )
+    lines = [
+        line for line in buf_path.read_text(encoding="utf-8").splitlines() if line
+    ]
+    assert lines, "buffer file is empty"
+    ev = json.loads(lines[-1])
+    data = ev.get("data", {})
+    assert data.get("tenant_id") == "00000000-0000-0000-0000-0000000000ab", data
+    assert data.get("adk_capability") == "setup", data
+
+
+# --- tenant-id sanitization (test-fixture leak defense) --------------------
+# Historical bug: tests that monkey-patched ``auth.discover_tenant`` to return
+# the literal string ``"tenant-id"`` (or that let it fall through the auth
+# path with a similarly non-GUID value) shipped real ``adk.*`` events to the
+# prod Aria cube during CI/local runs. Those events classified as ``customer``
+# (since ``"tenant-id"`` is neither the Microsoft nor EmployeeHub GUID) and
+# polluted the ``backup_template_configs`` / ``restore_template_configs``
+# customer usage counts. The autouse ``_disable_adk_telemetry`` fixture in
+# ``tests/conftest.py`` is the primary defense (short-circuits at
+# ``telemetry_enabled()``); this sanitizer in ``set_identity`` is the second
+# layer so that even if a future test overrides that env var, a bad
+# ``tenant_id`` still can't reach the wire.
+def test_set_identity_normalizes_non_guid_tenant_id_to_empty(monkeypatch):
+    monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
+    ident = adk.set_identity(tenant_id="tenant-id")  # the historical leak value
+    assert ident["tenant_id"] == ""
+    # common_dimensions must NOT stamp a bad tenant on the event either.
+    dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
+    assert dims["tenant_id"] == ""
+    # classify_tenant then labels the event as "unknown" (excluded from the
+    # customer bucket on the External dashboard).
+    assert _fc.classify_tenant(dims["tenant_id"]) == "unknown"
+
+
+def test_set_identity_accepts_canonical_guid_and_normalizes_case(monkeypatch):
+    monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
+    # Mixed-case + surrounding whitespace round-trip to lowercase, dashes preserved.
+    ident = adk.set_identity(tenant_id="  ABCDEF01-2345-6789-ABCD-EF0123456789  ")
+    assert ident["tenant_id"] == "abcdef01-2345-6789-abcd-ef0123456789"
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "tenant-id",                              # historical fixture leak
+        "unknown",                                # sentinel string
+        "abcdef01-2345-6789-abcd-ef012345678",    # 11-char trailing group (short)
+        "abcdef012345-6789-abcd-ef0123456789",    # dash in wrong offset
+        "gggggggg-gggg-gggg-gggg-gggggggggggg",   # non-hex
+        "Contoso",                                # display name accidentally routed here
+    ],
+)
+def test_sanitize_tenant_id_rejects_non_guid(bad):
+    assert adk._sanitize_tenant_id(bad) == ""
+
+
+def test_sanitize_tenant_id_preserves_empty():
+    assert adk._sanitize_tenant_id("") == ""
+    assert adk._sanitize_tenant_id("   ") == ""

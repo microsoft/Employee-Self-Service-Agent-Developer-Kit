@@ -66,6 +66,8 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
+import tempfile
 import uuid
 from datetime import datetime, timezone
 from functools import lru_cache
@@ -121,6 +123,17 @@ TENANT_CLASS_INTERNAL = "internal"
 TENANT_CLASS_CUSTOMER = "customer"
 TENANT_CLASS_UNKNOWN = "unknown"
 
+# Canonical Entra tenant GUID (8-4-4-4-12 lowercase hex). Used by
+# ``get_cached_tenant_id`` to validate the legacy raw-string cache format
+# so a torn / hand-edited / garbage ``.tenant_id`` file can never leak onto
+# real events. Duplicated from ``adk_telemetry._GUID_RE`` (this module
+# cannot import from adk_telemetry — the dependency direction goes the
+# other way); the two regexes are kept in lock-step by a regression test
+# in ``test_adk_telemetry.py``.
+_GUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+
 
 def _internal_tenant_ids() -> frozenset[str]:
     """Allow-list of tenant GUIDs treated as internal Microsoft tenancy.
@@ -146,16 +159,33 @@ def classify_tenant(tenant_id: str) -> str:
     """Map a raw Entra tenant GUID to ``internal`` | ``customer`` | ``unknown``.
 
     Empty / missing tenant -> ``unknown`` (we never guess). A tenant in the
-    internal allow-list -> ``internal``; anything else is an external
-    ``customer``. Case/whitespace-insensitive.
+    internal allow-list -> ``internal``. Any well-formed non-internal Entra
+    tenant GUID -> ``customer``. Case/whitespace-insensitive.
+
+    Defense-in-depth: a non-empty ``tenant_id`` that is **not** a canonical
+    Entra tenant GUID (test-fixture placeholders like ``"tenant-id"``, org
+    display names accidentally routed here, truncated / garbage values that
+    escaped ``set_identity``'s sanitizer, hand-edited cache files) maps to
+    ``unknown`` rather than ``customer``. Without this guard the External
+    dashboard's ``tenant_class == "customer"`` filter would silently absorb
+    any such value into the customer bucket — the exact failure mode that
+    produced 391 fixture-leak events in prod before the autouse conftest
+    guard landed. Aligns with the guarantee ``adk_telemetry._sanitize_tenant_id``
+    already gives at the identity ingress layer, and the same _GUID_RE
+    validation ``get_cached_tenant_id`` applies to the on-disk cache.
+
+    The internal allow-list is checked BEFORE the GUID shape check so that
+    non-GUID strings added to ``ESS_ADK_INTERNAL_TENANTS`` (e.g. a
+    non-canonical CI marker) still classify as ``internal``.
     """
     if not tenant_id:
         return TENANT_CLASS_UNKNOWN
-    return (
-        TENANT_CLASS_INTERNAL
-        if str(tenant_id).strip().lower() in _internal_tenant_ids()
-        else TENANT_CLASS_CUSTOMER
-    )
+    v = str(tenant_id).strip().lower()
+    if v in _internal_tenant_ids():
+        return TENANT_CLASS_INTERNAL
+    if not _GUID_RE.match(v):
+        return TENANT_CLASS_UNKNOWN
+    return TENANT_CLASS_CUSTOMER
 
 
 def _env_disabled() -> bool:
@@ -257,7 +287,10 @@ _TENANT_NAME_FILE = ".tenant_name"
 
 
 def cache_tenant_name(
-    tenant_id: str, tenant_name: str, local_dir: str = ".local"
+    tenant_id: str,
+    tenant_name: str,
+    local_dir: str = ".local",
+    source: str = "organization",
 ) -> None:
     """Persist the resolved org display name for reuse by later ADK events.
 
@@ -266,16 +299,147 @@ def cache_tenant_name(
     ``(tenant_id, tenant_name)`` pair. ``tenant_name`` is OII (org display
     name); it is written under the gitignored ``.local/`` dir on the maker's
     own machine, mirroring how ``.instance_id`` is persisted.
+
+    ``source`` records where the name came from. ``"organization"`` means it
+    came from Graph's ``/organization`` endpoint — the authoritative source.
+    ``"me"`` means it came from ``/me?$select=companyName``, which is a
+    per-user attribute (some tenants leave it unset or use a different
+    display value than the org record). A cached ``"organization"`` entry
+    is never overwritten by an ``"me"`` entry for the same tenant, so a
+    single unlucky call can't downgrade the label the whole dashboard uses.
+    A same-tenant write with the *same or better* source (organization ≥ me)
+    always wins.
     """
     if not tenant_id or not tenant_name:
         return
     path = os.path.join(local_dir, _TENANT_NAME_FILE)
+    _rank = {"organization": 2, "me": 1}
+    new_rank = _rank.get(source, 0)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            existing = json.load(f)
+        if (
+            isinstance(existing, dict)
+            and existing.get("tenant_id") == tenant_id
+            and _rank.get(existing.get("source", "organization"), 0) > new_rank
+        ):
+            return
+    except (OSError, ValueError):
+        pass
     try:
         os.makedirs(local_dir, exist_ok=True)
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump({"tenant_id": tenant_id, "tenant_name": tenant_name}, f)
+        # Atomic write via tempfile + os.replace, matching cache_tenant_id.
+        # A concurrent reader (a sibling emit_capability.py subprocess spawned
+        # from a SKILL.md step) must never see a truncated file — otherwise
+        # the reader would fall back to a blank tenant_name for the whole
+        # session, undoing the very cache we're populating.
+        payload = {
+            "tenant_id": tenant_id,
+            "tenant_name": tenant_name,
+            "source": source,
+        }
+        fd, tmp = tempfile.mkstemp(prefix=".tenant_name.", dir=local_dir)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f)
+            os.replace(tmp, path)
+        except OSError:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
     except OSError:
         pass
+
+
+# Persisted raw tenant GUID so ADK events emitted from a *fresh Python
+# subprocess* (e.g. `python scripts/emit_capability.py <cap>` invoked from a
+# SKILL.md step) can still stamp the tenant_id — without this, the subprocess'
+# in-memory ``_IDENTITY["tenant_id"]`` is empty, ``classify_tenant("")`` returns
+# ``unknown``, and the event never lands on the External (``tenant_class ==
+# "customer"``) dashboard. Separate file from ``.tenant_name`` because tenant_id
+# is available before (and even without) any Graph tenant-name resolution.
+_TENANT_ID_FILE = ".tenant_id"
+
+
+def cache_tenant_id(tenant_id: str, local_dir: str = ".local") -> None:
+    """Persist the raw tenant GUID for reuse by later same-install processes.
+
+    Best-effort: any IO error is swallowed (telemetry must never break a
+    flow). No-op when ``tenant_id`` is empty — we never persist a placeholder.
+    The value is written under the gitignored ``.local/`` dir on the maker's
+    own machine, mirroring how ``.instance_id`` is persisted. Overwrites any
+    prior value so a maker who switches tenants sees the latest one.
+
+    Write is atomic (``tempfile`` + ``os.replace``) so a concurrent reader
+    can never observe a truncated / half-written file — otherwise the reader
+    would silently see ``""`` and stamp the event as anonymous. Stored as
+    versioned JSON so a torn / legacy write from an older ADK build is
+    recognizable and discarded on read.
+    """
+    if not tenant_id:
+        return
+    path = os.path.join(local_dir, _TENANT_ID_FILE)
+    payload = {"version": 1, "tenant_id": str(tenant_id).strip()}
+    try:
+        os.makedirs(local_dir, exist_ok=True)
+        # tempfile.NamedTemporaryFile with delete=False so we can rename it in
+        # place with os.replace, which is atomic on POSIX AND Windows.
+        fd, tmp = tempfile.mkstemp(prefix=".tenant_id.", dir=local_dir)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                json.dump(payload, f)
+            os.replace(tmp, path)
+        except OSError:
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    except OSError:
+        pass
+
+
+def get_cached_tenant_id(local_dir: str = ".local") -> str:
+    """Return the persisted tenant GUID, or ``""`` if unavailable/unreadable.
+
+    Reads the versioned JSON produced by ``cache_tenant_id`` and validates
+    the schema before returning the value. A missing / malformed / wrong-
+    schema-version file returns ``""`` — the caller's fallback path treats
+    that as "no cache" and either uses the in-memory identity or lets
+    ``classify_tenant`` label the event ``"unknown"``. That is safer than
+    returning a torn / legacy raw string that would silently ride onto
+    real events.
+
+    A very small compatibility shim recognizes the pre-versioning raw-string
+    format (a single line whose contents look like a canonical GUID) so a
+    maker who upgrades mid-session doesn't lose their cached tenant. The
+    raw string is validated against ``_GUID_RE`` (case-insensitive) before
+    being returned; any other content (truncated GUID, non-hex, garbage,
+    JSON at a future schema version) is discarded.
+    """
+    path = os.path.join(local_dir, _TENANT_ID_FILE)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            raw = f.read().strip()
+    except OSError:
+        return ""
+    if not raw:
+        return ""
+    if raw.startswith("{"):
+        try:
+            obj = json.loads(raw)
+        except ValueError:
+            return ""
+        if not isinstance(obj, dict) or obj.get("version") != 1:
+            return ""
+        return str(obj.get("tenant_id", "")).strip()
+    # Legacy raw-string format from pre-versioned ADK builds: only trust the
+    # value when it matches the canonical GUID shape. Otherwise return ""
+    # and let the caller's fallback path (or classify_tenant) treat it as
+    # unknown — never leak a torn / hand-edited / garbage cache onto real
+    # events. Matches the docstring guarantee above.
+    v = raw.lower()
+    return v if _GUID_RE.match(v) else ""
 
 
 def get_cached_tenant_name(tenant_id: str, local_dir: str = ".local") -> str:
