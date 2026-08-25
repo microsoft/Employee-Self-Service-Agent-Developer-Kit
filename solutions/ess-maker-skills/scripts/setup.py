@@ -486,6 +486,38 @@ def _build_flow_topic_map(topics, topic_data):
     return result
 
 
+# Setup state (`.local/setup/config.json`, owned by setup_state.py) records the
+# LOCKED environment identity resolved during SETUP-01: its GUID, display name,
+# type, and tenant endpoint. `.local/config.json` historically recorded only the
+# org URL (`dataverseEndpoint`); we read the GUID back here so downstream
+# consumers — the planner's /setup output capture and flightcheck — get a stable
+# `environmentId`, not just the URL. Read-only crossover: setup_state.py stays
+# the sole writer of setup state.
+SETUP_STATE_PATH = os.path.join(".local", "setup", "config.json")
+
+
+def _locked_environment(endpoint):
+    """Best-effort read of the locked environment identity from setup state.
+
+    Returns ``{"id", "name"}`` for the locked environment when its
+    ``tenant_endpoint`` matches ``endpoint`` (so we only stamp the GUID for the
+    environment we are actually adopting into), else ``{}``. Never raises —
+    setup must still write config.json when setup state is absent or unreadable.
+    """
+    try:
+        with open(SETUP_STATE_PATH, "r", encoding="utf-8") as fh:
+            state = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return {}
+    env = state.get("environment") if isinstance(state, dict) else None
+    if not isinstance(env, dict):
+        return {}
+    tenant = (env.get("tenant_endpoint") or "").rstrip("/")
+    if endpoint and tenant and tenant != endpoint.rstrip("/"):
+        return {}
+    return {"id": env.get("id") or "", "name": env.get("name") or ""}
+
+
 def write_config(agent_info, slug, output_dir, template_configs_discovered,
                  template_config_count=0, workflow_count=0,
                  evaluation_count=0):
@@ -554,6 +586,20 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
         "workflowCount": workflow_count,
         "evaluationCount": evaluation_count,
     }
+
+    # Stamp the resolved environment GUID + display name from the locked setup
+    # state (the canonical resolved identity). config.json recorded only the org
+    # URL before; downstream consumers (planner /setup output capture,
+    # flightcheck) need the stable environmentId to reference the environment
+    # (WeveNova, for one, rejects an Environment output with no id). Fall back to
+    # any id already present in the existing config when setup state is absent.
+    locked = _locked_environment(agent_info["url"])
+    env_id = locked.get("id") or existing.get("environmentId")
+    env_name = locked.get("name") or existing.get("environmentName")
+    if env_id:
+        config["environmentId"] = env_id
+    if env_name:
+        config["environmentName"] = env_name
 
     # Preserve existing connections and other user-set fields
     for key in ("connections", "workdayTestEmployeeId", "referenceSource", "environmentSku"):

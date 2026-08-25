@@ -20,6 +20,7 @@ from planner.plan_model import (
     assignee_user_oid,
     context_entry,
     new_task,
+    order_tasks_by_dependency,
     plan_artifact,
     principal_person,
     principal_pool,
@@ -267,6 +268,83 @@ def test_tasks_for_person_groups_by_role_and_relation():
     assert grouped["integration-owner"][0]["relation"] == "pool"
     assert grouped["eval-author"][0]["relation"] == "assigned"
     assert grouped["eval-author"][0]["task"]["id"] == "P2"
+
+
+# --------------------------------------------------------------------------- #
+# Dependency ordering (produces -> consumes)
+# --------------------------------------------------------------------------- #
+
+def test_order_tasks_by_dependency_producer_before_consumer():
+    # The reported case: the readiness check consumes `primaryEnvironment`, which
+    # the setup task produces — so setup must render first even though it is
+    # authored second.
+    flightcheck = new_task("fc", "Check environment readiness",
+                           produces=["readinessReport"], consumes=["primaryEnvironment"])
+    setup = new_task("setup", "Run setup to onboard the kit",
+                     produces=["primaryEnvironment", "essAgent"], consumes=["essAgentInstalled"])
+    ordered = order_tasks_by_dependency([flightcheck, setup])
+    assert [t["id"] for t in ordered] == ["setup", "fc"]
+
+
+def test_order_tasks_by_dependency_keeps_learn_order_when_independent():
+    a = new_task("a", "A", produces=["x"])
+    b = new_task("b", "B", produces=["y"])
+    c = new_task("c", "C")  # no produces/consumes edges at all
+    ordered = order_tasks_by_dependency([a, b, c])
+    assert [t["id"] for t in ordered] == ["a", "b", "c"]  # authoring order preserved
+
+
+def test_order_tasks_by_dependency_ignores_externally_satisfied_consumes():
+    # `primaryEnvironment` is consumed but produced by no task in the set — an
+    # already-satisfied external prerequisite, so it introduces no reordering.
+    a = new_task("a", "A", consumes=["primaryEnvironment"])
+    b = new_task("b", "B", produces=["readinessReport"])
+    ordered = order_tasks_by_dependency([a, b])
+    assert [t["id"] for t in ordered] == ["a", "b"]
+
+
+def test_order_tasks_by_dependency_chains_transitively():
+    # c produces what b consumes; b produces what a consumes -> c, b, a.
+    a = new_task("a", "A", consumes=["b-out"])
+    b = new_task("b", "B", produces=["b-out"], consumes=["c-out"])
+    c = new_task("c", "C", produces=["c-out"])
+    ordered = order_tasks_by_dependency([a, b, c])
+    assert [t["id"] for t in ordered] == ["c", "b", "a"]
+
+
+def test_order_tasks_by_dependency_tolerates_weve_shape():
+    # WeveNova task dicts use PascalCase keys — ordering must still work on them.
+    consumer = {"TaskId": "c", "Produces": [], "Consumes": ["primaryEnvironment"]}
+    producer = {"TaskId": "p", "Produces": ["primaryEnvironment"], "Consumes": []}
+    ordered = order_tasks_by_dependency([consumer, producer])
+    assert [t["TaskId"] for t in ordered] == ["p", "c"]
+
+
+def test_order_tasks_by_dependency_breaks_cycle_without_dropping():
+    a = new_task("a", "A", produces=["x"], consumes=["y"])
+    b = new_task("b", "B", produces=["y"], consumes=["x"])
+    ordered = order_tasks_by_dependency([a, b])
+    assert {t["id"] for t in ordered} == {"a", "b"}  # both kept despite the cycle
+    assert len(ordered) == 2
+
+
+def test_order_tasks_by_dependency_returns_same_objects():
+    a = new_task("a", "A", consumes=["x"])
+    b = new_task("b", "B", produces=["x"])
+    ordered = order_tasks_by_dependency([a, b])
+    assert ordered[0] is b and ordered[1] is a  # identity preserved for map-back
+
+
+def test_render_summary_lists_tasks_in_dependency_order():
+    plan = Plan.new(objective="Deploy ESS in Bangalore")
+    plan.add_task(new_task("fc", "Check environment readiness",
+                           assigned_to=principal_pool("power-platform-admin"),
+                           produces=["readinessReport"], consumes=["primaryEnvironment"]))
+    plan.add_task(new_task("setup", "Run setup to onboard the kit",
+                           assigned_to=principal_pool("power-platform-admin"),
+                           produces=["primaryEnvironment"], consumes=["essAgentInstalled"]))
+    md = plan.render_summary()
+    assert md.index("Run setup to onboard the kit") < md.index("Check environment readiness")
 
 
 # --------------------------------------------------------------------------- #

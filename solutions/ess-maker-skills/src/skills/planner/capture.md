@@ -93,10 +93,28 @@ Once pinned, a later Task reads the value straight from the Plan — no
 re-discovery. Example: the eval author's Task consumes `primaryEnvironment`, so
 they read the `environmentId` from the summary/plan rather than hunting for it.
 
+## How completion persists outputs to WeveNova
+
+With `--store mcp`, completing a Task that produced outputs is a **single bulk
+call**: the CLI transitions `NotStarted → InProgress` if needed, then calls
+WeveNova's `complete_project_plan_task` carrying **all** the Task's pinned
+(`Active`) outputs in one array — WeveNova records outputs only at completion, so
+this one call both finishes the Task and persists its artifacts (it is not one
+call per output, and outputs are never pushed by a plain state change). The
+output `kind` is clamped to WeveNova's enum (`Environment`, `Connection`,
+`KnowledgeSource`, `Custom`); richer local kinds like `EntraApp`/`Agent` fold to
+`Custom` on the wire while the local plan keeps the precise kind. After the push
+the CLI re-fetches the authoritative plan and re-renders `plan.json` +
+`ESS-scenario-plan.md`. A pinned output whose producing Task isn't `Completed`
+yet stays local until that Task completes.
+
 ## Progress
 
+- With `--store mcp`, confirm the WeveNova plan is **Active** before starting,
+  completing, or cancelling a task. If it is Draft, stop and have the plan
+  resource owner activate it; do not retry the task mutation as an ETag conflict.
 - Advance Task state as work happens:
-  `python scripts/planner/cli.py set-state --task <T#> --state InProgress|Completed`.
+  `python scripts/planner/cli.py set-state --task <T#> --state InProgress|Completed|Cancelled`.
 - Completing a Task whose `produces` keys are now pinned can unblock downstream
   Tasks that `consume` them — point that out to the sponsor.
 - Show `python scripts/planner/cli.py summary` so "where are we" is answerable

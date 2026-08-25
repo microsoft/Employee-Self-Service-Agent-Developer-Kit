@@ -1,0 +1,24 @@
+{
+  "@odata.context": "https://localhost:444/weveb2/api/beta/$metadata#me/AgentConfigurationProjects('f9558815-21a6-400c-b2e8-01d8c7a63d33')/AgentPlans('d84948e1-c8b3-434a-a811-f1d9d66d3d39')/AgentPlanTasks/$entity",
+  "TaskId": "92f47d60-fa6a-4210-ad3a-d2789e234022",
+  "PlanId": "d84948e1-c8b3-434a-a811-f1d9d66d3d39",
+  "Title": "author evals",
+  "Description": "Eval author consumes the provisioned environment id from the plan",
+  "AssignedToId": null,
+  "AssignedToRoleId": null,
+  "Produces": [],
+  "Consumes": [
+    "primaryEnvironment"
+  ],
+  "State": "Completed",
+  "CreatedAt": "2026-08-13T11:22:31.0643419Z",
+  "UpdatedAt": "2026-08-13T11:22:50.3566566Z",
+  "ETag": "W/\"3\"",
+  "AssignedTo": null,
+  "UpdatedBy": {
+    "Id": "3541af92-2c5d-4b4a-aad8-5f257de3244d",
+    "Type": "User",
+    "DisplayName": "default",
+    "DirectoryRef": null
+  }
+}

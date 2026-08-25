@@ -168,8 +168,8 @@ exactly what the eager eval preview renders as golden prompts (below).
 The **role** for each Task comes from the Learn docs (Phase 1), not the sponsor.
 The sponsor's only assignment decision is *who* the person is (Phase 4). If a
 prerequisite's role is genuinely unclear from the docs, fall back to a
-conservative default (e.g. `power-platform-admin`) and note it — don't turn it
-into an interview question.
+conservative default (e.g. `Power Platform Administrator` — the exact WeveNova
+role id) and note it — don't turn it into an interview question.
 
 ## Eager eval preview — render golden prompts once scenarios + goals are captured
 

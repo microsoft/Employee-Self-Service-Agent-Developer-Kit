@@ -42,6 +42,7 @@ from planner.plan_model import (
     SCENARIO_GROUP,
     Plan,
     new_task,
+    order_tasks_by_dependency,
     plan_artifact,
     principal_person,
     principal_pool,
@@ -54,8 +55,49 @@ def _csv(value: str | None) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def _canonical_role(role: str | None) -> str | None:
+    """Normalise a role to its exact WeveNova wire id when the registry
+    recognises it (so a display name / casing variant like ``Workday
+    Administrator`` or ``environment maker`` becomes ``WorkdayAdmin`` /
+    ``Environment Maker``). An unrecognised role is passed through verbatim — the
+    absent-safe local store still accepts free-form roles."""
+    if not role:
+        return role
+    from planner.roles import DEFAULT_REGISTRY
+
+    hit = DEFAULT_REGISTRY.find(role)
+    return hit.role if hit else role
+
+
+def _store(args: argparse.Namespace):
+    """Build the Plan store for this invocation (local file, or WeveNova MCP)."""
+    from planner.plan_store import PlanStoreError, make_store
+
+    backend = getattr(args, "store", None) or os.environ.get("PLANNER_STORE", "local")
+    try:
+        return make_store(
+            backend=backend,
+            plan_path=args.plan,
+            mcp_server=getattr(args, "mcp_server", "weve-plan"),
+            mcp_config=getattr(args, "mcp_config", os.path.join(".vscode", "mcp.json")),
+            project_id=getattr(args, "project_id", None),
+            plan_id=getattr(args, "plan_id", None),
+        )
+    except PlanStoreError as exc:
+        raise SystemExit(f"plan store error: {exc}")
+
+
 def _load(args: argparse.Namespace) -> Plan:
-    return Plan.load_or_new(args.plan)
+    from planner.plan_store import PlanStoreError
+
+    store = _store(args)
+    try:
+        plan = store.load()
+    except PlanStoreError as exc:
+        raise SystemExit(f"cannot load the plan: {exc}")
+    for warning in getattr(store, "warnings", []):
+        print(f"warning: {warning}", file=sys.stderr)
+    return plan
 
 
 class PlanInvalidError(Exception):
@@ -67,13 +109,20 @@ class PlanInvalidError(Exception):
 
 
 def _save(plan: Plan, args: argparse.Namespace) -> None:
-    """Validate, then atomically persist — never overwrite the authoritative
-    plan with a document that ``validate`` would reject (over-limit collections,
-    invalid artifact kinds/states, orphan artifacts, ...)."""
+    """Validate, then persist through the active store — never persist a document
+    that ``validate`` would reject (over-limit collections, invalid artifact
+    kinds/states, orphan artifacts, ...). The store also (re)renders the ``.md``.
+    Any non-fatal store notices are printed to stderr."""
+    from planner.plan_store import PlanStoreError
+
     errors = plan.validate()
     if errors:
         raise PlanInvalidError(errors)
-    plan.save_all(args.plan)
+    try:
+        for notice in _store(args).save(plan):
+            print(f"note: {notice}", file=sys.stderr)
+    except PlanStoreError as exc:
+        raise SystemExit(f"cannot save the plan: {exc}")
 
 
 # --------------------------------------------------------------------------- #
@@ -81,6 +130,42 @@ def _save(plan: Plan, args: argparse.Namespace) -> None:
 # --------------------------------------------------------------------------- #
 
 def cmd_init(args: argparse.Namespace) -> int:
+    backend = getattr(args, "store", None) or os.environ.get("PLANNER_STORE", "local")
+    if backend == "mcp":
+        # ``init`` is the one command allowed to create the *first* WeveNova plan
+        # for a project that has none yet (a brand-new project, or one whose only
+        # plan is archived so discovery finds none). An existing plan is reused
+        # untouched — never recreated, since a blind reconcile would drop its
+        # tasks. Binding the plan up front the way the other commands do can't do
+        # this (it errors when no plan exists), so use the project-first
+        # open-or-create seam.
+        from planner.plan_store import PlanStoreError, open_or_create_mcp_plan
+
+        try:
+            store, created = open_or_create_mcp_plan(
+                plan_path=args.plan,
+                mcp_server=getattr(args, "mcp_server", "weve-plan"),
+                mcp_config=getattr(args, "mcp_config", os.path.join(".vscode", "mcp.json")),
+                project_id=getattr(args, "project_id", None),
+                plan_id=getattr(args, "plan_id", None),
+                objective=getattr(args, "objective", None),
+            )
+            plan = store.load()
+        except PlanStoreError as exc:
+            raise SystemExit(f"plan store error: {exc}")
+        for warning in getattr(store, "warnings", []):
+            print(f"warning: {warning}", file=sys.stderr)
+        plan.write_summary(store.summary_path)
+        if created:
+            print(
+                f"Created a new WeveNova project plan ({store.plan_id}); rendered the plan view."
+            )
+        else:
+            print(
+                f"Using the existing WeveNova project plan ({store.plan_id}, owned upstream); "
+                "rendered the plan view."
+            )
+        return 0
     if os.path.exists(args.plan) and not args.force:
         print(f"A plan already exists at {args.plan}. Use --force to overwrite.", file=sys.stderr)
         return 1
@@ -163,10 +248,11 @@ def cmd_add_system(args: argparse.Namespace) -> int:
 def cmd_add_task(args: argparse.Namespace) -> int:
     plan = _load(args)
     assigned: dict | None = None
+    role = _canonical_role(args.role)
     if args.person:
-        assigned = principal_person(args.person, role_id=args.role)
-    elif args.role:
-        assigned = principal_pool(args.role)
+        assigned = principal_person(args.person, role_id=role)
+    elif role:
+        assigned = principal_pool(role)
     plan.add_task(
         new_task(
             args.id,
@@ -206,9 +292,10 @@ def cmd_remove_task(args: argparse.Namespace) -> int:
 
 def cmd_assign(args: argparse.Namespace) -> int:
     plan = _load(args)
-    plan.assign_task(args.task, role_id=args.role, person_oid=args.person)
+    role = _canonical_role(args.role)
+    plan.assign_task(args.task, role_id=role, person_oid=args.person)
     _save(plan, args)
-    who = args.person or f"{args.role} (pool)"
+    who = args.person or f"{role} (pool)"
     print(f"Assigned {args.task!r} to {who}")
     return 0
 
@@ -376,6 +463,11 @@ def cmd_mine(args: argparse.Namespace) -> int:
         return 0
     print(f"You hold {len(grouped)} role(s) with tasks:\n")
     for role, items in grouped.items():
+        # Within each role, order producers ahead of the tasks that consume what
+        # they produce; independent tasks keep their Learn order.
+        ordered = order_tasks_by_dependency([it["task"] for it in items])
+        rank = {id(t): i for i, t in enumerate(ordered)}
+        items = sorted(items, key=lambda it: rank[id(it["task"])])
         print(f"[{role}]")
         for item in items:
             task = item["task"]
@@ -447,6 +539,118 @@ def cmd_summary(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_pull(args: argparse.Namespace) -> int:
+    """Fetch the plan from the active store and (re)materialize the local
+    ``ESS-scenario-plan.md`` view.
+
+    This is how the planner **resumes a WeveNova-backed plan**: with ``--store
+    mcp`` it reads the configured project plan (context, outputs, status) and its
+    tasks from the ``weve-plan`` MCP server — the plan for the project/agent being
+    configured — and writes the human view locally so the sponsor can read it.
+    Unlike ``summary`` (read-only), ``pull`` deliberately writes the ``.md`` to
+    reflect the freshly fetched upstream state; run it at the start of a resume,
+    before any local edits exist to reconcile."""
+    store = _store(args)
+    from planner.plan_store import PlanStoreError
+
+    try:
+        plan = store.load()
+    except PlanStoreError as exc:
+        raise SystemExit(f"cannot fetch the plan: {exc}")
+    for warning in getattr(store, "warnings", []):
+        print(f"warning: {warning}", file=sys.stderr)
+    plan.write_summary(store.summary_path)
+    print(plan.render_summary())
+    return 0
+
+
+def cmd_push(args: argparse.Namespace) -> int:
+    """Push the **whole local plan** to WeveNova in one pass — the bulk
+    counterpart to ``pull``. Reads ``plan.json`` once, opens (or creates) the
+    project's WeveNova plan, and reconciles the entire plan up at once: every
+    plan-level Context + AcceptanceCriteria entry travels in a **single**
+    ``update_project_plan`` write (not one round-trip per field), alongside the
+    tasks. Author locally — cheap file writes — then ``push`` once, instead of
+    editing straight against ``--store mcp`` where each ``set-context`` is its own
+    server round-trip (the wasteful ``W/"5"`` -> ``W/"6"`` etag churn).
+
+    Guards: reusing a project's **existing** plan needs ``--force`` because the
+    reconcile deletes upstream tasks absent locally (a blind push could drop a
+    second maker's tasks — ``pull`` first to merge). Creating the project's first
+    plan needs no flag."""
+    from planner.plan_store import (
+        LocalPlanStore,
+        PlanStoreError,
+        open_or_create_mcp_plan,
+    )
+
+    if not os.path.exists(args.plan):
+        raise SystemExit(f"no local plan at {args.plan} to push — run `init` first.")
+    local_plan = LocalPlanStore(args.plan).load()
+
+    errors = local_plan.validate()
+    if errors:
+        raise PlanInvalidError(errors)
+
+    try:
+        store, created = open_or_create_mcp_plan(
+            plan_path=args.plan,
+            mcp_server=getattr(args, "mcp_server", "weve-plan"),
+            mcp_config=getattr(args, "mcp_config", os.path.join(".vscode", "mcp.json")),
+            mcp_cache=False,  # don't touch the local cache until we're past the guard
+            project_id=getattr(args, "project_id", None),
+            plan_id=getattr(args, "plan_id", None),
+            objective=local_plan.output_value_or_context("objective"),
+        )
+    except PlanStoreError as exc:
+        raise SystemExit(f"cannot open the WeveNova plan: {exc}")
+
+    if not created and not args.force:
+        raise SystemExit(
+            f"a WeveNova plan ({store.plan_id}) already exists for this project. "
+            "Pushing reconciles it to the local plan and DELETES upstream tasks not "
+            "present locally — `pull` first to merge, or re-run with --force to "
+            "overwrite it with the local plan."
+        )
+
+    # Past the guard: mirror the post-push WeveNova state back into plan.json.
+    store.cache_path = args.plan
+    try:
+        notices = store.save(local_plan)
+    except PlanStoreError as exc:
+        raise SystemExit(f"cannot push the plan to WeveNova: {exc}")
+    for notice in notices:
+        print(f"note: {notice}", file=sys.stderr)
+
+    n_ctx = len(local_plan.context)
+    n_tasks = len(local_plan.tasks)
+    verb = "Created and pushed" if created else "Pushed"
+    print(
+        f"{verb} the plan to WeveNova ({store.plan_id}): {n_ctx} context "
+        f"entr{'y' if n_ctx == 1 else 'ies'} in one write, {n_tasks} task(s). "
+        "Local plan.json now mirrors WeveNova."
+    )
+    return 0
+
+
+def cmd_activate(args: argparse.Namespace) -> int:
+    """Activate the bound WeveNova plan using the current owner's identity."""
+    from planner.plan_store import McpPlanStore, PlanStoreError
+
+    store = _store(args)
+    if not isinstance(store, McpPlanStore):
+        raise SystemExit("activate requires --store mcp (or PLANNER_STORE=mcp).")
+    try:
+        plan = store.activate()
+    except PlanStoreError as exc:
+        raise SystemExit(f"cannot activate the plan: {exc}")
+    print(
+        f"Plan {store.plan_id} is {plan.get('Status', plan.get('status', 'Active'))} "
+        f"(ETag {plan.get('ETag', plan.get('etag', '?'))})."
+    )
+    return 0
+
+
 def cmd_validate(args: argparse.Namespace) -> int:
     plan = _load(args)
     errors = plan.validate()
@@ -465,7 +669,17 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="planner", description="ESS Maker Kit planner CLI")
-    parser.add_argument("--plan", default=PLAN_PATH, help="path to plan.json")
+    parser.add_argument("--plan", default=PLAN_PATH, help="path to plan.json (local store) / where the .md view is written")
+    parser.add_argument(
+        "--store",
+        choices=["local", "mcp"],
+        default=os.environ.get("PLANNER_STORE", "local"),
+        help="where the Plan is persisted: 'local' (plan.json, default) or 'mcp' (WeveNova project plan via the weve-plan MCP server). The ESS-scenario-plan.md view is rendered either way.",
+    )
+    parser.add_argument("--mcp-server", dest="mcp_server", default="weve-plan", help="MCP server name in .vscode/mcp.json (store=mcp)")
+    parser.add_argument("--mcp-config", dest="mcp_config", default=os.path.join(".vscode", "mcp.json"), help="path to the MCP config (store=mcp)")
+    parser.add_argument("--project-id", dest="project_id", default=None, help="WeveNova project id (store=mcp); else PLANNER_MCP_PROJECT_ID or discovery")
+    parser.add_argument("--plan-id", dest="plan_id", default=None, help="WeveNova plan id (store=mcp); else PLANNER_MCP_PLAN_ID or discovery")
     sub = parser.add_subparsers(dest="command", required=True)
 
     p = sub.add_parser("init", help="create a new plan")
@@ -540,7 +754,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("set-state", help="set a task's state")
     p.add_argument("--task", required=True)
-    p.add_argument("--state", required=True, choices=["NotStarted", "InProgress", "Completed", "Blocked"])
+    p.add_argument(
+        "--state",
+        required=True,
+        choices=["NotStarted", "InProgress", "Completed", "Cancelled"],
+    )
     p.set_defaults(func=cmd_set_state)
 
     p = sub.add_parser("capture-setup", help="observe /setup output and pin every id+name artifact in config.json")
@@ -590,6 +808,19 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("summary", help="render the plan's Markdown view (ESS-scenario-plan.md) and print it")
     p.set_defaults(func=cmd_summary)
+
+    p = sub.add_parser("pull", help="fetch the plan from the active store (WeveNova MCP with --store mcp) and write the local .md view")
+    p.set_defaults(func=cmd_pull)
+
+    p = sub.add_parser("push", help="push the whole local plan.json to WeveNova in one pass (bulk counterpart to pull); --force overwrites an existing plan")
+    p.add_argument("--force", action="store_true", help="reconcile over an existing WeveNova plan (deletes upstream tasks absent locally)")
+    p.set_defaults(func=cmd_push)
+
+    p = sub.add_parser(
+        "activate",
+        help="activate the bound WeveNova plan as its resource owner before task execution",
+    )
+    p.set_defaults(func=cmd_activate)
 
     p = sub.add_parser("validate", help="validate the plan")
     p.set_defaults(func=cmd_validate)

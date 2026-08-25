@@ -23,6 +23,12 @@ sponsor's only job here is to pick **who** does it. For each Task:
 The person is stored *acting as* the role — both facts are kept, so the Task
 still shows up under that role in Flow 2, and provenance survives.
 
+> **MCP store:** when running against WeveNova (`--store mcp`), also record the
+> named person against the role so Flow 2 (their "my tasks" view) lights up for
+> the pooled role tasks. That's the **`/roles` skill** (`src/skills/roles/SKILL.md`):
+> it resolves the person (via the WeveNova people directory) and attests them plan-scoped. Hand off to
+> `/roles` — the planner itself no longer attests.
+
 ## The soft assumption
 
 For the MVP, the sponsor often also holds Power Platform admin access, so they

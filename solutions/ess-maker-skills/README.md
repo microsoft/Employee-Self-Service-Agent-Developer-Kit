@@ -306,6 +306,7 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 | Command | What it does |
 |---------|-------------|
 | `/setup` | First-time environment setup — authenticate, discover agent, extract, configure |
+| `/roles` | Assign a person to a role, list who holds what, or ask "what am I assigned?" (people ↔ roles on a plan) |
 | `/connect` | Connect an external system (ServiceNow, Workday) — guided setup with MCP verification |
 | `/create` | Create an eval-driven topic, workflow, or evaluation test set |
 | `/update` | Update a simple topic with evals, a workflow, or an evaluation test set |

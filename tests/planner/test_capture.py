@@ -178,13 +178,46 @@ def test_detect_environment_became_complete_triggers():
     assert art is not None
 
 
-def test_detect_environment_endpoint_only():
+def test_detect_environment_endpoint_only(monkeypatch):
+    import planner.capture as capture_mod
+    # No setup state to backfill from -> endpoint-only artifact, empty ref.
+    monkeypatch.setattr(capture_mod, "SETUP_STATE_PATH", "does-not-exist.json")
     before = {}
     after = {"setup": "complete", "dataverseEndpoint": ENDPOINT, "environmentId": None}
     art = detect_environment(before, after, task_id="T1")
     assert art is not None
     assert art["attributes"] == {"environmentUrl": ENDPOINT}
     assert art["inventoryRef"] == ""  # no env id yet
+
+
+def test_detect_environment_backfills_env_id_from_setup_state(tmp_path, monkeypatch):
+    import planner.capture as capture_mod
+    state = tmp_path / "setup-config.json"
+    state.write_text(json.dumps({
+        "environment": {"id": ENV_ID, "name": "ADK_PLANNER", "tenant_endpoint": ENDPOINT}
+    }), encoding="utf-8")
+    monkeypatch.setattr(capture_mod, "SETUP_STATE_PATH", str(state))
+    # config.json (predating the environmentId stamp) has the endpoint only.
+    after = {"setup": "complete", "dataverseEndpoint": ENDPOINT}
+    art = detect_environment({}, after, task_id="T1")
+    assert art is not None
+    assert art["attributes"]["environmentId"] == ENV_ID
+    assert art["attributes"]["environmentUrl"] == ENDPOINT
+    assert art["inventoryRef"] == f"Environment:{ENV_ID}"
+
+
+def test_detect_environment_backfill_skips_endpoint_mismatch(tmp_path, monkeypatch):
+    import planner.capture as capture_mod
+    state = tmp_path / "setup-config.json"
+    state.write_text(json.dumps({
+        "environment": {"id": ENV_ID, "name": "OTHER",
+                        "tenant_endpoint": "https://other.crm.dynamics.com"}
+    }), encoding="utf-8")
+    monkeypatch.setattr(capture_mod, "SETUP_STATE_PATH", str(state))
+    after = {"setup": "complete", "dataverseEndpoint": ENDPOINT}
+    art = detect_environment({}, after, task_id="T1")
+    assert art is not None
+    assert art["inventoryRef"] == ""  # never cross-attribute another environment
 
 
 def test_detect_environment_empty_after_returns_none():

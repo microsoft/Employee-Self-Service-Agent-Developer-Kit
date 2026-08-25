@@ -6,7 +6,10 @@
 from __future__ import annotations
 
 from planner.roles import (
+    DEFAULT_REGISTRY,
+    RoleDef,
     RoleDirectory,
+    RoleRegistry,
     StaticRoleSource,
     is_well_formed_role_id,
     slugify_role_id,
@@ -79,3 +82,74 @@ def test_static_source_is_valid_role_accepts_wellformed_unknown():
     assert d.is_valid_role("known-role") is True
     # unknown but well-formed still validates (roster may be incomplete)
     assert d.is_valid_role("another-role") is True
+
+
+# --- role registry (the WeveNova valid-role catalogue) ----------------------- #
+
+def test_registry_exact_match_is_ordinal_and_case_sensitive():
+    r = DEFAULT_REGISTRY
+    # Exact wire ids are known; slugs / wrong case / no-space variants are not.
+    assert r.is_known_task_role("Power Platform Administrator")
+    assert r.is_known_task_role("WorkdayAdmin")
+    assert r.is_known_task_role("Environment Maker")
+    assert not r.is_known_task_role("power-platform-administrator")   # slug rejected
+    assert not r.is_known_task_role("power platform administrator")   # wrong case
+    assert not r.is_known_task_role("PowerPlatformAdministrator")     # no spaces
+    assert not r.is_known_task_role("Workday Administrator")          # External uses compact id
+
+
+def test_registry_attestable_and_provider():
+    r = DEFAULT_REGISTRY
+    assert r.is_attestable("WorkdayAdmin")
+    assert r.is_attestable("Environment Maker")
+    assert not r.is_attestable("AgentOwner")                 # internal authority role
+    assert r.provider_of("WorkdayAdmin") == "External"
+    assert r.provider_of("Global Administrator") == "Entra"
+    assert r.provider_of("Environment Maker") == "PowerPlatform"
+    assert r.provider_of("AgentOwner") == "AgentConfiguration"
+
+
+def test_registry_find_resolves_free_text_to_canonical_id():
+    r = DEFAULT_REGISTRY
+    # Exact id round-trips; display name and casing variants resolve to the id.
+    assert r.find("WorkdayAdmin").role == "WorkdayAdmin"
+    assert r.find("Workday Administrator").role == "WorkdayAdmin"      # display -> compact id
+    assert r.find("workday administrator").role == "WorkdayAdmin"      # case-insensitive
+    assert r.find("Power Platform Administrator").role == "Power Platform Administrator"
+    assert r.find("environment maker").role == "Environment Maker"
+    assert r.find("no such role") is None
+
+
+def test_registry_allowed_names_render_external_with_wire_id():
+    names = DEFAULT_REGISTRY.allowed_attestable_names("External")
+    # External display != id, so the nudge shows "Display (WireId)".
+    assert "Workday Administrator (WorkdayAdmin)" in names
+    # Entra id == display, so it renders bare.
+    entra = DEFAULT_REGISTRY.allowed_attestable_names("Entra")
+    assert "Power Platform Administrator" in entra
+
+
+def test_registry_from_mcp_uses_live_payload_and_falls_back():
+    class Fake:
+        def __init__(self, payload):
+            self._payload = payload
+        def call_tool(self, name, args=None):
+            if isinstance(self._payload, Exception):
+                raise self._payload
+            return self._payload
+
+    payload = {"roles": [
+        {"provider": "External", "role": "WorkdayAdmin",
+         "displayName": "Workday Administrator", "attestable": True},
+        {"provider": "AgentConfiguration", "role": "AgentOwner",
+         "displayName": "AgentOwner", "attestable": False},
+    ]}
+    reg = RoleRegistry.from_mcp(Fake(payload))
+    assert reg.is_attestable("WorkdayAdmin")
+    assert reg.provider_of("WorkdayAdmin") == "External"
+    assert not reg.is_attestable("AgentOwner")
+
+    # On any error the static catalogue is used, so the registry is never empty.
+    from planner.mcp_client import McpError
+    reg2 = RoleRegistry.from_mcp(Fake(McpError("down")))
+    assert reg2.is_known_task_role("Environment Maker")

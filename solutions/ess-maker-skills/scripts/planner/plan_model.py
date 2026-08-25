@@ -34,6 +34,7 @@ Nothing here reaches the network; it is pure data + local file IO.
 
 from __future__ import annotations
 
+import heapq
 import json
 import os
 from datetime import datetime, timezone
@@ -57,7 +58,7 @@ RESEARCH_PATH = os.path.join(PLAN_DIR, "research-context.json")
 # Controlled vocabularies. Kept as plain tuples (not Enums) because the values
 # are serialized verbatim to JSON and read back by an agent — the string IS the
 # contract.
-TASK_STATES = ("NotStarted", "InProgress", "Completed", "Blocked")
+TASK_STATES = ("NotStarted", "InProgress", "Completed", "Cancelled")
 ARTIFACT_STATES = ("Active", "Superseded")
 PRINCIPAL_TYPES = ("User", "Role")
 CONTEXT_SOURCES = ("User", "Agent", "Discovered")
@@ -243,6 +244,71 @@ def parse_dependency_key(key: str) -> tuple[str, str]:
     """Split a dependency key back into ``(scenario, depends_on)``."""
     parts = key.split(_DEP_SEP, 1)
     return (parts[0], parts[1]) if len(parts) == 2 else (key, "")
+
+
+def _task_produces(task: dict[str, Any]) -> list[str]:
+    """A task's produced ledger keys — tolerant of the local (``produces``) and
+    the WeveNova (``Produces``) task shapes so ordering works on either."""
+    return list(task.get("produces") or task.get("Produces") or [])
+
+
+def _task_consumes(task: dict[str, Any]) -> list[str]:
+    """A task's consumed ledger keys (local ``consumes`` / WeveNova ``Consumes``)."""
+    return list(task.get("consumes") or task.get("Consumes") or [])
+
+
+def order_tasks_by_dependency(tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Order tasks so a task **producing** a ledger key comes before any task that
+    **consumes** it — a stable topological sort over the produces→consumes edges.
+
+    This renders a role's (or a caller's) tasks in the order they can actually be
+    done: a producer is surfaced ahead of everything waiting on its output. Two
+    tasks with no producing/consuming relationship keep their original
+    (Learn/authoring) order, so independent work still reads in the documented
+    sequence. A key that is consumed but produced by no task in the set is treated
+    as an already-satisfied external prerequisite (it adds no edge). A dependency
+    cycle degrades gracefully — the tasks it entangles are appended in their
+    original order rather than dropped. The same dict objects are returned (not
+    copies), so callers can map results back by identity. Tolerates both the local
+    (``produces``/``consumes``) and WeveNova (``Produces``/``Consumes``) shapes.
+    """
+    count = len(tasks)
+    if count < 2:
+        return list(tasks)
+
+    producers: dict[str, list[int]] = {}
+    for i, task in enumerate(tasks):
+        for key in _task_produces(task):
+            producers.setdefault(key, []).append(i)
+
+    prereqs: list[set[int]] = [set() for _ in range(count)]
+    dependents: list[list[int]] = [[] for _ in range(count)]
+    for i, task in enumerate(tasks):
+        for key in _task_consumes(task):
+            for producer in producers.get(key, []):
+                if producer != i and producer not in prereqs[i]:
+                    prereqs[i].add(producer)
+                    dependents[producer].append(i)
+
+    indegree = [len(p) for p in prereqs]
+    # Kahn's algorithm, always emitting the ready task of lowest original index so
+    # tasks with no dependency between them retain their input (Learn) order.
+    ready = [i for i in range(count) if indegree[i] == 0]
+    heapq.heapify(ready)
+    order: list[int] = []
+    while ready:
+        i = heapq.heappop(ready)
+        order.append(i)
+        for dependent in dependents[i]:
+            indegree[dependent] -= 1
+            if indegree[dependent] == 0:
+                heapq.heappush(ready, dependent)
+
+    if len(order) < count:  # a cycle left tasks unemitted — keep them, in order
+        emitted = set(order)
+        order.extend(i for i in range(count) if i not in emitted)
+
+    return [tasks[i] for i in order]
 
 
 def known_scenario_dependencies() -> list[dict[str, str]]:
@@ -558,6 +624,16 @@ class Plan:
     def outputs_of_task(self, task_id: str) -> list[dict[str, Any]]:
         """"This task's outputs" = the ledger filtered by producing id (no copy)."""
         return [a for a in self.outputs if a.get("producedByTaskId") == task_id]
+
+    def completion_outputs(self, task_id: str) -> list[dict[str, Any]]:
+        """The **Active** artifacts this task produced, in pinned order — the exact
+        set handed to WeveNova in the single ``complete_project_plan_task`` call
+        when the task is marked ``Completed`` (WeveNova records outputs only at
+        completion). Superseded artifacts are excluded; an empty list means the
+        task completes with no outputs (a plain state change)."""
+        return [
+            a for a in self.outputs_of_task(task_id) if a.get("state") == "Active"
+        ]
 
     def resolved_consumes(self, task_id: str) -> dict[str, Any]:
         """For each key a task consumes, the Active artifact's attributes (or
@@ -910,7 +986,7 @@ class Plan:
         if self.tasks:
             lines.append("| # | Task | Role / owner | State |")
             lines.append("|---|------|--------------|-------|")
-            for task in self.tasks:
+            for task in order_tasks_by_dependency(self.tasks):
                 lines.append(
                     f"| {task.get('id')} | {task.get('title')} | "
                     f"{_render_assignee(task.get('assignedTo'))} | {task.get('state')} |"

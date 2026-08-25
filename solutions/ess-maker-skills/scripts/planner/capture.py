@@ -36,6 +36,14 @@ from .plan_model import plan_artifact
 
 CONFIG_PATH = os.path.join(".local", "config.json")
 
+# Setup state holds the LOCKED environment identity resolved during setup
+# (`.local/setup/config.json`, owned by setup_state.py). A config.json written
+# before setup.py stamped `environmentId` records only the org URL; we read the
+# GUID back from here so the Environment artifact carries a non-empty
+# ``inventoryRef`` (WeveNova rejects a produced Environment output without one).
+# Local file IO only — consistent with this module's observe-mode contract.
+SETUP_STATE_PATH = os.path.join(".local", "setup", "config.json")
+
 # Config keys that are bookkeeping/status, never artifacts to pin.
 _CONFIG_NOISE_KEYS = {"setup"}
 
@@ -69,6 +77,31 @@ def snapshot_config(path: str | os.PathLike[str] = CONFIG_PATH) -> dict[str, Any
     return config_snapshot(read_config(path))
 
 
+def _locked_environment_id(endpoint: str | None) -> str:
+    """Backfill the environment GUID from the locked setup state when
+    ``config.json`` lacks it.
+
+    Returns the GUID only when the locked environment's ``tenant_endpoint``
+    matches ``endpoint`` (never cross-attribute a different environment), else
+    ``""``. Best-effort local read; never raises. Covers configs written before
+    ``setup.py`` began stamping ``environmentId`` — without it the Environment
+    artifact would have an empty ``inventoryRef`` and WeveNova would reject the
+    produced output on task completion.
+    """
+    try:
+        with open(SETUP_STATE_PATH, "r", encoding="utf-8") as fh:
+            state = json.load(fh)
+    except (OSError, json.JSONDecodeError):
+        return ""
+    env = state.get("environment") if isinstance(state, dict) else None
+    if not isinstance(env, dict):
+        return ""
+    tenant = (env.get("tenant_endpoint") or "").rstrip("/")
+    if endpoint and tenant and tenant != endpoint.rstrip("/"):
+        return ""
+    return env.get("id") or ""
+
+
 def detect_environment(
     before: dict[str, Any],
     after: dict[str, Any],
@@ -86,11 +119,18 @@ def detect_environment(
 
     ``environmentId`` is a GUID assigned when the environment is created and is
     stable thereafter; ``dataverseEndpoint`` is the org URL. ``setup.py`` writes
-    ``dataverseEndpoint`` today, and ``environmentId`` when the kit resolves it
-    (see the design's open question on persisting the raw GUID).
+    both today (``environmentId`` sourced from the locked setup state). For a
+    config written before that, the GUID is backfilled from setup state so the
+    artifact still carries a non-empty ``inventoryRef``.
     """
     endpoint = after.get("dataverseEndpoint")
     env_id = after.get("environmentId")
+    if not env_id and endpoint:
+        # config.json written before setup stamped environmentId — backfill the
+        # GUID from the locked setup state so the Environment artifact carries a
+        # non-empty inventoryRef. The endpoint-match guard inside the helper
+        # prevents cross-attributing a different environment.
+        env_id = _locked_environment_id(endpoint)
     if not endpoint and not env_id:
         return None
 

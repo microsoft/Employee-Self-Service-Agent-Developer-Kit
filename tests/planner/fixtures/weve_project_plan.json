@@ -1,0 +1,97 @@
+{
+  "@odata.context": "https://localhost:444/weveb2/api/beta/$metadata#me/AgentConfigurationProjects('f9558815-21a6-400c-b2e8-01d8c7a63d33')/AgentPlans/$entity",
+  "PlanId": "d84948e1-c8b3-434a-a811-f1d9d66d3d39",
+  "ProjectId": "f9558815-21a6-400c-b2e8-01d8c7a63d33",
+  "OwnedById": "3541af92-2c5d-4b4a-aad8-5f257de3244d",
+  "Status": "Completed",
+  "AcceptanceCriteria": [
+    "HR knowledge grounded in Workday",
+    "Eval pass-rate >= 90%"
+  ],
+  "CreatedAt": "2026-08-13T11:22:26.1399272Z",
+  "UpdatedAt": "2026-08-13T11:22:53.9438339Z",
+  "ETag": "W/\"4\"",
+  "OwnedBy": {
+    "Id": "3541af92-2c5d-4b4a-aad8-5f257de3244d",
+    "Type": "User",
+    "DisplayName": "default",
+    "DirectoryRef": null
+  },
+  "Context": [
+    {
+      "Key": "scenario",
+      "Value": "HR-Ticketing",
+      "Group": "scenarioContext",
+      "Description": "The configuration scenario the sponsor asked for",
+      "Provenance": {
+        "Source": "User",
+        "AddedById": "3541af92-2c5d-4b4a-aad8-5f257de3244d",
+        "AddedAt": "2026-08-13T11:22:26.1399272Z",
+        "UpdatedById": null,
+        "UpdatedAt": null
+      }
+    },
+    {
+      "Key": "system",
+      "Value": "Workday",
+      "Group": "scenarioContext",
+      "Description": "System to integrate with",
+      "Provenance": {
+        "Source": "User",
+        "AddedById": "3541af92-2c5d-4b4a-aad8-5f257de3244d",
+        "AddedAt": "2026-08-13T11:22:26.1399272Z",
+        "UpdatedById": null,
+        "UpdatedAt": null
+      }
+    },
+    {
+      "Key": "market",
+      "Value": "DE",
+      "Group": "market",
+      "Description": "Target market",
+      "Provenance": {
+        "Source": "User",
+        "AddedById": "3541af92-2c5d-4b4a-aad8-5f257de3244d",
+        "AddedAt": "2026-08-13T11:22:26.1399272Z",
+        "UpdatedById": null,
+        "UpdatedAt": null
+      }
+    }
+  ],
+  "Outputs": [
+    {
+      "Key": "primaryEnvironment",
+      "Kind": "Environment",
+      "InventoryRef": "environment:d3f1e2a4-0000-4a10-9c00-abcdef012345",
+      "ProducedByTaskId": "bfcedfec-8f3d-4ba8-a487-f36b0b968f92",
+      "State": "Active",
+      "Attributes": [
+        {
+          "Key": "environmentId",
+          "Value": "d3f1e2a4-0000-4a10-9c00-abcdef012345",
+          "Description": "Dataverse environment GUID the connector binds to",
+          "Provenance": {
+            "Source": "User",
+            "ProducedById": "3541af92-2c5d-4b4a-aad8-5f257de3244d",
+            "ProducedAt": "2026-08-13T11:22:42.920527Z"
+          }
+        },
+        {
+          "Key": "environmentUrl",
+          "Value": "https://make.powerapps.com/environments/d3f1e2a4",
+          "Description": "Maker-portal URL for the provisioned environment",
+          "Provenance": {
+            "Source": "User",
+            "ProducedById": "3541af92-2c5d-4b4a-aad8-5f257de3244d",
+            "ProducedAt": "2026-08-13T11:22:42.920527Z"
+          }
+        }
+      ],
+      "Provenance": {
+        "Source": "User",
+        "ProducedById": "3541af92-2c5d-4b4a-aad8-5f257de3244d",
+        "ProducedAt": "2026-08-13T11:22:42.920527Z"
+      }
+    }
+  ]
+}

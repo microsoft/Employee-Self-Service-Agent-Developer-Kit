@@ -1,34 +1,99 @@
 # Planner — Flow 2: "What am I assigned?"
 
-When a person asks what work is waiting on them, show their Tasks **grouped by
-each role they hold** — which naturally covers a person with more than one role.
+When a person asks what work is waiting on them, show the Tasks assigned to them —
+their direct assignments **plus** the pooled Tasks for the roles they hold. Against
+WeveNova you never resolve those roles yourself: pass the person's own id and the
+server expands their attested roles. Grouping the result by role is a *display*
+choice, not a reason to query role-by-role.
+
+**The answer is *exactly* what the caller-scoped WeveNova call returns — nothing
+more.** "What am I assigned?" is a **filtered, self-scoped** query, not a plan tour:
+
+- The task list you show is **only** the output of `caller-tasks` (step 1). Never
+  substitute, pad, or supplement it with the wider plan.
+- **Never enumerate the whole plan's tasks**, and never show a task that is waiting
+  on a role the caller does **not** hold. "Here's everything in the plan and who
+  it's waiting on" is the **wrong** answer to "what am I assigned?".
+- **Never filter the plan client-side** to decide what's theirs — WeveNova scopes
+  it server-side from the caller's id. Pulling the plan and picking out rows
+  yourself is exactly the bug this flow exists to prevent.
+- If nothing is scoped to them, say so plainly and **stop there** (then offer the
+  next actions in step 1) — do **not** fall back to dumping the plan.
 
 ## Steps
 
-1. **Find the person's roles.** The roles source is a separate, unbuilt system,
-   so this is best-effort:
-   - If a roles source is wired, look up the roles this person holds.
-   - If not, resolve the caller's identity (e.g. via Work IQ `/me`) and/or ask
-     them to confirm which of the plan's roles are theirs.
-2. **Show their Tasks, grouped by role:**
+**0. Confirm a plan exists on WeveNova — for context only, not to list tasks.**
+Pull the live plan first so you can tell "no plan authored yet" apart from "a plan
+exists but nothing is scoped to you" — **even if you routed straight here** and
+think no backend is configured:
+
+```
+python scripts/planner/cli.py --store mcp pull
+```
+
+- Returns a plan → a plan exists; go to step 1 for the **scoped** answer. The
+  pulled plan is **background context only** — it is **not** the task list, and its
+  tasks must **never** be read out as "your tasks" (that dump is the exact mistake
+  this flow exists to prevent).
+- Returns an **empty plan / "no plans yet"** → there genuinely are no assignments
+  because no plan has been authored yet; say so and offer to **build** one (hand
+  back to the planner's plan-creation flow). Do **not** claim "no plan exists"
+  without having pulled.
+- Errors that WeveNova is unreachable/unconfigured → fall back to the **offline**
+  path in step 1 (`mine --person … --roles …`, where you supply the roles
+  manually because there's no server to resolve them).
+
+**Never answer "nothing is assigned / no plan exists" until this pull has run** —
+and never answer with the *whole* plan once it has.
+
+1. **Show the tasks waiting on them — let WeveNova resolve the roles.** Against
+   WeveNova (`--store mcp`, the default backend) this is owned by the **`/roles`
+   skill**; hand off to its `caller-tasks`:
 
    ```
-   python scripts/planner/cli.py mine --person <oid> --roles <role,role,...>
+   python scripts/planner/roles_cli.py caller-tasks
    ```
 
-   This lists, under each role:
-   - Tasks **assigned to them** directly ("assigned to you"), and
-   - Open **pools** for a role they hold ("open to your role"), which they can
-     pick up.
+   `caller-tasks` resolves the caller **automatically** from the kit's `.env`
+   (`userName` + `aadId`) — so **don't ask the person for their AAD id** (or
+   look up a name). `--caller` / `PLANNER_MCP_CALLER_ID` are optional overrides.
+   **Don't look up or infer their roles either** — there is no client-side role
+   API, and you never enumerate roles to build the query. Passing the caller id
+   *is* the whole mechanism: WeveNova reads it as a self-scope marker, expands the
+   roles that caller is attested to **server-side**, and returns their directly-
+   assigned tasks **plus** the pooled tasks for those roles. (Self-only: it is
+   always *your own* authenticated identity — a different, hand-supplied OID is
+   read as a literal filter and returns none of that person's role-pooled work.
+   See `src/skills/roles/SKILL.md`.)
 
-3. **Claiming a pooled Task.** If they take a pooled Task, record them as the
+   **`caller-tasks` output *is* the answer — present it and stop:**
+   - **It returned tasks** → show **those**, grouped by role for readability. Don't
+     add sibling tasks from the plan "for context."
+   - **It returned "No tasks are waiting on you right now"** (the plan exists — step
+     0 pulled it — but nothing is scoped to this caller) → say exactly that: nothing
+     is assigned to them yet. **Do not** then list the plan's other tasks or who
+     they're waiting on. Instead offer the useful next moves: **assign them to a
+     role** so the matching tasks become theirs (hand to `/roles` attest), or
+     **walk them through a specific task** if they name one. Let *them* ask to see
+     the wider plan — never volunteer it as their task list.
+
+   > **Offline fallback only** — when step 0 reported WeveNova
+   > unreachable/unconfigured (no live plan), the local equivalent is:
+   > ```
+   > python scripts/planner/cli.py mine --person <oid> --roles <role,…>
+   > ```
+   > Here — and *only* here — you supply the roles manually, because there's no
+   > server to resolve them: ask the person which of the plan's roles are theirs.
+   > Never do this against a live WeveNova plan — let the server expand roles.
+
+2. **Claiming a pooled Task.** If they take a pooled Task, record them as the
    owner (the role is retained):
 
    ```
    python scripts/planner/cli.py claim --task <T#> --person <oid>
    ```
 
-4. From there, they do the Task (as its description says) and you capture its
+3. From there, they do the Task (as its description says) and you capture its
    output (Phase 6, `src/skills/planner/capture.md`).
 
 ## Before they start — connect their kit to the plan's environment

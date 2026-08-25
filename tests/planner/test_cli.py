@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from planner import cli
 from planner.plan_model import Plan
 
@@ -255,3 +257,136 @@ def test_validate_reports_problems(tmp_path, capsys):
     rc = _run("--plan", str(plan_path), "validate")
     assert rc == 1
     assert "not unique" in capsys.readouterr().err
+
+
+# --- init --store mcp: create-or-reuse the WeveNova plan (Bug 1) ------------- #
+
+class _FakeMcpStore:
+    """Stand-in for the McpPlanStore `open_or_create_mcp_plan` returns, so the
+    cli branch can be tested without a live WeveNova server."""
+
+    def __init__(self, summary_path: str, plan_id: str) -> None:
+        self.summary_path = summary_path
+        self.plan_id = plan_id
+        self.warnings: list[str] = []
+
+    def load(self) -> Plan:
+        return Plan.new(objective="Deploy ESS in Bangalore")
+
+
+def test_init_mcp_creates_first_plan(tmp_path, monkeypatch, capsys):
+    import planner.plan_store as ps
+
+    summary = str(tmp_path / "ESS-scenario-plan.md")
+    seen: dict = {}
+
+    def fake_open(**kwargs):
+        seen.update(kwargs)
+        return _FakeMcpStore(summary, "new-plan-123"), True
+
+    monkeypatch.setattr(ps, "open_or_create_mcp_plan", fake_open)
+    rc = _run("--plan", str(tmp_path / "plan.json"), "--store", "mcp",
+              "init", "--objective", "Deploy ESS in Bangalore")
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Created a new WeveNova project plan" in out
+    assert "new-plan-123" in out
+    # The objective flows through to the create call, and the .md is rendered.
+    assert seen["objective"] == "Deploy ESS in Bangalore"
+    assert (tmp_path / "ESS-scenario-plan.md").exists()
+
+
+def test_init_mcp_reuses_existing_plan(tmp_path, monkeypatch, capsys):
+    import planner.plan_store as ps
+
+    summary = str(tmp_path / "ESS-scenario-plan.md")
+    monkeypatch.setattr(
+        ps, "open_or_create_mcp_plan",
+        lambda **k: (_FakeMcpStore(summary, "existing-plan-999"), False),
+    )
+    rc = _run("--plan", str(tmp_path / "plan.json"), "--store", "mcp", "init")
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Using the existing WeveNova project plan" in out
+    assert "existing-plan-999" in out
+
+
+# --- push: bulk local -> WeveNova in one pass ------------------------------- #
+
+class _FakePushStore:
+    """Captures the plan handed to a bulk push (stands in for McpPlanStore)."""
+
+    def __init__(self, plan_id: str) -> None:
+        self.plan_id = plan_id
+        self.cache_path = None
+        self.saved: Plan | None = None
+        self.warnings: list[str] = []
+
+    def save(self, plan: Plan) -> list[str]:
+        self.saved = plan
+        return []
+
+
+def _seed_local_plan(tmp_path) -> str:
+    """A valid local plan.json with an objective + one context entry."""
+    plan_path = str(tmp_path / "plan.json")
+    assert _run("--plan", plan_path, "init", "--objective", "Deploy ESS in Bangalore") == 0
+    assert _run("--plan", plan_path, "set-context", "--key", "persona",
+                "--value", "Employees only", "--group", "scenarioContext") == 0
+    return plan_path
+
+
+def test_push_creates_and_pushes_full_plan(tmp_path, monkeypatch, capsys):
+    import planner.plan_store as ps
+
+    plan_path = _seed_local_plan(tmp_path)
+    store = _FakePushStore("plan-abc")
+    seen: dict = {}
+
+    def fake_open(**kwargs):
+        seen.update(kwargs)
+        return store, True
+
+    monkeypatch.setattr(ps, "open_or_create_mcp_plan", fake_open)
+    rc = _run("--plan", plan_path, "--store", "mcp", "push")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Created and pushed the plan to WeveNova" in out
+    assert "plan-abc" in out
+    # the whole local plan is handed to a single save (bulk push); objective seeded
+    assert seen["objective"] == "Deploy ESS in Bangalore"
+    assert seen["mcp_cache"] is False              # local cache untouched until past the guard
+    assert store.cache_path == plan_path           # post-push mirror re-points at plan.json
+    assert store.saved is not None
+    assert any(c.get("key") == "persona" for c in store.saved.context)
+
+
+def test_push_refuses_existing_plan_without_force(tmp_path, monkeypatch):
+    import planner.plan_store as ps
+
+    plan_path = _seed_local_plan(tmp_path)
+    monkeypatch.setattr(ps, "open_or_create_mcp_plan",
+                        lambda **k: (_FakePushStore("plan-xyz"), False))
+    with pytest.raises(SystemExit) as exc:
+        _run("--plan", plan_path, "--store", "mcp", "push")
+    assert "already exists" in str(exc.value)
+    assert "--force" in str(exc.value)
+
+
+def test_push_over_existing_plan_with_force(tmp_path, monkeypatch, capsys):
+    import planner.plan_store as ps
+
+    plan_path = _seed_local_plan(tmp_path)
+    store = _FakePushStore("plan-xyz")
+    monkeypatch.setattr(ps, "open_or_create_mcp_plan", lambda **k: (store, False))
+    rc = _run("--plan", plan_path, "--store", "mcp", "push", "--force")
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "Pushed the plan to WeveNova" in out
+    assert store.saved is not None
+
+
+def test_push_without_local_plan_errors(tmp_path):
+    with pytest.raises(SystemExit) as exc:
+        _run("--plan", str(tmp_path / "missing.json"), "--store", "mcp", "push")
+    assert "no local plan" in str(exc.value)

@@ -8,10 +8,51 @@ Do NOT skip this step. Do NOT respond to the user's message first. Do NOT greet
 the user first. Do NOT list capabilities. Read both files FIRST, then decide what
 to do based on the result.
 
-### If foundation setup is missing or not ready
+### Step 1 — Classify the request BEFORE applying any gate
 
-Foundation setup is ready only when `.local/setup/config.json` exists and
-`connect_ready` is `true`.
+**Decide what the user is asking for FIRST. Do not show the welcome gate until
+you have ruled out the two intents below.** Two experiences are always allowed
+to run before setup and must be routed immediately — never answer them with the
+welcome gate:
+
+- **Planning / first-time / "where do I start"** — the user typed `/planner`, or
+  asked (in any phrasing) how to begin, plan, roll out, or deploy ESS. Examples:
+  "where do I start", "where should I start", "how do I get started", "getting
+  started with ESS", "what should I do first", "I want to set up ESS", "I want to
+  deploy ESS", "I want to deploy the ESS agent in \<place\>", "plan a rollout",
+  "plan my ESS deployment", "scenario plan", "set up ESS for the first time",
+  "first-time setup", "set up ESS from scratch", and "what am I assigned?" /
+  "what are my tasks?" / "what's assigned to me?". **Route to the planner: read
+  `src/skills/planner/SKILL.md` and follow it.** The planner is the one
+  experience allowed before setup — planning is how a greenfield rollout is
+  decided — so do NOT block on config being present, and do NOT show the welcome
+  gate. The plan's first task is almost always "the admin runs `/setup`", so the
+  planner emits that itself; do **not** send a first-time / "where do I start"
+  request straight to `/setup`. The planner is allowed first because it needs
+  **neither** of the two things setup provides (the Dataverse MCP server and a
+  locally cloned agent) — it's grounded entirely in the Microsoft Learn docs and
+  only writes a plan under `workspace/plan/`.
+- **Setup** — the user typed `/setup` or explicitly asked to run setup / "set up
+  ESS" (as an action to perform now, not "where do I start"). Read
+  `src/skills/foundation-setup/SKILL.md` and follow it.
+
+If the message matches either intent, act on it now and **skip the gate in Step 2.**
+
+### Step 2 — Otherwise, if foundation setup is missing or not ready
+
+This step applies only to requests that are **not** the planning or setup intents
+in Step 1. Foundation setup is ready only when `.local/setup/config.json` exists
+and `connect_ready` is `true`.
+
+**Why this gate exists (apply it by capability, not just keywords):** `/setup`
+does only two things — it installs the **Dataverse MCP server** and **clones the
+agent locally**. So the gate protects exactly the work that depends on those two
+things: anything that calls Dataverse APIs (template configs, connections,
+records) or reads/edits the cloned agent under `workspace/agents/{slug}/` —
+e.g. `/create`, `/update`, `/delete`, `/scan`, `/push`, `/connect`, `/evaluate`,
+`/test`, `/flightcheck`, `/troubleshoot`. A request that needs neither Dataverse
+nor the cloned agent (like planning) is **not** gated. When unsure, ask: "does
+this need the Dataverse MCP or the cloned agent?" If no, don't show the gate.
 
 **STOP.** Do not read any skill files. Do not load templates. Do not search for
 files. Do not attempt any customization work. Do not answer questions about ESS.
@@ -24,27 +65,19 @@ Respond with ONLY this exact message and nothing else:
 > your environment. In VS Code, type `/setup`; in the Copilot CLI (or any chat),
 > just say **"set up ESS"**. It only takes a couple minutes.
 
-**The exceptions**: If the user typed `/setup` or explicitly asked to run
-setup, proceed with setup — read `src/skills/foundation-setup/SKILL.md` and follow it.
-If the user typed `/planner` or asked to **plan a rollout / plan an ESS
-deployment / set up ESS for the first time / where do I start / how do I get
-started / "what am I assigned?"**, proceed with planning — read
-`src/skills/planner/SKILL.md` and follow it (the planner is the one experience
-that is allowed to run before setup, because planning is how a greenfield
-deployment is decided). A first-time / "where do I start" request is a
-**planning** request — route it to the planner, which then emits "run `/setup`"
-as the first task; do **not** send it straight to `/setup`.
-
-**This gate applies to ALL user messages** — including "hello", "hi", "help",
-"what can you do", "I need a topic", "create a workflow", or any other request.
-If foundation setup isn't ready, and the user didn't say `/setup`,
-show ONLY the welcome message above. No other text. No capabilities list. No greeting.
+**This gate applies to every OTHER user message** — including "hello", "hi",
+"help", "what can you do", "I need a topic", "create a workflow", or any other
+request that is not a Step 1 planning or setup intent. For those, if foundation
+setup isn't ready, show ONLY the welcome message above. No other text. No
+capabilities list. No greeting.
 
 ### If foundation is ready but the local workspace is not initialized
 
 If `.local/config.json` does not exist or its `setup` value is not `"complete"`,
-apply the same gate above. `/setup` resumes at the local onboarding bootstrap
-through `src/skills/foundation-setup/SKILL.md`.
+apply the same two-step logic above: **Step 1 still wins** — a planning /
+"where do I start" request routes to the planner, and `/setup` routes to setup —
+and only other requests fall through to the Step 2 welcome gate. `/setup` resumes
+at the local onboarding bootstrap through `src/skills/foundation-setup/SKILL.md`.
 
 ### If foundation and local workspace setup are complete
 
@@ -337,10 +370,11 @@ After a successful push, `.baseline/` is updated to match the new state.
 
 **Trigger phrases for planner:** "plan a rollout", "plan my ESS deployment",
 "create a plan", "scenario plan", "set up ESS with Workday/ServiceNow",
-"I want to set up ESS for the first time", "where do I start", "where should I
-start", "how do I get started", "getting started with ESS", "set up ESS from
-scratch", "first-time setup", "what should I do first", "what am I assigned",
-"what are my tasks", "my tasks", "what's assigned to me".
+"I want to set up ESS for the first time", "I want to deploy ESS",
+"I want to deploy the ESS agent in <place>", "deploy ESS", "where do I start",
+"where should I start", "how do I get started", "getting started with ESS",
+"set up ESS from scratch", "first-time setup", "what should I do first",
+"what am I assigned", "what are my tasks", "my tasks", "what's assigned to me".
 
 **Trigger phrases for troubleshooting:** "Workday error", "ISU not working",
 "invalid_client", "invalid username or password", "SOAP failure", "maker works
