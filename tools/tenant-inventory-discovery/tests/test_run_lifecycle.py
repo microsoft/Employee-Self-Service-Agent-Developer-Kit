@@ -1,4 +1,4 @@
-"""§10: run lifecycle -- idempotent re-run, reconcile gating (watermark-free)."""
+"""§10: run lifecycle -- idempotent re-run, reconcile gating."""
 
 from __future__ import annotations
 
@@ -41,8 +41,8 @@ def test_env_scoped_no_cross_environment_collision(platform, inventory):
     runner = _run(platform, inventory)
     runner.run()
     # Connection c-1 exists in both ENV_A and ENV_B -> two distinct rows.
-    assert inventory.get(Kind.CONNECTION, f"{ENV_A}|c-1") is not None
-    assert inventory.get(Kind.CONNECTION, f"{ENV_B}|c-1") is not None
+    assert inventory.get(Kind.CONNECTION, f"{ENV_A}:c-1") is not None
+    assert inventory.get(Kind.CONNECTION, f"{ENV_B}:c-1") is not None
 
 
 def test_full_run_completes_all_crawled_scopes(platform, inventory):
@@ -56,9 +56,31 @@ def test_full_run_completes_all_crawled_scopes(platform, inventory):
     assert not summary.aborted
 
 
-def test_skill_signals_reconcile_and_returns_summary(platform, inventory):
+def test_skill_retires_drift_and_returns_summary(platform, inventory):
+    """One server reconcile per completed env-scoped scope; tenant-root swept locally."""
     skill = DiscoverySkill(platform, inventory)
     summary = skill.discover("tenant-1")
-    assert inventory.reconcile_calls == 1
+
+    env_scoped_completed = [s for s in summary.completed_scopes if s.kind.is_env_scoped]
+    assert inventory.reconcile_calls == len(env_scoped_completed)
+    # Tenant-rooted kinds are rejected by the server action, so they are listed+diffed.
+    assert inventory.list_calls == len(
+        [s for s in summary.completed_scopes if s.kind.is_tenant_root]
+    )
     assert summary.correlation_id
+    assert summary.pass_started_at is not None
     assert not summary.aborted
+
+
+def test_reconcile_is_never_called_for_tenant_root_kinds(platform, inventory):
+    """The service rejects them; calling anyway would fail every tenant-root scope."""
+    calls: list[Kind] = []
+    original = inventory.reconcile
+
+    def _spy(kind, environment_id, pass_started_at):
+        calls.append(kind)
+        return original(kind, environment_id, pass_started_at)
+
+    inventory.reconcile = _spy
+    DiscoverySkill(platform, inventory).discover("tenant-1")
+    assert calls and all(k.is_env_scoped for k in calls)

@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from tenant_inventory_discovery.fake_inventory import FakeInventoryClient
 from tenant_inventory_discovery.platform_clients import FakePlatform
+
+from spies import SpyInventoryClient
 
 ENV_A = "env-aaaa"
 ENV_B = "env-bbbb"
@@ -50,14 +51,28 @@ def build_platform() -> FakePlatform:
             ],
         },
         extension_packs={
-            ENV_A: [{"environmentId": ENV_A, "packName": "ESS.HRSD", "version": "1.2.3"}],
+            # One row per environment: the schema has no identity attribute of its
+            # own -- installed/hrsd/itsm/flavor/flowCount all describe *this*
+            # environment's pack install. `packName`/`version` are unlisted and get
+            # dropped client-side.
+            ENV_A: [
+                {
+                    "environmentId": ENV_A,
+                    "installed": True,
+                    "hrsd": True,
+                    "itsm": False,
+                    "flavor": "ServiceNow",
+                    "flowCount": 12,
+                }
+            ],
         },
         scenario_templates={
             ENV_A: [
                 {
                     "environmentId": ENV_A,
                     "uniqueName": "GetPayslip",
-                    "scenarioName": "Get Payslip",
+                    "operation": "GetPayslip",
+                    "status": "Active",
                 }
             ],
         },
@@ -70,5 +85,5 @@ def platform() -> FakePlatform:
 
 
 @pytest.fixture
-def inventory() -> FakeInventoryClient:
-    return FakeInventoryClient()
+def inventory() -> SpyInventoryClient:
+    return SpyInventoryClient()

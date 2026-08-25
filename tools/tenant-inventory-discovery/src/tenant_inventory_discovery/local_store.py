@@ -2,17 +2,21 @@
 
 The discovery skill's durable output is server-side (WeveNova). This module produces a
 **local mirror** of that inventory -- a cache the ``/discover`` skill (and offline
-planning) can render without the server. It is deliberately faithful to the server's
-set-based, per-scope reconcile model (spec §6.3) so the local file never diverges from
-what the server would hold:
+planning) can render without the server. It applies the same per-scope gating the
+server-side retire phase does (spec §6.3), so the local file never claims something
+the server would not:
 
 - **Reconciled scope** (in :attr:`RunSummary.completed_scopes`): the freshly observed set
   is authoritative -- items are refreshed and drift (prior keys not observed) is retired.
 - **Complete-but-exempt scope** (fully enumerated, no error, but tenant-root during a
   subset crawl -- the tenant-root exemption): observed items are refreshed, but prior
   items are **kept** (the server would not retire them either).
-- **Incomplete / not-crawled scope**: prior items are preserved untouched -- a partial
-  crawl never wipes the mirror.
+- **Incomplete / capped / not-crawled scope**: prior items are preserved untouched -- a
+  partial crawl never wipes the mirror.
+
+The mirror diffs *observed keys* rather than replaying the server's ``UpdatedAt``
+watermark: locally it has the exact observed set, which is a stronger signal than a
+timestamp and needs no clock-skew allowance.
 
 Retired drift is **kept for one run** (``state = "Retired"`` + ``retiredAt``) so a reader
 can see what disappeared, then pruned on the next run.
@@ -43,8 +47,8 @@ def _record_from_item(item: Any, *, now: str, first_seen: str, state: str) -> di
         "naturalKey": item.natural_key,
         "environmentId": item.environment_id or "",
     }
-    if getattr(item, "connector_id", None):
-        record["connectorId"] = item.connector_id
+    if getattr(item, "display_name", None):
+        record["displayName"] = item.display_name
     record["attributes"] = dict(item.attributes)
     record["state"] = state
     record["firstSeenAt"] = first_seen
@@ -68,9 +72,10 @@ def build_document(
 ) -> dict:
     """Merge this run into the prior mirror and return the new mirror document.
 
-    ``stored_items`` are the run's upserted items (e.g. ``FakeInventoryClient.items``);
+    ``stored_items`` are the run's upserted items (e.g. ``InMemoryInventoryClient.items``
+    or whatever ``RecordingInventoryClient`` captured on the live path);
     each must expose ``kind`` (a :class:`~tenant_inventory_discovery.models.Kind`),
-    ``natural_key``, ``attributes``, ``environment_id``, ``connector_id`` and ``state``.
+    ``natural_key``, ``attributes``, ``environment_id`` and ``state``.
     ``summary`` supplies per-scope completeness and the reconcile-eligible set.
     """
     now = now or now_iso()
@@ -198,6 +203,9 @@ def _scopes_section(
                 "enumerated": report.enumerated,
                 "recorded": report.upserted,
                 "skippedInvalid": report.skipped_invalid,
+                "capped": report.capped,
+                "droppedAttributes": list(report.dropped_attributes),
+                "retiredItemIds": list(report.retired_item_ids),
                 "error": report.error,
             }
         )

@@ -15,8 +15,22 @@ class InventoryApiError(DiscoveryError):
     """A failure talking to the WeveNova Inventory API (§8)."""
 
 
-class PreconditionFailedError(InventoryApiError):
-    """HTTP 412 -- an ``If-Match`` ETag was stale; a concurrent writer won (§5.2)."""
+class NonRetryableApiError(InventoryApiError):
+    """A 4xx the service will answer identically no matter how often it is asked.
+
+    Schema violations, a missing role, and the per-(tenant, kind) row cap all land
+    here. Retrying them burns the backoff budget and delays the run for nothing, so
+    :func:`~tenant_inventory_discovery.inventory_client.with_retry` lets them through
+    on the first attempt.
+    """
+
+
+class PreconditionFailedError(NonRetryableApiError):
+    """HTTP 412 -- an ``If-Match`` ETag was stale; a concurrent writer won (§5.2).
+
+    Not retryable in place: the caller must re-read the row and re-apply, because a
+    blind replay would clobber whatever the concurrent writer just stored.
+    """
 
     def __init__(self, natural_key: str, message: str = "precondition failed") -> None:
         super().__init__(f"{message} for {natural_key}")

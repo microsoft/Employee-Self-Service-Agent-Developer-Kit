@@ -66,15 +66,35 @@ _SOLUTION_SELECT = "solutionid,uniquename,version,ismanaged,_publisherid_value"
 _SOLUTION_FILTER = "isvisible eq true"
 # application (Microsoft Graph v1.0): https://learn.microsoft.com/graph/api/resources/application
 # Fields verified against the Graph v1.0 schema: appId (String, $filter eq),
-# displayName (String), publisherDomain (String, read-only), signInAudience (String).
+# displayName (String), id (String, the directory object id).
 _GRAPH_APPLICATIONS_PATH = "/applications"
-_GRAPH_APPLICATIONS_SELECT = "appId,displayName,publisherDomain,signInAudience"
+_GRAPH_APPLICATIONS_SELECT = "appId,displayName,id"
 # ESS scenario/template config table (kit-specific). Column names verified against the
 # kit's own working script scripts/backup_template_configs.py.
 _TEMPLATE_CONFIG_ENTITY = "msdyn_employeeselfservicetemplateconfigs"
 _TEMPLATE_CONFIG_SELECT = (
     "msdyn_employeeselfservicetemplateconfigid,msdyn_uniquename,msdyn_name"
 )
+
+# Substring that marks an installed ESS extension-pack solution. The kit's own
+# scenario/topic naming uses the `msdyn_...employeeselfservice...` family throughout
+# (see scripts/setup.py and scripts/scan_config.py).
+_ESS_PACK_MARKER = "employeeselfservice"
+
+# ISV flavors an extension pack can target, longest-distinguishing marker first. Drawn
+# from the kit's own detection in flightcheck/checks/external_systems.py.
+_PACK_FLAVORS: tuple[tuple[str, str], ...] = (
+    ("servicenow", "ServiceNow"),
+    ("workday", "Workday"),
+    ("successfactors", "SAP SuccessFactors"),
+    ("sap", "SAP"),
+)
+
+
+def _pack_flavor(markers: str) -> str | None:
+    """Name the ISV flavor an environment's pack targets, or ``None`` if ambiguous."""
+    found = [label for marker, label in _PACK_FLAVORS if marker in markers]
+    return found[0] if found else None
 
 
 def _environment_id_from_url(env_url: str) -> str:
@@ -364,11 +384,18 @@ class DataverseBackedPlatform:
         Source (validatable -- Graph v1.0 CSDL / MS Learn):
           https://learn.microsoft.com/graph/api/resources/application
           Fields used: appId (String, ``$filter eq``), displayName (String),
-          publisherDomain (String, read-only), signInAudience (String).
+          id (String, the directory object id).
+
+        ``publisherDomain`` / ``signInAudience`` are *not* projected: the Inventory
+        schema does not model them for ``EntraApp``, so they would only be dropped
+        before the upsert.
         """
         if not self._entra_app_id:
             raise PlatformError(
-                "EntraApp discovery needs the agent's 'entraAppId' from config."
+                "No Entra app registration is configured for this agent yet. It is "
+                "provisioned by /connect (ServiceNow or Workday), not /setup -- run "
+                "that first if you expect one. Nothing is retired for EntraApp until "
+                "it can be read."
             )
         params = {
             "$filter": f"appId eq '{self._entra_app_id}'",
@@ -395,12 +422,9 @@ class DataverseBackedPlatform:
             display_name = row.get("displayName")
             if display_name:
                 item["displayName"] = str(display_name)
-            publisher_domain = row.get("publisherDomain")
-            if publisher_domain:
-                item["publisherDomain"] = str(publisher_domain)
-            sign_in_audience = row.get("signInAudience")
-            if sign_in_audience:
-                item["signInAudience"] = str(sign_in_audience)
+            object_id = row.get("id")
+            if object_id:
+                item["objectId"] = str(object_id)
             items.append(item)
         yield Page(items=items, is_last=True)
 
@@ -574,29 +598,53 @@ class DataverseBackedPlatform:
     def list_extension_packs(
         self, environment_id: str, page_size: int
     ) -> Iterator[Page]:
-        """Installed solutions in the environment -> §5.3 ``ExtensionPack`` (spec §4 row 7).
+        """The environment's ESS extension-pack install -> §5.3 ``ExtensionPack``.
 
-        Source (documented):
-          https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solution
-          Columns used: uniquename (Edm.String), version (Edm.String),
-          _publisherid_value (Edm.Guid lookup). Filtered to isvisible eq true to skip
-          system/internal solutions.
+        The server's ``ExtensionPack`` schema has **no identity attribute of its own**
+        (``installed`` / ``hrsd`` / ``itsm`` / ``flavor`` / ``flowCount`` all describe a
+        single environment's install), so this yields **at most one item per
+        environment**, keyed on ``environmentId`` -- not one per solution.
+
+        Sources (both already queried by this platform; no new endpoint):
+          - solution: https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solution
+            ``uniquename`` identifies the installed extension-pack solutions.
+          - the kit's ``msdyn_employeeselfservicetemplateconfigs`` table, whose
+            ``msdyn_uniquename`` values carry the ``ServiceNowHRSD`` / ``ServiceNowITSM``
+            scenario markers the kit's own FlightCheck uses to tell the packs apart
+            (``flightcheck/checks/servicenow.py``).
+
+        ``flowCount`` is deliberately omitted: counting cloud flows needs the BAP admin
+        surface, which this platform does not hold. The attribute is optional, so
+        omitting it is valid rather than guessed.
         """
-        rows = self._query(_SOLUTION_ENTITY, _SOLUTION_SELECT, _SOLUTION_FILTER)
-        items: list[dict] = []
-        for row in rows:
-            unique_name = row.get("uniquename")
-            if not unique_name:
-                continue  # a solution with no unique name cannot form a natural key
-            item: dict = {"environmentId": environment_id, "packName": str(unique_name)}
-            version = row.get("version")
-            if version:
-                item["version"] = str(version)
-            publisher = row.get("_publisherid_value")
-            if publisher:
-                item["publisher"] = str(publisher)
-            items.append(item)
-        yield Page(items=items, is_last=True)
+        solution_names = [
+            str(row.get("uniquename"))
+            for row in self._query(_SOLUTION_ENTITY, _SOLUTION_SELECT, _SOLUTION_FILTER)
+            if row.get("uniquename")
+        ]
+        scenario_names = [
+            str(row.get("msdyn_uniquename"))
+            for row in self._query(_TEMPLATE_CONFIG_ENTITY, _TEMPLATE_CONFIG_SELECT)
+            if row.get("msdyn_uniquename")
+        ]
+
+        markers = " ".join(solution_names + scenario_names).lower()
+        hrsd = "hrsd" in markers
+        itsm = "itsm" in markers
+        installed = any(
+            _ESS_PACK_MARKER in name.lower() for name in solution_names
+        ) or bool(scenario_names)
+
+        item: dict = {
+            "environmentId": environment_id,
+            "installed": installed,
+            "hrsd": hrsd,
+            "itsm": itsm,
+        }
+        flavor = _pack_flavor(markers)
+        if flavor:
+            item["flavor"] = flavor
+        yield Page(items=[item], is_last=True)
 
     def list_scenario_templates(
         self, environment_id: str, page_size: int
@@ -609,7 +657,11 @@ class DataverseBackedPlatform:
 
         Source (kit table -- columns verified against ``backup_template_configs.py``):
           msdyn_uniquename (Edm.String -> uniqueName / natural key),
-          msdyn_name (Edm.String -> displayName + scenarioName).
+          msdyn_name (Edm.String -> the row's displayName).
+
+        ``msdyn_name`` becomes the row's top-level display name rather than an
+        attribute: the Inventory schema does not model ``displayName`` (or a
+        ``scenarioName``) for ``ScenarioTemplate``.
         """
         rows = self._query(_TEMPLATE_CONFIG_ENTITY, _TEMPLATE_CONFIG_SELECT)
         items: list[dict] = []
@@ -624,6 +676,5 @@ class DataverseBackedPlatform:
             name = row.get("msdyn_name")
             if name:
                 item["displayName"] = str(name)
-                item["scenarioName"] = str(name)
             items.append(item)
         yield Page(items=items, is_last=True)

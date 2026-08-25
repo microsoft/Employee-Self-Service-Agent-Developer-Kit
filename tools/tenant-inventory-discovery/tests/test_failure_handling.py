@@ -38,7 +38,7 @@ def test_partial_crawl_keeps_prior_rows(inventory):
     skill2 = DiscoverySkill(p2, inventory)
     skill2.discover("t1")
 
-    conn = inventory.get(Kind.CONNECTION, f"{ENV_A}|c-1")
+    conn = inventory.get(Kind.CONNECTION, f"{ENV_A}:c-1")
     assert conn.state == "Active"  # not swept -- scope was incomplete
 
 
@@ -56,8 +56,9 @@ def test_crash_before_reconcile_retires_nothing(inventory):
     with pytest.raises(RuntimeError):
         skill.discover("t1")
 
-    # Crash path: reconcile never called -> nothing retired.
+    # Crash path: the retire phase never ran -> nothing retired.
     assert inventory.reconcile_calls == 0
+    assert inventory.retire_calls == 0
 
 
 def test_upsert_failure_makes_scope_incomplete(platform):
@@ -67,7 +68,7 @@ def test_upsert_failure_makes_scope_incomplete(platform):
         def __init__(self):
             self.reconcile_calls = 0
 
-        def upsert(self, item, *, if_match=None):
+        def upsert(self, item, *, if_match=None, run_id=""):
             if item.kind is Kind.CONNECTOR:
                 raise InventoryApiError("500")
             return None
@@ -84,8 +85,9 @@ def test_upsert_failure_makes_scope_incomplete(platform):
 
 
 def test_no_completed_scopes_skips_reconcile_call():
-    from tenant_inventory_discovery.fake_inventory import FakeInventoryClient
     from tenant_inventory_discovery.platform_clients import FakePlatform
+
+    from spies import SpyInventoryClient
 
     # Environment enumeration fails -> no environments discovered; every tenant-root
     # kind that fails is incomplete. Make them all fail to force empty completed set.
@@ -97,8 +99,9 @@ def test_no_completed_scopes_skips_reconcile_call():
             "list_sharepoint_sites",
         }
     )
-    inv = FakeInventoryClient()
+    inv = SpyInventoryClient()
     skill = DiscoverySkill(platform, inv)
     summary = skill.discover("t1")
     assert summary.completed_scopes == []
     assert inv.reconcile_calls == 0  # nothing to reconcile -> skip the call
+    assert inv.retire_calls == 0

@@ -11,10 +11,13 @@ from __future__ import annotations
 import enum
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import datetime
+from urllib.parse import quote
 
-# Delimiter used to compose multi-part natural keys for env-scoped kinds so identical
-# names across environments never collide (spec §4 / §4.1).
-NATURAL_KEY_DELIMITER = "|"
+# Reserved separator between natural-key segments, and between the kind and the
+# natural key in an item id. Matches the server's
+# ``AgentConfigurationInventoryNaturalKey.KindSeparator``.
+NATURAL_KEY_DELIMITER = ":"
 
 # Tenant-root kinds carry an empty EnvironmentId; reconcile treats them specially
 # (spec §6.3 tenant-root exemption). We model "no environment" as the empty string to
@@ -47,7 +50,11 @@ class Kind(enum.Enum):
         Scope.ENVIRONMENT,
         ("environmentId", "botId", "sourceId"),
     )
-    EXTENSION_PACK = ("ExtensionPack", Scope.ENVIRONMENT, ("environmentId", "packName"))
+    # The server's ExtensionPack schema carries no identity attribute of its own
+    # (installed/hrsd/itsm/flavor/flowCount are all facts *about* one environment's
+    # pack install), so the environment is the identity: one ExtensionPack row per
+    # environment.
+    EXTENSION_PACK = ("ExtensionPack", Scope.ENVIRONMENT, ("environmentId",))
     SCENARIO_TEMPLATE = (
         "ScenarioTemplate",
         Scope.ENVIRONMENT,
@@ -75,11 +82,16 @@ class Kind(enum.Enum):
         raise ValueError(f"Unknown kind discriminator: {discriminator!r}")
 
     def compose_natural_key(self, attributes: Mapping[str, object]) -> str:
-        """Compose the natural key from the kind's identity fields (spec §4/§4.1).
+        """Compose the natural key from the kind's identity fields.
 
-        Env-scoped kinds join their parts with :data:`NATURAL_KEY_DELIMITER` so, e.g.,
-        two ``Connection`` rows with the same ``connectionId`` in different
-        environments produce distinct keys.
+        Mirrors the server's ``AgentConfigurationInventoryNaturalKey``:
+
+        - A **single-segment** kind's natural key is the raw, un-encoded value
+          (``Encode`` percent-encodes the whole thing when building the item id).
+        - A **composite** kind uses ``ComposeNaturalKey``: each segment is
+          percent-encoded independently and then joined with
+          :data:`NATURAL_KEY_DELIMITER`, so the split stays unambiguous even when a
+          segment itself contains the separator (a SharePoint ``siteUrl``, say).
         """
         parts: list[str] = []
         for field_name in self.key_fields:
@@ -89,7 +101,20 @@ class Kind(enum.Enum):
                     f"{self.discriminator}: missing natural-key field {field_name!r}"
                 )
             parts.append(str(value))
-        return NATURAL_KEY_DELIMITER.join(parts)
+
+        if len(parts) == 1:
+            return parts[0]
+        return NATURAL_KEY_DELIMITER.join(quote(part, safe="") for part in parts)
+
+
+def encode_item_id(kind: Kind, natural_key: str) -> str:
+    """Build the opaque ``kind:naturalKey`` item id the service addresses rows by.
+
+    Mirrors ``AgentConfigurationInventoryNaturalKey.Encode``. This is the value that
+    goes in the ``agentConfigurationInventoryItems('<id>')`` route segment and comes
+    back as ``agentConfigurationInventoryItemId``.
+    """
+    return f"{kind.discriminator}{NATURAL_KEY_DELIMITER}{quote(natural_key, safe='')}"
 
 
 @dataclass(frozen=True)
@@ -114,7 +139,7 @@ class ScopeKey:
 
 @dataclass
 class InventoryItem:
-    """One resource mapped to a single inventory row (spec §4.1).
+    """One resource mapped to a single inventory row.
 
     The skill sets only the fields below. It deliberately does **not** set
     ``source``/``submittedById``/``state``/``createdAt``/``updatedAt``/``version`` --
@@ -124,40 +149,50 @@ class InventoryItem:
     kind: Kind
     natural_key: str
     attributes: dict[str, object]
-    environment_id: str | None = None  # containment edge (§5.5); set for env-scoped kinds
-    connector_id: str | None = None  # reference edge Connection -> Connector (§5.5)
+    environment_id: str | None = None  # containment edge; set for env-scoped kinds
+    display_name: str | None = None
+    description: str | None = None
 
     @property
     def scope_key(self) -> ScopeKey:
         return ScopeKey.for_kind(self.kind, self.environment_id)
 
+    @property
+    def item_id(self) -> str:
+        """The opaque ``kind:naturalKey`` id the service addresses this row by."""
+        return encode_item_id(self.kind, self.natural_key)
+
 
 @dataclass
 class UpsertResult:
-    """Outcome of a single ``POST /inventory`` upsert."""
+    """Outcome of a single upsert POST."""
 
     natural_key: str
     kind: Kind
+    item_id: str = ""
     etag: str | None = None
     created: bool = False
 
 
-@dataclass(frozen=True)
-class ScopeSnapshot:
-    """The observed natural keys for one fully-crawled scope (set-based reconcile).
+@dataclass
+class ReconcileResult:
+    """Outcome of one ``reconcile`` pass over a single (kind, environmentId) scope.
 
-    Replaces the RunId watermark: the server retires ``Source = Discovered``,
-    ``State = Active`` rows in this ``(EnvironmentId, Kind)`` scope whose ``naturalKey`` is
-    **not** in :attr:`present_keys` (spec §6.3, re-expressed without a watermark).
+    Mirrors the service's ``AgentConfigurationInventoryReconcileResult``. A
+    :attr:`retired_count` close to :attr:`evaluated_count` is the signal that the
+    crawl that triggered it was incomplete.
     """
 
-    scope: ScopeKey
-    present_keys: frozenset[str]
+    kind: Kind
+    environment_id: str
+    evaluated_count: int = 0
+    retired_count: int = 0
+    retired_item_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
 class ScopeReport:
-    """Per-scope crawl bookkeeping -- the reconcile gate (spec §6.3, §7)."""
+    """Per-scope crawl bookkeeping -- the reconcile gate."""
 
     scope: ScopeKey
     enumerated: int = 0
@@ -165,27 +200,39 @@ class ScopeReport:
     skipped_invalid: int = 0
     fully_enumerated: bool = False
     error: str | None = None
-    # Natural keys observed (successfully upserted) in this scope. On a complete scope
-    # this is the snapshot the server diffs against to retire drift (set-based reconcile,
-    # replacing the old RunId watermark).
+    # Natural keys successfully upserted in this scope. Used to diff against the
+    # server's current rows when retiring drift for tenant-rooted kinds, which the
+    # server-side reconcile refuses to handle.
     observed_keys: list[str] = field(default_factory=list)
+    # True when the scope hit the server's per-(tenant, kind) row cap and was
+    # truncated. A capped scope is never complete: retiring on a truncated view
+    # would delete rows the crawl simply never reached.
+    capped: bool = False
+    # Schema-unlisted attribute keys dropped before upsert, for diagnostics.
+    dropped_attributes: list[str] = field(default_factory=list)
+    # Item ids retired by the client-side drift sweep (tenant-rooted kinds).
+    retired_item_ids: list[str] = field(default_factory=list)
 
     @property
     def complete(self) -> bool:
-        """A scope is reconcile-eligible only if it enumerated fully with no fatal error."""
-        return self.fully_enumerated and self.error is None
+        """Reconcile-eligible only if fully enumerated, uncapped, and error-free."""
+        return self.fully_enumerated and self.error is None and not self.capped
 
 
 @dataclass
 class RunSummary:
-    """Structured per-run telemetry (spec §8).
+    """Structured per-run telemetry.
 
     ``correlation_id`` is a **local-only** log/trace id -- it is never sent to the
-    Inventory API and never stamped onto rows (the design carries no per-run watermark).
+    Inventory API and never stamped onto rows. ``pass_started_at`` *is* sent: it is
+    the watermark the server's reconcile uses to decide which rows this pass did not
+    observe, so it must be captured before the first enumeration.
     """
 
     correlation_id: str = ""
+    pass_started_at: datetime | None = None
     scopes: list[ScopeReport] = field(default_factory=list)
     completed_scopes: list[ScopeKey] = field(default_factory=list)
+    reconciled: list[ReconcileResult] = field(default_factory=list)
     retired_counts: dict[str, int] = field(default_factory=dict)
     aborted: bool = False

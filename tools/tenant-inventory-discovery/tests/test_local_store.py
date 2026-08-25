@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from tenant_inventory_discovery.fake_inventory import StoredItem
+from tenant_inventory_discovery.in_memory_inventory import StoredItem
 from tenant_inventory_discovery.local_store import build_document
 from tenant_inventory_discovery.models import (
     Kind,
@@ -17,14 +17,13 @@ T3 = "2024-01-03T00:00:00Z"
 ENV_A = "env-aaaa"
 
 
-def _item(kind, natural_key, *, env="", connector_id=None, **attrs):
+def _item(kind, natural_key, *, env="", **attrs):
     attributes = {"naturalKey": natural_key, **attrs}
     return StoredItem(
         kind=kind,
         natural_key=natural_key,
         attributes=attributes,
         environment_id=env,
-        connector_id=connector_id,
     )
 
 
@@ -54,7 +53,7 @@ def _build(prior, items, summary, *, now):
         summary,
         tenant_id="t1",
         mode="demo",
-        write_path="in-memory-sink",
+        write_path="local-only",
         now=now,
     )
 
@@ -83,7 +82,7 @@ def _find(doc, kind, natural_key):
 
 def test_fresh_build_shape_and_timestamps():
     items = [
-        _item(Kind.CONNECTION, "c-1", env=ENV_A, connector_id="shared_sn"),
+        _item(Kind.CONNECTION, "c-1", env=ENV_A, connectorId="shared_sn"),
         _item(Kind.CONNECTION, "c-2", env=ENV_A),
     ]
     rep = _report(Kind.CONNECTION, env=ENV_A, complete=True, upserted=2, enumerated=2)
@@ -102,7 +101,11 @@ def test_fresh_build_shape_and_timestamps():
         assert rec["state"] == "Active"
         assert rec["firstSeenAt"] == T1
         assert rec["lastSeenAt"] == T1
-    assert _find(doc, Kind.CONNECTION, "c-1")["connectorId"] == "shared_sn"
+    # The connector edge is an attribute, not a top-level field: the server models it
+    # inside the attribute bag for Connection/ScenarioTemplate.
+    assert (
+        _find(doc, Kind.CONNECTION, "c-1")["attributes"]["connectorId"] == "shared_sn"
+    )
     assert "connectorId" not in _find(doc, Kind.CONNECTION, "c-2")
     assert doc["totals"] == {
         "resourceTypes": 1,

@@ -1,9 +1,10 @@
 """CLI entry point for the discovery skill.
 
-Runs a single discovery pass against a configured platform surface and Inventory API.
-By default it uses the in-memory fakes so the lifecycle can be exercised end-to-end
-without the live WeveNova API (Dep-1/Dep-3). Wire :class:`HttpInventoryClient` and the
-real platform client layer for production (see README ``[verify]`` items).
+Runs a single discovery pass against a sample platform surface and the in-memory
+Inventory client, so the whole lifecycle can be exercised without the live service.
+This entry point is a **development harness**; the kit drives the real thing through
+``solutions/ess-maker-skills/scripts/discover_inventory.py``, which wires the live
+platform clients and :class:`HttpInventoryClient`.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ import sys
 
 from .config import DiscoveryConfig
 from .discovery_skill import DiscoverySkill
-from .fake_inventory import FakeInventoryClient
+from .in_memory_inventory import InMemoryInventoryClient
 from .platform_clients import FakePlatform
 
 
@@ -38,11 +39,11 @@ def main(argv: list[str] | None = None) -> int:
         format="%(levelname)s %(name)s %(message)s",
     )
 
-    # NOTE: fakes for demo. Replace with the real platform client layer and
-    # HttpInventoryClient in production (README §Wiring).
+    # Sample platform + in-memory Inventory: this CLI is a development harness, not
+    # the production entry point (see the module docstring).
     skill = DiscoverySkill(
         platform=FakePlatform(),
-        inventory=FakeInventoryClient(),
+        inventory=InMemoryInventoryClient(),
         config=DiscoveryConfig(),
     )
     summary = skill.discover(args.tenant_id, environment_ids=args.environment_ids)

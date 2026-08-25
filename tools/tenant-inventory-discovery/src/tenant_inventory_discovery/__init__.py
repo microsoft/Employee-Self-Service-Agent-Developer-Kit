@@ -1,8 +1,7 @@
 """Tenant Inventory discovery skill (ADK) -- admin-run crawler.
 
 Enumerates a tenant's shared agent resources across eight kinds and writes each as one
-idempotent ``InventoryItem`` to the WeveNova Inventory API, then triggers a scoped
-server-side reconcile so the tenant picture stays current on every re-run.
+idempotent ``InventoryItem`` to the WeveNova Inventory API, then retires drift so the tenant picture stays current on every re-run.
 
 Grounding: ``Tenant-Inventory-DesignSpec.md`` (not vendored here) + the ADK
 implementation spec. See ``README.md`` for the ``[verify]`` items (Dep-1/Dep-3, Q-A).
@@ -15,6 +14,7 @@ from .discovery_skill import DiscoverySkill
 from .errors import (
     DiscoveryError,
     InventoryApiError,
+    NonRetryableApiError,
     PlatformError,
     PreconditionFailedError,
     RunLockError,
@@ -28,7 +28,7 @@ from .models import (
     Scope,
     ScopeKey,
     ScopeReport,
-    ScopeSnapshot,
+    ReconcileResult,
     UpsertResult,
 )
 from .runner import DiscoveryRunner
@@ -45,12 +45,13 @@ __all__ = [
     "Scope",
     "ScopeKey",
     "ScopeReport",
-    "ScopeSnapshot",
+    "ReconcileResult",
     "RunSummary",
     "UpsertResult",
     "DiscoveryError",
     "PlatformError",
     "InventoryApiError",
+    "NonRetryableApiError",
     "PreconditionFailedError",
     "ThrottledError",
     "RunLockError",

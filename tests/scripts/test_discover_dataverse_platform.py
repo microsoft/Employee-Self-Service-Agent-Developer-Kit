@@ -48,8 +48,7 @@ _FAKE_APPLICATIONS = [
     {
         "appId": _ENTRA_APP_ID,
         "displayName": "ESS Agent App",
-        "publisherDomain": "contoso.onmicrosoft.com",
-        "signInAudience": "AzureADMyOrg",
+        "id": "9d4e2c31-0000-4a11-9b7e-7c6f2d1a5e33",
     }
 ]
 
@@ -227,31 +226,49 @@ class TestConnections:
 
         bound = items[0]
         item = map_resource(Kind.CONNECTION, bound)
-        assert item.natural_key == f"{_ENV_ID}|cr-1"
-        assert item.attributes["connectorId"] == "shared_service-now"
-        assert item.connector_id == "shared_service-now"  # reference edge (§5.5)
+        assert item.natural_key == f"{_ENV_ID}:cr-1"
+        assert item.attributes["connectorId"] == "shared_service-now"  # ref edge (§5.5)
         assert item.attributes["status"] == "Active"
 
-    def test_unbound_connection_omits_connectorid_and_is_rejected(self, platform):
+    def test_unbound_connection_omits_connectorid_but_still_maps(self, platform):
+        """``connectorId`` is optional in the server schema, so an unbound ref is valid.
+
+        The reference edge is genuinely absent -- never silently defaulted (§6) -- but
+        a connection reference with no connector is still a real resource worth
+        recording, so it must not be dropped.
+        """
         items, _ = drain(platform.list_connections(_ENV_ID, page_size=100))
         unbound = items[1]
         assert "connectorId" not in unbound  # never silently defaulted (§6)
         assert unbound["status"] == "Inactive"  # statecode != 0
-        # Missing a required §5.3 key -> mapper rejects (recorded as skipped_invalid).
-        with pytest.raises(Exception):
-            map_resource(Kind.CONNECTION, unbound)
+
+        item = map_resource(Kind.CONNECTION, unbound)
+        assert item.natural_key == f"{_ENV_ID}:cr-2"
+        assert "connectorId" not in item.attributes
 
 
 class TestExtensionPacks:
-    def test_solution_maps_to_5_3_and_drops_nameless(self, platform):
+    def test_env_yields_one_pack_row_with_install_facts(self, platform):
+        """The schema has no pack identity, so an environment gets exactly one row."""
         items, complete = drain(platform.list_extension_packs(_ENV_ID, page_size=100))
         assert complete is True
-        # The nameless solution is dropped; only the named one survives.
         assert len(items) == 1
+
         item = map_resource(Kind.EXTENSION_PACK, items[0])
-        assert item.natural_key == f"{_ENV_ID}|ESS.HRSD"
-        assert item.attributes["version"] == "1.2.3"
-        assert item.attributes["publisher"] == "pub-1"
+        assert item.natural_key == _ENV_ID
+        assert item.attributes["installed"] is True
+        # "ESS.HRSD" is installed; nothing in the fixture mentions ITSM.
+        assert item.attributes["hrsd"] is True
+        assert item.attributes["itsm"] is False
+        # The Workday scenario config names the ISV flavor.
+        assert item.attributes["flavor"] == "Workday"
+
+    def test_pack_attributes_survive_the_server_schema(self, platform):
+        """Every emitted key must be one the Inventory schema models."""
+        items, _ = drain(platform.list_extension_packs(_ENV_ID, page_size=100))
+        dropped: list[str] = []
+        map_resource(Kind.EXTENSION_PACK, items[0], dropped_out=dropped)
+        assert dropped == []
 
 
 class TestEntraApps:
@@ -263,8 +280,7 @@ class TestEntraApps:
         assert item.natural_key == _ENTRA_APP_ID
         assert item.attributes["appId"] == _ENTRA_APP_ID
         assert item.attributes["displayName"] == "ESS Agent App"
-        assert item.attributes["publisherDomain"] == "contoso.onmicrosoft.com"
-        assert item.attributes["signInAudience"] == "AzureADMyOrg"
+        assert item.attributes["objectId"] == "9d4e2c31-0000-4a11-9b7e-7c6f2d1a5e33"
 
     def test_query_is_scoped_to_configured_app_id(self, platform):
         drain(platform.list_entra_apps(page_size=100))
@@ -275,8 +291,14 @@ class TestEntraApps:
     def test_missing_entra_app_id_raises_platform_error(self, monkeypatch):
         monkeypatch.setattr(auth, "authenticate", lambda env_url: "dummy-token")
         p = DataverseBackedPlatform(_ENV_URL, graph_client=_FakeGraphClient())
-        with pytest.raises(PlatformError):
+        with pytest.raises(PlatformError) as excinfo:
             drain(p.list_entra_apps(page_size=100))
+        # The scope is reported Incomplete using this text, so it has to name the real
+        # cause. /setup never provisions an Entra app -- pointing the operator at a
+        # missing config value sends them looking for a key nothing writes.
+        message = str(excinfo.value)
+        assert "/connect" in message
+        assert "retired" in message
 
     def test_graph_permission_error_becomes_platform_error(self, monkeypatch):
         monkeypatch.setattr(auth, "authenticate", lambda env_url: "dummy-token")
@@ -329,7 +351,7 @@ class TestKnowledgeSources:
         # The id-less component is dropped; only the SharePoint-backed one survives.
         assert len(items) == 1
         item = map_resource(Kind.KNOWLEDGE_SOURCE, items[0])
-        assert item.natural_key == f"{_ENV_ID}|{_BOT_ID}|ks-1"
+        assert item.natural_key == f"{_ENV_ID}:{_BOT_ID}:ks-1"
         assert item.attributes["displayName"] == "HR SharePoint"
         assert item.attributes["sourceType"] == "SharePointSource"
 
@@ -395,9 +417,11 @@ class TestScenarioTemplates:
         # The row with no uniquename is dropped; only the named one survives.
         assert len(items) == 1
         item = map_resource(Kind.SCENARIO_TEMPLATE, items[0])
-        assert item.natural_key == f"{_ENV_ID}|msdyn_HRWorkdayHCMReferenceData_Payslip"
-        assert item.attributes["displayName"] == "Get Payslip"
-        assert item.attributes["scenarioName"] == "Get Payslip"
+        assert item.natural_key == f"{_ENV_ID}:msdyn_HRWorkdayHCMReferenceData_Payslip"
+        # The Inventory schema models no displayName attribute for ScenarioTemplate,
+        # so the name becomes the row's top-level label instead of an attribute.
+        assert item.display_name == "Get Payslip"
+        assert "displayName" not in item.attributes
 
 
 class TestApiErrorTranslation:
