@@ -113,11 +113,31 @@ _POST_TIMEOUT = (3.05, 5)
 # Aria cube, because 1DS RTA cubes map an event property straight to a
 # dimension and cannot derive one dimension's value from another.
 #
-# Seeded with the Microsoft corporate Entra tenant only. Additional internal /
-# dogfood tenants can be added WITHOUT a code change via the
-# ``ESS_ADK_INTERNAL_TENANTS`` env var (comma-separated GUIDs) — preferred over
-# growing a hard-coded list.
+# Seeded with the Microsoft corporate Entra tenant plus known internal
+# dogfood/demo tenants that we own. Additional internal / dogfood tenants
+# can be added WITHOUT a code change via the ``ESS_ADK_INTERNAL_TENANTS``
+# env var (comma-separated GUIDs) — preferred for one-off / short-lived
+# additions; the hard-coded list is for well-known, long-lived tenancies.
 MICROSOFT_CORP_TENANT_ID = "72f988bf-86f1-41af-91ab-2d7cd011db47"
+# EmployeeHub dogfood tenant (team-owned; see PR #242 / customer-attribution
+# analysis).
+EMPLOYEEHUB_TENANT_ID = "935884d7-bdee-469b-a461-fcc530a3ac83"
+# ESS internal demo/test tenants surfaced by usage analysis. tenant_name
+# lookup during the auth path resolves these to ``Contoso`` and
+# ``Crontoso, Inc`` respectively; both are internal test tenancies.
+CONTOSO_INTERNAL_TENANT_ID = "ed667978-98e2-41a3-ad41-bafc8f728f02"
+CRONTOSO_INTERNAL_TENANT_ID = "99f9fd00-6145-4c3e-b3ba-d4c7e59470d8"
+
+# Well-known internal Microsoft tenancies. Kept as a module-level constant
+# so tests and analytics tooling can enumerate the same set.
+_HARDCODED_INTERNAL_TENANT_IDS: frozenset[str] = frozenset(
+    {
+        MICROSOFT_CORP_TENANT_ID,
+        EMPLOYEEHUB_TENANT_ID,
+        CONTOSO_INTERNAL_TENANT_ID,
+        CRONTOSO_INTERNAL_TENANT_ID,
+    }
+)
 
 TENANT_CLASS_INTERNAL = "internal"
 TENANT_CLASS_CUSTOMER = "customer"
@@ -150,7 +170,7 @@ def _internal_tenant_ids() -> frozenset[str]:
 @lru_cache(maxsize=8)
 def _parse_internal_tenant_ids(extra: str) -> frozenset[str]:
     """Parse the comma-separated allow-list, cached per distinct env value."""
-    ids = {MICROSOFT_CORP_TENANT_ID}
+    ids = set(_HARDCODED_INTERNAL_TENANT_IDS)
     ids.update(t.strip().lower() for t in extra.split(",") if t.strip())
     return frozenset(ids)
 
