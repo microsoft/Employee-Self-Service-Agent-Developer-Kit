@@ -357,13 +357,14 @@ findings.
 Instruction changes are behavioral changes, and this skill has no way to demonstrate that the new text
 produces better answers. Say that plainly and route the maker onward.
 
-**Internal — do not say any of this to the maker.** `/evaluate` *authors* evaluation cases; the CSVs land
-in `workspace/tests/{date}/` and are uploaded to the Copilot Studio Evaluation portal, which runs them
-against the agent **as deployed**. `/test` drives a **topic or a workflow** to debug its runtime behavior;
-it does not exercise system instructions, so it is not the way to check an instruction change. Neither
-command reads the local `agent.mcs.yml`, which is why the push comes first. Use this to route correctly —
-name only the command you are recommending. A maker who is told which commands *not* to use has been handed
-your reasoning instead of a next step.
+**Internal — do not say any of this to the maker.** `/evaluate` *authors* evaluation cases: it writes them
+to `{agent.folder}/evaluations/` as `.mcs.yml` and pushes them to Copilot Studio as `botcomponent` records,
+which the maker then runs from the Evaluation tab. The run happens against the agent **as deployed**.
+`/test` drives a **topic or a workflow** to debug its runtime behavior; it does not exercise system
+instructions, so it is not the way to check an instruction change. Neither command reads the local
+`agent.mcs.yml`, which is why the push comes first. Use this to route correctly — name only the command you
+are recommending. A maker who is told which commands *not* to use has been handed your reasoning instead of
+a next step.
 
 **If changes were applied:**
 
@@ -376,9 +377,9 @@ paragraph about testing. Do not merge it into the `/evaluate` sentence, and do n
 > The change is in your local copy only — your agent in Copilot Studio is still running the previous
 > instructions. **Run `/push` to send it.**
 >
-> After that, `/evaluate` will turn the answers you didn't like into evaluation cases. It writes a CSV you
-> upload to the Copilot Studio Evaluation portal, which runs them against your agent and shows you whether
-> the behaviour actually changed.
+> After that, `/evaluate` will turn the answers you didn't like into evaluation cases and add them to your
+> agent in Copilot Studio. You run them from the Evaluation tab there, and the results show you whether the
+> behaviour actually changed.
 
 Where the maker gave specific bad responses in Step 2, carry them forward: those are the highest-value
 evaluation rows available, and they are the only direct evidence of whether this pass worked. Offer to run
