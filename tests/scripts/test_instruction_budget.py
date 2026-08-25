@@ -362,6 +362,25 @@ def test_skill_forbids_option_menus_at_intake():
     skill = _SKILL_ROOT / "src" / "skills" / "instructions" / "harden" / "SKILL.md"
     step_2 = (skill.read_text(encoding="utf-8")
               .split("## Step 2:")[1].split("## Step 3:")[0])
+    flat_2 = " ".join(step_2.split())
 
-    assert "Do not offer numbered options" in step_2
-    assert "ask again" in step_2
+    assert "Do not offer numbered options" in flat_2
+    # One prose follow-up turns a label into something scopeable often enough
+    # to be worth asking for.
+    assert "follow up once" in flat_2
+
+
+def test_skill_does_not_gate_intake_on_concrete_examples():
+    """A run asked repeatedly for a verbatim question/answer pair before it
+    would look at anything, which reads as a gate on the capability. Step 6
+    has branches for a theme and for no reported problem, so the run has
+    somewhere to go without an example."""
+    skill = _SKILL_ROOT / "src" / "skills" / "instructions" / "harden" / "SKILL.md"
+    step_2 = (skill.read_text(encoding="utf-8")
+              .split("## Step 2:")[1].split("## Step 3:")[0])
+    flat_2 = " ".join(step_2.split())
+
+    assert "Examples are never required" in flat_2
+    # The earlier wording stalled the run on a label instead of routing it.
+    assert "Do not proceed to Step 3" not in flat_2
+    assert "you do not have an answer yet" not in flat_2

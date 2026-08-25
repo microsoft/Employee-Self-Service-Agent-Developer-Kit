@@ -116,11 +116,16 @@ instead, and a category tells you nothing you can anchor a change to. Ask this a
 > If nothing specific has gone wrong, that's fine too — say so and I'll check the instructions for
 > contradictions and gaps and tell you what I find.
 
-**If the answer names a category rather than a behavior, you do not have an answer yet — ask again.**
-"General concerns", "the usual problems", "hallucination", or picking one of your own examples back are
-labels, not evidence. Follow up in prose — *"What has it been doing that concerns you?"* — and wait. Do
-not proceed to Step 3 on a label. A proposal built from a category is a proposal built from nothing, and
-it will read as generic hardening because that is what it is.
+**If the answer names a category rather than a behavior, follow up once — then proceed with whatever the
+second answer gives you.** "General concerns", "the usual problems", "hallucination", or picking one of
+your own examples back are labels rather than evidence, and one prose follow-up — *"What has it been doing
+that concerns you?"* — often turns a label into a behavior class worth scoping to.
+
+**Examples are never required.** Ask once, accept the answer, and move on. A maker who cannot produce a
+verbatim exchange still has a real concern, and a second or third request for one reads as a gate on a
+capability they asked for. If the follow-up produces nothing more specific, that is itself an answer: you
+have a theme or no reported problem, and Step 6 has a branch for each. Say what you are working from —
+*"I'll work from that as a general concern and tell you what I find"* — and go to Step 3.
 
 Record their answer. Do not paraphrase a vague answer into a specific complaint — if they said "it makes
 things up sometimes" without an example, you have a **theme**, not a case, and Step 6 treats those
