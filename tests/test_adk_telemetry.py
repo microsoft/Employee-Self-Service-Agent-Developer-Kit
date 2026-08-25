@@ -308,6 +308,7 @@ def test_classify_tenant_hardcoded_internal_dogfood_tenants(monkeypatch):
     assert _fc.classify_tenant(_fc.EMPLOYEEHUB_TENANT_ID) == "internal"
     assert _fc.classify_tenant(_fc.CONTOSO_INTERNAL_TENANT_ID) == "internal"
     assert _fc.classify_tenant(_fc.CRONTOSO_INTERNAL_TENANT_ID) == "internal"
+    assert _fc.classify_tenant(_fc.COCREATE_TEST_TENANT_ID) == "internal"
     # Case / whitespace insensitive on the new hardcoded entries too.
     assert _fc.classify_tenant(f"  {_fc.CONTOSO_INTERNAL_TENANT_ID.upper()} ") == "internal"
 

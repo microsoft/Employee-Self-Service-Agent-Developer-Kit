@@ -127,6 +127,9 @@ EMPLOYEEHUB_TENANT_ID = "935884d7-bdee-469b-a461-fcc530a3ac83"
 # ``Crontoso, Inc`` respectively; both are internal test tenancies.
 CONTOSO_INTERNAL_TENANT_ID = "ed667978-98e2-41a3-ad41-bafc8f728f02"
 CRONTOSO_INTERNAL_TENANT_ID = "99f9fd00-6145-4c3e-b3ba-d4c7e59470d8"
+# Cocreate test tenancy (``TESTTEST_Cocreate_06302026`` /
+# ``devtestcocreate0630.onmicrosoft.com``); internal dev/test only.
+COCREATE_TEST_TENANT_ID = "8d36aacf-bbb3-4388-ac14-8844210f377b"
 
 # Well-known internal Microsoft tenancies. Kept as a module-level constant
 # so tests and analytics tooling can enumerate the same set.
@@ -136,6 +139,7 @@ _HARDCODED_INTERNAL_TENANT_IDS: frozenset[str] = frozenset(
         EMPLOYEEHUB_TENANT_ID,
         CONTOSO_INTERNAL_TENANT_ID,
         CRONTOSO_INTERNAL_TENANT_ID,
+        COCREATE_TEST_TENANT_ID,
     }
 )
 
