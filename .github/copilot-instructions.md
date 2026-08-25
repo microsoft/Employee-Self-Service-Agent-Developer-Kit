@@ -28,10 +28,12 @@ For everything that isn't an attempt to use the kit (general questions, code exp
    - `/menu`
    - `/troubleshoot`
    - `/flightcheck`
+   - `/planner`
 
 2. **Intent hint — natural-language equivalent.** The user isn't typing a slash-command but is unambiguously asking to *run* the kit from this workspace. Examples:
    - "How do I set up the kit?" / "How do I run setup?" / "Start the ESS Maker Kit"
    - "Run flightcheck" / "Run the readiness check on my agent"
+   - "Plan a rollout" / "Plan an ESS deployment" / "What am I assigned?" — when phrased as a request to run the planner now in this workspace.
    - "Create a topic" / "Connect ServiceNow" / "Scan my agent for errors" — when phrased as a request to *do it now* in this workspace, not as a general "how does this work?" question.
 
    When in doubt, prefer the default behavior (answer normally) over firing the redirect. A user asking "what does /flightcheck do?" is asking a documentation question — answer it from the README and `solutions/ess-maker-skills/` files; do **not** redirect.
@@ -48,7 +50,7 @@ When (and only when) the trigger conditions above are met, respond with **only**
 > 2. Navigate **inside** this folder, then **into** `solutions`, and select `ess-maker-skills`
 > 3. Click `Select Folder`
 > 4. VS Code will reopen with the kit loaded
-> 5. Type `/setup` again — it will work this time
+> 5. Type your command again (for example `/setup` or `/planner`) — it will work this time
 >
 > See the [README](README.md) for the full getting-started walkthrough.
 >

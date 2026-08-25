@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "about": "Non-Learn planning facts for the ESS planner. The authoritative scenario list, priority order, and dependency edges live in the vendored ESS scenario catalogue (scripts/planner/scenario_catalogue.md). This file holds only the machine-checkable scenario dependency edges (mirrored from that catalogue, applied when both scenarios are in scope) that the check-deps CLI enforces, plus a small recognition lexicon used to spot role/output nouns when reading Learn pages. Each entry carries an explicit source. Do not invent edges the catalogue does not define; re-sync when the catalogue changes.",
+  "scenarioDependencies": [
+    {
+      "scenario": "hr-ticketing",
+      "dependsOn": "hr-knowledge",
+      "kind": "recommends",
+      "source": "ESS scenario catalogue (Dependency order)",
+      "rationale": "Knowledge is the deflection foundation - Ticketing works best after Knowledge; skipping Knowledge means more tickets are created instead of deflected."
+    },
+    {
+      "scenario": "it-ticketing",
+      "dependsOn": "it-knowledge",
+      "kind": "recommends",
+      "source": "ESS scenario catalogue (Dependency order)",
+      "rationale": "Knowledge is the deflection foundation - IT Ticketing works best after IT Knowledge."
+    },
+    {
+      "scenario": "hr-profile-write",
+      "dependsOn": "hr-profile-read",
+      "kind": "requires",
+      "source": "ESS scenario catalogue (Dependency order)",
+      "rationale": "Enable a category's reads before its writes (HR Profile Read before HR Profile Write) - governance / least privilege."
+    }
+  ],
+  "recognition": {
+    "about": "Vocabulary the planner uses to RECOGNISE roles/outputs while reading Learn pages. It does not define the roles/outputs - those are read from the page. Extend conservatively.",
+    "roles": [
+      "Power Platform administrator",
+      "Power Platform admin",
+      "Global administrator",
+      "Microsoft 365 administrator",
+      "Teams administrator",
+      "SharePoint administrator",
+      "security administrator",
+      "Entra administrator",
+      "maker"
+    ],
+    "outputs": [
+      "environment",
+      "connection",
+      "connector",
+      "app registration",
+      "Entra app",
+      "knowledge source",
+      "solution",
+      "agent",
+      "publish"
+    ]
+  }
+}
