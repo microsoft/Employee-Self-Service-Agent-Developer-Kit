@@ -1,0 +1,8 @@
+# Compiled Python
+__pycache__/
+*.pyc
+
+# Per-environment secrets and runtime state (never commit)
+tokens/
+logs/
+data/user-cache.json

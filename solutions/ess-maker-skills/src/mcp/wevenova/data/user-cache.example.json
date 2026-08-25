@@ -1,0 +1,20 @@
+[
+  {
+    "aadId": "00000000-0000-0000-0000-000000000001",
+    "displayName": "Primary Demo Maker",
+    "alias": "primary",
+    "emailAddress": "primary@contoso.com",
+    "tenantId": "11111111-1111-1111-1111-111111111111",
+    "tokenProfile": "primary",
+    "source": "example — copy to user-cache.json and edit"
+  },
+  {
+    "aadId": "00000000-0000-0000-0000-000000000002",
+    "displayName": "Default Demo User",
+    "alias": "default",
+    "emailAddress": "default@contoso.com",
+    "tenantId": "11111111-1111-1111-1111-111111111111",
+    "tokenProfile": "default",
+    "source": "example — copy to user-cache.json and edit"
+  }
+]
