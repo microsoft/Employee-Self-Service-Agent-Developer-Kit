@@ -357,52 +357,54 @@ findings.
 Instruction changes are behavioral changes, and this skill has no way to demonstrate that the new text
 produces better answers. Say that plainly and route the maker onward.
 
-**Internal — do not say any of this to the maker.** `/evaluate` *authors* evaluation cases: it writes them
-to `{agent.folder}/evaluations/` as `.mcs.yml` and pushes them to Copilot Studio as `botcomponent` records,
-which the maker then runs from the Evaluation tab. The run happens against the agent **as deployed**.
-`/test` drives a **topic or a workflow** to debug its runtime behavior; it does not exercise system
-instructions, so it is not the way to check an instruction change. Neither command reads the local
-`agent.mcs.yml`, which is why the push comes first. Use this to route correctly — name only the command you
-are recommending. A maker who is told which commands *not* to use has been handed your reasoning instead of
-a next step.
+**Internal — do not say any of this to the maker.** `/push` writes the local `agent.mcs.yml` to Copilot
+Studio through Dataverse. It does **not** publish the agent: the change lands in the agent's draft, which is
+what the Copilot Studio test pane answers from, while published channels keep serving the previous
+instructions until the maker publishes. `/test` drives that test pane — it sends a prompt and captures the
+reply — so it is the command that shows whether the new instructions changed the answers. A pushed
+instruction change is not always visible immediately; the runtime can serve a cached definition for several
+minutes. Neither command reads the local `agent.mcs.yml`, which is why the push comes first. Name only the
+command you are recommending. A maker who is told which commands *not* to use has been handed your
+reasoning instead of a next step.
 
 **If changes were applied:**
 
-The applied path **must** name `/push`, as its own instruction, before anything about evaluation. This is
+The applied path **must** name `/push`, as its own instruction, before anything about testing. This is
 the only command that makes the change real, and it is the one most easily lost when it is bundled into a
-paragraph about testing. Do not merge it into the `/evaluate` sentence, and do not leave it implied.
+paragraph about testing. Do not merge it into the `/test` sentence, and do not leave it implied.
 
 > Two things to know before you check whether this worked.
 >
 > The change is in your local copy only — your agent in Copilot Studio is still running the previous
-> instructions. **Run `/push` to send it.**
+> instructions. **Run `/push` to send it.** That updates the agent in Copilot Studio but does not publish
+> it, so anyone using the published agent keeps the previous instructions until you publish.
 >
-> After that, `/evaluate` will turn the answers you didn't like into evaluation cases and add them to your
-> agent in Copilot Studio. You run them from the Evaluation tab there, and the results show you whether the
-> behaviour actually changed.
+> Then run `/test` and ask the questions that produced the answers you didn't like. It drives your agent
+> and shows you the actual replies, which is the only way to see whether the new instructions changed the
+> behaviour. A pushed change can take a few minutes to reach the test pane — if you still see the old
+> behaviour, wait and ask again before concluding it didn't work.
 
 Where the maker gave specific bad responses in Step 2, carry them forward: those are the highest-value
-evaluation rows available, and they are the only direct evidence of whether this pass worked. Offer to run
-`/evaluate` with them.
+probes available, and they are the only direct evidence of whether this pass worked. Offer to run `/test`
+with them.
 
 Also mention, once, that a change intended to prevent a bad answer can also cause the agent to decline good
-questions — so the evaluation set should include a few normal, in-scope questions alongside the failing
-ones. Without those rows, an agent that has started refusing everything still scores clean.
+questions — so the questions asked should include a few normal, in-scope ones alongside the failing ones.
+Without those, an agent that has started refusing everything still looks fixed.
 
 **If the maker declined or deferred the proposal:**
 
 > Nothing has changed, locally or in Copilot Studio. If you want to find out whether the behaviour I
-> described actually shows up, `/evaluate` will build an evaluation set you can run against the agent as
-> it stands — that gives you a baseline before changing anything.
+> described actually shows up, `/test` drives your agent so you can ask the questions directly — that
+> gives you a baseline before changing anything.
 
 **If nothing was proposed:**
 
 > I didn't find anything worth changing in the instructions. That doesn't mean the agent answers well —
 > instructions are only one input, and knowledge sources and topics matter at least as much.
 >
-> `/evaluate` will build an evaluation set to run against the agent, which finds behaviour problems this
-> review cannot see. If you suspect one specific topic or workflow is misbehaving, `/test` drives that
-> component directly.
+> `/test` drives your agent so you can ask the questions that concern you and see the actual replies. That
+> finds behaviour problems this review cannot see.
 
 Reading the instructions cannot tell you what the agent actually says. Do not let a clean review stand as
 evidence that the agent is fine.

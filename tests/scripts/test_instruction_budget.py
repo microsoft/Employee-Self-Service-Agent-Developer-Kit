@@ -304,19 +304,21 @@ def test_skill_states_changes_are_local_until_push():
     # the maker is not told the same thing twice in adjacent paragraphs.
     assert "Step 10 gives the instruction to push" in step_9
 
-    # /evaluate pushes eval sets to Copilot Studio as botcomponent records and
-    # the maker runs them from the Evaluation tab; /test drives a topic or
-    # workflow. Neither reads the local agent.mcs.yml, so the push has to come
-    # first or the evaluation measures the old text.
+    # /push writes agent.mcs.yml to Copilot Studio without publishing, so the
+    # change reaches the draft the test pane answers from. /test drives that
+    # pane and captures the reply, which is how an instruction change is
+    # checked. Neither reads the local agent.mcs.yml, so the push comes first.
     step_10 = skill_text.split("## Step 10:")[1].split("## References")[0]
     # Markdown wraps at 110 columns, so a phrase can span a newline.
     flat_10 = " ".join(step_10.split())
-    assert "as deployed" in flat_10
-    assert "does not exercise system instructions" in flat_10
+    assert "does not publish" in flat_10
+    assert "drives that test pane" in flat_10
+    # A pushed change can be served from a cached definition for minutes; a
+    # maker who is not told that reads stale behaviour as a failed fix.
+    assert "cached definition" in flat_10
     # It does not write CSVs to workspace/tests/, a path that exists nowhere
     # else in the repo.
     assert "workspace/tests" not in flat_10
-    assert "{agent.folder}/evaluations/" in flat_10
     # That explanation is routing logic for the model. A real run leaked it to
     # the maker, who was told what /test is not for instead of a next step.
     assert "Internal — do not say any of this to the maker." in flat_10
@@ -324,7 +326,9 @@ def test_skill_states_changes_are_local_until_push():
     maker_facing = "\n".join(
         ln for ln in applied.splitlines() if ln.lstrip().startswith(">")
     )
-    assert "/test" not in maker_facing
+    # /test is what actually exercises the new instructions, so the applied
+    # path has to name it rather than leaving the maker without a way to look.
+    assert "/test" in maker_facing
     # /push is the only command that makes the change real, and a run dropped
     # it once the routing rule was read as "name one command".
     assert "must** name `/push`" in applied
