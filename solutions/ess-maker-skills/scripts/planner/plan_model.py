@@ -62,6 +62,17 @@ ARTIFACT_STATES = ("Active", "Superseded")
 PRINCIPAL_TYPES = ("User", "Role")
 CONTEXT_SOURCES = ("User", "Agent", "Discovered")
 ARTIFACT_KINDS = ("Environment", "Connection", "EntraApp", "KnowledgeSource", "Agent", "Custom")
+# Plan lifecycle vocab (mirrors the WeveNova PlanStatus enum). A local plan lives
+# in Draft until the sync seam pushes and activates it server-side.
+PLAN_STATES = ("Draft", "Active", "Completed", "Archived")
+# The ESS agent a plan configures (mirrors the WeveNova ConfiguringAgentName enum).
+# Required on the create body, so a plan must name one before it can be pushed.
+CONFIGURING_AGENT_NAMES = (
+    "EmployeeSelfServiceHRCEA",
+    "EmployeeSelfServiceHRDA",
+    "EmployeeSelfServiceITCEA",
+    "EmployeeSelfServiceITDA",
+)
 # The ledger key the /setup task produces and downstream tasks consume — the
 # grounded signal used to identify the setup task and env-dependent tasks. A Task
 # is described only by its title + description (matching the WeveNova Task
@@ -75,6 +86,10 @@ DEPENDENCY_KINDS = ("requires", "recommends")
 SCENARIO_GROUP = "scenario"
 DEPENDS_ON_GROUP = "scenarioDependsOn"
 _DEP_SEP = " -> "
+# Acceptance criteria (definition-of-done) live in the open Context bag under this
+# group so the local model stays a single bag; the sync seam promotes them to the
+# WeveNova Plan's first-class acceptanceCriteria list on export and back on import.
+ACCEPTANCE_GROUP = "acceptanceCriteria"
 
 
 class Limits:
@@ -285,10 +300,13 @@ class Plan:
             "schemaVersion": SCHEMA_VERSION,
             "planId": "",
             "projectId": "",
+            "configuringAgentName": "",
             "status": "Draft",
             "context": [],
             "tasks": [],
             "outputs": [],
+            "etag": "",
+            "syncedAt": "",
         }
         plan = cls(data)
         if objective:
@@ -305,7 +323,7 @@ class Plan:
         data.setdefault("schemaVersion", SCHEMA_VERSION)
         for key in ("context", "tasks", "outputs"):
             data.setdefault(key, [])
-        for key in ("planId", "projectId"):
+        for key in ("planId", "projectId", "configuringAgentName", "etag", "syncedAt"):
             data.setdefault(key, "")
         data.setdefault("status", "Draft")
         return cls(data)
@@ -367,6 +385,46 @@ class Plan:
             if t.get("id") == task_id:
                 return t
         return None
+
+    # ---- remote identity (sync seam) ------------------------------------ #
+
+    @property
+    def configuring_agent_name(self) -> str:
+        return self.data.get("configuringAgentName", "")
+
+    def set_configuring_agent_name(self, name: str) -> None:
+        """Name the ESS agent this plan configures — required before a sync push.
+
+        Must be one of :data:`CONFIGURING_AGENT_NAMES` (mirrors the WeveNova
+        ``ConfiguringAgentName`` enum).
+        """
+        if name not in CONFIGURING_AGENT_NAMES:
+            raise ValueError(
+                "configuringAgentName must be one of " + ", ".join(CONFIGURING_AGENT_NAMES)
+            )
+        self.data["configuringAgentName"] = name
+
+    def set_remote_identity(
+        self,
+        *,
+        project_id: str | None = None,
+        plan_id: str | None = None,
+        etag: str | None = None,
+        synced_at: str | None = None,
+    ) -> None:
+        """Record the server ids / ETag this local cache now mirrors (sync seam).
+
+        ``syncedAt`` is refreshed to *now* unless an explicit value is given.
+        Only the arguments that are not ``None`` are written, so a partial stamp
+        (e.g. project id before the plan exists) leaves the rest untouched.
+        """
+        if project_id is not None:
+            self.data["projectId"] = project_id
+        if plan_id is not None:
+            self.data["planId"] = plan_id
+        if etag is not None:
+            self.data["etag"] = etag
+        self.data["syncedAt"] = synced_at if synced_at is not None else now_iso()
 
     # ---- context (intent) mutators -------------------------------------- #
 
@@ -778,6 +836,10 @@ class Plan:
         if d.get("schemaVersion") != SCHEMA_VERSION:
             errors.append(f"schemaVersion should be {SCHEMA_VERSION}")
 
+        agent_name = d.get("configuringAgentName")
+        if agent_name and agent_name not in CONFIGURING_AGENT_NAMES:
+            errors.append(f"invalid configuringAgentName: {agent_name!r}")
+
         # Context
         if len(self.context) > Limits.MAX_CONTEXT_ENTRIES:
             errors.append(f"too many context entries (> {Limits.MAX_CONTEXT_ENTRIES})")
@@ -887,7 +949,11 @@ class Plan:
         lines.append(f"# Scenario plan — {objective}")
         lines.append("")
         planid = d.get("planId") or "(local, not synced)"
-        lines.append(f"Status: {d.get('status', '')}  |  Plan: {planid}")
+        agent = d.get("configuringAgentName") or "(agent not set)"
+        header = f"Status: {d.get('status', '')}  |  Agent: {agent}  |  Plan: {planid}"
+        if d.get("syncedAt"):
+            header += f"  |  Synced: {d.get('syncedAt')}"
+        lines.append(header)
         lines.append("")
 
         # Intent, grouped.

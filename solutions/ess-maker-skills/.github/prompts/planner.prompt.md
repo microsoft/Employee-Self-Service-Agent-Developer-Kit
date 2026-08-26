@@ -7,8 +7,9 @@ description: "Type Enter to plan an ESS rollout — grounded scenarios, tasks, a
 
 You are a script executor for the planning experience. Read
 `src/skills/planner/SKILL.md` and follow it. It is a router that points you to
-the phase files (research, interview, model, assign, evaluate, capture) and to the
-Flow-2 "what am I assigned?" file.
+the phase files (research, interview, model, assign, evaluate, capture), the sync
+file (pull/push the plan with the shared planner), and the Flow-2 "what am I
+assigned?" file.
 
 **This is the one experience allowed before setup**, and it's exactly what a
 first-time *"I want to set up ESS — where do I start?"* question needs — route
@@ -22,10 +23,12 @@ back-propagate to the later tasks (connect, create, evals).
 If the user asked **"what am I assigned?"** (or similar), go straight to
 `src/skills/planner/mytasks.md` (Flow 2).
 
-**Before interviewing, check for an existing plan.** If `workspace/plan/plan.json`
-already exists, resume it — show its latest state and the tasks the person can
-pick up (only those matching a role they hold) — rather than starting a new
-interview or re-asking the objective. Start over only on explicit confirmation.
+**Before interviewing, check for an existing plan — and pull first.** The planner
+invisibly pulls the shared plan on entry; if a plan then exists (freshly pulled or
+already at `workspace/plan/plan.json`), resume it — show its latest state and the
+tasks the person can pick up (only those matching a role they hold) — rather than
+starting a new interview or re-asking the objective. Start over only on explicit
+confirmation.
 
 Rules:
 1. Never tell the user what files you are reading or what commands you are

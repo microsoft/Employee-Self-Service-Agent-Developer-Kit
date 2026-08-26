@@ -38,6 +38,7 @@ from planner import research
 from planner.capture import detect_config_artifacts, snapshot_config
 from planner.plan_model import (
     ARTIFACT_KINDS,
+    CONFIGURING_AGENT_NAMES,
     PLAN_PATH,
     SCENARIO_GROUP,
     Plan,
@@ -45,6 +46,11 @@ from planner.plan_model import (
     plan_artifact,
     principal_person,
     principal_pool,
+)
+from planner.sync import (
+    hydrate_from_remote,
+    stamp_remote_ids,
+    to_remote_plan_body,
 )
 
 
@@ -460,6 +466,101 @@ def cmd_validate(args: argparse.Namespace) -> int:
 
 
 # --------------------------------------------------------------------------- #
+# Sync seam — the local plan mirrors the planner service. The CLI never talks to
+# the network: these commands only translate between the local document and the
+# JSON the skill shuttles to/from the planner tools (see planner.sync).
+# --------------------------------------------------------------------------- #
+
+def _read_input(source: str | None) -> str:
+    """Read a JSON payload from a file path, or stdin when ``source`` is ``-``."""
+    if source in (None, "-"):
+        return sys.stdin.read()
+    with open(source, "r", encoding="utf-8") as fh:
+        return fh.read()
+
+
+def cmd_set_agent_name(args: argparse.Namespace) -> int:
+    """Name the ESS agent this plan configures — required before it can be pushed."""
+    plan = _load(args)
+    try:
+        plan.set_configuring_agent_name(args.name)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    _save(plan, args)
+    print(f"Set configuring agent name to {args.name}")
+    return 0
+
+
+def cmd_export_remote_plan(args: argparse.Namespace) -> int:
+    """Print the single create body for pushing this plan (as one object)."""
+    plan = _load(args)
+    try:
+        body = to_remote_plan_body(plan, configuring_agent_name=args.agent_name)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    print(json.dumps(body, indent=2, ensure_ascii=False))
+    return 0
+
+
+def cmd_import_remote_plan(args: argparse.Namespace) -> int:
+    """Rebuild the local cache from a pushed plan's entities.
+
+    Reads a ``{"plan": <plan>, "tasks": [...]}`` JSON payload (or a bare plan
+    entity) and writes the hydrated document. The service is the source of truth,
+    so this does **not** gate the write on local validation — it only surfaces any
+    validation notes as non-blocking warnings.
+    """
+    try:
+        payload = json.loads(_read_input(args.input))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Could not read plan payload: {exc}", file=sys.stderr)
+        return 1
+
+    if isinstance(payload, dict) and "plan" in payload:
+        plan_entity = payload.get("plan")
+        tasks = payload.get("tasks")
+    else:
+        # Allow passing the plan entity directly (tasks embedded via expansion).
+        plan_entity = payload
+        tasks = None
+
+    try:
+        data = hydrate_from_remote(plan_entity, tasks)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
+    plan = Plan(data)
+    plan.save_all(args.plan)
+    print(
+        f"Imported plan {data.get('planId') or '(no id)'} "
+        f"with {len(data.get('tasks', []))} task(s)"
+    )
+    warnings = plan.validate()
+    if warnings:
+        print("Note — local validation flagged (not blocking the import):", file=sys.stderr)
+        for warning in warnings:
+            print(f"  - {warning}", file=sys.stderr)
+    return 0
+
+
+def cmd_stamp_remote(args: argparse.Namespace) -> int:
+    """Record the service ids/ETag a locally-authored plan now mirrors."""
+    plan = _load(args)
+    stamp_remote_ids(
+        plan,
+        project_id=args.project_id,
+        plan_id=args.plan_id,
+        plan_etag=args.etag,
+    )
+    _save(plan, args)
+    print(f"Stamped remote identity: project={args.project_id} plan={args.plan_id}")
+    return 0
+
+
+# --------------------------------------------------------------------------- #
 # Parser
 # --------------------------------------------------------------------------- #
 
@@ -593,6 +694,30 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("validate", help="validate the plan")
     p.set_defaults(func=cmd_validate)
+
+    p = sub.add_parser("set-agent-name",
+                       help="name the ESS agent this plan configures (required before a sync push)")
+    p.add_argument("--name", required=True, choices=list(CONFIGURING_AGENT_NAMES))
+    p.set_defaults(func=cmd_set_agent_name)
+
+    p = sub.add_parser("export-remote-plan",
+                       help="print the single create body for pushing this plan (JSON)")
+    p.add_argument("--agent-name", dest="agent_name", choices=list(CONFIGURING_AGENT_NAMES),
+                   help="override the plan's configuringAgentName for this export")
+    p.set_defaults(func=cmd_export_remote_plan)
+
+    p = sub.add_parser("import-remote-plan",
+                       help="rebuild the local cache from a pushed plan's entities (JSON)")
+    p.add_argument("--input", default="-",
+                   help="path to a {plan, tasks} JSON file, or '-' for stdin (default)")
+    p.set_defaults(func=cmd_import_remote_plan)
+
+    p = sub.add_parser("stamp-remote",
+                       help="record the service ids/ETag this local plan mirrors")
+    p.add_argument("--project-id", dest="project_id", required=True)
+    p.add_argument("--plan-id", dest="plan_id", required=True)
+    p.add_argument("--etag", help="plan ETag for optimistic concurrency (optional)")
+    p.set_defaults(func=cmd_stamp_remote)
 
     return parser
 

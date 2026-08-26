@@ -130,12 +130,14 @@ def test_set_system_scopes_keys_per_area():
 def test_plan_has_only_spec_fields():
     # The plan carries only fields the Step-2 spec (§7.1) defines: schemaVersion
     # (local file format) + planId/projectId/status + the Context bag + the
-    # Outputs ledger + the local tasks container. No invented generatedAt/
-    # updatedAt (server tracks CreatedAt/UpdatedAt) and no invented `notes`.
+    # Outputs ledger + the local tasks container, plus the sync-seam mirror
+    # fields (configuringAgentName + etag/syncedAt) that pair the local cache to
+    # its service plan. No invented generatedAt/updatedAt (server tracks
+    # CreatedAt/UpdatedAt) and no invented `notes`.
     plan = Plan.new(objective="x")
     assert set(plan.data) == {
-        "schemaVersion", "planId", "projectId", "status",
-        "context", "tasks", "outputs",
+        "schemaVersion", "planId", "projectId", "configuringAgentName", "status",
+        "context", "tasks", "outputs", "etag", "syncedAt",
     }
 
 

@@ -8,7 +8,9 @@ work, and captures Task outputs (starting with the environment `/setup`
 **connects to** — it records an already-deployed agent/environment, it does not
 create one) so later Tasks read them straight off the Plan.
 
-The Plan lives at `workspace/plan/plan.json`. Its human view —
+The Plan lives at `workspace/plan/plan.json` — a local **cache** of the shared
+planner (the service every maker on the agent shares; pull/push flow in
+`src/skills/planner/sync.md`). Its human view —
 `workspace/plan/ESS-scenario-plan.md` — is an **editable** surface a Plan editor
 can revise directly (or edit and re-upload); you reconcile their edits back into
 the plan (`src/skills/planner/edit.md`). The CLI regenerates it after every change.
@@ -42,19 +44,25 @@ exist yet, and the first Task the Plan emits is usually "run setup". So:
 **Always begin here. Do NOT ask for the objective (or anything else) until you
 have checked for an existing plan.**
 
-1. Check whether a plan already exists at `workspace/plan/plan.json`.
+1. **Pull the shared plan first — invisibly.** Before deciding anything, bring
+   the shared planner's copy down: get-or-create the ESS project, list its plans,
+   and if one exists hydrate the local cache from it (concrete tool + CLI flow:
+   `src/skills/planner/sync.md`). If the service can't be reached, just use
+   whatever is already in `workspace/plan/plan.json`. Then check whether a plan
+   now exists locally (freshly pulled, or a local draft not yet pushed).
 2. **If a plan exists, resume it — do not re-interview and do not ask for the
    objective again.**
    - Show its latest state: `python scripts/planner/cli.py summary` — the
      objective, every task and its state, scenario dependencies, and what's been
      produced so far. Present it in plain language.
    - Show the **tasks that can be picked up now**, *role-gated* to the person in
-     front of you (Flow 2 — read `src/skills/planner/mytasks.md`): the tasks
-     assigned to them or open to a role they hold, that aren't already Completed.
-     A task is shown **only** if the person holds the role it needs. Role
-     resolution is best-effort until the roles source / MCP exists — resolve the
-     caller's identity or ask which of the plan's roles are theirs, then show only
-     those roles' tasks.
+     front of you (Flow 2): the shared planner already stores the role→person
+     mapping, so ask it for the caller's tasks with
+     `list_project_plan_tasks_for_caller` and present exactly what comes back
+     (`src/skills/planner/sync.md`). Only when the service is unreachable, fall
+     back to the local best-effort gating in `src/skills/planner/mytasks.md`
+     (resolve the caller's identity or ask which of the plan's roles are theirs,
+     then show only those roles' tasks).
    - Offer next actions: **continue/extend** the plan (add or assign tasks),
      **edit** the plan — they can revise the ESS scenario plan Markdown directly
      or just say what to change, and you reconcile it (`src/skills/planner/edit.md`),
@@ -69,6 +77,8 @@ have checked for an existing plan.**
    create one after you have their one-line goal, then build it through the
    phases below:
    `python scripts/planner/cli.py init --objective "<their goal>"` → Phase 1.
+   Once the plan is built and assigned, **publish it** to the shared planner as
+   one object and activate it (`src/skills/planner/sync.md`).
 
 ## Progress
 
@@ -105,6 +115,11 @@ read `src/skills/planner/mytasks.md`.
 > **render-only: it generates nothing and doesn't touch the eval skill**.
 > After setup runs, use Phase 6 to brief each downstream assignee with what setup
 > produced (the env id) and to commit what they create back onto the plan.
+>
+> Once the full task set is modelled and assigned, **publish the plan to the
+> shared planner in one create call and activate it** (`src/skills/planner/sync.md`);
+> from then on route task edits, state changes, and captured outputs through the
+> planner tools so the shared service stays authoritative.
 
 ## Building the plan
 

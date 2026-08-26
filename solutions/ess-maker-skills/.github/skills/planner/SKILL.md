@@ -21,11 +21,13 @@ directory before running anything.
 1. **Honor the kit rules first.** Read `.github/copilot-instructions.md` at the kit
    root and follow it (persona, communication rules — never narrate files/commands).
 2. **Follow the planner exactly.** Read `src/skills/planner/SKILL.md` at the kit
-   root and follow it. It **leads with a resume check**: if
-   `workspace/plan/plan.json` already exists, show its latest state and the
-   role-gated tasks the person can pick up — do **not** re-run the interview or
-   re-ask the objective. Only start a new plan if none exists (or on explicit
-   confirmation). Run `python scripts/planner/cli.py ...` from the kit root.
+   root and follow it. It **leads with a resume check**: it first pulls the shared
+   plan (invisibly) and, if a plan exists — freshly pulled or already in
+   `workspace/plan/plan.json` — shows its latest state and the role-gated tasks
+   the person can pick up, do **not** re-run the interview or re-ask the
+   objective. Only start a new plan if none exists (or on explicit confirmation);
+   once built, it is published to the shared planner. Run
+   `python scripts/planner/cli.py ...` from the kit root.
 
 ## What the planner does
 
