@@ -36,7 +36,26 @@ re-render it here if the scope changed. It is render-only and generates nothing.
 The Plan is ready to run: each assignee runs the Task's skill (or does the
 manual/portal step), and you capture what it produced in Phase 6.
 
+## Nudge — put real people on the attestable roles
+
+Some Tasks are pooled to an **attestable role** (`ServiceNowAdmin`,
+`WorkdayAdmin`, `ServiceNowKnowledgeManager`) rather than a named person. Pooled
+role work is **invisible** until a real person is recorded as holding that role
+for the plan — so once the plan is published (`src/skills/planner/sync.md`), nudge
+the sponsor to assign those roles to real people. That is what makes the work show
+up in each person's "what am I assigned?" view. Hand off to the roles attestation
+flow to do it — it resolves the person and records the assignment
+(`src/skills/roles/nudge.md`, then `src/skills/roles/resolve-person.md` →
+`src/skills/roles/attest.md`). This is **assignment only**; it never answers "what
+are my tasks?".
+
 ## Future — resolve the person from an external roles API
+
+For an **attestable** role (`ServiceNowAdmin`, `WorkdayAdmin`,
+`ServiceNowKnowledgeManager`) the person side is already wired: the roles skill
+resolves a name to a directory object id and records the holder against the plan
+(`src/skills/roles/SKILL.md`). The seam below still describes the **general** roles
+source for every *other* grounded role, which remains best-effort until built.
 
 Today a Task carries a Learn-grounded **role** (pooled), and the sponsor picks the
 person by hand. The next step wires a real **roles source** behind the same seam

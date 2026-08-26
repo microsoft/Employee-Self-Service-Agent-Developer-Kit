@@ -715,6 +715,38 @@ def list_users(
     }
 
 
+def search_users(
+    *, users: Iterable[Mapping[str, Any]] | None = None
+) -> dict[str, Any]:
+    """Mock GET /v1.0/users?$search=... (name/UPN/mail resolution).
+
+    Registered on the bare ``/users`` path so it matches the ``$search`` /
+    ``$select`` / ``$top`` query the resolver sends (``responses`` treats a
+    querystring-free registration as "match any query on this path"). Tests
+    assert the outgoing ``$search`` term on ``responses.calls`` afterwards.
+
+    Cited consumers:
+      - flightcheck/graph_client.py search_users (name -> object id).
+
+    Source (validatable):
+      Schema: https://graph.microsoft.com/v1.0/$metadata
+              EntityType Name="user" — id, displayName,
+              userPrincipalName, mail, jobTitle
+      Docs:   https://learn.microsoft.com/graph/api/user-list
+              (?$search on directory objects; requires
+              ConsistencyLevel: eventual)
+    """
+    return {
+        "method": "GET",
+        "url": f"{GRAPH_BASE}/users",
+        "json": collection(
+            users if users is not None else [user()],
+            odata_context="$metadata#users(id,displayName,userPrincipalName,mail,jobTitle)",
+        ),
+        "status": 200,
+    }
+
+
 def list_directory_roles(
     *, roles: Iterable[Mapping[str, Any]] | None = None
 ) -> dict[str, Any]:

@@ -308,6 +308,7 @@ After a successful push, `.baseline/` is updated to match the new state.
 |-------------|--------------|
 | Run common ESS foundation setup (`/setup`) | `src/skills/foundation-setup/SKILL.md` |
 | Plan a rollout / generate a scenario Plan / "what am I assigned?" | `src/skills/planner/SKILL.md` |
+| Assign/attest a rollout role to a person (`/roles`) | `src/skills/roles/SKILL.md` |
 | Provision/connect the Workday setup environment (`/connect workday`) | `src/skills/setup/SKILL.md` |
 | Connect to ServiceNow/Workday | `src/skills/connect/SKILL.md` |
 | Create a topic | `src/skills/topics/create-eval-driven/SKILL.md` |
@@ -341,6 +342,14 @@ After a successful push, `.baseline/` is updated to match the new state.
 start", "how do I get started", "getting started with ESS", "set up ESS from
 scratch", "first-time setup", "what should I do first", "what am I assigned",
 "what are my tasks", "my tasks", "what's assigned to me".
+
+**Trigger phrases for roles:** "assign the ServiceNow admin role to <person>",
+"make <person> the Workday admin", "give <person> the <role> role", "who holds
+the <role> role", "who's the ServiceNow admin", "assign roles for this plan",
+"attest a role", "/roles". **Not** a roles request: "what are my tasks / what am
+I assigned?" — that is the planner (Flow 2), which reads back the roles this flow
+records. Roles attestation needs an existing plan; if none exists, route to
+`/planner` first.
 
 **Trigger phrases for troubleshooting:** "Workday error", "ISU not working",
 "invalid_client", "invalid username or password", "SOAP failure", "maker works

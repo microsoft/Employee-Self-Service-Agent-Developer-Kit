@@ -272,6 +272,64 @@ def test_tasks_for_person_groups_by_role_and_relation():
 
 
 # --------------------------------------------------------------------------- #
+# Execution order (topological render)
+# --------------------------------------------------------------------------- #
+
+def test_ordered_tasks_places_producer_before_consumer():
+    plan = Plan.new()
+    # Authored consumer-first on purpose; the render must flip them.
+    plan.add_task(new_task("T1", "consume", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce", produces=["envId"]))
+    ordered = [t["id"] for t in plan.ordered_tasks()]
+    assert ordered == ["T2", "T1"]
+
+
+def test_ordered_tasks_is_stable_for_independent_tasks():
+    plan = Plan.new()
+    plan.add_task(new_task("A", "a"))
+    plan.add_task(new_task("B", "b"))
+    plan.add_task(new_task("C", "c"))
+    # No produces/consumes edges — original order is preserved exactly.
+    assert [t["id"] for t in plan.ordered_tasks()] == ["A", "B", "C"]
+
+
+def test_ordered_tasks_orders_a_chain_and_keeps_ties():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume env", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce env", produces=["envId"]))
+    plan.add_task(new_task("T3", "independent"))
+    plan.add_task(new_task("T4", "chain", consumes=["envId"], produces=["topicId"]))
+    # T2 feeds T1 and T4; T3 is independent and holds its authored slot.
+    assert [t["id"] for t in plan.ordered_tasks()] == ["T2", "T1", "T3", "T4"]
+
+
+def test_ordered_tasks_tolerates_a_cycle_without_loss():
+    plan = Plan.new()
+    plan.add_task(new_task("C1", "a", consumes=["x"], produces=["y"]))
+    plan.add_task(new_task("C2", "b", consumes=["y"], produces=["x"]))
+    ordered = [t["id"] for t in plan.ordered_tasks()]
+    # Cycle can't be sorted — every task still appears exactly once, in order.
+    assert ordered == ["C1", "C2"]
+
+
+def test_ordered_tasks_does_not_mutate_stored_order():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce", produces=["envId"]))
+    plan.ordered_tasks()
+    # The on-disk sequence stays authoritative; only the view reorders.
+    assert [t["id"] for t in plan.tasks] == ["T1", "T2"]
+
+
+def test_render_summary_lists_tasks_in_execution_order():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce", produces=["envId"]))
+    summary = plan.render_summary()
+    assert summary.index("| T2 |") < summary.index("| T1 |")
+
+
+# --------------------------------------------------------------------------- #
 # Validation
 # --------------------------------------------------------------------------- #
 

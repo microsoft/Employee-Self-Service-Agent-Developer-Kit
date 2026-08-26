@@ -34,6 +34,7 @@ Nothing here reaches the network; it is pure data + local file IO.
 
 from __future__ import annotations
 
+import heapq
 import json
 import os
 from datetime import datetime, timezone
@@ -814,7 +815,7 @@ class Plan:
         """
         role_set = set(roles)
         grouped: dict[str, list[dict[str, Any]]] = {}
-        for task in self.tasks:
+        for task in self.ordered_tasks():
             if task.get("state") == "Completed":
                 continue  # Flow 2 surfaces work still waiting, not finished tasks
             assigned = task.get("assignedTo") or {}
@@ -939,6 +940,57 @@ class Plan:
 
     # ---- rendering ------------------------------------------------------- #
 
+    def ordered_tasks(self) -> list[dict[str, Any]]:
+        """Tasks in execution order: a task that **produces** an artifact another
+        task **consumes** is listed before that consumer.
+
+        A stable topological sort over the ``produces``/``consumes`` ledger.
+        Tasks with no dependency between them keep their original order (ties
+        break by original position), so the view only reorders where a real
+        producer -> consumer edge forces it. A ``produces``/``consumes`` cycle
+        degrades gracefully — tasks still tangled in it are appended in original
+        order — so rendering never drops or duplicates a task. Pure: it does not
+        mutate the stored task order (the shared planner stays authoritative on
+        sequence; this is a render-time convenience only)."""
+        tasks = self.tasks
+        n = len(tasks)
+        if n < 2:
+            return list(tasks)
+        # Map each produced key to the task positions that produce it.
+        producer_positions: dict[str, list[int]] = {}
+        for i, task in enumerate(tasks):
+            for key in (task.get("produces") or []):
+                producer_positions.setdefault(key, []).append(i)
+        # Edge producer -> consumer for every consumed key; indegree per consumer.
+        successors: list[set[int]] = [set() for _ in range(n)]
+        indegree = [0] * n
+        for i, task in enumerate(tasks):
+            producers: set[int] = set()
+            for key in (task.get("consumes") or []):
+                for p in producer_positions.get(key, []):
+                    if p != i:
+                        producers.add(p)
+            for p in producers:
+                if i not in successors[p]:
+                    successors[p].add(i)
+                    indegree[i] += 1
+        # Kahn's algorithm; original position as a stable tie-break so
+        # independent tasks never shuffle.
+        ready = [i for i in range(n) if indegree[i] == 0]
+        heapq.heapify(ready)
+        order: list[int] = []
+        while ready:
+            i = heapq.heappop(ready)
+            order.append(i)
+            for j in sorted(successors[i]):
+                indegree[j] -= 1
+                if indegree[j] == 0:
+                    heapq.heappush(ready, j)
+        if len(order) < n:  # produces/consumes cycle — keep the rest as-is.
+            placed = set(order)
+            order.extend(i for i in range(n) if i not in placed)
+        return [tasks[i] for i in order]
+
     def render_summary(self) -> str:
         """A human-readable Markdown view of the Plan — the editable surface a Plan
         editor revises directly; edits are reconciled back into plan.json
@@ -976,7 +1028,7 @@ class Plan:
         if self.tasks:
             lines.append("| # | Task | Role / owner | State |")
             lines.append("|---|------|--------------|-------|")
-            for task in self.tasks:
+            for task in self.ordered_tasks():
                 lines.append(
                     f"| {task.get('id')} | {task.get('title')} | "
                     f"{_render_assignee(task.get('assignedTo'))} | {task.get('state')} |"

@@ -424,6 +424,38 @@ class GraphClient:
         data = self.get("/users", params={"$top": str(top)})
         return data.get("value", [])
 
+    def search_users(self, query: str, *, top: int = 10) -> list:
+        """Resolve a person by name (or email / UPN) to their directory objects.
+
+        Runs a Graph ``$search`` over ``displayName``, ``userPrincipalName`` and
+        ``mail`` — which requires the ``ConsistencyLevel: eventual`` header that
+        :attr:`headers` already sets. Each returned object carries ``id`` (the
+        Entra object id used everywhere as the subject id) plus ``displayName`` /
+        ``userPrincipalName`` / ``mail`` / ``jobTitle`` for disambiguation.
+
+        Returns an empty list for a blank query, no match, or a 401/403 (the
+        caller lacks ``User.Read.All``) — matching the degrade-quietly contract of
+        the other read helpers. The caller decides how to surface "no match" vs
+        "sign in / grant access".
+        """
+        term = " ".join((query or "").split()).replace('"', "")
+        if not term:
+            return []
+        search = (
+            f'"displayName:{term}" OR "userPrincipalName:{term}" OR "mail:{term}"'
+        )
+        data = self.get(
+            "/users",
+            params={
+                "$search": search,
+                "$select": "id,displayName,userPrincipalName,mail,jobTitle",
+                "$top": str(top),
+            },
+        )
+        if isinstance(data, dict) and data.get("_error"):
+            return []
+        return data.get("value", [])
+
     def get_service_principals(
         self,
         filter_expr: str = "",
