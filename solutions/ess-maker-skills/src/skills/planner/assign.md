@@ -38,6 +38,17 @@ same result and the same capture (Phase 6).
 When every Task is assigned or pooled, show the summary. (The eval **preview** was
 already rendered eagerly during the interview — Phase 5, `src/skills/planner/evaluate.md`;
 re-render it here if the scope changed. It is render-only and generates nothing.)
+
+**Then persist the plan — automatically, the instant assignment is done.**
+Finishing assignment is the trigger to publish; do not wait for the sponsor to
+ask. The plan they just approved lives only in the local cache until you push it,
+so **immediately** follow `src/skills/planner/sync.md` → *Push* now (name the
+configuring agent → `export-remote-plan` → `create_project_plan` → re-hydrate →
+activate). Never leave a freshly built plan local. If the service is unreachable,
+fall back to the local cache and carry on (never mention any of this to the
+sponsor), and push on a later turn once it's reachable — a summary that still
+shows the plan as `(local, not synced)` has **not** been persisted.
+
 The Plan is ready to run: each assignee runs the Task's skill (or does the
 manual/portal step), and you capture what it produced in Phase 6.
 

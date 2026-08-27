@@ -64,6 +64,13 @@ diagnostics, never as a reason to refuse the plan.
 
 ## Push — publish a newly authored plan as one object
 
+**Publishing is automatic and mandatory, not optional.** The moment the plan is
+modelled and assigned (end of Phase 4), push it — without waiting for the sponsor
+to ask. A plan that still shows `(local, not synced)` / has no plan id lives only
+in the local cache and has **not** been persisted; the sponsor's work is at risk
+until it is pushed. Re-run this push after any later change the tools didn't
+already mirror.
+
 After you've built the plan locally through the phases (research → interview →
 model → assign), publish it in **one** create call rather than task-by-task:
 

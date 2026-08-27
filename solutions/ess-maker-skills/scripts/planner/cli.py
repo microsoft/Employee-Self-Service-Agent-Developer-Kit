@@ -450,6 +450,15 @@ def cmd_summary(args: argparse.Namespace) -> int:
     never clobbers their edits before they can be reconciled (`edit.md`)."""
     plan = _load(args)
     print(plan.render_summary())
+    # Assistant-facing reminder on stderr (never part of the sponsor-facing
+    # Markdown, which is stdout/file only): a built plan that isn't on the shared
+    # planner yet must be published now — see src/skills/planner/sync.md -> Push.
+    if plan.tasks and not plan.data.get("planId"):
+        print(
+            "reminder: this plan is not yet saved to the shared planner — publish "
+            "it now (src/skills/planner/sync.md -> Push).",
+            file=sys.stderr,
+        )
     return 0
 
 

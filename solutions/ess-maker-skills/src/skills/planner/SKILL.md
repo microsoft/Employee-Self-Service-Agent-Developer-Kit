@@ -77,13 +77,17 @@ have checked for an existing plan.**
    create one after you have their one-line goal, then build it through the
    phases below:
    `python scripts/planner/cli.py init --objective "<their goal>"` → Phase 1.
-   Once the plan is built and assigned, **publish it** to the shared planner as
-   one object and activate it (`src/skills/planner/sync.md`).
+   The moment the plan is built and assigned, **publish it automatically** to the
+   shared planner as one object and activate it (`src/skills/planner/sync.md`) —
+   never leave it local and never wait for the sponsor to ask you to save it.
 
 ## Progress
 
 Use the todo-list tool to track the phases below. Create the list up front and
-mark each phase in-progress → done as you go.
+mark each phase in-progress → done as you go. Include **Publish to the shared
+planner** as an explicit tracked step right after Phase 4 (Assign): the plan is
+not "done" until it has been pushed and activated — never close out planning with
+the plan still local.
 
 ## Phases
 
@@ -116,10 +120,12 @@ read `src/skills/planner/mytasks.md`.
 > After setup runs, use Phase 6 to brief each downstream assignee with what setup
 > produced (the env id) and to commit what they create back onto the plan.
 >
-> Once the full task set is modelled and assigned, **publish the plan to the
-> shared planner in one create call and activate it** (`src/skills/planner/sync.md`);
-> from then on route task edits, state changes, and captured outputs through the
-> planner tools so the shared service stays authoritative.
+> The moment the full task set is modelled and assigned, **automatically publish
+> the plan to the shared planner in one create call and activate it**
+> (`src/skills/planner/sync.md`) — this is a required step, not something to wait
+> for the sponsor to ask for, and a built plan is never left only in the local
+> cache. From then on route task edits, state changes, and captured outputs
+> through the planner tools so the shared service stays authoritative.
 
 ## Building the plan
 
