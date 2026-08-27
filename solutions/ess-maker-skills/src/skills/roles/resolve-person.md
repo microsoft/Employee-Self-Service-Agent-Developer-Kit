@@ -1,10 +1,18 @@
-# Roles — resolve a person to a directory object id
+# Resolve a person to a directory object id
 
-`attest_plan_role` identifies the person by their **directory object id**
-(`subjectId`), never by name. So the first step of any "assign `<role>` to
-`<person>`" request is to turn the name the maker said into that id. This is the
-one hop the plan can't do for you — it's a live **directory** lookup, so it may
-ask the maker to sign in.
+Some flows identify a person by their **directory object id** (`oid`), never by
+name. This is the shared step that turns the name a maker says into that id. Two
+capabilities call it:
+
+- **Role attestation** — `attest_plan_role` takes the id as `subjectId`
+  (`src/skills/roles/attest.md`).
+- **Task assignment** — the planner assigns a task to a person with
+  `assign --person <oid>` (`src/skills/planner/assign.md`).
+
+So whenever a maker names a **person** — "make Priya the ServiceNow admin",
+"assign this task to Sam" — resolve that name here first, then the calling flow
+takes the `oid` from here and carries on. It's the one hop the plan can't do for
+you: a live **directory** lookup, so it may ask the maker to sign in.
 
 ## How to resolve — two tiers
 
@@ -31,8 +39,8 @@ sign-in themselves — no directory admin needed.
 Branch on `status`:
 
 - **`ok` with one candidate** — use its `oid`. Confirm the person by name before
-  attesting ("I found Priya Sharma (priya@contoso.com) — assigning the ServiceNow
-  admin role to her").
+  you use the id ("I found Priya Sharma (priya@contoso.com) — is that who you
+  mean?").
 - **`ok` with several candidates** — **disambiguate.** Show the candidates in
   plain language (name, email, job title — never the raw JSON) and ask which one
   they mean. Use only the `oid` of the person they pick.
@@ -46,7 +54,9 @@ Branch on `status`:
   (some large orgs, including Microsoft's own, do this). Don't dead-end: move to
   **Tier 2**.
 
-Carry the chosen `oid` into the attestation (`src/skills/roles/attest.md`).
+Hand the chosen `oid` back to the flow that called this step — attestation
+carries it as `subjectId` (`src/skills/roles/attest.md`); task assignment carries
+it as `--person` (`src/skills/planner/assign.md`).
 
 ## Tier 2 — WorkIQ (fallback when the directory won't open)
 
@@ -66,12 +76,12 @@ where the raw directory sign-in is refused.
    id off it.
 3. **Confirm and disambiguate exactly as in Tier 1** — verify the person by name
    with the maker (and job title / email if WorkIQ returns them) before using the
-   id. If WorkIQ returns several people, ask which one they mean. Never attest on
-   an unconfirmed match.
+   id. If WorkIQ returns several people, ask which one they mean. Never use an
+   unconfirmed match.
 
-Carry the resulting `oid` into the attestation the same way — from the plan's
-point of view the two tiers are interchangeable, they just differ in how the
-person's id was looked up.
+Hand the resulting `oid` back the same way — from the plan's point of view the
+two tiers are interchangeable, they just differ in how the person's id was looked
+up.
 
 > Setting WorkIQ up (one time, only for tenants that need it): it's a Microsoft
 > 365 Copilot capability exposed as an MCP server (`npx -y @microsoft/workiq
@@ -88,4 +98,5 @@ person's id was looked up.
 - **The source of truth is the maker's own directory.** Tier 1 resolves names
   against Microsoft Graph `/users` (`$search`) and Tier 2 against WorkIQ; both
   return the same Entra (AAD) object id, because those ids are minted by Entra —
-  WeveNova only *consumes* them (it keys role assignments on the id it's given).
+  WeveNova only *consumes* them (it keys role and task assignments on the id it's
+  given).

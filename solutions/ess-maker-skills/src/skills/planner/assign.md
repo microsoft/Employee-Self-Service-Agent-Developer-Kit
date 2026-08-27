@@ -10,7 +10,12 @@ sponsor's only job here is to pick **who** does it. For each Task:
      sponsor pick one.
    - If not, ask the sponsor for the person's name/identifier, or offer to
      **leave it open to the role** (a pool any holder can later claim).
-3. **Record the choice:**
+3. **Record the choice.** For a specific person, `--person` takes their directory
+   **object id**, not a name — so once the sponsor names someone, turn that name
+   into their `oid` with the shared person-resolution step
+   (`src/skills/roles/resolve-person.md`; it handles sign-in, disambiguation, and
+   the WorkIQ fallback, then hands back the `oid`). Skip that when leaving the
+   task open to the role.
 
    ```
    # assign a specific person, keeping the grounded role
