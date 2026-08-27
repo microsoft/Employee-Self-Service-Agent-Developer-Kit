@@ -18,8 +18,10 @@ writes. Never route "what are my tasks / what am I assigned?" here.
 All role reads/writes are **planner tools** you call directly
 (`list_attestable_roles`, `attest_plan_role`, `list_plan_role_assignments`, ...).
 The one thing the plan can't do for you — turning a person's *name* into the
-directory **object id** those tools take as `subjectId` — is a single local
-command:
+directory **object id** those tools take as `subjectId` — is the shared
+person-resolution step (`src/skills/roles/resolve-person.md`): a live directory
+lookup whose first tier is a single local command, with a WorkIQ fallback for
+tenants that block directory sign-in.
 
 ```
 python scripts/roles/cli.py resolve-person --name "<person>"
