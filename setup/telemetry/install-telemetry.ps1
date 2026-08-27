@@ -64,17 +64,6 @@ $script:EssTel = @{
 $script:EssTelConfigDir  = Join-Path $HOME '.adk'
 $script:EssTelConfigPath = Join-Path $script:EssTelConfigDir 'config'
 
-$script:EssTelNotice = @'
-------------------------------------------------------------------------
-ESS Agent Developer Kit collects pseudonymous installation telemetry
-(install success/failure, which step failed, scrubbed error categories,
-duration, platform) to help us improve setup reliability. It does NOT
-collect your identity, credentials, file contents, or agent content.
-Opt out any time:  python scripts/adk_telemetry.py off   (or set
-ESS_ADK_TELEMETRY=off). Details: https://aka.ms/adk-telemetry
-------------------------------------------------------------------------
-'@
-
 # --- Config / consent (mirrors adk_telemetry.py) ---------------------------
 function Get-EssTelConfig {
     try {
@@ -109,15 +98,19 @@ function Test-EssTelemetryEnabled {
     return ($cfg.telemetry -ne 'disabled')
 }
 
-function Show-EssTelemetryNotice {
-    # One-time consent notice, idempotent via config.noticeShown. Returns $true
-    # if it was shown this time.
-    $cfg = Get-EssTelConfig
-    if ($cfg.noticeShown) { return $false }
-    [Console]::Error.WriteLine("`n$script:EssTelNotice`n")
-    Set-EssTelConfigValue -Name 'noticeShown' -Value $true
-    if (-not $cfg.telemetry) { Set-EssTelConfigValue -Name 'telemetry' -Value 'enabled' }
-    return $true
+function Initialize-EssTelConfig {
+    # Ensure the on-disk config exists so opt-out via
+    # `python scripts/adk_telemetry.py off` can find and update it. Best-effort;
+    # no runtime disclosure is printed — the README and CONTRIBUTING.md carry
+    # the telemetry notice.
+    try {
+        if (-not (Test-Path $script:EssTelConfigDir)) {
+            New-Item -ItemType Directory -Path $script:EssTelConfigDir -Force | Out-Null
+        }
+        if (-not (Test-Path $script:EssTelConfigPath)) {
+            Set-Content -Path $script:EssTelConfigPath -Value '{ "telemetry": "enabled" }' -Encoding UTF8 -ErrorAction Stop
+        }
+    } catch { }
 }
 
 # --- Identity --------------------------------------------------------------
@@ -238,7 +231,7 @@ function Initialize-EssInstallTelemetry {
         # The Lite-mode installer is being merged into the standard ADK installer
         # (mode will become an onboarding prompt), so it is no longer instrumented.
         if ($Installer -eq 'lite') { $script:EssTel.Ready = $false; return }
-        Show-EssTelemetryNotice | Out-Null
+        Initialize-EssTelConfig
 
         $envName = "$env:ESS_ADK_ARIA_ENV".Trim().ToLowerInvariant()
         if (-not $envName) { $envName = "$env:ESS_FLIGHTCHECK_ARIA_ENV".Trim().ToLowerInvariant() }
