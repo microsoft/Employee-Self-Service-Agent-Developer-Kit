@@ -74,6 +74,7 @@ def test_search_users_no_match_returns_empty_list():
 
 @responses.activate
 def test_search_users_permission_denied_returns_empty_list():
-    # Missing User.Read.All -> Graph 403 -> quiet [] (caller prompts for consent).
+    # Missing a directory user-read scope -> Graph 403 -> quiet [] (the caller
+    # prompts the maker to sign in / consent, or escalates to the fallback).
     responses.add(method="GET", url=f"{graph.GRAPH_BASE}/users", status=403, json={})
     assert _client().search_users("Priya") == []

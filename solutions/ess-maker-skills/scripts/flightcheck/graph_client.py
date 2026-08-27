@@ -56,6 +56,20 @@ GRAPH_SCOPES = [
     "https://graph.microsoft.com/ExternalConnection.Read.All",
 ]
 
+# Least-privilege delegated scope for the /roles person resolver
+# (scripts/roles/cli.py: person name -> Entra object id). Several of the
+# broader FlightCheck GRAPH_SCOPES above (User.Read.All, Directory.Read.All,
+# Policy.Read.All) are ADMIN-consent-gated; this single scope is instead
+# USER-consentable in a default tenant, so a maker can grant it themselves
+# without pulling in a directory admin — yet it still authorizes the org-wide
+# GET /users?$search that search_users runs. Where a tenant disables user
+# consent for the Graph CLI app outright (e.g. Microsoft corp), interactive
+# sign-in is refused; the resolver then reports auth_required so the /roles
+# skill can fall back to the WorkIQ MCP (see src/skills/roles/resolve-person.md).
+PERSON_RESOLUTION_SCOPES = [
+    "https://graph.microsoft.com/User.ReadBasic.All",
+]
+
 # Wall-clock ceiling for the two silent lookups called from the interactive
 # auth hot path (``resolve_tenant_display_name_silent`` → /organization then
 # /me). Kept small — the sign-in critical path must not stall on a
@@ -285,8 +299,13 @@ def _try_me_company_name_lookup(app, account) -> str:
 class GraphClient:
     """Lightweight Microsoft Graph client with MSAL interactive auth."""
 
-    def __init__(self, tenant_id: str):
+    def __init__(self, tenant_id: str, scopes: list[str] | None = None):
         self.tenant_id = tenant_id
+        # Default to the broad FlightCheck scope set. Callers that only need a
+        # narrow, user-consentable capability (e.g. the /roles person resolver)
+        # pass their own least-privilege scopes so makers aren't pushed through
+        # an admin-consent prompt for permissions their task never uses.
+        self._scopes = scopes or GRAPH_SCOPES
         self._token: str | None = None
 
     def authenticate(self) -> str:
@@ -307,12 +326,12 @@ class GraphClient:
         accounts = app.get_accounts()
         result = None
         if accounts:
-            result = app.acquire_token_silent(GRAPH_SCOPES, account=accounts[0])
+            result = app.acquire_token_silent(self._scopes, account=accounts[0])
 
         if not result or "access_token" not in result:
             print("Opening browser for Microsoft Graph sign-in...")
             result = app.acquire_token_interactive(
-                GRAPH_SCOPES, prompt="select_account"
+                self._scopes, prompt="select_account"
             )
 
         if "access_token" not in result:
@@ -434,9 +453,9 @@ class GraphClient:
         ``userPrincipalName`` / ``mail`` / ``jobTitle`` for disambiguation.
 
         Returns an empty list for a blank query, no match, or a 401/403 (the
-        caller lacks ``User.Read.All``) — matching the degrade-quietly contract of
-        the other read helpers. The caller decides how to surface "no match" vs
-        "sign in / grant access".
+        caller lacks a directory user-read scope such as ``User.ReadBasic.All``)
+        — matching the degrade-quietly contract of the other read helpers. The
+        caller decides how to surface "no match" vs "sign in / grant access".
         """
         term = " ".join((query or "").split()).replace('"', "")
         if not term:

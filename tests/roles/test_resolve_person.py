@@ -36,8 +36,9 @@ def _fake_graph_client(users=None, *, raise_auth=False):
     """
 
     class _Fake:
-        def __init__(self, tenant_id):
+        def __init__(self, tenant_id, scopes=None):
             self.tenant_id = tenant_id
+            self.scopes = scopes
 
         def authenticate(self):
             if raise_auth:
@@ -107,6 +108,30 @@ def test_resolve_person_blank_name_short_circuits(monkeypatch):
     out = roles_cli.resolve_person("   ", env_url="")
     assert out["status"] == "no_match"
     assert out["count"] == 0
+
+
+def test_resolve_person_requests_least_privilege_scope(monkeypatch):
+    """Resolution must ask for the narrow, user-consentable scope — never
+    FlightCheck's admin-gated set — so a maker isn't pushed into an admin
+    consent prompt just to look a name up in their own directory."""
+    captured = {}
+
+    class _Capture:
+        def __init__(self, tenant_id, scopes=None):
+            captured["scopes"] = scopes
+
+        def authenticate(self):
+            return "fake-token"
+
+        def search_users(self, query, *, top=10):
+            return []
+
+    monkeypatch.setattr(roles_cli, "GraphClient", _Capture)
+    roles_cli.resolve_person("Priya", env_url="")
+    assert captured["scopes"] == roles_cli.PERSON_RESOLUTION_SCOPES
+    # Pin the actual permission: least-privilege User.ReadBasic.All, which is
+    # user-consentable, not the admin-gated User.Read.All.
+    assert captured["scopes"] == ["https://graph.microsoft.com/User.ReadBasic.All"]
 
 
 def test_cmd_exit_zero_and_prints_json_on_match(monkeypatch, capsys):

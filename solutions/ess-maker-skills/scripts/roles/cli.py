@@ -12,9 +12,10 @@ admin" has to be resolved to Priya's directory object first.
 
 This CLI owns exactly that Graph hop and nothing else. It reuses the kit's
 existing Graph integration (``flightcheck.graph_client.GraphClient`` — same
-MSAL app, scopes, and shared token cache as FlightCheck), signs the maker in
-if needed, runs a directory ``$search``, and prints the candidate list as JSON
-for the skill to disambiguate. Every role read/write itself
+MSAL app and shared token cache as FlightCheck) but asks for only the
+least-privilege, user-consentable ``User.ReadBasic.All`` scope, signs the
+maker in if needed, runs a directory ``$search``, and prints the candidate
+list as JSON for the skill to disambiguate. Every role read/write itself
 (``list_attestable_roles``, ``attest_plan_role``, ...) is a planner tool call
 the skill makes directly — those never pass through here.
 
@@ -25,8 +26,12 @@ Usage (run from the kit root):
 
 Network: this command signs in and calls Microsoft Graph. Unlike the planner
 CLI (deliberately network-free), person resolution is inherently a live
-directory lookup — Graph's ``User.Read.All`` delegated scope, already part of
-the kit's Graph sign-in, backs the ``$search``.
+directory lookup. It requests only the least-privilege, USER-consentable
+``User.ReadBasic.All`` delegated scope (not the broader admin-gated set
+FlightCheck uses), so in a normal tenant a maker can grant it themselves with
+no directory admin. Where a tenant blocks user consent for the Graph CLI app
+outright (e.g. Microsoft corp), sign-in is refused, this CLI reports
+``auth_required``, and the ``/roles`` skill falls back to the WorkIQ MCP.
 """
 
 from __future__ import annotations
@@ -41,7 +46,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from auth import discover_tenant
-from flightcheck.graph_client import GraphClient
+from flightcheck.graph_client import GraphClient, PERSON_RESOLUTION_SCOPES
 
 CONFIG_PATH = os.path.join(".local", "config.json")
 
@@ -95,7 +100,11 @@ def resolve_person(
 
     * ``"ok"`` — one or more candidates (the skill disambiguates if >1),
     * ``"no_match"`` — the directory returned nobody for the query,
-    * ``"auth_required"`` — sign-in failed or was declined.
+    * ``"auth_required"`` — sign-in failed, was declined, OR the tenant blocks
+      user consent for the Graph CLI app (e.g. Microsoft corp). These are not
+      distinguishable from the token layer, so the ``/roles`` skill gives the
+      maker one chance to sign in and, if that still fails, falls back to the
+      WorkIQ MCP.
 
     Never raises for the expected failure modes; the skill branches on
     ``status`` rather than catching exceptions.
@@ -107,7 +116,9 @@ def resolve_person(
     resolved_url = env_url if env_url is not None else _load_env_url()
     tenant_id = discover_tenant(resolved_url) if resolved_url else "organizations"
 
-    client = GraphClient(tenant_id)
+    # Least-privilege, user-consentable scope — not FlightCheck's admin-gated
+    # set — so resolving a name never forces the maker through an admin prompt.
+    client = GraphClient(tenant_id, scopes=PERSON_RESOLUTION_SCOPES)
     try:
         client.authenticate()
     except Exception:
