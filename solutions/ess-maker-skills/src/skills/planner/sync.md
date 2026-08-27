@@ -25,11 +25,15 @@ cache and carry on — planning is never blocked by the service being offline.
 Every plan lives under the ESS project. Get-or-create it — the call is
 idempotent, so it's safe to run on every entry:
 
-- Call **`create_agent_configuration_project`** with `{"name": "Employee Self Serve"}`.
+- Call **`create_agent_configuration_project`** with `{"name": "Employee Self-Service"}`.
 - Keep the returned **`projectId`** (and its `etag`); you need `projectId` for
   every plan/task call below. Do **not** list-and-match on the display name — the
-  tenant may render it differently ("Employee Self-Service"); the create name key
-  is the stable handle.
+  tenant may render it differently. The name must be one of the supported
+  configuration experiences — **`Employee Self-Service`** or **`Workforce
+  Insights`**; any other value is rejected with a 400 (`name must be one of the
+  supported configuration experiences`). Matching is case- and
+  whitespace-insensitive, so casing/spacing is forgiven, but the words must match
+  a supported experience exactly.
 
 ## Pull — resume from the service on entry
 
