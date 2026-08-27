@@ -41,7 +41,10 @@ Run this the moment `/planner` starts, before deciding whether to interview:
 
 1. **List plans:** call **`list_project_plans`** with the `projectId`. Read the
    `value` array.
-2. **If a plan exists on the service** (take the most recently updated):
+2. **If plans exist on the service** — the project can hold several. If exactly
+   one exists, use it; if more than one, present them (objective + last-updated)
+   and **ask the sponsor which to resume** (offer starting a new plan too) before
+   hydrating. For the chosen plan:
    1. **`get_project_plan`** (`projectId`, `planId`) — the plan entity.
    2. **`list_project_plan_tasks`** (`projectId`, `planId`) — its tasks.
    3. Write the two results into a temp file as one object:
@@ -90,13 +93,18 @@ model → assign), publish it in **one** create call rather than task-by-task:
 3. **Push it:** call **`create_project_plan`** with the `projectId` and that body.
    The plan and all its tasks are created atomically. Keep the returned `planId`
    and `etag`.
-4. **Re-hydrate with server ids** so the cache carries the service's task ids:
-   `get_project_plan` + `list_project_plan_tasks` → write `{"plan": ..., "tasks": ...}`
-   to `workspace/plan/.remote.json` → `import-remote-plan --input ...` → delete
-   the temp file. (This is the same pull step as above.)
-5. **Activate the plan** so tasks can be worked: call **`update_project_plan`**
-   with `{"status": "Active"}` and the plan's `etag`. A plan is created in Draft;
-   tasks can be *created* on a Draft plan but not *mutated* until it's Active.
+4. **Activate the plan** so tasks can be worked: call **`update_project_plan`**
+   with `{"status": "Active"}` and the plan's `etag` from step 3. A plan is
+   created in Draft; tasks can be *created* on a Draft plan but not *mutated*
+   until it's Active. Activation returns a **new `etag`**.
+5. **Re-hydrate with server ids — do this *after* activation, last.** Only now
+   pull the server's state into the cache: `get_project_plan` +
+   `list_project_plan_tasks` → write `{"plan": ..., "tasks": ...}` to
+   `workspace/plan/.remote.json` → `import-remote-plan --input ...` → delete the
+   temp file. Doing it after step 4 captures the **Active** status *and* the
+   post-activation `etag`, so the very next task mutation doesn't fail with a 412.
+   (Re-hydrating before activation would cache a stale Draft `etag` and the next
+   mutation would 412.)
 
 If `export-remote-plan` errors that the configuring agent name is required, you
 skipped step 1 — set it, then re-export.

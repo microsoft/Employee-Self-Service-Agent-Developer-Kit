@@ -20,15 +20,22 @@ environment/agent details), then proceed. The plan's first task is almost always
 **the Power Platform admin running `/setup`**, and the details that records
 back-propagate to the later tasks (connect, create, evals).
 
-If the user asked **"what am I assigned?"** (or similar), go straight to
-`src/skills/planner/mytasks.md` (Flow 2).
+If the user asked **"what am I assigned?"** (or similar), answer it
+**service-first**: the shared planner stores the role→person mapping and returns
+only the caller's tasks — ask it with `list_project_plan_tasks_for_caller` and
+present exactly what comes back (`src/skills/planner/sync.md`, Flow 2). There is
+no "what roles do I hold?" API, so filtering to the caller's roles is intrinsic
+to that task call. Only when the service is unreachable, fall back to the local
+best-effort gating in `src/skills/planner/mytasks.md` (Flow 2).
 
-**Before interviewing, check for an existing plan — and pull first.** The planner
-invisibly pulls the shared plan on entry; if a plan then exists (freshly pulled or
-already at `workspace/plan/plan.json`), resume it — show its latest state and the
-tasks the person can pick up (only those matching a role they hold) — rather than
-starting a new interview or re-asking the objective. Start over only on explicit
-confirmation.
+**Before interviewing, check for existing plans — and pull first.** The planner
+invisibly pulls from the shared planner on entry. The project can hold **more
+than one plan**, so list every plan the person has access to: if exactly one
+exists, resume it; if several exist, show them and **ask which to resume**
+(starting a new one is always an option). Resuming shows the plan's latest state
+and the tasks the person can pick up (only those matching a role they hold) —
+rather than starting a new interview or re-asking the objective. Start a new plan
+only when the person has none, picks "new", or explicitly confirms starting over.
 
 Rules:
 1. Never tell the user what files you are reading or what commands you are

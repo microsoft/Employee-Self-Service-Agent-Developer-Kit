@@ -452,10 +452,13 @@ class GraphClient:
         Entra object id used everywhere as the subject id) plus ``displayName`` /
         ``userPrincipalName`` / ``mail`` / ``jobTitle`` for disambiguation.
 
-        Returns an empty list for a blank query, no match, or a 401/403 (the
-        caller lacks a directory user-read scope such as ``User.ReadBasic.All``)
-        — matching the degrade-quietly contract of the other read helpers. The
-        caller decides how to surface "no match" vs "sign in / grant access".
+        Returns an empty list for a blank query or a genuine no-match. Raises
+        ``PermissionError`` on a 401/403 (the caller lacks a directory user-read
+        scope such as ``User.ReadBasic.All``, or the tenant blocks user consent
+        for the CLI app) so the caller can tell "sign in / grant access / fall
+        back" apart from an empty result — a swallowed ``[]`` there would read as
+        a genuine "no match" and defeat the WorkIQ fallback the ``/roles`` skill
+        relies on.
         """
         term = " ".join((query or "").split()).replace('"', "")
         if not term:
@@ -472,7 +475,15 @@ class GraphClient:
             },
         )
         if isinstance(data, dict) and data.get("_error"):
-            return []
+            # 401/403 -> the caller lacks a directory user-read scope (e.g.
+            # User.ReadBasic.All) or the tenant blocks user consent for the CLI
+            # app. Raise (mirroring get_all(raise_on_permission_error=True)) so
+            # the caller can tell "grant access / fall back" apart from a real
+            # empty result — a swallowed [] here would read as a genuine "no
+            # match" and defeat the /roles skill's WorkIQ fallback.
+            raise PermissionError(
+                f"Graph returned HTTP {data.get('_status')} resolving users."
+            )
         return data.get("value", [])
 
     def get_service_principals(

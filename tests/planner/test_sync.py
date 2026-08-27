@@ -295,6 +295,16 @@ def test_hydrate_outputs_list_to_dict():
     assert output["attributes"] == {"connectionId": "abc"}  # list flattened, description dropped
 
 
+def test_hydrate_empty_collection_does_not_resurrect_embedded_tasks():
+    # An explicit empty collection is the service authoritatively saying "no
+    # tasks" — it must NOT fall back to the plan's embedded agentPlanTasks
+    # expansion (only task_entities=None does that). Otherwise a task deleted
+    # upstream would be resurrected on the next pull.
+    entity = _remote_plan(agentPlanTasks=[{"taskId": "rt-stale", "title": "Stale"}])
+    data = sync.hydrate_from_remote(entity, {"value": []})
+    assert data["tasks"] == []
+
+
 def test_hydrate_uses_embedded_tasks_when_no_collection_given():
     entity = _remote_plan(agentPlanTasks=[{"taskId": "rt-e", "title": "Embedded"}])
     data = sync.hydrate_from_remote(entity)  # task_entities omitted

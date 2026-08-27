@@ -100,11 +100,12 @@ def resolve_person(
 
     * ``"ok"`` — one or more candidates (the skill disambiguates if >1),
     * ``"no_match"`` — the directory returned nobody for the query,
-    * ``"auth_required"`` — sign-in failed, was declined, OR the tenant blocks
-      user consent for the Graph CLI app (e.g. Microsoft corp). These are not
-      distinguishable from the token layer, so the ``/roles`` skill gives the
-      maker one chance to sign in and, if that still fails, falls back to the
-      WorkIQ MCP.
+    * ``"auth_required"`` — sign-in failed, was declined, OR sign-in succeeded
+      but Graph still refused the directory read with a 401/403 (the tenant
+      blocks user consent for the Graph CLI app, e.g. Microsoft corp). These are
+      not cleanly distinguishable, so the ``/roles`` skill gives the maker one
+      chance to sign in / grant access and, if that still fails, falls back to
+      the WorkIQ MCP.
 
     Never raises for the expected failure modes; the skill branches on
     ``status`` rather than catching exceptions.
@@ -131,7 +132,21 @@ def resolve_person(
             "candidates": [],
         }
 
-    candidates = [_shape_candidate(u) for u in client.search_users(query, top=top)]
+    try:
+        raw = client.search_users(query, top=top)
+    except PermissionError:
+        # Sign-in succeeded, but the tenant won't grant even the least-privilege
+        # User.ReadBasic.All to the Graph CLI app (e.g. Microsoft corp). Treat it
+        # exactly like a declined sign-in so the /roles skill falls back to the
+        # WorkIQ MCP instead of reporting a misleading "no match".
+        return {
+            "query": query,
+            "status": "auth_required",
+            "count": 0,
+            "candidates": [],
+        }
+
+    candidates = [_shape_candidate(u) for u in raw]
     return {
         "query": query,
         "status": "ok" if candidates else "no_match",

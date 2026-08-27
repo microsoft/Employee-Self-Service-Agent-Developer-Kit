@@ -35,23 +35,37 @@ Every other skill requires `.local/config.json` with `setup: "complete"`.
 `/planner` is the exception: on a greenfield tenant the environment doesn't
 exist yet, and the first Task the Plan emits is usually "run setup". So:
 
-1. Read `.local/config.json` if it exists (to reuse the environment/agent
+1. **Make the planner's tools reachable — invisibly.** The planner talks to the
+   shared planner (and, for person resolution, the WorkIQ fallback) through MCP
+   servers a clean workspace hasn't registered yet, and `/setup` — which would
+   otherwise wire them — may not have run. Materialize the committed defaults so
+   those servers reach the MCP host:
+   `python scripts/mcp_config.py materialize-defaults`. It is idempotent and
+   preserves any existing overrides, so it's safe to run on every entry. Never
+   narrate this to the sponsor.
+2. Read `.local/config.json` if it exists (to reuse the environment/agent
    details and enable output capture).
-2. Whether or not setup is complete, **proceed** with planning.
+3. Whether or not setup is complete, **proceed** with planning.
 
 ## First — resume an existing plan, or start a new one
 
 **Always begin here. Do NOT ask for the objective (or anything else) until you
 have checked for an existing plan.**
 
-1. **Pull the shared plan first — invisibly.** Before deciding anything, bring
-   the shared planner's copy down: get-or-create the ESS project, list its plans,
-   and if one exists hydrate the local cache from it (concrete tool + CLI flow:
-   `src/skills/planner/sync.md`). If the service can't be reached, just use
-   whatever is already in `workspace/plan/plan.json`. Then check whether a plan
-   now exists locally (freshly pulled, or a local draft not yet pushed).
-2. **If a plan exists, resume it — do not re-interview and do not ask for the
-   objective again.**
+1. **Pull from the shared planner first — invisibly.** Before deciding anything,
+   bring the shared planner's copy down: get-or-create the ESS project and list
+   its plans (concrete tool + CLI flow: `src/skills/planner/sync.md`). The project
+   can hold **more than one plan**:
+   - **No plans on the service** → use whatever is already in
+     `workspace/plan/plan.json` (a local draft not yet pushed), if anything.
+   - **Exactly one plan** → hydrate the local cache from it and resume it.
+   - **Several plans** → list them (objective + last-updated) and **ask which one
+     to resume** before hydrating; offer starting a new plan as an option too.
+   If the service can't be reached, just use whatever is already in
+   `workspace/plan/plan.json`. Then check whether a plan now exists locally
+   (freshly pulled, or a local draft not yet pushed).
+2. **Once a plan is chosen (or the single existing plan is loaded), resume it —
+   do not re-interview and do not ask for the objective again.**
    - Show its latest state: `python scripts/planner/cli.py summary` — the
      objective, every task and its state, scenario dependencies, and what's been
      produced so far. Present it in plain language.

@@ -28,11 +28,13 @@ def _user(oid, name, *, upn=None, mail=None, title="Analyst"):
     }
 
 
-def _fake_graph_client(users=None, *, raise_auth=False):
+def _fake_graph_client(users=None, *, raise_auth=False, raise_permission=False):
     """Build a stand-in for ``roles.cli.GraphClient``.
 
     ``authenticate`` either succeeds or raises (the sign-in-declined path);
-    ``search_users`` returns the canned directory hits.
+    ``search_users`` returns the canned directory hits, or raises
+    ``PermissionError`` (sign-in worked but Graph refused the directory read —
+    the tenant-blocks-user-consent path).
     """
 
     class _Fake:
@@ -46,6 +48,8 @@ def _fake_graph_client(users=None, *, raise_auth=False):
             return "fake-token"
 
         def search_users(self, query, *, top=10):
+            if raise_permission:
+                raise PermissionError("Graph returned HTTP 403 resolving users.")
             return list(users or [])
 
     return _Fake
@@ -91,6 +95,20 @@ def test_resolve_person_no_match(monkeypatch):
 def test_resolve_person_auth_required(monkeypatch):
     monkeypatch.setattr(
         roles_cli, "GraphClient", _fake_graph_client(raise_auth=True)
+    )
+    out = roles_cli.resolve_person("Priya", env_url="")
+    assert out["status"] == "auth_required"
+    assert out["count"] == 0
+    assert out["candidates"] == []
+
+
+def test_resolve_person_permission_denied_maps_to_auth_required(monkeypatch):
+    """Sign-in succeeds but Graph refuses the directory read (401/403) — the
+    Microsoft-corp path. It must surface as ``auth_required``, not ``no_match``,
+    so the /roles skill falls back to the WorkIQ MCP instead of telling the maker
+    the person doesn't exist."""
+    monkeypatch.setattr(
+        roles_cli, "GraphClient", _fake_graph_client(raise_permission=True)
     )
     out = roles_cli.resolve_person("Priya", env_url="")
     assert out["status"] == "auth_required"

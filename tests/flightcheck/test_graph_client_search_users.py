@@ -10,14 +10,16 @@ the attestation ``subjectId``. These tests exercise it against the schema-backed
 
 * the outgoing ``$search`` / ``$select`` and the ``ConsistencyLevel: eventual``
   header ``$search`` requires,
-* the degrade-quietly contract (blank query -> no call; 401/403 -> ``[]``;
-  empty result -> ``[]``).
+* the contract (blank query -> no call; empty result -> ``[]``; 401/403 ->
+  ``PermissionError`` so the caller can fall back rather than misread a
+  permission denial as a genuine "no match").
 """
 
 from __future__ import annotations
 
 from urllib.parse import parse_qs, urlparse
 
+import pytest
 import responses
 
 from flightcheck.graph_client import GraphClient
@@ -73,8 +75,20 @@ def test_search_users_no_match_returns_empty_list():
 
 
 @responses.activate
-def test_search_users_permission_denied_returns_empty_list():
-    # Missing a directory user-read scope -> Graph 403 -> quiet [] (the caller
-    # prompts the maker to sign in / consent, or escalates to the fallback).
+def test_search_users_permission_denied_raises():
+    # Missing a directory user-read scope -> Graph 403. This must RAISE, not
+    # return [], so the caller can tell "grant access / fall back" apart from a
+    # genuine no-match (a swallowed [] would defeat the /roles WorkIQ fallback).
     responses.add(method="GET", url=f"{graph.GRAPH_BASE}/users", status=403, json={})
-    assert _client().search_users("Priya") == []
+    with pytest.raises(PermissionError):
+        _client().search_users("Priya")
+
+
+@responses.activate
+def test_search_users_token_expired_raises():
+    # A 401 (expired / missing token) is likewise an auth condition, not a
+    # no-match — raise so the caller re-auths or falls back rather than reporting
+    # the person as absent.
+    responses.add(method="GET", url=f"{graph.GRAPH_BASE}/users", status=401, json={})
+    with pytest.raises(PermissionError):
+        _client().search_users("Priya")

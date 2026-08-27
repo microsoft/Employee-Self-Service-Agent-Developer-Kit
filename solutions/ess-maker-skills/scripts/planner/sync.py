@@ -362,9 +362,14 @@ def hydrate_from_remote(
     if not isinstance(plan_entity, dict):
         raise ValueError("plan_entity must be a service Plan object")
 
-    tasks_raw = _as_entities(task_entities)
-    if not tasks_raw:
+    # ``None`` means "tasks weren't fetched — use the plan's embedded expansion";
+    # an explicit collection (even an empty ``{"value": []}``) is the service
+    # authoritatively stating the task set, so it must NOT fall back to the
+    # embedded ``agentPlanTasks`` (that would resurrect tasks deleted upstream).
+    if task_entities is None:
         tasks_raw = _as_entities(_scalar(plan_entity, "agentPlanTasks", "AgentPlanTasks", default=None))
+    else:
+        tasks_raw = _as_entities(task_entities)
 
     context: list[dict[str, Any]] = []
     for entry in _list(plan_entity, "context", "Context"):
