@@ -75,7 +75,7 @@ def main():
             [sys.executable,
              os.path.join(os.path.dirname(os.path.abspath(__file__)),
                           "emit_capability.py"),
-             "publish"],
+             "publishing"],
             check=False, capture_output=True,
         )
     except Exception:  # noqa: BLE001
