@@ -40,6 +40,33 @@ The command validates the state schema and prints only the current step
 summary. If it fails, show the specific error and stop. Never recreate or
 overwrite corrupt state silently.
 
+**First run only — confirm the maker actually wants environment setup.** If the
+state just initialized above shows no completed steps and the active step is
+still the first (`SETUP-01`), this is a first `/setup`. Ask one question before
+going any further. Skip it on any resume (a step already completed, or the active
+step has advanced) — a resume proceeds directly to dispatch and needs no input.
+
+**Message:**
+
+Before we set up your environment — which is closest to what you need right now?
+
+1. **Plan your ESS rollout** — work out what to build, which systems to connect,
+   and who owns each part. Choose this if you don't have an ESS environment yet,
+   you're still exploring what ESS can do, or you're not sure where to start.
+2. **Set up the environment now** — you're ready to configure a Power Platform
+   environment and install ESS. This needs Power Platform admin access.
+
+**End message.**
+
+- If the maker chooses **1** — or says anything like "plan", "help me figure out
+  ESS", "I don't have an environment yet", "where do I start", or "create a
+  plan" — this is a planning request. Read `src/skills/planner/SKILL.md` and
+  follow it instead; do **not** continue the foundation setup below. Planning is
+  allowed before setup and emits "run `/setup`" as a task once an environment is
+  actually needed.
+- If the maker chooses **2**, or already asked to configure or install the
+  environment, continue with the foundation setup below.
+
 If `connect_ready` is true, inspect `.local/config.json`:
 
 - If its `setup` value is `"complete"`, show that foundation and workspace setup
