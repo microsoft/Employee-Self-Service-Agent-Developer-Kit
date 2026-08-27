@@ -1,0 +1,36 @@
+{
+  "id": "servicenow",
+  "serverName": "ServiceNow",
+  "parameters": {
+    "instanceUrl": {
+      "argument": "--instance-url",
+      "format": "https-url",
+      "stripTrailingSlash": true,
+      "required": true
+    }
+  },
+  "inputs": [
+    {
+      "id": "servicenowUsername",
+      "type": "promptString",
+      "description": "ServiceNow admin username",
+      "password": false
+    },
+    {
+      "id": "servicenowPassword",
+      "type": "promptString",
+      "description": "ServiceNow admin password",
+      "password": true
+    }
+  ],
+  "server": {
+    "command": "{pythonExecutable}",
+    "args": ["server.py"],
+    "cwd": "${workspaceFolder}/src/mcp/servicenow",
+    "env": {
+      "SERVICENOW_INSTANCE_URL": "{instanceUrl}",
+      "SERVICENOW_USERNAME": "${input:servicenowUsername}",
+      "SERVICENOW_PASSWORD": "${input:servicenowPassword}"
+    }
+  }
+}
