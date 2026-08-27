@@ -9,6 +9,10 @@
       "command": "{pythonExecutable}",
       "args": ["server.py"],
       "cwd": "${workspaceFolder}/src/mcp/agentconfig_planner"
+    },
+    "workiq-preview": {
+      "command": "npx",
+      "args": ["-y", "@microsoft/workiq@latest", "mcp"]
     }
   }
 }

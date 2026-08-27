@@ -72,3 +72,18 @@ def test_mcp_defaults_defer_production_endpoints_to_server_fallbacks() -> None:
     serialized = json.dumps(config).lower()
     assert "localhost" not in serialized
     assert "tls_insecure" not in serialized
+
+
+def test_mcp_defaults_register_workiq_people_fallback() -> None:
+    """WorkIQ ships as a default server so the /roles person resolver has a
+    ready fallback in tenants that block user consent for the Graph CLI app
+    (e.g. Microsoft corp). It rides on M365 Copilot via npx — no per-maker
+    parameters and no ``{pythonExecutable}`` to render."""
+    config = json.loads(MCP_DEFAULTS_PATH.read_text(encoding="utf-8"))
+
+    assert "workiq-preview" in config["servers"]
+    server = config["servers"]["workiq-preview"]
+    assert server["command"] == "npx"
+    # Launches the published Work IQ MCP: npx -y @microsoft/workiq@latest mcp.
+    assert "mcp" in server["args"]
+    assert any("@microsoft/workiq" in argument for argument in server["args"])
