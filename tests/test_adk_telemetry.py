@@ -653,6 +653,53 @@ def test_wired_capabilities_are_in_canonical_list():
     assert not missing, f"wired capabilities not in ADK_CAPABILITIES: {missing}"
 
 
+# --- guard: any string a caller passes to the shim must be canonical --------
+def test_no_caller_passes_a_noncanonical_capability_to_the_shim():
+    """Scan the repo for ``emit_capability.py <cap>`` invocations — both
+    Python subprocess calls (from ``scripts/*.py``) and SKILL.md steps — and
+    assert every capability argument is a member of ``ADK_CAPABILITIES``.
+
+    This is the guardrail the hardcoded ``wired`` set in the test above
+    doesn't provide: a fresh caller that hardcodes a typo (as ``publish.py``
+    did with ``"publish"`` vs the canonical ``"publishing"``) silently maps
+    to ``CAPABILITY_UNKNOWN`` on the dashboards. Scanning source directly
+    catches the typo the first time it lands, no manual list update needed.
+    """
+    import re as _re
+    from pathlib import Path as _Path
+
+    repo_root = _Path(__file__).resolve().parent.parent
+    scripts_dir = repo_root / "solutions" / "ess-maker-skills" / "scripts"
+    skills_dir = repo_root / "solutions" / "ess-maker-skills" / "src" / "skills"
+
+    # Python subprocess form:
+    #   subprocess.run([..., "emit_capability.py"), "<cap>"], ...)
+    # SKILL.md form:
+    #   python scripts/emit_capability.py <cap>
+    py_pat = _re.compile(r'"emit_capability\.py"\)\s*,\s*\n?\s*"([^"]+)"')
+    md_pat = _re.compile(r'emit_capability\.py\s+([A-Za-z_][A-Za-z0-9_\-]*)')
+
+    offenders: list[tuple[str, str]] = []
+    for path in scripts_dir.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for m in py_pat.finditer(text):
+            cap = m.group(1)
+            if cap not in adk.ADK_CAPABILITIES:
+                offenders.append((str(path.relative_to(repo_root)), cap))
+    for path in skills_dir.rglob("SKILL.md"):
+        text = path.read_text(encoding="utf-8")
+        for m in md_pat.finditer(text):
+            cap = m.group(1)
+            if cap not in adk.ADK_CAPABILITIES:
+                offenders.append((str(path.relative_to(repo_root)), cap))
+
+    assert not offenders, (
+        "Non-canonical capability strings passed to emit_capability.py — these "
+        "would silently normalize to CAPABILITY_UNKNOWN on the dashboards. "
+        f"Offenders (file, capability): {offenders}"
+    )
+
+
 
 # --- emit_capability.py shim (the SKILL.md-driven hook) -------------------
 def test_shim_emits_capability_and_exits_zero(captured_post, monkeypatch):
