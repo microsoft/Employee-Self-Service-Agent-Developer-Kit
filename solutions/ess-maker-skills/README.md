@@ -71,6 +71,18 @@ Catch and fix compile errors before they reach production. The `/scan` command a
 - Proposes fixes and applies them with your confirmation
 - Re-scans after each fix to verify resolution
 
+### 🛡️ Harden Agent Instructions
+
+Review your agent's **system instructions** — the standing guidance it follows on every turn — for the gaps that let it answer confidently from something other than its knowledge sources, or offer to do things it can't actually do. Run `/harden`.
+
+- **Asks what you've actually seen first** — paste an answer you didn't like and the review works backward from it to the instruction that permitted it
+- **Always checks for contradictions** — a rule contradicted elsewhere in the instructions isn't in force, however firmly it's written, and this runs even when the agent is behaving well
+- **Proposes line-level diffs** — exact before-and-after text with a reason, applied only after you approve; never a wholesale rewrite
+- **Won't tighten for the sake of it** — if nothing is wrong, it says so. Extra prohibitions make the agent decline questions it could have answered, which is a real regression traded for a hypothetical one
+- **Enforces the length ceiling** — instructions have a character limit and hardening only adds text, so the pass measures the result and proposes what comes out when it doesn't fit
+
+Instruction changes are behavioral changes, so `/harden` hands off to `/evaluate` and `/test` to check them — including the answers you reported, which are the only direct evidence of whether the change worked.
+
 ### 📊 Generate Evaluation Test Sets
 
 Create structured CSV test sets that you upload to the Copilot Studio Evaluation portal. The agent reads your topics and generates tests across multiple quality dimensions.

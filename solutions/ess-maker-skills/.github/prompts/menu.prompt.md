@@ -19,6 +19,7 @@ Here's what I can help you with:
 | `/delete` | Type Enter to delete a topic or workflow from your agent |
 | `/scan` | Type Enter to scan your agent for compile errors and fix them |
 | `/review` | Type Enter to review a topic (or a whole module's topics) for issues before publishing |
+| `/harden` | Type Enter to review and harden your agent's instructions against ungrounded or over-committing answers |
 | `/test` | Type Enter to drive and debug a topic or workflow's runtime behaviour until it's right |
 | `/evaluate` | Type Enter to generate evaluation test sets for your agent |
 | `/flightcheck` | Type Enter to run a pre-deployment readiness check |
