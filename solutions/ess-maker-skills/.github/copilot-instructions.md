@@ -257,6 +257,27 @@ For detailed patterns, see `src/reference/ess-docs/customization/customize.md`.
 - HTTP — for generic REST API calls to custom endpoints
 - Any Power Platform connector can be added through the Copilot Studio portal
 
+## Developer Tools (authoring-time)
+
+These are MCP tools the **maker's Copilot** uses while building. They run on the
+maker's machine under the maker's own sign-in and are **never** part of the ESS
+agent's runtime (no connection reference, extension pack, or flow) and are never
+deployed to Copilot Studio. Do not confuse them with the `/connect` integrations
+above, which configure what the deployed agent calls at runtime.
+
+### Work IQ (people & directory lookup)
+- Microsoft [Work IQ](https://github.com/microsoft/work-iq) (`@microsoft/workiq`) MCP
+  server for Microsoft 365 intelligence; enabled via a `workiq` entry in
+  `.vscode/mcp.json` (`npx -y @microsoft/workiq@latest mcp`, interactive Entra sign-in).
+- **Primary use — resolve a person to their Entra (AAD) object id.** Use the `fetch`
+  tool on a Graph-relative path: `fetch /users/{upn}` → `results[0].data.id` is the
+  Entra object id; `fetch /me/people?$search={name}` for fuzzy name lookup. In chat,
+  just ask (e.g. "what's the Entra object id for jane@contoso.com?").
+- **Boundary:** authoring-time only. Never treat Work IQ or an id it returns as a
+  runtime dependency of the ESS agent. For the *signed-in employee's* identity at
+  runtime, use the ESS user-context topics / `System.User.*`, not Work IQ.
+- See `src/reference/work-iq-mcp.md` for config, the AAD-id recipe, and consent notes.
+
 ## Agent Development Lifecycle (CRITICAL)
 
 The files in `workspace/agents/{slug}/` are a **local working copy** of the agent
