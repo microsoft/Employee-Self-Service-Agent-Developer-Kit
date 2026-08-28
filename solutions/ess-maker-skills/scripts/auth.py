@@ -266,7 +266,6 @@ def authenticate(env_url):
 
         claims = result.get("id_token_claims", {}) or {}
         tenant_id = claims.get("tid", "") or tenant
-        adk_telemetry.maybe_print_notice()
         # Resolve the tenant's display name via a SILENT-ONLY Graph token
         # BEFORE emitting adk.session.start, so the very first ADK event on a
         # fresh install carries tenant_name (instead of blank until FlightCheck

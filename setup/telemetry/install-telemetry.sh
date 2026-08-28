@@ -18,7 +18,8 @@
 #     unknown here and no tenant dimension is emitted (the internal-vs-external
 #     split lives in the post-auth ADK/FlightCheck telemetry).
 #   * Same unified opt-out: ESS_ADK_TELEMETRY=off or ~/.adk/config
-#     {"telemetry":"disabled"}; one-time notice on first install.
+#     {"telemetry":"disabled"}. Disclosure lives in the README /
+#     CONTRIBUTING.md; no runtime banner is printed.
 #
 # The iKeys are 1DS ingestion keys: write-only, safe to embed.
 #
@@ -61,33 +62,14 @@ ess_tel_enabled() {
     return 0
 }
 
-ess_tel_notice() {
-    # One-time notice, idempotent via config noticeShown (best-effort).
-    if [[ -f "$ESS_TEL_CONFIG" ]] && grep -Eq '"noticeShown"[[:space:]]*:[[:space:]]*true' "$ESS_TEL_CONFIG" 2>/dev/null; then
-        return 0
-    fi
-    cat >&2 <<'EOF'
-
-------------------------------------------------------------------------
-ESS Agent Developer Kit collects pseudonymous installation telemetry
-(install success/failure, which step failed, scrubbed error categories,
-duration, platform) to help us improve setup reliability. It does NOT
-collect your identity, credentials, file contents, or agent content.
-Opt out any time:  python scripts/adk_telemetry.py off   (or set
-ESS_ADK_TELEMETRY=off). Details: https://aka.ms/adk-telemetry
-------------------------------------------------------------------------
-
-EOF
+ess_tel_ensure_config() {
+    # Ensure the on-disk config exists so opt-out via
+    # `python scripts/adk_telemetry.py off` can find and update it. Best-effort;
+    # no runtime disclosure is printed — the README and CONTRIBUTING.md carry
+    # the telemetry notice.
     mkdir -p "$ESS_TEL_CONFIG_DIR" 2>/dev/null || true
-    if [[ -f "$ESS_TEL_CONFIG" ]] && grep -q '"telemetry"' "$ESS_TEL_CONFIG" 2>/dev/null; then
-        # append noticeShown without clobbering (best-effort minimal edit)
-        if ! grep -q '"noticeShown"' "$ESS_TEL_CONFIG" 2>/dev/null; then
-            # insert before the closing brace
-            local tmp="$ESS_TEL_CONFIG.tmp.$$"
-            sed 's/}[[:space:]]*$/, "noticeShown": true }/' "$ESS_TEL_CONFIG" > "$tmp" 2>/dev/null && mv "$tmp" "$ESS_TEL_CONFIG" 2>/dev/null || true
-        fi
-    else
-        printf '{ "telemetry": "enabled", "noticeShown": true }\n' > "$ESS_TEL_CONFIG" 2>/dev/null || true
+    if [[ ! -f "$ESS_TEL_CONFIG" ]]; then
+        printf '{ "telemetry": "enabled" }\n' > "$ESS_TEL_CONFIG" 2>/dev/null || true
     fi
     return 0
 }
@@ -183,7 +165,7 @@ ess_tel_init() {
     # The Lite-mode installer is being merged into the standard ADK installer
     # (mode will become an onboarding prompt), so it is no longer instrumented.
     [[ "$ESS_TEL_INSTALLER" == "lite" ]] && { ESS_TEL_READY=0; return 0; }
-    ess_tel_notice
+    ess_tel_ensure_config
     local envname
     envname="$(printf '%s' "${ESS_ADK_ARIA_ENV:-${ESS_FLIGHTCHECK_ARIA_ENV:-}}" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
     if [[ "$envname" == "dev" ]]; then ESS_TEL_ENV='dev'; ESS_TEL_IKEY="$ESS_TEL_IKEY_DEV"; else ESS_TEL_ENV='prod'; ESS_TEL_IKEY="$ESS_TEL_IKEY_PROD"; fi

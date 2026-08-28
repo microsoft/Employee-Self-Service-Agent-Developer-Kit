@@ -220,7 +220,8 @@ def test_resolve_ikey_disabled(monkeypatch):
 
 def test_resolve_ikey_disabled_via_unified_adk_optout(monkeypatch):
     # `adk telemetry off` (ESS_ADK_TELEMETRY=off / ~/.adk/config) must silence
-    # the legacy FlightCheck emitter too, matching the printed consent notice.
+    # the legacy FlightCheck emitter too, matching the documented opt-out
+    # (README / CONTRIBUTING.md).
     monkeypatch.setenv("ESS_ADK_TELEMETRY", "off")
     ikey, env = telemetry.resolve_ikey()
     assert ikey is None

@@ -24,8 +24,9 @@ Design rules (deliberate — read before changing):
 
 * **Consent + opt-out.** Telemetry is enabled by default. The maker can
   opt out via ``python adk_telemetry.py off`` (persisted to
-  ``~/.adk/config``) or the ``ESS_ADK_TELEMETRY=off`` env var. A one-time
-  notice is printed on first use (``maybe_print_notice``).
+  ``~/.adk/config``) or the ``ESS_ADK_TELEMETRY=off`` env var. Disclosure
+  lives in the top-level README and CONTRIBUTING.md; no runtime banner is
+  printed.
 
 * **Privacy: no developer identity collected; tenant_id raw OII; enums only,
   no free text.** We do NOT collect or emit any developer/user identifier
@@ -157,7 +158,10 @@ _ERROR_OUTCOMES = frozenset(
     {"client_error", "server_error", "timeout", "abandoned", "failure", "fail"}
 )
 
-# Local config / state lives under ~/.adk (spec Consent & Notice).
+# Local config / state lives under ~/.adk. Opt-out preference is written here
+# by ``python scripts/adk_telemetry.py off`` (see set_telemetry); no runtime
+# banner is printed — disclosure lives in the top-level README and
+# CONTRIBUTING.md.
 CONFIG_DIR = os.path.expanduser(os.path.join("~", ".adk"))
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config")
 SESSION_PATH = os.path.join(CONFIG_DIR, "session.json")
@@ -168,14 +172,6 @@ BUFFER_MAX_EVENTS = 1000
 BUFFER_MAX_BYTES = 5 * 1024 * 1024
 RUNS_PATH = os.path.join(CONFIG_DIR, "flightcheck-runs.json")
 
-NOTICE_TEXT = (
-    "ADK collects pseudonymous usage data to improve the product.\n"
-    "To disable telemetry, run: python scripts/adk_telemetry.py off\n"
-    "(or set the environment variable ESS_ADK_TELEMETRY=off)\n"
-    "Learn more: https://aka.ms/adk-telemetry\n"
-)
-
-# When true (env or block=True), emit on the calling thread for determinism.
 _SYNC = os.environ.get("ESS_ADK_TELEMETRY_SYNC", "").strip().lower() in (
     "1", "on", "true", "yes",
 )
@@ -292,7 +288,11 @@ def set_identity(
     return dict(_IDENTITY)
 
 
-# --- Consent / opt-out (spec Consent & Notice) ----------------------------
+# --- Consent / opt-out ----------------------------------------------------
+# Opt-out is honored via the ``ESS_ADK_TELEMETRY`` env var or the on-disk
+# ``~/.adk/config`` preference (written by ``python adk_telemetry.py off``).
+# Disclosure lives in the top-level README and CONTRIBUTING.md; no runtime
+# banner is printed by the SDK.
 def _read_config() -> dict[str, Any]:
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
@@ -332,22 +332,6 @@ def set_telemetry(enabled: bool) -> bool:
 
 def telemetry_status() -> str:
     return "enabled" if telemetry_enabled() else "disabled"
-
-
-def maybe_print_notice(stream: Any = None) -> bool:
-    """Print the one-time consent notice on first use. Returns True if shown.
-
-    Idempotent across invocations via the ``noticeShown`` config flag. Never
-    blocks execution — it prints and returns.
-    """
-    cfg = _read_config()
-    if cfg.get("noticeShown"):
-        return False
-    (stream or sys.stderr).write("\n" + NOTICE_TEXT + "\n")
-    cfg["noticeShown"] = True
-    cfg.setdefault("telemetry", "enabled")
-    _write_config(cfg)
-    return True
 
 
 # --- Session identity (spec: UUID v4, 30-min inactivity window) -----------

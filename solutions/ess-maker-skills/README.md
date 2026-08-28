@@ -359,8 +359,7 @@ solutions/ess-maker-skills/
 
 The ADK collects **pseudonymous** usage telemetry to help us understand which
 capabilities are used and where they fail, so we can improve the product. It is
-**enabled by default**, and a one-time notice is printed the first time you run a
-CLI command.
+**enabled by default**; you can opt out at any time (see below).
 
 **What is collected**
 

@@ -16,7 +16,8 @@ What we lock down:
   * identity: random ``instance_id`` dedup + raw ``tenant_id``, no developer id.
   * common-dimensions shape + Common Schema 4.0 envelope.
   * error-field scrubbing/attachment (no paths / URLs / newlines leak).
-  * consent: env override + ``~/.adk/config`` opt-out, one-time notice.
+  * consent: env override + ``~/.adk/config`` opt-out (README/CONTRIBUTING
+    carry the disclosure; no runtime banner is printed).
   * session: persists across calls, rolls after the 30-min window.
   * run-index counter: per-agent within a session.
   * ikey resolution (shared default env, env override, raw-key override).
@@ -445,13 +446,19 @@ def test_config_opt_out_persists():
     assert adk.telemetry_enabled() is True
 
 
-def test_notice_shown_once(capsys):
-    import io
-
-    first = adk.maybe_print_notice(stream=io.StringIO())  # writes, flags shown
-    assert first is True
-    second = adk.maybe_print_notice(stream=io.StringIO())
-    assert second is False
+def test_no_runtime_notice_symbol_exists():
+    # Per Privacy-review decision, disclosure lives in README / CONTRIBUTING.md;
+    # the SDK must never print a runtime banner. This test locks that in — if
+    # someone reintroduces ``maybe_print_notice`` or a ``NOTICE_TEXT`` constant,
+    # the test fails and the reviewer is forced to re-consult Privacy.
+    assert not hasattr(adk, "maybe_print_notice"), (
+        "maybe_print_notice was intentionally removed; re-check with Privacy "
+        "before adding a runtime disclosure banner."
+    )
+    assert not hasattr(adk, "NOTICE_TEXT"), (
+        "NOTICE_TEXT was intentionally removed; re-check with Privacy before "
+        "adding a runtime disclosure banner."
+    )
 
 
 def test_disabled_emit_does_not_post(monkeypatch, captured_post):

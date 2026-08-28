@@ -783,7 +783,6 @@ def main():
     try:
         import adk_telemetry
 
-        adk_telemetry.maybe_print_notice()
         adk_telemetry.emit_agent_create(
             agent_id=agent_info.get("botId", ""), adk_capability="setup")
         adk_telemetry.flush(timeout=3)
