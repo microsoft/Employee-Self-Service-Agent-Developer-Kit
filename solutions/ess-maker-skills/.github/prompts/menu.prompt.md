@@ -18,9 +18,10 @@ Here's what I can help you with:
 | `/update` | Update a simple topic with evals, a workflow, or an evaluation test set |
 | `/delete` | Type Enter to delete a topic or workflow from your agent |
 | `/scan` | Type Enter to scan your agent for compile errors and fix them |
-| `/review` | Type Enter to review a topic (or a whole module's topics) for issues before publishing |
+| `/review` | Type Enter to review a topic or evaluation test sets tagged for review |
 | `/test` | Type Enter to drive and debug a topic or workflow's runtime behaviour until it's right |
-| `/evaluate` | Type Enter to generate evaluation test sets for your agent |
+| `/evaluate` | Type Enter to create, update, tag, review, run, view results, or delete evaluation test sets |
+| `/run` | Type Enter to run evaluation test sets or view run results |
 | `/flightcheck` | Type Enter to run a pre-deployment readiness check |
 | `/push` | Type Enter to push all local changes to Copilot Studio |
 | `/backup-template-configs` | Type Enter to back up Workday HCM template config customisations before an ESS package update |
