@@ -45,6 +45,12 @@ from auth import (
     load_config,
     AuthExpiredError,
 )
+from evaluation_review import (
+    REVIEW_FILENAME,
+    ReviewMetadataError,
+    metadata_description,
+    parse_review_metadata,
+)
 
 EXCLUDE_DIRS = {".baseline", ".checkpoints"}
 EXCLUDE_FILES = {"snapshot.md", "_meta.json"}
@@ -501,6 +507,8 @@ def _botcomponent_recreate_payload(entry, content, bot_id):
     }
     if entry.get("componenttype") is not None:
         payload["componenttype"] = entry["componenttype"]
+    if entry.get("description"):
+        payload["description"] = entry["description"]
     if entry.get("parentbotcomponentid"):
         payload["ParentBotComponentId@odata.bind"] = \
             f"/botcomponents({entry['parentbotcomponentid']})"
@@ -593,9 +601,41 @@ def classify_path(filepath):
         if parts[-1] == "metadata.yml":
             return "workflow-meta"
         return None
+    if parts[0] == "evaluations" and parts[-1] == REVIEW_FILENAME:
+        return "evaluation-review"
     if filepath.endswith(".mcs.yml"):
         return "botcomponent"
     return None
+
+
+def _evaluation_parent_path(review_path, component_map, working_files):
+    """Resolve an evaluations/<set>/review.json file to its parent YAML."""
+    folder = review_path.replace("\\", "/").rsplit("/", 1)[0]
+    prefix = f"{folder}/"
+    mapped = [
+        path for path, entry in component_map.items()
+        if path.startswith(prefix)
+        and entry.get("componenttype") == 19
+        and not entry.get("parentbotcomponentid")
+    ]
+    if len(mapped) == 1:
+        return mapped[0]
+
+    local = [
+        path for path, content in working_files.items()
+        if path.startswith(prefix)
+        and path.endswith(".mcs.yml")
+        and "kind: EvaluationSet" in content
+    ]
+    return local[0] if len(local) == 1 else None
+
+
+def _review_description_for_create(parent_path, working_files):
+    """Return a tagged description when a new parent has review.json."""
+    folder = parent_path.replace("\\", "/").rsplit("/", 1)[0]
+    review_path = f"{folder}/{REVIEW_FILENAME}"
+    content = working_files.get(review_path)
+    return metadata_description(content) if content is not None else None
 
 
 def collect_files(root_dir):
@@ -1131,6 +1171,11 @@ def main():
         new = [f for f in new if matches_only(f, only_globs)]
         deleted = [f for f in deleted if matches_only(f, only_globs)]
 
+    destructive_deletes = [
+        path for path in deleted
+        if classify_path(path) != "evaluation-review"
+    ]
+
     if not changed and not new and not deleted:
         if only_globs:
             print("Nothing to push in the selected scope.")
@@ -1187,11 +1232,17 @@ def main():
                 yaml.safe_load(content)
             except yaml.YAMLError as exc:
                 parse_errors.append(f"  YAML parse error in {filepath}: {exc}")
-        elif ctype == "workflow":
+        elif ctype in ("workflow", "evaluation-review"):
             try:
                 json.loads(content)
             except json.JSONDecodeError as exc:
                 parse_errors.append(f"  JSON parse error in {filepath}: {exc}")
+            if ctype == "evaluation-review":
+                try:
+                    parse_review_metadata(content)
+                except ReviewMetadataError as exc:
+                    parse_errors.append(
+                        f"  Review metadata error in {filepath}: {exc}")
         elif ctype == "template-config":
             # Either JSON or XML; only validate JSON, XML may be templated.
             stripped = content.lstrip()
@@ -1217,18 +1268,21 @@ def main():
     # Separate confirmation for destructive operations. --yes covers
     # creates and updates; deletes additionally require --force-delete
     # OR an interactive 'delete' confirmation.
-    if deleted and not force_delete:
+    if destructive_deletes and not force_delete:
         if auto_yes:
             print(
-                f"\nERROR: Refusing to delete {len(deleted)} component(s) without"
+                f"\nERROR: Refusing to delete {len(destructive_deletes)} "
+                "component(s) without"
                 " --force-delete. Re-run with --force-delete (alongside --yes)"
                 " if you really want to delete these:"
             )
-            for d in deleted:
+            for d in destructive_deletes:
                 print(f"  - {d}")
             sys.exit(2)
-        print(f"\nWARNING: this will DELETE {len(deleted)} component(s):")
-        for d in deleted:
+        print(
+            f"\nWARNING: this will DELETE {len(destructive_deletes)} "
+            "component(s):")
+        for d in destructive_deletes:
             print(f"  - {d}")
         confirm = input("\nType 'delete' to confirm deletion, or anything else to abort: ").strip().lower()
         if confirm != "delete":
@@ -1272,6 +1326,48 @@ def main():
     pending_meta_writes: list = []  # list[(meta_full_path, meta_data_dict)]
     pending_renames: dict = {}     # filepath -> new name (workflow-meta
                                    # rename mutations staged for the gate)
+    pending_descriptions: dict = {}  # parent filepath -> Dataverse description
+
+    # Stage review metadata independently from EvaluationSet YAML. Existing
+    # parents receive their description PATCH only after every component
+    # mutation succeeds; new parents consume review.json during the evaluation
+    # parent-create pass below.
+    review_changes = [
+        path for path in changed + new + deleted
+        if classify_path(path) == "evaluation-review"
+    ]
+    for review_path in review_changes:
+        parent_path = _evaluation_parent_path(
+            review_path, component_map, working_files)
+        if parent_path is None:
+            print(f"  ❌ Failed: {review_path}: evaluation parent not found")
+            errors += 1
+            continue
+        if parent_path in deleted:
+            # The component deletion removes the description with the record;
+            # avoid a redundant status PATCH immediately before deleting it.
+            continue
+        parent_entry = component_map.get(parent_path, {})
+        parent_id = parent_entry.get("botcomponentid")
+        if not parent_id:
+            if parent_path in new and review_path in new:
+                continue
+            print(f"  ❌ Failed: {review_path}: parent has no component ID")
+            errors += 1
+            continue
+
+        try:
+            if review_path in deleted:
+                metadata = parse_review_metadata(baseline_files[review_path])
+                description = metadata["baseDescription"]
+            else:
+                description = metadata_description(
+                    working_files[review_path])
+            pending_descriptions[parent_path] = description
+            print(f"  ⏳ Staged review status: {parent_path}")
+        except Exception as exc:
+            print(f"  ❌ Failed: {review_path}: {exc}")
+            errors += 1
 
     # Push modified files
     for filepath in changed:
@@ -1279,6 +1375,8 @@ def main():
         entry = component_map.get(filepath)
         content = working_files[filepath]
 
+        if ctype == "evaluation-review":
+            continue
         if ctype == "botcomponent":
             if not entry or not entry.get("botcomponentid"):
                 print(f"  SKIP {filepath}: no component ID in map")
@@ -1465,6 +1563,8 @@ def main():
     eval_new = []
     non_eval_new = []
     for filepath in new:
+        if classify_path(filepath) == "evaluation-review":
+            continue
         parts = filepath.replace("\\", "/").split("/")
         if parts[0] == "evaluations":
             eval_new.append(filepath)
@@ -1664,6 +1764,10 @@ def main():
                 "schemaname": schema,
                 "parentbotid@odata.bind": f"/bots({bot_id})",
             }
+            review_description = _review_description_for_create(
+                filepath, working_files)
+            if review_description is not None:
+                record_data["description"] = review_description
             try:
                 new_id = _call_with_refresh(auth, create_record,
                                             env_url, auth.token,
@@ -1674,6 +1778,7 @@ def main():
                     "schemaname": schema,
                     "componenttype": 19,
                     "name": record_data["name"],
+                    "description": record_data.get("description", ""),
                 }
                 eval_parent_ids[filepath] = new_id
                 success += 1
@@ -1837,6 +1942,8 @@ def main():
 
     for filepath in ordered_deleted:
         ctype = classify_path(filepath)
+        if ctype == "evaluation-review":
+            continue
         entry = component_map.get(filepath)
 
         if ctype == "botcomponent":
@@ -1999,6 +2106,23 @@ def main():
         registration_incomplete.extend(
             _register_flow(auth, env_url, schema_name, wf_id, wf_json))
 
+    # Publish staged review descriptions only after all evaluation mutations
+    # succeed. This prevents review_completed from becoming visible remotely
+    # while the reviewed YAML is stale or only partially updated.
+    if errors == 0:
+        for parent_path, description in pending_descriptions.items():
+            parent_entry = component_map.get(parent_path, {})
+            parent_id = parent_entry.get("botcomponentid")
+            try:
+                _call_with_refresh(
+                    auth, update_record, env_url, auth.token,
+                    "botcomponents", parent_id, {"description": description})
+                print(f"  ✅ Updated review status: {parent_path}")
+                success += 1
+            except Exception as exc:
+                print(f"  ❌ Failed review status: {parent_path}: {exc}")
+                errors += 1
+
     # Apply pending state mutations atomically with the baseline + map save.
     # The full-success gate is the contract: if everything pushed, persist
     # the new component_map (with creates merged in and deletes removed),
@@ -2038,6 +2162,9 @@ def main():
         for path, new_name in pending_renames.items():
             if path in component_map:
                 component_map[path]["name"] = new_name
+        for path, description in pending_descriptions.items():
+            if path in component_map:
+                component_map[path]["description"] = description
 
         # Phase 2: stage every write to a .tmp sibling.
         map_path = os.path.join(agent_dir, ".component-map.json")
