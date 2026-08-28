@@ -629,6 +629,52 @@ class Plan:
             resolved[key] = art.get("attributes", {}) if art else None
         return resolved
 
+    def blocking_inputs(self, task_id: str) -> dict[str, list[str]]:
+        """The task's consumed keys that have **no Active artifact yet**, each
+        mapped to the task ids declared to produce them.
+
+        This is the produces/consumes readiness signal: a task cannot truly
+        start (nor be legitimately ``Completed``) while it consumes an artifact
+        nothing has produced. Returns ``{key: [producerTaskId, ...]}`` for every
+        unmet key — the producer list is empty for an external input no task in
+        the plan produces. A task with no entry here is ready on the artifact
+        model. Pure/read-only: reflects the current ledger, never mutates it."""
+        task = self.task(task_id)
+        if not task:
+            return {}
+        unmet: dict[str, list[str]] = {}
+        for key in (task.get("consumes") or []):
+            if self.output(key) is not None:
+                continue  # satisfied by an Active artifact
+            producers = [
+                t.get("id")
+                for t in self.tasks
+                if key in (t.get("produces") or []) and t.get("id") != task_id
+            ]
+            unmet[key] = [p for p in producers if p]
+        return unmet
+
+    def waiting_on(self, task_id: str) -> list[str]:
+        """Flattened, de-duplicated, sorted list of what a task is blocked on:
+        the upstream producer task ids for its unproduced consumed artifacts,
+        plus ``needs <key>`` for any consumed key nothing in the plan produces.
+        Empty when the task is ready. Drives the task-list dependency marker."""
+        tokens: list[str] = []
+        for key, producers in self.blocking_inputs(task_id).items():
+            if producers:
+                tokens.extend(producers)
+            else:
+                tokens.append(f"needs {key}")
+        return sorted(dict.fromkeys(tokens))
+
+    def dependency_marker(self, task_id: str) -> str:
+        """Compact task-list marker for artifact readiness: ``""`` when the task
+        is ready (all consumed artifacts produced, or it consumes nothing), else
+        the comma-joined :meth:`waiting_on` tokens (e.g. ``"T2"`` or
+        ``"T1, T2"``). Render-time only — reflects the produces/consumes ledger,
+        never mutates it, and never changes stored task sequence or state."""
+        return ", ".join(self.waiting_on(task_id))
+
     def setup_task_id(self) -> str | None:
         """The plan's setup task id — the task that **produces** the primary
         environment (`primaryEnvironment`), i.e. the ``/setup`` task. Prefers the
@@ -693,6 +739,7 @@ class Plan:
             "state": task.get("state", ""),
             "kitSetup": self.kit_setup_nudge(task_id),
             "consumes": self.resolved_consumes(task_id),
+            "blockedBy": self.blocking_inputs(task_id),
             "produces": list(task.get("produces", [])),
         }
 
@@ -822,9 +869,13 @@ class Plan:
             role = assignee_role_id(assigned) or "(no role)"
             owner = assignee_user_oid(assigned)
             if assigned.get("type") == "User" and owner == person_oid:
-                grouped.setdefault(role, []).append({"task": task, "relation": "assigned"})
+                grouped.setdefault(role, []).append(
+                    {"task": task, "relation": "assigned", "waitingOn": self.waiting_on(task.get("id"))}
+                )
             elif assigned.get("type") == "Role" and assignee_role_id(assigned) in role_set:
-                grouped.setdefault(role, []).append({"task": task, "relation": "pool"})
+                grouped.setdefault(role, []).append(
+                    {"task": task, "relation": "pool", "waitingOn": self.waiting_on(task.get("id"))}
+                )
         return grouped
 
     # ---- validation ------------------------------------------------------ #
@@ -1026,12 +1077,13 @@ class Plan:
         lines.append("## Tasks")
         lines.append("")
         if self.tasks:
-            lines.append("| # | Task | Role / owner | State |")
-            lines.append("|---|------|--------------|-------|")
+            lines.append("| # | Task | Role / owner | State | Blocked by |")
+            lines.append("|---|------|--------------|-------|------------|")
             for task in self.ordered_tasks():
+                marker = self.dependency_marker(task.get("id")) or "—"
                 lines.append(
                     f"| {task.get('id')} | {task.get('title')} | "
-                    f"{_render_assignee(task.get('assignedTo'))} | {task.get('state')} |"
+                    f"{_render_assignee(task.get('assignedTo'))} | {task.get('state')} | {marker} |"
                 )
         else:
             lines.append("_No tasks yet._")

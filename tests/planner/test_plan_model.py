@@ -330,6 +330,83 @@ def test_render_summary_lists_tasks_in_execution_order():
 
 
 # --------------------------------------------------------------------------- #
+# Dependency marker (artifact-model readiness)
+# --------------------------------------------------------------------------- #
+
+def test_blocking_inputs_flags_unproduced_consumed_key():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce", produces=["envId"]))
+    # Nothing produced yet: T1 waits on its producer T2; T2 itself is ready.
+    assert plan.blocking_inputs("T1") == {"envId": ["T2"]}
+    assert plan.waiting_on("T1") == ["T2"]
+    assert plan.dependency_marker("T1") == "T2"
+    assert plan.blocking_inputs("T2") == {}
+    assert plan.dependency_marker("T2") == ""
+
+
+def test_dependency_marker_clears_once_artifact_is_active():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce", produces=["envId"]))
+    plan.add_output(plan_artifact("envId", "Environment", {"environmentId": "e"}, produced_by_task_id="T2"))
+    # The consumed key now has an Active artifact — the marker disappears.
+    assert plan.blocking_inputs("T1") == {}
+    assert plan.waiting_on("T1") == []
+    assert plan.dependency_marker("T1") == ""
+
+
+def test_waiting_on_marks_external_key_no_task_produces():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", consumes=["externalId"]))
+    # No task produces externalId — surface the missing key, not a producer id.
+    assert plan.blocking_inputs("T1") == {"externalId": []}
+    assert plan.waiting_on("T1") == ["needs externalId"]
+    assert plan.dependency_marker("T1") == "needs externalId"
+
+
+def test_dependency_marker_dedupes_and_sorts_producers():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume both", consumes=["a", "b"]))
+    plan.add_task(new_task("P2", "make a", produces=["a"]))
+    plan.add_task(new_task("P1", "make b", produces=["b"]))
+    # Producers are de-duplicated and sorted for a stable marker.
+    assert plan.dependency_marker("T1") == "P1, P2"
+
+
+def test_render_summary_shows_blocked_by_column():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce", produces=["envId"]))
+    summary = plan.render_summary()
+    assert "Blocked by" in summary
+    rows = {
+        line.split("|")[1].strip(): line
+        for line in summary.splitlines()
+        if line.startswith("| T")
+    }
+    # Consumer row names its upstream producer; the producer row is ready ("—").
+    assert "T2" in rows["T1"].split("|")[-2]
+    assert rows["T2"].split("|")[-2].strip() == "—"
+
+
+def test_tasks_for_person_reports_waiting_on():
+    plan = Plan.new()
+    plan.add_task(new_task(
+        "T1", "consume", consumes=["envId"],
+        assigned_to=principal_person(ANN, role_id="eval-author"),
+    ))
+    plan.add_task(new_task(
+        "T2", "produce", produces=["envId"],
+        assigned_to=principal_person(ANN, role_id="eval-author"),
+    ))
+    grouped = plan.tasks_for_person(ANN, ["eval-author"])
+    by_id = {item["task"]["id"]: item for item in grouped["eval-author"]}
+    assert by_id["T1"]["waitingOn"] == ["T2"]
+    assert by_id["T2"]["waitingOn"] == []
+
+
+# --------------------------------------------------------------------------- #
 # Validation
 # --------------------------------------------------------------------------- #
 

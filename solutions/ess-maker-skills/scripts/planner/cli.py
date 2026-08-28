@@ -386,7 +386,9 @@ def cmd_mine(args: argparse.Namespace) -> int:
         for item in items:
             task = item["task"]
             tag = "assigned to you" if item["relation"] == "assigned" else "open to your role"
-            print(f"    - {task['id']}  {task['title']}  ({tag})  [{task.get('state')}]")
+            waiting = item.get("waitingOn") or []
+            blocked = f"  [blocked by {', '.join(waiting)}]" if waiting else ""
+            print(f"    - {task['id']}  {task['title']}  ({tag})  [{task.get('state')}]{blocked}")
         print()
     return 0
 

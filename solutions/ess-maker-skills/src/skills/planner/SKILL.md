@@ -68,7 +68,11 @@ have checked for an existing plan.**
    do not re-interview and do not ask for the objective again.**
    - Show its latest state: `python scripts/planner/cli.py summary` — the
      objective, every task and its state, scenario dependencies, and what's been
-     produced so far. Present it in plain language.
+     produced so far. The task table's **Blocked by** column is the render-time
+     dependency marker: it names the upstream task(s) that still owe an artifact
+     this task consumes (`—` == ready). Call out blocked tasks when you present
+     the plan so nobody starts a task whose inputs don't exist yet. Present it in
+     plain language.
    - Show the **tasks that can be picked up now**, *role-gated* to the person in
      front of you (Flow 2): the shared planner already stores the role→person
      mapping, so ask it for the caller's tasks with
