@@ -1,7 +1,8 @@
 # Evaluate Skill — Generate Evaluation Test Sets
 
 This skill guides the agent through generating Copilot Studio evaluation test
-sets from the user's agent topics and pushing them directly to Copilot Studio
+sets from the user's agent topics, writing synchronized `.mcs.yml` and CSV
+artifacts, and pushing the `.mcs.yml` representation directly to Copilot Studio
 via Dataverse. Test cases are stored as `botcomponent` records with
 `componenttype=19` in a parent→child hierarchy (EvaluationSet → EvaluationData).
 
@@ -9,7 +10,8 @@ via Dataverse. Test cases are stored as `botcomponent` records with
 
 - ALWAYS read `.local/config.json` to get the agent folder name and slug.
 - ALWAYS read all topic files in the agent folder to understand what the agent does before generating tests.
-- Write evaluation files to `{agent.folder}/evaluations/` as `.mcs.yml` YAML files.
+- Write evaluation files to `{agent.folder}/evaluations/` as synchronized
+  `.mcs.yml` and CSV artifacts generated from the same cases.
 - Use the existing starter test sets in `src/examples/ess-samples/ESSEvaluationSamples/StarterTestSets/` as exemplar patterns for each test category.
 - Follow the standard mutation pipeline: **checkpoint → write files → scan → dry run → push → verify**.
 - **TRACK PROGRESS**: Use the todo list tool to track your progress through this skill's steps. Create a todo list at the start with all the steps, mark each in-progress as you start it, and mark completed when done.
@@ -157,7 +159,7 @@ Also ask: "Does your agent have **knowledge sources** loaded (documents, SharePo
 
 ---
 
-## Step 3: Generate Evaluation YAML Files
+## Step 3: Generate Evaluation Files
 
 ### File format
 
@@ -241,6 +243,30 @@ Each category gets its own folder under `evaluations/`:
 
 The `displayOrder` field is an epoch-milliseconds timestamp. Use the current time
 and increment by 1 for each test case to preserve ordering.
+
+### CSV copy
+
+For every EvaluationSet, write a CSV under
+`{agent.folder}/evaluations/exports/` from the exact same in-memory cases used
+for its child `.mcs.yml` files. Create the `exports/` folder when needed.
+
+- File name: `{YYYYMMDD}_{Evaluation_Set_Display_Name}.csv`, with spaces and
+  punctuation in the display name replaced by underscores (for example,
+  `20260724_Workday_ProfileUpdates.csv`).
+- CompareMeaning header:
+  `Prompt,Expected response,Test Method Type,Passing Score`.
+- CompareMeaning rows use `CompareMeaning` and the set threshold converted to
+  a 0–100 score (`0.7` → `70`, `0.5` → `50`).
+- GeneralQuality header:
+  `Prompt,Expected response,Test Method Type`.
+- GeneralQuality rows use `GeneralQuality`.
+- Use a real RFC-4180 CSV writer, not string concatenation.
+- Prefix any cell beginning with `=`, `+`, `-`, or `@` with an apostrophe to
+  prevent spreadsheet formula injection.
+
+The YAML and CSV are two representations of one case list. Never generate or
+edit one without synchronizing the other. CSV files are local/shareable
+artifacts and are not pushed by `push.py`.
 
 ### Evaluation set size limit
 
@@ -609,8 +635,10 @@ user-facing message, and it never fails the step):
 
 ### 4.2 — Write evaluation files
 
-Create the `evaluations/` folder inside the agent folder if it doesn't exist.
-Write each EvaluationSet and EvaluationData file as described above.
+Create the `evaluations/` and `evaluations/exports/` folders inside the agent
+folder if they do not exist. Write each EvaluationSet, EvaluationData, and
+matching CSV file as described above. Generate YAML and CSV from the same
+in-memory cases in one pass.
 
 ### 4.3 — Quality validation
 
@@ -626,7 +654,8 @@ Follow the quality gate + fix flow defined in
 there is step 4.4 of this skill.
 
 **Do not proceed to step 4.4 until quality validation has returned results and
-any fixes are complete.**
+any fixes are complete. If validation changes a YAML case, regenerate the
+matching CSV before continuing.**
 
 ---
 
@@ -663,13 +692,44 @@ Wait for the user's answer before continuing. Do not run the dry-run or push unt
 > Want to **fill them in now** or **after pushing**?
 
 - **If user says now**: Walk through each placeholder and ask the user for
-  the real value. Update the files before pushing.
+  the real value. Update the YAML and matching CSV before pushing.
 - **If user says after pushing**: Proceed, but remind them again in the
   final summary (Step 4.7).
 
 - **If user says review**: Show the test cases they want to inspect, let them
   request edits, then re-confirm push.
 - **If user says push**: Proceed to dry run.
+
+### 4.4a — Offer review tagging before push
+
+Before the dry run, ask:
+
+> Would you like to tag any of these test sets for review by a
+> reviewer, judge, or SME?
+
+If no, continue to Step 4.5.
+
+If yes:
+
+1. List the generated test sets and ask which ones to tag.
+   This question is scoped only because the user is directly answering the
+   create flow's offer about **these generated test sets**. If the user instead
+   starts a generic request such as "tag testsets for review", route to
+   `src/skills/evaluations/update/SKILL.md` Flow R1, list all workspace and
+   configured-agent sets, and require an explicit selection.
+2. For every selected set, run:
+
+   ```text
+   python scripts/evaluation_review.py --set-folder "{set-folder}" --status review_requested
+   ```
+
+This creates `review.json` beside the parent EvaluationSet. `push.py` converts
+that metadata to the parent botcomponent description without replacing any
+human-authored description:
+
+```text
+[ADK-REVIEW status=review_requested]
+```
 
 ### 4.5 — Dry run
 
@@ -683,6 +743,11 @@ Show the user the dry run output and ask for confirmation.
 Run `python scripts/push.py` to push the evaluation test sets to Copilot Studio.
 The push script handles two-pass ordering automatically: parent EvaluationSet records
 are created first, then child EvaluationData records are linked via `parentbotcomponentid`.
+
+If the push fails or is cancelled, show:
+
+> ⚠️ This test set is still local and is not available to another authorized
+> judge or SME. It must be successfully pushed to Copilot Studio.
 
 ### 4.7 — Show summary
 
@@ -698,6 +763,10 @@ Print a summary table:
 >
 > ✅ Pushed to Copilot Studio. Open the
 > [Evaluation tab](https://copilotstudio.microsoft.com/) to run evaluations.
+>
+> These test sets are now available to authorized judges and SMEs.
+>
+> CSV copies are available in `{agent.folder}/evaluations/exports/`.
 
 ---
 
