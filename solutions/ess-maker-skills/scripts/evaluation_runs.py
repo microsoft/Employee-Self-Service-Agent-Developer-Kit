@@ -29,6 +29,14 @@ RUN_WAIT_GUIDANCE = (
     "Running your evaluation may take a while. Please return in 10-15 "
     "minutes to see the results."
 )
+REVIEW_PENDING_GUIDANCE = (
+    "This test set is tagged for review and cannot run until the review is "
+    "completed and pushed."
+)
+REVIEW_COMPLETION_NOT_PUSHED_GUIDANCE = (
+    "Review is completed locally, but Copilot Studio still shows "
+    "review_requested. Push the review completion before running."
+)
 
 
 class EvaluationRunError(RuntimeError):
@@ -266,8 +274,9 @@ def list_agent_test_sets(
     bot_id: str,
     agent_folder: str | Path,
     query: str | None = None,
+    include_blocked: bool = False,
 ) -> list[dict[str, Any]]:
-    """List runnable local sets that are active remotely and not awaiting review."""
+    """List active local sets, optionally including review-blocked sets."""
     agent = Path(agent_folder)
     map_path = agent / ".component-map.json"
     if not map_path.is_file():
@@ -312,13 +321,14 @@ def list_agent_test_sets(
         set_folder = agent / "evaluations" / parts[1]
         if not set_folder.is_dir():
             continue
-        review_statuses: list[str] = []
-        review_paths = (
+        review_statuses: list[str | None] = []
+        for review_path in (
             set_folder / REVIEW_FILENAME,
             agent / ".baseline" / "evaluations" / parts[1] / REVIEW_FILENAME,
-        )
-        for review_path in review_paths:
+        ):
+            review_status = None
             if not review_path.is_file():
+                review_statuses.append(review_status)
                 continue
             try:
                 review_metadata = json.loads(
@@ -327,12 +337,21 @@ def list_agent_test_sets(
                 if isinstance(review_metadata, dict):
                     status = review_metadata.get("status")
                     if isinstance(status, str):
-                        review_statuses.append(status)
+                        review_status = status
             except (OSError, json.JSONDecodeError):
-                continue
-        if REVIEW_REQUESTED in review_statuses:
+                pass
+            review_statuses.append(review_status)
+        local_review_status, deployed_review_status = review_statuses
+        blocked_reason = None
+        if (
+            local_review_status == "review_completed"
+            and deployed_review_status == REVIEW_REQUESTED
+        ):
+            blocked_reason = REVIEW_COMPLETION_NOT_PUSHED_GUIDANCE
+        elif REVIEW_REQUESTED in review_statuses:
+            blocked_reason = REVIEW_PENDING_GUIDANCE
+        if blocked_reason and not include_blocked:
             continue
-        review_status = review_statuses[0] if review_statuses else None
         seen.add(test_set_id)
         local_count = sum(
             1
@@ -344,7 +363,11 @@ def list_agent_test_sets(
             "localFolder": str(set_folder.resolve()),
             "localSetName": parts[1],
             "localTestCaseCount": local_count,
-            "reviewStatus": review_status,
+            "reviewStatus": local_review_status,
+            "localReviewStatus": local_review_status,
+            "deployedReviewStatus": deployed_review_status,
+            "runnable": blocked_reason is None,
+            "blockedReason": blocked_reason,
             "source": "Configured agent evaluations folder",
         })
     return match_test_sets(local_sets, query)
@@ -697,6 +720,7 @@ def main() -> int:
                 bot_id,
                 agent_folder,
                 args.query,
+                include_blocked=True,
             ))
         elif args.command == "run":
             test_sets = list_agent_test_sets(

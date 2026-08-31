@@ -42,15 +42,22 @@ python scripts/evaluation_runs.py list-sets --query "{user text}"
 
 The script starts from `{agent.folder}/evaluations/`, reads each EvaluationSet
 parent ID from `.component-map.json`, and confirms that ID is active in the
-Power Platform API. It excludes every set whose local `review.json` status is
-`review_requested`, whether the user named that set or requested the complete
-list. This is the only excluded status: sets with no review tag,
-`review_completed`, unknown statuses, or unreadable legacy metadata remain
-runnable.
-Display every returned match with name, test-set ID, state, local folder, and
-case count. Ask the user to select or confirm one. Never silently choose a
-fuzzy match. Stop after asking; do not invoke `evaluation_runs.py run` in this
-turn.
+Power Platform API. It returns both runnable and review-blocked matches.
+
+Display every match whose `runnable` value is `true` with name, test-set ID,
+state, local folder, and case count. If a returned match has `runnable=false`,
+show it separately as unavailable and copy its `blockedReason` verbatim:
+
+- A set with an active review request explains that review must be completed
+  and pushed.
+- A set completed locally while the deployed baseline remains
+  `review_requested` explains that the completion must be pushed.
+
+Sets with no review tag, synchronized `review_completed`, unknown statuses, or
+unreadable legacy metadata remain runnable. Ask the user to select or confirm
+one of the runnable choices. Never offer a blocked set as a selection and never
+silently choose a fuzzy match. Stop after asking; do not invoke
+`evaluation_runs.py run` in this turn.
 
 If the user does not name a test set, run:
 
@@ -59,8 +66,9 @@ python scripts/evaluation_runs.py list-sets
 ```
 
 Display all active deployed test sets represented in the configured agent's
-local `evaluations/` folder and ask which one to run. Stop after asking, even
-if the list contains only one test set.
+local `evaluations/` folder. Show runnable sets as choices and review-blocked
+sets with their returned `blockedReason`. Ask which runnable set to run.
+Stop after asking, even if the list contains only one runnable test set.
 
 If no match is returned, show the available sets instead of guessing.
 Workspace-only test sets are not runnable until they are pushed to the
