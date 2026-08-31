@@ -53,19 +53,24 @@ exist yet, and the first Task the Plan emits is usually "run setup". So:
 have checked for an existing plan.**
 
 1. **Pull from the shared planner first — invisibly.** Before deciding anything,
-   bring the shared planner's copy down: get-or-create the ESS project and list
-   its plans (concrete tool + CLI flow: `src/skills/planner/sync.md`). The project
-   can hold **more than one plan**:
-   - **No plans on the service** → use whatever is already in
+   bring the shared planner's copy down: get-or-create the ESS project (concrete
+   tool + CLI flow: `src/skills/planner/sync.md`). A project has **at most one
+   active plan** — activating a plan archives whatever was active before — and the
+   project entity names it in **`activePlanId`**, so there is never a "which
+   plan?" choice:
+   - **`activePlanId` is set** → that is the plan; hydrate the local cache from it
+     and resume it.
+   - **`activePlanId` is null** → there may be an un-activated **Draft**. Call
+     `list_project_plans` (it returns only non-archived plans) and, if it returns
+     one, hydrate and resume it. Never guess and never fall back to "the most
+     recently updated".
+   - **No plan on the service** → use whatever is already in
      `workspace/plan/plan.json` (a local draft not yet pushed), if anything.
-   - **Exactly one plan** → hydrate the local cache from it and resume it.
-   - **Several plans** → list them (objective + last-updated) and **ask which one
-     to resume** before hydrating; offer starting a new plan as an option too.
    If the service can't be reached, just use whatever is already in
    `workspace/plan/plan.json`. Then check whether a plan now exists locally
    (freshly pulled, or a local draft not yet pushed).
-2. **Once a plan is chosen (or the single existing plan is loaded), resume it —
-   do not re-interview and do not ask for the objective again.**
+2. **Once the plan is loaded, resume it — do not re-interview and do not ask for
+   the objective again.**
    - Show its latest state: `python scripts/planner/cli.py summary` — the
      objective, every task and its state, scenario dependencies, and what's been
      produced so far. The task table's **Blocked by** column is the render-time

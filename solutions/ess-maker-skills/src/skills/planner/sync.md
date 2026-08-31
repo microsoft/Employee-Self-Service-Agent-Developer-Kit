@@ -27,7 +27,9 @@ idempotent, so it's safe to run on every entry:
 
 - Call **`create_agent_configuration_project`** with `{"name": "Employee Self-Service"}`.
 - Keep the returned **`projectId`** (and its `etag`); you need `projectId` for
-  every plan/task call below. Do **not** list-and-match on the display name — the
+  every plan/task call below. The project entity also names its one plan in
+  **`activePlanId`** — keep that too; the Pull step below resolves the plan from
+  it. Do **not** list-and-match on the display name — the
   tenant may render it differently. The name must be one of the supported
   configuration experiences — **`Employee Self-Service`** or **`Workforce
   Insights`**; any other value is rejected with a 400 (`name must be one of the
@@ -39,12 +41,20 @@ idempotent, so it's safe to run on every entry:
 
 Run this the moment `/planner` starts, before deciding whether to interview:
 
-1. **List plans:** call **`list_project_plans`** with the `projectId`. Read the
-   `value` array.
-2. **If plans exist on the service** — the project can hold several. If exactly
-   one exists, use it; if more than one, present them (objective + last-updated)
-   and **ask the sponsor which to resume** (offer starting a new plan too) before
-   hydrating. For the chosen plan:
+1. **Resolve the one plan from the project.** A project has **at most one active
+   plan** — activating a plan archives whatever was active before — and the
+   project entity names it in **`activePlanId`** (from the get-or-create you just
+   ran). There is never a genuine "which plan?" choice, so never present one and
+   never fall back to "the most recently updated":
+   - **`activePlanId` is set** → that is the plan. Use it directly; skip the
+     listing.
+   - **`activePlanId` is null** → there may still be an un-activated **Draft** (a
+     plan that was pushed but not yet activated — activation is what stamps
+     `activePlanId`). Call **`list_project_plans`** (it returns only non-archived
+     plans) and take the single plan it returns, if any; that is the Draft to
+     resume.
+2. **If a plan was resolved** (an `activePlanId` plan or a lone Draft), hydrate
+   it:
    1. **`get_project_plan`** (`projectId`, `planId`) — the plan entity.
    2. **`list_project_plan_tasks`** (`projectId`, `planId`) — its tasks.
    3. Write the two results into a temp file as one object:

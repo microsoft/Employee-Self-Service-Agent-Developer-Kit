@@ -115,7 +115,11 @@ async def get_agent_configuration_project(
     projectId: str,
     query: Optional[dict[str, Any]] = None,
 ) -> str:
-    """Get one project and its current ETag before archiving or updating it."""
+    """Get one project and its current ETag before archiving or updating it. The
+    project names its single plan in ``activePlanId`` (null when no plan is
+    active): a project has at most one active plan — activating a plan archives
+    whatever was active before — so resolve the plan from ``activePlanId`` rather
+    than listing and choosing."""
     return _format(
         await get_client().get_agent_configuration_project(projectId, query)
     )
@@ -130,7 +134,9 @@ async def create_agent_configuration_project(
     names: {"name": "Employee Self-Service"} or {"name": "Workforce Insights"};
     optional ownedById? and metadata?. An unsupported name is rejected (400
     ValidationError "name must be one of the supported configuration
-    experiences: Employee Self-Service, Workforce Insights")."""
+    experiences: Employee Self-Service, Workforce Insights"). The returned
+    project carries ``activePlanId`` — the project's single active plan (null if
+    none) — use it to resolve the plan instead of listing and choosing."""
     return _format(
         await get_client().create_agent_configuration_project(project, idempotencyKey)
     )
@@ -150,7 +156,10 @@ async def list_project_plans(
     projectId: str,
     query: Optional[dict[str, Any]] = None,
 ) -> str:
-    """List the plans in a project."""
+    """List a project's plans (returns only non-archived plans). A project has at
+    most one active plan, so prefer the project's ``activePlanId`` to resolve the
+    plan directly; use this list only when ``activePlanId`` is null, to find an
+    un-activated Draft."""
     return _format(await get_client().list_project_plans(projectId, query))
 
 

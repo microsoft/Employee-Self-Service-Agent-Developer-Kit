@@ -29,10 +29,10 @@ to that task call. Only when the service is unreachable, fall back to the local
 best-effort gating in `src/skills/planner/mytasks.md` (Flow 2).
 
 **Before interviewing, check for existing plans — and pull first.** The planner
-invisibly pulls from the shared planner on entry. The project can hold **more
-than one plan**, so list every plan the person has access to: if exactly one
-exists, resume it; if several exist, show them and **ask which to resume**
-(starting a new one is always an option). Resuming shows the plan's latest state
+invisibly pulls from the shared planner on entry. A project has **at most one
+plan** — the project entity names it in `activePlanId`, and activating a new plan
+archives whatever was active before — so resolve that single plan and resume it;
+there is no "which plan?" choice to present. Resuming shows the plan's latest state
 and the tasks the person can pick up (only those matching a role they hold) —
 rather than starting a new interview or re-asking the objective. Start a new plan
 only when the person has none, picks "new", or explicitly confirms starting over.

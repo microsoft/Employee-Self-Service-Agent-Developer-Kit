@@ -49,12 +49,14 @@ auto-pick when the choice is ambiguous:
    stamped it — that is the plan the maker is working on. Use its `projectId` and
    `planId` and don't go looking further.
 2. **Only if nothing is cached, ask the service.** Get-or-create the ESS project
-   (`create_agent_configuration_project`, idempotent) and `list_project_plans`
-   for its `projectId`, exactly as `src/skills/planner/sync.md` describes:
-   - **Exactly one plan** — use it.
-   - **More than one** — do **not** guess, and never fall back to "the most
-     recently updated". Present them to the maker as a **clickable choice**
-     (objective + last-updated) and attest against the one they pick.
+   (`create_agent_configuration_project`, idempotent) — the project entity names
+   its one plan in **`activePlanId`**. A project has **at most one active plan**,
+   so there is never a "which plan?" choice to present:
+   - **`activePlanId` is set** — that is the plan; attest against it.
+   - **`activePlanId` is null** — call `list_project_plans` (it returns only
+     non-archived plans) and use the single plan it returns, if any (a Draft not
+     yet activated). Never guess and never fall back to "the most recently
+     updated".
 3. **If no plan exists at all**, there is nothing to attest against — tell the
    maker a plan has to be created first and route them to planning (`/planner`).
    Do not attest without a plan.
