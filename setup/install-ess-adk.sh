@@ -582,11 +582,32 @@ with open(sys.argv[6], 'w', encoding='utf-8') as f:
     exit $?
 fi
 
+WORKSPACE_PATH="$REPO_PATH/solutions/ess-maker-skills"
+
+# ---------------------------------------------------------------------------
+# 7b. Materialize ready-to-run MCP servers
+# ---------------------------------------------------------------------------
+if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
+    MCP_CONFIG_SCRIPT="$WORKSPACE_PATH/scripts/mcp_config.py"
+    MCP_CONFIG_PYTHON="$VENV_PATH/bin/python"
+    if [[ ! -x "$MCP_CONFIG_PYTHON" ]]; then
+        MCP_CONFIG_PYTHON="$PYTHON"
+    fi
+    if [[ -f "$MCP_CONFIG_SCRIPT" ]]; then
+        step "Configuring default MCP servers"
+        if "$MCP_CONFIG_PYTHON" "$MCP_CONFIG_SCRIPT" materialize-defaults; then
+            ok "Default MCP servers configured"
+        else
+            warn "Default MCP server configuration failed. /setup will try again."
+        fi
+    else
+        warn "MCP configuration script not found. /setup will try again."
+    fi
+fi
+
 # ---------------------------------------------------------------------------
 # 8. Launch VS Code
 # ---------------------------------------------------------------------------
-WORKSPACE_PATH="$REPO_PATH/solutions/ess-maker-skills"
-
 if [[ -n "$CODE_CMD" ]]; then
     # Launch strategy depends on mode:
     # - Standard mode (SKIP_MAKER_PROFILE=true): use `code chat` to open

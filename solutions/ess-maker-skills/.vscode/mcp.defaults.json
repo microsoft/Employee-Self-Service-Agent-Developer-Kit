@@ -1,0 +1,14 @@
+{
+  "servers": {
+    "ess-landing-page-config": {
+      "command": "{pythonExecutable}",
+      "args": ["server.py"],
+      "cwd": "${workspaceFolder}/src/mcp/agentconfig_landing_page"
+    },
+    "ess-planner": {
+      "command": "{pythonExecutable}",
+      "args": ["server.py"],
+      "cwd": "${workspaceFolder}/src/mcp/agentconfig_planner"
+    }
+  }
+}

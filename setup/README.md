@@ -36,7 +36,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 This installs everything the standard installer does, plus the **ESS Maker Profile** extension which provides:
 - A chat-only layout with all developer surfaces hidden
-- Big-button "Quick Actions" rail for common tasks (Connect, Create, Scan, FlightCheck, Push)
+- Big-button "Quick Actions" rail for common tasks (Connect, Customize landing page, Create, Scan, FlightCheck, Push)
 - A built-in tutorial explaining each button
 
 You can switch between lite mode and standard VS Code at any time using the toggle buttons in the Quick Actions panel.
@@ -162,6 +162,8 @@ The installer provisions the following dependencies. Users do not need to instal
 | `msal` | Microsoft Authentication Library — Entra ID auth for FlightCheck |
 | `requests` | HTTP client for Dataverse / Graph API calls |
 | `urllib3` | HTTP transport layer (requests dependency, pinned) |
+| `httpx` | Async HTTP client for the AgentConfiguration API |
+| `mcp` | MCP server runtime for landing-page configuration tools and widgets |
 | `PyYAML` | YAML parsing for topic schema validation |
 | `defusedxml` | Safe XML parsing for Workday SOAP responses (XXE-hardened) |
 

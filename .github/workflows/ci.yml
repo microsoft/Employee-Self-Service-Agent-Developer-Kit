@@ -79,6 +79,38 @@ jobs:
       shell: pwsh
       run: ./setup/Install-EssAdk.Tests.ps1
 
+  landing-page-config:
+    name: Landing-page configuration
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.11'
+
+    - name: Install Python dependencies
+      run: >-
+        pip install
+        -r requirements-dev.txt
+        -r solutions/ess-maker-skills/src/mcp/agentconfig_landing_page/requirements.txt
+
+    - name: Run AgentConfiguration tests
+      run: >-
+        python -m pytest
+        tests/mcp/agentconfig
+        tests/scripts/test_setup_preserves_title_id.py
+        tests/scripts/test_validate_branding.py
+        -q
+
+    - name: Test ESS Maker Quick Actions
+      working-directory: tools/ess-maker-profile/extension
+      run: |
+        node extension.test.js
+        npm run validate
+
   flightcheck-tests:
     name: FlightCheck offline test suite
     runs-on: ubuntu-latest
@@ -86,8 +118,8 @@ jobs:
     # Runs the whole FlightCheck pytest suite. Every test is offline: network
     # calls are mocked (responses / respx) or replayed from committed VCR
     # cassettes, and `live`-marked tests are skipped unless opted in with
-    # --run-live. This is the job that actually enforces the FlightCheck tests
-    # on every PR (previously none of them ran in CI). It includes the offline
+    # --run-live. This job enforces the FlightCheck tests on every PR. It
+    # includes the offline
     # URL hygiene gate (tests/flightcheck/test_url_hygiene.py), which asserts
     # fetchable report URLs use https. It does NOT verify a path is live (that
     # a learn.microsoft.com article still exists) — stale-path detection is a

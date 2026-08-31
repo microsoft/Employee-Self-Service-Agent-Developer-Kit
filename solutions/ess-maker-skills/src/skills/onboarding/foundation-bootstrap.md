@@ -13,18 +13,14 @@ Set ENV_URL to `environment.tenant_endpoint`, stripping any trailing slash.
 Create `workspace/onboarding/steps.md` from `src/skills/onboarding/steps.md`
 only when it is missing. Do not display that checklist.
 
-Create `.vscode/mcp.json` with the locked endpoint:
+Configure the contextual Dataverse MCP server:
 
-```json
-{
-  "servers": {
-    "Dataverse": {
-      "type": "http",
-      "url": "{ENV_URL}/api/mcp"
-    }
-  }
-}
+```text
+python scripts/mcp_config.py configure dataverse --environment-url "{ENV_URL}"
 ```
+
+If configuration fails, show the exact error and stop. The command preserves
+every other server, input, and top-level field in `.vscode/mcp.json`.
 
 Do not recheck environment selection, roles, Dataverse provisioning, or the
 Allowed MCP Client prerequisite. Foundation setup already completed them.

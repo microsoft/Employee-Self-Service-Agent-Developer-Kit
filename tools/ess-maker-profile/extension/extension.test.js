@@ -59,8 +59,8 @@ function test(name, fn) {
 
 console.log('ACTIONS structure:');
 
-test('has 7 actions', () => {
-    assert.strictEqual(ACTIONS.length, 7);
+test('has 8 actions', () => {
+    assert.strictEqual(ACTIONS.length, 8);
 });
 
 test('every action has required fields', () => {
@@ -69,15 +69,16 @@ test('every action has required fields', () => {
         assert.ok(a.icon, `missing icon for ${a.id}`);
         assert.ok(a.label, `missing label for ${a.id}`);
         assert.ok(a.sub, `missing sub for ${a.id}`);
-        assert.ok(a.slash, `missing slash for ${a.id}`);
+        assert.ok(a.query, `missing query for ${a.id}`);
         assert.ok(Array.isArray(a.requires), `requires not array for ${a.id}`);
     }
 });
 
-test('every slash command starts with /', () => {
-    for (const a of ACTIONS) {
-        assert.ok(a.slash.startsWith('/'), `${a.id}: slash "${a.slash}" doesn't start with /`);
-    }
+test('landing-page action sends the skill-triggering query', () => {
+    const landingPage = ACTIONS.find(a => a.id === 'landingPage');
+    assert.strictEqual(landingPage.label, 'Customize landing page');
+    assert.strictEqual(landingPage.query, 'Customize my landing page');
+    assert.deepStrictEqual(landingPage.requires, ['setup']);
 });
 
 test('setup has no requirements', () => {
