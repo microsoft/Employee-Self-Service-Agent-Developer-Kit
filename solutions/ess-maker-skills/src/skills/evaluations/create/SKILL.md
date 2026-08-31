@@ -674,9 +674,18 @@ Count the positive, boundary, and negative cases generated per category. Then sh
 > | Integration Data | {n} | {n} | {n} | {n} |
 > | ... | ... | ... | ... | ... |
 >
-> Want to **review specific test cases** before pushing, or **push now**?
+Use the available structured question control and ask:
 
-Wait for the user's answer before continuing. Do not run the dry-run or push until the user explicitly says "push" or "proceed".
+> How would you like to continue with these test sets?
+
+Offer:
+
+1. **Edit the test sets myself**
+2. **Send them to a judge or SME for feedback**
+3. **Push without requesting review**
+
+Wait for the user's answer before continuing. Do not run the dry-run or push
+until the user explicitly chooses one of the push paths.
 
 **If IntegrationData tests were generated**, add a placeholder reminder:
 
@@ -696,22 +705,21 @@ Wait for the user's answer before continuing. Do not run the dry-run or push unt
 - **If user says after pushing**: Proceed, but remind them again in the
   final summary (Step 4.7).
 
-- **If user says review**: Show the test cases they want to inspect, let them
-  request edits, then re-confirm push.
-- **If user says push**: Proceed to dry run.
+- **Edit the test sets myself**: Show the selected cases, apply requested edits,
+  synchronize YAML and CSV, rerun validation when required, and ask this
+  structured question again.
+- **Send them to a judge or SME for feedback**: Continue to Step 4.4a, tag the
+  selected sets `review_requested`, and push them after confirmation.
+- **Push without requesting review**: Skip review tagging and proceed to the
+  dry run.
 
 ### 4.4a — Offer review tagging before push
 
-Before the dry run, ask:
+Enter this step when the maker chose **Send them to a judge or SME for
+feedback** in Step 4.4:
 
-> Would you like to tag any of these test sets for review by a
-> reviewer, judge, or SME?
-
-If no, continue to Step 4.5.
-
-If yes:
-
-1. List the generated test sets and ask which ones to tag.
+1. List the generated test sets and use a structured multi-select choice to ask
+   which ones to tag.
    This question is scoped only because the user is directly answering the
    create flow's offer about **these generated test sets**. If the user instead
    starts a generic request such as "tag testsets for review", route to
@@ -772,9 +780,18 @@ Print a summary table:
 
 ## Step 5: Offer Next Steps
 
-After pushing the test sets:
+After pushing, use a structured choice question rather than ending with a list
+of open-text suggestions:
 
-- "Would you like to **review or edit** any test cases?"
-- "Would you like to **add more test cases** for a specific topic?"
-- "Open the [Copilot Studio Evaluation tab](https://copilotstudio.microsoft.com/) to run the evaluations."
-- "Type `/menu` to see other options."
+> What would you like to do next?
+
+Offer:
+
+- **Edit the test sets myself**
+- **Send them to a judge or SME for feedback** when they are not already tagged
+- **Add more test cases**
+- **Run an evaluation**
+- **Finish**
+
+This closing question is mandatory and must not be omitted after a successful
+push.

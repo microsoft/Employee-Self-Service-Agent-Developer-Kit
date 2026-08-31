@@ -31,6 +31,9 @@ def test_review_testsets_routes_to_human_review_before_validation():
     assert "Do not use this skill as the entry point" in validate_skill
     assert 'Never describe this workflow as "view-only."' in normalized_review_skill
     assert "inspect and edit prompts or expected responses" in review_skill
+    assert "structured question control" in review_skill
+    assert "**Describe recommended changes for the maker**" in review_skill
+    assert "maker owns the official edits, push" in review_skill
 
 
 def test_review_route_does_not_require_setup_for_workspace_sets():
@@ -49,6 +52,35 @@ def test_generic_tag_request_requires_all_sets_and_explicit_selection():
     assert "Display every returned workspace and configured-agent test set" in update_skill
     assert "Wait for an explicit selection" in update_skill
     assert "Do not infer a selection from the previous conversation" in update_skill
+    assert "structured choice control" in update_skill
+
+
+def test_maker_is_offered_edit_review_or_keep_choices():
+    create_skill = _read("src/skills/evaluations/create/SKILL.md")
+    generate_skill = _read("src/skills/evaluations/generate/SKILL.md")
+    update_skill = _read("src/skills/evaluations/update/SKILL.md")
+    normalized_generate = " ".join(generate_skill.split())
+
+    assert "**Edit the test sets myself**" in create_skill
+    assert "**Send them to a judge or SME for feedback**" in create_skill
+    assert "**Push without requesting review**" in create_skill
+    assert "**Edit the test set myself**" in generate_skill
+    assert "**Prepare it to send to a judge or SME for feedback**" in generate_skill
+    assert "**Edit the test set myself**" in update_skill
+    assert "**Send it to a judge or SME for feedback**" in update_skill
+    assert "**Keep it unchanged**" in update_skill
+    assert "closing question is mandatory" in create_skill
+    assert "closing question is mandatory" in normalized_generate
+
+
+def test_reviewer_recommendations_return_ownership_to_maker():
+    update_skill = _read("src/skills/evaluations/update/SKILL.md")
+    normalized = " ".join(update_skill.split())
+
+    assert "**Describe recommended changes for the maker**" in update_skill
+    assert "The maker should apply the official test-case changes" in normalized
+    assert "Recommendations alone do not modify the test-set files" in normalized
+    assert "Do not claim that conversational recommendations were automatically written" in normalized
 
 
 def test_evaluation_push_is_scoped_and_warns_about_replacement_deletions():
