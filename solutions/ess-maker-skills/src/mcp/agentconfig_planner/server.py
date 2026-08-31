@@ -20,7 +20,7 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import ToolAnnotations
 
 from planner_client import PlannerClient
-from roles import ATTESTABLE_ROLES
+from roles_surface import ATTESTABLE_ROLES
 
 
 _READ_ONLY_ANNOTATIONS = ToolAnnotations(
@@ -45,6 +45,17 @@ _CREATE_ANNOTATIONS = ToolAnnotations(
     readOnlyHint=False,
     destructiveHint=False,
     idempotentHint=False,
+    openWorldHint=False,
+)
+# Get-or-create / upsert tools converge on the same resource, so a replay is
+# safe: create_agent_configuration_project returns the existing project when one
+# already matches, and attest_plan_role upserts a deterministic grant row. They
+# are creates in name only — non-destructive and idempotent — so clients may
+# safely retry them after an ambiguous failure.
+_CREATE_IDEMPOTENT_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=True,
     openWorldHint=False,
 )
 
@@ -110,7 +121,7 @@ async def get_agent_configuration_project(
     )
 
 
-@mcp.tool(annotations=_CREATE_ANNOTATIONS)
+@mcp.tool(annotations=_CREATE_IDEMPOTENT_ANNOTATIONS)
 async def create_agent_configuration_project(
     project: dict[str, Any],
     idempotencyKey: Optional[str] = None,
@@ -408,7 +419,7 @@ async def get_role_assignment(assignmentId: str) -> str:
     return _format(await get_client().get_role_assignment(assignmentId))
 
 
-@mcp.tool(annotations=_CREATE_ANNOTATIONS)
+@mcp.tool(annotations=_CREATE_IDEMPOTENT_ANNOTATIONS)
 async def attest_plan_role(
     planId: str,
     subjectId: str,

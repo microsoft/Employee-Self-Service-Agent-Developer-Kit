@@ -37,7 +37,7 @@ from _odata import (  # noqa: E402
 )
 from base_client import AgentConfigApiError  # noqa: E402
 
-from roles import ATTESTABLE_ROLES  # noqa: E402
+from roles_surface import ATTESTABLE_ROLES  # noqa: E402
 
 _AGENT_PROJECTS_COLLECTION = "me/agentConfigurationProjects"
 _PLANS_RESOURCE = "agentPlans"
@@ -432,14 +432,22 @@ class PlannerMixin:
             f"assignedToId eq '{_escape_odata_literal(caller_id, 'callerId')}'"
         ]
         for role_id in await self._caller_active_role_ids(plan_id, caller_id):
+            # Pool-only. A person-assigned task keeps its grounding
+            # assignedToRoleId (see scripts/planner/sync.py), so matching the
+            # role id alone would surface work owned by someone else to every
+            # other holder of that role; require the open Role-typed pool too.
             clauses.append(
-                f"assignedToRoleId eq '{_escape_odata_literal(role_id, 'roleId')}'"
+                f"(assignedToRoleId eq '{_escape_odata_literal(role_id, 'roleId')}' "
+                "and assignedToType eq 'Role')"
             )
         caller_filter = " or ".join(clauses)
+        # Completed work is history, not something the caller can pick up
+        # (mirrors the local Flow-2 exclusion in plan_model), so scope it out.
+        scoped_filter = f"({caller_filter}) and state ne 'Completed'"
         merged = dict(query or {})
         existing = merged.get("filter")
         merged["filter"] = (
-            f"({caller_filter}) and ({existing})" if existing else caller_filter
+            f"({scoped_filter}) and ({existing})" if existing else scoped_filter
         )
         return await self._request(
             "GET",

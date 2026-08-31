@@ -90,7 +90,7 @@ _EXPECTED_TOOLS: dict[str, list[str]] = {
 _EXPECTED_ANNOTATIONS: dict[str, str] = {
     "list_agent_configuration_projects": "_READ_ONLY_ANNOTATIONS",
     "get_agent_configuration_project": "_READ_ONLY_ANNOTATIONS",
-    "create_agent_configuration_project": "_CREATE_ANNOTATIONS",
+    "create_agent_configuration_project": "_CREATE_IDEMPOTENT_ANNOTATIONS",
     "archive_agent_configuration_project": "_DELETE_ANNOTATIONS",
     "list_project_plans": "_READ_ONLY_ANNOTATIONS",
     "get_project_plan": "_READ_ONLY_ANNOTATIONS",
@@ -109,7 +109,7 @@ _EXPECTED_ANNOTATIONS: dict[str, str] = {
     "list_attestable_roles": "_READ_ONLY_ANNOTATIONS",
     "list_plan_role_assignments": "_READ_ONLY_ANNOTATIONS",
     "get_role_assignment": "_READ_ONLY_ANNOTATIONS",
-    "attest_plan_role": "_CREATE_ANNOTATIONS",
+    "attest_plan_role": "_CREATE_IDEMPOTENT_ANNOTATIONS",
     "revoke_role_assignment": "_DELETE_ANNOTATIONS",
 }
 

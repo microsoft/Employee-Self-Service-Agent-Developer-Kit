@@ -139,13 +139,14 @@ _TOOLS: dict[str, tuple[list[str], list[str]]] = {
 _HINTS = {
     "read": (True, False, True),
     "create": (False, False, False),
+    "create_idempotent": (False, False, True),
     "update": (False, False, True),
     "delete": (False, True, True),
 }
 _TOOL_CATEGORY = {
     "list_agent_configuration_projects": "read",
     "get_agent_configuration_project": "read",
-    "create_agent_configuration_project": "create",
+    "create_agent_configuration_project": "create_idempotent",
     "archive_agent_configuration_project": "delete",
     "list_project_plans": "read",
     "get_project_plan": "read",
@@ -164,7 +165,7 @@ _TOOL_CATEGORY = {
     "list_attestable_roles": "read",
     "list_plan_role_assignments": "read",
     "get_role_assignment": "read",
-    "attest_plan_role": "create",
+    "attest_plan_role": "create_idempotent",
     "revoke_role_assignment": "delete",
 }
 

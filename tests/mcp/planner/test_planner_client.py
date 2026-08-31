@@ -31,7 +31,7 @@ sys.path.insert(0, str(PLANNER_DIR))
 
 import planner_client as planner_client_module  # noqa: E402
 import base_client as base_client_module  # noqa: E402
-import roles as roles_module  # noqa: E402
+import roles_surface as roles_module  # noqa: E402
 
 
 TENANT_ID = "11111111-2222-3333-4444-555555555555"
@@ -273,9 +273,10 @@ def test_task_caller_scoping_expands_to_caller_direct_and_active_roles(
     # so role-pooled tasks (assignedToRoleId) are not silently dropped.
     assert len(task_calls) == 1
     assert task_calls[0].url.params["$filter"] == (
-        f"assignedToId eq '{CALLER_OID}' "
-        "or assignedToRoleId eq 'ServiceNowAdmin' "
-        "or assignedToRoleId eq 'WorkdayAdmin'"
+        f"(assignedToId eq '{CALLER_OID}' "
+        "or (assignedToRoleId eq 'ServiceNowAdmin' and assignedToType eq 'Role') "
+        "or (assignedToRoleId eq 'WorkdayAdmin' and assignedToType eq 'Role')) "
+        "and state ne 'Completed'"
     )
 
 
@@ -301,7 +302,9 @@ def test_task_caller_scoping_preserves_caller_supplied_filter(monkeypatch) -> No
 
     task_call = next(r for r in requests if "agentPlanTasks" in str(r.url))
     assert task_call.url.params["$filter"] == (
-        f"(assignedToId eq '{CALLER_OID}' or assignedToRoleId eq 'ServiceNowAdmin') "
+        f"((assignedToId eq '{CALLER_OID}' "
+        "or (assignedToRoleId eq 'ServiceNowAdmin' and assignedToType eq 'Role')) "
+        "and state ne 'Completed') "
         "and (state eq 'InProgress')"
     )
 

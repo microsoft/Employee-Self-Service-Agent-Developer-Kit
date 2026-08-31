@@ -41,14 +41,23 @@ python scripts/roles/cli.py resolve-person --name "<person>"
 ## Gate — a plan must already exist
 
 Attestation is always **against a plan**, so unlike `/planner` this is not a
-pre-setup experience:
+pre-setup experience. Settle on the one plan to attest against — and never
+auto-pick when the choice is ambiguous:
 
-1. Get-or-create the ESS project and find the plan exactly as
-   `src/skills/planner/sync.md` describes (create the project, `list_project_plans`,
-   take the most recently updated). Keep `projectId` and `planId`.
-2. **If no plan exists yet**, there is nothing to attest against — tell the maker
-   a plan has to be created first and route them to planning (`/planner`). Do not
-   attest without a plan.
+1. **Prefer the plan already in play.** If the local Plan
+   (`workspace/plan/plan.json`) already carries a `planId` — a prior pull/push
+   stamped it — that is the plan the maker is working on. Use its `projectId` and
+   `planId` and don't go looking further.
+2. **Only if nothing is cached, ask the service.** Get-or-create the ESS project
+   (`create_agent_configuration_project`, idempotent) and `list_project_plans`
+   for its `projectId`, exactly as `src/skills/planner/sync.md` describes:
+   - **Exactly one plan** — use it.
+   - **More than one** — do **not** guess, and never fall back to "the most
+     recently updated". Present them to the maker as a **clickable choice**
+     (objective + last-updated) and attest against the one they pick.
+3. **If no plan exists at all**, there is nothing to attest against — tell the
+   maker a plan has to be created first and route them to planning (`/planner`).
+   Do not attest without a plan.
 
 ## Two things to know
 

@@ -36,8 +36,8 @@ from _odata import (  # noqa: E402
 )
 from base_client import AgentConfigBaseClient, _decode_object_id_from_jwt  # noqa: E402
 
-from planner import PlannerMixin  # noqa: E402
-from roles import RolesMixin  # noqa: E402
+from planner_surface import PlannerMixin  # noqa: E402
+from roles_surface import RolesMixin  # noqa: E402
 
 
 class PlannerClient(PlannerMixin, RolesMixin, AgentConfigBaseClient):

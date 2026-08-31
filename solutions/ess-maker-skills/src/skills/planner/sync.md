@@ -91,7 +91,14 @@ model → assign), publish it in **one** create call rather than task-by-task:
    `python scripts/planner/cli.py export-remote-plan` — this prints the JSON body
    (configuring agent, acceptance criteria, context, and every task inline).
 3. **Push it (the plan is created in Draft):** call **`create_project_plan`**
-   with the `projectId` and that body. The plan and all its tasks are created
+   with the `projectId`, that body, and an **`idempotencyKey`**. Generate the key
+   once when the publish starts (a fresh UUID) and treat it as belonging to this
+   draft — reuse the *exact same* key on every retry of this same publish. Keying
+   the create is what makes a retry safe: the service collapses a replay onto the
+   same plan instead of creating a duplicate. (An **unkeyed** create is
+   deliberately *not* auto-retried, because a blind replay could duplicate the
+   plan — so if a keyless push fails ambiguously, never just fire it again; add a
+   key and retry with that.) The plan and all its tasks are created
    atomically, in **Draft**. Keep the returned `planId` and `etag`. A Draft plan
    holds all its tasks, but they can't be *mutated* (assigned, reassigned,
    state-changed) until the plan is **Active** — and **the backend never
