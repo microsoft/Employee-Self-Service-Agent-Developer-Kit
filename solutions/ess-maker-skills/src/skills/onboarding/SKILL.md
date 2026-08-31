@@ -63,24 +63,29 @@ by "Picking up at Step {N}." Then go to the matching step below.
 
 **First run only — check the maker is in the right place.** Because foundation
 setup is not complete here, this is a first run. Unless the maker already asked
-to connect a deployed agent, ask one question before showing the checklist:
+to connect a deployed agent, ask one question before showing the checklist.
 
-**Message:**
+Use the `vscode_askQuestions` tool:
 
-Before we connect your environment — which is closest to what you need?
+```json
+[
+  {
+    "header": "Where would you like to start?",
+    "question": "Before we connect your environment — which is closest to what you need?",
+    "options": [
+      { "label": "Plan your ESS rollout", "description": "Figure out what to build and who does each part. Choose this if you don't have an ESS environment yet or you're not sure where to start." },
+      { "label": "Connect an existing environment", "description": "You already have an ESS agent deployed and want to wire this kit to it." }
+    ],
+    "allowFreeformInput": true
+  }
+]
+```
 
-1. **Plan your ESS rollout** — figure out what to build and who does each part.
-   Choose this if you don't have an ESS environment yet or you're not sure where
-   to start.
-2. **Connect an existing environment** — you already have an ESS agent deployed
-   and want to wire this kit to it.
-
-**End message.**
-
-- If the maker chooses **1** (or asks to plan, to learn about ESS, or says they
-  have no environment yet), read `src/skills/planner/SKILL.md` and follow it
-  instead — do **not** continue below.
-- If the maker chooses **2**, continue with the checklist below.
+- If the maker chooses **"Plan your ESS rollout"** (or asks to plan, to learn
+  about ESS, or says they have no environment yet), read
+  `src/skills/planner/SKILL.md` and follow it instead — do **not** continue below.
+- If the maker chooses **"Connect an existing environment"**, continue with the
+  checklist below.
 
 **Message:**
 

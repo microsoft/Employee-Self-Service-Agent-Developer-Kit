@@ -90,21 +90,41 @@ model → assign), publish it in **one** create call rather than task-by-task:
 2. **Build the create body:**
    `python scripts/planner/cli.py export-remote-plan` — this prints the JSON body
    (configuring agent, acceptance criteria, context, and every task inline).
-3. **Push it:** call **`create_project_plan`** with the `projectId` and that body.
-   The plan and all its tasks are created atomically. Keep the returned `planId`
-   and `etag`.
-4. **Activate the plan** so tasks can be worked: call **`update_project_plan`**
-   with `{"status": "Active"}` and the plan's `etag` from step 3. A plan is
-   created in Draft; tasks can be *created* on a Draft plan but not *mutated*
-   until it's Active. Activation returns a **new `etag`**.
-5. **Re-hydrate with server ids — do this *after* activation, last.** Only now
-   pull the server's state into the cache: `get_project_plan` +
-   `list_project_plan_tasks` → write `{"plan": ..., "tasks": ...}` to
-   `workspace/plan/.remote.json` → `import-remote-plan --input ...` → delete the
-   temp file. Doing it after step 4 captures the **Active** status *and* the
-   post-activation `etag`, so the very next task mutation doesn't fail with a 412.
-   (Re-hydrating before activation would cache a stale Draft `etag` and the next
-   mutation would 412.)
+3. **Push it (the plan is created in Draft):** call **`create_project_plan`**
+   with the `projectId` and that body. The plan and all its tasks are created
+   atomically, in **Draft**. Keep the returned `planId` and `etag`. A Draft plan
+   holds all its tasks, but they can't be *mutated* (assigned, reassigned,
+   state-changed) until the plan is **Active** — and **the backend never
+   auto-activates a plan**. Activation is therefore an explicit step you take
+   yourself, at the moment the first assignment happens (step 6). Do **not**
+   activate here.
+4. **Re-hydrate so the cache carries the server ids** (planId, task ids, etag):
+   `get_project_plan` + `list_project_plan_tasks` → write
+   `{"plan": <get_project_plan result>, "tasks": <list_project_plan_tasks result>}`
+   to `workspace/plan/.remote.json` → `import-remote-plan --input ...` → delete
+   the temp file. The plan is now cached as **Draft** with real ids.
+5. **Show the plan and let the sponsor choose what's next — don't activate yet.**
+   Present the plan and offer the Markdown for them to **download and review**
+   (the render is in `src/skills/planner/SKILL.md`). Then offer a plain-language
+   choice of where to go next:
+   - **Put people on the roles** — record real people against the plan's
+     attestable roles so pooled role work becomes visible
+     (`src/skills/roles/nudge.md` → `src/skills/roles/attest.md`).
+   - **Assign tasks to people** — hand specific tasks to named owners
+     (`src/skills/planner/assign.md`).
+   - **Keep iterating on the plan** — refine the objective or tasks before anyone
+     is put on it; this stays in **Draft**, so just re-push the edits.
+   Iterating leaves the plan in Draft. Choosing either kind of assignment is what
+   puts the plan into motion — so it **activates** the plan (step 6).
+6. **Activate on the first assignment — explicitly; the backend won't.** The
+   first time the sponsor assigns a role or a task, activate *before* recording
+   it: call **`update_project_plan`** with `{"status": "Active"}` and the plan's
+   Draft `etag`. Activation returns a **new `etag`** — use that one for the
+   assignment mutation that follows, then re-hydrate (`get_project_plan` +
+   `list_project_plan_tasks` → `import-remote-plan`) so the cache reflects the
+   **Active** status and the post-activation etags (otherwise the next task
+   mutation fails with a 412). Once the plan is Active, later assignments need no
+   re-activation.
 
 If `export-remote-plan` errors that the configuring agent name is required, you
 skipped step 1 — set it, then re-export.

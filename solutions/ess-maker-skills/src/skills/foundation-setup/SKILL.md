@@ -46,26 +46,30 @@ still the first (`SETUP-01`), this is a first `/setup`. Ask one question before
 going any further. Skip it on any resume (a step already completed, or the active
 step has advanced) — a resume proceeds directly to dispatch and needs no input.
 
-**Message:**
+Use the `vscode_askQuestions` tool:
 
-Before we set up your environment — which is closest to what you need right now?
+```json
+[
+  {
+    "header": "Where would you like to start?",
+    "question": "Before we set up your environment — which is closest to what you need right now?",
+    "options": [
+      { "label": "Plan your ESS rollout", "description": "Work out what to build, which systems to connect, and who owns each part. Choose this if you don't have an ESS environment yet, you're still exploring what ESS can do, or you're not sure where to start." },
+      { "label": "Set up the environment now", "description": "You're ready to configure a Power Platform environment and install ESS. This needs Power Platform admin access." }
+    ],
+    "allowFreeformInput": true
+  }
+]
+```
 
-1. **Plan your ESS rollout** — work out what to build, which systems to connect,
-   and who owns each part. Choose this if you don't have an ESS environment yet,
-   you're still exploring what ESS can do, or you're not sure where to start.
-2. **Set up the environment now** — you're ready to configure a Power Platform
-   environment and install ESS. This needs Power Platform admin access.
-
-**End message.**
-
-- If the maker chooses **1** — or says anything like "plan", "help me figure out
-  ESS", "I don't have an environment yet", "where do I start", or "create a
-  plan" — this is a planning request. Read `src/skills/planner/SKILL.md` and
-  follow it instead; do **not** continue the foundation setup below. Planning is
-  allowed before setup and emits "run `/setup`" as a task once an environment is
-  actually needed.
-- If the maker chooses **2**, or already asked to configure or install the
-  environment, continue with the foundation setup below.
+- If the maker chooses **"Plan your ESS rollout"** — or says anything like
+  "plan", "help me figure out ESS", "I don't have an environment yet", "where do
+  I start", or "create a plan" — this is a planning request. Read
+  `src/skills/planner/SKILL.md` and follow it instead; do **not** continue the
+  foundation setup below. Planning is allowed before setup and emits "run
+  `/setup`" as a task once an environment is actually needed.
+- If the maker chooses **"Set up the environment now"**, or already asked to
+  configure or install the environment, continue with the foundation setup below.
 
 If `connect_ready` is true, inspect `.local/config.json`:
 

@@ -43,8 +43,11 @@ re-render it here if the scope changed. It is render-only and generates nothing.
 Finishing assignment is the trigger to publish; do not wait for the sponsor to
 ask. The plan they just approved lives only in the local cache until you push it,
 so **immediately** follow `src/skills/planner/sync.md` → *Push* now (name the
-configuring agent → `export-remote-plan` → `create_project_plan` → re-hydrate →
-activate). Never leave a freshly built plan local. If the service is unreachable,
+configuring agent → `export-remote-plan` → `create_project_plan` → re-hydrate).
+That publishes the plan as **Draft** and shows it back for review; the plan
+**activates on the first role/task assignment, not on push** — you call activate
+explicitly then, because the backend never auto-activates (see `sync.md` steps
+5–6). Never leave a freshly built plan local. If the service is unreachable,
 fall back to the local cache and carry on (never mention any of this to the
 sponsor), and push on a later turn once it's reachable — a summary that still
 shows the plan as `(local, not synced)` has **not** been persisted.
