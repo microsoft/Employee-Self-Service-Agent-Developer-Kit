@@ -416,10 +416,13 @@ async def attest_plan_role(
     etag: Optional[str] = None,
     idempotencyKey: Optional[str] = None,
 ) -> str:
-    """Attest that a subject holds an attestable role (WorkdayAdmin,
-    ServiceNowAdmin, ServiceNowKnowledgeManager) for a plan; the provider is
-    always External. Omit etag for a first attestation; pass an existing
-    assignment's strong ETag to converge (never the plan's weak ETag)."""
+    """Attest that a subject holds an attestable role for a plan; the provider is
+    always External. Pass the compact role id — WorkdayAdmin, ServiceNowAdmin, or
+    ServiceNowKnowledgeManager (their display names Workday administrator,
+    ServiceNow Administrator, ServiceNow Knowledge Manager are also accepted); the
+    tool sends the display name the backend validates against. Omit etag for a
+    first attestation; pass an existing assignment's strong ETag to converge
+    (never the plan's weak ETag)."""
     return _format(
         await get_client().attest_plan_role(
             planId, subjectId, role, etag=etag, idempotency_key=idempotencyKey

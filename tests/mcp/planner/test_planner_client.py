@@ -468,7 +468,9 @@ def test_role_assignment_routes_are_tenant_sharded(monkeypatch) -> None:
     assert str(attesting.url) == f"{collection}/attest"
     assert json.loads(attesting.content) == {
         "subjectId": "subject-oid",
-        "role": "WorkdayAdmin",
+        # Caller passes the compact id "WorkdayAdmin"; the client maps it to the
+        # provider display name the backend validates the attest role against.
+        "role": "Workday administrator",
         "target": {"type": "Plan", "id": "plan1"},
         "provider": "External",
     }
@@ -500,6 +502,62 @@ def test_attest_validation(monkeypatch, args, kwargs, match) -> None:
     client = _make_client(monkeypatch, handler)
     with pytest.raises(ValueError, match=match):
         _run(client, lambda: client.attest_plan_role(*args, **kwargs))
+
+
+def test_attest_accepts_role_display_name_and_sends_it_verbatim(monkeypatch) -> None:
+    # Callers may pass either the compact id or the backend display name; a
+    # display name is already wire-shaped and must pass through unchanged.
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+
+    _run(
+        client,
+        lambda: client.attest_plan_role(
+            "plan1", "subject-oid", "ServiceNow Administrator"
+        ),
+    )
+
+    attesting = next(r for r in requests if r.method == "POST")
+    assert json.loads(attesting.content)["role"] == "ServiceNow Administrator"
+
+
+def test_planner_api_error_surfaces_target_and_details(monkeypatch) -> None:
+    # The generic top-level Message is opaque ("...sent a bad request..."); the
+    # planner overrides the error formatter to surface Target + Details[] so the
+    # agent reads the real reason (e.g. the exact allowed attest role values)
+    # and self-corrects. This is the planner counterpart to the landing page's
+    # test_api_error_uses_top_level_code_message_and_http_status (which pins the
+    # neutral core still dropping Details).
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            400,
+            json={
+                "Code": "BadRequest",
+                "Message": "The calling client sent a bad request to the service.",
+                "Target": "agentRoleAssignments.role",
+                "Details": [
+                    {
+                        "Code": "ValidationError",
+                        "Message": (
+                            "role must be one of Workday administrator, "
+                            "ServiceNow Administrator, ServiceNow Knowledge Manager."
+                        ),
+                    }
+                ],
+            },
+        )
+
+    client = _make_client(monkeypatch, handler)
+
+    with pytest.raises(base_client_module.AgentConfigApiError) as excinfo:
+        _run(client, lambda: client.list_project_plan_tasks("proj1", "plan1"))
+
+    message = str(excinfo.value)
+    assert excinfo.value.http_status == 400
+    assert message.startswith("BadRequest:")
+    assert "agentRoleAssignments.role" in message  # Target surfaced
+    assert "ValidationError" in message
+    assert "ServiceNow Administrator" in message  # Details surfaced
 
 
 def test_list_role_assignments_validates_status_and_orderby(monkeypatch) -> None:

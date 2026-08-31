@@ -37,6 +37,20 @@ _ROLE_ASSIGNMENTS_RESOURCE = "agentRoleAssignments"
 # Only the provider-owned attestable roles are valid; legacy agent/task roles
 # are retired.
 ATTESTABLE_ROLES = ("WorkdayAdmin", "ServiceNowAdmin", "ServiceNowKnowledgeManager")
+
+# The attest action's ``role`` field validates against the provider's
+# human-readable display names, NOT the compact ids used everywhere else (the
+# ATTESTABLE_ROLES constant, the roleId list filter, and the skill
+# instructions). Map each compact id the caller passes to the exact display
+# string the backend requires. Verified against the live AgentConfiguration
+# service: posting a compact id (e.g. "ServiceNowAdmin") returns 400
+# "role must be one of Workday administrator, ServiceNow Administrator,
+# ServiceNow Knowledge Manager." while the display name is accepted (201).
+ATTESTABLE_ROLE_WIRE_NAMES = {
+    "WorkdayAdmin": "Workday administrator",
+    "ServiceNowAdmin": "ServiceNow Administrator",
+    "ServiceNowKnowledgeManager": "ServiceNow Knowledge Manager",
+}
 _ROLE_ASSIGNMENT_STATUSES = ("Active", "Revoked")
 _ROLE_ASSIGNMENT_ORDERBY = ("createdAt asc", "createdAt desc")
 _ATTESTATION_PROVIDER = "External"
@@ -118,15 +132,27 @@ class RolesMixin:
     ) -> Any:
         if not isinstance(subject_id, str) or not subject_id.strip():
             raise ValueError("subjectId is required")
-        if role not in ATTESTABLE_ROLES:
-            raise ValueError("role must be one of " + ", ".join(ATTESTABLE_ROLES))
+        if role in ATTESTABLE_ROLE_WIRE_NAMES:
+            wire_role = ATTESTABLE_ROLE_WIRE_NAMES[role]
+        elif role in ATTESTABLE_ROLE_WIRE_NAMES.values():
+            wire_role = role
+        else:
+            raise ValueError(
+                "role must be one of "
+                + ", ".join(ATTESTABLE_ROLES)
+                + " (compact ids) or their display names "
+                + ", ".join(ATTESTABLE_ROLE_WIRE_NAMES.values())
+            )
         if provider != _ATTESTATION_PROVIDER:
             raise ValueError("provider must be External for plan attestation")
         if not isinstance(plan_id, str) or not plan_id.strip():
             raise ValueError("planId is required")
         body = {
             "subjectId": subject_id,
-            "role": role,
+            # The backend validates ``role`` against the provider display names,
+            # so always send the mapped display string even though callers may
+            # pass the compact id used elsewhere in the family.
+            "role": wire_role,
             "target": {"type": "Plan", "id": plan_id},
             "provider": provider,
         }

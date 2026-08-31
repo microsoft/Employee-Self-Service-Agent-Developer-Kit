@@ -291,6 +291,30 @@ class AgentConfigBaseClient:
         """
         return payload
 
+    def _format_api_error(self, body: Any, status_code: int) -> str:
+        """Build an ``AgentConfigApiError`` message from an error response body.
+
+        The neutral core surfaces only the top-level ``Code`` and ``Message``
+        from the AgentConfiguration error envelope. A server (e.g. the planner)
+        may override this to surface additional actionable detail — such as the
+        ``Target`` field and the nested ``Details[]`` validation entries — that
+        the caller (or the agent) needs to self-correct.
+        """
+        code = ""
+        message = ""
+        if isinstance(body, dict):
+            code_candidate = body.get("Code")
+            if isinstance(code_candidate, str):
+                code = code_candidate
+            message_candidate = body.get("Message")
+            if isinstance(message_candidate, str):
+                message = message_candidate
+        if not code:
+            code = "HttpError"
+        if not message:
+            message = f"HTTP {status_code}"
+        return f"{code}: {message}"
+
     async def _ensure_client(self) -> httpx.AsyncClient:
         if self._client is not None and not self._client.is_closed:
             return self._client
@@ -387,25 +411,12 @@ class AgentConfigBaseClient:
                 )
 
             except httpx.HTTPStatusError as error:
-                code = ""
-                message = ""
                 try:
                     body = error.response.json()
                 except (json.JSONDecodeError, UnicodeDecodeError):
                     body = None
-                if isinstance(body, dict):
-                    code_candidate = body.get("Code")
-                    if isinstance(code_candidate, str):
-                        code = code_candidate
-                    message_candidate = body.get("Message")
-                    if isinstance(message_candidate, str):
-                        message = message_candidate
-                if not code:
-                    code = "HttpError"
-                if not message:
-                    message = f"HTTP {error.response.status_code}"
                 raise AgentConfigApiError(
-                    f"{code}: {message}",
+                    self._format_api_error(body, error.response.status_code),
                     http_status=error.response.status_code,
                 ) from error
 

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import os
 import sys
+from typing import Any
 
 import httpx
 
@@ -64,3 +65,37 @@ class PlannerClient(PlannerMixin, RolesMixin, AgentConfigBaseClient):
             f"<PlannerClient projects_base_url={self.projects_base_url!r} "
             f"tenant_id={self.tenant_id!r}>"
         )
+
+    def _format_api_error(self, body: Any, status_code: int) -> str:
+        """Surface the AgentConfiguration error envelope's actionable detail.
+
+        The neutral core message is just ``Code: Message`` — often opaque, e.g.
+        ``BadRequest: The calling client sent a bad request to the service.``.
+        The planner and role routes carry the field-level reason in ``Target``
+        and the nested ``Details[]`` validation entries (for example the exact
+        allowed values for an attest ``role``). The planner appends them so the
+        agent reads the real cause and self-corrects instead of only seeing the
+        generic top-level message.
+        """
+        message = super()._format_api_error(body, status_code)
+        if not isinstance(body, dict):
+            return message
+        target = body.get("Target")
+        if isinstance(target, str) and target.strip():
+            message = f"{message} (target: {target})"
+        details = body.get("Details")
+        if isinstance(details, list):
+            rendered: list[str] = []
+            for detail in details:
+                if not isinstance(detail, dict):
+                    continue
+                detail_code = detail.get("Code")
+                detail_message = detail.get("Message")
+                if isinstance(detail_message, str) and detail_message.strip():
+                    if isinstance(detail_code, str) and detail_code.strip():
+                        rendered.append(f"{detail_code}: {detail_message}")
+                    else:
+                        rendered.append(detail_message)
+            if rendered:
+                message = f"{message} Details: {'; '.join(rendered)}"
+        return message
