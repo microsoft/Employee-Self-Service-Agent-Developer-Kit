@@ -1,0 +1,9 @@
+{
+  "id": "landing-page",
+  "serverName": "ess-landing-page-config",
+  "server": {
+    "command": "{pythonExecutable}",
+    "args": ["server.py"],
+    "cwd": "${workspaceFolder}/src/mcp/agentconfig"
+  }
+}
