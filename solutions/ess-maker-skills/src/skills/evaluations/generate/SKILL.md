@@ -278,6 +278,18 @@ retrievable by another user.
 
 ## Step 9: Offer next steps
 
-- "Want me to **add another scenario** to this set, or generate a **different
-  scenario**?"
-- "Type `/menu` to see other options."
+Use a structured choice question:
+
+> What would you like to do next?
+
+Offer:
+
+- **Edit the test set myself**
+- **Prepare it to send to a judge or SME for feedback**
+- **Add another scenario**
+- **Generate a different scenario**
+- **Keep it local and finish**
+
+If the maker chooses judge or SME feedback, explain that the workspace set must
+first be promoted and pushed to Copilot Studio. This closing question is
+mandatory and must not be omitted.

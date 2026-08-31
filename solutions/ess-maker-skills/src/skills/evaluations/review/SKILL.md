@@ -43,7 +43,9 @@ Copilot Studio state are currently available for review. Do not treat a local
 `review_requested` change with `nextAction=push_review_request` as reviewable,
 and do not run the quality validator as a fallback.
 
-Ask exactly:
+Use the available structured question control (dropdown or choice buttons)
+with one option per returned test set. Each option must include the test-set
+name, source, and case count. Ask exactly:
 
 > Which test set would you like to review?
 
@@ -57,7 +59,13 @@ After the user selects a set, read
 `src/skills/evaluations/update/SKILL.md` and follow **Flow R2 — Review assigned
 test sets**, beginning with showing its prompts and expected responses.
 
-The reviewer may inspect and edit prompts or expected responses. Invoke quality
-validation only when test cases are edited; inspection without changes does not
-automatically run the quality gate. Never describe this workflow as
-"view-only."
+The reviewer may inspect and edit prompts or expected responses, or provide
+written recommendations for the maker without editing the source files. Invoke
+quality validation only when test cases are edited; inspection or written
+recommendations without source changes do not automatically run the quality
+gate. Never describe this workflow as "view-only."
+
+Before ending, the reviewer must be offered a structured choice to **Edit test
+cases directly**, **Describe recommended changes for the maker**, or **Mark
+review complete without changes**. If recommendations are supplied, state that
+the maker owns the official edits, push, and subsequent evaluation run.
