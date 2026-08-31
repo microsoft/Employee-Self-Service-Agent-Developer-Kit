@@ -39,6 +39,14 @@ copy becomes the single local source of truth.
 - Store local review state in `review.json` beside the parent EvaluationSet.
 - Preserve the human-authored Dataverse description when adding or changing
   the ADK review marker.
+- Whenever test sets or test cases are shown for user selection, use the
+  available structured question control with named choices (dropdown, buttons,
+  or multi-select as appropriate). Do not rely on an open-text question when
+  the choices are already known.
+- Never finish immediately after displaying test cases. Makers must receive an
+  explicit choice to edit the set themselves, send it to a judge or SME for
+  feedback, or keep it unchanged. Reviewers must receive an explicit choice to
+  edit directly, describe recommendations for the maker, or complete review.
 
 ## Review-intent routing
 
@@ -99,7 +107,8 @@ Before asking the user to tag a set, explain:
 
    Display every returned workspace and configured-agent test set, including
    its source, test-case count, and current review status.
-2. Ask which test set or sets should be tagged.
+2. Use the available structured choice control to ask which test set or sets
+   should be tagged. Each option must contain the set name and source.
 3. Wait for an explicit selection.
 4. Do not infer a selection from the previous conversation, the most recently
    generated set, or the active agent. A set is preselected only when the user
@@ -135,6 +144,7 @@ and every configured agent. Do not substitute an ad hoc `review.json` glob.
 **Hard entry gate:** display the tagged-set table and wait for the user to
 select a set before reading all category files or invoking quality validation.
 The word "review" alone never means "run the evaluation quality validator."
+Use the available structured choice control with one option per returned set.
 Ask: **"Which test set would you like to review?"** Do not use "Which pending
 test set..." in the user-facing question.
 
@@ -149,8 +159,25 @@ For each selected set:
    > evaluation files and automatically reflected in the CSV.
 
 2. Show all prompts and expected responses.
-3. Let the reviewer inspect and edit the test cases. If edited, synchronize
-   YAML and CSV and run the quality gate exactly as in the normal update flow.
+3. Use a structured choice question:
+
+   > How would you like to provide your review?
+
+   Offer:
+
+   - **Edit test cases directly**
+   - **Describe recommended changes for the maker**
+   - **Mark review complete without changes**
+
+   Reviewers are not restricted from editing. If they choose recommendations,
+   capture and clearly summarize their proposed prompt or expected-response
+   changes in the conversation. State that the maker remains responsible for
+   applying those official changes before pushing and running the test set. Do
+   not claim that conversational recommendations were automatically written to
+   the test-set description or source files.
+
+   If test cases are edited directly, synchronize YAML and CSV and run the
+   quality gate exactly as in the normal update flow.
 4. Follow **Step 6a: Review completion gate**. Do not ask about pushing before
    this gate is resolved.
 5. When the user confirms completion, run:
@@ -179,12 +206,13 @@ If the user explicitly names a test set, run:
 python scripts/evaluation_review.py --list-all --query "{user text}"
 ```
 
-Display the returned name matches with their source and ask the user to select
-or confirm the intended set. Do not silently choose a fuzzy match.
+Display the returned name matches with their source and use the available
+structured choice control to ask the user to select or confirm the intended
+set. Do not silently choose a fuzzy match.
 
 If the user does not name a test set, run
-`python scripts/evaluation_review.py --list-all`, display every set, and ask
-which one or ones to update.
+`python scripts/evaluation_review.py --list-all`, display every set, and use a
+structured choice control to ask which one or ones to update.
 
 ### Workspace-level sets
 
@@ -208,7 +236,8 @@ If the same set name exists in both locations, include both rows and their full
 source labels. If no sets are found, explain that there is nothing to update and
 suggest creating an evaluation set first.
 
-Ask which set or sets the user wants to update.
+Ask which set or sets the user wants to update using the structured choice
+control. Each option must include the test-set name, source, and case count.
 
 ## Step 2: Identify the requested changes
 
@@ -231,6 +260,22 @@ Then continue with the existing detailed edit experience and show its cases:
 
 Read both `input` and `expectedOutput` from every EvaluationData file before
 presenting the cases. The expected response is required context, not optional.
+
+Unless the user already supplied a specific edit, follow the case display with
+this mandatory structured question:
+
+> How would you like to continue with **{set name}**?
+
+Offer:
+
+1. **Edit the test set myself**
+2. **Send it to a judge or SME for feedback**
+3. **Keep it unchanged**
+
+If the maker chooses to edit, continue with the normal update flow. If they
+choose judge or SME feedback, enter Flow R1 and explain that the set must be
+pushed before another user can review it. If they keep it unchanged, do not
+mutate or push anything without a separate explicit request.
 
 When using a checkbox or multiple-choice UI, every case option must use this
 shape:
@@ -373,6 +418,8 @@ Offer:
    review changes are needed.
 2. **Make further changes** — keeps the review open and returns to editing
    prompts or expected responses.
+3. **Describe recommendations for the maker** — keeps the review open while
+   the reviewer provides a written handoff instead of editing the source files.
 
 Explain these meanings before waiting for the user's choice. Marking review
 complete closes the review state; it is not the same as initially marking a set
@@ -396,6 +443,16 @@ ask whether to push the updated files and completed-review marker together.
 Return to the selected set's edit flow. After the additional edits,
 synchronize YAML and CSV, rerun quality validation, show the updated summary,
 and return to this completion gate.
+
+### Describe recommendations for the maker
+
+Capture the recommendations and present them back as a concise checklist tied
+to the relevant prompts or expected responses. End with this mandatory
+statement:
+
+> Your recommendations are ready to hand back to the maker. The maker should apply the official test-case changes, push the updated set, and then run the evaluation. Recommendations alone do not modify the test-set files.
+
+Then return to the completion gate. Do not silently mark the review complete.
 
 Outside Flow R2, preserve `review_requested` and skip this gate. If a workspace
 set was tagged and the user cancelled before promotion or push, a later
