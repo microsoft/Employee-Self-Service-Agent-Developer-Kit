@@ -187,6 +187,45 @@ def test_list_agent_test_sets_excludes_review_requested_sets(tmp_path):
     assert sets == []
 
 
+def test_list_agent_test_sets_explains_review_pending_when_requested(
+    tmp_path,
+):
+    evaluations = tmp_path / "evaluations" / "compensation"
+    evaluations.mkdir(parents=True)
+    (evaluations / "compensation.mcs.yml").write_text(
+        "kind: EvaluationSet\n",
+        encoding="utf-8",
+    )
+    (evaluations / "review.json").write_text(
+        json.dumps({"status": "review_requested"}),
+        encoding="utf-8",
+    )
+    (tmp_path / ".component-map.json").write_text(
+        json.dumps({
+            "evaluations/compensation/compensation.mcs.yml": {
+                "botcomponentid": "set-comp",
+                "componenttype": 19,
+                "name": "Compensation",
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    sets = evaluation_runs.list_agent_test_sets(
+        FakeClient(),
+        "environment-id",
+        "bot-id",
+        tmp_path,
+        include_blocked=True,
+    )
+
+    assert len(sets) == 1
+    assert sets[0]["runnable"] is False
+    assert sets[0]["blockedReason"] == (
+        evaluation_runs.REVIEW_PENDING_GUIDANCE
+    )
+
+
 def test_list_agent_test_sets_allows_review_completed_sets(tmp_path):
     evaluations = tmp_path / "evaluations" / "compensation"
     evaluations.mkdir(parents=True)
@@ -259,6 +298,49 @@ def test_list_agent_test_sets_excludes_unpushed_review_completion(tmp_path):
     )
 
     assert sets == []
+
+
+def test_list_agent_test_sets_explains_unpushed_review_completion(tmp_path):
+    evaluations = tmp_path / "evaluations" / "compensation"
+    baseline = tmp_path / ".baseline" / "evaluations" / "compensation"
+    evaluations.mkdir(parents=True)
+    baseline.mkdir(parents=True)
+    (evaluations / "compensation.mcs.yml").write_text(
+        "kind: EvaluationSet\n",
+        encoding="utf-8",
+    )
+    (evaluations / "review.json").write_text(
+        json.dumps({"status": "review_completed"}),
+        encoding="utf-8",
+    )
+    (baseline / "review.json").write_text(
+        json.dumps({"status": "review_requested"}),
+        encoding="utf-8",
+    )
+    (tmp_path / ".component-map.json").write_text(
+        json.dumps({
+            "evaluations/compensation/compensation.mcs.yml": {
+                "botcomponentid": "set-comp",
+                "componenttype": 19,
+                "name": "Compensation",
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    sets = evaluation_runs.list_agent_test_sets(
+        FakeClient(),
+        "environment-id",
+        "bot-id",
+        tmp_path,
+        include_blocked=True,
+    )
+
+    assert len(sets) == 1
+    assert sets[0]["runnable"] is False
+    assert sets[0]["blockedReason"] == (
+        evaluation_runs.REVIEW_COMPLETION_NOT_PUSHED_GUIDANCE
+    )
 
 
 def test_list_agent_test_sets_allows_unknown_review_status(tmp_path):
