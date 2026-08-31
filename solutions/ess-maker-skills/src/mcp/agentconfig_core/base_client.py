@@ -30,6 +30,7 @@ import logging
 import os
 import random
 import stat
+import sys
 import threading
 import urllib.parse
 import uuid
@@ -178,7 +179,14 @@ def _acquire_token_interactive_form_post(app: Any) -> dict[str, Any]:
     thread = threading.Thread(target=server.handle_request, daemon=True)
     thread.start()
 
-    print(f"Opening browser for AgentConfiguration sign-in ({redirect_uri}) ...")
+    # This runs inside stdio MCP servers, where stdout is reserved for JSON-RPC
+    # frames — a stray line there corrupts the protocol stream and disconnects
+    # the client. Send the human-facing sign-in notice to stderr instead.
+    print(
+        f"Opening browser for AgentConfiguration sign-in ({redirect_uri}) ...",
+        file=sys.stderr,
+        flush=True,
+    )
     webbrowser.open(flow["auth_uri"])
     thread.join(timeout=300)
     server.server_close()
