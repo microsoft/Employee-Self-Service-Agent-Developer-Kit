@@ -29,11 +29,13 @@ def test_review_testsets_routes_to_human_review_before_validation():
     assert 'Do not call the test sets "pending"' in review_skill
     assert "wait for the user to select" in review_skill.lower()
     assert "Do not use this skill as the entry point" in validate_skill
-    assert 'Never describe this workflow as "view-only."' in normalized_review_skill
-    assert "inspect and edit prompts or expected responses" in review_skill
+    assert 'Never describe this workflow as "view-only"' in normalized_review_skill
+    assert "provides feedback, suggestions, or recommendations" in normalized_review_skill
+    assert "does not edit test-case source files" in normalized_review_skill
+    assert "quality validation is not invoked" in normalized_review_skill
     assert "structured question control" in review_skill
-    assert "**Describe recommended changes for the maker**" in review_skill
-    assert "maker owns the official edits, push" in review_skill
+    assert "**Provide feedback or recommendations for the maker**" in normalized_review_skill
+    assert "maker owns the official edits, validation, push" in normalized_review_skill
 
 
 def test_review_route_does_not_require_setup_for_workspace_sets():
@@ -77,7 +79,8 @@ def test_reviewer_recommendations_return_ownership_to_maker():
     update_skill = _read("src/skills/evaluations/update/SKILL.md")
     normalized = " ".join(update_skill.split())
 
-    assert "**Describe recommended changes for the maker**" in update_skill
+    assert "**Provide feedback or recommendations for the maker**" in update_skill
+    assert "The reviewer does not edit the test-case source files" in normalized
     assert "The maker should apply the official test-case changes" in normalized
     assert "Recommendations alone do not modify the test-set files" in normalized
     assert "Do not claim that conversational recommendations were automatically written" in normalized
@@ -100,14 +103,15 @@ def test_evaluation_push_is_scoped_and_warns_about_replacement_deletions():
 
 def test_review_requested_update_resolves_review_before_push():
     update_skill = _read("src/skills/evaluations/update/SKILL.md")
+    normalized = " ".join(update_skill.split())
 
     assert "## Step 6a: Review completion gate" in update_skill
     assert "Do not show or ask the push question until" in update_skill
     assert "**Mark review complete**" in update_skill
-    assert "**Make further changes**" in update_skill
+    assert "**Provide feedback or recommendations for the maker**" in update_skill
     assert "--status review_completed" in update_skill
     assert "completion requires the user's explicit choice" in update_skill
-    assert "keeps the review open" in update_skill
+    assert "keeps the review open" in normalized
     assert "review is finished" in update_skill
     assert "when this push records `review_completed`" in update_skill
     assert "You can now run this test set" in update_skill
@@ -145,10 +149,11 @@ def test_review_next_action_reconciles_local_and_deployed_status():
 
 def test_review_tagging_explains_collaboration_meaning():
     update_skill = _read("src/skills/evaluations/update/SKILL.md")
+    normalized = " ".join(update_skill.split())
     assert "**Mark for review** indicates" in update_skill
-    assert "inspect and suggest or make changes" in update_skill
-    assert "The tag must" in update_skill
-    assert "be pushed to Copilot Studio before it is shared" in update_skill
+    assert "inspect and provide feedback, suggestions, or" in update_skill
+    assert "The maker remains responsible for editing the test set" in update_skill
+    assert "tag must be pushed to Copilot Studio before it is shared" in normalized
 
 
 def test_named_update_filters_candidates_before_selection():
