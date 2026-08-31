@@ -95,6 +95,38 @@ def captured_post(monkeypatch):
     return calls
 
 
+def _client_events_envelope(**overrides):
+    envelope = {
+        "schemaVersion": 1,
+        "correlationId": "corr-test",
+        "mountId": "mount-test",
+        "appName": "AgentIcon",
+        "buildEnvironment": "dev",
+        "buildNumber": "0",
+        "toolCallId": "tool-test",
+        "events": [
+            {
+                "eventName": "WidgetReady",
+                "timeSinceAppStart": 12,
+                "locale": "en-US",
+                "properties": {
+                    "count": 1,
+                    "flag": True,
+                    "label": "loaded",
+                    "tags": ["a", 2, False, None],
+                },
+            },
+            {
+                "eventName": "WidgetFunnelStage",
+                "timeSinceAppStart": 18.5,
+                "properties": {"stage": "loaded"},
+            },
+        ],
+    }
+    envelope.update(overrides)
+    return envelope
+
+
 # --- identity (instance_id; no developer identity) ------------------------
 def test_set_identity_stores_instance_and_raw_tenant(monkeypatch):
     monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
@@ -449,6 +481,377 @@ def test_buffer_oversize_drops_oldest_and_accepts_newest(monkeypatch):
         names = [json.loads(ln)["name"] for ln in f.read().splitlines() if ln.strip()]
     assert "adk.evt.19" in names      # newest kept
     assert "adk.evt.0" not in names   # oldest dropped
+
+
+# --- Vorpal client event bridge --------------------------------------------
+def test_report_client_events_accepts_and_posts_valid_batch(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+
+    result = adk.report_client_events(_client_events_envelope(), block=True)
+
+    assert result == {"status": "accepted", "acceptedEventCount": 2}
+    assert len(captured_post) == 1
+    _ikey, envelopes = captured_post[0]
+    assert [envelope["name"] for envelope in envelopes] == [
+        "adk.client.event",
+        "adk.client.event",
+    ]
+    first = envelopes[0]["data"]
+    assert first["client_event_name"] == "WidgetReady"
+    assert first["client_correlation_id"] == "corr-test"
+    assert first["client_mount_id"] == "mount-test"
+    assert first["client_tool_call_id"] == "tool-test"
+    assert first["client_app_name"] == "AgentIcon"
+    assert first["client_build_environment"] == "dev"
+    assert first["client_build_number"] == "0"
+    assert first["client_time_since_app_start_ms"] == 12
+    assert first["client_locale"] == "en-US"
+    assert first["client_prop_count"] == 1
+    assert first["client_prop_tags"] == ["a", 2, False, None]
+    assert "developer_id" not in first
+
+
+def test_report_client_events_honors_opt_out_without_retrying(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_TELEMETRY", "off")
+
+    result = adk.report_client_events(_client_events_envelope(), block=True)
+
+    assert result == {"status": "accepted", "acceptedEventCount": 2}
+    assert captured_post == []
+
+
+def test_report_client_events_rejects_unsupported_schema(captured_post):
+    result = adk.report_client_events(
+        _client_events_envelope(schemaVersion=2),
+        block=True,
+    )
+
+    assert result == {
+        "status": "rejected",
+        "acceptedEventCount": 0,
+        "rejectedReason": "unsupported_schema_version",
+    }
+    assert captured_post == []
+
+
+def test_report_client_events_rejects_empty_and_oversized_batches(captured_post):
+    empty = adk.report_client_events(_client_events_envelope(events=[]), block=True)
+    oversized = adk.report_client_events(
+        _client_events_envelope(
+            events=[
+                {"eventName": f"Event{i}", "timeSinceAppStart": i}
+                for i in range(adk.CLIENT_EVENTS_MAX_BATCH_EVENTS + 1)
+            ]
+        ),
+        block=True,
+    )
+
+    assert empty["rejectedReason"] == "empty_batch"
+    assert oversized["rejectedReason"] == "batch_too_large"
+    assert captured_post == []
+
+
+_IDENTIFIER_FIELDS = {
+    "correlationId": ("corr-", "invalid_correlation_id"),
+    "mountId": ("mount-", "invalid_mount_id"),
+    "toolCallId": ("tool-", "invalid_tool_call_id"),
+}
+
+
+@pytest.mark.parametrize("field", list(_IDENTIFIER_FIELDS))
+def test_each_identifier_field_reports_its_own_rejection_reason(field, captured_post):
+    """A rejection must name the field that actually failed.
+
+    Sharing ``invalid_correlation_id`` across all three misattributes the
+    failure on any Vorpal-side dashboard or alert that buckets by
+    ``rejectedReason`` — a broken ``mountId`` would be triaged as a correlation
+    problem.
+    """
+    _prefix, expected_reason = _IDENTIFIER_FIELDS[field]
+
+    result = adk.report_client_events(
+        _client_events_envelope(**{field: "not-the-right-prefix"}),
+        block=True,
+    )
+
+    assert result["rejectedReason"] == expected_reason
+    assert captured_post == []
+
+
+def test_identifier_rejection_reasons_are_distinct():
+    # The whole point of the split: three fields, three reasons.
+    reasons = {reason for _prefix, reason in _IDENTIFIER_FIELDS.values()}
+    assert len(reasons) == 3
+    assert reasons <= adk._CLIENT_EVENTS_REJECTED_REASONS
+
+
+def test_rejection_reasons_survive_the_bounded_value_list_guard():
+    # _rejection() coerces anything outside _CLIENT_EVENTS_REJECTED_REASONS to
+    # invalid_event_shape, so a new reason that was not registered there would
+    # be silently swallowed rather than reported.
+    for reason in (
+        adk.CLIENT_EVENTS_REJECTED_INVALID_MOUNT_ID,
+        adk.CLIENT_EVENTS_REJECTED_INVALID_TOOL_CALL_ID,
+    ):
+        assert adk._rejection(reason)["rejectedReason"] == reason
+
+
+@pytest.mark.parametrize("field", list(_IDENTIFIER_FIELDS))
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "jdoe@contoso.com",
+        "C:\\Users\\jdoe\\secret.docx",
+        "https://contoso.sharepoint.com/x",
+        "6f7c8f9c-1234-4abc-9def-0123456789ab is the object id",
+        "a b c",  # a space is enough to turn the field into free text
+        "x" * 65,  # bounded well below the 200-char string cap
+    ],
+)
+def test_correlation_identifiers_are_not_a_free_text_tunnel(field, payload, captured_post):
+    """The ephemeral ids are emitted verbatim, so they must be identifier-shaped.
+
+    A prefix + length check alone would leave ~195 characters of arbitrary UTF-8
+    per field free to smuggle UPNs, paths, URLs and object ids into Aria. The
+    pre-existing negative test used ``"request-123"``, which failed on the
+    PREFIX rather than the content, so it never exercised this.
+
+    These are rejected rather than scrubbed on purpose: a redacted correlation
+    id would silently stop stitching a mount's events together, which is worse
+    than refusing the batch outright.
+    """
+    prefix, expected_reason = _IDENTIFIER_FIELDS[field]
+
+    result = adk.report_client_events(
+        _client_events_envelope(**{field: f"{prefix}{payload}"}),
+        block=True,
+    )
+
+    assert result["rejectedReason"] == expected_reason
+    assert captured_post == []
+
+
+def test_well_formed_correlation_identifiers_are_accepted(captured_post, monkeypatch):
+    # The charset gate must not reject the shapes Vorpal actually mints, incl.
+    # UUID-style suffixes and the dot/underscore/dash characters it allows.
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            correlationId="corr-6f7c8f9c-1234-4abc-9def-0123456789ab",
+            mountId="mount-1a2b_3c.4d",
+            toolCallId="tool-Call.42",
+        ),
+        block=True,
+    )
+
+    assert result == {"status": "accepted", "acceptedEventCount": 2}
+    data = captured_post[0][1][0]["data"]
+    assert data["client_correlation_id"] == "corr-6f7c8f9c-1234-4abc-9def-0123456789ab"
+    assert data["client_mount_id"] == "mount-1a2b_3c.4d"
+    assert data["client_tool_call_id"] == "tool-Call.42"
+
+
+def test_report_client_events_rejects_non_ascii_event_names(captured_post):
+    # Correctly rejected by the event-name regex today, but previously unasserted.
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[{"eventName": "Widget\U0001f600Ready", "timeSinceAppStart": 1}]
+        ),
+        block=True,
+    )
+
+    assert result["rejectedReason"] == "invalid_event_shape"
+    assert captured_post == []
+
+
+def test_report_client_events_rejects_oversized_property_strings(captured_post):
+    # Per-string length is enforced by _valid_property_value; pin it so the
+    # 64KB envelope cap is not the only thing bounding a single value.
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[
+                {
+                    "eventName": "BigProp",
+                    "timeSinceAppStart": 1,
+                    "properties": {"blob": "x" * (adk.CLIENT_EVENTS_MAX_STRING_LENGTH + 1)},
+                }
+            ]
+        ),
+        block=True,
+    )
+
+    assert result["rejectedReason"] == "invalid_property_type"
+    assert captured_post == []
+
+
+@pytest.mark.parametrize(
+    ("event", "reason"),
+    [
+        ({"eventName": "", "timeSinceAppStart": 1}, "invalid_event_shape"),
+        ({"eventName": "BadTime", "timeSinceAppStart": float("nan")}, "invalid_event_shape"),
+        ({"eventName": "BadProperty", "timeSinceAppStart": 1, "properties": {"x": {"nested": True}}}, "invalid_property_type"),
+        ({"eventName": "BadKey", "timeSinceAppStart": 1, "properties": {"bad-key": True}}, "invalid_property_type"),
+        ({"eventName": "ExtraField", "timeSinceAppStart": 1, "rawRequestId": "abc"}, "invalid_event_shape"),
+    ],
+)
+def test_report_client_events_rejects_out_of_contract_events(event, reason, captured_post):
+    result = adk.report_client_events(
+        _client_events_envelope(events=[event]),
+        block=True,
+    )
+
+    assert result["rejectedReason"] == reason
+    assert captured_post == []
+
+
+def test_report_client_events_rejects_unknown_envelope_fields(captured_post):
+    result = adk.report_client_events(
+        _client_events_envelope(rawPayload="not allowed"),
+        block=True,
+    )
+
+    assert result["rejectedReason"] == "invalid_event_shape"
+    assert captured_post == []
+
+
+def test_report_client_events_scrubs_paths_urls_emails_and_guids(captured_post, monkeypatch):
+    # Bounded primitives still reach Aria verbatim unless they go through
+    # _scrub, so a widget property carrying a UPN / local path / object id would
+    # contradict the approved Data Profile ("no user-linkable IDs, no customer
+    # content"). Every string the bridge emits must be redacted.
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[
+                {
+                    "eventName": "WidgetReady",
+                    "timeSinceAppStart": 1,
+                    "properties": {
+                        "note": "C:\\Users\\jdoe\\secret.docx see https://contoso.sharepoint.com/x",
+                        "owner": "jdoe@contoso.com",
+                        "objectId": "6f7c8f9c-1234-4abc-9def-0123456789ab",
+                        "tags": ["a@b.com", "ok"],
+                        "count": 3,
+                    },
+                }
+            ]
+        ),
+        block=True,
+    )
+
+    assert result == {"status": "accepted", "acceptedEventCount": 1}
+    data = captured_post[0][1][0]["data"]
+    assert data["client_prop_note"] == "<path> see <url>"
+    assert data["client_prop_owner"] == "<email>"
+    assert data["client_prop_objectId"] == "<guid>"
+    # Array elements are redacted too; non-strings pass through untouched.
+    assert data["client_prop_tags"] == ["<email>", "ok"]
+    assert data["client_prop_count"] == 3
+
+
+def test_report_client_events_rejects_free_text_event_names(captured_post):
+    # ADK deliberately keeps no Vorpal event-name allowlist, but the name is
+    # emitted verbatim as a dimension, so it must stay identifier-shaped rather
+    # than become a free-text channel for customer content.
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[
+                {
+                    "eventName": "SurveyAnswer: my boss is john.doe@contoso.com",
+                    "timeSinceAppStart": 1,
+                }
+            ]
+        ),
+        block=True,
+    )
+
+    assert result["rejectedReason"] == "invalid_event_shape"
+    assert captured_post == []
+
+
+def test_report_client_events_rejection_leaves_no_session_side_effect(captured_post):
+    # get_session() WRITES ~/.adk/session.json: it mints a fresh id once the
+    # inactivity window lapses and stamps `last` on every call. A batch that is
+    # ultimately rejected must not mutate ADK session state.
+    import os
+
+    assert not os.path.exists(adk.SESSION_PATH)
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[{"eventName": "Bad", "timeSinceAppStart": 1, "properties": {"x": {"nested": 1}}}]
+        ),
+        block=True,
+    )
+
+    assert result["rejectedReason"] == "invalid_property_type"
+    assert not os.path.exists(adk.SESSION_PATH)
+    assert captured_post == []
+
+
+def test_report_client_events_fails_open_on_internal_fault(monkeypatch, captured_post):
+    # Vorpal reads a result without a `status` as a transient failure and
+    # retries the batch, so an internal ADK fault must never escape as an
+    # exception. It resolves to an acceptance for the WHOLE batch: Vorpal
+    # rejects an acknowledgement that doesn't account for every sent event.
+    def _boom(*args, **kwargs):
+        raise OSError("state dir gone")
+
+    monkeypatch.setattr(adk, "common_dimensions", _boom)
+
+    result = adk.report_client_events(_client_events_envelope(), block=True)
+
+    assert result == {"status": "accepted", "acceptedEventCount": 2}
+    assert captured_post == []
+
+
+def test_client_events_batch_cap_matches_vorpal_batcher():
+    # A batch above the cap is REJECTED, and Vorpal never retries a rejection —
+    # so this cap must stay >= the Vorpal-side batch maximum or a full batch is
+    # silently and permanently dropped.
+    assert adk.CLIENT_EVENTS_MAX_BATCH_EVENTS == 25
+
+
+def test_fail_open_echo_is_bounded_by_the_batch_cap(monkeypatch, captured_post):
+    """A fail-open acknowledgement must never echo an unbounded count.
+
+    On the normal path an oversized batch is rejected with ``batch_too_large``,
+    so the echo is already bounded. This path runs when validation ITSELF
+    faults, before the cap has been applied — without clamping, a caller could
+    hand over 100k events and be told all 100k were accepted, even though
+    nothing was emitted.
+    """
+    def _boom(_envelope):
+        raise RecursionError("validator blew up")
+
+    monkeypatch.setattr(adk, "_serialized_size", _boom)
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[{"eventName": "E", "timeSinceAppStart": 1} for _ in range(100_000)]
+        ),
+        block=True,
+    )
+
+    assert result["status"] == "accepted"
+    assert result["acceptedEventCount"] == adk.CLIENT_EVENTS_MAX_BATCH_EVENTS
+    assert captured_post == []
+
+
+def test_oversized_batch_is_rejected_on_the_normal_path(captured_post):
+    # Companion to the test above: with the validator healthy, the same batch
+    # is refused outright rather than fail-open acknowledged.
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[{"eventName": "E", "timeSinceAppStart": 1} for _ in range(100)]
+        ),
+        block=True,
+    )
+
+    assert result["rejectedReason"] == "batch_too_large"
+    assert captured_post == []
 
 
 # --- capability taxonomy + normalization ----------------------------------

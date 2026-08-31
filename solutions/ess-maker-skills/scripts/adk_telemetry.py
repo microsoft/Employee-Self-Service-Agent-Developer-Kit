@@ -87,6 +87,77 @@ EVENT_CAPABILITY_USE = "adk.capability.use"
 EVENT_FLIGHTCHECK_RUN = "adk.flightcheck.run"
 EVENT_FLIGHTCHECK_RESULT = "adk.flightcheck.result"
 EVENT_FLIGHTCHECK_ERROR = "adk.flightcheck.error"
+EVENT_CLIENT = "adk.client.event"
+
+CLIENT_EVENTS_SCHEMA_VERSION = 1
+CLIENT_EVENTS_MAX_BATCH_EVENTS = 25
+CLIENT_EVENTS_MAX_SERIALIZED_BYTES = 64 * 1024
+CLIENT_EVENTS_MAX_STRING_LENGTH = 200
+CLIENT_EVENTS_MAX_PROPERTIES = 25
+CLIENT_EVENTS_MAX_ARRAY_LENGTH = 10
+
+CLIENT_EVENTS_REJECTED_UNSUPPORTED_SCHEMA_VERSION = "unsupported_schema_version"
+CLIENT_EVENTS_REJECTED_INVALID_CORRELATION_ID = "invalid_correlation_id"
+# Per-field reasons for the other two ephemeral identifiers. Reusing
+# ``invalid_correlation_id`` for these misattributes the failure on any
+# Vorpal-side dashboard or alert that buckets by ``rejectedReason``.
+#
+# These extend Vorpal's bounded ``BridgeRejectedReason`` union, so until the
+# matching Vorpal change ships its client maps them to ``unrecognized_reason``.
+# That degrades safely: ``getTelemetryBridgeOutcome`` still classifies an
+# unrecognized reason as a REJECTION, so the batch is dropped rather than
+# retried, exactly as before.
+CLIENT_EVENTS_REJECTED_INVALID_MOUNT_ID = "invalid_mount_id"
+CLIENT_EVENTS_REJECTED_INVALID_TOOL_CALL_ID = "invalid_tool_call_id"
+CLIENT_EVENTS_REJECTED_EMPTY_BATCH = "empty_batch"
+CLIENT_EVENTS_REJECTED_BATCH_TOO_LARGE = "batch_too_large"
+CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE = "invalid_event_shape"
+CLIENT_EVENTS_REJECTED_INVALID_PROPERTY_TYPE = "invalid_property_type"
+
+_CLIENT_EVENTS_REJECTED_REASONS = frozenset(
+    {
+        CLIENT_EVENTS_REJECTED_UNSUPPORTED_SCHEMA_VERSION,
+        CLIENT_EVENTS_REJECTED_INVALID_CORRELATION_ID,
+        CLIENT_EVENTS_REJECTED_INVALID_MOUNT_ID,
+        CLIENT_EVENTS_REJECTED_INVALID_TOOL_CALL_ID,
+        CLIENT_EVENTS_REJECTED_EMPTY_BATCH,
+        CLIENT_EVENTS_REJECTED_BATCH_TOO_LARGE,
+        CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE,
+        CLIENT_EVENTS_REJECTED_INVALID_PROPERTY_TYPE,
+    }
+)
+_CLIENT_EVENTS_PROPERTY_KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+# Vorpal owns the event catalog (ADK deliberately keeps no name allowlist), but
+# an event name must still be identifier-shaped. Without this the name field is
+# a free-text channel: it is emitted verbatim as a dimension, so a sentence
+# carrying customer content would ride straight into Aria.
+_CLIENT_EVENTS_EVENT_NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
+# The ephemeral correlation identifiers are emitted as dimensions, so a bounded
+# length alone would leave ~195 characters of arbitrary UTF-8 per field free to
+# smuggle UPNs, paths, URLs or object ids into Aria. Requiring an
+# identifier-shaped suffix rejects that outright rather than silently redacting
+# it, which is the posture the bridge claims: no free-text tunnel.
+_CLIENT_EVENTS_IDENTIFIER_SUFFIX_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
+_CLIENT_EVENTS_ENVELOPE_KEYS = frozenset(
+    {
+        "schemaVersion",
+        "correlationId",
+        "mountId",
+        "appName",
+        "buildEnvironment",
+        "buildNumber",
+        "toolCallId",
+        "events",
+    }
+)
+_CLIENT_EVENTS_EVENT_KEYS = frozenset(
+    {
+        "eventName",
+        "timeSinceAppStart",
+        "locale",
+        "properties",
+    }
+)
 
 # --- Canonical ADK capability value-list (single source of truth) ---------
 # Every ``adk_capability`` value emitted anywhere in the kit MUST be one of
@@ -532,6 +603,264 @@ def _emit(event_name: str, data: dict[str, Any], *, block: bool = False) -> dict
     _THREADS[:] = [x for x in _THREADS if x.is_alive()]
     _THREADS.append(t)
     return {"sent": None, "async": True, "event": event_name}
+
+
+def _emit_many_sync(event_name: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Emit a validated batch through the same opt-out, buffer, and 1DS path."""
+    if not telemetry_enabled():
+        return {
+            "sent": False,
+            "events": 0,
+            "status": None,
+            "reason": "disabled",
+        }
+    try:
+        ikey, env = resolve_ikey()
+        envelopes = []
+        for row in rows:
+            data = dict(row)
+            data.setdefault("env", env)
+            envelopes.append(build_event(event_name, data, _fc.envelope_ikey(ikey)))
+        _buffer_flush(ikey)
+        status = _fc._post(ikey, envelopes)
+        ok = status in (200, 204)
+        if not ok:
+            _buffer_append(envelopes)
+        return {
+            "sent": ok,
+            "events": len(envelopes) if ok else 0,
+            "status": status,
+            "env": env,
+            "event": event_name,
+            "reason": "ok" if ok else f"http {status}",
+        }
+    except Exception as e:  # noqa: BLE001 — telemetry must never break a caller
+        try:
+            ikey, env = resolve_ikey()
+            buffered = []
+            for row in rows:
+                data = dict(row)
+                data.setdefault("env", env)
+                buffered.append(build_event(event_name, data, _fc.envelope_ikey(ikey)))
+            _buffer_append(buffered)
+        except Exception:  # noqa: BLE001
+            pass
+        return {
+            "sent": False,
+            "events": 0,
+            "status": None,
+            "event": event_name,
+            "reason": f"{type(e).__name__}: {e}",
+        }
+
+
+def _emit_many(event_name: str, rows: list[dict[str, Any]], *, block: bool = False) -> dict[str, Any]:
+    """Dispatch a batch emit. Async (daemon thread) unless sync/block requested."""
+    if _SYNC or block:
+        return _emit_many_sync(event_name, rows)
+    t = threading.Thread(target=_emit_many_sync, args=(event_name, rows), daemon=True)
+    t.start()
+    _THREADS[:] = [x for x in _THREADS if x.is_alive()]
+    _THREADS.append(t)
+    return {"sent": None, "async": True, "event": event_name, "events": len(rows)}
+
+
+def _is_finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value == value and value not in (float("inf"), float("-inf"))
+
+
+def _valid_bounded_string(value: Any, *, allow_empty: bool = False) -> bool:
+    return isinstance(value, str) and (allow_empty or bool(value)) and len(value) <= CLIENT_EVENTS_MAX_STRING_LENGTH
+
+
+def _valid_client_identifier(value: Any, prefix: str) -> bool:
+    """True when ``value`` is ``<prefix><identifier-shaped suffix>``.
+
+    The prefix keeps the three ephemeral correlation ids distinguishable (Vorpal
+    mints them as ``corr-`` / ``mount-`` / ``tool-``); the suffix charset is what
+    stops the field being a free-text channel. These ids are emitted verbatim as
+    dimensions, so anything that is not identifier-shaped is rejected rather
+    than scrubbed — a redacted correlation id would silently stop stitching
+    events together, which is worse than refusing the batch.
+    """
+    if not _valid_bounded_string(value) or not value.startswith(prefix):
+        return False
+    return bool(_CLIENT_EVENTS_IDENTIFIER_SUFFIX_RE.match(value[len(prefix):]))
+
+
+def _valid_property_value(value: Any) -> bool:
+    if isinstance(value, bool) or value is None:
+        return True
+    if isinstance(value, str):
+        return len(value) <= CLIENT_EVENTS_MAX_STRING_LENGTH
+    return _is_finite_number(value)
+
+
+def _scrub_client_scalar(value: Any) -> Any:
+    """Redact paths / URLs / emails / GUIDs from a bridge string value.
+
+    Bounded primitives still reach Aria verbatim otherwise, so a widget that
+    puts a UPN, a local path or an object id into a property value would
+    contradict the approved Data Profile. Non-strings pass through unchanged.
+    """
+    if isinstance(value, str):
+        return _scrub(value, limit=CLIENT_EVENTS_MAX_STRING_LENGTH)
+    return value
+
+
+def _scrub_client_property(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_scrub_client_scalar(item) for item in value]
+    return _scrub_client_scalar(value)
+
+
+def _valid_property_container(properties: Any) -> bool:
+    if properties is None:
+        return True
+    if not isinstance(properties, dict) or len(properties) > CLIENT_EVENTS_MAX_PROPERTIES:
+        return False
+    for key, value in properties.items():
+        if not isinstance(key, str) or not _CLIENT_EVENTS_PROPERTY_KEY_RE.match(key):
+            return False
+        if isinstance(value, list):
+            if len(value) > CLIENT_EVENTS_MAX_ARRAY_LENGTH:
+                return False
+            if not all(_valid_property_value(item) for item in value):
+                return False
+        elif not _valid_property_value(value):
+            return False
+    return True
+
+
+def _rejection(reason: str) -> dict[str, Any]:
+    if reason not in _CLIENT_EVENTS_REJECTED_REASONS:
+        reason = CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE
+    return {
+        "status": "rejected",
+        "acceptedEventCount": 0,
+        "rejectedReason": reason,
+    }
+
+
+def _serialized_size(value: Any) -> int:
+    try:
+        return len(json.dumps(value, separators=(",", ":"), sort_keys=True).encode("utf-8"))
+    except (TypeError, ValueError):
+        return CLIENT_EVENTS_MAX_SERIALIZED_BYTES + 1
+
+
+def _validate_client_events_envelope(envelope: Any) -> tuple[str | None, list[dict[str, Any]]]:
+    if not isinstance(envelope, dict):
+        return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+    if set(envelope) - _CLIENT_EVENTS_ENVELOPE_KEYS:
+        return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+    if envelope.get("schemaVersion") != CLIENT_EVENTS_SCHEMA_VERSION:
+        return CLIENT_EVENTS_REJECTED_UNSUPPORTED_SCHEMA_VERSION, []
+    if _serialized_size(envelope) > CLIENT_EVENTS_MAX_SERIALIZED_BYTES:
+        return CLIENT_EVENTS_REJECTED_BATCH_TOO_LARGE, []
+    if not _valid_client_identifier(envelope.get("correlationId"), "corr-"):
+        return CLIENT_EVENTS_REJECTED_INVALID_CORRELATION_ID, []
+    if not _valid_client_identifier(envelope.get("mountId"), "mount-"):
+        return CLIENT_EVENTS_REJECTED_INVALID_MOUNT_ID, []
+    if not _valid_bounded_string(envelope.get("appName")):
+        return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+    if not _valid_bounded_string(envelope.get("buildEnvironment")):
+        return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+    if not _valid_bounded_string(envelope.get("buildNumber"), allow_empty=True):
+        return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+    tool_call_id = envelope.get("toolCallId")
+    if tool_call_id is not None and not _valid_client_identifier(tool_call_id, "tool-"):
+        return CLIENT_EVENTS_REJECTED_INVALID_TOOL_CALL_ID, []
+
+    events = envelope.get("events")
+    if not isinstance(events, list) or not events:
+        return CLIENT_EVENTS_REJECTED_EMPTY_BATCH, []
+    if len(events) > CLIENT_EVENTS_MAX_BATCH_EVENTS:
+        return CLIENT_EVENTS_REJECTED_BATCH_TOO_LARGE, []
+
+    rows: list[dict[str, Any]] = []
+    for event in events:
+        if not isinstance(event, dict):
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        if set(event) - _CLIENT_EVENTS_EVENT_KEYS:
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        if not _valid_bounded_string(event.get("eventName")):
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        if not _CLIENT_EVENTS_EVENT_NAME_RE.match(event["eventName"]):
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        if not _is_finite_number(event.get("timeSinceAppStart")):
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        locale = event.get("locale")
+        if locale is not None and not _valid_bounded_string(locale):
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        if not _valid_property_container(event.get("properties")):
+            return CLIENT_EVENTS_REJECTED_INVALID_PROPERTY_TYPE, []
+
+    # ``get_session`` mutates ~/.adk/session.json (it mints a fresh id once the
+    # inactivity window lapses and stamps ``last`` on every call), so it runs
+    # only after the whole batch has passed validation — a rejected batch must
+    # leave no side effect on ADK session state.
+    sid, _ = get_session(SURFACE_CLI)
+    for event in events:
+        locale = event.get("locale")
+        row = common_dimensions(SURFACE_CLI, session_id=sid)
+        row.update(
+            {
+                "client_event_name": event["eventName"],
+                "client_correlation_id": envelope["correlationId"],
+                "client_mount_id": envelope["mountId"],
+                "client_app_name": _scrub_client_scalar(envelope["appName"]),
+                "client_build_environment": _scrub_client_scalar(envelope["buildEnvironment"]),
+                "client_build_number": _scrub_client_scalar(envelope["buildNumber"]),
+                "client_time_since_app_start_ms": event["timeSinceAppStart"],
+            }
+        )
+        if tool_call_id is not None:
+            row["client_tool_call_id"] = tool_call_id
+        if locale is not None:
+            row["client_locale"] = _scrub_client_scalar(locale)
+        for key, value in (event.get("properties") or {}).items():
+            row[f"client_prop_{key}"] = _scrub_client_property(value)
+        rows.append(row)
+
+    return None, rows
+
+
+def report_client_events(envelope: dict[str, Any], *, block: bool = False) -> dict[str, Any]:
+    """Validate and emit a Vorpal bridge event batch through ADK telemetry.
+
+    Always returns a contract-shaped verdict. Vorpal reads a result without a
+    ``status`` as a transient failure and retries the batch, so an internal ADK
+    fault must never escape as an exception: it resolves to ``accepted`` for the
+    whole batch (fail-open, matching the module's "never break a caller" rule —
+    ADK's own buffer owns delivery retries).
+    """
+    try:
+        reason, rows = _validate_client_events_envelope(envelope)
+        if reason:
+            return _rejection(reason)
+        _emit_many(EVENT_CLIENT, rows, block=block)
+        return {"status": "accepted", "acceptedEventCount": len(rows)}
+    except Exception:  # noqa: BLE001 — the bridge must never break the widget
+        return {
+            "status": "accepted",
+            "acceptedEventCount": _client_events_batch_size(envelope),
+        }
+
+
+def _client_events_batch_size(envelope: Any) -> int:
+    """Best-effort count of the events a caller sent, capped at the batch max.
+
+    Vorpal treats an acknowledgement that doesn't account for the whole batch as
+    unreadable and retries it, so a fail-open acceptance must echo the sent
+    cardinality rather than zero. The cap is defense-in-depth: the validator
+    already refuses anything above the maximum, but this path runs when
+    validation itself faulted, so the echo would otherwise be unbounded.
+    """
+    events = envelope.get("events") if isinstance(envelope, dict) else None
+    if not isinstance(events, list):
+        return 0
+    return min(len(events), CLIENT_EVENTS_MAX_BATCH_EVENTS)
 
 
 def flush(timeout: float = 5.0) -> None:

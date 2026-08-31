@@ -23,10 +23,12 @@ from typing import Any, Iterator
 
 import yaml
 from mcp.server.fastmcp import FastMCP
+from mcp.types import CallToolResult, TextContent, ToolAnnotations
 
 # Allow imports from scripts/auth.py when the server is launched directly.
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "scripts"))
 
+import adk_telemetry  # type: ignore  # pylint: disable=import-error
 from auth import (  # type: ignore  # pylint: disable=import-error
     AuthExpiredError,
     authenticate,
@@ -37,6 +39,14 @@ from auth import (  # type: ignore  # pylint: disable=import-error
 
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 FLIGHTCHECK_RESULTS_PATH = os.path.join(REPO_ROOT, "workspace", "flightcheck", "results.json")
+
+_APP_ONLY_TOOL_META = {"ui": {"visibility": ["app"]}}
+_REPORT_CLIENT_EVENTS_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
+    openWorldHint=False,
+)
 
 mcp = FastMCP(
     "adk",
@@ -516,6 +526,70 @@ def _read_topic_files(agent_folder: str) -> list[tuple[str, dict[str, Any]]]:
             continue
         topics.append((os.path.splitext(os.path.splitext(file_name)[0])[0], parsed))
     return topics
+
+
+@mcp.tool(
+    meta=_APP_ONLY_TOOL_META,
+    annotations=_REPORT_CLIENT_EVENTS_ANNOTATIONS,
+)
+async def report_client_events(
+    schemaVersion: Any = None,
+    correlationId: Any = None,
+    mountId: Any = None,
+    appName: Any = None,
+    buildEnvironment: Any = None,
+    buildNumber: Any = None,
+    events: Any = None,
+    toolCallId: Any = None,
+) -> CallToolResult:
+    """Accept Vorpal client telemetry batches through the app-only bridge.
+
+    Every parameter is deliberately untyped: FastMCP validates the tool
+    signature with Pydantic *before* the body runs, so a narrowly-typed
+    signature would turn an out-of-contract envelope into a ToolError carrying
+    no ``structuredContent``. Vorpal reads a result without a ``status`` as a
+    transient failure and retries it, so a permanently malformed batch would
+    retry forever. Widening the signature routes every envelope through the
+    bridge validator, which always answers with an explicit accepted/rejected
+    verdict.
+    """
+    envelope: dict[str, Any] = {
+        "schemaVersion": schemaVersion,
+        "correlationId": correlationId,
+        "mountId": mountId,
+        "appName": appName,
+        "buildEnvironment": buildEnvironment,
+        "buildNumber": buildNumber,
+        "events": events,
+    }
+    if toolCallId is not None:
+        envelope["toolCallId"] = toolCallId
+
+    try:
+        result = adk_telemetry.report_client_events(envelope)
+    except Exception:  # noqa: BLE001 — telemetry must never break the widget
+        # Echo the sent cardinality (Vorpal retries a partial acknowledgement),
+        # but capped: this path runs when the bridge itself faulted, so the
+        # validator's batch limit has not necessarily been applied.
+        result = {
+            "status": "accepted",
+            "acceptedEventCount": (
+                min(len(events), adk_telemetry.CLIENT_EVENTS_MAX_BATCH_EVENTS)
+                if isinstance(events, list)
+                else 0
+            ),
+        }
+
+    message = (
+        f"Accepted {result['acceptedEventCount']} client telemetry event(s)."
+        if result.get("status") == "accepted"
+        else "Rejected the client telemetry batch."
+    )
+    return CallToolResult(
+        content=[TextContent(type="text", text=message)],
+        structuredContent=result,
+        isError=result.get("status") == "rejected",
+    )
 
 
 @mcp.tool()
