@@ -59,13 +59,13 @@ After the user selects a set, read
 `src/skills/evaluations/update/SKILL.md` and follow **Flow R2 — Review assigned
 test sets**, beginning with showing its prompts and expected responses.
 
-The reviewer may inspect and edit prompts or expected responses, or provide
-written recommendations for the maker without editing the source files. Invoke
-quality validation only when test cases are edited; inspection or written
-recommendations without source changes do not automatically run the quality
-gate. Never describe this workflow as "view-only."
+The reviewer inspects prompts and expected responses and provides feedback,
+suggestions, or recommendations for the maker. The reviewer does not edit
+test-case source files in this flow, so quality validation is not invoked.
+Never describe this workflow as "view-only"; it produces an actionable review
+handoff.
 
-Before ending, the reviewer must be offered a structured choice to **Edit test
-cases directly**, **Describe recommended changes for the maker**, or **Mark
-review complete without changes**. If recommendations are supplied, state that
-the maker owns the official edits, push, and subsequent evaluation run.
+Before ending, the reviewer must be offered a structured choice to **Provide
+feedback or recommendations for the maker** or **Mark review complete without
+feedback**. If recommendations are supplied, state that the maker owns the
+official edits, validation, push, and subsequent evaluation run.
