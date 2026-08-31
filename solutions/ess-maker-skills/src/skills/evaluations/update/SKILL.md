@@ -46,7 +46,8 @@ copy becomes the single local source of truth.
 - Never finish immediately after displaying test cases. Makers must receive an
   explicit choice to edit the set themselves, send it to a judge or SME for
   feedback, or keep it unchanged. Reviewers must receive an explicit choice to
-  edit directly, describe recommendations for the maker, or complete review.
+  provide feedback, suggestions, or recommendations, or complete review
+  without feedback.
 
 ## Review-intent routing
 
@@ -83,7 +84,7 @@ Use `nextAction` from the command:
 | Next action | Meaning | User-facing action |
 |---|---|---|
 | `push_review_request` | Local tag is requested, but Copilot Studio is untagged or the set is not deployed | Offer to push the review request |
-| `review` | Local and deployed status are both `review_requested` | Offer the reviewer edit/completion workflow |
+| `review` | Local and deployed status are both `review_requested` | Offer the reviewer feedback/completion workflow |
 | `push_review_completion` | Review was completed locally but Copilot Studio still has the requested tag | Offer to push the completed-review marker |
 | `run_or_view_results` | Local and deployed status are both `review_completed` | Offer run or result-history actions |
 
@@ -96,8 +97,9 @@ the latest retrieved Copilot Studio state before entering Flow R2.
 Before asking the user to tag a set, explain:
 
 > **Mark for review** indicates that the test set is ready for another
-> reviewer, judge, or SME to inspect and suggest or make changes. The tag must
-> be pushed to Copilot Studio before it is shared with other users.
+> reviewer, judge, or SME to inspect and provide feedback, suggestions, or
+> recommendations. The maker remains responsible for editing the test set. The
+> tag must be pushed to Copilot Studio before it is shared with other users.
 
 1. For a generic request such as **"tag testsets for review"**, run:
 
@@ -165,19 +167,15 @@ For each selected set:
 
    Offer:
 
-   - **Edit test cases directly**
-   - **Describe recommended changes for the maker**
-   - **Mark review complete without changes**
+   - **Provide feedback or recommendations for the maker**
+   - **Mark review complete without feedback**
 
-   Reviewers are not restricted from editing. If they choose recommendations,
-   capture and clearly summarize their proposed prompt or expected-response
-   changes in the conversation. State that the maker remains responsible for
-   applying those official changes before pushing and running the test set. Do
-   not claim that conversational recommendations were automatically written to
-   the test-set description or source files.
-
-   If test cases are edited directly, synchronize YAML and CSV and run the
-   quality gate exactly as in the normal update flow.
+   The reviewer does not edit the test-case source files in this flow. Capture
+   and clearly summarize proposed prompt or expected-response changes in the
+   conversation. State that the maker remains responsible for applying the
+   official changes, validating them, pushing the set, and running it. Do not
+   claim that conversational recommendations were automatically written to the
+   test-set description or source files.
 4. Follow **Step 6a: Review completion gate**. Do not ask about pushing before
    this gate is resolved.
 5. When the user confirms completion, run:
@@ -415,11 +413,10 @@ selected set's `review.json`. If its status is `review_requested`, ask:
 Offer:
 
 1. **Mark review complete** — confirms the review is finished and no further
-   review changes are needed.
-2. **Make further changes** — keeps the review open and returns to editing
-   prompts or expected responses.
-3. **Describe recommendations for the maker** — keeps the review open while
-   the reviewer provides a written handoff instead of editing the source files.
+   reviewer feedback is needed.
+2. **Provide feedback or recommendations for the maker** — keeps the review
+   open while the reviewer prepares a written handoff. The reviewer does not
+   edit the source files.
 
 Explain these meanings before waiting for the user's choice. Marking review
 complete closes the review state; it is not the same as initially marking a set
@@ -438,13 +435,7 @@ python scripts/evaluation_review.py --set-folder "{set-folder}" --status review_
 Confirm the local status is now `review_completed`, then continue to Step 7 and
 ask whether to push the updated files and completed-review marker together.
 
-### Make further changes
-
-Return to the selected set's edit flow. After the additional edits,
-synchronize YAML and CSV, rerun quality validation, show the updated summary,
-and return to this completion gate.
-
-### Describe recommendations for the maker
+### Provide feedback or recommendations for the maker
 
 Capture the recommendations and present them back as a concise checklist tied
 to the relevant prompts or expected responses. End with this mandatory
