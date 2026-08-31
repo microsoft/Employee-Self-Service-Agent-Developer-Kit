@@ -289,6 +289,15 @@ def test_list_attestable_roles_returns_provider_roles() -> None:
         "WorkdayAdmin",
         "ServiceNowAdmin",
         "ServiceNowKnowledgeManager",
+        "EntraGlobalAdministrator",
+        "EntraNetworkAdministrator",
+        "EntraUserAdministrator",
+        "EntraPowerPlatformAdministrator",
+        "EntraApplicationAdministrator",
+        "EntraCloudApplicationAdministrator",
+        "PowerPlatformEnvironmentMaker",
+        "PowerPlatformEnvironmentAdministrator",
+        "PowerPlatformSystemAdministrator",
     ]
 
 

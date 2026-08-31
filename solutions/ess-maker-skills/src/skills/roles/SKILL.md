@@ -62,10 +62,16 @@ auto-pick when the choice is ambiguous:
 ## Two things to know
 
 - **Only attestable roles can be attested.** Ask `list_attestable_roles` for the
-  exact set the plan accepts (today: `WorkdayAdmin`, `ServiceNowAdmin`,
-  `ServiceNowKnowledgeManager`). If the maker names anything else, explain only
-  those roles are attestable and stop — attesting a non-attestable role is
-  rejected.
+  exact set the plan accepts — that live list is the source of truth, so read it
+  rather than assuming a fixed set. It spans three provider families: the external
+  systems (`WorkdayAdmin`, `ServiceNowAdmin`, `ServiceNowKnowledgeManager`),
+  Microsoft Entra directory roles (including `EntraPowerPlatformAdministrator`,
+  `EntraGlobalAdministrator`, `EntraApplicationAdministrator`), and Power Platform
+  roles (`PowerPlatformEnvironmentMaker`, `PowerPlatformEnvironmentAdministrator`,
+  `PowerPlatformSystemAdministrator`). Map a loose name the maker uses to the
+  matching id ("the ServiceNow admin" → `ServiceNowAdmin`, "Power Platform admin"
+  → `EntraPowerPlatformAdministrator`). Only if the role genuinely isn't in that
+  list do you explain it can't be attested and stop.
 - **Attesting changes visibility.** After you attest, the person sees the plan
   and every task pooled to that role in their own "what am I assigned?" view, and
   can claim them. That is the whole point — state it back to the maker in plain

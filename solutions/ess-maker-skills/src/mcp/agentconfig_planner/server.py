@@ -390,7 +390,8 @@ async def delete_project_plan_task(
 
 @mcp.tool(annotations=_READ_ONLY_ANNOTATIONS)
 async def list_attestable_roles() -> str:
-    """List the provider-owned role identifiers accepted by plan attestation."""
+    """List the provider-owned role identifiers accepted by plan attestation
+    (across the External, Entra, and PowerPlatform providers)."""
     return _format(list(ATTESTABLE_ROLES))
 
 
@@ -427,12 +428,16 @@ async def attest_plan_role(
     etag: Optional[str] = None,
     idempotencyKey: Optional[str] = None,
 ) -> str:
-    """Attest that a subject holds an attestable role for a plan; the provider is
-    always External. Pass the compact role id — WorkdayAdmin, ServiceNowAdmin, or
-    ServiceNowKnowledgeManager (their display names Workday administrator,
-    ServiceNow Administrator, ServiceNow Knowledge Manager are also accepted); the
-    tool sends the display name the backend validates against. Omit etag for a
-    first attestation; pass an existing assignment's strong ETag to converge
+    """Attest that a subject holds an attestable role for a plan. Pass a compact
+    role id from list_attestable_roles; the backend's attestable set spans three
+    providers - External (WorkdayAdmin, ServiceNowAdmin, ServiceNowKnowledgeManager),
+    Entra directory roles (e.g. EntraPowerPlatformAdministrator,
+    EntraGlobalAdministrator, EntraApplicationAdministrator), and PowerPlatform
+    (e.g. PowerPlatformEnvironmentMaker, PowerPlatformSystemAdministrator). Each
+    role's display name and owning provider are derived from the role, so the
+    provider is never a free choice (the backend rejects a mismatched provider);
+    a role's display name is also accepted in place of its compact id. Omit etag
+    for a first attestation; pass an existing assignment's strong ETag to converge
     (never the plan's weak ETag)."""
     return _format(
         await get_client().attest_plan_role(

@@ -57,8 +57,8 @@ manual/portal step), and you capture what it produced in Phase 6.
 
 ## Nudge — put real people on the attestable roles
 
-Some Tasks are pooled to an **attestable role** (`ServiceNowAdmin`,
-`WorkdayAdmin`, `ServiceNowKnowledgeManager`) rather than a named person. Pooled
+Some Tasks are pooled to an **attestable role** (e.g. `ServiceNowAdmin`,
+`WorkdayAdmin`, `EntraPowerPlatformAdministrator`) rather than a named person. Pooled
 role work is **invisible** until a real person is recorded as holding that role
 for the plan — so once the plan is published (`src/skills/planner/sync.md`), nudge
 the sponsor to assign those roles to real people. That is what makes the work show
@@ -70,8 +70,8 @@ are my tasks?".
 
 ## Future — resolve the person from an external roles API
 
-For an **attestable** role (`ServiceNowAdmin`, `WorkdayAdmin`,
-`ServiceNowKnowledgeManager`) the person side is already wired: the roles skill
+For an **attestable** role (e.g. `ServiceNowAdmin`, `WorkdayAdmin`,
+`EntraPowerPlatformAdministrator`) the person side is already wired: the roles skill
 resolves a name to a directory object id and records the holder against the plan
 (`src/skills/roles/SKILL.md`). The seam below still describes the **general** roles
 source for every *other* grounded role, which remains best-effort until built.

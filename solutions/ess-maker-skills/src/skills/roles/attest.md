@@ -6,11 +6,17 @@ Now record it.
 
 ## 1. Validate the role
 
-Call `list_attestable_roles`. If the role the maker asked for isn't in that set,
-stop and explain only those roles can be attested (today `WorkdayAdmin`,
-`ServiceNowAdmin`, `ServiceNowKnowledgeManager`) — offer the closest match if the
-maker used a loose name ("the ServiceNow admin" → `ServiceNowAdmin`). Confirm the
-exact role with the maker before you write anything.
+Call `list_attestable_roles` — that live list is the source of truth for what the
+plan accepts, and it spans three provider families: the external systems
+(`WorkdayAdmin`, `ServiceNowAdmin`, `ServiceNowKnowledgeManager`), Microsoft Entra
+directory roles (including `EntraPowerPlatformAdministrator`,
+`EntraGlobalAdministrator`, `EntraApplicationAdministrator`), and Power Platform
+roles (`PowerPlatformEnvironmentMaker`, `PowerPlatformEnvironmentAdministrator`,
+`PowerPlatformSystemAdministrator`). Map a loose name the maker uses to the
+matching id ("the ServiceNow admin" → `ServiceNowAdmin`, "Power Platform admin" →
+`EntraPowerPlatformAdministrator`). Only if the role genuinely isn't in that list
+do you stop and explain it can't be attested. Confirm the exact role with the
+maker before you write anything.
 
 ## 2. Attest
 

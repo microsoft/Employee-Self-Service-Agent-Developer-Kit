@@ -524,6 +524,42 @@ def test_attest_accepts_role_display_name_and_sends_it_verbatim(monkeypatch) -> 
     assert json.loads(attesting.content)["role"] == "ServiceNow Administrator"
 
 
+def test_attest_non_external_role_sends_its_owning_provider(monkeypatch) -> None:
+    # A non-External attestable role must go out with the provider that owns it,
+    # derived from the role rather than the legacy hard-coded "External". Power
+    # Platform Administrator is owned by the Entra provider on the backend.
+    requests, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+
+    _run(
+        client,
+        lambda: client.attest_plan_role(
+            "plan1", "subject-oid", "EntraPowerPlatformAdministrator"
+        ),
+    )
+
+    body = json.loads(next(r for r in requests if r.method == "POST").content)
+    assert body["role"] == "Power Platform Administrator"
+    assert body["provider"] == "Entra"
+
+
+def test_attest_rejects_provider_that_does_not_own_the_role(monkeypatch) -> None:
+    # An explicit provider is allowed but must match the role's owner; the
+    # backend would otherwise reject the mismatch, so the client catches it first.
+    _, handler = _recorder()
+    client = _make_client(monkeypatch, handler)
+    with pytest.raises(ValueError, match="Entra"):
+        _run(
+            client,
+            lambda: client.attest_plan_role(
+                "plan1",
+                "subject-oid",
+                "EntraPowerPlatformAdministrator",
+                provider="PowerPlatform",
+            ),
+        )
+
+
 def test_planner_api_error_surfaces_target_and_details(monkeypatch) -> None:
     # The generic top-level Message is opaque ("...sent a bad request..."); the
     # planner overrides the error formatter to surface Target + Details[] so the
@@ -591,10 +627,36 @@ def test_planner_responses_are_returned_without_key_transformation(
 
 
 def test_attestable_roles_constant_is_the_provider_owned_set() -> None:
+    # Mirrors the backend AttestableAuthorizationRoles registry: the three
+    # External roles first (preserving the prior ordering/behaviour), then the
+    # Entra directory roles, then the Power Platform roles.
     assert roles_module.ATTESTABLE_ROLES == (
         "WorkdayAdmin",
         "ServiceNowAdmin",
         "ServiceNowKnowledgeManager",
+        "EntraGlobalAdministrator",
+        "EntraNetworkAdministrator",
+        "EntraUserAdministrator",
+        "EntraPowerPlatformAdministrator",
+        "EntraApplicationAdministrator",
+        "EntraCloudApplicationAdministrator",
+        "PowerPlatformEnvironmentMaker",
+        "PowerPlatformEnvironmentAdministrator",
+        "PowerPlatformSystemAdministrator",
+    )
+    # Each role resolves to its (display name, owning provider). The provider is
+    # a fixed property of the role, spanning all three attestation providers.
+    assert roles_module.ATTESTABLE_ROLE_DEFINITIONS["WorkdayAdmin"] == (
+        "Workday administrator",
+        "External",
+    )
+    assert roles_module.ATTESTABLE_ROLE_DEFINITIONS["EntraPowerPlatformAdministrator"] == (
+        "Power Platform Administrator",
+        "Entra",
+    )
+    assert roles_module.ATTESTABLE_ROLE_DEFINITIONS["PowerPlatformEnvironmentMaker"] == (
+        "Environment Maker",
+        "PowerPlatform",
     )
 
 

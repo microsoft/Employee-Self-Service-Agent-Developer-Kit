@@ -1,8 +1,9 @@
 # Roles — nudge role assignment when a plan is created
 
 When a plan is published, some of its tasks are pooled to **roles**
-(`ServiceNowAdmin`, `WorkdayAdmin`, `ServiceNowKnowledgeManager`) rather than to
-named people. Until a real person is attested into each of those roles, that work
+(e.g. `ServiceNowAdmin`, `WorkdayAdmin`, `EntraPowerPlatformAdministrator`) rather
+than to named people. Until a real person is attested into each of those roles,
+that work
 is **invisible** — nobody's "what am I assigned?" view shows it, so it silently
 stalls. This nudge closes that gap at the moment the plan is created.
 

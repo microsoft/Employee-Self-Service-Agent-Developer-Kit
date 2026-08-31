@@ -34,26 +34,96 @@ from _odata import (  # noqa: E402
 
 _ROLE_ASSIGNMENTS_RESOURCE = "agentRoleAssignments"
 
-# Only the provider-owned attestable roles are valid; legacy agent/task roles
-# are retired.
-ATTESTABLE_ROLES = ("WorkdayAdmin", "ServiceNowAdmin", "ServiceNowKnowledgeManager")
+# Attestation providers accepted by the backend's attest action. The native
+# ``AgentConfiguration`` provider is grant-only and is never valid for
+# attestation, so it is deliberately absent here.
+PROVIDER_EXTERNAL = "External"
+PROVIDER_ENTRA = "Entra"
+PROVIDER_POWER_PLATFORM = "PowerPlatform"
+ATTESTATION_PROVIDERS = (PROVIDER_EXTERNAL, PROVIDER_ENTRA, PROVIDER_POWER_PLATFORM)
 
-# The attest action's ``role`` field validates against the provider's
-# human-readable display names, NOT the compact ids used everywhere else (the
-# ATTESTABLE_ROLES constant, the roleId list filter, and the skill
-# instructions). Map each compact id the caller passes to the exact display
-# string the backend requires. Verified against the live AgentConfiguration
-# service: posting a compact id (e.g. "ServiceNowAdmin") returns 400
-# "role must be one of Workday administrator, ServiceNow Administrator,
-# ServiceNow Knowledge Manager." while the display name is accepted (201).
-ATTESTABLE_ROLE_WIRE_NAMES = {
-    "WorkdayAdmin": "Workday administrator",
-    "ServiceNowAdmin": "ServiceNow Administrator",
-    "ServiceNowKnowledgeManager": "ServiceNow Knowledge Manager",
+# Provider-owned attestable roles, mirroring the backend registry
+# ``AttestableAuthorizationRoles`` (core/core/AgentConfiguration/Authorization/
+# AttestableAuthorizationRoles.cs in o365exchange / "O365 Core" / WeveNova).
+# There is no discovery endpoint for this set - it is a closed compile-time
+# catalog on the service - so this table is a hand-maintained mirror and MUST
+# stay in lockstep with the backend. The attest action validates ``role``
+# against each provider's human-readable display names (NOT the compact ids used
+# everywhere else), and additionally rejects any attest whose asserted provider
+# doesn't own the role. So each role carries a fixed owning provider, and attest
+# derives that provider from the role rather than trusting the caller. Verified
+# against the live service: posting a compact id (e.g. "ServiceNowAdmin") returns
+# 400 "role must be one of Workday administrator, ServiceNow Administrator,
+# ServiceNow Knowledge Manager." while the display name under its owning provider
+# is accepted (201).
+_ROLES_BY_PROVIDER: dict[str, dict[str, str]] = {
+    # External - upstream systems with no queryable Microsoft directory.
+    PROVIDER_EXTERNAL: {
+        "WorkdayAdmin": "Workday administrator",
+        "ServiceNowAdmin": "ServiceNow Administrator",
+        "ServiceNowKnowledgeManager": "ServiceNow Knowledge Manager",
+    },
+    # Entra - Microsoft Entra ID directory roles.
+    PROVIDER_ENTRA: {
+        "EntraGlobalAdministrator": "Global Administrator",
+        "EntraNetworkAdministrator": "Network Administrator",
+        "EntraUserAdministrator": "User Administrator",
+        "EntraPowerPlatformAdministrator": "Power Platform Administrator",
+        "EntraApplicationAdministrator": "Application Administrator",
+        "EntraCloudApplicationAdministrator": "Cloud Application Administrator",
+    },
+    # Power Platform - Dataverse / environment roles.
+    PROVIDER_POWER_PLATFORM: {
+        "PowerPlatformEnvironmentMaker": "Environment Maker",
+        "PowerPlatformEnvironmentAdministrator": "Environment Administrator",
+        "PowerPlatformSystemAdministrator": "System Administrator",
+    },
 }
+
+# Compact id -> (wire display name, owning provider). Flattened from the
+# provider-grouped source above; External roles stay first so pre-existing
+# ordering and behaviour are preserved.
+ATTESTABLE_ROLE_DEFINITIONS: dict[str, tuple[str, str]] = {
+    role_id: (wire, provider)
+    for provider, roles in _ROLES_BY_PROVIDER.items()
+    for role_id, wire in roles.items()
+}
+
+# The compact role ids, in registry order - what ``list_attestable_roles``
+# returns and what ``create_role_assigned_project_plan_task`` validates against.
+ATTESTABLE_ROLES = tuple(ATTESTABLE_ROLE_DEFINITIONS)
+
+# Compact id -> wire display name. Retained as a public alias (callers and tests
+# reference it), derived from the single source of truth above.
+ATTESTABLE_ROLE_WIRE_NAMES = {
+    role_id: wire for role_id, (wire, _provider) in ATTESTABLE_ROLE_DEFINITIONS.items()
+}
+
+# Wire display name -> owning provider, for callers that pass a display name.
+_WIRE_NAME_TO_PROVIDER = {
+    wire: provider for wire, provider in ATTESTABLE_ROLE_DEFINITIONS.values()
+}
+
+
+def resolve_attestable_role(role: str) -> tuple[str, str]:
+    """Resolve a caller-supplied role - a compact id (``WorkdayAdmin``) or the
+    backend wire display name (``Workday administrator``) - to its
+    ``(wire display name, owning provider)``. Raise ``ValueError`` listing the
+    accepted values when the role is not attestable."""
+    if role in ATTESTABLE_ROLE_DEFINITIONS:
+        return ATTESTABLE_ROLE_DEFINITIONS[role]
+    if role in _WIRE_NAME_TO_PROVIDER:
+        return role, _WIRE_NAME_TO_PROVIDER[role]
+    raise ValueError(
+        "role must be one of "
+        + ", ".join(ATTESTABLE_ROLES)
+        + " (compact ids) or their display names "
+        + ", ".join(ATTESTABLE_ROLE_WIRE_NAMES.values())
+    )
+
+
 _ROLE_ASSIGNMENT_STATUSES = ("Active", "Revoked")
 _ROLE_ASSIGNMENT_ORDERBY = ("createdAt asc", "createdAt desc")
-_ATTESTATION_PROVIDER = "External"
 
 
 class RolesMixin:
@@ -126,25 +196,23 @@ class RolesMixin:
         plan_id: str,
         subject_id: str,
         role: str,
-        provider: str = _ATTESTATION_PROVIDER,
+        provider: Optional[str] = None,
         etag: Optional[str] = None,
         idempotency_key: Optional[str] = None,
     ) -> Any:
         if not isinstance(subject_id, str) or not subject_id.strip():
             raise ValueError("subjectId is required")
-        if role in ATTESTABLE_ROLE_WIRE_NAMES:
-            wire_role = ATTESTABLE_ROLE_WIRE_NAMES[role]
-        elif role in ATTESTABLE_ROLE_WIRE_NAMES.values():
-            wire_role = role
-        else:
+        # A role's provider is fixed by the backend registry (the service rejects
+        # any attest whose provider doesn't own the role), so resolve both the
+        # wire display name and the owning provider from the role. ``provider``
+        # stays accepted for explicit callers, but when supplied it must match
+        # the role's owner rather than override it.
+        wire_role, role_provider = resolve_attestable_role(role)
+        if provider is not None and provider != role_provider:
             raise ValueError(
-                "role must be one of "
-                + ", ".join(ATTESTABLE_ROLES)
-                + " (compact ids) or their display names "
-                + ", ".join(ATTESTABLE_ROLE_WIRE_NAMES.values())
+                f"role '{wire_role}' is owned by provider '{role_provider}', "
+                f"not '{provider}'"
             )
-        if provider != _ATTESTATION_PROVIDER:
-            raise ValueError("provider must be External for plan attestation")
         if not isinstance(plan_id, str) or not plan_id.strip():
             raise ValueError("planId is required")
         body = {
@@ -154,7 +222,8 @@ class RolesMixin:
             # pass the compact id used elsewhere in the family.
             "role": wire_role,
             "target": {"type": "Plan", "id": plan_id},
-            "provider": provider,
+            # Attestation is provider-scoped; send the role's owning provider.
+            "provider": role_provider,
         }
         # Attest is a deterministic-row upsert on the backend: a given
         # (subject, role, target) resolves to one stable assignment row (an
