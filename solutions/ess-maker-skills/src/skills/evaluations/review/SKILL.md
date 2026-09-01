@@ -8,9 +8,28 @@ evaluation validate subagent when entering this skill.
 
 ## Step 1: Discover tagged test sets
 
-For configured agents, the reviewer must first have the latest Copilot Studio
-data pulled through setup/refresh. The local working status alone is not proof
-that the tag was pushed.
+The reviewer must not be asked to pull or refresh test sets manually.
+
+Read `.local/config.json`. When a configured agent is available, automatically
+refresh it before listing review work:
+
+```text
+python scripts/fetch_and_setup.py --refresh
+```
+
+The refresh flow creates a checkpoint before replacing local agent files and
+rebuilds the baseline from the latest Copilot Studio state. Show a short
+progress message such as:
+
+> Refreshing the latest evaluation test sets from Copilot Studio...
+
+Do not ask for a separate confirmation or instruct the reviewer to run
+`/setup --refresh`. If refresh fails, report the actual authentication, API, or
+setup error and stop rather than presenting a stale review list.
+
+When no configured agent exists, skip the refresh and continue discovery so
+the command can report any eligible local state. The local working status alone
+is not proof that a configured-agent review tag was pushed.
 
 From the solution root, run:
 
