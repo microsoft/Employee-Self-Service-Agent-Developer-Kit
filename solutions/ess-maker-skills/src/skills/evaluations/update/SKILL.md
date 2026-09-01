@@ -133,8 +133,20 @@ The pushed parent description contains:
 
 ### Flow R2 — Review assigned test sets
 
-Setup continues to pull all evaluation test sets. When a user asks to review
-test sets, run:
+When a user asks to review test sets, automatically refresh the configured
+agent before discovery unless `fetch_and_setup.py --refresh` already completed
+successfully in the current turn:
+
+```text
+python scripts/fetch_and_setup.py --refresh
+```
+
+This refresh creates a checkpoint before updating local files and rebuilds the
+baseline from the latest Copilot Studio state. Do not ask the reviewer to pull
+manually or require an extra `/setup --refresh` step. If the refresh fails,
+report the actual error and stop rather than reviewing stale local data.
+
+After a successful refresh, run:
 
 ```text
 python scripts/evaluation_review.py --list --status review_requested

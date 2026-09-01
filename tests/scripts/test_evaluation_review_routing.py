@@ -47,6 +47,22 @@ def test_review_route_does_not_require_setup_for_workspace_sets():
     assert "Workspace-level evaluation updates and review-tag workflows do not" in update_prompt
 
 
+def test_reviewer_flow_refreshes_configured_agent_automatically():
+    review_skill = _normalized("src/skills/evaluations/review/SKILL.md")
+    update_skill = _normalized("src/skills/evaluations/update/SKILL.md")
+
+    for skill in (review_skill, update_skill):
+        assert "python scripts/fetch_and_setup.py --refresh" in skill
+        assert "creates a checkpoint" in skill
+        assert "Do not ask" in skill
+        assert "/setup --refresh" in skill
+        assert "rather than" in skill
+        assert "stale" in skill
+
+    assert "The reviewer must not be asked to pull or refresh test sets manually" in review_skill
+    assert "unless `fetch_and_setup.py --refresh` already completed successfully in the current turn" in update_skill
+
+
 def test_generic_tag_request_requires_all_sets_and_explicit_selection():
     update_skill = _read("src/skills/evaluations/update/SKILL.md")
 
