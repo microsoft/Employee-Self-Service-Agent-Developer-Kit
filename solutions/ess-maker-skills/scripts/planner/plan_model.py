@@ -34,6 +34,7 @@ Nothing here reaches the network; it is pure data + local file IO.
 
 from __future__ import annotations
 
+import heapq
 import json
 import os
 from datetime import datetime, timezone
@@ -62,6 +63,17 @@ ARTIFACT_STATES = ("Active", "Superseded")
 PRINCIPAL_TYPES = ("User", "Role")
 CONTEXT_SOURCES = ("User", "Agent", "Discovered")
 ARTIFACT_KINDS = ("Environment", "Connection", "EntraApp", "KnowledgeSource", "Agent", "Custom")
+# Plan lifecycle vocab (mirrors the WeveNova PlanStatus enum). A local plan lives
+# in Draft until the sync seam pushes and activates it server-side.
+PLAN_STATES = ("Draft", "Active", "Completed", "Archived")
+# The ESS agent a plan configures (mirrors the WeveNova ConfiguringAgentName enum).
+# Required on the create body, so a plan must name one before it can be pushed.
+CONFIGURING_AGENT_NAMES = (
+    "EmployeeSelfServiceHRCEA",
+    "EmployeeSelfServiceHRDA",
+    "EmployeeSelfServiceITCEA",
+    "EmployeeSelfServiceITDA",
+)
 # The ledger key the /setup task produces and downstream tasks consume — the
 # grounded signal used to identify the setup task and env-dependent tasks. A Task
 # is described only by its title + description (matching the WeveNova Task
@@ -75,6 +87,10 @@ DEPENDENCY_KINDS = ("requires", "recommends")
 SCENARIO_GROUP = "scenario"
 DEPENDS_ON_GROUP = "scenarioDependsOn"
 _DEP_SEP = " -> "
+# Acceptance criteria (definition-of-done) live in the open Context bag under this
+# group so the local model stays a single bag; the sync seam promotes them to the
+# WeveNova Plan's first-class acceptanceCriteria list on export and back on import.
+ACCEPTANCE_GROUP = "acceptanceCriteria"
 
 
 class Limits:
@@ -285,10 +301,13 @@ class Plan:
             "schemaVersion": SCHEMA_VERSION,
             "planId": "",
             "projectId": "",
+            "configuringAgentName": "",
             "status": "Draft",
             "context": [],
             "tasks": [],
             "outputs": [],
+            "etag": "",
+            "syncedAt": "",
         }
         plan = cls(data)
         if objective:
@@ -305,7 +324,7 @@ class Plan:
         data.setdefault("schemaVersion", SCHEMA_VERSION)
         for key in ("context", "tasks", "outputs"):
             data.setdefault(key, [])
-        for key in ("planId", "projectId"):
+        for key in ("planId", "projectId", "configuringAgentName", "etag", "syncedAt"):
             data.setdefault(key, "")
         data.setdefault("status", "Draft")
         return cls(data)
@@ -367,6 +386,46 @@ class Plan:
             if t.get("id") == task_id:
                 return t
         return None
+
+    # ---- remote identity (sync seam) ------------------------------------ #
+
+    @property
+    def configuring_agent_name(self) -> str:
+        return self.data.get("configuringAgentName", "")
+
+    def set_configuring_agent_name(self, name: str) -> None:
+        """Name the ESS agent this plan configures — required before a sync push.
+
+        Must be one of :data:`CONFIGURING_AGENT_NAMES` (mirrors the WeveNova
+        ``ConfiguringAgentName`` enum).
+        """
+        if name not in CONFIGURING_AGENT_NAMES:
+            raise ValueError(
+                "configuringAgentName must be one of " + ", ".join(CONFIGURING_AGENT_NAMES)
+            )
+        self.data["configuringAgentName"] = name
+
+    def set_remote_identity(
+        self,
+        *,
+        project_id: str | None = None,
+        plan_id: str | None = None,
+        etag: str | None = None,
+        synced_at: str | None = None,
+    ) -> None:
+        """Record the server ids / ETag this local cache now mirrors (sync seam).
+
+        ``syncedAt`` is refreshed to *now* unless an explicit value is given.
+        Only the arguments that are not ``None`` are written, so a partial stamp
+        (e.g. project id before the plan exists) leaves the rest untouched.
+        """
+        if project_id is not None:
+            self.data["projectId"] = project_id
+        if plan_id is not None:
+            self.data["planId"] = plan_id
+        if etag is not None:
+            self.data["etag"] = etag
+        self.data["syncedAt"] = synced_at if synced_at is not None else now_iso()
 
     # ---- context (intent) mutators -------------------------------------- #
 
@@ -570,6 +629,52 @@ class Plan:
             resolved[key] = art.get("attributes", {}) if art else None
         return resolved
 
+    def blocking_inputs(self, task_id: str) -> dict[str, list[str]]:
+        """The task's consumed keys that have **no Active artifact yet**, each
+        mapped to the task ids declared to produce them.
+
+        This is the produces/consumes readiness signal: a task cannot truly
+        start (nor be legitimately ``Completed``) while it consumes an artifact
+        nothing has produced. Returns ``{key: [producerTaskId, ...]}`` for every
+        unmet key — the producer list is empty for an external input no task in
+        the plan produces. A task with no entry here is ready on the artifact
+        model. Pure/read-only: reflects the current ledger, never mutates it."""
+        task = self.task(task_id)
+        if not task:
+            return {}
+        unmet: dict[str, list[str]] = {}
+        for key in (task.get("consumes") or []):
+            if self.output(key) is not None:
+                continue  # satisfied by an Active artifact
+            producers = [
+                t.get("id")
+                for t in self.tasks
+                if key in (t.get("produces") or []) and t.get("id") != task_id
+            ]
+            unmet[key] = [p for p in producers if p]
+        return unmet
+
+    def waiting_on(self, task_id: str) -> list[str]:
+        """Flattened, de-duplicated, sorted list of what a task is blocked on:
+        the upstream producer task ids for its unproduced consumed artifacts,
+        plus ``needs <key>`` for any consumed key nothing in the plan produces.
+        Empty when the task is ready. Drives the task-list dependency marker."""
+        tokens: list[str] = []
+        for key, producers in self.blocking_inputs(task_id).items():
+            if producers:
+                tokens.extend(producers)
+            else:
+                tokens.append(f"needs {key}")
+        return sorted(dict.fromkeys(tokens))
+
+    def dependency_marker(self, task_id: str) -> str:
+        """Compact task-list marker for artifact readiness: ``""`` when the task
+        is ready (all consumed artifacts produced, or it consumes nothing), else
+        the comma-joined :meth:`waiting_on` tokens (e.g. ``"T2"`` or
+        ``"T1, T2"``). Render-time only — reflects the produces/consumes ledger,
+        never mutates it, and never changes stored task sequence or state."""
+        return ", ".join(self.waiting_on(task_id))
+
     def setup_task_id(self) -> str | None:
         """The plan's setup task id — the task that **produces** the primary
         environment (`primaryEnvironment`), i.e. the ``/setup`` task. Prefers the
@@ -634,6 +739,7 @@ class Plan:
             "state": task.get("state", ""),
             "kitSetup": self.kit_setup_nudge(task_id),
             "consumes": self.resolved_consumes(task_id),
+            "blockedBy": self.blocking_inputs(task_id),
             "produces": list(task.get("produces", [])),
         }
 
@@ -756,16 +862,20 @@ class Plan:
         """
         role_set = set(roles)
         grouped: dict[str, list[dict[str, Any]]] = {}
-        for task in self.tasks:
+        for task in self.ordered_tasks():
             if task.get("state") == "Completed":
                 continue  # Flow 2 surfaces work still waiting, not finished tasks
             assigned = task.get("assignedTo") or {}
             role = assignee_role_id(assigned) or "(no role)"
             owner = assignee_user_oid(assigned)
             if assigned.get("type") == "User" and owner == person_oid:
-                grouped.setdefault(role, []).append({"task": task, "relation": "assigned"})
+                grouped.setdefault(role, []).append(
+                    {"task": task, "relation": "assigned", "waitingOn": self.waiting_on(task.get("id"))}
+                )
             elif assigned.get("type") == "Role" and assignee_role_id(assigned) in role_set:
-                grouped.setdefault(role, []).append({"task": task, "relation": "pool"})
+                grouped.setdefault(role, []).append(
+                    {"task": task, "relation": "pool", "waitingOn": self.waiting_on(task.get("id"))}
+                )
         return grouped
 
     # ---- validation ------------------------------------------------------ #
@@ -777,6 +887,10 @@ class Plan:
 
         if d.get("schemaVersion") != SCHEMA_VERSION:
             errors.append(f"schemaVersion should be {SCHEMA_VERSION}")
+
+        agent_name = d.get("configuringAgentName")
+        if agent_name and agent_name not in CONFIGURING_AGENT_NAMES:
+            errors.append(f"invalid configuringAgentName: {agent_name!r}")
 
         # Context
         if len(self.context) > Limits.MAX_CONTEXT_ENTRIES:
@@ -877,6 +991,57 @@ class Plan:
 
     # ---- rendering ------------------------------------------------------- #
 
+    def ordered_tasks(self) -> list[dict[str, Any]]:
+        """Tasks in execution order: a task that **produces** an artifact another
+        task **consumes** is listed before that consumer.
+
+        A stable topological sort over the ``produces``/``consumes`` ledger.
+        Tasks with no dependency between them keep their original order (ties
+        break by original position), so the view only reorders where a real
+        producer -> consumer edge forces it. A ``produces``/``consumes`` cycle
+        degrades gracefully — tasks still tangled in it are appended in original
+        order — so rendering never drops or duplicates a task. Pure: it does not
+        mutate the stored task order (the shared planner stays authoritative on
+        sequence; this is a render-time convenience only)."""
+        tasks = self.tasks
+        n = len(tasks)
+        if n < 2:
+            return list(tasks)
+        # Map each produced key to the task positions that produce it.
+        producer_positions: dict[str, list[int]] = {}
+        for i, task in enumerate(tasks):
+            for key in (task.get("produces") or []):
+                producer_positions.setdefault(key, []).append(i)
+        # Edge producer -> consumer for every consumed key; indegree per consumer.
+        successors: list[set[int]] = [set() for _ in range(n)]
+        indegree = [0] * n
+        for i, task in enumerate(tasks):
+            producers: set[int] = set()
+            for key in (task.get("consumes") or []):
+                for p in producer_positions.get(key, []):
+                    if p != i:
+                        producers.add(p)
+            for p in producers:
+                if i not in successors[p]:
+                    successors[p].add(i)
+                    indegree[i] += 1
+        # Kahn's algorithm; original position as a stable tie-break so
+        # independent tasks never shuffle.
+        ready = [i for i in range(n) if indegree[i] == 0]
+        heapq.heapify(ready)
+        order: list[int] = []
+        while ready:
+            i = heapq.heappop(ready)
+            order.append(i)
+            for j in sorted(successors[i]):
+                indegree[j] -= 1
+                if indegree[j] == 0:
+                    heapq.heappush(ready, j)
+        if len(order) < n:  # produces/consumes cycle — keep the rest as-is.
+            placed = set(order)
+            order.extend(i for i in range(n) if i not in placed)
+        return [tasks[i] for i in order]
+
     def render_summary(self) -> str:
         """A human-readable Markdown view of the Plan — the editable surface a Plan
         editor revises directly; edits are reconciled back into plan.json
@@ -887,7 +1052,11 @@ class Plan:
         lines.append(f"# Scenario plan — {objective}")
         lines.append("")
         planid = d.get("planId") or "(local, not synced)"
-        lines.append(f"Status: {d.get('status', '')}  |  Plan: {planid}")
+        agent = d.get("configuringAgentName") or "(agent not set)"
+        header = f"Status: {d.get('status', '')}  |  Agent: {agent}  |  Plan: {planid}"
+        if d.get("syncedAt"):
+            header += f"  |  Synced: {d.get('syncedAt')}"
+        lines.append(header)
         lines.append("")
 
         # Intent, grouped.
@@ -908,12 +1077,13 @@ class Plan:
         lines.append("## Tasks")
         lines.append("")
         if self.tasks:
-            lines.append("| # | Task | Role / owner | State |")
-            lines.append("|---|------|--------------|-------|")
-            for task in self.tasks:
+            lines.append("| # | Task | Role / owner | State | Blocked by |")
+            lines.append("|---|------|--------------|-------|------------|")
+            for task in self.ordered_tasks():
+                marker = self.dependency_marker(task.get("id")) or "—"
                 lines.append(
                     f"| {task.get('id')} | {task.get('title')} | "
-                    f"{_render_assignee(task.get('assignedTo'))} | {task.get('state')} |"
+                    f"{_render_assignee(task.get('assignedTo'))} | {task.get('state')} | {marker} |"
                 )
         else:
             lines.append("_No tasks yet._")

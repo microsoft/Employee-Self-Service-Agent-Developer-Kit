@@ -21,6 +21,15 @@ each role they hold** — which naturally covers a person with more than one rol
    - Open **pools** for a role they hold ("open to your role"), which they can
      pick up.
 
+   Each task line also carries a **dependency marker** when it isn't ready yet:
+   `[blocked by <T#, ...>]` names the upstream task(s) that must still produce an
+   artifact this task consumes (or `[blocked by needs <key>]` for an input
+   nothing in the plan produces). No marker == ready to start on the
+   produces/consumes model. Surface it in plain language — e.g. "you can start
+   this now" vs. "this waits on T2 (Build topic) to finish first" — so the person
+   knows what to do next rather than picking up a task they can't complete. The
+   `--json` form exposes the same signal as a `waitingOn` list per task.
+
 3. **Claiming a pooled Task.** If they take a pooled Task, record them as the
    owner (the role is retained):
 

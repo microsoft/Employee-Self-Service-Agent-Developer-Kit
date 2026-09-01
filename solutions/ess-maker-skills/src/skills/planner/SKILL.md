@@ -8,7 +8,9 @@ work, and captures Task outputs (starting with the environment `/setup`
 **connects to** — it records an already-deployed agent/environment, it does not
 create one) so later Tasks read them straight off the Plan.
 
-The Plan lives at `workspace/plan/plan.json`. Its human view —
+The Plan lives at `workspace/plan/plan.json` — a local **cache** of the shared
+planner (the service every maker on the agent shares; pull/push flow in
+`src/skills/planner/sync.md`). Its human view —
 `workspace/plan/ESS-scenario-plan.md` — is an **editable** surface a Plan editor
 can revise directly (or edit and re-upload); you reconcile their edits back into
 the plan (`src/skills/planner/edit.md`). The CLI regenerates it after every change.
@@ -33,28 +35,57 @@ Every other skill requires `.local/config.json` with `setup: "complete"`.
 `/planner` is the exception: on a greenfield tenant the environment doesn't
 exist yet, and the first Task the Plan emits is usually "run setup". So:
 
-1. Read `.local/config.json` if it exists (to reuse the environment/agent
+1. **Make the planner's tools reachable — invisibly.** The planner talks to the
+   shared planner (and, for person resolution, the WorkIQ fallback) through MCP
+   servers a clean workspace hasn't registered yet, and `/setup` — which would
+   otherwise wire them — may not have run. Materialize the committed defaults so
+   those servers reach the MCP host:
+   `python scripts/mcp_config.py materialize-defaults`. It is idempotent and
+   preserves any existing overrides, so it's safe to run on every entry. Never
+   narrate this to the sponsor.
+2. Read `.local/config.json` if it exists (to reuse the environment/agent
    details and enable output capture).
-2. Whether or not setup is complete, **proceed** with planning.
+3. Whether or not setup is complete, **proceed** with planning.
 
 ## First — resume an existing plan, or start a new one
 
 **Always begin here. Do NOT ask for the objective (or anything else) until you
 have checked for an existing plan.**
 
-1. Check whether a plan already exists at `workspace/plan/plan.json`.
-2. **If a plan exists, resume it — do not re-interview and do not ask for the
-   objective again.**
+1. **Pull from the shared planner first — invisibly.** Before deciding anything,
+   bring the shared planner's copy down: get-or-create the ESS project (concrete
+   tool + CLI flow: `src/skills/planner/sync.md`). A project has **at most one
+   active plan** — activating a plan archives whatever was active before — and the
+   project entity names it in **`activePlanId`**, so there is never a "which
+   plan?" choice:
+   - **`activePlanId` is set** → that is the plan; hydrate the local cache from it
+     and resume it.
+   - **`activePlanId` is null** → there may be an un-activated **Draft**. Call
+     `list_project_plans` (it returns only non-archived plans) and, if it returns
+     one, hydrate and resume it. Never guess and never fall back to "the most
+     recently updated".
+   - **No plan on the service** → use whatever is already in
+     `workspace/plan/plan.json` (a local draft not yet pushed), if anything.
+   If the service can't be reached, just use whatever is already in
+   `workspace/plan/plan.json`. Then check whether a plan now exists locally
+   (freshly pulled, or a local draft not yet pushed).
+2. **Once the plan is loaded, resume it — do not re-interview and do not ask for
+   the objective again.**
    - Show its latest state: `python scripts/planner/cli.py summary` — the
      objective, every task and its state, scenario dependencies, and what's been
-     produced so far. Present it in plain language.
+     produced so far. The task table's **Blocked by** column is the render-time
+     dependency marker: it names the upstream task(s) that still owe an artifact
+     this task consumes (`—` == ready). Call out blocked tasks when you present
+     the plan so nobody starts a task whose inputs don't exist yet. Present it in
+     plain language.
    - Show the **tasks that can be picked up now**, *role-gated* to the person in
-     front of you (Flow 2 — read `src/skills/planner/mytasks.md`): the tasks
-     assigned to them or open to a role they hold, that aren't already Completed.
-     A task is shown **only** if the person holds the role it needs. Role
-     resolution is best-effort until the roles source / MCP exists — resolve the
-     caller's identity or ask which of the plan's roles are theirs, then show only
-     those roles' tasks.
+     front of you (Flow 2): the shared planner already stores the role→person
+     mapping, so ask it for the caller's tasks with
+     `list_project_plan_tasks_for_caller` and present exactly what comes back
+     (`src/skills/planner/sync.md`). Only when the service is unreachable, fall
+     back to the local best-effort gating in `src/skills/planner/mytasks.md`
+     (resolve the caller's identity or ask which of the plan's roles are theirs,
+     then show only those roles' tasks).
    - Offer next actions: **continue/extend** the plan (add or assign tasks),
      **edit** the plan — they can revise the ESS scenario plan Markdown directly
      or just say what to change, and you reconcile it (`src/skills/planner/edit.md`),
@@ -69,11 +100,19 @@ have checked for an existing plan.**
    create one after you have their one-line goal, then build it through the
    phases below:
    `python scripts/planner/cli.py init --objective "<their goal>"` → Phase 1.
+   The moment the plan is built, **publish it automatically** to the
+   shared planner as one object (`src/skills/planner/sync.md`) — never leave it
+   local and never wait for the sponsor to ask you to save it. It publishes as
+   **Draft**; you then ask the sponsor to **activate** it when it's ready to run
+   (an explicit step — the backend never auto-activates).
 
 ## Progress
 
 Use the todo-list tool to track the phases below. Create the list up front and
-mark each phase in-progress → done as you go.
+mark each phase in-progress → done as you go. Include **Publish to the shared
+planner** as an explicit tracked step right after Phase 4 (Assign): the plan is
+not "done" until it has been pushed (as Draft) and — once the sponsor confirms
+it's ready — activated. Never close out planning with the plan still local.
 
 ## Phases
 
@@ -105,6 +144,16 @@ read `src/skills/planner/mytasks.md`.
 > **render-only: it generates nothing and doesn't touch the eval skill**.
 > After setup runs, use Phase 6 to brief each downstream assignee with what setup
 > produced (the env id) and to commit what they create back onto the plan.
+>
+> The moment the full task set is modelled and assigned, **automatically publish
+> the plan to the shared planner in one create call** (`src/skills/planner/sync.md`)
+> — this is a required step, not something to wait for the sponsor to ask for, and
+> a built plan is never left only in the local cache. It publishes as **Draft**;
+> activation is an explicit step you take once the sponsor confirms the plan is
+> ready to run (the backend never auto-activates). From then on route task edits,
+> state
+> changes, and captured outputs through the planner tools so the shared service
+> stays authoritative.
 
 ## Building the plan
 

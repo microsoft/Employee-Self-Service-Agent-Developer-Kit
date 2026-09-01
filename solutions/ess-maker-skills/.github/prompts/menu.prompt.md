@@ -14,6 +14,7 @@ Here's what I can help you with:
 | Command | What it does |
 |---------|-------------|
 | `/planner` | Type Enter to plan an ESS rollout — grounded scenarios, tasks, and owners (works before setup) |
+| `/roles` | Assign a rollout role (Workday/ServiceNow admin) to a person so they can see and pick up their tasks |
 | `/connect` | Type Enter to connect ServiceNow or Workday to your agent |
 | `/create` | Create a simple topic with evals, a workflow, or an evaluation test set |
 | `/update` | Update a simple topic with evals, a workflow, or an evaluation test set |

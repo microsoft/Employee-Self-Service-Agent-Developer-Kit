@@ -10,7 +10,12 @@ sponsor's only job here is to pick **who** does it. For each Task:
      sponsor pick one.
    - If not, ask the sponsor for the person's name/identifier, or offer to
      **leave it open to the role** (a pool any holder can later claim).
-3. **Record the choice:**
+3. **Record the choice.** For a specific person, `--person` takes their directory
+   **object id**, not a name — so once the sponsor names someone, turn that name
+   into their `oid` with the shared person-resolution step
+   (`src/skills/roles/resolve-person.md`; it handles sign-in, disambiguation, and
+   the WorkIQ fallback, then hands back the `oid`). Skip that when leaving the
+   task open to the role.
 
    ```
    # assign a specific person, keeping the grounded role
@@ -33,10 +38,44 @@ same result and the same capture (Phase 6).
 When every Task is assigned or pooled, show the summary. (The eval **preview** was
 already rendered eagerly during the interview — Phase 5, `src/skills/planner/evaluate.md`;
 re-render it here if the scope changed. It is render-only and generates nothing.)
+
+**Then persist the plan — automatically, the instant assignment is done.**
+Finishing assignment is the trigger to publish; do not wait for the sponsor to
+ask. The plan they just approved lives only in the local cache until you push it,
+so **immediately** follow `src/skills/planner/sync.md` → *Push* now (name the
+configuring agent → `export-remote-plan` → `create_project_plan` → re-hydrate).
+That publishes the plan as **Draft** (with its assignees baked in) and shows it
+back for review. A Draft's tasks are read-only until it's **Active**, and the
+backend never auto-activates — so once the sponsor has reviewed it, **ask them to
+activate** the plan to put the assigned work in motion (see `sync.md` steps 5–6).
+Never leave a freshly built plan local. If the service is unreachable,
+fall back to the local cache and carry on (never mention any of this to the
+sponsor), and push on a later turn once it's reachable — a summary that still
+shows the plan as `(local, not synced)` has **not** been persisted.
+
 The Plan is ready to run: each assignee runs the Task's skill (or does the
 manual/portal step), and you capture what it produced in Phase 6.
 
+## Nudge — put real people on the attestable roles
+
+Some Tasks are pooled to an **attestable role** (e.g. `ServiceNowAdmin`,
+`WorkdayAdmin`, `EntraPowerPlatformAdministrator`) rather than a named person. Pooled
+role work is **invisible** until a real person is recorded as holding that role
+for the plan — so once the plan is published (`src/skills/planner/sync.md`), nudge
+the sponsor to assign those roles to real people. That is what makes the work show
+up in each person's "what am I assigned?" view. Hand off to the roles attestation
+flow to do it — it resolves the person and records the assignment
+(`src/skills/roles/nudge.md`, then `src/skills/roles/resolve-person.md` →
+`src/skills/roles/attest.md`). This is **assignment only**; it never answers "what
+are my tasks?".
+
 ## Future — resolve the person from an external roles API
+
+For an **attestable** role (e.g. `ServiceNowAdmin`, `WorkdayAdmin`,
+`EntraPowerPlatformAdministrator`) the person side is already wired: the roles skill
+resolves a name to a directory object id and records the holder against the plan
+(`src/skills/roles/SKILL.md`). The seam below still describes the **general** roles
+source for every *other* grounded role, which remains best-effort until built.
 
 Today a Task carries a Learn-grounded **role** (pooled), and the sponsor picks the
 person by hand. The next step wires a real **roles source** behind the same seam

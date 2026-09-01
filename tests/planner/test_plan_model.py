@@ -130,12 +130,14 @@ def test_set_system_scopes_keys_per_area():
 def test_plan_has_only_spec_fields():
     # The plan carries only fields the Step-2 spec (§7.1) defines: schemaVersion
     # (local file format) + planId/projectId/status + the Context bag + the
-    # Outputs ledger + the local tasks container. No invented generatedAt/
-    # updatedAt (server tracks CreatedAt/UpdatedAt) and no invented `notes`.
+    # Outputs ledger + the local tasks container, plus the sync-seam mirror
+    # fields (configuringAgentName + etag/syncedAt) that pair the local cache to
+    # its service plan. No invented generatedAt/updatedAt (server tracks
+    # CreatedAt/UpdatedAt) and no invented `notes`.
     plan = Plan.new(objective="x")
     assert set(plan.data) == {
-        "schemaVersion", "planId", "projectId", "status",
-        "context", "tasks", "outputs",
+        "schemaVersion", "planId", "projectId", "configuringAgentName", "status",
+        "context", "tasks", "outputs", "etag", "syncedAt",
     }
 
 
@@ -267,6 +269,141 @@ def test_tasks_for_person_groups_by_role_and_relation():
     assert grouped["integration-owner"][0]["relation"] == "pool"
     assert grouped["eval-author"][0]["relation"] == "assigned"
     assert grouped["eval-author"][0]["task"]["id"] == "P2"
+
+
+# --------------------------------------------------------------------------- #
+# Execution order (topological render)
+# --------------------------------------------------------------------------- #
+
+def test_ordered_tasks_places_producer_before_consumer():
+    plan = Plan.new()
+    # Authored consumer-first on purpose; the render must flip them.
+    plan.add_task(new_task("T1", "consume", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce", produces=["envId"]))
+    ordered = [t["id"] for t in plan.ordered_tasks()]
+    assert ordered == ["T2", "T1"]
+
+
+def test_ordered_tasks_is_stable_for_independent_tasks():
+    plan = Plan.new()
+    plan.add_task(new_task("A", "a"))
+    plan.add_task(new_task("B", "b"))
+    plan.add_task(new_task("C", "c"))
+    # No produces/consumes edges — original order is preserved exactly.
+    assert [t["id"] for t in plan.ordered_tasks()] == ["A", "B", "C"]
+
+
+def test_ordered_tasks_orders_a_chain_and_keeps_ties():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume env", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce env", produces=["envId"]))
+    plan.add_task(new_task("T3", "independent"))
+    plan.add_task(new_task("T4", "chain", consumes=["envId"], produces=["topicId"]))
+    # T2 feeds T1 and T4; T3 is independent and holds its authored slot.
+    assert [t["id"] for t in plan.ordered_tasks()] == ["T2", "T1", "T3", "T4"]
+
+
+def test_ordered_tasks_tolerates_a_cycle_without_loss():
+    plan = Plan.new()
+    plan.add_task(new_task("C1", "a", consumes=["x"], produces=["y"]))
+    plan.add_task(new_task("C2", "b", consumes=["y"], produces=["x"]))
+    ordered = [t["id"] for t in plan.ordered_tasks()]
+    # Cycle can't be sorted — every task still appears exactly once, in order.
+    assert ordered == ["C1", "C2"]
+
+
+def test_ordered_tasks_does_not_mutate_stored_order():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce", produces=["envId"]))
+    plan.ordered_tasks()
+    # The on-disk sequence stays authoritative; only the view reorders.
+    assert [t["id"] for t in plan.tasks] == ["T1", "T2"]
+
+
+def test_render_summary_lists_tasks_in_execution_order():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce", produces=["envId"]))
+    summary = plan.render_summary()
+    assert summary.index("| T2 |") < summary.index("| T1 |")
+
+
+# --------------------------------------------------------------------------- #
+# Dependency marker (artifact-model readiness)
+# --------------------------------------------------------------------------- #
+
+def test_blocking_inputs_flags_unproduced_consumed_key():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce", produces=["envId"]))
+    # Nothing produced yet: T1 waits on its producer T2; T2 itself is ready.
+    assert plan.blocking_inputs("T1") == {"envId": ["T2"]}
+    assert plan.waiting_on("T1") == ["T2"]
+    assert plan.dependency_marker("T1") == "T2"
+    assert plan.blocking_inputs("T2") == {}
+    assert plan.dependency_marker("T2") == ""
+
+
+def test_dependency_marker_clears_once_artifact_is_active():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce", produces=["envId"]))
+    plan.add_output(plan_artifact("envId", "Environment", {"environmentId": "e"}, produced_by_task_id="T2"))
+    # The consumed key now has an Active artifact — the marker disappears.
+    assert plan.blocking_inputs("T1") == {}
+    assert plan.waiting_on("T1") == []
+    assert plan.dependency_marker("T1") == ""
+
+
+def test_waiting_on_marks_external_key_no_task_produces():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", consumes=["externalId"]))
+    # No task produces externalId — surface the missing key, not a producer id.
+    assert plan.blocking_inputs("T1") == {"externalId": []}
+    assert plan.waiting_on("T1") == ["needs externalId"]
+    assert plan.dependency_marker("T1") == "needs externalId"
+
+
+def test_dependency_marker_dedupes_and_sorts_producers():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume both", consumes=["a", "b"]))
+    plan.add_task(new_task("P2", "make a", produces=["a"]))
+    plan.add_task(new_task("P1", "make b", produces=["b"]))
+    # Producers are de-duplicated and sorted for a stable marker.
+    assert plan.dependency_marker("T1") == "P1, P2"
+
+
+def test_render_summary_shows_blocked_by_column():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce", produces=["envId"]))
+    summary = plan.render_summary()
+    assert "Blocked by" in summary
+    rows = {
+        line.split("|")[1].strip(): line
+        for line in summary.splitlines()
+        if line.startswith("| T")
+    }
+    # Consumer row names its upstream producer; the producer row is ready ("—").
+    assert "T2" in rows["T1"].split("|")[-2]
+    assert rows["T2"].split("|")[-2].strip() == "—"
+
+
+def test_tasks_for_person_reports_waiting_on():
+    plan = Plan.new()
+    plan.add_task(new_task(
+        "T1", "consume", consumes=["envId"],
+        assigned_to=principal_person(ANN, role_id="eval-author"),
+    ))
+    plan.add_task(new_task(
+        "T2", "produce", produces=["envId"],
+        assigned_to=principal_person(ANN, role_id="eval-author"),
+    ))
+    grouped = plan.tasks_for_person(ANN, ["eval-author"])
+    by_id = {item["task"]["id"]: item for item in grouped["eval-author"]}
+    assert by_id["T1"]["waitingOn"] == ["T2"]
+    assert by_id["T2"]["waitingOn"] == []
 
 
 # --------------------------------------------------------------------------- #

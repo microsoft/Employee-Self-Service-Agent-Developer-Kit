@@ -80,7 +80,7 @@ Each role is grounded from the checklist item's `role:` — use the **stable
 `slugify` id** (lowercase, hyphen-joined: `App/Cloud App Admin` →
 `app-cloud-app-admin`) as the `--role`, and keep the human label as the display
 name. This keeps role ids well-formed (the roles seam validates them) and stable
-across the plan and WeveNova, while the label stays Learn-grounded. The exact set
+across the plan and the shared planner, while the label stays Learn-grounded. The exact set
 is whatever that skill lists for the tenant's path (simplified vs
 confirm that from its checklist; never assume it.
 
