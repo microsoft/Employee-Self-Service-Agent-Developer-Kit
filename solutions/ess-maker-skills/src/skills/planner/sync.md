@@ -136,12 +136,17 @@ model → assign), publish it in **one** create call rather than task-by-task:
 6. **Activate on the first assignment — explicitly; the backend won't.** The
    first time the sponsor assigns a role or a task, activate *before* recording
    it: call **`update_project_plan`** with `{"status": "Active"}` and the plan's
-   Draft `etag`. Activation returns a **new `etag`** — use that one for the
-   assignment mutation that follows, then re-hydrate (`get_project_plan` +
-   `list_project_plan_tasks` → `import-remote-plan`) so the cache reflects the
-   **Active** status and the post-activation etags (otherwise the next task
-   mutation fails with a 412). Once the plan is Active, later assignments need no
-   re-activation.
+   Draft `etag`. Activation returns a **new `etag`**, but that etag belongs to the
+   **plan** — so re-hydrate first (`get_project_plan` + `list_project_plan_tasks`
+   → `import-remote-plan`) so the cache reflects the **Active** status and the
+   fresh per-task etags, **then** record the assignment with the etag that matches
+   the call you make:
+   - **Reassigning a task** (`update_project_plan_task`) needs **that task's**
+     etag — from the re-hydrated cache or a fresh `get_project_plan` — never the
+     plan's activation etag, which would 412.
+   - **A first role attestation** (`create_role_assigned_project_plan_task`) is a
+     create and takes **no** etag at all.
+   Once the plan is Active, later assignments need no re-activation.
 
 If `export-remote-plan` errors that the configuring agent name is required, you
 skipped step 1 — set it, then re-export.
