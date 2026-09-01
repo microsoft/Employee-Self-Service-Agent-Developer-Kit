@@ -84,6 +84,6 @@ def test_mcp_defaults_register_workiq_people_fallback() -> None:
     assert "workiq-preview" in config["servers"]
     server = config["servers"]["workiq-preview"]
     assert server["command"] == "npx"
-    # Launches the published Work IQ MCP: npx -y @microsoft/workiq@latest mcp.
+    # Launches the published Work IQ MCP: npx -y @microsoft/workiq@1.0.0 mcp.
     assert "mcp" in server["args"]
     assert any("@microsoft/workiq" in argument for argument in server["args"])

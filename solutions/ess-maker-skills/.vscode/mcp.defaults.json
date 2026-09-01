@@ -12,7 +12,7 @@
     },
     "workiq-preview": {
       "command": "npx",
-      "args": ["-y", "@microsoft/workiq@latest", "mcp"]
+      "args": ["-y", "@microsoft/workiq@1.0.0", "mcp"]
     }
   }
 }
