@@ -18,13 +18,12 @@ import json
 from roles import cli as roles_cli
 
 
-def _user(oid, name, *, upn=None, mail=None, title="Analyst"):
+def _user(oid, name, *, upn=None, mail=None):
     return {
         "id": oid,
         "displayName": name,
         "userPrincipalName": upn or f"{name.replace(' ', '.').lower()}@contoso.com",
         "mail": mail or upn or f"{name.replace(' ', '.').lower()}@contoso.com",
-        "jobTitle": title,
     }
 
 
@@ -66,7 +65,7 @@ def test_resolve_person_single_candidate(monkeypatch):
     assert only["oid"] == "oid-1"
     assert only["displayName"] == "Priya Sharma"
     # Every field the skill disambiguates on is projected.
-    assert set(only) == {"oid", "displayName", "userPrincipalName", "mail", "jobTitle"}
+    assert set(only) == {"oid", "displayName", "userPrincipalName", "mail"}
 
 
 def test_resolve_person_multiple_candidates_all_returned(monkeypatch):

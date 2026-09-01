@@ -731,7 +731,7 @@ def search_users(
     Source (validatable):
       Schema: https://graph.microsoft.com/v1.0/$metadata
               EntityType Name="user" — id, displayName,
-              userPrincipalName, mail, jobTitle
+              userPrincipalName, mail
       Docs:   https://learn.microsoft.com/graph/api/user-list
               (?$search on directory objects; requires
               ConsistencyLevel: eventual)
@@ -741,7 +741,7 @@ def search_users(
         "url": f"{GRAPH_BASE}/users",
         "json": collection(
             users if users is not None else [user()],
-            odata_context="$metadata#users(id,displayName,userPrincipalName,mail,jobTitle)",
+            odata_context="$metadata#users(id,displayName,userPrincipalName,mail)",
         ),
         "status": 200,
     }

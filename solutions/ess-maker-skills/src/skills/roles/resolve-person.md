@@ -31,8 +31,8 @@ python scripts/roles/cli.py resolve-person --name "<what the maker said>"
 
 `--name` accepts a display name, an email, or a user principal name. The command
 prints a JSON envelope — `{"query", "status", "count", "candidates": [...]}` —
-where each candidate has `oid`, `displayName`, `userPrincipalName`, `mail`, and
-`jobTitle`. It asks the directory for **only** a least-privilege, self-grantable
+where each candidate has `oid`, `displayName`, `userPrincipalName`, and `mail`.
+It asks the directory for **only** a least-privilege, self-grantable
 read permission, so in a normal tenant the maker can approve the one-time
 sign-in themselves — no directory admin needed.
 
@@ -42,7 +42,7 @@ Branch on `status`:
   you use the id ("I found Priya Sharma (priya@contoso.com) — is that who you
   mean?").
 - **`ok` with several candidates** — **disambiguate.** Show the candidates in
-  plain language (name, email, job title — never the raw JSON) and ask which one
+  plain language (name, email — never the raw JSON) and ask which one
   they mean. Use only the `oid` of the person they pick.
 - **`no_match`** — nobody matched. Ask for a more specific name, or their email /
   user principal name, and resolve again. Never guess an id.

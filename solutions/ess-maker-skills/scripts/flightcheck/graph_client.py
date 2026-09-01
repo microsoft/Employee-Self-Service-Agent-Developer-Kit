@@ -450,7 +450,10 @@ class GraphClient:
         ``mail`` — which requires the ``ConsistencyLevel: eventual`` header that
         :attr:`headers` already sets. Each returned object carries ``id`` (the
         Entra object id used everywhere as the subject id) plus ``displayName`` /
-        ``userPrincipalName`` / ``mail`` / ``jobTitle`` for disambiguation.
+        ``userPrincipalName`` / ``mail`` for disambiguation. ``jobTitle`` is
+        deliberately not requested: the person-resolution scope is
+        ``User.ReadBasic.All``, whose basic projection doesn't grant it, so a
+        ``$select`` on it comes back empty at best and 403s the call at worst.
 
         Returns an empty list for a blank query or a genuine no-match. Raises
         ``PermissionError`` on a 401/403 (the caller lacks a directory user-read
@@ -470,7 +473,7 @@ class GraphClient:
             "/users",
             params={
                 "$search": search,
-                "$select": "id,displayName,userPrincipalName,mail,jobTitle",
+                "$select": "id,displayName,userPrincipalName,mail",
                 "$top": str(top),
             },
         )

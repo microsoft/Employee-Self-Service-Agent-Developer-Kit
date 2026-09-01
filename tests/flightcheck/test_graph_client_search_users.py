@@ -44,7 +44,6 @@ def test_search_users_returns_candidates_and_sends_search_query():
                     user_id="oid-1",
                     display_name="Priya Sharma",
                     user_principal_name="priya@contoso.com",
-                    job_title="HR Analyst",
                 )
             ]
         )
@@ -56,7 +55,7 @@ def test_search_users_returns_candidates_and_sends_search_query():
     request = responses.calls[0].request
     query = parse_qs(urlparse(request.url).query)
     assert query["$search"][0].startswith('"displayName:Priya Sharma"')
-    assert query["$select"][0] == "id,displayName,userPrincipalName,mail,jobTitle"
+    assert query["$select"][0] == "id,displayName,userPrincipalName,mail"
     # $search on directory objects is rejected without eventual consistency.
     assert request.headers.get("ConsistencyLevel") == "eventual"
 

@@ -80,7 +80,6 @@ def _shape_candidate(user: dict) -> dict:
         "displayName": user.get("displayName", ""),
         "userPrincipalName": user.get("userPrincipalName", ""),
         "mail": user.get("mail", ""),
-        "jobTitle": user.get("jobTitle", ""),
     }
 
 
