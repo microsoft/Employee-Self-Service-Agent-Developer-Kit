@@ -110,43 +110,46 @@ model → assign), publish it in **one** create call rather than task-by-task:
    plan — so if a keyless push fails ambiguously, never just fire it again; add a
    key and retry with that.) The plan and all its tasks are created
    atomically, in **Draft**. Keep the returned `planId` and `etag`. A Draft plan
-   holds all its tasks, but they can't be *mutated* (assigned, reassigned,
-   state-changed) until the plan is **Active** — and **the backend never
-   auto-activates a plan**. Activation is therefore an explicit step you take
-   yourself, at the moment the first assignment happens (step 6). Do **not**
-   activate here.
+   already holds all its tasks with their assignees baked in at creation, but
+   those tasks can't be *mutated* (reassigned, state-changed, edited, completed)
+   until the plan is **Active** — and **the backend never auto-activates a plan**.
+   Activation is therefore an explicit step you take yourself, once the sponsor
+   confirms the plan is ready to run (step 6). Do **not** activate here.
 4. **Re-hydrate so the cache carries the server ids** (planId, task ids, etag):
    `get_project_plan` + `list_project_plan_tasks` → write
    `{"plan": <get_project_plan result>, "tasks": <list_project_plan_tasks result>}`
    to `workspace/plan/.remote.json` → `import-remote-plan --input ...` → delete
    the temp file. The plan is now cached as **Draft** with real ids.
-5. **Show the plan and let the sponsor choose what's next — don't activate yet.**
-   Present the plan and offer the Markdown for them to **download and review**
-   (the render is in `src/skills/planner/SKILL.md`). Then offer a plain-language
-   choice of where to go next:
-   - **Put people on the roles** — record real people against the plan's
-     attestable roles so pooled role work becomes visible
-     (`src/skills/roles/nudge.md` → `src/skills/roles/attest.md`).
-   - **Assign tasks to people** — hand specific tasks to named owners
-     (`src/skills/planner/assign.md`).
-   - **Keep iterating on the plan** — refine the objective or tasks before anyone
-     is put on it; this stays in **Draft**, so just re-push the edits.
-   Iterating leaves the plan in Draft. Choosing either kind of assignment is what
-   puts the plan into motion — so it **activates** the plan (step 6).
-6. **Activate on the first assignment — explicitly; the backend won't.** The
-   first time the sponsor assigns a role or a task, activate *before* recording
-   it: call **`update_project_plan`** with `{"status": "Active"}` and the plan's
-   Draft `etag`. Activation returns a **new `etag`**, but that etag belongs to the
+5. **Show the plan and ask the sponsor whether to activate it.** Present the plan
+   and offer the Markdown for them to **download and review** (the render is in
+   `src/skills/planner/SKILL.md`). The plan is already Draft with its assignees
+   baked in, and a Draft's tasks are **read-only** until it's Active — so the
+   real choice now is simply *when* to activate:
+   - **Activate now** — the plan is ready to run; go to step 6. Activation makes
+     the assigned work real and visible. From then on, put people on the pooled
+     roles (`src/skills/roles/nudge.md` → `src/skills/roles/attest.md`), hand
+     tasks to named owners (`src/skills/planner/assign.md`), and capture outputs —
+     all through the task tools against the **Active** plan.
+   - **Not yet** — leave it in Draft and keep refining the plan locally (the
+     editable *ESS scenario plan*, `src/skills/planner/edit.md`). Those local
+     edits **can't be pushed onto a Draft**: the service has no "update a Draft"
+     path — re-running `create_project_plan` makes a *new* plan, and a Draft's
+     tasks are read-only — so revisions reach the server only **after activation**
+     (step 6). When practical, finish refining **before** you publish.
+6. **Activate when the sponsor is ready — explicitly; the backend won't.** When
+   the sponsor confirms the plan is ready to run (step 5), activate it: call
+   **`update_project_plan`** with `{"status": "Active"}` and the plan's Draft
+   `etag`. Activation returns a **new `etag`**, but that etag belongs to the
    **plan** — so re-hydrate first (`get_project_plan` + `list_project_plan_tasks`
    → `import-remote-plan`) so the cache reflects the **Active** status and the
-   fresh per-task etags, **then** record the assignment with the etag that matches
-   the call you make:
+   fresh per-task etags. Any later assignment change must then use the etag that
+   matches the call you make:
    - **Reassigning a task** (`update_project_plan_task`) needs **that task's**
      etag — from the re-hydrated cache or a fresh `get_project_plan` — never the
      plan's activation etag, which would 412.
-   - **A first role attestation** (`create_role_assigned_project_plan_task`) is a
+   - **A role attestation** (`create_role_assigned_project_plan_task`) is a
      create and takes **no** etag at all.
-   Once the plan is Active, later assignments need no re-activation.
+   Once the plan is Active, later edits and assignments need no re-activation.
 
 If `export-remote-plan` errors that the configuring agent name is required, you
 skipped step 1 — set it, then re-export.

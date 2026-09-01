@@ -103,16 +103,16 @@ have checked for an existing plan.**
    The moment the plan is built, **publish it automatically** to the
    shared planner as one object (`src/skills/planner/sync.md`) — never leave it
    local and never wait for the sponsor to ask you to save it. It publishes as
-   **Draft** and activates on the first role/task assignment (an explicit step —
-   the backend never auto-activates).
+   **Draft**; you then ask the sponsor to **activate** it when it's ready to run
+   (an explicit step — the backend never auto-activates).
 
 ## Progress
 
 Use the todo-list tool to track the phases below. Create the list up front and
 mark each phase in-progress → done as you go. Include **Publish to the shared
 planner** as an explicit tracked step right after Phase 4 (Assign): the plan is
-not "done" until it has been pushed (as Draft) and — once the sponsor makes the
-first assignment — activated. Never close out planning with the plan still local.
+not "done" until it has been pushed (as Draft) and — once the sponsor confirms
+it's ready — activated. Never close out planning with the plan still local.
 
 ## Phases
 
@@ -149,8 +149,9 @@ read `src/skills/planner/mytasks.md`.
 > the plan to the shared planner in one create call** (`src/skills/planner/sync.md`)
 > — this is a required step, not something to wait for the sponsor to ask for, and
 > a built plan is never left only in the local cache. It publishes as **Draft**;
-> activation is deferred to the first role/task assignment and called explicitly
-> (the backend never auto-activates). From then on route task edits, state
+> activation is an explicit step you take once the sponsor confirms the plan is
+> ready to run (the backend never auto-activates). From then on route task edits,
+> state
 > changes, and captured outputs through the planner tools so the shared service
 > stays authoritative.
 
