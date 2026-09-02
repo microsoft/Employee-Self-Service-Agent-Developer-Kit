@@ -482,7 +482,7 @@ def main():
 
         # block=True: short-lived CLI process — emit synchronously so the event
         # isn't dropped when the interpreter exits and kills a daemon thread.
-        adk_telemetry.emit_capability_use("evaluations", block=True)
+        adk_telemetry.emit_capability_use("evaluation_validate", block=True)
     except Exception:  # noqa: BLE001 — telemetry must never break evaluation
         pass
 

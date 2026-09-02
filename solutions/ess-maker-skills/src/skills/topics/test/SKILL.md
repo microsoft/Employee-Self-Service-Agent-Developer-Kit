@@ -39,6 +39,9 @@ This skill **drives the topic automatically** — it launches (or attaches to) a
 
 ## Classify the topic — which fault surface?
 
+Record anonymous usage telemetry (best-effort, non-blocking — no user-facing
+message, and it never fails the step): `python scripts/emit_capability.py topic_test`
+
 Read the topic file and decide which fault surface applies — it drives which tool you reach for:
 
 - **Flow-backed** — the topic calls a shared system topic (`BeginDialog` to `...System...`) or an `InvokeFlowAction`. Faults here are usually in the flow / connector path → **Inspect the flow run**.

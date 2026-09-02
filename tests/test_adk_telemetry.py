@@ -512,12 +512,12 @@ def test_resolve_ikey_env_and_raw_override(monkeypatch):
 # --- emit happy path + fail-open + buffering ------------------------------
 def test_emit_happy_path_posts_envelope(captured_post, monkeypatch):
     monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
-    res = adk.emit_capability_use("evaluations", block=True)
+    res = adk.emit_capability_use("evaluation_validate", block=True)
     assert res["sent"] is True
     assert len(captured_post) == 1
     _ikey, envelopes = captured_post[0]
     assert envelopes[0]["name"] == "adk.capability.use"
-    assert envelopes[0]["data"]["adk_capability"] == "evaluations"
+    assert envelopes[0]["data"]["adk_capability"] == "evaluation_validate"
     assert envelopes[0]["iKey"] == f"o:{DEV_TOKEN}"
 
 
@@ -646,14 +646,19 @@ def test_wired_capabilities_are_in_canonical_list():
     "unknown" on the dashboards. This is the "keep in sync" contract."""
     wired = {
         # emit_capability_use(...) from the Python entry points
-        "setup", "evaluations",
+        "setup", "evaluation_validate",
         "backup_template_configs", "restore_template_configs",
+        "push",
         # emit_build_*/flightcheck_* event families
         "publishing", "flightcheck",
         # emit_capability.py shim invocations across the SKILL.md skills
         "connect",
+        "onboarding",
         "topic_create", "topic_update", "topic_delete",
+        "topic_review", "topic_test",
         "workflow_create", "workflow_update", "workflow_delete",
+        "workflow_test",
+        "evaluation_create", "evaluation_update", "evaluation_delete",
         "cleanup", "troubleshoot",
     }
     missing = wired - set(adk.ADK_CAPABILITIES)

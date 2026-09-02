@@ -60,7 +60,7 @@ Run in the terminal:
 
 ```
 python scripts/checkpoint.py "pre-update-evaluation"
-python scripts/emit_capability.py evaluations
+python scripts/emit_capability.py evaluation_update
 ```
 
 The `emit_capability.py` line records anonymous usage telemetry (best-effort,

@@ -1253,7 +1253,7 @@ def main():
     try:
         import adk_telemetry
 
-        adk_telemetry.emit_build_start(agent_id=bot_id, adk_capability="publishing")
+        adk_telemetry.emit_build_start(agent_id=bot_id, adk_capability="push")
     except Exception:  # noqa: BLE001 — telemetry must never break push
         pass
 
@@ -2177,11 +2177,11 @@ def main():
                 "error_message": _error_message,
             }
         adk_telemetry.emit_build_complete(
-            agent_id=bot_id, adk_capability="publishing",
+            agent_id=bot_id, adk_capability="push",
             outcome=_outcome, duration_ms=_duration_ms, **_err_kwargs,
         )
         adk_telemetry.emit_agent_deploy(
-            agent_id=bot_id, deploy_target=_deploy_target, adk_capability="publishing",
+            agent_id=bot_id, deploy_target=_deploy_target, adk_capability="push",
             outcome=("server_error" if _failed else "success"),
             duration_ms=_duration_ms,
             **({"error_code": ("DEPLOY_PARTIAL_FAILURE" if errors
@@ -2189,6 +2189,7 @@ def main():
                 "error_category": "runtime",
                 "error_message": _error_message} if _failed else {}),
         )
+        adk_telemetry.emit_capability_use("push", block=False)
         adk_telemetry.flush(timeout=5)
     except Exception:  # noqa: BLE001 — telemetry must never break push
         pass
