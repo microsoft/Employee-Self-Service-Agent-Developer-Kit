@@ -1365,7 +1365,7 @@ def main():
                     working_files[review_path])
             pending_descriptions[parent_path] = description
             print(f"  ⏳ Staged review status: {parent_path}")
-        except Exception as exc:
+        except ReviewMetadataError as exc:
             print(f"  ❌ Failed: {review_path}: {exc}")
             errors += 1
 

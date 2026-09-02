@@ -19,6 +19,8 @@ from auth import discover_tenant, load_config
 from evaluation_review import (
     REVIEW_FILENAME,
     REVIEW_REQUESTED,
+    ReviewMetadataError,
+    parse_review_metadata,
 )
 from flightcheck.pp_admin_client import PPAdminClient
 from flightcheck.powerplatform_client import PowerPlatformClient
@@ -246,13 +248,30 @@ def _runtime(config: dict[str, Any]) -> tuple[
     str,
     Path,
 ]:
-    env_url = str(config["dataverseEndpoint"]).rstrip("/")
+    env_url = str(config.get("dataverseEndpoint") or "").rstrip("/")
+    if not env_url:
+        raise EvaluationRunError(
+            "Dataverse endpoint is missing from .local/config.json. "
+            "Run /setup first."
+        )
+    agent = config.get("agent")
+    if not isinstance(agent, dict):
+        raise EvaluationRunError(
+            "Configured agent details are missing from .local/config.json. "
+            "Run /setup first."
+        )
+    bot_id = str(agent.get("botId") or "").strip()
+    agent_folder_value = str(agent.get("folder") or "").strip()
+    if not bot_id or not agent_folder_value:
+        raise EvaluationRunError(
+            "Configured agent botId or folder is missing from "
+            ".local/config.json. Run /setup first."
+        )
+
     client = PowerPlatformClient(discover_tenant(env_url))
     client.authenticate()
     environment_id = resolve_environment_id(config, client)
-    agent = config["agent"]
-    bot_id = str(agent["botId"])
-    agent_folder = Path(str(agent["folder"]))
+    agent_folder = Path(agent_folder_value)
     return client, environment_id, bot_id, agent_folder
 
 
@@ -331,21 +350,19 @@ def list_agent_test_sets(
                 review_statuses.append(review_status)
                 continue
             try:
-                review_metadata = json.loads(
+                review_status = parse_review_metadata(
                     review_path.read_text(encoding="utf-8")
-                )
-                if isinstance(review_metadata, dict):
-                    status = review_metadata.get("status")
-                    if isinstance(status, str):
-                        review_status = status
-            except (OSError, json.JSONDecodeError):
-                pass
+                )["status"]
+            except (OSError, ReviewMetadataError) as exc:
+                raise EvaluationRunError(
+                    f"Unable to read review metadata {review_path}: {exc}"
+                ) from exc
             review_statuses.append(review_status)
         local_review_status, deployed_review_status = review_statuses
         blocked_reason = None
         if (
             local_review_status == "review_completed"
-            and deployed_review_status == REVIEW_REQUESTED
+            and deployed_review_status != "review_completed"
         ):
             blocked_reason = REVIEW_COMPLETION_NOT_PUSHED_GUIDANCE
         elif REVIEW_REQUESTED in review_statuses:
@@ -578,8 +595,10 @@ def analyze_run_results(result: dict[str, Any]) -> dict[str, Any]:
         case for case in cases
         if isinstance(case, dict)
     ] if isinstance(cases, list) else []
-    passed = [case for case in cases if _case_passed(case)]
-    failed = [case for case in cases if not _case_passed(case)]
+    passed = []
+    failed = []
+    for case in cases:
+        (passed if _case_passed(case) else failed).append(case)
     total = len(cases)
     pass_rate = round((len(passed) / total) * 100, 1) if total else 0.0
 
@@ -704,7 +723,7 @@ def main() -> int:
     run_parser.add_argument("--published", action="store_true")
     run_parser.add_argument("--mcs-connection-id")
 
-    list_runs_parser = subparsers.add_parser("list-runs")
+    subparsers.add_parser("list-runs")
 
     results_parser = subparsers.add_parser("results")
     results_parser.add_argument("--run-id", required=True)
@@ -728,6 +747,7 @@ def main() -> int:
                 environment_id,
                 bot_id,
                 agent_folder,
+                include_blocked=True,
             )
             selected = next(
                 (
@@ -739,6 +759,11 @@ def main() -> int:
             if selected is None:
                 raise EvaluationRunError(
                     "The selected test set is not active or no longer exists."
+                )
+            if not selected.get("runnable", True):
+                raise EvaluationRunError(
+                    str(selected.get("blockedReason"))
+                    or "The selected test set is blocked from running."
                 )
             connection = resolve_mcs_connection(
                 config,

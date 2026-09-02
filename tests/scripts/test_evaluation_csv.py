@@ -16,6 +16,10 @@ sys.path.insert(0, str(SCRIPTS))
 import evaluation_csv  # noqa: E402
 
 
+def test_passing_score_defaults_for_invalid_threshold():
+    assert evaluation_csv._passing_score(None) == "70"
+
+
 def test_regenerate_exports_creates_general_quality_csv(tmp_path):
     set_folder = tmp_path / "evaluations" / "general"
     set_folder.mkdir(parents=True)
