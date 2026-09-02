@@ -12,6 +12,9 @@ agent, product, and connector names before displaying them.
 
 ## Start
 
+Record anonymous usage telemetry (best-effort, non-blocking — no user-facing
+message, and it never fails the step): `python scripts/emit_capability.py onboarding`
+
 Run `python scripts/setup_state.py show --view current`. When `connect_ready` is
 true, this is workspace bootstrap after foundation setup:
 

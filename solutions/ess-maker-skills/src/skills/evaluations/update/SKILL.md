@@ -349,7 +349,7 @@ For workspace-only updates, do not require an agent checkpoint.
 Record anonymous usage telemetry on a best-effort basis:
 
 ```text
-python scripts/emit_capability.py evaluations
+python scripts/emit_capability.py evaluation_update
 ```
 
 Telemetry failure must not block the update.

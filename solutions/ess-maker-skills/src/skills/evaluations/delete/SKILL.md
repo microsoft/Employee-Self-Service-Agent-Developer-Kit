@@ -70,7 +70,7 @@ Wait for confirmation.
 
 ```
 python scripts/checkpoint.py "pre-delete-evaluation-{name}"
-python scripts/emit_capability.py evaluations
+python scripts/emit_capability.py evaluation_delete
 ```
 
 The `emit_capability.py` line records anonymous usage telemetry (best-effort,
