@@ -541,6 +541,18 @@ def test_get_results_enriches_local_test_case_and_set_names(tmp_path):
     assert result["analysis"]["scenarioGroups"][0]["group"] == "Compensation"
 
 
+def test_get_results_preserves_unmapped_test_case_id(tmp_path):
+    result = evaluation_runs.get_run_results(
+        FakeClient(),
+        "environment-id",
+        "bot-id",
+        tmp_path,
+        "run-1",
+    )
+
+    assert result["testCasesResults"][0]["testCaseName"] == "case-1"
+
+
 def test_get_results_joins_remote_test_set_name_without_local_history(tmp_path):
     result = evaluation_runs.get_run_results(
         FakeClient(),
