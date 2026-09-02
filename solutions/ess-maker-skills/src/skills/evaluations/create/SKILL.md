@@ -605,7 +605,7 @@ Run `python scripts/checkpoint.py "before evaluation test set creation"` to save
 
 Then record anonymous usage telemetry (best-effort, non-blocking — no
 user-facing message, and it never fails the step):
-`python scripts/emit_capability.py evaluations`
+`python scripts/emit_capability.py evaluation_create`
 
 ### 4.2 — Write evaluation files
 
