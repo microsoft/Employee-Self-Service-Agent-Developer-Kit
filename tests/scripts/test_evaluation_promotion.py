@@ -129,6 +129,39 @@ def test_cleanup_removes_only_workspace_staging(tmp_path):
     assert (destination / "compensation.mcs.yml").is_file()
 
 
+def test_cleanup_removes_workspace_collision_safe_export(tmp_path):
+    workspace = tmp_path / "workspace" / "evaluations"
+    agent = tmp_path / "agent"
+    source = workspace / "payroll-a"
+    other_source = workspace / "payroll-b"
+    destination = agent / "evaluations" / "payroll-a"
+    for folder, display_name in (
+        (source, "Payroll/Benefits"),
+        (other_source, "Payroll Benefits"),
+        (destination, "Payroll/Benefits"),
+    ):
+        _write_set(folder)
+        (folder / "compensation.mcs.yml").write_text(
+            "kind: EvaluationSet\n"
+            f"displayName: {display_name}\n",
+            encoding="utf-8",
+        )
+    exports = workspace / "exports"
+    exports.mkdir()
+    csv_path = exports / "20260828_Payroll_Benefits__payroll_a.csv"
+    csv_path.write_text("Prompt\n", encoding="utf-8")
+
+    result = evaluation_promotion.cleanup_workspace_set(
+        workspace,
+        agent,
+        "payroll-a",
+    )
+
+    assert str(csv_path) in result["removedCsvs"]
+    assert not csv_path.exists()
+    assert other_source.is_dir()
+
+
 def test_cleanup_refuses_when_agent_copy_is_missing(tmp_path):
     workspace = tmp_path / "workspace" / "evaluations"
     source = workspace / "compensation"

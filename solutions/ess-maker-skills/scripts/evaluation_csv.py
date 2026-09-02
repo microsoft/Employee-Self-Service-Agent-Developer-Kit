@@ -41,7 +41,7 @@ def _passing_score(threshold: Any) -> str:
     try:
         score = float(threshold) * 100
     except (TypeError, ValueError):
-        score = 70
+        score = 70.0
     return str(int(score)) if score.is_integer() else f"{score:g}"
 
 
