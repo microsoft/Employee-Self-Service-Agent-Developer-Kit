@@ -6,6 +6,28 @@ regenerates it from `plan.json` after every change, and the editor can revise it
 and have those revisions **reconciled back into the plan**. `plan.json` stays the
 source of truth; the Markdown is how a human edits it.
 
+**It reads as a document, not a data dump.** The view is generated from
+`plan.json` — the local cache of the shared WeveNova plan, hydrated on pull
+(`src/skills/planner/sync.md`), so it always reflects the persisted plan (the
+header shows the live **Status**, the connected **Agent**, and whether it is
+**synced**). Instead of listing the raw context bag as `group → key: value`
+bullets, it groups the sponsor's intent into readable sections:
+
+- **Overview** — market/rollout wave, audience, jobs-to-be-done, business goals,
+  and the definition of done (pilot bar).
+- **Scenarios in scope** — one subsection per scenario with its capabilities, the
+  system that backs it, and its dependencies in plain language.
+- **Systems** — which system backs each area.
+- **Scenario dependencies**, **Tasks**, **Produced outputs** — the ledgers.
+
+**Enriched from Learn at render time.** When a Learn-research corpus is present
+alongside the plan (`workspace/plan/research-context.json`), the render/refresh
+step folds its grounding links into the view (a per-scenario *Learn:* line and a
+**Learn references** section). This is best-effort: the plan renders fully without
+it, and the setup *detail* still comes from Learn live at brief time
+(`src/skills/planner/mytasks.md`) — the view links to the source, it never freezes
+steps. Keep grounding a Learn link, not a copy.
+
 ## Present it as an editable file
 
 Whenever you've created or changed the plan, show the editor the Markdown plan and
@@ -32,15 +54,17 @@ overwrite their edits**:
    (`python scripts/planner/cli.py summary`). The Tasks table is keyed by task
    **id** (the `#` column) — use it to line rows up.
 2. **Diff by id.** Work out, per task, what changed. The Tasks table shows
-   **title**, **role / owner**, and **state** (plus the Intent and Scenario
-   dependencies sections) — those are what a direct file edit can change:
+   **title**, **role / owner**, and **state** (plus the Overview, Scenarios in
+   scope, Systems, and Scenario dependencies sections) — those are what a direct
+   file edit can change:
    - **Added** row (no existing id / a new one) → a new task.
    - **Removed** row → a deletion.
    - **Retitled** → a title edit.
    - **Role / owner** column changed → a reassignment.
    - **State** column changed (e.g. a ticked checkbox → Completed) → a state change.
-   - Changes under **Intent** (scenarios, systems, goals) or **Scenario
-     dependencies** → context edits.
+   - Changes under **Overview**, **Scenarios in scope**, **Systems**, or
+     **Scenario dependencies** (goals, persona, a scenario's capabilities or its
+     backing system, an added/removed scenario or dependency edge) → context edits.
 
    A task's **description / produces / consumes are not columns in the table**,
    so they can't be edited in the file — to change those, have the editor say so
