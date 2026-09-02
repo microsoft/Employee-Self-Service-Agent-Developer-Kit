@@ -397,7 +397,7 @@ def discover_review_sets(
     config_path: str | Path = ".local/config.json",
     status: str = REVIEW_REQUESTED,
 ) -> list[dict[str, Any]]:
-    """Discover review-tagged workspace and configured-agent evaluation sets."""
+    """Discover review-tagged sets synchronized with Copilot Studio."""
     if status not in VALID_STATUSES:
         raise ReviewMetadataError(f"Unsupported review status: {status}")
 
@@ -421,7 +421,7 @@ if __name__ == "__main__":
         "--list",
         action="store_true",
         dest="list_sets",
-        help="List review-tagged workspace and configured-agent sets.",
+        help="List review-tagged sets synchronized with Copilot Studio.",
     )
     list_group.add_argument(
         "--list-all",

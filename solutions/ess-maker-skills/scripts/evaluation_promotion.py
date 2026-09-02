@@ -143,7 +143,7 @@ def cleanup_workspace_set(
     removed_csvs: list[str] = []
     exports = source.parent / "exports"
     if exports.is_dir():
-        safe_name = evaluation_export_stem(destination)
+        safe_name = evaluation_export_stem(source)
         csv_patterns = (
             f"{set_name}-eval-testset-*.csv",
             f"????????_{safe_name}.csv",

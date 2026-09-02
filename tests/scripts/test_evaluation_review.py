@@ -73,7 +73,7 @@ def test_set_review_metadata_reads_description_from_component_map(tmp_path):
     assert metadata["baseDescription"] == "Existing description"
 
 
-def test_discover_review_sets_finds_workspace_and_configured_agent(tmp_path):
+def test_discover_review_sets_returns_only_synchronized_agent_sets(tmp_path):
     workspace_set = tmp_path / "workspace" / "evaluations" / "benefits"
     workspace_set.mkdir(parents=True)
     (workspace_set / "review.json").write_text(

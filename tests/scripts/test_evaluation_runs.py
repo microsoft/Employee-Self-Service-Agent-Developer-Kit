@@ -4,6 +4,8 @@ import json
 import sys
 from pathlib import Path
 
+import pytest
+
 
 SCRIPTS = (
     Path(__file__).resolve().parents[2]
@@ -228,12 +230,21 @@ def test_list_agent_test_sets_explains_review_pending_when_requested(
 
 def test_list_agent_test_sets_allows_review_completed_sets(tmp_path):
     evaluations = tmp_path / "evaluations" / "compensation"
+    baseline = tmp_path / ".baseline" / "evaluations" / "compensation"
     evaluations.mkdir(parents=True)
+    baseline.mkdir(parents=True)
     (evaluations / "compensation.mcs.yml").write_text(
         "kind: EvaluationSet\n",
         encoding="utf-8",
     )
     (evaluations / "review.json").write_text(
+        json.dumps({
+            "status": "review_completed",
+            "baseDescription": "Reviewed by SME",
+        }),
+        encoding="utf-8",
+    )
+    (baseline / "review.json").write_text(
         json.dumps({
             "status": "review_completed",
             "baseDescription": "Reviewed by SME",
@@ -260,6 +271,44 @@ def test_list_agent_test_sets_allows_review_completed_sets(tmp_path):
 
     assert [item["id"] for item in sets] == ["set-comp"]
     assert sets[0]["reviewStatus"] == "review_completed"
+
+
+def test_list_agent_test_sets_blocks_unpushed_completion_without_baseline(
+    tmp_path,
+):
+    evaluations = tmp_path / "evaluations" / "compensation"
+    evaluations.mkdir(parents=True)
+    (evaluations / "compensation.mcs.yml").write_text(
+        "kind: EvaluationSet\n",
+        encoding="utf-8",
+    )
+    (evaluations / "review.json").write_text(
+        json.dumps({"status": "review_completed"}),
+        encoding="utf-8",
+    )
+    (tmp_path / ".component-map.json").write_text(
+        json.dumps({
+            "evaluations/compensation/compensation.mcs.yml": {
+                "botcomponentid": "set-comp",
+                "componenttype": 19,
+                "name": "Compensation",
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    sets = evaluation_runs.list_agent_test_sets(
+        FakeClient(),
+        "environment-id",
+        "bot-id",
+        tmp_path,
+        include_blocked=True,
+    )
+
+    assert sets[0]["runnable"] is False
+    assert sets[0]["blockedReason"] == (
+        evaluation_runs.REVIEW_COMPLETION_NOT_PUSHED_GUIDANCE
+    )
 
 
 def test_list_agent_test_sets_excludes_unpushed_review_completion(tmp_path):
@@ -343,7 +392,76 @@ def test_list_agent_test_sets_explains_unpushed_review_completion(tmp_path):
     )
 
 
-def test_list_agent_test_sets_allows_unknown_review_status(tmp_path):
+def test_run_command_reports_review_block_reason(
+    monkeypatch,
+    capsys,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "evaluation_runs.py",
+            "run",
+            "--test-set-id",
+            "set-comp",
+        ],
+    )
+    monkeypatch.setattr(evaluation_runs, "load_config", lambda: {})
+    monkeypatch.setattr(
+        evaluation_runs,
+        "_runtime",
+        lambda config: (
+            FakeClient(),
+            "environment-id",
+            "bot-id",
+            tmp_path,
+        ),
+    )
+    monkeypatch.setattr(
+        evaluation_runs,
+        "list_agent_test_sets",
+        lambda *args, **kwargs: [{
+            "id": "set-comp",
+            "runnable": False,
+            "blockedReason": evaluation_runs.REVIEW_PENDING_GUIDANCE,
+        }],
+    )
+    monkeypatch.setattr(
+        evaluation_runs,
+        "resolve_mcs_connection",
+        lambda *args, **kwargs: pytest.fail(
+            "Blocked sets must not resolve a connection"
+        ),
+    )
+
+    assert evaluation_runs.main() == 1
+    assert evaluation_runs.REVIEW_PENDING_GUIDANCE in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("config", "message"),
+    [
+        ({}, "Dataverse endpoint is missing"),
+        (
+            {"dataverseEndpoint": "https://example.crm.dynamics.com"},
+            "Configured agent details are missing",
+        ),
+        (
+            {
+                "dataverseEndpoint": "https://example.crm.dynamics.com",
+                "agent": {},
+            },
+            "Configured agent botId or folder is missing",
+        ),
+    ],
+)
+def test_runtime_rejects_incomplete_config(config, message):
+    with pytest.raises(evaluation_runs.EvaluationRunError, match=message):
+        evaluation_runs._runtime(config)
+
+
+def test_list_agent_test_sets_rejects_unknown_review_status(tmp_path):
     evaluations = tmp_path / "evaluations" / "compensation"
     evaluations.mkdir(parents=True)
     (evaluations / "compensation.mcs.yml").write_text(
@@ -368,15 +486,16 @@ def test_list_agent_test_sets_allows_unknown_review_status(tmp_path):
         encoding="utf-8",
     )
 
-    sets = evaluation_runs.list_agent_test_sets(
-        FakeClient(),
-        "environment-id",
-        "bot-id",
-        tmp_path,
-    )
-
-    assert [item["id"] for item in sets] == ["set-comp"]
-    assert sets[0]["reviewStatus"] == "unknown"
+    with pytest.raises(
+        evaluation_runs.EvaluationRunError,
+        match="Review status must be",
+    ):
+        evaluation_runs.list_agent_test_sets(
+            FakeClient(),
+            "environment-id",
+            "bot-id",
+            tmp_path,
+        )
 
 
 def test_start_run_returns_api_details_without_local_mapping(tmp_path):
