@@ -656,7 +656,7 @@ def get_run_results(
                 **case,
                 "testCaseName": names.get(
                     str(case.get("testCaseId", "")),
-                    "Unknown test case",
+                    str(case.get("testCaseId", "")) or "Unknown test case",
                 ),
             }
             for case in cases
