@@ -13,9 +13,12 @@ planner (the service every maker on the agent shares; pull/push flow in
 `src/skills/planner/sync.md`). Its human view —
 `workspace/plan/ESS-scenario-plan.md` — is an **editable** surface a Plan editor
 can revise directly (or edit and re-upload); you reconcile their edits back into
-the plan (`src/skills/planner/edit.md`). The CLI regenerates it after every change.
-All structured reads/writes go through the CLI so writes are atomic and
-validated:
+the plan (`src/skills/planner/edit.md`). The CLI regenerates it after every change
+as a **readable document** — an Overview, the Scenarios in scope (each with its
+capabilities and backing system), the Systems, and the Tasks — generated from
+`plan.json` (the local cache of the shared WeveNova plan) and enriched from
+Microsoft Learn at render time when a research corpus is present. All structured
+reads/writes go through the CLI so writes are atomic and validated:
 
 ```
 python scripts/planner/cli.py <command> [options]

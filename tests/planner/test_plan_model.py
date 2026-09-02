@@ -19,10 +19,13 @@ from planner.plan_model import (
     assignee_role_id,
     assignee_user_oid,
     context_entry,
+    humanize,
+    learn_links,
     new_task,
     plan_artifact,
     principal_person,
     principal_pool,
+    read_research_context,
 )
 
 PAUL = "00000000-0000-0000-0000-0000000000b1"
@@ -493,3 +496,155 @@ def test_validate_flags_orphan_artifact_task_ref():
     plan.add_task(new_task("T1", "t"))
     plan.outputs.append(plan_artifact("k", "Custom", {"a": 1}, produced_by_task_id="TX"))
     assert any("unknown task" in e for e in plan.validate())
+
+
+# --------------------------------------------------------------------------- #
+# Readable Markdown view (render_summary) + Learn enrichment
+# --------------------------------------------------------------------------- #
+
+def _bangalore_plan() -> Plan:
+    """A plan shaped like the real /planner capture — scenarios, capabilities,
+    systems, goals, persona — used to exercise the readable view."""
+    plan = Plan.new(objective="Roll out ESS to the Bangalore team")
+    plan.set_context("market", "Bangalore team (India)", group="market")
+    plan.set_context("persona", "Employees (Bangalore pilot group)", group="scenarioContext")
+    plan.set_context("jtbd", "HR knowledge, HR profile, HR ticketing", group="scenarioContext")
+    plan.set_context("ticketDeflection", "Reduce HR ticket volume by 30%", group="businessGoals")
+    plan.set_context("pilotBar", "Pilot-ready: passes evals and HR-signed-off", group="acceptanceCriteria")
+    for sid, label in [
+        ("hr-knowledge", "HR knowledge"),
+        ("hr-profile-read", "HR profile read"),
+        ("hr-profile-write", "HR profile update"),
+        ("hr-ticketing", "HR ticketing"),
+    ]:
+        plan.set_context(sid, label, group="scenario")
+    plan.set_context("hr-knowledge.policy-lookup", "HR Policy Lookup", group="scenarioCapability")
+    plan.set_context("hr-ticketing.create-ticket", "Create HR Ticket", group="scenarioCapability")
+    plan.set_context("hr-profile-read.job-details", "View Job Details", group="scenarioCapability")
+    plan.set_system("hr-knowledge", "SharePoint (knowledge source)")
+    plan.set_system("hr-profile", "Workday")
+    plan.set_system("hr-ticketing", "ServiceNow HRSD")
+    plan.add_scenario_dependency("hr-ticketing", "hr-knowledge", kind="recommends")
+    plan.add_scenario_dependency("hr-profile-write", "hr-profile-read", kind="requires")
+    return plan
+
+
+def test_readable_view_replaces_raw_group_bullets():
+    md = _bangalore_plan().render_summary()
+    # Human sections, not the old raw "## Intent" + "group\n- key: value" dump.
+    assert "# ESS scenario plan — Roll out ESS to the Bangalore team" in md
+    assert "## Overview" in md
+    assert "## Scenarios in scope" in md
+    assert "## Systems" in md
+    assert "## Intent" not in md  # the flat bag heading is gone
+    assert "scenarioCapability" not in md  # raw group names never surface
+    assert "scenarioContext" not in md
+
+
+def test_readable_view_renders_scenario_with_system_and_capabilities():
+    md = _bangalore_plan().render_summary()
+    assert "### HR knowledge (`hr-knowledge`)" in md
+    assert "Backed by **SharePoint (knowledge source)**." in md
+    assert "- HR Policy Lookup" in md
+    # A write scenario shows its dependency inline, in plain language.
+    assert "Depends on: `hr-profile-read` (requires, in scope)" in md
+
+
+def test_readable_view_humanizes_overview_and_system_areas():
+    md = _bangalore_plan().render_summary()
+    assert "- **Market / rollout wave:** Bangalore team (India)" in md
+    assert "- **Audience:** Employees (Bangalore pilot group)" in md
+    assert "**Business goals**" in md
+    assert "- Reduce HR ticket volume by 30%" in md
+    # System area slug is humanised with acronym casing.
+    assert "| HR knowledge | SharePoint (knowledge source) |" in md
+    assert "| HR profile | Workday |" in md
+
+
+def test_readable_view_keeps_dependency_table_contract():
+    # The scenario-dependency table row format is relied on by edit.md reconcile
+    # and by test_scenario_deps — keep it exact.
+    md = _bangalore_plan().render_summary()
+    assert "## Scenario dependencies" in md
+    assert "| hr-ticketing | hr-knowledge | recommends | met |" in md
+
+
+def test_agent_line_reflects_pinned_agent_output():
+    plan = _bangalore_plan()
+    assert "**Agent:** not set yet" in plan.render_summary()
+    plan.add_task(new_task("T1", "Run setup"))
+    plan.add_output(plan_artifact("essAgent", "Agent", {"name": "Contoso ESS"}, produced_by_task_id="T1"))
+    assert "**Agent:** Contoso ESS" in plan.render_summary()
+
+
+def test_more_context_catches_unknown_groups():
+    plan = Plan.new()
+    plan.set_context("dataResidency", "India only", group="constraints")
+    md = plan.render_summary()
+    assert "## More context" in md
+    assert "**Constraints**" in md
+    assert "- Data residency: India only" in md
+
+
+def test_learn_enrichment_is_best_effort_and_optional():
+    plan = _bangalore_plan()
+    # No corpus -> no Learn section (the common case today; no persisted sidecar).
+    assert "## Learn references" not in plan.render_summary()
+    # A corpus enriches the view with grounding links, incl. per-scenario.
+    research = {
+        "sources": [
+            {"title": "Set up HR knowledge", "url": "https://learn.microsoft.com/x", "scenario": "hr-knowledge"},
+            {"toc_title": "ESS overview", "href": "https://learn.microsoft.com/overview"},
+        ]
+    }
+    md = plan.render_summary(research=research)
+    assert "## Learn references" in md
+    assert "[Set up HR knowledge](https://learn.microsoft.com/x)" in md
+    assert "[ESS overview](https://learn.microsoft.com/overview)" in md
+
+
+def test_write_summary_enriches_from_research_sidecar(tmp_path):
+    """render/refresh time: save_all/write_summary auto-load research-context.json
+    next to the plan and enrich the Markdown from it."""
+    plan = _bangalore_plan()
+    (tmp_path / "research-context.json").write_text(
+        json.dumps({"pages": [{"title": "Workday setup", "url": "https://learn.microsoft.com/wd"}]}),
+        encoding="utf-8",
+    )
+    plan.save_all(tmp_path / "plan.json")
+    md = (tmp_path / "ESS-scenario-plan.md").read_text(encoding="utf-8")
+    assert "## Learn references" in md
+    assert "[Workday setup](https://learn.microsoft.com/wd)" in md
+
+
+def test_write_summary_without_sidecar_renders_no_learn_section(tmp_path):
+    plan = _bangalore_plan()
+    plan.save_all(tmp_path / "plan.json")
+    md = (tmp_path / "ESS-scenario-plan.md").read_text(encoding="utf-8")
+    assert "## Learn references" not in md
+    assert "## Scenarios in scope" in md  # still fully rendered
+
+
+def test_humanize_acronyms_and_camel_case():
+    assert humanize("pilotBar") == "Pilot bar"
+    assert humanize("hr-knowledge") == "HR knowledge"
+    assert humanize("it_ticketing") == "IT ticketing"
+    assert humanize("ticketDeflection") == "Ticket deflection"
+
+
+def test_learn_links_tolerates_shapes_and_dedupes():
+    assert learn_links(None) == []
+    assert learn_links({"nothing": 1}) == []
+    links = learn_links([
+        {"title": "A", "url": "u1"},
+        {"name": "B", "href": "u2", "system": "workday"},
+        {"label": "dupe", "sourceUrl": "u1"},  # same url -> dropped
+    ])
+    assert [l["url"] for l in links] == ["u1", "u2"]
+    assert links[1]["scope"] == "workday"
+
+
+def test_read_research_context_missing_returns_none(tmp_path):
+    assert read_research_context(tmp_path) is None
+    (tmp_path / "research-context.json").write_text("{ not json", encoding="utf-8")
+    assert read_research_context(tmp_path) is None  # unreadable -> None, never raises

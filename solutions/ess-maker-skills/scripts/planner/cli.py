@@ -46,6 +46,7 @@ from planner.plan_model import (
     plan_artifact,
     principal_person,
     principal_pool,
+    read_research_context,
 )
 from planner.sync import (
     hydrate_from_remote,
@@ -449,9 +450,12 @@ def cmd_summary(args: argparse.Namespace) -> int:
     """Render and print the plan's Markdown view. **Read-only** — it does NOT
     rewrite ``ESS-scenario-plan.md`` (mutating commands already regenerate it via
     ``save_all``), so running ``summary`` after a Plan editor revises that file
-    never clobbers their edits before they can be reconciled (`edit.md`)."""
+    never clobbers their edits before they can be reconciled (`edit.md`). The
+    printed view is enriched from the Learn-research sidecar (best-effort) so it
+    matches the file the mutating commands write."""
     plan = _load(args)
-    print(plan.render_summary())
+    directory = os.path.dirname(os.fspath(args.plan)) or "."
+    print(plan.render_summary(research=read_research_context(directory)))
     # Assistant-facing reminder on stderr (never part of the sponsor-facing
     # Markdown, which is stdout/file only): a built plan that isn't on the shared
     # planner yet must be published now — see src/skills/planner/sync.md -> Push.
