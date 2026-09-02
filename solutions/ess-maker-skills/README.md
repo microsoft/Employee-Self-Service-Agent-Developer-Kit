@@ -73,7 +73,10 @@ Catch and fix compile errors before they reach production. The `/scan` command a
 
 ### 📊 Generate Evaluation Test Sets
 
-Create structured CSV test sets that you upload to the Copilot Studio Evaluation portal. The agent reads your topics and generates tests across multiple quality dimensions.
+Create Copilot Studio-native evaluation sets from configured agent topics, or
+generate catalogue-grounded starter sets for named ESS scenarios before an
+agent is configured. Each set produces synchronized `.mcs.yml` and CSV
+artifacts from the same test cases.
 
 - **Topic Triggering** — Verifies each topic fires on its trigger phrases plus paraphrased variants
 - **Responsible AI** — Standard guardrail tests for harmful, adversarial, and policy-bypass prompts
@@ -83,7 +86,11 @@ Create structured CSV test sets that you upload to the Copilot Studio Evaluation
 - **Integration Data** — Validates external system data retrieval with placeholder-based expected responses
 - **General Knowledge** — Open-ended quality checks against loaded knowledge sources
 
-Test sets are written to `workspace/tests/{date}/` in the exact CSV format Copilot Studio expects (`Prompt, Expected response, Test Method Type, Passing Score`). Run `/evaluate` to generate them.
+Catalogue-grounded sets are staged under `workspace/evaluations/`; configured
+agent sets live under the agent's `evaluations/` folder. The lifecycle supports
+quality validation, optional SME review, promotion into the configured agent,
+scoped push, execution, run history, and results analysis. Run `/evaluate` to
+create or manage sets, and `/run` to execute a pushed set or inspect results.
 
 ### 🚀 Push to Copilot Studio
 
@@ -312,6 +319,7 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 | `/delete` | Delete a topic or workflow from your agent |
 | `/scan` | Scan your agent for compile errors and fix them |
 | `/evaluate` | Generate evaluation test sets for your agent |
+| `/run` | Run pushed evaluation test sets and inspect history or results |
 | `/flightcheck` | Run pre-deployment readiness validation — licenses, environment, integrations, agent files |
 | `/push` | Push all local changes to Copilot Studio |
 | `/backup-template-configs` | Capture customised Workday HCM reference-data template configs before an ESS package update |
