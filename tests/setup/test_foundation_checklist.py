@@ -17,7 +17,7 @@ _TEMPLATE = (
     / "src"
     / "skills"
     / "foundation-setup"
-    / "tasks.md"
+    / "steps.md"
 )
 _EXPECTED_STEPS = {
     "SETUP-01",
