@@ -124,6 +124,48 @@ def test_materialize_defaults_preserves_local_override(tmp_path: Path) -> None:
     assert preserved["servers"]["bundled"]["args"] == ["local.py"]
 
 
+def test_materialize_defaults_resolves_the_active_python_interpreter(
+    tmp_path: Path,
+) -> None:
+    defaults = _defaults("bundled")
+    defaults["servers"]["bundled"]["command"] = "{pythonExecutable}"
+    _write_json(tmp_path / mcp_config.DEFAULTS_PATH, defaults)
+
+    mcp_config.materialize_defaults(tmp_path)
+    config = json.loads((tmp_path / mcp_config.CONFIG_PATH).read_text())
+
+    assert config["servers"]["bundled"]["command"] == str(
+        Path(sys.executable).resolve()
+    )
+
+
+def test_configured_environment_override_survives_default_rematerialization(
+    tmp_path: Path,
+) -> None:
+    defaults = _defaults("Example")
+    _write_json(tmp_path / mcp_config.DEFAULTS_PATH, defaults)
+    _write_json(
+        tmp_path / "src/mcp/example/mcp.server.json",
+        {
+            "id": "example",
+            "serverName": "Example",
+            "server": defaults["servers"]["Example"],
+        },
+    )
+
+    mcp_config.materialize_defaults(tmp_path)
+    mcp_config.configure_server(
+        "example",
+        ["--env", "EXAMPLE_MODE=custom"],
+        tmp_path,
+    )
+    result = mcp_config.materialize_defaults(tmp_path)
+    config = json.loads((tmp_path / mcp_config.CONFIG_PATH).read_text())
+
+    assert result["preservedServerOverrides"] == ["Example"]
+    assert config["servers"]["Example"]["env"] == {"EXAMPLE_MODE": "custom"}
+
+
 def test_invalid_generated_config_fails_without_writing(tmp_path: Path) -> None:
     _write_json(tmp_path / mcp_config.DEFAULTS_PATH, _defaults("bundled"))
     config_path = tmp_path / mcp_config.CONFIG_PATH
