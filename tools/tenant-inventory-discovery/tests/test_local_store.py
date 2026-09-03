@@ -1,4 +1,18 @@
-"""Pure build/merge semantics for the durable local inventory mirror (local_store)."""
+"""Pure build/merge semantics for the durable local inventory mirror (local_store).
+
+The mirror mimics the *service's* rules so an offline reader sees the same picture the
+tenant has. Under whole-inventory sync those rules collapsed into one decision, taken
+once per run rather than once per scope:
+
+* the sync succeeded -> the payload **was** the tenant, so refresh what it carried and
+  retire what it omitted;
+* the sync did not happen -> the tenant did not change, so the prior mirror is still
+  correct and this run's observations are discarded rather than displayed.
+
+Discarding observations on a withheld sync is deliberate. Showing them would assert a
+tenant state that was never written, and the next successful sync re-observes them
+anyway.
+"""
 
 from __future__ import annotations
 
@@ -9,6 +23,7 @@ from tenant_inventory_discovery.models import (
     RunSummary,
     ScopeKey,
     ScopeReport,
+    SyncResult,
 )
 
 T1 = "2024-01-01T00:00:00Z"
@@ -27,22 +42,27 @@ def _item(kind, natural_key, *, env="", **attrs):
     )
 
 
-def _report(kind, *, env="", complete=True, error=None, upserted=0, enumerated=0):
+def _report(kind, *, env="", complete=True, error=None, mapped=0, enumerated=0):
     scope = ScopeKey.for_kind(kind, env or None)
     return ScopeReport(
         scope=scope,
         enumerated=enumerated,
-        upserted=upserted,
+        mapped=mapped,
         fully_enumerated=complete,
+        covered=True,
         error=error,
     )
 
 
-def _summary(reports, *, completed=None, correlation_id="run-1", aborted=False):
+def _summary(reports, *, synced=True, correlation_id="run-1", aborted=False, blocked=""):
+    """A run summary. ``synced`` decides which of the two merge branches applies."""
     s = RunSummary(correlation_id=correlation_id)
     s.scopes = reports
-    s.completed_scopes = [r.scope for r in (completed or [])]
+    s.authoritative_scopes = [r.scope for r in reports if r.authoritative]
     s.aborted = aborted
+    s.sync_blocked_reason = blocked
+    if synced:
+        s.synced = SyncResult(submitted_count=0, upserted_count=0, retired_count=0)
     return s
 
 
@@ -66,10 +86,6 @@ def _conn(nk):
     return _item(Kind.CONNECTION, nk, env=ENV_A)
 
 
-def _solo(rep):
-    return _summary([rep], completed=[rep])
-
-
 def _find(doc, kind, natural_key):
     for rec in _records(doc, kind):
         if rec["naturalKey"] == natural_key:
@@ -85,10 +101,8 @@ def test_fresh_build_shape_and_timestamps():
         _item(Kind.CONNECTION, "c-1", env=ENV_A, connectorId="shared_sn"),
         _item(Kind.CONNECTION, "c-2", env=ENV_A),
     ]
-    rep = _report(Kind.CONNECTION, env=ENV_A, complete=True, upserted=2, enumerated=2)
-    summary = _summary([rep], completed=[rep])
-
-    doc = _build(None, items, summary, now=T1)
+    rep = _report(Kind.CONNECTION, env=ENV_A, mapped=2, enumerated=2)
+    doc = _build(None, items, _summary([rep]), now=T1)
 
     assert doc["schemaVersion"] == 1
     assert doc["kind"] == "tenant-inventory"
@@ -115,24 +129,37 @@ def test_fresh_build_shape_and_timestamps():
         "incompleteScopes": 0,
     }
     scope_row = doc["scopes"][0]
-    assert scope_row["reconciled"] is True
     assert scope_row["complete"] is True
+    assert scope_row["authoritative"] is True
     assert scope_row["tenantRoot"] is False
 
 
-# -- reconciled scope: retire drift, keep-then-prune -------------------------------
+def test_the_run_record_carries_the_sync_outcome():
+    rep = _report(Kind.CONNECTION, env=ENV_A, mapped=1, enumerated=1)
+    summary = _summary([rep])
+    summary.synced = SyncResult(
+        submitted_count=1, upserted_count=1, retired_count=2,
+        retired_item_ids=["Connection:gone"],
+    )
+    doc = _build(None, [_conn("c-1")], summary, now=T1)
+
+    assert doc["lastRun"]["synced"] is True
+    assert doc["lastRun"]["retiredCount"] == 2
+    assert doc["lastRun"]["syncBlockedReason"] == ""
 
 
-def test_reconciled_scope_retires_then_prunes_drift():
+# -- a successful sync: absence retires, then prunes --------------------------------
+
+
+def test_a_synced_run_retires_then_prunes_drift():
     # Run 1: c-1, c-2 both present.
-    items1 = [_item(Kind.CONNECTION, "c-1", env=ENV_A), _item(Kind.CONNECTION, "c-2", env=ENV_A)]
-    rep1 = _report(Kind.CONNECTION, env=ENV_A, upserted=2, enumerated=2)
-    doc1 = _build(None, items1, _summary([rep1], completed=[rep1]), now=T1)
+    items1 = [_conn("c-1"), _conn("c-2")]
+    rep1 = _report(Kind.CONNECTION, env=ENV_A, mapped=2, enumerated=2)
+    doc1 = _build(None, items1, _summary([rep1]), now=T1)
 
-    # Run 2: only c-1 observed -> c-2 becomes Retired (kept one run).
-    items2 = [_item(Kind.CONNECTION, "c-1", env=ENV_A)]
-    rep2 = _report(Kind.CONNECTION, env=ENV_A, upserted=1, enumerated=1)
-    doc2 = _build(doc1, items2, _summary([rep2], completed=[rep2]), now=T2)
+    # Run 2: only c-1 in the payload -> c-2 was retired server-side, shown for one run.
+    rep2 = _report(Kind.CONNECTION, env=ENV_A, mapped=1, enumerated=1)
+    doc2 = _build(doc1, [_conn("c-1")], _summary([rep2]), now=T2)
 
     c1 = _find(doc2, Kind.CONNECTION, "c-1")
     c2 = _find(doc2, Kind.CONNECTION, "c-2")
@@ -141,123 +168,138 @@ def test_reconciled_scope_retires_then_prunes_drift():
     assert doc2["totals"]["retired"] == 1
 
     # Run 3: still only c-1 -> the already-Retired c-2 is pruned.
-    items3 = [_item(Kind.CONNECTION, "c-1", env=ENV_A)]
-    rep3 = _report(Kind.CONNECTION, env=ENV_A, upserted=1, enumerated=1)
-    doc3 = _build(doc2, items3, _summary([rep3], completed=[rep3]), now=T3)
+    rep3 = _report(Kind.CONNECTION, env=ENV_A, mapped=1, enumerated=1)
+    doc3 = _build(doc2, [_conn("c-1")], _summary([rep3]), now=T3)
 
     assert _find(doc3, Kind.CONNECTION, "c-2") is None
     assert [r["naturalKey"] for r in _records(doc3, Kind.CONNECTION)] == ["c-1"]
 
 
-# -- firstSeenAt carried forward, lastSeenAt bumped --------------------------------
-
-
 def test_firstseen_carried_lastseen_bumped():
-    rep1 = _report(Kind.CONNECTION, env=ENV_A, upserted=1)
-    doc1 = _build(None, [_conn("c-1")], _solo(rep1), now=T1)
+    rep1 = _report(Kind.CONNECTION, env=ENV_A, mapped=1)
+    doc1 = _build(None, [_conn("c-1")], _summary([rep1]), now=T1)
 
-    rep2 = _report(Kind.CONNECTION, env=ENV_A, upserted=1)
-    doc2 = _build(doc1, [_conn("c-1")], _solo(rep2), now=T2)
+    rep2 = _report(Kind.CONNECTION, env=ENV_A, mapped=1)
+    doc2 = _build(doc1, [_conn("c-1")], _summary([rep2]), now=T2)
 
     rec = _find(doc2, Kind.CONNECTION, "c-1")
     assert rec["firstSeenAt"] == T1
     assert rec["lastSeenAt"] == T2
 
 
-# -- incomplete scope preserves prior untouched ------------------------------------
+def test_a_retired_item_revives_on_reappearance():
+    rep1 = _report(Kind.CONNECTION, env=ENV_A, mapped=2)
+    doc1 = _build(None, [_conn("c-1"), _conn("c-2")], _summary([rep1]), now=T1)
 
-
-def test_incomplete_scope_preserves_prior():
-    rep1 = _report(Kind.CONNECTION, env=ENV_A, upserted=2)
-    items1 = [_item(Kind.CONNECTION, "c-1", env=ENV_A), _item(Kind.CONNECTION, "c-2", env=ENV_A)]
-    doc1 = _build(None, items1, _summary([rep1], completed=[rep1]), now=T1)
-
-    # Run 2: scope failed to enumerate -> not complete, nothing upserted.
-    rep2 = _report(Kind.CONNECTION, env=ENV_A, complete=False, error="boom", upserted=0)
-    doc2 = _build(doc1, [], _summary([rep2], completed=[]), now=T2)
-
-    # Both prior items preserved unchanged (no wipe, no retire).
-    for nk in ("c-1", "c-2"):
-        rec = _find(doc2, Kind.CONNECTION, nk)
-        assert rec["state"] == "Active"
-        assert rec["firstSeenAt"] == T1
-        assert rec["lastSeenAt"] == T1  # not bumped
-    assert doc2["totals"]["incompleteScopes"] == 1
-
-
-# -- tenant-root exemption in subset mode ------------------------------------------
-
-
-def test_tenant_root_complete_but_exempt_does_not_retire():
-    # Run 1 (full crawl): connectors conn-1, conn-2 reconciled.
-    items1 = [_item(Kind.CONNECTOR, "conn-1"), _item(Kind.CONNECTOR, "conn-2")]
-    rep1 = _report(Kind.CONNECTOR, upserted=2)
-    doc1 = _build(None, items1, _summary([rep1], completed=[rep1]), now=T1)
-
-    # Run 2 (subset mode): connector scope enumerated fully (complete=True) but is
-    # NOT reconcile-eligible (tenant-root exemption -> absent from completed_scopes).
-    # conn-2 disappeared; it must be preserved, not retired.
-    items2 = [_item(Kind.CONNECTOR, "conn-1")]
-    rep2 = _report(Kind.CONNECTOR, complete=True, upserted=1)
-    doc2 = _build(doc1, items2, _summary([rep2], completed=[]), now=T2)
-
-    conn1 = _find(doc2, Kind.CONNECTOR, "conn-1")
-    conn2 = _find(doc2, Kind.CONNECTOR, "conn-2")
-    assert conn1["state"] == "Active" and conn1["lastSeenAt"] == T2  # refreshed
-    assert conn2["state"] == "Active"  # preserved, NOT retired
-    assert conn2["lastSeenAt"] == T1
-    assert doc2["scopes"][0]["reconciled"] is False
-
-
-# -- scope not crawled this run is preserved ---------------------------------------
-
-
-def test_scope_absent_from_run_is_preserved():
-    # Run 1 crawls two scopes.
-    items1 = [
-        _item(Kind.CONNECTION, "c-1", env=ENV_A),
-        _item(Kind.EXTENSION_PACK, "ESS.HRSD", env=ENV_A, version="1.0"),
-    ]
-    reps1 = [
-        _report(Kind.CONNECTION, env=ENV_A, upserted=1),
-        _report(Kind.EXTENSION_PACK, env=ENV_A, upserted=1),
-    ]
-    doc1 = _build(None, items1, _summary(reps1, completed=reps1), now=T1)
-
-    # Run 2 only crawls Connection; ExtensionPack scope is absent from the summary.
-    rep2 = _report(Kind.CONNECTION, env=ENV_A, upserted=1)
-    doc2 = _build(doc1, [_conn("c-1")], _solo(rep2), now=T2)
-
-    pack = _find(doc2, Kind.EXTENSION_PACK, "ESS.HRSD")
-    assert pack is not None and pack["state"] == "Active"
-    assert pack["firstSeenAt"] == T1 and pack["lastSeenAt"] == T1  # untouched
-
-
-# -- a retired item reappearing is revived -----------------------------------------
-
-
-def test_retired_item_revived_on_reappearance():
-    rep1 = _report(Kind.CONNECTION, env=ENV_A, upserted=2)
-    doc1 = _build(
-        None,
-        [_item(Kind.CONNECTION, "c-1", env=ENV_A), _item(Kind.CONNECTION, "c-2", env=ENV_A)],
-        _summary([rep1], completed=[rep1]),
-        now=T1,
-    )
-    # c-2 disappears -> retired.
-    rep2 = _report(Kind.CONNECTION, env=ENV_A, upserted=1)
-    doc2 = _build(doc1, [_conn("c-1")], _solo(rep2), now=T2)
+    rep2 = _report(Kind.CONNECTION, env=ENV_A, mapped=1)
+    doc2 = _build(doc1, [_conn("c-1")], _summary([rep2]), now=T2)
     assert _find(doc2, Kind.CONNECTION, "c-2")["state"] == "Retired"
 
-    # c-2 comes back -> Active again, firstSeenAt preserved, no retiredAt.
-    rep3 = _report(Kind.CONNECTION, env=ENV_A, upserted=2)
-    doc3 = _build(
-        doc2,
-        [_item(Kind.CONNECTION, "c-1", env=ENV_A), _item(Kind.CONNECTION, "c-2", env=ENV_A)],
-        _summary([rep3], completed=[rep3]),
-        now=T3,
-    )
+    rep3 = _report(Kind.CONNECTION, env=ENV_A, mapped=2)
+    doc3 = _build(doc2, [_conn("c-1"), _conn("c-2")], _summary([rep3]), now=T3)
+
     c2 = _find(doc3, Kind.CONNECTION, "c-2")
     assert c2["state"] == "Active"
     assert c2["firstSeenAt"] == T1
     assert "retiredAt" not in c2
+
+
+def test_carried_forward_rows_keep_the_mirror_whole():
+    """The payload includes rows the crawl did not observe; the mirror must show them.
+
+    Otherwise a narrow run would blank the mirror for every environment it skipped --
+    the same absence bug as the service, one layer down.
+    """
+    items1 = [_conn("c-1"), _item(Kind.CONNECTION, "other", env="env-bbbb")]
+    rep1 = _report(Kind.CONNECTION, env=ENV_A, mapped=2)
+    doc1 = _build(None, items1, _summary([rep1]), now=T1)
+
+    # Run 2 observes only c-1 but carries "other" forward, so both are in the payload.
+    rep2 = _report(Kind.CONNECTION, env=ENV_A, mapped=1)
+    doc2 = _build(doc1, items1, _summary([rep2]), now=T2)
+
+    assert _find(doc2, Kind.CONNECTION, "other")["state"] == "Active"
+
+
+# -- a run that did not sync must not move the mirror -------------------------------
+
+
+def test_a_withheld_sync_preserves_the_prior_mirror_exactly():
+    items1 = [_conn("c-1"), _conn("c-2")]
+    rep1 = _report(Kind.CONNECTION, env=ENV_A, mapped=2)
+    doc1 = _build(None, items1, _summary([rep1]), now=T1)
+
+    # Run 2 crawled but never wrote. The tenant is unchanged, so the mirror is too.
+    rep2 = _report(Kind.CONNECTION, env=ENV_A, complete=False, error="boom")
+    doc2 = _build(
+        doc1, [], _summary([rep2], synced=False, blocked="inventory unreadable"), now=T2
+    )
+
+    for nk in ("c-1", "c-2"):
+        rec = _find(doc2, Kind.CONNECTION, nk)
+        assert rec["state"] == "Active"
+        assert rec["firstSeenAt"] == T1
+        assert rec["lastSeenAt"] == T1  # not bumped -- nothing was confirmed
+    assert doc2["totals"]["incompleteScopes"] == 1
+    assert doc2["lastRun"]["synced"] is False
+    assert doc2["lastRun"]["syncBlockedReason"] == "inventory unreadable"
+
+
+def test_a_withheld_sync_discards_this_runs_observations():
+    """Showing them would claim a tenant state that was never written."""
+    rep1 = _report(Kind.CONNECTION, env=ENV_A, mapped=1)
+    doc1 = _build(None, [_conn("c-1")], _summary([rep1]), now=T1)
+
+    rep2 = _report(Kind.CONNECTION, env=ENV_A, mapped=2)
+    doc2 = _build(
+        doc1, [_conn("c-1"), _conn("c-new")], _summary([rep2], synced=False), now=T2
+    )
+
+    assert _find(doc2, Kind.CONNECTION, "c-new") is None
+    assert _find(doc2, Kind.CONNECTION, "c-1")["lastSeenAt"] == T1
+
+
+def test_a_withheld_sync_never_retires():
+    """The failure direction that matters: no write means no deletion, ever."""
+    rep1 = _report(Kind.CONNECTION, env=ENV_A, mapped=2)
+    doc1 = _build(None, [_conn("c-1"), _conn("c-2")], _summary([rep1]), now=T1)
+
+    rep2 = _report(Kind.CONNECTION, env=ENV_A, mapped=1)
+    doc2 = _build(doc1, [_conn("c-1")], _summary([rep2], synced=False), now=T2)
+
+    assert _find(doc2, Kind.CONNECTION, "c-2")["state"] == "Active"
+    assert doc2["totals"]["retired"] == 0
+
+
+def test_an_aborted_run_leaves_the_mirror_alone():
+    rep1 = _report(Kind.CONNECTION, env=ENV_A, mapped=1)
+    doc1 = _build(None, [_conn("c-1")], _summary([rep1]), now=T1)
+
+    doc2 = _build(doc1, [], _summary([], synced=False, aborted=True), now=T2)
+
+    assert _find(doc2, Kind.CONNECTION, "c-1")["state"] == "Active"
+    assert doc2["lastRun"]["aborted"] is True
+
+
+# -- scope bookkeeping ---------------------------------------------------------------
+
+
+def test_a_non_authoritative_scope_is_recorded_as_such():
+    """Complete but not vouched-for: enumerated fine, coverage too narrow to trust."""
+    rep = _report(Kind.CONNECTOR, mapped=1, enumerated=1)
+    rep.covered = False  # e.g. the kit's Connector, derived from one environment
+    doc = _build(None, [_item(Kind.CONNECTOR, "conn-1")], _summary([rep]), now=T1)
+
+    row = doc["scopes"][0]
+    assert row["complete"] is True
+    assert row["authoritative"] is False
+
+
+def test_a_failed_scope_records_its_error():
+    rep = _report(Kind.CONNECTION, env=ENV_A, complete=False, error="403 forbidden")
+    doc = _build(None, [], _summary([rep], synced=False), now=T1)
+
+    row = doc["scopes"][0]
+    assert row["error"] == "403 forbidden"
+    assert row["complete"] is False
+    assert row["authoritative"] is False

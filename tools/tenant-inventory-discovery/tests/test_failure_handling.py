@@ -1,4 +1,16 @@
-"""§10: completeness invariant -- partial crawl and crash never trigger reconcile."""
+"""§10: completeness invariant -- what a partial crawl or a crash is allowed to do.
+
+The whole-inventory contract inverted this file's stakes. Under reconcile, a scope that
+failed to enumerate simply contributed no delete ids, and the worst case was stale
+data. Under sync, a scope that failed to enumerate contributes *absences*, and absences
+delete -- so the same failure that used to be harmless is now the one that can empty a
+tenant.
+
+The invariant these tests hold is therefore stronger than "don't retire the broken
+scope". It is: **a run may only ever remove something it actually looked at and found
+gone.** Everything else must survive, whether it went missing because a token expired,
+a page failed, or the process died halfway through.
+"""
 
 from __future__ import annotations
 
@@ -7,101 +19,139 @@ import pytest
 from conftest import ENV_A, build_platform
 from tenant_inventory_discovery.config import DiscoveryConfig
 from tenant_inventory_discovery.discovery_skill import DiscoverySkill
+from tenant_inventory_discovery.errors import PlatformError
 from tenant_inventory_discovery.models import Kind
 from tenant_inventory_discovery.runner import DiscoveryRunner
 
 
-def test_failed_scope_excluded_from_reconcile(platform, inventory):
-    # Connections enumeration fails -> that scope must not be swept (spec §7).
-    platform.fail_on = {"list_connections"}
-    runner = DiscoveryRunner(platform, inventory, DiscoveryConfig())
-    summary = runner.run()
+class TestAFailedScopeIsMarkedIncomplete:
+    def test_the_failure_is_recorded_not_swallowed(self, platform, inventory):
+        platform.fail_on = {"list_connections"}
+        summary = DiscoveryRunner(platform, inventory, DiscoveryConfig()).run()
 
-    completed_kinds = {s.kind for s in summary.completed_scopes}
-    assert Kind.CONNECTION not in completed_kinds
-    # Other scopes still complete normally.
-    assert Kind.EXTENSION_PACK in completed_kinds
-    # The failed scope is recorded as incomplete with an error.
-    conn_reports = [s for s in summary.scopes if s.scope.kind is Kind.CONNECTION]
-    assert conn_reports and all(not r.complete for r in conn_reports)
+        conn_reports = [s for s in summary.scopes if s.scope.kind is Kind.CONNECTION]
+        assert conn_reports
+        assert all(not r.complete and r.error for r in conn_reports)
 
+    def test_healthy_scopes_are_unaffected(self, platform, inventory):
+        platform.fail_on = {"list_connections"}
+        summary = DiscoveryRunner(platform, inventory, DiscoveryConfig()).run()
 
-def test_partial_crawl_keeps_prior_rows(inventory):
-    # Full run 1.
-    skill = DiscoverySkill(build_platform(), inventory)
-    skill.discover("t1")
+        completed = {s.kind for s in summary.completed_scopes}
+        assert Kind.CONNECTION not in completed
+        assert Kind.EXTENSION_PACK in completed
 
-    # Run 2: connection enumeration fails in ENV_A -> scope incomplete -> the existing
-    # ENV_A connection must NOT be retired (spec §7).
-    p2 = build_platform()
-    p2.fail_on = {"list_connections"}
-    skill2 = DiscoverySkill(p2, inventory)
-    skill2.discover("t1")
+    def test_a_failed_scope_never_becomes_authoritative(self, platform, inventory):
+        """Authority is the licence to delete. A scope that errored has not earned it."""
+        platform.fail_on = {"list_connections"}
+        summary = DiscoveryRunner(platform, inventory, DiscoveryConfig()).run()
 
-    conn = inventory.get(Kind.CONNECTION, f"{ENV_A}:c-1")
-    assert conn.state == "Active"  # not swept -- scope was incomplete
+        for report in summary.scopes:
+            if report.scope.kind is Kind.CONNECTION:
+                assert not report.authoritative
 
 
-def test_crash_before_reconcile_retires_nothing(inventory):
-    # A platform that raises a non-PlatformError during enumeration simulates a crash
-    # that escapes the per-scope handler.
-    platform = build_platform()
+class TestAPartialCrawlPreservesData:
+    def test_a_failed_scopes_rows_survive(self, inventory):
+        DiscoverySkill(build_platform(), inventory).discover("t1")
 
-    def explode(_page_size):
-        raise RuntimeError("boom")
+        broken = build_platform()
+        broken.fail_on = {"list_connections"}
+        DiscoverySkill(broken, inventory).discover("t1")
 
-    platform.list_environments = explode  # type: ignore[assignment]
+        assert inventory.get(Kind.CONNECTION, f"{ENV_A}:c-1").state == "Active"
 
-    skill = DiscoverySkill(platform, inventory)
-    with pytest.raises(RuntimeError):
-        skill.discover("t1")
+    def test_the_run_still_completes(self, inventory):
+        """One broken kind is not a reason to abandon the other seven."""
+        DiscoverySkill(build_platform(), inventory).discover("t1")
 
-    # Crash path: the retire phase never ran -> nothing retired.
-    assert inventory.reconcile_calls == 0
-    assert inventory.retire_calls == 0
+        broken = build_platform()
+        broken.fail_on = {"list_connections"}
+        summary = DiscoverySkill(broken, inventory).discover("t1")
+
+        assert not summary.aborted
+        assert summary.synced_ok
+
+    def test_a_mid_enumeration_failure_still_preserves_the_kind(self, inventory):
+        """Failing on page two is the nastiest case: some rows were seen, not all."""
+        DiscoverySkill(build_platform(), inventory).discover("t1")
+
+        broken = build_platform()
+        calls = {"n": 0}
+        original = broken.list_connections
+
+        def flaky(env_id, page_size):
+            for page in original(env_id, page_size):
+                calls["n"] += 1
+                yield page
+                raise PlatformError("token expired mid-page")
+
+        broken.list_connections = flaky
+        DiscoverySkill(broken, inventory).discover("t1")
+
+        assert inventory.get(Kind.CONNECTION, f"{ENV_A}:c-1").state == "Active"
 
 
-def test_upsert_failure_makes_scope_incomplete(platform):
-    from tenant_inventory_discovery.errors import InventoryApiError
+class TestACrashWritesNothing:
+    def test_a_crash_during_the_crawl_never_reaches_the_sync(self, inventory):
+        platform = build_platform()
 
-    class FlakyInventory:
-        def __init__(self):
-            self.reconcile_calls = 0
+        def explode(_page_size):
+            raise RuntimeError("boom")
 
-        def upsert(self, item, *, if_match=None, run_id=""):
-            if item.kind is Kind.CONNECTOR:
-                raise InventoryApiError("500")
-            return None
+        platform.list_environments = explode  # type: ignore[assignment]
 
-        def reconcile(self, snapshots):
-            self.reconcile_calls += 1
-            return {}
+        with pytest.raises(RuntimeError):
+            DiscoverySkill(platform, inventory).discover("t1")
 
-    inv = FlakyInventory()
-    runner = DiscoveryRunner(platform, inv, DiscoveryConfig())
-    summary = runner.run()
-    completed_kinds = {s.kind for s in summary.completed_scopes}
-    assert Kind.CONNECTOR not in completed_kinds  # exhausted retries -> incomplete (§7)
+        assert inventory.sync_calls == 0
+
+    def test_a_crash_leaves_prior_rows_untouched(self, inventory):
+        DiscoverySkill(build_platform(), inventory).discover("t1")
+        before = inventory.active_keys()
+
+        platform = build_platform()
+
+        def explode(_page_size):
+            raise RuntimeError("boom")
+
+        platform.list_environments = explode  # type: ignore[assignment]
+
+        with pytest.raises(RuntimeError):
+            DiscoverySkill(platform, inventory).discover("t1")
+
+        assert inventory.active_keys() == before
 
 
-def test_no_completed_scopes_skips_reconcile_call():
-    from tenant_inventory_discovery.platform_clients import FakePlatform
+class TestATotallyFailedCrawlWritesNothing:
+    """Every kind failed. The payload would be empty, and empty means "delete all"."""
 
-    from spies import SpyInventoryClient
+    def _dead_platform(self):
+        from tenant_inventory_discovery.platform_clients import FakePlatform
 
-    # Environment enumeration fails -> no environments discovered; every tenant-root
-    # kind that fails is incomplete. Make them all fail to force empty completed set.
-    platform = FakePlatform(
-        fail_on={
-            "list_environments",
-            "list_entra_apps",
-            "list_connectors",
-            "list_sharepoint_sites",
-        }
-    )
-    inv = SpyInventoryClient()
-    skill = DiscoverySkill(platform, inv)
-    summary = skill.discover("t1")
-    assert summary.completed_scopes == []
-    assert inv.reconcile_calls == 0  # nothing to reconcile -> skip the call
-    assert inv.retire_calls == 0
+        return FakePlatform(
+            fail_on={
+                "list_environments",
+                "list_entra_apps",
+                "list_connectors",
+                "list_sharepoint_sites",
+            }
+        )
+
+    def test_no_scope_completes(self, inventory):
+        summary = DiscoverySkill(self._dead_platform(), inventory).discover("t1")
+        assert summary.completed_scopes == []
+
+    def test_the_sync_is_withheld(self, inventory):
+        summary = DiscoverySkill(self._dead_platform(), inventory).discover("t1")
+
+        assert inventory.sync_calls == 0
+        assert summary.sync_blocked_reason
+
+    def test_an_existing_inventory_is_not_wiped(self, inventory):
+        DiscoverySkill(build_platform(), inventory).discover("t1")
+        before = inventory.active_keys()
+
+        DiscoverySkill(self._dead_platform(), inventory).discover("t1")
+
+        assert inventory.active_keys() == before

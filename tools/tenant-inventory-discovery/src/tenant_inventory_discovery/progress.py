@@ -1,15 +1,22 @@
 """Live progress reporting for a discovery run.
 
 A crawl is long and almost entirely I/O: it enumerates eight kinds across a tenant and
-then writes every observed row back, one POST each. Without a running commentary the
-process is silent for minutes at a stretch, which reads as a hang -- both to a person
-watching a terminal and to a tool that treats "no output" as a stalled command.
+then submits the whole picture in one call. Without a running commentary the process is
+silent for minutes at a stretch, which reads as a hang -- both to a person watching a
+terminal and to a tool that treats "no output" as a stalled command.
 
 So the run engine emits events as it goes, and a reporter decides what to do with
 them. :class:`NullProgressReporter` is the default and costs nothing;
 :class:`ConsoleProgressReporter` prints a human-readable line per event plus a
 **heartbeat** while a single slow call is in flight, so the stream never goes quiet
 for longer than the heartbeat interval.
+
+The narration has two acts, matching what the run actually does. The crawl *reads* and
+maps -- it writes nothing, so its lines say "found" and "prepared", never "recorded".
+The sync is one call that either goes out or is withheld, so it gets exactly one of
+:meth:`ProgressReporter.sync_finished` or :meth:`ProgressReporter.sync_skipped`. A
+withheld sync is the loudest line the reporter emits, because it is the one outcome a
+watching operator must not mistake for success.
 
 Progress is deliberately *not* the run summary: it is best-effort narration. A
 reporter must never raise into the crawl, so :class:`ConsoleProgressReporter` swallows
@@ -22,7 +29,7 @@ import threading
 import time
 from typing import Protocol, TextIO
 
-from .models import Kind, RunSummary, ScopeReport
+from .models import Kind, RunSummary, ScopeReport, SyncResult
 
 #: How long the console reporter may stay silent before it emits a heartbeat.
 DEFAULT_HEARTBEAT_SECONDS = 10.0
@@ -59,17 +66,27 @@ class ProgressReporter(Protocol):
         self, kind: Kind, environment_id: str | None, count: int, complete: bool
     ) -> None: ...
 
-    def upsert_progress(
-        self, kind: Kind, environment_id: str | None, done: int, total: int
-    ) -> None: ...
+    def scope_mapped(
+        self, kind: Kind, environment_id: str | None, mapped: int, enumerated: int
+    ) -> None:
+        """A scope finished mapping. Nothing has been written -- this is payload."""
+        ...
 
     def scope_finished(self, report: ScopeReport) -> None: ...
 
-    def retire_started(self, scope_count: int) -> None: ...
+    def sync_started(self, item_count: int) -> None:
+        """The whole-inventory payload is going out."""
+        ...
 
-    def scope_retired(
-        self, kind: Kind, environment_id: str | None, retired: int
-    ) -> None: ...
+    def sync_skipped(self, reason: str) -> None:
+        """The payload was withheld. Nothing changed server-side."""
+        ...
+
+    def sync_unchanged(self, item_count: int) -> None:
+        """The payload already matched the service, so nothing was sent."""
+        ...
+
+    def sync_finished(self, result: SyncResult) -> None: ...
 
     def run_finished(self, summary: RunSummary) -> None: ...
 
@@ -107,20 +124,24 @@ class NullProgressReporter:
     ) -> None:
         return None
 
-    def upsert_progress(
-        self, kind: Kind, environment_id: str | None, done: int, total: int
+    def scope_mapped(
+        self, kind: Kind, environment_id: str | None, mapped: int, enumerated: int
     ) -> None:
         return None
 
     def scope_finished(self, report: ScopeReport) -> None:
         return None
 
-    def retire_started(self, scope_count: int) -> None:
+    def sync_started(self, item_count: int) -> None:
         return None
 
-    def scope_retired(
-        self, kind: Kind, environment_id: str | None, retired: int
-    ) -> None:
+    def sync_skipped(self, reason: str) -> None:
+        return None
+
+    def sync_unchanged(self, item_count: int) -> None:
+        return None
+
+    def sync_finished(self, result: SyncResult) -> None:
         return None
 
     def run_finished(self, summary: RunSummary) -> None:
@@ -134,10 +155,11 @@ class ConsoleProgressReporter:
 
     * **Every write is flushed.** A pipe-buffered stream would hold the narration
       until the process exits, which defeats the entire purpose.
-    * **Silence is bounded.** A single upsert can block for a long time (token mint,
-      retry backoff). A background heartbeat thread prints an elapsed-time line
-      whenever nothing else has been written for ``heartbeat_seconds``, so a caller
-      watching the stream can always tell "still working" from "wedged".
+    * **Silence is bounded.** A single call can block for a long time (token mint,
+      retry backoff, and above all the one whole-inventory sync at the end). A
+      background heartbeat thread prints an elapsed-time line whenever nothing else
+      has been written for ``heartbeat_seconds``, so a caller watching the stream can
+      always tell "still working" from "wedged".
 
     Use as a context manager so the heartbeat thread is always stopped.
     """
@@ -160,9 +182,6 @@ class ConsoleProgressReporter:
         self._last_write = clock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        # Upsert progress is per-item and can be hundreds of calls; only the
-        # transitions worth reading are printed.
-        self._last_upsert_report = 0.0
 
     # -- lifecycle -------------------------------------------------------------------
 
@@ -241,51 +260,83 @@ class ConsoleProgressReporter:
         self._set_activity(f"recording {count} {label_for(kind)}")
         self._write(f"   found {count} {label_for(kind)}{note}")
 
-    def upsert_progress(
-        self, kind: Kind, environment_id: str | None, done: int, total: int
+    def scope_mapped(
+        self, kind: Kind, environment_id: str | None, mapped: int, enumerated: int
     ) -> None:
-        self._set_activity(f"recording {label_for(kind)} ({done}/{total})")
-        # Throttle: one line per second is enough to prove liveness without burying
-        # the meaningful events under hundreds of counter updates.
-        now = self._clock()
-        with self._lock:
-            due = now - self._last_upsert_report >= 1.0
-            if due:
-                self._last_upsert_report = now
-        if due or done == total:
-            self._write(f"   recorded {done}/{total} {label_for(kind)}")
+        self._set_activity(f"preparing {label_for(kind)}")
+        if mapped != enumerated:
+            self._write(
+                f"   prepared {mapped}/{enumerated} {label_for(kind)} for the sync"
+            )
 
     def scope_finished(self, report: ScopeReport) -> None:
+        label = label_for(report.scope.kind)
         if report.error:
+            self._write(f"   ! {label} could not be read: {report.error}")
+        elif report.skipped_invalid:
             self._write(
-                f"   ! {label_for(report.scope.kind)} incomplete: {report.error}"
+                f"   ! {report.skipped_invalid} {label} could not be described and "
+                "were skipped"
             )
         elif report.capped:
             self._write(
-                f"   ! {label_for(report.scope.kind)} hit the per-type row limit; "
-                "nothing will be removed for it"
+                f"   ! {label} hit the per-type row limit; syncing the first "
+                f"{report.mapped} and leaving out {report.truncated}"
             )
 
-    def retire_started(self, scope_count: int) -> None:
-        self._set_activity("removing resources that no longer exist")
+    def sync_started(self, item_count: int) -> None:
+        self._set_activity(f"saving {item_count} resource(s) to the inventory")
         self._write(
-            f">> Checking {scope_count} resource type(s) for entries that no longer "
-            "exist"
+            f">> Saving the tenant picture: {item_count} resource(s) in one request"
+        )
+        # Set expectations before the wait, not after. This single call does all the
+        # writing and all the retiring for the run, so minutes of silence here is
+        # normal -- and a caller who does not know that kills the process.
+        self._write(
+            "   This is one large request and can take several minutes. "
+            "Progress lines continue below; do not cancel."
         )
 
-    def scope_retired(
-        self, kind: Kind, environment_id: str | None, retired: int
-    ) -> None:
-        if retired:
-            self._write(f"   removed {retired} stale {label_for(kind)}")
+    def sync_skipped(self, reason: str) -> None:
+        self._set_activity("finishing up")
+        self._write(f"!! Nothing was saved: {reason}.")
+        self._write("   The inventory is unchanged. Fix the above and re-run.")
+
+    def sync_unchanged(self, item_count: int) -> None:
+        self._set_activity("finishing up")
+        self._write(
+            f"   inventory already matches all {item_count} resource(s) -- "
+            "nothing to save, skipping the request"
+        )
+
+    def sync_finished(self, result: SyncResult) -> None:
+        self._set_activity("finishing up")
+        self._write(
+            f"   saved {result.upserted_count} resource(s); "
+            f"removed {result.retired_count} that no longer exist"
+        )
+        for failed in result.failed_items:
+            self._write(f"   ! could not save {failed.item_id}: {failed.reason}")
 
     def run_finished(self, summary: RunSummary) -> None:
         self._set_activity("finishing up")
         if summary.aborted:
             self._write("Discovery stopped early. Nothing was changed.")
             return
-        total = sum(scope.upserted for scope in summary.scopes)
+        if summary.synced is None:
+            if summary.sync_unchanged:
+                self._write(
+                    f"Discovery finished: {len(summary.payload)} resource(s) "
+                    "confirmed, nothing changed since the last run."
+                )
+                return
+            # sync_skipped already explained why; don't imply anything was stored.
+            self._write(
+                f"Discovery finished reading {len(summary.payload)} resource(s), "
+                "but saved nothing."
+            )
+            return
         self._write(
-            f"Discovery finished: recorded {total} resource(s) across "
-            f"{len(summary.scopes)} scope(s)."
+            f"Discovery finished: {summary.synced.upserted_count} resource(s) saved "
+            f"across {len(summary.scopes)} scope(s)."
         )

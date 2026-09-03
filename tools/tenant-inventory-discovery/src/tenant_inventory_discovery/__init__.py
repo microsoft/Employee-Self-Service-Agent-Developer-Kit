@@ -1,7 +1,9 @@
 """Tenant Inventory discovery skill (ADK) -- admin-run crawler.
 
-Enumerates a tenant's shared agent resources across eight kinds and writes each as one
-idempotent ``InventoryItem`` to the WeveNova Inventory API, then retires drift so the tenant picture stays current on every re-run.
+Enumerates a tenant's shared agent resources across eight kinds, maps each to an
+``InventoryItem``, and submits the whole picture to the WeveNova Inventory API in one
+``syncInventory`` call. The payload *is* the desired end state: anything Active the
+service does not see in it is retired, so the crawl must be complete before it is sent.
 
 Grounding: ``Tenant-Inventory-DesignSpec.md`` (not vendored here) + the ADK
 implementation spec. See ``README.md`` for the ``[verify]`` items (Dep-1/Dep-3, Q-A).
@@ -16,20 +18,20 @@ from .errors import (
     InventoryApiError,
     NonRetryableApiError,
     PlatformError,
-    PreconditionFailedError,
     RunLockError,
     ThrottledError,
 )
 from .inventory_client import HttpInventoryClient, InventoryClient
+from .mapping import SyncPayloadError
 from .models import (
+    FailedSyncItem,
     InventoryItem,
     Kind,
     RunSummary,
     Scope,
     ScopeKey,
     ScopeReport,
-    ReconcileResult,
-    UpsertResult,
+    SyncResult,
 )
 from .runner import DiscoveryRunner
 
@@ -45,14 +47,14 @@ __all__ = [
     "Scope",
     "ScopeKey",
     "ScopeReport",
-    "ReconcileResult",
     "RunSummary",
-    "UpsertResult",
+    "SyncResult",
+    "FailedSyncItem",
+    "SyncPayloadError",
     "DiscoveryError",
     "PlatformError",
     "InventoryApiError",
     "NonRetryableApiError",
-    "PreconditionFailedError",
     "ThrottledError",
     "RunLockError",
 ]

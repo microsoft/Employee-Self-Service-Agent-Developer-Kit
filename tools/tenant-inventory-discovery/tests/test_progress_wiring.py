@@ -45,17 +45,23 @@ class RecordingProgress:
             ("scope_enumerated", (kind, environment_id, count, complete))
         )
 
-    def upsert_progress(self, kind, environment_id, done, total):
-        self.events.append(("upsert_progress", (kind, environment_id, done, total)))
+    def scope_mapped(self, kind, environment_id, mapped, enumerated):
+        self.events.append(("scope_mapped", (kind, environment_id, mapped, enumerated)))
 
     def scope_finished(self, report):
         self.events.append(("scope_finished", report))
 
-    def retire_started(self, scope_count):
-        self.events.append(("retire_started", scope_count))
+    def sync_started(self, item_count):
+        self.events.append(("sync_started", item_count))
 
-    def scope_retired(self, kind, environment_id, retired):
-        self.events.append(("scope_retired", (kind, environment_id, retired)))
+    def sync_skipped(self, reason):
+        self.events.append(("sync_skipped", reason))
+
+    def sync_unchanged(self, item_count):
+        self.events.append(("sync_unchanged", item_count))
+
+    def sync_finished(self, result):
+        self.events.append(("sync_finished", result))
 
     def run_finished(self, summary):
         self.events.append(("run_finished", summary))
@@ -113,54 +119,72 @@ class TestEveryScopeIsNarrated:
         assert starts == finishes
 
 
-class TestUpsertsReportIncrementally:
-    def test_progress_is_reported_while_rows_are_written(self, summary, progress):
-        assert progress.payloads("upsert_progress"), (
-            "no per-row progress during the write phase"
+class TestMappingIsNarrated:
+    """The crawl's own progress. There is no per-row write phase to narrate anymore --
+    the writing is one request -- so what a watcher follows is the *reading*."""
+
+    def test_each_scope_reports_what_it_mapped(self, summary, progress):
+        assert progress.payloads("scope_mapped"), (
+            "no per-scope mapping progress during the crawl"
         )
 
-    def test_the_counter_never_exceeds_the_total(self, summary, progress):
-        for _kind, _env, done, total in progress.payloads("upsert_progress"):
-            assert 1 <= done <= total
+    def test_the_mapped_count_never_exceeds_what_was_enumerated(
+        self, summary, progress
+    ):
+        for _kind, _env, mapped, enumerated in progress.payloads("scope_mapped"):
+            assert 0 <= mapped <= enumerated
 
-    def test_each_scope_counts_all_the_way_up(self, summary, progress):
-        finals: dict[tuple[Kind, Any], tuple[int, int]] = {}
-        for kind, env, done, total in progress.payloads("upsert_progress"):
-            best = finals.get((kind, env), (0, total))
-            finals[(kind, env)] = (max(best[0], done), total)
-        # The last thing reported for a scope must be "done", or a watcher is left
-        # staring at a stalled-looking fraction.
-        for (_kind, _env), (done, total) in finals.items():
-            assert done == total
+    def test_mapping_is_reported_for_every_scope_that_found_something(
+        self, summary, progress
+    ):
+        reported = {(kind, env) for kind, env, _m, _e in progress.payloads("scope_mapped")}
+        for report in summary.scopes:
+            if report.enumerated:
+                assert (report.scope.kind, report.scope.environment_id or None) in reported
 
 
-class TestRetireIsNarrated:
-    def test_the_retire_phase_announces_itself(self, summary, progress):
-        assert "retire_started" in progress._names()
+class TestTheSyncIsNarrated:
+    """The single write is the slow, destructive step; it must never be silent."""
 
-    def test_retire_is_announced_after_the_crawl(self, summary, progress):
+    def test_the_sync_announces_itself_with_a_size(self, summary, progress):
+        counts = progress.payloads("sync_started")
+        assert counts == [len(summary.payload)]
+
+    def test_the_sync_is_announced_after_the_crawl(self, summary, progress):
         names = progress._names()
-        assert names.index("retire_started") > names.index("scope_started")
+        assert names.index("sync_started") > names.index("scope_started")
 
-    def test_retire_counts_are_reported_per_scope(self, platform, inventory, progress):
-        # First pass populates the inventory...
-        DiscoverySkill(platform, inventory).discover("contoso.onmicrosoft.com")
+    def test_the_result_is_reported_back(self, summary, progress):
+        results = progress.payloads("sync_finished")
+        assert results and results[0] is summary.synced
 
-        # ...then a resource disappears, so the second pass must retire it. Use a
-        # tenant-root kind: its sweep is a list/diff, not a watermark compare, so it
-        # does not depend on wall-clock separation between the two passes.
-        platform2 = build_platform()
-        platform2.connectors = []
+    def test_a_withheld_sync_says_so_instead_of_going_quiet(self, inventory, progress):
+        """Silence after a refusal reads as a hang; the reason must be narrated."""
+        empty = build_platform()
+        empty.environments = []
+        empty.entra_apps = []
+        empty.connectors = []
+        empty.sharepoint_sites = []
+        empty.connections = {}
+        empty.knowledge_sources = {}
+        empty.extension_packs = {}
+        empty.scenario_templates = {}
 
-        DiscoverySkill(platform2, inventory, progress=progress).discover(
-            "contoso.onmicrosoft.com"
-        )
+        DiscoverySkill(empty, inventory, progress=progress).discover("contoso")
 
-        retired = {
-            (kind, env): count
-            for kind, env, count in progress.payloads("scope_retired")
-        }
-        assert retired.get((Kind.CONNECTOR, None)) == 1
+        skipped = progress.payloads("sync_skipped")
+        assert skipped and "empty payload" in skipped[0]
+        assert "sync_started" not in progress._names()
+
+    def test_a_retirement_is_visible_in_the_result(self, platform, inventory, progress):
+        DiscoverySkill(platform, inventory).discover("contoso")
+
+        gone = build_platform()
+        gone.connectors = []
+        DiscoverySkill(gone, inventory, progress=progress).discover("contoso")
+
+        result = progress.payloads("sync_finished")[0]
+        assert result.retired_item_ids == ["Connector:conn-catalog-1"]
 
 
 class TestFailuresAreNarrated:

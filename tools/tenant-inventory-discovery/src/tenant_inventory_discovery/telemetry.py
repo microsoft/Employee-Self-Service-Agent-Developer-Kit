@@ -29,9 +29,13 @@ def _scope_row(report: ScopeReport) -> dict[str, object]:
         "environmentId": report.scope.environment_id,  # opaque id, not PII
         "kind": report.scope.kind.discriminator,
         "enumerated": report.enumerated,
-        "upserted": report.upserted,
+        "mapped": report.mapped,
         "skippedInvalid": report.skipped_invalid,
         "complete": report.complete,
+        # Whether absence in this scope was allowed to mean deletion. The single most
+        # useful field when a retirement needs explaining after the fact.
+        "authoritative": report.authoritative,
+        "capped": report.capped,
         "hasError": report.error is not None,
     }
 
@@ -44,7 +48,12 @@ class LoggingTelemetrySink:
             "event": "discovery.run_summary",
             "correlationId": summary.correlation_id,
             "aborted": summary.aborted,
+            "synced": summary.synced_ok,
+            "syncBlocked": bool(summary.sync_blocked_reason),
+            "authoritativeScopeCount": len(summary.authoritative_scopes),
             "completedScopeCount": len(summary.completed_scopes),
+            "submittedCount": len(summary.payload),
+            "carriedForward": summary.carried_forward,
             "retiredCounts": summary.retired_counts,
             "scopes": [_scope_row(s) for s in summary.scopes],
         }

@@ -6,18 +6,25 @@ storage happens to be a dict -- not a hollow test stub. It reproduces the *obser
 semantics of the live service, so a test that passes here is meaningful against the
 real thing:
 
-- Upsert is keyed on ``(kind, naturalKey)`` and replays a cached ``Idempotency-Key``.
-- Re-asserting a Retired discovered row revives it.
-- ``DELETE`` is a **soft** delete (``state = Retired``) and is idempotent.
+- ``syncInventory`` takes the tenant's **whole** inventory and treats the payload as
+  the desired end state: rows are upserted, and every Active ``Discovered`` row the
+  payload omits is **retired**. There is no per-row write and no delete call.
+- Rows are keyed on ``(kind, naturalKey)``; re-asserting a Retired discovered row
+  revives it.
+- Ordering inside the call mirrors the service's, not the caller's: parents are
+  written before children and retirement happens after every upsert, so a payload may
+  arrive in any order.
+- A child whose environment is carried by neither the payload nor the store lands in
+  ``failedItems`` -- **partial success**, since everything else still applied.
+- Manually-authored rows (``Source != Discovered``) are never retired by absence.
 - ``list_items`` never returns Retired rows.
-- Creates are refused past :data:`AttributeCaps.max_items_per_tenant_and_kind`.
-- **Reconcile is watermark-based and env-scoped only**: it retires Active,
-  ``Source = Discovered`` rows in one ``(kind, environmentId)`` scope whose
-  ``updatedAt`` predates ``passStartedAt``, and it *rejects* tenant-rooted kinds.
-  Manually-authored rows (``Source != Discovered``) are never retired.
+- The payload is rejected outright when it is empty, carries a duplicate
+  ``kind:naturalKey``, or blows a cap -- see
+  :func:`~tenant_inventory_discovery.mapping.validate_sync_payload`.
+- An ``Idempotency-Key`` replays the original response, ``retiredItemIds`` included.
 
 That fidelity is the point. It is what let the suite catch a cross-run idempotency
-replay silently defeating watermark reconcile -- a laxer stub would have passed.
+replay silently suppressing a write -- a laxer stub would have passed.
 
 Two callers:
 
@@ -26,20 +33,24 @@ Two callers:
 2. **Tests**, via ``tests/spies.py``, which subclasses this to add call counters.
    Assertion-only bookkeeping lives there, not here.
 
-The clock is injectable so a test can place writes on either side of a watermark
-without sleeping.
+The clock is injectable so a test can order writes deterministically without sleeping.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from .errors import InventoryApiError, PreconditionFailedError
-from .mapping import idempotency_key
-from .models import InventoryItem, Kind, ReconcileResult, encode_item_id
+from .mapping import sync_idempotency_key, validate_sync_payload
+from .models import (
+    FailedSyncItem,
+    InventoryItem,
+    Kind,
+    SyncResult,
+    encode_item_id,
+)
 from .schemas import AttributeCaps
 
 
@@ -84,75 +95,14 @@ class StoredItem:
 
 @dataclass
 class InMemoryInventoryClient:
-    """In-memory store honoring the idempotency + watermark-reconcile contract."""
+    """In-memory store honoring the whole-inventory sync contract."""
 
     items: dict[str, StoredItem] = field(default_factory=dict)
-    seen_idempotency_keys: dict[str, int] = field(default_factory=dict)
+    replayed_syncs: dict[str, SyncResult] = field(default_factory=dict)
     caps: AttributeCaps = field(default_factory=AttributeCaps)
     clock: Callable[[], datetime] = _utcnow
 
     # -- InventoryClient ------------------------------------------------------------
-
-    def upsert(
-        self, item: InventoryItem, *, if_match: str | None = None, run_id: str = ""
-    ):
-        from .models import UpsertResult
-
-        idem = idempotency_key(item, run_id)
-        item_id = item.item_id
-
-        if idem in self.seen_idempotency_keys:
-            # Replay of the same upsert -> no duplicate, no version bump.
-            stored = self.items[item_id]
-            return UpsertResult(
-                item.natural_key, item.kind, item_id=item_id, etag=str(stored.version)
-            )
-
-        created = item_id not in self.items
-        env_id = item.environment_id or ""
-
-        if created:
-            active_in_kind = sum(
-                1
-                for s in self.items.values()
-                if s.kind is item.kind and s.state == "Active"
-            )
-            if active_in_kind >= self.caps.max_items_per_tenant_and_kind:
-                raise InventoryApiError(
-                    f"{item.kind.discriminator}: tenant is at the per-kind row cap "
-                    f"({self.caps.max_items_per_tenant_and_kind}); create refused"
-                )
-            stored = StoredItem(
-                kind=item.kind,
-                natural_key=item.natural_key,
-                attributes=dict(item.attributes),
-                environment_id=env_id,
-                display_name=item.display_name,
-                description=item.description,
-                updated_at=self.clock(),
-            )
-        else:
-            stored = self.items[item_id]
-            if if_match is not None and if_match != str(stored.version):
-                raise PreconditionFailedError(item.natural_key)
-            stored.attributes = dict(item.attributes)  # overwrite in place (idempotent)
-            stored.environment_id = env_id
-            stored.display_name = item.display_name
-            stored.description = item.description
-            stored.version += 1
-            stored.updated_at = self.clock()
-            if stored.source == "Discovered":
-                stored.state = "Active"  # re-asserting revives a retired row
-
-        self.items[item_id] = stored
-        self.seen_idempotency_keys[idem] = stored.version
-        return UpsertResult(
-            item.natural_key,
-            item.kind,
-            item_id=item_id,
-            etag=str(stored.version),
-            created=created,
-        )
 
     def list_items(
         self, *, kind: Kind | None = None, environment_id: str | None = None
@@ -165,54 +115,117 @@ class InMemoryInventoryClient:
         rows.sort(key=lambda s: s.natural_key)
         return [s.to_wire() for s in rows]
 
-    def retire(self, item_id: str, *, if_match: str | None = None) -> None:
-        stored = self.items.get(item_id)
-        if stored is None:
-            return  # idempotent: nothing to retire
-        if if_match is not None and if_match != str(stored.version):
-            raise PreconditionFailedError(stored.natural_key)
-        if stored.state == "Retired":
-            return
-        stored.state = "Retired"
-        stored.version += 1
-        stored.updated_at = self.clock()
+    def sync_inventory(
+        self, items: Sequence[InventoryItem], *, run_id: str = ""
+    ) -> SyncResult:
+        """Replace the tenant's inventory with ``items``; absences retire.
 
-    def reconcile(
-        self, kind: Kind, environment_id: str, pass_started_at: datetime
-    ) -> ReconcileResult:
-        if kind.is_tenant_root:
-            raise InventoryApiError(
-                f"{kind.discriminator} is tenant-rooted and cannot be reconciled; "
-                "retire drift explicitly instead"
-            )
-        if not environment_id:
-            raise InventoryApiError("environmentId is required to reconcile")
-        if pass_started_at.tzinfo is None:
-            pass_started_at = pass_started_at.replace(tzinfo=timezone.utc)
-        if pass_started_at > self.clock():
-            raise InventoryApiError("passStartedAt cannot be in the future")
+        Mirrors the service's ordering guarantee rather than relying on the caller's:
+        parents are written before children and retirement happens after every upsert,
+        so a payload may arrive in any order.
+        """
+        payload = list(items)
+        validate_sync_payload(payload, caps=self.caps)
 
-        evaluated = 0
+        idem = sync_idempotency_key(payload, run_id)
+        cached = self.replayed_syncs.get(idem)
+        if cached is not None:
+            # 24h replay of the original response, including its retiredItemIds.
+            return cached
+
+        # Parents first so a child never lands before the environment containing it.
+        ordered = sorted(payload, key=lambda i: i.kind is not Kind.ENVIRONMENT)
+
+        submitted_ids: set[str] = set()
+        failed: list[FailedSyncItem] = []
+        upserted = 0
+
+        for item in ordered:
+            item_id = item.item_id
+            if item.kind.is_env_scoped and not self._environment_present(
+                item, payload
+            ):
+                # The documented per-item failure: a child whose environment the
+                # payload does not carry. Partial success -- everything else applies.
+                failed.append(
+                    FailedSyncItem(
+                        item_id=item_id,
+                        reason=(
+                            f"environment {item.environment_id!r} is not present in "
+                            "the payload or the store"
+                        ),
+                    )
+                )
+                continue
+            submitted_ids.add(item_id)
+            self._apply(item)
+            upserted += 1
+
+        # Absence retires. Children first so an Environment is never refused over rows
+        # this same call is removing.
         retired_ids: list[str] = []
-        for stored in self.items.values():
-            if stored.kind is not kind or stored.environment_id != environment_id:
-                continue
-            if stored.source != "Discovered" or stored.state != "Active":
-                continue
-            evaluated += 1
-            if stored.updated_at < pass_started_at:
-                stored.state = "Retired"
-                stored.version += 1
-                stored.updated_at = self.clock()
-                retired_ids.append(stored.item_id)
+        stale = [
+            s
+            for s in self.items.values()
+            if s.state == "Active"
+            and s.source == "Discovered"
+            and s.item_id not in submitted_ids
+        ]
+        for stored in sorted(stale, key=lambda s: s.kind is Kind.ENVIRONMENT):
+            stored.state = "Retired"
+            stored.version += 1
+            stored.updated_at = self.clock()
+            retired_ids.append(stored.item_id)
 
-        return ReconcileResult(
-            kind=kind,
-            environment_id=environment_id,
-            evaluated_count=evaluated,
+        result = SyncResult(
+            submitted_count=len(payload),
+            upserted_count=upserted,
             retired_count=len(retired_ids),
             retired_item_ids=retired_ids,
+            failed_items=failed,
         )
+        self.replayed_syncs[idem] = result
+        return result
+
+    def _environment_present(
+        self, item: InventoryItem, payload: Sequence[InventoryItem]
+    ) -> bool:
+        """Is the environment this row hangs off available to contain it?"""
+        env_id = item.environment_id or ""
+        if not env_id:
+            return False
+        if any(
+            other.kind is Kind.ENVIRONMENT and other.natural_key == env_id
+            for other in payload
+        ):
+            return True
+        existing = self.items.get(encode_item_id(Kind.ENVIRONMENT, env_id))
+        return existing is not None and existing.state == "Active"
+
+    def _apply(self, item: InventoryItem) -> None:
+        """Create or overwrite one row, reviving it if it had been retired."""
+        item_id = item.item_id
+        env_id = item.environment_id or ""
+        stored = self.items.get(item_id)
+        if stored is None:
+            self.items[item_id] = StoredItem(
+                kind=item.kind,
+                natural_key=item.natural_key,
+                attributes=dict(item.attributes),
+                environment_id=env_id,
+                display_name=item.display_name,
+                description=item.description,
+                updated_at=self.clock(),
+            )
+            return
+        stored.attributes = dict(item.attributes)
+        stored.environment_id = env_id
+        stored.display_name = item.display_name
+        stored.description = item.description
+        stored.version += 1
+        stored.updated_at = self.clock()
+        if stored.source == "Discovered":
+            stored.state = "Active"  # re-asserting revives a retired row
 
     # -- test helpers ---------------------------------------------------------------
 

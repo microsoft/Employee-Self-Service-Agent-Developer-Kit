@@ -2,21 +2,23 @@
 
 The discovery skill's durable output is server-side (WeveNova). This module produces a
 **local mirror** of that inventory -- a cache the ``/discover`` skill (and offline
-planning) can render without the server. It applies the same per-scope gating the
-server-side retire phase does (spec §6.3), so the local file never claims something
-the server would not:
+planning) can render without the server.
 
-- **Reconciled scope** (in :attr:`RunSummary.completed_scopes`): the freshly observed set
-  is authoritative -- items are refreshed and drift (prior keys not observed) is retired.
-- **Complete-but-exempt scope** (fully enumerated, no error, but tenant-root during a
-  subset crawl -- the tenant-root exemption): observed items are refreshed, but prior
-  items are **kept** (the server would not retire them either).
-- **Incomplete / capped / not-crawled scope**: prior items are preserved untouched -- a
-  partial crawl never wipes the mirror.
+The merge rule follows the service's, which under whole-inventory sync is now a single
+run-level decision rather than eight per-scope ones:
 
-The mirror diffs *observed keys* rather than replaying the server's ``UpdatedAt``
-watermark: locally it has the exact observed set, which is a stronger signal than a
-timestamp and needs no clock-skew allowance.
+- **The run synced.** The payload was the tenant's entire desired inventory and the
+  service retired everything it omitted, so the mirror does the same: observed items
+  are refreshed as ``Active``, and every prior record the payload did not carry is
+  marked ``Retired``.
+- **The run did not sync** (withheld, or aborted). *Nothing changed server-side*, so
+  nothing changes here. The prior mirror is preserved verbatim, including the partial
+  observations this run happened to make -- claiming them would show a tenant state
+  that was never written.
+
+That second branch is the whole safety story in miniature. Previously an incomplete
+scope only forfeited its own retirements; now an incomplete anything forfeits the
+entire write, and the mirror has to say so rather than quietly half-updating.
 
 Retired drift is **kept for one run** (``state = "Retired"`` + ``retiredAt``) so a reader
 can see what disappeared, then pruned on the next run.
@@ -56,10 +58,6 @@ def _record_from_item(item: Any, *, now: str, first_seen: str, state: str) -> di
     return record
 
 
-def _scope_of_record(kind_discriminator: str, record: dict) -> tuple[str, str]:
-    return (record.get("environmentId", "") or "", kind_discriminator)
-
-
 def build_document(
     prior_doc: dict | None,
     stored_items: list[Any],
@@ -72,72 +70,44 @@ def build_document(
 ) -> dict:
     """Merge this run into the prior mirror and return the new mirror document.
 
-    ``stored_items`` are the run's upserted items (e.g. ``InMemoryInventoryClient.items``
-    or whatever ``RecordingInventoryClient`` captured on the live path);
-    each must expose ``kind`` (a :class:`~tenant_inventory_discovery.models.Kind`),
-    ``natural_key``, ``attributes``, ``environment_id`` and ``state``.
-    ``summary`` supplies per-scope completeness and the reconcile-eligible set.
+    ``stored_items`` are the items the service actually stored (e.g.
+    ``InMemoryInventoryClient.items``, or whatever ``RecordingInventoryClient``
+    captured on the live path); each must expose ``kind`` (a
+    :class:`~tenant_inventory_discovery.models.Kind`), ``natural_key``,
+    ``attributes``, ``environment_id`` and ``state``. ``summary`` supplies whether the
+    run earned the right to write at all.
     """
     now = now or now_iso()
 
-    # -- index the prior mirror by (kind, naturalKey) and by scope --------------------
+    # -- index the prior mirror by (kind, naturalKey) ---------------------------------
     prior_resources: dict[str, list[dict]] = (
         (prior_doc or {}).get("resources", {}) if prior_doc else {}
     )
     prior_by_key: dict[tuple[str, str], dict] = {}
-    prior_by_scope: dict[tuple[str, str], list[dict]] = {}
     for kind_disc, records in prior_resources.items():
         for rec in records:
             prior_by_key[(kind_disc, rec["naturalKey"])] = rec
-            prior_by_scope.setdefault(_scope_of_record(kind_disc, rec), []).append(rec)
 
-    # -- group this run's observed items by scope ------------------------------------
-    observed_by_scope: dict[tuple[str, str], list[Any]] = {}
-    observed_keys_by_scope: dict[tuple[str, str], set[str]] = {}
-    for item in stored_items:
-        scope = (item.environment_id or "", item.kind.discriminator)
-        observed_by_scope.setdefault(scope, []).append(item)
-        observed_keys_by_scope.setdefault(scope, set()).add(item.natural_key)
-
-    # -- scope status ----------------------------------------------------------------
-    reconciled_scopes = {
-        (s.environment_id, s.kind.discriminator) for s in summary.completed_scopes
-    }
-    report_by_scope = {
-        (r.scope.environment_id, r.scope.kind.discriminator): r for r in summary.scopes
-    }
-
-    all_scopes = set(report_by_scope) | set(prior_by_scope)
-
-    # -- merge, scope by scope -------------------------------------------------------
     resources: dict[str, list[dict]] = {}
 
     def _emit(kind_disc: str, record: dict) -> None:
         resources.setdefault(kind_disc, []).append(record)
 
-    for scope in all_scopes:
-        env_id, kind_disc = scope
-        report = report_by_scope.get(scope)
-        prior_recs = prior_by_scope.get(scope, [])
-
-        # Not crawled this run -> preserve prior untouched.
-        if report is None:
-            for rec in prior_recs:
+    if not summary.synced_ok:
+        # Nothing reached the service, so the mirror must not move. Any items this run
+        # did observe are discarded: showing them would assert a tenant state that was
+        # never written, and the next successful sync will observe them again anyway.
+        for kind_disc, records in prior_resources.items():
+            for rec in records:
                 _emit(kind_disc, rec)
-            continue
+    else:
+        observed_keys: set[tuple[str, str]] = {
+            (item.kind.discriminator, item.natural_key) for item in stored_items
+        }
 
-        # Incomplete crawl -> preserve prior untouched; ignore any partial observations.
-        if not report.complete:
-            for rec in prior_recs:
-                _emit(kind_disc, rec)
-            continue
-
-        observed = observed_by_scope.get(scope, [])
-        observed_keys = observed_keys_by_scope.get(scope, set())
-        is_reconciled = scope in reconciled_scopes
-
-        # Refresh every observed item (carry firstSeenAt; revive if previously retired).
-        for item in observed:
+        # Refresh every stored item (carry firstSeenAt; revive if previously retired).
+        for item in stored_items:
+            kind_disc = item.kind.discriminator
             prior = prior_by_key.get((kind_disc, item.natural_key))
             first_seen = prior.get("firstSeenAt", now) if prior else now
             _emit(
@@ -147,19 +117,18 @@ def build_document(
                 ),
             )
 
-        # Reconcile drift only for reconcile-eligible scopes (server parity, §6.3).
-        for rec in prior_recs:
-            if rec["naturalKey"] in observed_keys:
-                continue  # already re-emitted fresh above
-            if not is_reconciled:
-                _emit(kind_disc, rec)  # complete-but-exempt: keep prior, never retire
-                continue
-            if rec.get("state") == "Retired":
-                continue  # already shown retired once -> prune now
-            retired = dict(rec)
-            retired["state"] = "Retired"
-            retired["retiredAt"] = now
-            _emit(kind_disc, retired)
+        # Absence retires. The payload was the whole tenant, so anything prior that is
+        # not in it was retired server-side and is shown retired here for one run.
+        for kind_disc, records in prior_resources.items():
+            for rec in records:
+                if (kind_disc, rec["naturalKey"]) in observed_keys:
+                    continue  # already re-emitted fresh above
+                if rec.get("state") == "Retired":
+                    continue  # already shown retired once -> prune now
+                retired = dict(rec)
+                retired["state"] = "Retired"
+                retired["retiredAt"] = now
+                _emit(kind_disc, retired)
 
     # Stable ordering: records by naturalKey within each kind.
     resources = {
@@ -168,6 +137,7 @@ def build_document(
         if recs
     }
 
+    synced = summary.synced
     return {
         "schemaVersion": SCHEMA_VERSION,
         "kind": DOCUMENT_KIND,
@@ -178,17 +148,22 @@ def build_document(
             "mode": mode,
             "writePath": write_path,
             "aborted": summary.aborted,
+            "synced": summary.synced_ok,
+            "syncBlockedReason": summary.sync_blocked_reason,
+            "submittedCount": len(summary.payload),
+            "retiredCount": synced.retired_count if synced else 0,
+            "failedItemIds": synced.failed_item_ids if synced else [],
         },
-        "scopes": _scopes_section(summary, reconciled_scopes),
+        "scopes": _scopes_section(summary),
         "resources": resources,
         "totals": _totals(resources, summary),
     }
 
 
-def _scopes_section(
-    summary: RunSummary, reconciled_scopes: set[tuple[str, str]]
-) -> list[dict]:
+def _scopes_section(summary: RunSummary) -> list[dict]:
     """Per-``(environmentId, kind)`` bookkeeping, tenant-root scopes first."""
+    completed = set(summary.completed_scopes)
+    authoritative = set(summary.authoritative_scopes)
     rows = []
     for report in summary.scopes:
         scope = report.scope
@@ -197,15 +172,17 @@ def _scopes_section(
                 "environmentId": scope.environment_id,
                 "kind": scope.kind.discriminator,
                 "tenantRoot": scope.kind.is_tenant_root,
-                "complete": report.complete,
-                "reconciled": (scope.environment_id, scope.kind.discriminator)
-                in reconciled_scopes,
+                "complete": scope in completed,
+                # Whether absence in this scope was allowed to mean deletion. A scope
+                # can be complete without being authoritative -- that is the whole
+                # point of the carry-forward rule.
+                "authoritative": scope in authoritative,
                 "enumerated": report.enumerated,
-                "recorded": report.upserted,
+                "submitted": report.mapped,
                 "skippedInvalid": report.skipped_invalid,
                 "capped": report.capped,
+                "truncated": report.truncated,
                 "droppedAttributes": list(report.dropped_attributes),
-                "retiredItemIds": list(report.retired_item_ids),
                 "error": report.error,
             }
         )

@@ -3,8 +3,8 @@
 Tenant inventory discovery — the **admin-run crawler**. Enumerates the tenant's
 shared agent resources across **eight kinds** (Environment, EntraApp, Connector,
 Connection, SharePointSite, KnowledgeSource, ExtensionPack, ScenarioTemplate),
-writes each as one idempotent inventory item, then triggers a scoped reconcile so
-the tenant picture stays current on every re-run.
+assembles them into one payload, and submits the tenant's whole inventory in a single
+request so the tenant picture stays current on every re-run.
 
 The heavy lifting lives in the standalone crawler package at
 `tools/tenant-inventory-discovery/`. This skill drives it via
@@ -61,11 +61,11 @@ can watch it work.
 
 **End message.**
 
-> **This command is expected to run for minutes, not seconds.** It writes one row per
-> discovered resource. It reports progress continuously (see "Reading the live progress
-> output" below), so treat ongoing output as healthy — do not cancel it, re-run it, or
-> tell the user it has stalled while progress or heartbeat lines are still arriving.
-> Wait for the process to exit and parse the final JSON line on stdout.
+> **This command is expected to run for minutes, not seconds.** It reads eight resource
+> types across several platform APIs. It reports progress continuously (see "Reading the
+> live progress output" below), so treat ongoing output as healthy — do not cancel it,
+> re-run it, or tell the user it has stalled while progress or heartbeat lines are still
+> arriving. Wait for the process to exit and parse the final JSON line on stdout.
 
 > **What runs today.** The default crawl enumerates **all eight kinds** live for the
 > configured environment, using your admin sign-in (a browser window may open the first
@@ -74,15 +74,15 @@ can watch it work.
 >
 > - **Dataverse** — `Connection`, `ExtensionPack`, `ScenarioTemplate` (and the
 >   `Environment` identity, from config).
-> - **Microsoft Graph** — `EntraApp` (the agent's app registration) and `SharePointSite`
+> - **Microsoft Graph** — `EntraApp` (the tenant's app registrations) and `SharePointSite`
 >   (only the sites referenced by the agent's SharePoint knowledge sources).
 > - **Power Platform (BAP) admin** — `Connector` (the distinct connectors used by the
 >   environment's connections).
 > - **Copilot Studio** — `KnowledgeSource` (the agent bot's knowledge sources).
 >
 > If any kind's platform call fails (e.g. a missing role or consent), just that kind's
-> scope is reported as **Incomplete** so nothing is retired for it — the rest of the run
-> still succeeds.
+> scope is reported as **Incomplete**. Its existing rows are re-sent unchanged so nothing
+> is removed for it, and the rest of the run still succeeds.
 >
 > **The write path is wired to the real WeveNova Inventory API and persisting is the
 > default** — a discovery pass exists to update the tenant inventory:
@@ -123,16 +123,27 @@ python scripts/discover_inventory.py --tenant-id {TENANT_ID} --demo --local-only
 
 ### Reading the live progress output
 
-A live crawl writes one row per discovered resource, so it can run for several minutes.
-The command narrates itself on **stderr** as it goes — the phase it is in, each resource
-type as it is read, and a running `recorded N/M` counter while rows are written. If a
-single call is slow (token mint, retry backoff), a heartbeat line
-(`... still recording connections (30s elapsed)`) is emitted so the output never goes
-silent for more than ten seconds.
+A live crawl reads eight resource types across several platform APIs, so it can run for
+several minutes. The command narrates itself on **stderr** as it goes — the phase it is
+in, each resource type as it is read (`reading connections...`, `found 12 connections`),
+and finally a single save step (`>> Saving the tenant picture: N resource(s) in one
+request`). If a single call is slow (token mint, retry backoff), a heartbeat line
+(`... still saving 137 resource(s) to the inventory (30s elapsed)`) is emitted so the
+output never goes silent for more than ten seconds.
+
+**The save step is one large request and normally takes minutes.** It does all the
+writing and all the retiring for the whole run, and it cannot be split — under the
+whole-inventory contract each chunk would retire everything not in it. The command says
+so itself before it starts waiting. Treat heartbeat lines during this phase as healthy.
+Do **not** cancel the run, re-run it, or report it as hung while they are arriving.
+
+If the tenant has not changed since the last run, the command skips the request entirely
+and prints `inventory already matches all N resource(s) -- nothing to save, skipping the
+request`. That is a success, not a failure.
 
 This narration is progress only. The machine-readable result is still the **single JSON
 object on stdout**, which is the only thing to parse. Do not treat a heartbeat or a
-counter line as the result, and do not report the run as hung while these lines are
+progress line as the result, and do not report the run as hung while these lines are
 still arriving.
 
 Use `--quiet` to suppress the narration, or `--heartbeat-seconds N` to change the
@@ -182,8 +193,8 @@ keep working.
 | Code | Meaning |
 | --- | --- |
 | `0` | Crawl succeeded and the inventory was updated (or `--local-only` was requested). |
-| `1` | The run aborted. Nothing was reconciled; the local mirror was left untouched. |
-| `2` | The crawl succeeded but the inventory could **not** be updated. See `writePathNote`. |
+| `1` | The run aborted. Nothing was written; the local mirror was left untouched. |
+| `2` | The crawl succeeded but the inventory was **not** updated — either the write path failed (`writePathNote`) or the sync was withheld for safety (`syncWithheldNote`). Nothing was deleted either way. |
 
 The script prints a one-line status and writes the full results to
 `workspace/discover/results.json`. The JSON always carries a `discovered` block (the
@@ -195,10 +206,11 @@ unless `writePath` is a host (or `mcp:{host}`) and `writeDegraded` is `false`.**
 
 On a successful (non-aborted) run the script also updates a **durable local inventory
 mirror** at `.local/inventory.json` (override with `--inventory-out`). This file is the
-persistent picture of the tenant: it is merged across runs using the same per-scope
-reconcile rules the server uses — completed scopes replace their items and retire drift
-(kept one run as `state:"Retired"`, then pruned), incomplete or tenant-root-exempt scopes
-preserve their prior items untouched, and each record carries `firstSeenAt`/`lastSeenAt`.
+persistent picture of the tenant: it is merged across runs using the same whole-inventory
+rules the server uses — a successful sync refreshes everything the payload carried and
+retires what it omitted (kept one run as `state:"Retired"`, then pruned), while a run that
+did not write preserves the prior picture untouched. Each record carries
+`firstSeenAt`/`lastSeenAt`.
 The server (WeveNova) remains the source of truth; this file is a local cache. An aborted
 run never overwrites it. The script also drops a best-effort `inventoryPath` pointer into
 `.local/config.json`.
@@ -263,24 +275,48 @@ Table columns — read each from the `scopes[]` entries:
   `environmentId`.
 - **Resource** = friendly label for `kind`.
 - **Found** = `enumerated`.
-- **Recorded** = `upserted`.
+- **Recorded** = `mapped`.
 - **Status** = `Complete` when `complete` is `true`; otherwise
-  `Incomplete — not updated` (and include the `error` text if present).
+  `Incomplete — kept as-is` (and include the `error` text if present).
 
 After the table, show a one-line summary from `totals`:
 
 **Message:**
 
-Recorded **{totals.upserted}** resources across **{totals.kindsCrawled}** resource types.
+Recorded **{totals.mapped}** resources across **{totals.kindsCrawled}** resource types.
 
 **End message.**
 
-If `retiredCounts` is non-empty, add:
+If `sync.retired` is greater than zero, add:
 
 **Message:**
 
-I also removed **{sum of retiredCounts}** resource(s) that no longer exist in your
+I also removed **{sync.retired}** resource(s) that no longer exist in your
 tenant since the last discovery.
+
+**End message.**
+
+If `sync.blockedReason` is non-empty, the inventory was **not** updated. Say so plainly
+and do not present the run as saved:
+
+**Message:**
+
+⚠️ I read your tenant but did **not** save the results: {sync.blockedReason}
+
+Nothing was changed or deleted. Re-run `/discover` once that is resolved.
+
+**End message.**
+
+If `sync.unchanged` is `true`, the run **succeeded** — the tenant already matched what
+was stored, so the write was skipped as redundant. This is not a withhold and not a
+failure; never report it with a ⚠️ or alongside `sync.blockedReason`, which is empty in
+this case.
+
+**Message:**
+
+✅ Your inventory is already up to date — I checked all **{sync.submitted}**
+resource(s) and nothing has changed since the last discovery, so there was nothing
+to save.
 
 **End message.**
 
@@ -308,27 +344,31 @@ rather than risk removing valid entries. Re-running discovery will pick them up.
 
 Offer to re-run `/discover`.
 
-### `EntraApp` incomplete on a tenant that hasn't run `/connect`
+### `EntraApp` incomplete because the tenant has more app registrations than the cap
 
-This is the one incomplete scope that is usually **expected, not a fault**. The Entra
-app registration is provisioned by `/connect` (ServiceNow or Workday) — `/setup` never
-creates one. On a tenant that has only run `/setup`, there is genuinely no app to
-discover, and the crawler correctly reports the scope incomplete so it never retires
-previously-recorded `EntraApp` rows.
+`EntraApp` no longer depends on `/connect` having run — discovery enumerates the
+tenant's app registrations directly from Microsoft Graph, so a tenant that has only
+run `/setup` still gets a real reading.
 
-When `EntraApp` is the only incomplete scope and its error mentions `/connect`, do not
-present it as a failure or tell the user to fix their config. Say instead:
+The usual reason it comes back incomplete now is **volume**: the service caps every
+kind at 50 rows per tenant, and directories routinely hold more app registrations
+than that. When the read is truncated the scope is marked `capped` and nothing is
+retired for it — which is correct, since the crawl never saw the whole directory.
+
+If `EntraApp` is incomplete and `capped: true`, say:
 
 **Message:**
 
-`EntraApp` shows as not updated because no Entra app registration exists for this
-agent yet — that's created when you run `/connect` for ServiceNow or Workday. Nothing
-was removed for it. Everything else was recorded normally.
+`EntraApp` shows as not updated because this tenant has more app registrations than
+the inventory records per resource type, so I only read part of the list. Nothing was
+removed for it. The app registration this agent actually uses is always recorded.
 
 **End message.**
 
-Do **not** suggest hand-editing `entraAppId` into `.local/config.json`. Discovery
-resolves it automatically from wherever `/connect` saved it.
+If instead the error mentions `Application.Read.All`, the signed-in admin lacks Graph
+permission to list applications. Say that consent for `Application.Read.All` is needed
+and that nothing was removed for `EntraApp`. Do **not** suggest hand-editing
+`entraAppId` into `.local/config.json` — discovery does not need it to enumerate.
 
 ---
 
@@ -336,28 +376,50 @@ resolves it automatically from wherever `/connect` saved it.
 
 - The crawler is idempotent by `(kind, naturalKey)`: re-running over an unchanged
   tenant produces identical results and removes nothing.
-- Completeness is the safety gate: a scope that fails to enumerate fully is
-  reported `Incomplete` and is **not** reconciled — never present incomplete
-  scopes as if they were updated. A scope that hits the server's 50-row-per-kind
-  cap is also marked incomplete (`capped: true`) for the same reason.
-- Drift removal differs by scope shape, and both are already handled:
-  environment-scoped kinds use the server's watermark `reconcile` action, while
-  tenant-rooted kinds (Environment, EntraApp, Connector, SharePointSite) — which
-  the service refuses to reconcile — are swept client-side by listing, diffing,
-  and issuing `DELETE` per drifted row.
-- `EntraApp` needs the agent's Entra app (client) id. `discover_inventory.py`
-  resolves it from the top-level `entraAppId` in `.local/config.json`, then falls
-  back to `.local/connect/workday/config.json` (`entraAppId`) and
-  `.local/connect/servicenow/config.json` (`entra.appClientId`) — which is where
-  `/connect` actually writes it. Absent everywhere means no connector has been
-  connected yet, which is a normal state, not a misconfiguration.
+- **Absence is the delete verb.** The client submits the tenant's *entire* inventory in
+  one `syncInventory` call and the service retires anything Active that the payload
+  omits. There is no diff, no id list, and no server-side guardrail — every safety
+  property lives in the client. The failure direction is inverted from the old design:
+  a partial crawl used to remove too little, and would now remove too much.
+- The guardrail is **carry-forward**. Before syncing, the client reads the current
+  inventory and re-sends verbatim every Active row belonging to a scope this run cannot
+  vouch for. So a scope that failed to enumerate, was truncated, or was never visited
+  keeps its rows and loses nothing.
+- A scope may only retire by omission when it is **authoritative**: fully enumerated, no
+  fatal error, nothing unmappable, not `capped`, *and* the platform declares tenant-wide
+  reach for that kind. The kit crawls only the configured environment, so `EntraApp` is
+  the one kind read tenant-wide; `Environment`, `Connector` and `SharePointSite` are
+  always carried forward even though they are filed at the tenant root. Env-scoped kinds
+  are authoritative only inside the environment that was crawled.
+- Two situations withhold the sync entirely (exit code `2`, `sync.blockedReason` set):
+  the current inventory could not be read, so carry-forward is impossible; or a row in
+  it uses a kind this build does not recognise, so it cannot be re-sent faithfully.
+  Withholding writes nothing and deletes nothing.
+- The sync is one large request and legitimately takes **minutes** — it does every write
+  and every retirement for the run. It cannot be chunked: absence retires, so each chunk
+  would delete everything not in it. Heartbeat lines during this phase mean healthy, not
+  hung. Never cancel or re-launch a run that is still emitting them.
+- The client skips that request when the payload already matches what the service holds
+  (`sync.unchanged: true`), which is the common case on a re-run. That is a **success**
+  with zero writes, not a withhold — `sync.blockedReason` is empty and the exit code is
+  `0`. Report it as up-to-date; never as failed, withheld, or "saved nothing".
+- Never present an incomplete scope as updated, and never present a withheld run as
+  saved.
+- `EntraApp` is read tenant-wide from Microsoft Graph (`GET /applications`) and needs
+  no configured id. When `entraAppId` *is* known — resolved from the top-level key in
+  `.local/config.json`, then `.local/connect/workday/config.json` (`entraAppId`), then
+  `.local/connect/servicenow/config.json` (`entra.appClientId`) — that app is fetched
+  separately and **pinned to the front** of the list, so it survives the 50-row
+  truncation on a large directory. A tenant with more apps than the cap reports
+  `EntraApp` incomplete and therefore retires nothing for it. An empty read is also
+  treated as incomplete, never as "every app was deleted".
 - Never fabricate counts, environment ids, or resource names — every value comes
   from `workspace/discover/results.json`.
 - `workspace/discover/results.json` is the per-run render artifact. The durable
   cross-run picture is `.local/inventory.json` (the local mirror): merged with
-  server-faithful reconcile semantics, with `firstSeenAt`/`lastSeenAt` and one-run
+  server-faithful whole-inventory semantics, with `firstSeenAt`/`lastSeenAt` and one-run
   `Retired` tombstones. The server (WeveNova) stays authoritative; the mirror is a
-  local cache and is only updated on a successful run.
+  local cache and is only updated on a run that actually synced.
 - The default crawl reads all eight kinds live for the configured environment —
   Dataverse (Connection, ExtensionPack, ScenarioTemplate), Microsoft Graph (EntraApp,
   SharePointSite), the BAP admin API (Connector), and Copilot Studio (KnowledgeSource) —

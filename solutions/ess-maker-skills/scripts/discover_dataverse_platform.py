@@ -14,7 +14,8 @@ Wired today
 - ``Environment``     -> the single configured environment (identity from config's
                          ``dataverseEndpoint``; no platform query)
 - ``EntraApp``        -> Microsoft Graph ``/applications`` (the kit's ``GraphClient``),
-                         scoped to the agent's ``entraAppId`` from config
+                         tenant-wide, with the agent's configured ``entraAppId`` pinned
+                         to the front of the page when it is known
 - ``Connector``       -> distinct connectors used by the environment's connections
                          (BAP admin ``PPAdminClient.get_connections``)
 - ``Connection``      -> Dataverse ``connectionreferences``
@@ -26,19 +27,20 @@ Wired today
 - ``ScenarioTemplate``-> Dataverse ``msdyn_employeeselfservicetemplateconfigs``
 
 All eight kinds enumerate live; a kind whose platform call fails raises ``PlatformError``
-so the runner records that scope **incomplete** and the server-side reconcile never
-sweeps it (completeness invariant, spec §7).
+so the runner records that scope **incomplete** and carries its existing inventory rows
+forward untouched instead of letting the sync retire them by omission (spec §7).
 
 Single-environment crawl
 ------------------------
 The kit's setup config binds **one** environment: ``.local/config.json`` stores its
 ``dataverseEndpoint`` (no Power Platform environment GUID). The environment identity is
 therefore **derived from that config URL** (the org unique name) -- the skill never
-"discovers" other environments. The bridge runs a **subset crawl**
-(``environment_ids=[environment_id]``) so the tenant-root exemption (spec §6.3) keeps
-the tenant-root kinds (``Environment``, ``EntraApp``, ``Connector``, ``SharePointSite``)
-out of reconcile -- only the env-scoped kinds (``Connection``, ``KnowledgeSource``,
-``ExtensionPack``, ``ScenarioTemplate``), fully enumerated, are reconciled.
+"discovers" other environments. That narrowness is the whole reason
+:meth:`DataverseBackedPlatform.tenant_wide_kinds` declares only ``EntraApp``: under the
+whole-inventory contract absence is the delete verb, so a kind this bridge reads only
+partially must never be trusted to say what is gone. ``Environment``, ``Connector`` and
+``SharePointSite`` are filed at the tenant root but are *observed* through the single
+configured environment, so their rows are carried forward rather than retired.
 
 Field mappings are grounded in the documented Dataverse system-table schemas
 (see per-method ``Source (documented)`` citations) but the *choice* of which column maps
@@ -52,6 +54,7 @@ from urllib.parse import urlsplit
 
 import auth  # kit Dataverse client (same scripts/ directory)
 from tenant_inventory_discovery.errors import PlatformError
+from tenant_inventory_discovery.models import Kind
 from tenant_inventory_discovery.platform_clients import Page
 
 # -- Dataverse entity sets + $select projections ---------------------------------------
@@ -237,6 +240,25 @@ class DataverseBackedPlatform:
         """The environment id (from config) used to scope the subset crawl (spec §4)."""
         return self._env_id
 
+    def tenant_wide_kinds(self) -> set[Kind]:
+        """Which tenant-root kinds this surface reads across the *whole* tenant.
+
+        Only ``EntraApp`` qualifies: :meth:`list_entra_apps` queries Graph
+        ``/applications``, which is tenant-scoped. The other three tenant-root kinds
+        look tenant-wide but are not -- they are derived from the single configured
+        environment, so absence from their results says nothing about the rest of the
+        tenant:
+
+        * ``Environment`` -- yields only the environment named in the kit's config.
+        * ``Connector`` -- derived from that one environment's connections.
+        * ``SharePointSite`` -- only sites referenced by this agent's knowledge sources.
+
+        Anything not listed here has its existing rows carried forward on sync rather
+        than retired by absence. Widening this set widens the blast radius of a sync:
+        add a kind only once its enumeration genuinely covers the whole tenant.
+        """
+        return {Kind.ENTRA_APP}
+
     def _query(
         self, entity_set: str, select: str, filter_expr: str | None = None
     ) -> list[dict]:
@@ -246,7 +268,7 @@ class DataverseBackedPlatform:
             )
         except auth.APIError as exc:
             # Translate to the crawler's platform-error type so the runner marks the
-            # scope incomplete and excludes it from reconcile (spec §7).
+            # scope incomplete and carries its existing rows forward (spec §7).
             raise PlatformError(
                 f"Dataverse enumeration of {entity_set} failed: {exc}"
             ) from exc
@@ -375,36 +397,48 @@ class DataverseBackedPlatform:
         )
 
     def list_entra_apps(self, page_size: int) -> Iterator[Page]:
-        """The agent's Entra app registration -> §5.3 ``EntraApp`` (spec §4 row 2).
+        """Every app registration readable in the tenant -> §5.3 ``EntraApp``.
 
         Enumerated live from Microsoft Graph ``GET /applications`` via the kit's
-        ``GraphClient``, scoped to the agent's ``appId`` from config (spec §4 names the
-        source as "agent app registration(s)", not every app in the tenant).
+        ``GraphClient``. This is deliberately **tenant-wide** rather than scoped to the
+        agent's configured ``appId``: requiring ``entraAppId`` meant a tenant that had
+        not yet run ``/connect`` reported the whole kind as a failure, which is a normal
+        state, not a misconfiguration.
 
         Source (validatable -- Graph v1.0 CSDL / MS Learn):
           https://learn.microsoft.com/graph/api/resources/application
-          Fields used: appId (String, ``$filter eq``), displayName (String),
-          id (String, the directory object id).
+          Fields used: appId (String), displayName (String), id (String, the directory
+          object id). Requires ``Application.Read.All`` (or ``Directory.Read.All``) --
+          the same permission the previous single-app ``$filter`` needed.
+
+        Two consequences of going tenant-wide, both handled here rather than left to
+        surprise the caller:
+
+        * **The configured app is fetched first and pinned to the front.** The service
+          caps a kind at 50 Active rows, so a tenant with more app registrations than
+          that gets truncated by the runner. Truncation takes a prefix, so the agent's
+          own app -- the one row that must not be lost -- is resolved by ``appId`` in
+          its own targeted call and placed ahead of the bulk listing.
+        * **A truncated or empty read is never treated as authoritative.** One page of
+          ``$top=page_size`` is enough for the runner to detect that the tenant exceeds
+          the cap, so a directory with thousands of apps costs one request, not
+          thousands. If more pages remain, ``is_last`` stays False, which strips the
+          scope of authority. An empty result does the same, so a tenant that
+          momentarily reads back zero apps can never retire a previously-recorded row.
 
         ``publisherDomain`` / ``signInAudience`` are *not* projected: the Inventory
         schema does not model them for ``EntraApp``, so they would only be dropped
-        before the upsert.
+        before the sync.
         """
-        if not self._entra_app_id:
-            raise PlatformError(
-                "No Entra app registration is configured for this agent yet. It is "
-                "provisioned by /connect (ServiceNow or Workday), not /setup -- run "
-                "that first if you expect one. Nothing is retired for EntraApp until "
-                "it can be read."
-            )
-        params = {
-            "$filter": f"appId eq '{self._entra_app_id}'",
-            "$select": _GRAPH_APPLICATIONS_SELECT,
-        }
         try:
             graph = self._get_graph()
-            rows = graph.get_all(
-                _GRAPH_APPLICATIONS_PATH, params, raise_on_permission_error=True
+            pinned = self._configured_entra_app(graph)
+            page = graph.get(
+                _GRAPH_APPLICATIONS_PATH,
+                {
+                    "$select": _GRAPH_APPLICATIONS_SELECT,
+                    "$top": str(max(1, page_size)),
+                },
             )
         except PlatformError:
             raise
@@ -413,11 +447,20 @@ class DataverseBackedPlatform:
                 f"Microsoft Graph enumeration of applications failed: {exc}"
             ) from exc
 
+        if isinstance(page, dict) and page.get("_error"):
+            raise PlatformError(
+                "Microsoft Graph enumeration of applications failed: "
+                f"{page.get('_error')} (HTTP {page.get('_status')}). Reading every app "
+                "registration needs Application.Read.All or Directory.Read.All."
+            )
+
         items: list[dict] = []
-        for row in rows:
+        seen: set[str] = set()
+        for row in [*pinned, *(page.get("value") or [])]:
             app_id = row.get("appId")
-            if not app_id:
-                continue  # an app with no appId cannot form a natural key
+            if not app_id or str(app_id) in seen:
+                continue  # no appId -> no natural key; already pinned -> no duplicate
+            seen.add(str(app_id))
             item: dict = {"appId": str(app_id)}
             display_name = row.get("displayName")
             if display_name:
@@ -426,7 +469,35 @@ class DataverseBackedPlatform:
             if object_id:
                 item["objectId"] = str(object_id)
             items.append(item)
-        yield Page(items=items, is_last=True)
+
+        # Anything short of "we listed them all and there was at least one" leaves the
+        # scope incomplete, so nothing is retired on a view we cannot vouch for.
+        more_pages = bool(page.get("@odata.nextLink"))
+        yield Page(items=items, is_last=bool(items) and not more_pages)
+
+    def _configured_entra_app(self, graph) -> list[dict]:
+        """The agent's own app registration, resolved by ``appId``, or ``[]``.
+
+        Kept as a targeted lookup so the row survives the runner's per-kind truncation
+        even in a tenant with more app registrations than the cap. Absence is not an
+        error -- ``/connect`` provisions it, so a tenant that has not run it yet simply
+        has no app to pin.
+        """
+        if not self._entra_app_id:
+            return []
+        try:
+            return graph.get_all(
+                _GRAPH_APPLICATIONS_PATH,
+                {
+                    "$filter": f"appId eq '{self._entra_app_id}'",
+                    "$select": _GRAPH_APPLICATIONS_SELECT,
+                },
+                raise_on_permission_error=True,
+            )
+        except Exception:
+            # The bulk listing below still covers this app; pinning is an ordering
+            # optimization, so a failure here must not fail the whole scope.
+            return []
 
     def list_connectors(self, page_size: int) -> Iterator[Page]:
         """Distinct connectors used by the environment's connections -> §5.3 ``Connector``.

@@ -10,9 +10,18 @@ skill renders. This is the script the ``src/skills/discover/SKILL.md`` invokes.
 
 The crawler enumerates a tenant's shared agent resources across eight kinds
 (Environment, EntraApp, Connector, Connection, SharePointSite, KnowledgeSource,
-ExtensionPack, ScenarioTemplate) and upserts each to the WeveNova Inventory API,
-then signals a scoped server-side reconcile. The crawl is always scoped to the
+ExtensionPack, ScenarioTemplate) and submits them to the WeveNova Inventory API as a
+single whole-inventory ``syncInventory`` call. The crawl is always scoped to the
 **single environment configured during /setup** -- there is no full-tenant crawl.
+
+.. warning::
+   ``syncInventory`` retires by absence: anything currently Active that the submitted
+   payload omits is deleted. Because this crawl only ever sees one environment, the
+   crawler first reads the existing inventory and **carries forward** every Active row
+   it cannot vouch for, so resources in other environments survive. If that read fails,
+   the sync is withheld entirely rather than submitted incomplete. See
+   ``tools/tenant-inventory-discovery`` ``discovery_skill.py`` for the full rule.
+
 .. note::
    Two independent switches: where the crawl **reads** from, and where it **writes** to.
 
@@ -25,7 +34,8 @@ then signals a scoped server-side reconcile. The crawl is always scoped to the
      kit's ``GraphClient``; the BAP admin API (``Connector``) via ``PPAdminClient``; and
      Copilot Studio (``KnowledgeSource``, and the sites behind ``SharePointSite``) via
      ``PVAClient``. Any kind whose platform call fails is reported as an incomplete
-     scope (and excluded from reconcile) rather than aborting the run.
+     scope; its existing rows are carried forward unchanged rather than retired, so a
+     partial crawl costs freshness, never data.
 
    Write path (persisting is the default -- it is the point of a discovery pass):
 
@@ -57,8 +67,10 @@ then signals a scoped server-side reconcile. The crawl is always scoped to the
 
 Exit codes:
    0 = crawl succeeded and the inventory was updated (or --local-only was requested)
-   1 = the run aborted; nothing was reconciled and the local mirror was left untouched
-   2 = the crawl succeeded but the inventory could not be updated (see writePathNote)
+   1 = the run aborted; nothing was written and the local mirror was left untouched
+   2 = the crawl succeeded but the inventory was not updated -- either the write path
+       failed (see writePathNote) or the sync was withheld for safety (see
+       syncWithheldNote). In both cases nothing was deleted.
 
 Usage:
    # Live crawl of the configured environment, persisted to WeveNova (the default;
@@ -118,8 +130,8 @@ from tenant_inventory_discovery.recording import (  # noqa: E402
 DEFAULT_JSON_OUT = "workspace/discover/results.json"
 
 # Durable local mirror of the (server-authoritative) tenant inventory. Unlike the
-# transient results JSON, this file is merged across runs with the same per-scope
-# reconcile semantics the server uses, so it stays a faithful offline picture.
+# transient results JSON, this file is merged across runs with the same whole-inventory
+# semantics the server uses, so it stays a faithful offline picture.
 DEFAULT_INVENTORY_OUT = os.path.join(".local", "inventory.json")
 
 # Demo mode has no config, so it crawls this one representative environment (the tool
@@ -218,17 +230,20 @@ _ENTRA_APP_ID_FALLBACKS = (
 def _resolve_entra_app_id(cfg, local_state_dir=".local"):
     """Find the agent's Entra app (client) id wherever `/connect` actually wrote it.
 
-    Reading only the documented top-level `entraAppId` leaves the `EntraApp` scope
-    permanently **Incomplete** even on a fully connected tenant, because the connect
-    playbooks persist it elsewhere: Workday as `entraAppId` in
-    `.local/connect/workday/config.json`, ServiceNow as `entra.appClientId` in
-    `.local/connect/servicenow/config.json`. FlightCheck hit the same config drift and
-    works around it the same way -- see
+    This is a **hint, not a requirement**. `EntraApp` discovery enumerates the tenant's
+    app registrations regardless; the id is used only to pin the agent's own app to the
+    front of that listing so it survives the server's per-kind row cap on a large
+    directory.
+
+    Reading only the documented top-level `entraAppId` would miss it on a fully
+    connected tenant, because the connect playbooks persist it elsewhere: Workday as
+    `entraAppId` in `.local/connect/workday/config.json`, ServiceNow as
+    `entra.appClientId` in `.local/connect/servicenow/config.json`. FlightCheck hit the
+    same config drift and works around it the same way -- see
     `flightcheck/checks/_workday_app_assignment.py::_workday_hints`.
 
     Returns ``None`` when no connector has been connected yet. That is a legitimate
-    state, not an error: there is simply no app registration to discover, and the
-    caller reports the scope incomplete so nothing is retired for it.
+    state, not an error: the crawl simply has no app to prioritise.
 
     Any read/parse failure degrades to "not found" rather than raising -- a malformed
     connect config must not take down a crawl of seven other kinds.
@@ -257,8 +272,9 @@ def _live_platform():
     queries) via :class:`DataverseBackedPlatform`. The setup config binds a **single**
     environment (``dataverseEndpoint``); its identity is derived from that config URL
     (no environment discovery). The crawl is **always** scoped to that one environment
-    -- there is no full-tenant crawl -- so the tenant-root exemption keeps the
-    not-yet-wired tenant-root kinds out of reconcile (spec §6.3).
+    -- there is no full-tenant crawl -- so the platform declares ``EntraApp`` as its
+    only genuinely tenant-wide kind (``tenant_wide_kinds``) and everything else is
+    carried forward rather than retired by absence.
     """
     import auth
     from discover_dataverse_platform import DataverseBackedPlatform
@@ -356,7 +372,7 @@ def _build_inventory_client(
     it falls back to the local mirror, reports the failure, and exits non-zero.
 
     The live path is pre-flighted before the crawl so an unusable endpoint or a
-    rejected token surfaces immediately instead of on the first upsert, after minutes
+    rejected token surfaces immediately instead of at the sync, after minutes
     of enumeration.
     """
     from tenant_inventory_discovery.in_memory_inventory import InMemoryInventoryClient
@@ -508,21 +524,29 @@ def _resolve_write_mode(args):
 
 def _summary_to_dict(summary: RunSummary) -> dict:
     """Serialize a RunSummary into a stable, render-friendly JSON shape."""
+    sync = summary.synced
     return {
         "correlationId": summary.correlation_id,
-        "passStartedAt": (
-            summary.pass_started_at.isoformat() if summary.pass_started_at else None
-        ),
         "aborted": summary.aborted,
         "retiredCounts": summary.retired_counts,
-        "reconciled": [
-            {
-                "kind": r.kind.discriminator,
-                "environmentId": r.environment_id,
-                "evaluated": r.evaluated_count,
-                "retired": r.retired_count,
-            }
-            for r in summary.reconciled
+        "sync": {
+            "attempted": sync is not None,
+            "unchanged": summary.sync_unchanged,
+            "blockedReason": summary.sync_blocked_reason,
+            "submitted": sync.submitted_count if sync else 0,
+            "upserted": sync.upserted_count if sync else 0,
+            "retired": sync.retired_count if sync else 0,
+            "retiredItemIds": list(sync.retired_item_ids) if sync else [],
+            "failed": [
+                {"itemId": f.item_id, "reason": f.reason} for f in sync.failed_items
+            ]
+            if sync
+            else [],
+        },
+        # Scopes this run vouched for: absence here was allowed to mean deletion.
+        "authoritativeScopes": [
+            {"environmentId": s.environment_id, "kind": s.kind.discriminator}
+            for s in summary.authoritative_scopes
         ],
         "completedScopes": [
             {"environmentId": s.environment_id, "kind": s.kind.discriminator}
@@ -533,12 +557,12 @@ def _summary_to_dict(summary: RunSummary) -> dict:
                 "environmentId": r.scope.environment_id,
                 "kind": r.scope.kind.discriminator,
                 "enumerated": r.enumerated,
-                "upserted": r.upserted,
+                "mapped": r.mapped,
                 "skippedInvalid": r.skipped_invalid,
                 "capped": r.capped,
                 "droppedAttributes": r.dropped_attributes,
-                "retiredItemIds": r.retired_item_ids,
                 "complete": r.complete,
+                "authoritative": r.authoritative,
                 "error": r.error,
             }
             for r in summary.scopes
@@ -546,11 +570,13 @@ def _summary_to_dict(summary: RunSummary) -> dict:
         "totals": {
             "kindsCrawled": len({r.scope.kind for r in summary.scopes}),
             "enumerated": sum(r.enumerated for r in summary.scopes),
-            "upserted": sum(r.upserted for r in summary.scopes),
+            "mapped": sum(r.mapped for r in summary.scopes),
+            "carriedForward": summary.carried_forward,
+            "submitted": len(summary.payload),
             "skippedInvalid": sum(r.skipped_invalid for r in summary.scopes),
             "incompleteScopes": sum(1 for r in summary.scopes if not r.complete),
             "cappedScopes": sum(1 for r in summary.scopes if r.capped),
-            "retired": sum(len(r.retired_item_ids) for r in summary.scopes),
+            "retired": sync.retired_count if sync else 0,
         },
     }
 
@@ -800,7 +826,7 @@ def main(argv=None) -> int:
         aborted = False
         try:
             summary = skill.discover(args.tenant_id, environment_ids=environment_ids)
-        except Exception as exc:  # crash path: nothing reconciled (crawler guarantees this)
+        except Exception as exc:  # crash path: nothing synced (crawler guarantees this)
             aborted = True
             summary = RunSummary(correlation_id="unknown")
             summary.aborted = True
@@ -816,6 +842,17 @@ def main(argv=None) -> int:
     result["discovered"] = _discovered_from_inventory(inventory)
     result["writePath"] = write_path
     result["writeDegraded"] = degraded_reason is not None
+    # A withheld sync is not a write-path failure: the service was reachable, but this
+    # crawl could not describe the tenant safely enough to submit a whole-inventory
+    # payload. Surfaced separately so the operator does not chase a connectivity bug.
+    withheld = result["sync"]["blockedReason"] if not aborted else ""
+    if withheld:
+        result["syncWithheldNote"] = (
+            "SYNC WITHHELD: the tenant inventory was NOT updated. Under the "
+            "whole-inventory contract, anything the payload omits is retired, so the "
+            "crawler refuses to submit a payload it cannot vouch for. Reason: "
+            f"{withheld}. Nothing was deleted; re-run once the cause is resolved."
+        )
     if degraded_reason:
         result["writePathNote"] = (
             "WRITE FAILED: the WeveNova Inventory API could not be used, so discovered "
@@ -836,7 +873,7 @@ def main(argv=None) -> int:
         json.dump(result, fh, indent=2)
 
     # Merge into the durable local mirror. Skip on abort so a partial/crashed run
-    # never overwrites the last good picture (matching the "no reconcile on abort" rule).
+    # never overwrites the last good picture (matching the "no sync on abort" rule).
     inventory_written = None
     if not (aborted or result["aborted"]):
         inventory_written = args.inventory_out
@@ -863,7 +900,10 @@ def main(argv=None) -> int:
                 "inventoryPath": inventory_written,
                 "writePath": write_path,
                 "writeDegraded": degraded_reason is not None,
-                "upserted": result["totals"]["upserted"],
+                "syncWithheld": bool(withheld),
+                "syncUnchanged": result["sync"]["unchanged"],
+                "submitted": result["totals"]["submitted"],
+                "carriedForward": result["totals"]["carriedForward"],
                 "incompleteScopes": result["totals"]["incompleteScopes"],
                 "retired": result["retiredCounts"],
             }
@@ -872,11 +912,13 @@ def main(argv=None) -> int:
     if degraded_reason:
         # Loud on stderr so it survives a caller that only parses stdout JSON.
         print(f"WRITE FAILED: {degraded_reason}", file=sys.stderr)
+    if withheld:
+        print(f"SYNC WITHHELD: {withheld}", file=sys.stderr)
     if aborted or result["aborted"]:
         return 1
     # The crawl succeeded but the inventory was not updated. Exit non-zero so
     # automation notices; the local mirror was still written.
-    return 2 if degraded_reason else 0
+    return 2 if (degraded_reason or withheld) else 0
 
 
 if __name__ == "__main__":

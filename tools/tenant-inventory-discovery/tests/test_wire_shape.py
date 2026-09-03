@@ -9,17 +9,14 @@ service so these tests fail if that shape ever drifts again.
 
 from __future__ import annotations
 
-import json
-from datetime import datetime, timezone
-
 import httpx
-import pytest
 
 from tenant_inventory_discovery.config import DiscoveryConfig, RetryPolicy
 from tenant_inventory_discovery.inventory_client import (
     HttpInventoryClient,
     normalize_row,
 )
+from tenant_inventory_discovery.mapping import map_resource
 from tenant_inventory_discovery.models import Kind
 
 _BASE = "https://inventory.example.test"
@@ -146,17 +143,63 @@ class TestListItemsAgainstTheLiveShape:
         assert len(rows) == 1
 
 
-class TestUpsertAgainstTheLiveShape:
-    def test_reads_the_item_id_from_a_pascal_case_response(self):
-        from tenant_inventory_discovery.mapping import map_resource
+class TestSyncAgainstTheLiveShape:
+    def test_a_pascal_case_sync_response_is_normalized(self):
+        """The write response goes through the same PascalCase treatment as reads."""
 
         def handler(request: httpx.Request) -> httpx.Response:
-            return httpx.Response(201, json=LIVE_ROW)
+            return httpx.Response(
+                200,
+                json={
+                    "SubmittedCount": 2,
+                    "UpsertedCount": 2,
+                    "RetiredCount": 1,
+                    "RetiredItemIds": ["Connector:gone"],
+                    "FailedItems": [],
+                },
+            )
 
         item = map_resource(
             Kind.ENVIRONMENT,
             {"environmentId": "env-prod", "displayName": "Production Environment"},
         )
-        result = _client(handler).upsert(item, run_id="run-1")
-        assert result.item_id == "Environment:env-prod"
-        assert result.created is True
+        result = _client(handler).sync_inventory([item], run_id="run-1")
+
+        assert result.submitted_count == 2
+        assert result.upserted_count == 2
+        assert result.retired_item_ids == ["Connector:gone"]
+
+    def test_pascal_case_failed_items_are_normalized(self):
+        """``FailedItems`` is the one part of a 200 that reports trouble. Reading it
+        from the wrong key space turns a partial success into a silent one."""
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(
+                200,
+                json={
+                    "SubmittedCount": 2,
+                    "UpsertedCount": 1,
+                    "RetiredCount": 0,
+                    "RetiredItemIds": [],
+                    "FailedItems": [
+                        {"ItemId": "Connection:c-9", "Reason": "no environment"}
+                    ],
+                },
+            )
+
+        item = map_resource(Kind.ENVIRONMENT, {"environmentId": "env-prod"})
+        result = _client(handler).sync_inventory([item], run_id="run-1")
+
+        assert len(result.failed_items) == 1
+        assert result.failed_items[0].item_id == "Connection:c-9"
+        assert result.failed_items[0].reason == "no environment"
+
+    def test_a_row_the_service_returns_can_be_sent_straight_back(self):
+        """Carry-forward depends on this: server-managed fields are ignored inbound,
+        so a GET body is a legal sync entry after normalization."""
+        row = normalize_row(LIVE_ROW)
+        assert row["kind"] == "Environment"
+        assert row["naturalKey"] == "env-prod"
+        assert row["state"] == "Active"
+        assert row["validationStatus"] == "Unvalidated"
+        assert {a["key"] for a in row["attributes"]} == {"environmentId", "region"}

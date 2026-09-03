@@ -43,6 +43,7 @@ _ENV_URL = "https://org538df70b.crm.dynamics.com"
 _ENV_ID = "org538df70b"
 _ENTRA_APP_ID = "d64a50b6-f92c-43af-be17-53132d75b94d"
 _TENANT_ID = "contoso.onmicrosoft.com"
+_APPLICATIONS_PATH = "/applications"
 
 _FAKE_APPLICATIONS = [
     {
@@ -125,22 +126,44 @@ _FAKE_KNOWLEDGE_SOURCES = [
 class _FakeGraphClient:
     """Stand-in for the kit's GraphClient (no network); records the query it received."""
 
-    def __init__(self, rows=None, raises=None, sites=None):
+    def __init__(self, rows=None, raises=None, sites=None, next_link=None):
         self._rows = rows if rows is not None else list(_FAKE_APPLICATIONS)
         self._raises = raises
         # Map of graph path -> site dict, for site-by-path resolution (SharePointSite).
         self._sites = sites if sites is not None else {}
+        self._next_link = next_link
         self.last_path = None
         self.last_params = None
+        # EntraApp reads twice -- a targeted pin then the tenant-wide page -- so the
+        # tests need both, not just whichever landed last.
+        self.filtered_params = None
+        self.listing_params = None
 
     def get_all(self, path, params=None, *, raise_on_permission_error=False):
         self.last_path = path
         self.last_params = params
+        if params and "$filter" in params:
+            self.filtered_params = params
         if self._raises is not None:
             raise self._raises
-        return list(self._rows)
+        rows = list(self._rows)
+        if params and "$filter" in params:
+            # Crude stand-in for `appId eq '<id>'`.
+            wanted = params["$filter"].split("'")[1] if "'" in params["$filter"] else ""
+            rows = [r for r in rows if r.get("appId") == wanted]
+        return rows
 
     def get(self, path, params=None):
+        self.last_path = path
+        self.last_params = params
+        if path == _APPLICATIONS_PATH:
+            self.listing_params = params
+            if self._raises is not None:
+                raise self._raises
+            page = {"value": list(self._rows)}
+            if self._next_link:
+                page["@odata.nextLink"] = self._next_link
+            return page
         return self._sites.get(path)
 
 
@@ -282,23 +305,83 @@ class TestEntraApps:
         assert item.attributes["displayName"] == "ESS Agent App"
         assert item.attributes["objectId"] == "9d4e2c31-0000-4a11-9b7e-7c6f2d1a5e33"
 
-    def test_query_is_scoped_to_configured_app_id(self, platform):
+    def test_query_is_tenant_wide_not_scoped_to_the_configured_app(self, platform):
+        """The whole point of the change: don't require /connect to have run."""
         drain(platform.list_entra_apps(page_size=100))
-        graph = platform._graph  # the injected fake records its last query
-        assert graph.last_path == "/applications"
-        assert graph.last_params["$filter"] == f"appId eq '{_ENTRA_APP_ID}'"
+        graph = platform._graph
+        assert graph.listing_params is not None
+        assert "$filter" not in graph.listing_params  # every app, not just the agent's
+        assert graph.listing_params["$top"] == "100"
 
-    def test_missing_entra_app_id_raises_platform_error(self, monkeypatch):
+    def test_configured_app_is_pinned_ahead_of_the_bulk_listing(self):
+        """The per-kind cap truncates a prefix, so the agent's app must lead it."""
+        others = [
+            {"appId": f"other-{i}", "displayName": f"App {i}", "id": f"obj-{i}"}
+            for i in range(5)
+        ]
+        graph = _FakeGraphClient(rows=[*others, *_FAKE_APPLICATIONS])
+        p = DataverseBackedPlatform(
+            _ENV_URL, entra_app_id=_ENTRA_APP_ID, graph_client=graph
+        )
+        items, _ = drain(p.list_entra_apps(page_size=100))
+
+        assert items[0]["appId"] == _ENTRA_APP_ID  # pinned, despite being listed last
+        assert graph.filtered_params["$filter"] == f"appId eq '{_ENTRA_APP_ID}'"
+        # Pinning must not duplicate the row that the bulk listing also returns.
+        assert [i["appId"] for i in items].count(_ENTRA_APP_ID) == 1
+        assert len(items) == 6
+
+    def test_missing_entra_app_id_still_enumerates(self, monkeypatch):
+        """A tenant that has not run /connect is a normal state, not a failure.
+
+        This is the regression: requiring ``entraAppId`` reported the whole kind as
+        `enumeration failed` for anyone who had not connected a system yet.
+        """
         monkeypatch.setattr(auth, "authenticate", lambda env_url: "dummy-token")
         p = DataverseBackedPlatform(_ENV_URL, graph_client=_FakeGraphClient())
+        items, complete = drain(p.list_entra_apps(page_size=100))
+
+        assert complete is True
+        assert [i["appId"] for i in items] == [_ENTRA_APP_ID]
+
+    def test_more_pages_means_the_scope_is_incomplete(self, monkeypatch):
+        """A truncated directory read must never look authoritative.
+
+        A tenant with more app registrations than the 50-row per-kind cap gets
+        truncated by the runner; leaving ``is_last`` False is what strips the scope of
+        authority, so the untouched remainder is carried forward instead of retired.
+        """
+        monkeypatch.setattr(auth, "authenticate", lambda env_url: "dummy-token")
+        graph = _FakeGraphClient(next_link="https://graph.microsoft.com/v1.0/next")
+        p = DataverseBackedPlatform(
+            _ENV_URL, entra_app_id=_ENTRA_APP_ID, graph_client=graph
+        )
+        items, complete = drain(p.list_entra_apps(page_size=100))
+
+        assert items  # rows were still recorded...
+        assert complete is False  # ...but the scope cannot retire anything
+
+    def test_empty_read_is_incomplete_so_nothing_is_retired(self, monkeypatch):
+        """Zero apps back is not proof the agent's app is gone."""
+        monkeypatch.setattr(auth, "authenticate", lambda env_url: "dummy-token")
+        p = DataverseBackedPlatform(_ENV_URL, graph_client=_FakeGraphClient(rows=[]))
+        items, complete = drain(p.list_entra_apps(page_size=100))
+
+        assert items == []
+        assert complete is False
+
+    def test_permission_denied_response_becomes_platform_error(self, monkeypatch):
+        """GraphClient.get returns a 403 envelope rather than raising."""
+        monkeypatch.setattr(auth, "authenticate", lambda env_url: "dummy-token")
+
+        class _Denied(_FakeGraphClient):
+            def get(self, path, params=None):
+                return {"_error": "insufficient_permissions", "_status": 403}
+
+        p = DataverseBackedPlatform(_ENV_URL, graph_client=_Denied())
         with pytest.raises(PlatformError) as excinfo:
             drain(p.list_entra_apps(page_size=100))
-        # The scope is reported Incomplete using this text, so it has to name the real
-        # cause. /setup never provisions an Entra app -- pointing the operator at a
-        # missing config value sends them looking for a key nothing writes.
-        message = str(excinfo.value)
-        assert "/connect" in message
-        assert "retired" in message
+        assert "Application.Read.All" in str(excinfo.value)
 
     def test_graph_permission_error_becomes_platform_error(self, monkeypatch):
         monkeypatch.setattr(auth, "authenticate", lambda env_url: "dummy-token")

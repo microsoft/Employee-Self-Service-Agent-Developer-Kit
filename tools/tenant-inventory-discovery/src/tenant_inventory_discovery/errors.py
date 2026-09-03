@@ -25,18 +25,6 @@ class NonRetryableApiError(InventoryApiError):
     """
 
 
-class PreconditionFailedError(NonRetryableApiError):
-    """HTTP 412 -- an ``If-Match`` ETag was stale; a concurrent writer won (§5.2).
-
-    Not retryable in place: the caller must re-read the row and re-apply, because a
-    blind replay would clobber whatever the concurrent writer just stored.
-    """
-
-    def __init__(self, natural_key: str, message: str = "precondition failed") -> None:
-        super().__init__(f"{message} for {natural_key}")
-        self.natural_key = natural_key
-
-
 class ThrottledError(InventoryApiError):
     """HTTP 429 -- throttled; ``retry_after`` seconds requested by the server (§6)."""
 

@@ -76,32 +76,53 @@ class DiscoveryConfig:
     inventory_base_url: str | None = DEFAULT_INVENTORY_BASE_URL
     api_segment: str = "api/beta"
     entity_set: str = "agentConfigurationInventoryItems"
-    reconcile_action: str = "reconcile"
+    sync_action: str = "syncInventory"
 
     # --- Crawl ---------------------------------------------------------------------
     # Per-platform enumeration page size.
     page_size: int = 200
 
-    # Bounded parallelism for upserts. Conservative: the service counts rows per
-    # (tenant, kind) on every create, so hammering it buys little.
-    max_concurrency: int = 4
-
     # OData $top used when listing existing rows. The service caps $top at 500.
     list_page_size: int = 500
 
-    retry: RetryPolicy = field(default_factory=RetryPolicy)
-    caps: AttributeCaps = field(default_factory=AttributeCaps)
+    # --- Timeouts ------------------------------------------------------------------
+    # Split three ways because the calls have wildly different shapes. A connect that
+    # has not landed in 10s is a dead host, not a slow one. An ordinary read is a
+    # single page and should not need 30s. The whole-inventory sync is the outlier: one
+    # request drives up to ``max_items_per_sync`` server-side writes plus the
+    # retirement sweep, so it routinely runs for minutes. Holding it to the read budget
+    # is what turns a *working* sync into a timeout, a retry, and a re-POST of the
+    # entire payload onto a service that was already busy applying the first one.
+    connect_timeout_seconds: float = 10.0
+    read_timeout_seconds: float = 30.0
+    sync_timeout_seconds: float = 600.0
 
-    # Reconcile compares a *client-supplied* watermark against *server-stamped*
-    # UpdatedAt values. If the client clock runs ahead, rows written during the pass
-    # can look older than the watermark and be wrongly retired. Backdating the
-    # watermark by this allowance trades a little staleness (drift lingers one extra
-    # run) for never retiring a row the crawl actually observed.
-    clock_skew_allowance_seconds: int = 300
+    retry: RetryPolicy = field(default_factory=RetryPolicy)
+    # The sync gets its own, much shallower budget. Every attempt re-sends the entire
+    # payload, so the default five would pile ~50 minutes of duplicated work onto a
+    # service that is merely slow. One retry is enough to ride out a dropped
+    # connection -- and because it carries the same ``Idempotency-Key``, a server that
+    # *did* finish replays its original answer instead of running the payload twice.
+    sync_retry: RetryPolicy = field(
+        default_factory=lambda: RetryPolicy(max_attempts=2, base_delay_seconds=2.0)
+    )
+    caps: AttributeCaps = field(default_factory=AttributeCaps)
 
     # Per-tenant single-flight run lock TTL. Single-host interim mitigation; a
     # multi-host deployment needs a distributed lock.
     run_lock_ttl_seconds: int = 3600
+
+    @property
+    def max_items_per_sync(self) -> int:
+        """Ceiling on items in one ``syncInventory`` payload; more earns a 400.
+
+        The service computes this as ``MaxItemsPerTenantAndKind x <kind count>`` off
+        its own enum, so it grows automatically when a kind is added. Deriving it the
+        same way here -- rather than hard-coding 400 -- keeps the two in step.
+        """
+        from .models import Kind
+
+        return self.caps.max_items_per_tenant_and_kind * len(Kind)
 
     @classmethod
     def from_env(cls, **overrides: object) -> DiscoveryConfig:

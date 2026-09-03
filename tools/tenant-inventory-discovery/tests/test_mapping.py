@@ -1,18 +1,21 @@
-"""§10: per-kind mapping, natural-key composition, and the upsert wire body.
-
-These tests pin the contract against the *server's* schema
-(``AgentConfigurationInventoryAttributeSchema``) and natural-key recipe
-(``AgentConfigurationInventoryNaturalKey``). A change here should mean the server
-changed.
-"""
+"""§10: per-kind mapping, natural-key composition, and sync payload validation."""
 
 from __future__ import annotations
 
 import pytest
 
-from tenant_inventory_discovery.mapping import map_resource, to_request_body
-from tenant_inventory_discovery.models import Kind, encode_item_id
-from tenant_inventory_discovery.schemas import AttributeValidationError, schema_for
+from tenant_inventory_discovery.mapping import (
+    SyncPayloadError,
+    map_resource,
+    to_sync_entry,
+    validate_sync_payload,
+)
+from tenant_inventory_discovery.models import InventoryItem, Kind, encode_item_id
+from tenant_inventory_discovery.schemas import (
+    AttributeCaps,
+    AttributeValidationError,
+    schema_for,
+)
 
 # One minimally-valid resource per kind: every required attribute, nothing unlisted.
 SAMPLES: dict[Kind, dict[str, object]] = {
@@ -27,6 +30,15 @@ SAMPLES: dict[Kind, dict[str, object]] = {
 }
 
 
+def _item(kind: Kind, natural_key: str) -> InventoryItem:
+    return InventoryItem(
+        kind=kind,
+        natural_key=natural_key,
+        attributes={kind.key_fields[-1]: natural_key},
+        environment_id=natural_key if kind.is_env_scoped else None,
+    )
+
+
 def test_every_kind_maps_required_keys_only_allowed_camelcase():
     for kind, attrs in SAMPLES.items():
         item = map_resource(kind, attrs)
@@ -37,17 +49,11 @@ def test_every_kind_maps_required_keys_only_allowed_camelcase():
 
 def test_missing_required_key_fails_item():
     with pytest.raises(AttributeValidationError):
-        # KnowledgeSource requires botId as well as environmentId/sourceId.
         map_resource(Kind.KNOWLEDGE_SOURCE, {"environmentId": "e1", "sourceId": "k1"})
 
 
 def test_unlisted_key_is_dropped_not_rejected():
-    """The server 400s on an unknown key, so the client drops it first.
-
-    Failing the whole item because a platform surface returned one extra field would
-    make a scope incomplete and block reconcile -- a much worse outcome than losing
-    an attribute the schema does not model.
-    """
+    """Unknown keys would 400 the whole sync, so the crawler drops them first."""
     dropped: list[str] = []
     item = map_resource(
         Kind.CONNECTOR,
@@ -68,7 +74,6 @@ def test_env_scoped_natural_key_composes_environment_id():
         Kind.CONNECTION,
         {"environmentId": "envB", "connectionId": "c-1", "connectorId": "k"},
     )
-    # Same connectionId in two environments must not collide (spec §4).
     assert a.natural_key != b.natural_key
     assert a.natural_key == "envA:c-1"
     assert b.natural_key == "envB:c-1"
@@ -93,7 +98,7 @@ def test_composite_segments_are_escaped_before_joining():
 
 
 def test_single_segment_natural_key_is_raw():
-    """Single-segment kinds keep the raw value; only the item id percent-encodes it."""
+    """Single-segment kinds keep the raw value; only the item id encodes it."""
     url = "https://contoso.sharepoint.com/sites/hr"
     item = map_resource(Kind.SHAREPOINT_SITE, {"siteUrl": url})
     assert item.natural_key == url
@@ -102,7 +107,7 @@ def test_single_segment_natural_key_is_raw():
 
 
 def test_extension_pack_is_keyed_on_environment():
-    """The schema carries no pack identity, so an environment holds exactly one row."""
+    """The schema has no pack identity, so an environment holds exactly one row."""
     item = map_resource(
         Kind.EXTENSION_PACK, {"environmentId": "e1", "installed": True, "hrsd": False}
     )
@@ -111,38 +116,38 @@ def test_extension_pack_is_keyed_on_environment():
 
 
 def test_connection_carries_connector_edge_as_attribute():
-    """The reference edge lives in `attributes`; there is no top-level connectorId."""
+    """The reference edge lives in attributes; there is no top-level connectorId."""
     item = map_resource(
         Kind.CONNECTION,
         {"environmentId": "e1", "connectionId": "c-1", "connectorId": "cat-9"},
     )
-    assert item.attributes["connectorId"] == "cat-9"  # reference edge (§5.5)
-    assert item.environment_id == "e1"  # containment edge (§5.5)
-    assert "connectorId" not in to_request_body(item)
+    body = to_sync_entry(item, "tenant-1")
+    assert item.attributes["connectorId"] == "cat-9"
+    assert item.environment_id == "e1"
+    assert "connectorId" not in body
 
 
 def test_tenant_root_has_no_environment_id():
     item = map_resource(Kind.CONNECTOR, {"connectorId": "c1", "displayName": "SN"})
+    body = to_sync_entry(item, "tenant-1")
     assert item.environment_id is None
-    assert "environmentId" not in to_request_body(item)
+    assert "environmentId" not in body
 
 
-def test_request_body_serializes_attributes_as_entry_array():
+def test_sync_entry_serializes_attributes_as_entry_array():
     item = map_resource(Kind.ENVIRONMENT, {"environmentId": "e1", "region": "us"})
-    body = to_request_body(item)
+    body = to_sync_entry(item, "tenant-1")
+    assert body["tenantId"] == "tenant-1"
     assert body["kind"] == "Environment"
     assert body["naturalKey"] == "e1"
-    assert "runId" not in body  # no per-run watermark on the wire
+    assert body["validationStatus"] == "Unvalidated"
 
-    # attributes is an array of {key, value} entries, not an object or a string: an
-    # OData entity type binds a dictionary to a list of empty objects.
     assert body["attributes"] == [
         {"key": "environmentId", "value": "e1"},
         {"key": "region", "value": "us"},
     ]
 
-    # Skill never stamps provenance/audit/concurrency (spec §4.1).
-    for forbidden in ("source", "submittedById", "state", "createdAt", "version"):
+    for forbidden in ("source", "submittedById", "state", "createdAt", "version", "etag"):
         assert forbidden not in body
 
 
@@ -152,7 +157,7 @@ def test_typed_attribute_values_travel_as_strings():
         Kind.EXTENSION_PACK,
         {"environmentId": "e1", "installed": True, "hrsd": False, "flowCount": 12},
     )
-    entries = {e["key"]: e["value"] for e in to_request_body(item)["attributes"]}
+    entries = {e["key"]: e["value"] for e in to_sync_entry(item, "tenant-1")["attributes"]}
     assert entries["installed"] == "true"
     assert entries["hrsd"] == "false"
     assert entries["flowCount"] == "12"
@@ -161,9 +166,7 @@ def test_typed_attribute_values_travel_as_strings():
 
 def test_non_coercible_typed_value_fails_item():
     with pytest.raises(AttributeValidationError):
-        map_resource(
-            Kind.EXTENSION_PACK, {"environmentId": "e1", "installed": "maybe"}
-        )
+        map_resource(Kind.EXTENSION_PACK, {"environmentId": "e1", "installed": "maybe"})
     with pytest.raises(AttributeValidationError):
         map_resource(
             Kind.EXTENSION_PACK,
@@ -171,9 +174,7 @@ def test_non_coercible_typed_value_fails_item():
         )
 
 
-def test_caps_enforced():
-    from tenant_inventory_discovery.schemas import AttributeCaps
-
+def test_caps_enforced_while_mapping_fields():
     caps = AttributeCaps(max_value_length=3)
     with pytest.raises(AttributeValidationError):
         map_resource(
@@ -181,3 +182,34 @@ def test_caps_enforced():
             {"environmentId": "e1", "region": "way-too-long"},
             caps=caps,
         )
+
+    with pytest.raises(AttributeValidationError):
+        map_resource(
+            Kind.ENVIRONMENT,
+            {"environmentId": "e1"},
+            caps=AttributeCaps(max_attribute_count=0),
+        )
+
+
+def test_validate_sync_payload_rejects_an_empty_payload():
+    with pytest.raises(SyncPayloadError, match="empty payload"):
+        validate_sync_payload([])
+
+
+def test_validate_sync_payload_rejects_more_than_400_items():
+    items = [_item(Kind.ENVIRONMENT, f"e{i}") for i in range(401)]
+    caps = AttributeCaps(max_items_per_tenant_and_kind=500)
+    with pytest.raises(SyncPayloadError, match="per-call cap"):
+        validate_sync_payload(items, caps=caps, max_items=400)
+
+
+def test_validate_sync_payload_rejects_more_than_50_in_one_kind():
+    items = [_item(Kind.ENVIRONMENT, f"e{i}") for i in range(51)]
+    with pytest.raises(SyncPayloadError, match="per-kind cap"):
+        validate_sync_payload(items)
+
+
+def test_validate_sync_payload_rejects_duplicate_kind_natural_key():
+    items = [_item(Kind.CONNECTOR, "c1"), _item(Kind.CONNECTOR, "c1")]
+    with pytest.raises(SyncPayloadError, match="duplicate item"):
+        validate_sync_payload(items)

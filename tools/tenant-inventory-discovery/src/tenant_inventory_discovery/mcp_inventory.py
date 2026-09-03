@@ -17,13 +17,12 @@ so a synchronous client stays small and adds no dependency to a package whose on
 runtime import today is ``httpx``.
 
 The transport is **multiplexed**, not request/response-in-lockstep: a single reader
-thread owns stdout and routes each frame to the caller waiting on its id. That is
-load-bearing, because the crawler upserts concurrently and the server answers
-concurrently, so replies interleave. See :class:`_StdioJsonRpc`.
+thread owns stdout and routes each frame to the caller waiting on its id. See
+:class:`_StdioJsonRpc`.
 
 Errors raised by the server are re-raised here as the *same* exception types the HTTP
 client raises. That is what lets the runner and skill treat this as a drop-in: their
-retry, drift, and abort logic all branch on that taxonomy.
+retry and abort logic both branch on that taxonomy.
 """
 
 from __future__ import annotations
@@ -32,30 +31,41 @@ import json
 import subprocess
 import sys
 import threading
-from datetime import datetime, timezone
+from collections.abc import Sequence
 from typing import Any
 
+from .config import DiscoveryConfig
 from .errors import (
     InventoryApiError,
     NonRetryableApiError,
-    PreconditionFailedError,
     ThrottledError,
 )
-from .models import InventoryItem, Kind, ReconcileResult, UpsertResult
+from .models import (
+    FailedSyncItem,
+    InventoryItem,
+    Kind,
+    SyncResult,
+)
 
 #: MCP revision this client negotiates. The server tolerates older clients.
 PROTOCOL_VERSION = "2024-11-05"
 
 #: How long one MCP call may take before the server is declared wedged. Deliberately
-#: generous: answering a single upsert can mean minting a token (up to 180s) and then
-#: replaying a throttled POST through the HTTP client's whole backoff budget. A bound
-#: still matters -- without one, a server that dies holding the pipe open would hang
-#: the crawl forever instead of failing it.
-DEFAULT_REQUEST_TIMEOUT = 600.0
+#: generous: the sync call carries the tenant's whole inventory in one request, and
+#: answering it can mean minting a token (up to 180s) and then replaying a throttled
+#: POST through the HTTP client's whole backoff budget. A bound still matters --
+#: without one, a server that dies holding the pipe open would hang the crawl forever
+#: instead of failing it.
+#:
+#: Kept strictly **above** :attr:`DiscoveryConfig.sync_timeout_seconds`, because the
+#: server runs that HTTP call inside this RPC and whichever budget expires first owns
+#: the error the user sees. The inner one names the payload size, says the write may
+#: still be landing, and points at the knob to turn; this one can only report that the
+#: server went quiet. Equal budgets race, and the race loses the better message.
+DEFAULT_REQUEST_TIMEOUT = DiscoveryConfig().sync_timeout_seconds + 120.0
 
 #: Server-reported error type name -> local exception class.
 _ERROR_TYPES: dict[str, type[Exception]] = {
-    "PreconditionFailedError": PreconditionFailedError,
     "ThrottledError": ThrottledError,
     "NonRetryableApiError": NonRetryableApiError,
     "InventoryApiError": InventoryApiError,
@@ -84,16 +94,15 @@ class _Pending:
 class _StdioJsonRpc:
     """Thread-safe synchronous JSON-RPC 2.0 client over a child process's stdio.
 
-    One pipe carries every request, and replies come back **out of order**: the MCP
+    One pipe carries every request, and replies may come back **out of order**: the MCP
     server dispatches each incoming message with ``task_group.start_soon``
-    (``mcp.server.lowlevel.Server.run``), and the crawler issues upserts from a
-    :class:`~concurrent.futures.ThreadPoolExecutor` sized by ``max_concurrency``.
+    (``mcp.server.lowlevel.Server.run``), so nothing guarantees the server answers in
+    arrival order even when a client sends one request at a time.
 
     That rules out the obvious "send, then read until my own id appears" loop. Two
     threads reading the same pipe race for each line, and the winner *discards* any
     frame that is not its own -- so the thread that reply actually belonged to waits
-    forever on a response no one will send again. In practice a crawl stalled after a
-    couple of upserts and never produced another line of output.
+    forever on a response no one will send again.
 
     Hence: exactly one reader thread owns stdout and routes each frame to the waiter
     registered under its id. Callers block on their own event, never on the pipe, and
@@ -340,10 +349,8 @@ class McpInventoryClient:
         error = payload.get("error") or {}
         exc_type = _ERROR_TYPES.get(error.get("type", ""), InventoryApiError)
         message = error.get("message", "unknown error")
-        # Rebuild the richer types from their own fields so the runner still sees
-        # ``natural_key`` and ``retry_after``, not just a sentence.
-        if exc_type is PreconditionFailedError:
-            raise PreconditionFailedError(error.get("naturalKey") or message)
+        # Rebuild the richer type from its own fields so the caller still sees
+        # ``retry_after``, not just a sentence.
         if exc_type is ThrottledError:
             raise ThrottledError(error.get("retryAfter"))
         raise exc_type(message)
@@ -376,31 +383,6 @@ class McpInventoryClient:
     def probe(self) -> None:
         self._tool("probe", {"tenant_id": self._tenant_id})
 
-    def upsert(
-        self, item: InventoryItem, *, if_match: str | None = None, run_id: str = ""
-    ) -> UpsertResult:
-        data = self._tool(
-            "upsert_item",
-            {
-                "tenant_id": self._tenant_id,
-                "kind": item.kind.discriminator,
-                "natural_key": item.natural_key,
-                "attributes": item.attributes,
-                "environment_id": item.environment_id,
-                "display_name": item.display_name,
-                "description": item.description,
-                "run_id": run_id,
-                "if_match": if_match,
-            },
-        )
-        return UpsertResult(
-            natural_key=data.get("naturalKey", item.natural_key),
-            kind=item.kind,
-            item_id=data.get("itemId") or item.item_id,
-            etag=data.get("etag"),
-            created=bool(data.get("created")),
-        )
-
     def list_items(
         self, *, kind: Kind | None = None, environment_id: str | None = None
     ) -> list[dict[str, Any]]:
@@ -414,38 +396,47 @@ class McpInventoryClient:
         )
         return list(data or [])
 
-    def retire(self, item_id: str, *, if_match: str | None = None) -> None:
-        self._tool(
-            "retire_item",
-            {
-                "tenant_id": self._tenant_id,
-                "item_id": item_id,
-                "if_match": if_match,
-            },
-        )
+    def sync_inventory(
+        self, items: Sequence[InventoryItem], *, run_id: str = ""
+    ) -> SyncResult:
+        """Submit the tenant's whole inventory in one call.
 
-    def reconcile(
-        self, kind: Kind, environment_id: str, pass_started_at: datetime
-    ) -> ReconcileResult:
-        if pass_started_at.tzinfo is None:
-            pass_started_at = pass_started_at.replace(tzinfo=timezone.utc)
+        The items cross the pipe in their domain shape, not the wire shape: building
+        the request body is :class:`HttpInventoryClient`'s job, and duplicating it here
+        would give the payload two independent encoders to drift apart.
+        """
+        payload = [
+            {
+                "kind": item.kind.discriminator,
+                "natural_key": item.natural_key,
+                "attributes": item.attributes,
+                "environment_id": item.environment_id,
+                "display_name": item.display_name,
+                "description": item.description,
+            }
+            for item in items
+        ]
         data = self._tool(
-            "reconcile",
+            "sync_inventory",
             {
                 "tenant_id": self._tenant_id,
-                "kind": kind.discriminator,
-                "environment_id": environment_id,
-                "pass_started_at": pass_started_at.astimezone(
-                    timezone.utc
-                ).isoformat(),
+                "items": payload,
+                "run_id": run_id,
             },
         )
-        return ReconcileResult(
-            kind=kind,
-            environment_id=environment_id,
-            evaluated_count=int(data.get("evaluatedCount", 0)),
+        failed = [
+            FailedSyncItem(
+                item_id=str(f.get("itemId") or ""),
+                reason=str(f.get("reason") or ""),
+            )
+            for f in (data.get("failedItems") or [])
+        ]
+        return SyncResult(
+            submitted_count=int(data.get("submittedCount", len(payload))),
+            upserted_count=int(data.get("upsertedCount", 0)),
             retired_count=int(data.get("retiredCount", 0)),
             retired_item_ids=list(data.get("retiredItemIds") or []),
+            failed_items=failed,
         )
 
     def server_info(self) -> dict[str, Any]:

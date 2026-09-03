@@ -1,23 +1,25 @@
-"""Run engine: enumerate -> map -> upsert -> track completeness (spec §5, §6, §7).
+"""Run engine: enumerate -> map -> collect -> track completeness (spec §5, §6, §7).
 
-This drives every crawler with identical run semantics and computes which
-``(EnvironmentId, Kind)`` scopes are reconcile-eligible. It does **not** signal
-run-complete or touch the lock/telemetry -- that orchestration lives in
-:mod:`tenant_inventory_discovery.discovery_skill`. Keeping the two apart makes the
-reconcile gate (the load-bearing safety property, §7) directly unit-testable.
+This drives every crawler with identical run semantics and assembles the whole-tenant
+sync payload. It deliberately **writes nothing**: under ``syncInventory`` the tenant's
+inventory is replaced in one call whose absences retire, so no scope can safely be
+submitted on its own. Deciding whether the assembled payload may be sent at all, and
+sending it, lives in :mod:`tenant_inventory_discovery.discovery_skill`.
+
+Keeping the two apart makes the sync gate -- the load-bearing safety property, and now
+the only thing standing between a half-read tenant and mass retirement -- directly
+unit-testable.
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timedelta, timezone
 
 from .config import DiscoveryConfig
 from .crawlers.base import Crawler
 from .crawlers.registry import ENV_SCOPED_CRAWLERS, TENANT_ROOT_CRAWLERS
-from .errors import PlatformError, PreconditionFailedError
+from .errors import PlatformError
 from .inventory_client import InventoryClient
 from .mapping import map_resource
 from .models import (
@@ -27,7 +29,7 @@ from .models import (
     ScopeKey,
     ScopeReport,
 )
-from .platform_clients import PlatformSurface, drain
+from .platform_clients import PlatformSurface, coverage_of, drain
 from .progress import NullProgressReporter, ProgressReporter
 from .schemas import AttributeValidationError
 
@@ -57,28 +59,29 @@ class DiscoveryRunner:
     ) -> RunSummary:
         """Crawl the tenant and return a :class:`RunSummary` (spec §5.1, §6.1).
 
-        ``environment_ids=None`` performs a **full/tenant-root crawl**: all discovered
-        environments are crawled and tenant-root kinds become reconcile-eligible. Passing
-        an explicit subset performs a **partial env crawl**: env-scoped scopes for those
-        environments may reconcile, but tenant-root kinds are **never** marked complete
-        (tenant-root exemption, §6.3).
+        Nothing is written here. The run collects every mapped item into
+        :attr:`RunSummary.payload`; deciding whether that payload is safe to submit --
+        and submitting it -- belongs to
+        :class:`~tenant_inventory_discovery.discovery_skill.DiscoverySkill`.
 
-        ``run_id`` scopes each upsert's idempotency key to this pass; see
-        :func:`~tenant_inventory_discovery.mapping.idempotency_key`.
+        ``environment_ids=None`` performs a **full crawl**: every environment the
+        Environment kind yielded is visited. Passing an explicit subset performs a
+        **partial crawl**, which is still safe to sync -- the skill carries forward the
+        service's existing rows for every scope this run did not visit, so an
+        unvisited environment is present in the payload rather than absent from it.
         """
         full_crawl = environment_ids is None
         summary = RunSummary(correlation_id=run_id or f"run-{uuid.uuid4()}")
+        summary.full_crawl = full_crawl
         self._run_id = summary.correlation_id
-        # The reconcile watermark, captured *before* the first enumeration and
-        # backdated by the configured skew allowance. Every row this pass observes is
-        # re-upserted, so its server-stamped UpdatedAt lands after this instant;
-        # anything still older was not observed and is drift.
-        summary.pass_started_at = datetime.now(timezone.utc) - timedelta(
-            seconds=self._config.clock_skew_allowance_seconds
-        )
+        # Which tenant-root kinds this platform sees in full. Env-scoped kinds are
+        # always covered for an environment the run actually visited: the surface is
+        # asked for that environment by id, so "everything in it" is what it returns.
+        coverage = coverage_of(self._platform)
         reports: dict[ScopeKey, ScopeReport] = {}
         discovered_env_ids: list[str] = []
-        # Rows written per kind this run. The server caps rows per (tenant, kind) --
+        payload: list[InventoryItem] = []
+        # Rows collected per kind this run. The server caps rows per (tenant, kind) --
         # not per scope -- so this counter spans every environment in the run.
         self._kind_counts: dict[Kind, int] = {}
 
@@ -87,8 +90,10 @@ class DiscoveryRunner:
         self._progress.phase("Reading tenant-wide resources")
         for crawler in TENANT_ROOT_CRAWLERS:
             report, items = self._crawl_tenant_root(crawler)
+            report.covered = crawler.kind in coverage
             reports[report.scope] = report
             summary.scopes.append(report)
+            payload.extend(items)
             if crawler.kind is Kind.ENVIRONMENT:
                 discovered_env_ids = [
                     str(it.attributes["environmentId"]) for it in items
@@ -100,11 +105,20 @@ class DiscoveryRunner:
         for env_id in target_envs:
             self._progress.phase(f"Reading resources in {env_id}")
             for crawler in ENV_SCOPED_CRAWLERS:
-                report = self._crawl_env(crawler, env_id)
+                report, items = self._crawl_env(crawler, env_id)
+                report.covered = True
                 reports[report.scope] = report
                 summary.scopes.append(report)
+                payload.extend(items)
 
-        summary.completed_scopes = self._completed_scopes(reports, full_crawl)
+        summary.payload = payload
+        summary.submitted_counts = {}
+        for item in payload:
+            key = item.kind.discriminator
+            summary.submitted_counts[key] = summary.submitted_counts.get(key, 0) + 1
+        summary.authoritative_scopes = [
+            scope for scope, report in reports.items() if report.authoritative
+        ]
         return summary
 
     # -- crawl helpers --------------------------------------------------------------
@@ -127,11 +141,13 @@ class DiscoveryRunner:
 
         report.fully_enumerated = fully
         self._progress.scope_enumerated(crawler.kind, None, len(resources), fully)
-        items = self._map_and_upsert(crawler.kind, resources, report)
+        items = self._map_and_collect(crawler.kind, resources, report)
         self._progress.scope_finished(report)
         return report, items
 
-    def _crawl_env(self, crawler: Crawler, environment_id: str) -> ScopeReport:
+    def _crawl_env(
+        self, crawler: Crawler, environment_id: str
+    ) -> tuple[ScopeReport, list[InventoryItem]]:
         scope = ScopeKey.for_kind(crawler.kind, environment_id)
         report = ScopeReport(scope=scope)
         assert crawler.env_scoped is not None
@@ -150,43 +166,32 @@ class DiscoveryRunner:
                 exc,
             )
             self._progress.scope_finished(report)
-            return report
+            return report, []
 
         report.fully_enumerated = fully
         self._progress.scope_enumerated(
             crawler.kind, environment_id, len(resources), fully
         )
-        self._map_and_upsert(crawler.kind, resources, report, environment_id)
+        items = self._map_and_collect(
+            crawler.kind, resources, report, environment_id
+        )
         self._progress.scope_finished(report)
-        return report
+        return report, items
 
-    def _map_and_upsert(
+    def _map_and_collect(
         self,
         kind: Kind,
         resources: list[dict[str, object]],
         report: ScopeReport,
         environment_id: str | None = None,
     ) -> list[InventoryItem]:
-        report.enumerated = len(resources)
+        """Map a scope's resources into payload items. Writes nothing.
 
-        # Client-side guard for the server's per-(tenant, kind) row cap. Writing past
-        # it earns a 4xx per item; worse, the resulting partial view would make the
-        # scope look authoritative. Truncate instead and mark the scope capped, which
-        # disqualifies it from reconcile so nothing gets retired on a short view.
-        cap = self._config.caps.max_items_per_tenant_and_kind
-        already = self._kind_counts.get(kind, 0)
-        remaining = max(0, cap - already)
-        if len(resources) > remaining:
-            logger.warning(
-                "%s: %d resources exceed the remaining per-kind budget (%d of %d); "
-                "truncating and skipping reconcile for this scope",
-                kind.discriminator,
-                len(resources),
-                remaining,
-                cap,
-            )
-            resources = resources[:remaining]
-            report.capped = True
+        Under whole-inventory sync there is no per-scope write. Every scope's items are
+        accumulated and submitted once, at the end, by the skill -- which is also the
+        only place that can decide whether submitting is safe at all.
+        """
+        report.enumerated = len(resources)
 
         items: list[InventoryItem] = []
         dropped: list[str] = []
@@ -201,6 +206,8 @@ class DiscoveryRunner:
                 )
             except (AttributeValidationError, ValueError) as exc:
                 # Fail the item and log; never silently drop a required key (spec §6).
+                # This also withholds the whole sync: a resource that exists but cannot
+                # be described would be omitted from the payload, and omission retires.
                 report.skipped_invalid += 1
                 logger.warning("skipping invalid %s item: %s", kind.discriminator, exc)
                 continue
@@ -214,84 +221,56 @@ class DiscoveryRunner:
                 report.dropped_attributes,
             )
 
-        self._upsert_all(items, report)
-        self._kind_counts[kind] = already + report.upserted
+        items = self._enforce_kind_cap(kind, items, report)
+
+        report.mapped = len(items)
+        report.observed_keys = [i.natural_key for i in items]
+        self._kind_counts[kind] = self._kind_counts.get(kind, 0) + len(items)
+        self._progress.scope_mapped(kind, environment_id, len(items), len(resources))
         return items
 
-    def _upsert_all(self, items: list[InventoryItem], report: ScopeReport) -> None:
-        """Upsert items with bounded concurrency; order-independent (spec §5.1, §6).
+    def _enforce_kind_cap(
+        self, kind: Kind, items: list[InventoryItem], report: ScopeReport
+    ) -> list[InventoryItem]:
+        """Trim a kind to the server's per-(tenant, kind) row ceiling.
 
-        Any item whose upsert exhausts retries makes the scope **incomplete** (§7) so no
-        reconcile fires for it. A 412 (concurrent writer won) is logged and counted as
-        applied -- not a failure (§5.2).
+        The cap is a storage limit, not a reading failure: the service refuses a
+        payload carrying more than this many rows of one kind, and could not have
+        stored them anyway. Truncating is therefore the only way to sync at all, and
+        the rows dropped here are rows the inventory has never been able to hold.
 
-        Every observed item is written **even when unchanged**: the server's reconcile
-        decides drift by comparing each row's ``UpdatedAt`` against the pass watermark,
-        so skipping a no-op write would make a live resource look abandoned and retire
-        it. ``report.observed_keys`` records the applied natural keys, which the
-        tenant-root sweep diffs against the server's current rows (the server refuses
-        to reconcile tenant-rooted kinds itself).
+        Selection is **sorted by natural key**, not enumeration order. An arbitrary
+        prefix would pick a different 50 whenever a platform reordered its listing, and
+        because absence retires, that churn would retire and revive rows on alternating
+        runs. A stable key makes the chosen set the same every pass.
 
-        Results are collected **as each write completes** rather than in submission
-        order, so progress can be reported while the batch is still in flight. Nothing
-        downstream depends on the ordering: ``observed_keys`` is consumed as a set and
-        ``upserted`` is a count.
+        The counter spans environments, because the server counts rows per
+        ``(tenant, kind)`` rather than per scope.
         """
-        if not items:
-            return
-        workers = max(1, self._config.max_concurrency)
-        kind = report.scope.kind
-        environment_id = report.scope.environment_id or None
-        total = len(items)
+        cap = self._config.caps.max_items_per_tenant_and_kind
+        already = self._kind_counts.get(kind, 0)
+        remaining = max(0, cap - already)
+        if len(items) <= remaining:
+            return items
 
-        def _one(item: InventoryItem) -> tuple[str, bool]:
-            try:
-                self._inventory.upsert(item, run_id=self._run_id)
-                return item.natural_key, True
-            except PreconditionFailedError as exc:
-                logger.info("precondition failed (concurrent writer won): %s", exc)
-                return item.natural_key, True
-            except Exception as exc:  # exhausted retries -> scope incomplete (§7)
-                logger.error("upsert failed for %s: %s", item.natural_key, exc)
-                report.error = report.error or f"upsert failed: {exc}"
-                return item.natural_key, False
+        items = sorted(items, key=lambda i: i.natural_key)
+        kept, dropped = items[:remaining], len(items) - remaining
+        report.capped = True
+        report.truncated = dropped
+        logger.warning(
+            "%s: %d rows exceed the per-kind cap of %d; syncing the first %d by "
+            "natural key and dropping %d",
+            kind.discriminator,
+            already + len(items),
+            cap,
+            len(kept),
+            dropped,
+        )
+        return kept
 
-        results: list[tuple[str, bool]] = []
-        if workers == 1:
-            for item in items:
-                results.append(_one(item))
-                self._progress.upsert_progress(
-                    kind, environment_id, len(results), total
-                )
-        else:
-            with ThreadPoolExecutor(max_workers=workers) as pool:
-                futures = [pool.submit(_one, item) for item in items]
-                for future in as_completed(futures):
-                    # _one never raises, so result() cannot fail the batch here.
-                    results.append(future.result())
-                    self._progress.upsert_progress(
-                        kind, environment_id, len(results), total
-                    )
-
-        report.upserted = sum(1 for _, ok in results if ok)
-        report.observed_keys = [nk for nk, ok in results if ok]
-
-    # -- reconcile gate -------------------------------------------------------------
+    # -- sync gate -------------------------------------------------------------------
 
     @staticmethod
-    def _completed_scopes(
-        reports: dict[ScopeKey, ScopeReport], full_crawl: bool
-    ) -> list[ScopeKey]:
-        """Scopes eligible for server reconcile (spec §6.3, §7).
-
-        A scope qualifies only if it enumerated fully with no fatal error **and** (for
-        tenant-root kinds) the run was a full crawl.
-        """
-        completed: list[ScopeKey] = []
-        for scope, report in reports.items():
-            if not report.complete:
-                continue
-            if scope.kind.is_tenant_root and not full_crawl:
-                continue  # tenant-root exemption (§6.3)
-            completed.append(scope)
-        return completed
+    def _completed_scopes(reports: dict[ScopeKey, ScopeReport]) -> list[ScopeKey]:
+        """Scopes read without error (spec §7)."""
+        return [scope for scope, report in reports.items() if report.complete]
