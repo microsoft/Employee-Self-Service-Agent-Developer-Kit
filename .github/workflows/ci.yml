@@ -5,9 +5,8 @@ name: CI
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main", "release/**" ]
   pull_request:
-    branches: [ "main" ]
 
 permissions:
   contents: read
@@ -79,6 +78,31 @@ jobs:
       shell: pwsh
       run: ./setup/Install-EssAdk.Tests.ps1
 
+  mcp-foundation:
+    name: MCP foundation tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.11'
+
+    - name: Install Python dependencies
+      run: >-
+        pip install
+        -r requirements-dev.txt
+        -r solutions/ess-maker-skills/src/mcp/agentconfig_core/requirements.txt
+
+    - name: Run MCP foundation tests
+      run: >-
+        python -m pytest
+        tests/mcp/agentconfig_core
+        tests/scripts/test_mcp_config.py
+        -q
+
   flightcheck-tests:
     name: FlightCheck offline test suite
     runs-on: ubuntu-latest
@@ -86,8 +110,8 @@ jobs:
     # Runs the whole FlightCheck pytest suite. Every test is offline: network
     # calls are mocked (responses / respx) or replayed from committed VCR
     # cassettes, and `live`-marked tests are skipped unless opted in with
-    # --run-live. This is the job that actually enforces the FlightCheck tests
-    # on every PR (previously none of them ran in CI). It includes the offline
+    # --run-live. This job enforces the FlightCheck tests on every PR. It
+    # includes the offline
     # URL hygiene gate (tests/flightcheck/test_url_hygiene.py), which asserts
     # fetchable report URLs use https. It does NOT verify a path is live (that
     # a learn.microsoft.com article still exists) — stale-path detection is a

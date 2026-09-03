@@ -127,25 +127,20 @@ Save their answer as ENV_URL. **Strip any trailing
 slash** from ENV_URL before using it (e.g., `https://org.crm.dynamics.com/`
 becomes `https://org.crm.dynamics.com`).
 
-## 1.2 — Write the MCP config file
+## 1.2 — Configure MCP servers
 
 Build the MCP URL by appending `/api/mcp` to ENV_URL. Double-check the
 result has exactly ONE slash between the domain and `api` — for example
 `https://org.crm.dynamics.com/api/mcp`, NOT `https://org.crm.dynamics.com//api/mcp`.
 
-Create `.vscode/mcp.json` with this exact content (replace the entire
-`url` value with the MCP URL you just built):
+Run:
 
-```json
-{
-  "servers": {
-    "Dataverse": {
-      "type": "http",
-      "url": "https://org.crm.dynamics.com/api/mcp"
-    }
-  }
-}
+```text
+python scripts/mcp_config.py configure dataverse --environment-url "{ENV_URL}"
 ```
+
+If configuration fails, show the exact error and stop. The command preserves
+every other server, input, and top-level field in `.vscode/mcp.json`.
 
 If FOUNDATION_REUSED is true, do not rerun the Allowed MCP Client prerequisite;
 it already passed in foundation `SETUP-02.2`. Continue directly to section 1.3.
