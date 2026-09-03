@@ -2,6 +2,9 @@
 
 ## 0.4.24 (POC)
 
+- Added **Customize landing page** to Quick Actions. The setup-gated action
+  opens a guided Copilot chat for branding, quick links, starter prompts, and
+  insight cards.
 - **Auto-update nudge.** On VS Code startup, the extension now checks
   whether the local ESS ADK clone is behind `origin/main` (via
   `git ls-remote` vs the local `HEAD`) and, if so, shows a non-blocking

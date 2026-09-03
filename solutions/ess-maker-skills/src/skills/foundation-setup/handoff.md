@@ -44,9 +44,10 @@ checklist. When it completes:
 
 **Message:**
 
-Your ESS foundation and local workspace are complete and ready for integrations.
+Your ESS foundation and local workspace are complete.
 
-Run `/connect` and choose the system you want to connect. Topic creation remains a
-separate `/create` workflow.
+Run `/landing-page` to configure branding and the content employees see. Run
+`/connect` to choose an integration. Topic creation remains a separate
+`/create` workflow.
 
 **End message.**
