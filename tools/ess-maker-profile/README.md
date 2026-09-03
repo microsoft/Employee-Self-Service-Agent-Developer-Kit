@@ -17,8 +17,8 @@ When the extension activates inside the ESS Maker workspace it:
    - **Update a topic** → `/update`
    - **Scan for issues** → `/scan`
    - **Run a flightcheck** → `/flightcheck`
-   - **Generate tests** → `/evaluate` (gated on flightcheck)
-   - **Push to Copilot Studio** → `/push` (gated on flightcheck)
+   - **Generate tests** → `/evaluate` (available after setup)
+   - **Push to Copilot Studio** → `/push` (available after setup)
    - plus: *View tutorial*, *Switch to standard VS Code / lite mode*
 4. **Routes every button click into Copilot Chat** with its guided query pre-filled.
 5. **Provides a "View tutorial"** button that opens a custom webview panel beside chat explaining how each button works.
