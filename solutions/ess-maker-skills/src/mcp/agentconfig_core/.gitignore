@@ -1,0 +1,7 @@
+# Compiled Python
+__pycache__/
+*.pyc
+
+# Local MSAL token cache and any manually-dropped static token files -
+# never commit real bearer tokens or cached refresh tokens.
+.local/
