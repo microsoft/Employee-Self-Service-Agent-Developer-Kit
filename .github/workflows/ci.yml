@@ -104,6 +104,38 @@ jobs:
         tests/scripts/test_mcp_config.py
         -q
 
+  landing-page-config:
+    name: Landing-page configuration
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.11'
+
+    - name: Install Python dependencies
+      run: >-
+        pip install
+        -r requirements-dev.txt
+        -r solutions/ess-maker-skills/src/mcp/agentconfig_landing_page/requirements.txt
+
+    - name: Run AgentConfiguration tests
+      run: >-
+        python -m pytest
+        tests/mcp/agentconfig
+        tests/scripts/test_setup_preserves_title_id.py
+        tests/scripts/test_validate_branding.py
+        -q
+
+    - name: Test ESS Maker Quick Actions
+      working-directory: tools/ess-maker-profile/extension
+      run: |
+        node extension.test.js
+        npm run validate
+
   flightcheck-tests:
     name: FlightCheck offline test suite
     runs-on: ubuntu-latest

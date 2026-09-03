@@ -12,6 +12,7 @@ When the extension activates inside the ESS Maker workspace it:
 2. **Opens GitHub Copilot Chat in the editor area** — chat lives in the center of the window, not tucked into a side panel.
 3. **Pins a "Quick actions" button rail in the primary sidebar** — a custom Webview view with big icon-labeled buttons:
    - **Connect** → `/setup`
+   - **Customize landing page** → guided landing-page configuration
    - **Create a topic** → `/create`
    - **Update a topic** → `/update`
    - **Scan for issues** → `/scan`
@@ -19,7 +20,7 @@ When the extension activates inside the ESS Maker workspace it:
    - **Generate tests** → `/evaluate` (gated on flightcheck)
    - **Push to Copilot Studio** → `/push` (gated on flightcheck)
    - plus: *View tutorial*, *Switch to standard VS Code / lite mode*
-4. **Routes every button click into Copilot Chat** with the slash command pre-filled.
+4. **Routes every button click into Copilot Chat** with its guided query pre-filled.
 5. **Provides a "View tutorial"** button that opens a custom webview panel beside chat explaining how each button works.
 
 The customer never sees code, a file tree, or a menu. The whole window is: **chat in the center, big buttons on the left**.
