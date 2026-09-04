@@ -370,6 +370,32 @@ permission to list applications. Say that consent for `Application.Read.All` is 
 and that nothing was removed for `EntraApp`. Do **not** suggest hand-editing
 `entraAppId` into `.local/config.json` — discovery does not need it to enumerate.
 
+### Any resource type can hit the 50-row cap, not just `EntraApp`
+
+The cap is **50 rows per resource type per tenant** (the service's
+`MaxItemsPerTenantAndKind`; 8 kinds × 50 is where the 400-item payload ceiling comes
+from). `EntraApp` hits it most often because directories are large, but it applies
+equally to `Connection`, `KnowledgeSource`, `ExtensionPack` and `ScenarioTemplate` —
+and an enterprise tenant can easily hold more than 50 connections in a single
+environment.
+
+When a type exceeds the cap, discovery records the first 50 **sorted by natural key**
+and marks the scope `capped: true`. Sorting matters: an arbitrary 50 would change
+whenever the platform reordered its listing, and because absence retires, that churn
+would delete and revive rows on alternating runs.
+
+A capped scope is never authoritative, so **nothing is retired for it** — the rows
+beyond the cap are simply never recorded. Do not describe a capped scope as fully
+inventoried. If the user asks why a resource is missing from the inventory, this is
+the first thing to check:
+
+**Message:**
+
+This tenant has more **{kind}** than the inventory records per resource type
+(50), so I recorded the first 50 and left the rest out. Nothing was removed.
+
+**End message.**
+
 ---
 
 ## Notes for the assistant (do not show the user)

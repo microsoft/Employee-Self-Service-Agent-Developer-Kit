@@ -126,11 +126,15 @@ _FAKE_KNOWLEDGE_SOURCES = [
 class _FakeGraphClient:
     """Stand-in for the kit's GraphClient (no network); records the query it received."""
 
-    def __init__(self, rows=None, raises=None, sites=None, next_link=None):
+    def __init__(self, rows=None, raises=None, sites=None, next_link=None,
+                 site_raises=None):
         self._rows = rows if rows is not None else list(_FAKE_APPLICATIONS)
         self._raises = raises
         # Map of graph path -> site dict, for site-by-path resolution (SharePointSite).
         self._sites = sites if sites is not None else {}
+        # Raised only from the site-by-path lookup, so a SharePoint failure can be
+        # exercised without disturbing the application-listing path.
+        self._site_raises = site_raises
         self._next_link = next_link
         self.last_path = None
         self.last_params = None
@@ -164,7 +168,21 @@ class _FakeGraphClient:
             if self._next_link:
                 page["@odata.nextLink"] = self._next_link
             return page
+        if self._site_raises is not None:
+            raise self._site_raises
         return self._sites.get(path)
+
+
+class _FakeHttpError(Exception):
+    """Mimics ``requests.HTTPError``: carries the response that caused it."""
+
+    class _Resp:
+        def __init__(self, status_code):
+            self.status_code = status_code
+
+    def __init__(self, status_code):
+        super().__init__(f"HTTP {status_code}")
+        self.response = self._Resp(status_code)
 
 
 class _FakePVAClient:
@@ -479,6 +497,57 @@ class TestSharePointSites:
         items, complete = drain(p.list_sharepoint_sites(page_size=100))
         assert complete is True
         assert items == []
+
+    def test_a_site_that_graph_says_is_gone_is_dropped(self):
+        """A 404 is the one answer that genuinely means the site is not there."""
+        p = DataverseBackedPlatform(
+            _ENV_URL,
+            tenant_id=_TENANT_ID,
+            bot_id=_BOT_ID,
+            pva_client=_FakePVAClient(),
+            graph_client=_FakeGraphClient(site_raises=_FakeHttpError(404)),
+        )
+        items, complete = drain(p.list_sharepoint_sites(page_size=100))
+        assert complete is True
+        assert items == []
+
+    def test_a_graph_outage_fails_the_scope_instead_of_dropping_sites(self):
+        """A 5xx must not look like 'no such site'.
+
+        Reporting the scope complete while silently omitting sites we could not read
+        is how a transient outage turns into a deletion under the whole-inventory
+        contract, where an omission is the delete verb.
+        """
+        p = DataverseBackedPlatform(
+            _ENV_URL,
+            tenant_id=_TENANT_ID,
+            bot_id=_BOT_ID,
+            pva_client=_FakePVAClient(),
+            graph_client=_FakeGraphClient(site_raises=_FakeHttpError(503)),
+        )
+        with pytest.raises(PlatformError) as excinfo:
+            drain(p.list_sharepoint_sites(page_size=100))
+        assert "503" in str(excinfo.value)
+
+    def test_a_permission_failure_fails_the_scope(self):
+        """GraphClient returns 401/403 as a payload, so it never raises on its own."""
+        p = DataverseBackedPlatform(
+            _ENV_URL,
+            tenant_id=_TENANT_ID,
+            bot_id=_BOT_ID,
+            pva_client=_FakePVAClient(),
+            graph_client=_FakeGraphClient(
+                sites={
+                    "/sites/contoso.sharepoint.com:/sites/HR": {
+                        "_error": "insufficient_permissions",
+                        "_status": 403,
+                    }
+                }
+            ),
+        )
+        with pytest.raises(PlatformError) as excinfo:
+            drain(p.list_sharepoint_sites(page_size=100))
+        assert "Sites.Read.All" in str(excinfo.value)
 
     def test_missing_bot_id_raises_platform_error(self):
         p = DataverseBackedPlatform(

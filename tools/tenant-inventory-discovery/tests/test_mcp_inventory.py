@@ -13,6 +13,7 @@ import textwrap
 
 import pytest
 
+from tenant_inventory_discovery import mcp_inventory as mcp_module
 from tenant_inventory_discovery.errors import (
     InventoryApiError,
     NonRetryableApiError,
@@ -320,6 +321,44 @@ class TestTransportFailures:
         with pytest.raises(McpTransportError):
             client.probe()
         client.close()
+
+    def test_a_failed_handshake_does_not_leak_the_subprocess(self, tmp_path, monkeypatch):
+        """The constructor owns the child until it returns.
+
+        If it raises, the caller never receives an object to ``close()``, so anything
+        the constructor started has to be torn down on the way out -- otherwise the
+        server survives with its stdio pipes held open.
+        """
+        script = tmp_path / "mute.py"
+        script.write_text(
+            textwrap.dedent(
+                """
+                import os, sys
+                os.close(1)       # EOF on stdout: the handshake fails at once
+                sys.stdin.read()  # outlive it, until the client closes our stdin
+                """
+            ),
+            encoding="utf-8",
+        )
+
+        created = []
+        real_popen = mcp_module.subprocess.Popen
+
+        def spy(*args, **kwargs):
+            proc = real_popen(*args, **kwargs)
+            created.append(proc)
+            return proc
+
+        monkeypatch.setattr(mcp_module.subprocess, "Popen", spy)
+        try:
+            with pytest.raises(McpTransportError):
+                McpInventoryClient(_TENANT, server_argv=[sys.executable, str(script)])
+            assert created, "the server was never started"
+            assert created[0].poll() is not None, "the server subprocess was leaked"
+        finally:
+            for proc in created:
+                if proc.poll() is None:
+                    proc.kill()
 
 
 _CONCURRENT_SERVER = '''

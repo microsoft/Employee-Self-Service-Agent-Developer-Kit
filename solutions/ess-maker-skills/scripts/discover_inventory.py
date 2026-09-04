@@ -634,17 +634,40 @@ def _persist_local_inventory(inventory, summary, *, tenant_id, mode, write_path,
     )
     _atomic_write_json(path, doc)
 
-    # Best-effort config pointer -- never fatal.
+    # Best-effort config pointer -- never fatal, but never silent either: a pointer
+    # that quietly fails to move leaves later runs reading a stale inventoryPath with
+    # nothing in the output to explain why.
     config_path = os.path.join(".local", "config.json")
     try:
         with open(config_path, "r", encoding="utf-8") as fh:
             cfg = json.load(fh)
-        if isinstance(cfg, dict):
-            cfg["inventoryPath"] = path
-            cfg["inventoryUpdatedAt"] = doc["updatedAt"]
+    except FileNotFoundError:
+        # No config yet is the normal state for a first run, not a problem to report.
+        cfg = None
+    except (OSError, ValueError) as exc:
+        print(
+            f"note: could not read {config_path} to update the inventory pointer "
+            f"({exc}); the mirror at {path} is still current.",
+            file=sys.stderr,
+        )
+        cfg = None
+    if cfg is not None and not isinstance(cfg, dict):
+        print(
+            f"note: {config_path} is not a JSON object, so the inventory pointer was "
+            f"left alone; the mirror at {path} is still current.",
+            file=sys.stderr,
+        )
+    elif isinstance(cfg, dict):
+        cfg["inventoryPath"] = path
+        cfg["inventoryUpdatedAt"] = doc["updatedAt"]
+        try:
             _atomic_write_json(config_path, cfg)
-    except (OSError, ValueError):
-        pass
+        except (OSError, ValueError, TypeError) as exc:
+            print(
+                f"note: could not write the inventory pointer into {config_path} "
+                f"({exc}); the mirror at {path} is still current.",
+                file=sys.stderr,
+            )
     return doc
 
 
@@ -792,6 +815,10 @@ def main(argv=None) -> int:
     )
     progress.start()
 
+    # Bound before the try so the cleanup below is safe even if the client is never
+    # built -- an UnboundLocalError there would replace the real diagnostic with a
+    # bogus one, at the exact moment the operator most needs the real one.
+    inner = None
     try:
         if args.demo:
             progress.phase("Loading sample tenant data")
@@ -836,6 +863,13 @@ def main(argv=None) -> int:
             result = _summary_to_dict(summary)
     finally:
         progress.stop()
+        # Release the write path here rather than after the summary is assembled:
+        # everything below this point is pure local bookkeeping, and a failure in it
+        # (full disk, bad path, a malformed prior mirror) must not strand the MCP
+        # subprocess or leak the pooled HTTP connection.
+        close = getattr(inner, "close", None)
+        if callable(close):
+            close()
 
     result["mode"] = mode
     result["tenantId"] = args.tenant_id
@@ -885,12 +919,6 @@ def main(argv=None) -> int:
             write_path=result.get("writePath", "local-only"),
             path=args.inventory_out,
         )
-    # Release the write path before reporting: for --via-mcp this shuts down the
-    # server subprocess, and for the HTTP path it returns the pooled connection.
-    close = getattr(inner, "close", None)
-    if callable(close):
-        close()
-
     print(
         json.dumps(
             {

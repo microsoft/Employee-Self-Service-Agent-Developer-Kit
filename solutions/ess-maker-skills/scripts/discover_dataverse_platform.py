@@ -353,12 +353,18 @@ class DataverseBackedPlatform:
         return self._bap_env_id
 
     def _resolve_site_id(self, site_url: str) -> str | None:
-        """Resolve a SharePoint site URL to its Graph ``site.id`` (or ``None``).
+        """Resolve a SharePoint site URL to its Graph ``site.id``.
 
         Uses Graph ``GET /sites/{hostname}:/{server-relative-path}`` (documented:
-        https://learn.microsoft.com/graph/api/site-getbypath). Any failure returns
-        ``None`` so the site is skipped rather than aborting the whole scope -- the
-        §5.3 ``siteId`` is required, so a site we cannot resolve simply drops out.
+        https://learn.microsoft.com/graph/api/site-getbypath).
+
+        Only a **404** returns ``None``: that is the one answer meaning the site is
+        genuinely not there, so dropping it is the truth. Every other failure -- 5xx,
+        auth, transport -- raises :class:`PlatformError` so the scope is marked
+        incomplete. Returning ``None`` for those would report the scope complete while
+        silently omitting sites we simply could not read, and under the whole-inventory
+        contract an omission is a deletion. Carry-forward keeps ``SharePointSite`` safe
+        today, but that is a property of the current wiring, not of this function.
         """
         parts = urlsplit(site_url)
         host = parts.hostname
@@ -368,8 +374,25 @@ class DataverseBackedPlatform:
         graph_path = f"/sites/{host}:{path}" if path else f"/sites/{host}"
         try:
             data = self._get_graph().get(graph_path)
-        except Exception:
-            return None
+        except PlatformError:
+            raise
+        except Exception as exc:  # auth / transport / 5xx -> scope incomplete (§7)
+            status = getattr(getattr(exc, "response", None), "status_code", None)
+            if status == 404:
+                return None
+            raise PlatformError(
+                f"Microsoft Graph could not resolve the SharePoint site {site_url!r}: "
+                f"{exc}. Nothing is dropped for SharePointSite until it can be read."
+            ) from exc
+
+        # GraphClient returns 401/403 as a payload rather than raising, so an auth
+        # failure looks exactly like a site with no id unless it is checked here.
+        if isinstance(data, dict) and data.get("_error"):
+            raise PlatformError(
+                f"Microsoft Graph could not resolve the SharePoint site {site_url!r}: "
+                f"{data.get('_error')} (HTTP {data.get('_status')}). Reading sites "
+                "needs Sites.Read.All."
+            )
         if isinstance(data, dict):
             site_id = data.get("id")
             if site_id:

@@ -242,10 +242,17 @@ class HttpInventoryClient:
 
     # -- plumbing --------------------------------------------------------------------
 
-    def _headers(self, *, idem_key: str | None = None) -> dict[str, str]:
+    def _headers(
+        self, *, idem_key: str | None = None, json_body: bool = False
+    ) -> dict[str, str]:
         # The skill runs as the admin end-to-end: a delegated bearer token, never a
         # lower-privilege identity.
         headers = {"Accept": "application/json"}
+        if json_body:
+            # httpx infers this from ``json=``, but the wire format of a request is
+            # the caller's contract with the service, not a detail to leave to a
+            # library default that a future transport swap could change.
+            headers["Content-Type"] = "application/json"
         if self._auth_token_provider is not None:
             headers["Authorization"] = f"Bearer {self._auth_token_provider()}"
         if idem_key is not None:
@@ -343,7 +350,7 @@ class HttpInventoryClient:
                 resp = self._client.post(
                     url,
                     json=body,
-                    headers=self._headers(idem_key=idem),
+                    headers=self._headers(idem_key=idem, json_body=True),
                     timeout=self._sync_timeout,
                 )
             except self._httpx.TimeoutException as exc:

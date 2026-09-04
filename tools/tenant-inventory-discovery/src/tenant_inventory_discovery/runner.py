@@ -246,6 +246,13 @@ class DiscoveryRunner:
 
         The counter spans environments, because the server counts rows per
         ``(tenant, kind)`` rather than per scope.
+
+        Known gap: this counts only rows *this run observed*. Carry-forward adds more
+        rows to the payload afterwards, and those are not counted here, so a tenant
+        near the cap can still assemble an over-cap payload that
+        ``validate_sync_payload`` rejects -- withholding the whole sync rather than
+        degrading one scope. Closing it means deciding which rows lose when the cap
+        binds, which is a behavioural change rather than a fix; tracked separately.
         """
         cap = self._config.caps.max_items_per_tenant_and_kind
         already = self._kind_counts.get(kind, 0)

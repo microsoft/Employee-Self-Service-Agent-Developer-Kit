@@ -435,3 +435,89 @@ class TestProbe:
 
         with pytest.raises(InventoryApiError):
             _client(handler).probe()
+
+
+class TestTheRequestHeaders:
+    """Every call must actually carry the admin's delegated token.
+
+    There was no coverage of this at all, which made the header effectively
+    unverifiable: a review of the source read a redacted rendering of the ``Bearer``
+    line as if it were the literal value, and no test could settle the question. These
+    assert the wire form, which is the only thing the service sees.
+    """
+
+    def _capture(self) -> tuple[list[httpx.Request], object]:
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            if request.method == "POST":
+                return httpx.Response(
+                    200,
+                    json={
+                        "submittedCount": 1,
+                        "upsertedCount": 1,
+                        "retiredCount": 0,
+                        "retiredItemIds": [],
+                        "failedItems": [],
+                    },
+                )
+            return httpx.Response(200, json={"value": []})
+
+        return seen, handler
+
+    def test_the_sync_sends_the_bearer_token(self):
+        seen, handler = self._capture()
+        _client(handler).sync_inventory([_environment_item()], run_id="run-1")
+        assert seen[0].headers["authorization"] == "Bearer test-token"
+
+    def test_the_list_sends_the_bearer_token(self):
+        seen, handler = self._capture()
+        _client(handler).list_items()
+        assert seen[0].headers["authorization"] == "Bearer test-token"
+
+    def test_the_probe_sends_the_bearer_token(self):
+        seen, handler = self._capture()
+        _client(handler).probe()
+        assert seen[0].headers["authorization"] == "Bearer test-token"
+
+    def test_the_token_is_read_per_request_not_captured_once(self):
+        """A token refreshed mid-run has to reach the wire, so the provider is called
+        on every request rather than resolved once in the constructor."""
+        seen: list[httpx.Request] = []
+        tokens = iter(["first", "second"])
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, json={"value": []})
+
+        c = HttpInventoryClient(
+            _TENANT,
+            config=_config(),
+            auth_token_provider=lambda: next(tokens),
+            transport=httpx.MockTransport(handler),
+        )
+        c.list_items()
+        c.list_items()
+        assert seen[0].headers["authorization"] == "Bearer first"
+        assert seen[1].headers["authorization"] == "Bearer second"
+
+    def test_no_authorization_header_without_a_provider(self):
+        seen: list[httpx.Request] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(request)
+            return httpx.Response(200, json={"value": []})
+
+        HttpInventoryClient(
+            _TENANT,
+            config=_config(),
+            auth_token_provider=None,
+            transport=httpx.MockTransport(handler),
+        ).list_items()
+        assert "authorization" not in seen[0].headers
+
+    def test_the_sync_declares_its_content_type(self):
+        seen, handler = self._capture()
+        _client(handler).sync_inventory([_environment_item()], run_id="run-1")
+        assert seen[0].headers["content-type"] == "application/json"

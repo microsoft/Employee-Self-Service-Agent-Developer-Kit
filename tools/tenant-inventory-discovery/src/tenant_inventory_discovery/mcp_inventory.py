@@ -142,7 +142,14 @@ class _StdioJsonRpc:
         self._stderr_thread.start()
         self._reader_thread = threading.Thread(target=self._read_loop, daemon=True)
         self._reader_thread.start()
-        self._handshake()
+        try:
+            self._handshake()
+        except BaseException:
+            # The constructor is the only thing holding this subprocess. If it raises,
+            # the caller never gets an object to close(), so the child would survive
+            # with its stdio pipes open until it decided to exit on its own.
+            self.close()
+            raise
 
     def _drain_stderr(self) -> None:
         assert self._proc.stderr is not None
