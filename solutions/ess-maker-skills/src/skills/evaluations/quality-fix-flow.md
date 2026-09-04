@@ -1,8 +1,7 @@
 # Eval Quality Fix Flow
 
 This file is the single source of truth for the quality gate + fix flow.
-`create/SKILL.md`, `generate/SKILL.md`, `update/SKILL.md`, and
-`delete/SKILL.md` reference it.
+`create/SKILL.md`, `update/SKILL.md`, and `delete/SKILL.md` reference it.
 Do not duplicate this logic in any of those files.
 
 ---
@@ -14,15 +13,14 @@ their response:
 > What would you like to do?
 > - **A** — Fix all flagged cases
 > - **B** — Pick which ones to fix
-> - **C** — Continue as-is and fix later
+> - **C** — Push as-is and fix later
 
 When the user responds:
 
 - **A (fix all)**: Run the fix flow below for all flagged cases.
 - **B (pick some)**: Ask the user which case numbers to fix (e.g. `1, 3, 5`).
   Run the fix flow below for only those cases.
-- **C (continue as-is)**: Proceed to the review step. A skill with a deployment
-  stage may later push; a local-only generation skill only presents its files.
+- **C (push as-is)**: Proceed to the review step.
 
 **Fix flow (A or B)**:
 1. For each selected case, read the current file and note the existing `input`
