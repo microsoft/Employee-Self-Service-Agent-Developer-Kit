@@ -143,7 +143,6 @@ class PPAdminClient:
         self.tenant_id = tenant_id
         self._token: str | None = None
         self._flow_token: str | None = None
-        self.signed_in_username: str | None = None
 
     def authenticate(self, *, include_flow: bool = True) -> str:
         """Acquire Power Platform access tokens.
@@ -172,14 +171,10 @@ class PPAdminClient:
 
         accounts = app.get_accounts()
 
-        def acquire(scope: str, label: str) -> tuple[str, str | None]:
+        def acquire(scope: str, label: str) -> str:
             result = None
-            selected_account = accounts[0] if accounts else None
             if accounts:
-                result = app.acquire_token_silent(
-                    [scope],
-                    account=selected_account,
-                )
+                result = app.acquire_token_silent([scope], account=accounts[0])
             if not result or "access_token" not in result:
                 print(f"Opening browser for Power Platform sign-in ({label})...")
                 result = app.acquire_token_interactive(
@@ -190,17 +185,11 @@ class PPAdminClient:
                 # internal flow details (CWE-209). Mirrors the auth.py pattern.
                 error = result.get("error", "unknown_error")
                 raise RuntimeError(f"Power Platform auth failed for {label} ({error}).")
-            claims = result.get("id_token_claims", {}) or {}
-            username = (
-                claims.get("preferred_username")
-                or claims.get("upn")
-                or (selected_account or {}).get("username")
-            )
-            return result["access_token"], username
+            return result["access_token"]
 
-        pp_token, pp_username = acquire(PP_SCOPE, "PowerApps/BAP")
+        pp_token = acquire(PP_SCOPE, "PowerApps/BAP")
         flow_token = (
-            acquire(FLOW_SCOPE, "Power Automate (Flow)")[0]
+            acquire(FLOW_SCOPE, "Power Automate (Flow)")
             if include_flow
             else None
         )
@@ -220,7 +209,6 @@ class PPAdminClient:
 
         self._token = pp_token
         self._flow_token = flow_token
-        self.signed_in_username = pp_username
         return self._token
 
     def authenticate_silent(self) -> bool:
@@ -458,21 +446,6 @@ class PPAdminClient:
             POWERAPPS_BASE,
             f"/providers/Microsoft.PowerApps/scopes/admin/environments/{env_id}/connections",
             params={"api-version": "2016-11-01"},
-        )
-
-    def get_connector_connections(
-        self,
-        env_id: str,
-        connector_name: str,
-    ) -> list | dict:
-        """List the signed-in user's connections for one connector."""
-        return self._get_all(
-            POWERAPPS_BASE,
-            f"/providers/Microsoft.PowerApps/apis/{connector_name}/connections",
-            params={
-                "api-version": "2016-11-01",
-                "$filter": f"environment eq '{env_id}'",
-            },
         )
 
     # ----- DLP Policy APIs -----

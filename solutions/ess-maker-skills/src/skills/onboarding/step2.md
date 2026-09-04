@@ -38,11 +38,6 @@ change step 3 from `- [ ]` to `- [x]`.
 
 {paste the script's summary output here}
 
-If the summary contains **Tagged for review**, explicitly tell the user:
-
-> You have evaluation test sets tagged for review. Ask me to **review the
-> tagged test sets** when you are ready, and I will show that list.
-
 One more step — we need to start the **Dataverse MCP** server so the kit can
 work with your environment going forward.
 

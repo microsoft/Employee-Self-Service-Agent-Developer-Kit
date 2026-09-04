@@ -80,39 +80,3 @@ class TestResolveRefreshTarget:
             _args(managed=False), _config(),
         )
         assert managed is True
-
-
-class TestFetchComponents:
-    def test_fetches_all_components_and_preserves_description(
-        self, monkeypatch,
-    ):
-        calls = []
-
-        def fake_query_all(
-            env_url, token, entity_set, select, filter_expr=None,
-        ):
-            calls.append(filter_expr)
-            return [{
-                "botcomponentid": "parent",
-                "name": "Compensation",
-                "schemaname": "mspva_parent",
-                "componenttype": 19,
-                "data": "kind: EvaluationSet",
-                "description": (
-                    "[ADK-REVIEW status=review_requested]"
-                ),
-                "_parentbotcomponentid_value": None,
-            }]
-
-        monkeypatch.setattr(fetch_and_setup, "query_all", fake_query_all)
-        components = fetch_and_setup.fetch_components(
-            "https://example.crm.dynamics.com",
-            "token",
-            "bot",
-        )
-
-        assert len(calls) == 1
-        assert calls[0] == "_parentbotid_value eq 'bot'"
-        assert components[0]["description"] == (
-            "[ADK-REVIEW status=review_requested]"
-        )
