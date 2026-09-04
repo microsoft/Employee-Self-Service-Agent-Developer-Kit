@@ -22,7 +22,6 @@ For everything that isn't an attempt to use the kit (general questions, code exp
    - `/connect`
    - `/delete`
    - `/evaluate`
-   - `/run`
    - `/scan`
    - `/update`
    - `/push`
@@ -51,7 +50,7 @@ When (and only when) the trigger conditions above are met, respond with **only**
 > 2. Navigate **inside** this folder, then **into** `solutions`, and select `ess-maker-skills`
 > 3. Click `Select Folder`
 > 4. VS Code will reopen with the kit loaded
-> 5. Type your command again (for example `/setup`, `/run`, or `/planner`) — it will work this time
+> 5. Type your command again (for example `/setup` or `/planner`) — it will work this time
 >
 > See the [README](README.md) for the full getting-started walkthrough.
 >

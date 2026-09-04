@@ -6,37 +6,29 @@ files. Your only inputs are the paths to the eval YAML files and the agent
 folder. Use the script below to score the files, then add actionable guidance
 for any flagged cases.
 
-Do not use this skill as the entry point for requests such as "review
-testsets", "show test sets tagged for review", or "I am the reviewer." Those
-requests must first use `src/skills/evaluations/review/SKILL.md` to list
-`review_requested` sets and obtain a user selection. This validator is invoked
-only when quality validation is explicitly requested or when an evaluation
-create/update/review flow calls it after editing cases.
-
 ---
 
 ## Step 1 — Run the quality script
 
 Run the following command **from the `solutions/ess-maker-skills/` directory**
-using the exact selected evaluation-set folder passed by the parent:
+to score the eval files:
 
 ```
-python scripts/evaluate_evals.py --evaluation-folder "{set-folder}"
+python scripts/evaluate_evals.py --agent {agent-slug} --category {category}
 ```
 
 Where:
-- `{set-folder}` is the direct parent folder containing the selected
-  EvaluationSet and EvaluationData `.mcs.yml` files.
-- Use the provided path exactly. Do not reconstruct it from the display name,
-  category label, prior conversation, or agent slug.
-- This supports both workspace-level sets and configured-agent sets.
+- `{agent-slug}` is the agent folder name under `workspace/agents/` — derive
+  it from the agent folder path you were given (e.g. `workspace/agents/employee-self-service-hr/`
+  → slug is `employee-self-service-hr`).
+- `{category}` is the subfolder name under `evaluations/` — derive it from
+  the file paths you were given (e.g. files in `evaluations/topic-triggering/`
+  → category is `topic-triggering`).
 
 The script calls the Copilot API and returns dimension scores and flagged cases.
 
-If the script fails, report its actual error reason before falling back to Step
-2. Do not label every failure as "script unavailable": distinguish an invalid
-folder, authentication failure, missing dependency, and API failure. Otherwise
-skip Step 2 and go straight to Step 3.
+If the script fails (auth error, missing dependency), fall back to Step 2
+(manual scoring). Otherwise skip Step 2 and go straight to Step 3.
 
 **If re-invoked after fixes** (the parent passes a list of edited files):
 - Script path: re-run the script on the full category — fast enough to rescore all.
@@ -48,7 +40,7 @@ skip Step 2 and go straight to Step 3.
 
 At the top of your report, indicate which path was used:
 - Script succeeded: `📊 Scored using evaluate_evals.py (Copilot API)`
-- Script failed, fall back: `⚠️ Automated scoring failed ({reason}) — scored manually`
+- Script failed, fall back: `⚠️ Script unavailable — scored manually`
 
 The script automatically skips `MultiTurnEvaluationCase` files — no action
 needed.
