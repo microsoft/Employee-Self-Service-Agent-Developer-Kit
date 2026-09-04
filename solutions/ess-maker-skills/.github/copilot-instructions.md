@@ -21,10 +21,19 @@ Do not say "hello" or introduce yourself.
 Respond with ONLY this exact message and nothing else:
 
 > Hey! Welcome to the ESS Maker Kit. Before we dive in, I need to set up
-> your environment. Type `/setup` to get started — it only takes a couple minutes.
+> your environment. In VS Code, type `/setup`; in the Copilot CLI (or any chat),
+> just say **"set up ESS"**. It only takes a couple minutes.
 
-**The ONLY exception**: If the user typed `/setup` or explicitly asked to run
+**The exceptions**: If the user typed `/setup` or explicitly asked to run
 setup, proceed with setup — read `src/skills/foundation-setup/SKILL.md` and follow it.
+If the user typed `/planner` or asked to **plan a rollout / plan an ESS
+deployment / set up ESS for the first time / where do I start / how do I get
+started / "what am I assigned?"**, proceed with planning — read
+`src/skills/planner/SKILL.md` and follow it (the planner is the one experience
+that is allowed to run before setup, because planning is how a greenfield
+deployment is decided). A first-time / "where do I start" request is a
+**planning** request — route it to the planner, which then emits "run `/setup`"
+as the first task; do **not** send it straight to `/setup`.
 
 **This gate applies to ALL user messages** — including "hello", "hi", "help",
 "what can you do", "I need a topic", "create a workflow", or any other request.
@@ -298,6 +307,8 @@ After a successful push, `.baseline/` is updated to match the new state.
 | User intent | Skill to read |
 |-------------|--------------|
 | Run common ESS foundation setup (`/setup`) | `src/skills/foundation-setup/SKILL.md` |
+| Plan a rollout / generate a scenario Plan / "what am I assigned?" | `src/skills/planner/SKILL.md` |
+| Assign/attest a rollout role to a person (`/roles`) | `src/skills/roles/SKILL.md` |
 | Provision/connect the Workday setup environment (`/connect workday`) | `src/skills/setup/SKILL.md` |
 | Connect to ServiceNow/Workday | `src/skills/connect/SKILL.md` |
 | Create a topic | `src/skills/topics/create-eval-driven/SKILL.md` |
@@ -324,6 +335,21 @@ After a successful push, `.baseline/` is updated to match the new state.
 **Trigger phrases for connect:** "connect ServiceNow", "set up ServiceNow",
 "integrate ServiceNow", "connect Workday", "set up Workday", "add ServiceNow",
 "I want to connect to ServiceNow", "ServiceNow integration".
+
+**Trigger phrases for planner:** "plan a rollout", "plan my ESS deployment",
+"create a plan", "scenario plan", "set up ESS with Workday/ServiceNow",
+"I want to set up ESS for the first time", "where do I start", "where should I
+start", "how do I get started", "getting started with ESS", "set up ESS from
+scratch", "first-time setup", "what should I do first", "what am I assigned",
+"what are my tasks", "my tasks", "what's assigned to me".
+
+**Trigger phrases for roles:** "assign the ServiceNow admin role to <person>",
+"make <person> the Workday admin", "give <person> the <role> role", "who holds
+the <role> role", "who's the ServiceNow admin", "assign roles for this plan",
+"attest a role", "/roles". **Not** a roles request: "what are my tasks / what am
+I assigned?" — that is the planner (Flow 2), which reads back the roles this flow
+records. Roles attestation needs an existing plan; if none exists, route to
+`/planner` first.
 
 **Trigger phrases for troubleshooting:** "Workday error", "ISU not working",
 "invalid_client", "invalid username or password", "SOAP failure", "maker works

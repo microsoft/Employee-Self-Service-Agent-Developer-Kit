@@ -1,0 +1,650 @@
+# Copyright (c) Microsoft Corporation.
+# Licensed under the MIT License.
+
+"""Tests for planner.plan_model — the local Plan document.
+
+Pure logic + local file IO (no network), so exempt from the FlightCheck
+cassette policy per tests/AGENTS.md.
+"""
+
+from __future__ import annotations
+
+import json
+
+import pytest
+
+from planner.plan_model import (
+    Limits,
+    Plan,
+    assignee_role_id,
+    assignee_user_oid,
+    context_entry,
+    humanize,
+    learn_links,
+    new_task,
+    plan_artifact,
+    principal_person,
+    principal_pool,
+    read_research_context,
+)
+
+PAUL = "00000000-0000-0000-0000-0000000000b1"
+ANN = "00000000-0000-0000-0000-0000000000b2"
+
+
+def _plan_with_tasks() -> Plan:
+    plan = Plan.new(objective="ESS HR ticketing on Workday")
+    plan.add_task(
+        new_task(
+            "T1",
+            "Create environment & run setup",
+            description="Run /setup to onboard the ADK to the deployed agent",
+            assigned_to=principal_pool("power-platform-admin"),
+            produces=["primaryEnvironment"],
+        )
+    )
+    plan.add_task(
+        new_task(
+            "T2",
+            "Connect Workday",
+            description="Run /connect to connect Workday to the ESS agent",
+            assigned_to=principal_pool("integration-owner"),
+            consumes=["primaryEnvironment"],
+        )
+    )
+    return plan
+
+
+# --------------------------------------------------------------------------- #
+# Construction, IO, round-trip
+# --------------------------------------------------------------------------- #
+
+def test_new_plan_has_objective_context_entry():
+    plan = Plan.new(objective="Do the thing")
+    assert plan.output_value_or_context("objective") == "Do the thing"
+    entry = plan.context[0]
+    assert entry["group"] == "objective"
+    assert entry["provenance"]["source"] == "User"
+
+
+def test_save_is_atomic_and_round_trips(tmp_path):
+    plan = _plan_with_tasks()
+    path = tmp_path / "plan.json"
+    plan.save(path)
+    assert not (tmp_path / "plan.json.tmp").exists()  # no leftover temp file
+    reloaded = Plan.load(path)
+    assert reloaded.data == plan.data
+
+
+def test_save_all_writes_summary(tmp_path):
+    plan = _plan_with_tasks()
+    path = tmp_path / "plan.json"
+    plan.save_all(path)
+    summary = (tmp_path / "ESS-scenario-plan.md").read_text(encoding="utf-8")
+    assert "Connect Workday" in summary
+    assert "## Tasks" in summary
+
+
+def test_load_backfills_missing_collections(tmp_path):
+    path = tmp_path / "plan.json"
+    path.write_text(json.dumps({"objective": "x"}), encoding="utf-8")
+    plan = Plan.load(path)
+    assert plan.tasks == []
+    assert plan.context == []
+    assert plan.outputs == []
+    assert plan.data["status"] == "Draft"
+
+
+def test_load_or_new_when_absent(tmp_path):
+    plan = Plan.load_or_new(tmp_path / "nope.json")
+    assert plan.tasks == []
+
+
+# --------------------------------------------------------------------------- #
+# Context bag (intent) — overwrite-in-place with provenance
+# --------------------------------------------------------------------------- #
+
+def test_set_context_overwrites_in_place_and_keeps_creator():
+    plan = Plan.new()
+    plan.set_context("market", "DE", group="market", source="User")
+    first_added = plan.context[0]["provenance"]["addedAt"]
+    plan.set_context("market", "FR", source="Agent")
+    assert len(plan.context) == 1  # overwritten, not duplicated
+    prov = plan.context[0]["provenance"]
+    assert plan.context[0]["value"] == "FR"
+    assert prov["addedAt"] == first_added  # creator stamp preserved
+    assert prov["updatedAt"]  # last editor stamp added
+    assert prov["source"] == "Agent"
+
+
+def test_set_system_scopes_keys_per_area():
+    plan = Plan.new()
+    plan.set_system("hr-knowledge", "SharePoint")
+    plan.set_system("hr-ticketing", "ServiceNow HRSD")
+    plan.set_system("IT Ticketing", "ServiceNow ITSM")  # slugified
+    systems = {e["key"]: e["value"] for e in plan.context if e.get("group") == "system"}
+    assert systems == {
+        "system.hr-knowledge": "SharePoint",
+        "system.hr-ticketing": "ServiceNow HRSD",
+        "system.it-ticketing": "ServiceNow ITSM",
+    }
+
+
+def test_plan_has_only_spec_fields():
+    # The plan carries only fields the Step-2 spec (§7.1) defines: schemaVersion
+    # (local file format) + planId/projectId/status + the Context bag + the
+    # Outputs ledger + the local tasks container, plus the sync-seam mirror
+    # fields (configuringAgentName + etag/syncedAt) that pair the local cache to
+    # its service plan. No invented generatedAt/updatedAt (server tracks
+    # CreatedAt/UpdatedAt) and no invented `notes`.
+    plan = Plan.new(objective="x")
+    assert set(plan.data) == {
+        "schemaVersion", "planId", "projectId", "configuringAgentName", "status",
+        "context", "tasks", "outputs", "etag", "syncedAt",
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Tasks + assignment (the extended Principal states)
+# --------------------------------------------------------------------------- #
+
+def test_add_task_rejects_duplicate_id():
+    plan = _plan_with_tasks()
+    with pytest.raises(ValueError, match="duplicate task id"):
+        plan.add_task(new_task("T1", "dup"))
+
+
+def test_assign_pool_then_direct():
+    plan = _plan_with_tasks()
+    plan.assign_task("T1", role_id="power-platform-admin")  # pool
+    at = plan.task("T1")["assignedTo"]
+    assert at["type"] == "Role"
+    assert assignee_role_id(at) == "power-platform-admin"
+    assert assignee_user_oid(at) is None
+    plan.assign_task("T1", role_id="power-platform-admin", person_oid=PAUL)  # direct-for-role
+    at = plan.task("T1")["assignedTo"]
+    assert at["type"] == "User"
+    assert assignee_user_oid(at) == PAUL
+    assert assignee_role_id(at) == "power-platform-admin"
+
+
+def test_claim_retains_role():
+    plan = _plan_with_tasks()
+    plan.assign_task("T2", role_id="integration-owner")  # pool
+    plan.claim_task("T2", PAUL)
+    at = plan.task("T2")["assignedTo"]
+    assert at["type"] == "User"
+    assert assignee_user_oid(at) == PAUL
+    assert assignee_role_id(at) == "integration-owner"  # role survives the claim
+
+
+def test_assign_requires_something():
+    plan = _plan_with_tasks()
+    with pytest.raises(ValueError):
+        plan.assign_task("T1")
+
+
+def test_set_state_validates():
+    plan = _plan_with_tasks()
+    # Invalid state is rejected.
+    with pytest.raises(ValueError):
+        plan.set_task_state("T1", "Bogus")
+    # Cannot Complete while a declared `produces` is unresolved (invariant enforced
+    # in the model, so every caller — not just the capture CLI — is covered).
+    with pytest.raises(ValueError):
+        plan.set_task_state("T1", "Completed")
+    # After pinning the produced output, Complete succeeds.
+    plan.add_output(plan_artifact("primaryEnvironment", "Environment", {"environmentId": "e"}, produced_by_task_id="T1"))
+    plan.set_task_state("T1", "Completed")
+    assert plan.task("T1")["state"] == "Completed"
+
+
+def test_require_task_missing():
+    plan = _plan_with_tasks()
+    with pytest.raises(KeyError):
+        plan.set_task_state("nope", "Completed")
+
+
+def test_update_task_changes_content_only():
+    plan = _plan_with_tasks()
+    plan.update_task(
+        "T1",
+        title="Run setup (revised)",
+        description="new how-to",
+        produces=["primaryEnvironment", "extra"],
+    )
+    t = plan.task("T1")
+    assert t["title"] == "Run setup (revised)"
+    assert t["description"] == "new how-to"
+    assert t["produces"] == ["primaryEnvironment", "extra"]
+    # consumes left untouched (None argument means "unchanged").
+    assert t["consumes"] == []
+    with pytest.raises(KeyError):
+        plan.update_task("nope", title="x")
+
+
+def test_remove_task():
+    plan = _plan_with_tasks()
+    before = len(plan.tasks)
+    removed = plan.remove_task("T1")
+    assert removed["id"] == "T1"
+    assert plan.task("T1") is None
+    assert len(plan.tasks) == before - 1
+    # Removing an unknown (or already-removed) id fails loudly.
+    with pytest.raises(KeyError):
+        plan.remove_task("T1")
+
+
+# --------------------------------------------------------------------------- #
+# Output ledger — supersede-by-key, filter-by-task
+# --------------------------------------------------------------------------- #
+
+def test_add_output_supersedes_by_key():
+    plan = _plan_with_tasks()
+    plan.add_output(plan_artifact("primaryEnvironment", "Environment", {"environmentId": "one"}, produced_by_task_id="T1"))
+    plan.add_output(plan_artifact("primaryEnvironment", "Environment", {"environmentId": "two"}, produced_by_task_id="T1"))
+    active = [a for a in plan.outputs if a["state"] == "Active"]
+    assert len(active) == 1
+    assert active[0]["attributes"]["environmentId"] == "two"
+    assert plan.output("primaryEnvironment")["attributes"]["environmentId"] == "two"
+
+
+def test_outputs_of_task_is_ledger_filter():
+    plan = _plan_with_tasks()
+    plan.add_output(plan_artifact("primaryEnvironment", "Environment", {"environmentId": "e"}, produced_by_task_id="T1"))
+    plan.add_output(plan_artifact("evalSuite", "Custom", {"id": "s"}, produced_by_task_id="T2"))
+    assert [a["key"] for a in plan.outputs_of_task("T1")] == ["primaryEnvironment"]
+
+
+# --------------------------------------------------------------------------- #
+# Flow 2 — discovery grouped by role, multi-role
+# --------------------------------------------------------------------------- #
+
+def test_tasks_for_person_groups_by_role_and_relation():
+    plan = Plan.new()
+    plan.add_task(new_task("P1", "pooled", assigned_to=principal_pool("integration-owner")))
+    plan.add_task(new_task("P2", "mine", assigned_to=principal_person(ANN, role_id="eval-author")))
+    plan.add_task(new_task("P3", "other", assigned_to=principal_pool("workday-admin")))
+    plan.add_task(new_task("P4", "theirs", assigned_to=principal_person(PAUL, role_id="eval-author")))
+
+    grouped = plan.tasks_for_person(ANN, ["integration-owner", "eval-author"])
+    assert set(grouped) == {"integration-owner", "eval-author"}
+    assert grouped["integration-owner"][0]["relation"] == "pool"
+    assert grouped["eval-author"][0]["relation"] == "assigned"
+    assert grouped["eval-author"][0]["task"]["id"] == "P2"
+
+
+# --------------------------------------------------------------------------- #
+# Execution order (topological render)
+# --------------------------------------------------------------------------- #
+
+def test_ordered_tasks_places_producer_before_consumer():
+    plan = Plan.new()
+    # Authored consumer-first on purpose; the render must flip them.
+    plan.add_task(new_task("T1", "consume", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce", produces=["envId"]))
+    ordered = [t["id"] for t in plan.ordered_tasks()]
+    assert ordered == ["T2", "T1"]
+
+
+def test_ordered_tasks_is_stable_for_independent_tasks():
+    plan = Plan.new()
+    plan.add_task(new_task("A", "a"))
+    plan.add_task(new_task("B", "b"))
+    plan.add_task(new_task("C", "c"))
+    # No produces/consumes edges — original order is preserved exactly.
+    assert [t["id"] for t in plan.ordered_tasks()] == ["A", "B", "C"]
+
+
+def test_ordered_tasks_orders_a_chain_and_keeps_ties():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume env", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce env", produces=["envId"]))
+    plan.add_task(new_task("T3", "independent"))
+    plan.add_task(new_task("T4", "chain", consumes=["envId"], produces=["topicId"]))
+    # T2 feeds T1 and T4; T3 is independent and holds its authored slot.
+    assert [t["id"] for t in plan.ordered_tasks()] == ["T2", "T1", "T3", "T4"]
+
+
+def test_ordered_tasks_tolerates_a_cycle_without_loss():
+    plan = Plan.new()
+    plan.add_task(new_task("C1", "a", consumes=["x"], produces=["y"]))
+    plan.add_task(new_task("C2", "b", consumes=["y"], produces=["x"]))
+    ordered = [t["id"] for t in plan.ordered_tasks()]
+    # Cycle can't be sorted — every task still appears exactly once, in order.
+    assert ordered == ["C1", "C2"]
+
+
+def test_ordered_tasks_does_not_mutate_stored_order():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce", produces=["envId"]))
+    plan.ordered_tasks()
+    # The on-disk sequence stays authoritative; only the view reorders.
+    assert [t["id"] for t in plan.tasks] == ["T1", "T2"]
+
+
+def test_render_summary_lists_tasks_in_execution_order():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce", produces=["envId"]))
+    summary = plan.render_summary()
+    assert summary.index("| T2 |") < summary.index("| T1 |")
+
+
+# --------------------------------------------------------------------------- #
+# Dependency marker (artifact-model readiness)
+# --------------------------------------------------------------------------- #
+
+def test_blocking_inputs_flags_unproduced_consumed_key():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce", produces=["envId"]))
+    # Nothing produced yet: T1 waits on its producer T2; T2 itself is ready.
+    assert plan.blocking_inputs("T1") == {"envId": ["T2"]}
+    assert plan.waiting_on("T1") == ["T2"]
+    assert plan.dependency_marker("T1") == "T2"
+    assert plan.blocking_inputs("T2") == {}
+    assert plan.dependency_marker("T2") == ""
+
+
+def test_dependency_marker_clears_once_artifact_is_active():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce", produces=["envId"]))
+    plan.add_output(plan_artifact("envId", "Environment", {"environmentId": "e"}, produced_by_task_id="T2"))
+    # The consumed key now has an Active artifact — the marker disappears.
+    assert plan.blocking_inputs("T1") == {}
+    assert plan.waiting_on("T1") == []
+    assert plan.dependency_marker("T1") == ""
+
+
+def test_waiting_on_marks_external_key_no_task_produces():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", consumes=["externalId"]))
+    # No task produces externalId — surface the missing key, not a producer id.
+    assert plan.blocking_inputs("T1") == {"externalId": []}
+    assert plan.waiting_on("T1") == ["needs externalId"]
+    assert plan.dependency_marker("T1") == "needs externalId"
+
+
+def test_dependency_marker_dedupes_and_sorts_producers():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume both", consumes=["a", "b"]))
+    plan.add_task(new_task("P2", "make a", produces=["a"]))
+    plan.add_task(new_task("P1", "make b", produces=["b"]))
+    # Producers are de-duplicated and sorted for a stable marker.
+    assert plan.dependency_marker("T1") == "P1, P2"
+
+
+def test_render_summary_shows_blocked_by_column():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "consume", consumes=["envId"]))
+    plan.add_task(new_task("T2", "produce", produces=["envId"]))
+    summary = plan.render_summary()
+    assert "Blocked by" in summary
+    rows = {
+        line.split("|")[1].strip(): line
+        for line in summary.splitlines()
+        if line.startswith("| T")
+    }
+    # Consumer row names its upstream producer; the producer row is ready ("—").
+    assert "T2" in rows["T1"].split("|")[-2]
+    assert rows["T2"].split("|")[-2].strip() == "—"
+
+
+def test_tasks_for_person_reports_waiting_on():
+    plan = Plan.new()
+    plan.add_task(new_task(
+        "T1", "consume", consumes=["envId"],
+        assigned_to=principal_person(ANN, role_id="eval-author"),
+    ))
+    plan.add_task(new_task(
+        "T2", "produce", produces=["envId"],
+        assigned_to=principal_person(ANN, role_id="eval-author"),
+    ))
+    grouped = plan.tasks_for_person(ANN, ["eval-author"])
+    by_id = {item["task"]["id"]: item for item in grouped["eval-author"]}
+    assert by_id["T1"]["waitingOn"] == ["T2"]
+    assert by_id["T2"]["waitingOn"] == []
+
+
+# --------------------------------------------------------------------------- #
+# Validation
+# --------------------------------------------------------------------------- #
+
+def test_valid_plan_has_no_errors():
+    plan = _plan_with_tasks()
+    plan.add_output(plan_artifact("primaryEnvironment", "Environment", {"environmentId": "e"}, produced_by_task_id="T1"))
+    assert plan.validate() == []
+
+
+def test_validate_flags_nested_context_value():
+    plan = Plan.new()
+    plan.context.append(context_entry("bad", {"nested": "object"}))
+    assert any("must be scalar" in e for e in plan.validate())
+
+
+def test_validate_flags_duplicate_context_key():
+    plan = Plan.new()
+    plan.context.append(context_entry("dup", "1"))
+    plan.context.append(context_entry("dup", "2"))
+    assert any("not unique" in e for e in plan.validate())
+
+
+def test_task_needs_no_action_to_be_valid():
+    plan = Plan.new()
+    # A task is described by title + description only — no action field required.
+    plan.add_task(new_task("T", "Connect Workday",
+                           description="Run /connect to connect Workday",
+                           assigned_to=principal_pool("integration-owner")))
+    assert plan.validate() == []
+    assert "action" not in plan.task("T")
+
+
+def test_validate_flags_invalid_artifact_kind():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "t"))
+    plan.outputs.append(plan_artifact("k", "NotAKind", {"a": 1}, produced_by_task_id="T1"))
+    assert any("invalid kind" in e for e in plan.validate())
+
+
+def test_validate_flags_two_active_same_key():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "t"))
+    plan.outputs.append(plan_artifact("k", "Custom", {"a": 1}, produced_by_task_id="T1"))
+    plan.outputs.append(plan_artifact("k", "Custom", {"a": 2}, produced_by_task_id="T1"))
+    assert any("Active artifacts" in e for e in plan.validate())
+
+
+def test_validate_flags_too_many_tasks():
+    plan = Plan.new()
+    for i in range(Limits.MAX_TASKS + 1):
+        plan.tasks.append(new_task(f"T{i}", "t"))
+    assert any("too many tasks" in e for e in plan.validate())
+
+
+def test_claim_rejects_task_not_open_to_a_role():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "no assignee"))  # unassigned -> not a pool
+    with pytest.raises(ValueError):
+        plan.claim_task("T1", PAUL)
+    plan.assign_task("T1", role_id="maker", person_oid=PAUL)  # now owned by a person
+    with pytest.raises(ValueError):
+        plan.claim_task("T1", ANN)  # cannot steal an owned task
+
+
+def test_tasks_for_person_excludes_completed():
+    plan = _plan_with_tasks()
+    plan.assign_task("T1", role_id="power-platform-admin", person_oid=PAUL)
+    plan.add_output(plan_artifact("primaryEnvironment", "Environment", {"environmentId": "e"}, produced_by_task_id="T1"))
+    plan.set_task_state("T1", "Completed")
+    grouped = plan.tasks_for_person(PAUL, ["power-platform-admin"])
+    flat = [it["task"]["id"] for items in grouped.values() for it in items]
+    assert "T1" not in flat  # Flow 2 surfaces waiting work, not finished tasks
+
+
+def test_unresolved_produces_tracks_active_outputs():
+    plan = _plan_with_tasks()  # T1 produces primaryEnvironment
+    assert plan.unresolved_produces("T1") == ["primaryEnvironment"]
+    plan.add_output(plan_artifact("primaryEnvironment", "Environment", {"environmentId": "e"}, produced_by_task_id="T1"))
+    assert plan.unresolved_produces("T1") == []
+
+
+def test_validate_flags_orphan_artifact_task_ref():
+    plan = Plan.new()
+    plan.add_task(new_task("T1", "t"))
+    plan.outputs.append(plan_artifact("k", "Custom", {"a": 1}, produced_by_task_id="TX"))
+    assert any("unknown task" in e for e in plan.validate())
+
+
+# --------------------------------------------------------------------------- #
+# Readable Markdown view (render_summary) + Learn enrichment
+# --------------------------------------------------------------------------- #
+
+def _bangalore_plan() -> Plan:
+    """A plan shaped like the real /planner capture — scenarios, capabilities,
+    systems, goals, persona — used to exercise the readable view."""
+    plan = Plan.new(objective="Roll out ESS to the Bangalore team")
+    plan.set_context("market", "Bangalore team (India)", group="market")
+    plan.set_context("persona", "Employees (Bangalore pilot group)", group="scenarioContext")
+    plan.set_context("jtbd", "HR knowledge, HR profile, HR ticketing", group="scenarioContext")
+    plan.set_context("ticketDeflection", "Reduce HR ticket volume by 30%", group="businessGoals")
+    plan.set_context("pilotBar", "Pilot-ready: passes evals and HR-signed-off", group="acceptanceCriteria")
+    for sid, label in [
+        ("hr-knowledge", "HR knowledge"),
+        ("hr-profile-read", "HR profile read"),
+        ("hr-profile-write", "HR profile update"),
+        ("hr-ticketing", "HR ticketing"),
+    ]:
+        plan.set_context(sid, label, group="scenario")
+    plan.set_context("hr-knowledge.policy-lookup", "HR Policy Lookup", group="scenarioCapability")
+    plan.set_context("hr-ticketing.create-ticket", "Create HR Ticket", group="scenarioCapability")
+    plan.set_context("hr-profile-read.job-details", "View Job Details", group="scenarioCapability")
+    plan.set_system("hr-knowledge", "SharePoint (knowledge source)")
+    plan.set_system("hr-profile", "Workday")
+    plan.set_system("hr-ticketing", "ServiceNow HRSD")
+    plan.add_scenario_dependency("hr-ticketing", "hr-knowledge", kind="recommends")
+    plan.add_scenario_dependency("hr-profile-write", "hr-profile-read", kind="requires")
+    return plan
+
+
+def test_readable_view_replaces_raw_group_bullets():
+    md = _bangalore_plan().render_summary()
+    # Human sections, not the old raw "## Intent" + "group\n- key: value" dump.
+    assert "# ESS scenario plan — Roll out ESS to the Bangalore team" in md
+    assert "## Overview" in md
+    assert "## Scenarios in scope" in md
+    assert "## Systems" in md
+    assert "## Intent" not in md  # the flat bag heading is gone
+    assert "scenarioCapability" not in md  # raw group names never surface
+    assert "scenarioContext" not in md
+
+
+def test_readable_view_renders_scenario_with_system_and_capabilities():
+    md = _bangalore_plan().render_summary()
+    assert "### HR knowledge (`hr-knowledge`)" in md
+    assert "Backed by **SharePoint (knowledge source)**." in md
+    assert "- HR Policy Lookup" in md
+    # A write scenario shows its dependency inline, in plain language.
+    assert "Depends on: `hr-profile-read` (requires, in scope)" in md
+
+
+def test_readable_view_humanizes_overview_and_system_areas():
+    md = _bangalore_plan().render_summary()
+    assert "- **Market / rollout wave:** Bangalore team (India)" in md
+    assert "- **Audience:** Employees (Bangalore pilot group)" in md
+    assert "**Business goals**" in md
+    assert "- Reduce HR ticket volume by 30%" in md
+    # System area slug is humanised with acronym casing.
+    assert "| HR knowledge | SharePoint (knowledge source) |" in md
+    assert "| HR profile | Workday |" in md
+
+
+def test_readable_view_keeps_dependency_table_contract():
+    # The scenario-dependency table row format is relied on by edit.md reconcile
+    # and by test_scenario_deps — keep it exact.
+    md = _bangalore_plan().render_summary()
+    assert "## Scenario dependencies" in md
+    assert "| hr-ticketing | hr-knowledge | recommends | met |" in md
+
+
+def test_agent_line_reflects_pinned_agent_output():
+    plan = _bangalore_plan()
+    assert "**Agent:** not set yet" in plan.render_summary()
+    plan.add_task(new_task("T1", "Run setup"))
+    plan.add_output(plan_artifact("essAgent", "Agent", {"name": "Contoso ESS"}, produced_by_task_id="T1"))
+    assert "**Agent:** Contoso ESS" in plan.render_summary()
+
+
+def test_more_context_catches_unknown_groups():
+    plan = Plan.new()
+    plan.set_context("dataResidency", "India only", group="constraints")
+    md = plan.render_summary()
+    assert "## More context" in md
+    assert "**Constraints**" in md
+    assert "- Data residency: India only" in md
+
+
+def test_learn_enrichment_is_best_effort_and_optional():
+    plan = _bangalore_plan()
+    # No corpus -> no Learn section (the common case today; no persisted sidecar).
+    assert "## Learn references" not in plan.render_summary()
+    # A corpus enriches the view with grounding links, incl. per-scenario.
+    research = {
+        "sources": [
+            {"title": "Set up HR knowledge", "url": "https://learn.microsoft.com/x", "scenario": "hr-knowledge"},
+            {"toc_title": "ESS overview", "href": "https://learn.microsoft.com/overview"},
+        ]
+    }
+    md = plan.render_summary(research=research)
+    assert "## Learn references" in md
+    assert "[Set up HR knowledge](https://learn.microsoft.com/x)" in md
+    assert "[ESS overview](https://learn.microsoft.com/overview)" in md
+
+
+def test_write_summary_enriches_from_research_sidecar(tmp_path):
+    """render/refresh time: save_all/write_summary auto-load research-context.json
+    next to the plan and enrich the Markdown from it."""
+    plan = _bangalore_plan()
+    (tmp_path / "research-context.json").write_text(
+        json.dumps({"pages": [{"title": "Workday setup", "url": "https://learn.microsoft.com/wd"}]}),
+        encoding="utf-8",
+    )
+    plan.save_all(tmp_path / "plan.json")
+    md = (tmp_path / "ESS-scenario-plan.md").read_text(encoding="utf-8")
+    assert "## Learn references" in md
+    assert "[Workday setup](https://learn.microsoft.com/wd)" in md
+
+
+def test_write_summary_without_sidecar_renders_no_learn_section(tmp_path):
+    plan = _bangalore_plan()
+    plan.save_all(tmp_path / "plan.json")
+    md = (tmp_path / "ESS-scenario-plan.md").read_text(encoding="utf-8")
+    assert "## Learn references" not in md
+    assert "## Scenarios in scope" in md  # still fully rendered
+
+
+def test_humanize_acronyms_and_camel_case():
+    assert humanize("pilotBar") == "Pilot bar"
+    assert humanize("hr-knowledge") == "HR knowledge"
+    assert humanize("it_ticketing") == "IT ticketing"
+    assert humanize("ticketDeflection") == "Ticket deflection"
+
+
+def test_learn_links_tolerates_shapes_and_dedupes():
+    assert learn_links(None) == []
+    assert learn_links({"nothing": 1}) == []
+    links = learn_links([
+        {"title": "A", "url": "u1"},
+        {"name": "B", "href": "u2", "system": "workday"},
+        {"label": "dupe", "sourceUrl": "u1"},  # same url -> dropped
+    ])
+    assert [l["url"] for l in links] == ["u1", "u2"]
+    assert links[1]["scope"] == "workday"
+
+
+def test_read_research_context_missing_returns_none(tmp_path):
+    assert read_research_context(tmp_path) is None
+    (tmp_path / "research-context.json").write_text("{ not json", encoding="utf-8")
+    assert read_research_context(tmp_path) is None  # unreadable -> None, never raises

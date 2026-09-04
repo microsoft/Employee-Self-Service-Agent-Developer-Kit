@@ -3,6 +3,7 @@ workspace/**
 !workspace/
 !workspace/onboarding/
 !workspace/agents/
+!workspace/plan/
 !workspace/**/.gitkeep
 
 .local/**
@@ -22,3 +23,9 @@ src/reference/ess-docs/isv/
 
 # Runtime-heuristics docs synced from an internal ESS reference source (never committed)
 src/reference/ess-docs/runtime/
+
+# Per-environment MCP server config written by /setup at runtime (holds the
+# maker's Dataverse URL / connection details) — never commit; .vscode/settings.json
+# and extensions.json are the only tracked .vscode files.
+.vscode/mcp.json
+
