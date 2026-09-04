@@ -56,6 +56,20 @@ GRAPH_SCOPES = [
     "https://graph.microsoft.com/ExternalConnection.Read.All",
 ]
 
+# Least-privilege delegated scope for the /roles person resolver
+# (scripts/roles/cli.py: person name -> Entra object id). Several of the
+# broader FlightCheck GRAPH_SCOPES above (User.Read.All, Directory.Read.All,
+# Policy.Read.All) are ADMIN-consent-gated; this single scope is instead
+# USER-consentable in a default tenant, so a maker can grant it themselves
+# without pulling in a directory admin — yet it still authorizes the org-wide
+# GET /users?$search that search_users runs. Where a tenant disables user
+# consent for the Graph CLI app outright (e.g. Microsoft corp), interactive
+# sign-in is refused; the resolver then reports auth_required so the /roles
+# skill can fall back to the WorkIQ MCP (see src/skills/roles/resolve-person.md).
+PERSON_RESOLUTION_SCOPES = [
+    "https://graph.microsoft.com/User.ReadBasic.All",
+]
+
 # Wall-clock ceiling for the two silent lookups called from the interactive
 # auth hot path (``resolve_tenant_display_name_silent`` → /organization then
 # /me). Kept small — the sign-in critical path must not stall on a
@@ -285,8 +299,13 @@ def _try_me_company_name_lookup(app, account) -> str:
 class GraphClient:
     """Lightweight Microsoft Graph client with MSAL interactive auth."""
 
-    def __init__(self, tenant_id: str):
+    def __init__(self, tenant_id: str, scopes: list[str] | None = None):
         self.tenant_id = tenant_id
+        # Default to the broad FlightCheck scope set. Callers that only need a
+        # narrow, user-consentable capability (e.g. the /roles person resolver)
+        # pass their own least-privilege scopes so makers aren't pushed through
+        # an admin-consent prompt for permissions their task never uses.
+        self._scopes = scopes or GRAPH_SCOPES
         self._token: str | None = None
 
     def authenticate(self) -> str:
@@ -307,12 +326,12 @@ class GraphClient:
         accounts = app.get_accounts()
         result = None
         if accounts:
-            result = app.acquire_token_silent(GRAPH_SCOPES, account=accounts[0])
+            result = app.acquire_token_silent(self._scopes, account=accounts[0])
 
         if not result or "access_token" not in result:
             print("Opening browser for Microsoft Graph sign-in...")
             result = app.acquire_token_interactive(
-                GRAPH_SCOPES, prompt="select_account"
+                self._scopes, prompt="select_account"
             )
 
         if "access_token" not in result:
@@ -422,6 +441,52 @@ class GraphClient:
     def get_users_sample(self, top: int = 10) -> list:
         """Get a sample of users for sync verification."""
         data = self.get("/users", params={"$top": str(top)})
+        return data.get("value", [])
+
+    def search_users(self, query: str, *, top: int = 10) -> list:
+        """Resolve a person by name (or email / UPN) to their directory objects.
+
+        Runs a Graph ``$search`` over ``displayName``, ``userPrincipalName`` and
+        ``mail`` — which requires the ``ConsistencyLevel: eventual`` header that
+        :attr:`headers` already sets. Each returned object carries ``id`` (the
+        Entra object id used everywhere as the subject id) plus ``displayName`` /
+        ``userPrincipalName`` / ``mail`` for disambiguation. ``jobTitle`` is
+        deliberately not requested: the person-resolution scope is
+        ``User.ReadBasic.All``, whose basic projection doesn't grant it, so a
+        ``$select`` on it comes back empty at best and 403s the call at worst.
+
+        Returns an empty list for a blank query or a genuine no-match. Raises
+        ``PermissionError`` on a 401/403 (the caller lacks a directory user-read
+        scope such as ``User.ReadBasic.All``, or the tenant blocks user consent
+        for the CLI app) so the caller can tell "sign in / grant access / fall
+        back" apart from an empty result — a swallowed ``[]`` there would read as
+        a genuine "no match" and defeat the WorkIQ fallback the ``/roles`` skill
+        relies on.
+        """
+        term = " ".join((query or "").split()).replace('"', "")
+        if not term:
+            return []
+        search = (
+            f'"displayName:{term}" OR "userPrincipalName:{term}" OR "mail:{term}"'
+        )
+        data = self.get(
+            "/users",
+            params={
+                "$search": search,
+                "$select": "id,displayName,userPrincipalName,mail",
+                "$top": str(top),
+            },
+        )
+        if isinstance(data, dict) and data.get("_error"):
+            # 401/403 -> the caller lacks a directory user-read scope (e.g.
+            # User.ReadBasic.All) or the tenant blocks user consent for the CLI
+            # app. Raise (mirroring get_all(raise_on_permission_error=True)) so
+            # the caller can tell "grant access / fall back" apart from a real
+            # empty result — a swallowed [] here would read as a genuine "no
+            # match" and defeat the /roles skill's WorkIQ fallback.
+            raise PermissionError(
+                f"Graph returned HTTP {data.get('_status')} resolving users."
+            )
         return data.get("value", [])
 
     def get_service_principals(

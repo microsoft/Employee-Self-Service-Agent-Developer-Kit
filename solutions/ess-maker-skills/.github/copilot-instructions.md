@@ -24,18 +24,29 @@ Respond with ONLY this exact message and nothing else:
 > your environment. In VS Code, type `/setup`; in the Copilot CLI (or any chat),
 > just say **"set up ESS"**. It only takes a couple minutes.
 
-**The exceptions**: If the user typed `/setup` or explicitly asked to run
-setup, proceed with setup — read `src/skills/foundation-setup/SKILL.md` and follow it.
-If the user typed `/planner` or asked to **plan a rollout / plan an ESS
-deployment / set up ESS for the first time / where do I start / how do I get
-started / "what am I assigned?"**, proceed with planning — read
-`src/skills/planner/SKILL.md` and follow it (the planner is the one experience
-that is allowed to run before setup, because planning is how a greenfield
-deployment is decided). A first-time / "where do I start" request is a
-**planning** request — route it to the planner, which then emits "run `/setup`"
-as the first task; do **not** send it straight to `/setup`.
+**Exceptions:**
 
-**This gate applies to ALL user messages** — including "hello", "hi", "help",
+- If the user typed `/setup` or explicitly asked to run setup, proceed with
+  setup — read `src/skills/foundation-setup/SKILL.md` and follow it.
+- If the user typed `/planner` or asked to **plan a rollout / plan an ESS
+  deployment / set up ESS for the first time / where do I start / how do I get
+  started / "what am I assigned?"**, proceed with planning — read
+  `src/skills/planner/SKILL.md` and follow it. The planner is allowed to run
+  before setup because it defines the greenfield deployment and emits setup as
+  the first task. Do not route these requests directly to setup.
+- If the user explicitly asks to create or generate evaluation test sets,
+  proceed without setup — read
+  `src/skills/evaluations/dispatcher/SKILL.md` and follow it. This exception is
+  for creating test sets.
+- If the user explicitly asks to update, edit, modify, or change evaluation
+  test sets or individual test cases, proceed without setup — read
+  `src/skills/evaluations/update/SKILL.md` and follow it. This includes natural
+  requests such as "edit the testsets" and "change an expected response." That
+  skill discovers workspace-level sets without setup and agent-owned sets when
+  configuration is available. Deleting deployed sets still requires setup.
+
+**Except for the cases above, this gate applies to ALL user messages** —
+including "hello", "hi", "help",
 "what can you do", "I need a topic", "create a workflow", or any other request.
 If foundation setup isn't ready, and the user didn't say `/setup`,
 show ONLY the welcome message above. No other text. No capabilities list. No greeting.
@@ -43,8 +54,8 @@ show ONLY the welcome message above. No other text. No capabilities list. No gre
 ### If foundation is ready but the local workspace is not initialized
 
 If `.local/config.json` does not exist or its `setup` value is not `"complete"`,
-apply the same gate above. `/setup` resumes at the local onboarding bootstrap
-through `src/skills/foundation-setup/SKILL.md`.
+apply the same gate and exceptions above. `/setup` resumes at the local
+onboarding bootstrap through `src/skills/foundation-setup/SKILL.md`.
 
 ### If foundation and local workspace setup are complete
 
@@ -308,6 +319,7 @@ After a successful push, `.baseline/` is updated to match the new state.
 |-------------|--------------|
 | Run common ESS foundation setup (`/setup`) | `src/skills/foundation-setup/SKILL.md` |
 | Plan a rollout / generate a scenario Plan / "what am I assigned?" | `src/skills/planner/SKILL.md` |
+| Assign/attest a rollout role to a person (`/roles`) | `src/skills/roles/SKILL.md` |
 | Provision/connect the Workday setup environment (`/connect workday`) | `src/skills/setup/SKILL.md` |
 | Connect to ServiceNow/Workday | `src/skills/connect/SKILL.md` |
 | Create a topic | `src/skills/topics/create-eval-driven/SKILL.md` |
@@ -321,7 +333,7 @@ After a successful push, `.baseline/` is updated to match the new state.
 | Run pre-deployment readiness check | `src/skills/flightcheck/SKILL.md` |
 | Discover / crawl tenant inventory (`/discover`) | `src/skills/discover/SKILL.md` |
 | Fix compile errors | `src/skills/cleanup/SKILL.md` |
-| Generate evaluation test sets | `src/skills/evaluations/create/SKILL.md` |
+| Generate evaluation test sets | `src/skills/evaluations/dispatcher/SKILL.md` |
 | Update/modify evaluation test cases | `src/skills/evaluations/update/SKILL.md` |
 | Delete evaluation test sets/cases | `src/skills/evaluations/delete/SKILL.md` |
 | Validate / quality-check evaluation test sets | `src/skills/evaluations/validate/SKILL.md` |
@@ -343,6 +355,14 @@ start", "how do I get started", "getting started with ESS", "set up ESS from
 scratch", "first-time setup", "what should I do first", "what am I assigned",
 "what are my tasks", "my tasks", "what's assigned to me".
 
+**Trigger phrases for roles:** "assign the ServiceNow admin role to <person>",
+"make <person> the Workday admin", "give <person> the <role> role", "who holds
+the <role> role", "who's the ServiceNow admin", "assign roles for this plan",
+"attest a role", "/roles". **Not** a roles request: "what are my tasks / what am
+I assigned?" — that is the planner (Flow 2), which reads back the roles this flow
+records. Roles attestation needs an existing plan; if none exists, route to
+`/planner` first.
+
 **Trigger phrases for troubleshooting:** "Workday error", "ISU not working",
 "invalid_client", "invalid username or password", "SOAP failure", "maker works
 but users don't", "authentication error", "connection not working",
@@ -362,11 +382,14 @@ summary. Generating a helper script here is a bug — it leaks raw terminal outp
 and internal process into chat instead of the clean formatted result.
 
 **Quality validation invocation:** When quality validation is requested on
-eval files — at step 4.3 of the eval create flow, step 4 of the eval
-update flow, OR step 5 of the eval delete flow (single test case deletion
-only) — invoke `runSubagent` (the VS Code Copilot Chat tool) pointing the subagent to read
+eval files — at step 4.3 of the topic-grounded eval create flow, step 6 of the
+catalogue-grounded eval generate flow, step 4 of the eval update flow, OR step
+5 of the eval delete flow (single test case deletion only) — invoke
+`runSubagent` (the VS Code Copilot Chat tool) pointing the subagent to read
 `src/skills/evaluations/validate/SKILL.md` as its first action, passing the
-paths of the newly written eval files and the agent folder path. Wait for
+paths of the newly written eval files and the exact evaluation-set folder.
+This requirement applies whether or not the requested scenario matched a
+configured topic. Wait for
 the subagent to return with its quality report before continuing. If fixes
 are applied, re-invoke the subagent and wait for the updated report
 before continuing. Do NOT proceed to review and push until the subagent

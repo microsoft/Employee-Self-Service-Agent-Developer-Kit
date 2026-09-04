@@ -34,8 +34,10 @@ Nothing here reaches the network; it is pure data + local file IO.
 
 from __future__ import annotations
 
+import heapq
 import json
 import os
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -62,6 +64,17 @@ ARTIFACT_STATES = ("Active", "Superseded")
 PRINCIPAL_TYPES = ("User", "Role")
 CONTEXT_SOURCES = ("User", "Agent", "Discovered")
 ARTIFACT_KINDS = ("Environment", "Connection", "EntraApp", "KnowledgeSource", "Agent", "Custom")
+# Plan lifecycle vocab (mirrors the WeveNova PlanStatus enum). A local plan lives
+# in Draft until the sync seam pushes and activates it server-side.
+PLAN_STATES = ("Draft", "Active", "Completed", "Archived")
+# The ESS agent a plan configures (mirrors the WeveNova ConfiguringAgentName enum).
+# Required on the create body, so a plan must name one before it can be pushed.
+CONFIGURING_AGENT_NAMES = (
+    "EmployeeSelfServiceHRCEA",
+    "EmployeeSelfServiceHRDA",
+    "EmployeeSelfServiceITCEA",
+    "EmployeeSelfServiceITDA",
+)
 # The ledger key the /setup task produces and downstream tasks consume — the
 # grounded signal used to identify the setup task and env-dependent tasks. A Task
 # is described only by its title + description (matching the WeveNova Task
@@ -75,6 +88,38 @@ DEPENDENCY_KINDS = ("requires", "recommends")
 SCENARIO_GROUP = "scenario"
 DEPENDS_ON_GROUP = "scenarioDependsOn"
 _DEP_SEP = " -> "
+# Acceptance criteria (definition-of-done) live in the open Context bag under this
+# group so the local model stays a single bag; the sync seam promotes them to the
+# WeveNova Plan's first-class acceptanceCriteria list on export and back on import.
+ACCEPTANCE_GROUP = "acceptanceCriteria"
+
+# The remaining Context groups the /planner skill writes (see
+# src/skills/planner/interview.md). Naming them here lets the readable Markdown
+# view render each in a dedicated, human-readable section instead of dumping the
+# raw ``group -> key: value`` bag; any group NOT listed here still falls through
+# to a generic "More context" block so no captured intent is silently dropped.
+OBJECTIVE_GROUP = "objective"
+MARKET_GROUP = "market"
+BUSINESS_GOALS_GROUP = "businessGoals"
+SCENARIO_CONTEXT_GROUP = "scenarioContext"
+CAPABILITY_GROUP = "scenarioCapability"
+SYSTEM_GROUP = "system"
+
+# Groups the readable Markdown sections already consume; anything else falls
+# through to the generic "More context" block (keeps the view lossless).
+_STRUCTURED_GROUPS = frozenset(
+    {
+        OBJECTIVE_GROUP,
+        MARKET_GROUP,
+        BUSINESS_GOALS_GROUP,
+        ACCEPTANCE_GROUP,
+        SCENARIO_CONTEXT_GROUP,
+        SCENARIO_GROUP,
+        CAPABILITY_GROUP,
+        SYSTEM_GROUP,
+        DEPENDS_ON_GROUP,
+    }
+)
 
 
 class Limits:
@@ -262,6 +307,101 @@ def known_scenario_dependencies() -> list[dict[str, str]]:
 
 
 # --------------------------------------------------------------------------- #
+# Readable-Markdown helpers (used by Plan.render_summary).
+# --------------------------------------------------------------------------- #
+
+# Acronyms the humaniser keeps upper-cased so ``hr-knowledge`` reads
+# "HR knowledge", not "Hr knowledge". Lower-case entries only.
+_ACRONYMS = frozenset(
+    {"hr", "it", "hrsd", "itsm", "sso", "api", "id", "ess", "adk", "sap", "m365", "pto", "url"}
+)
+
+
+def humanize(token: str) -> str:
+    """Turn an id / slug / camelCase key into readable heading text.
+
+    ``pilotBar`` -> ``Pilot bar``; ``hr-knowledge`` -> ``HR knowledge``;
+    ``ticket_deflection`` -> ``Ticket deflection``. Known acronyms are
+    upper-cased; only the first word is otherwise capitalised so the result
+    reads like a sentence fragment, not Title Case.
+    """
+    if not token:
+        return ""
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", str(token))
+    parts = [p for p in re.split(r"[\s._\-]+", spaced) if p]
+    words: list[str] = []
+    for i, part in enumerate(parts):
+        low = part.lower()
+        if low in _ACRONYMS:
+            words.append(low.upper())
+        elif i == 0:
+            words.append(part[:1].upper() + part[1:])
+        else:
+            words.append(low)
+    return " ".join(words)
+
+
+# Keys under which an (agent-authored, free-form) research corpus may list its
+# Learn pages. The loader is deliberately tolerant of shape.
+_LEARN_LIST_KEYS = (
+    "sources", "pages", "prerequisites", "capabilities", "learn", "links", "references", "docs",
+)
+
+
+def learn_links(research: Any) -> list[dict[str, str]]:
+    """Best-effort ``[{label, url, scope}]`` extracted from a research corpus.
+
+    The corpus is agent-authored and free-form (there is no persisted schema
+    yet — see src/skills/planner/research.md), so this tolerates a top-level
+    list or a dict holding lists under any of ``_LEARN_LIST_KEYS``, reads the
+    label/url/scope from the usual field spellings, de-dupes by url, and never
+    raises. A missing or unrecognised corpus yields an empty list.
+    """
+    out: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def take(seq: Any) -> None:
+        if not isinstance(seq, list):
+            return
+        for item in seq:
+            if not isinstance(item, dict):
+                continue
+            url = item.get("url") or item.get("href") or item.get("sourceUrl")
+            if not isinstance(url, str) or not url or url in seen:
+                continue
+            seen.add(url)
+            label = (
+                item.get("title") or item.get("toc_title") or item.get("label")
+                or item.get("name") or url
+            )
+            scope = (
+                item.get("scenario") or item.get("system") or item.get("area")
+                or item.get("scope") or ""
+            )
+            out.append({"label": str(label), "url": url, "scope": str(scope)})
+
+    if isinstance(research, list):
+        take(research)
+    elif isinstance(research, dict):
+        for key in _LEARN_LIST_KEYS:
+            take(research.get(key))
+    return out
+
+
+def read_research_context(directory: str | os.PathLike[str]) -> Any | None:
+    """Best-effort load of the Learn-research corpus (``research-context.json``)
+    next to the plan. Returns parsed JSON, or ``None`` when absent/unreadable so
+    the Markdown view enriches from it only when it exists (there is no persisted
+    sidecar today; see src/skills/planner/research.md)."""
+    path = os.path.join(os.fspath(directory), os.path.basename(RESEARCH_PATH))
+    try:
+        with open(path, "r", encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+# --------------------------------------------------------------------------- #
 # The Plan.
 # --------------------------------------------------------------------------- #
 
@@ -285,10 +425,13 @@ class Plan:
             "schemaVersion": SCHEMA_VERSION,
             "planId": "",
             "projectId": "",
+            "configuringAgentName": "",
             "status": "Draft",
             "context": [],
             "tasks": [],
             "outputs": [],
+            "etag": "",
+            "syncedAt": "",
         }
         plan = cls(data)
         if objective:
@@ -305,7 +448,7 @@ class Plan:
         data.setdefault("schemaVersion", SCHEMA_VERSION)
         for key in ("context", "tasks", "outputs"):
             data.setdefault(key, [])
-        for key in ("planId", "projectId"):
+        for key in ("planId", "projectId", "configuringAgentName", "etag", "syncedAt"):
             data.setdefault(key, "")
         data.setdefault("status", "Draft")
         return cls(data)
@@ -337,10 +480,21 @@ class Plan:
                 pass
         os.replace(tmp, path)
 
-    def write_summary(self, path: str | os.PathLike[str] = SUMMARY_PATH) -> None:
+    def write_summary(
+        self,
+        path: str | os.PathLike[str] = SUMMARY_PATH,
+        research: Any | None = None,
+    ) -> None:
+        """Regenerate the Markdown view from plan.json. This is the render/refresh
+        moment: unless a ``research`` corpus is passed in, best-effort load the
+        Learn-research sidecar next to the plan so the view is *enriched from
+        Learn* when grounding is available (and renders fully without it)."""
         path = os.fspath(path)
-        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-        Path(path).write_text(self.render_summary(), encoding="utf-8")
+        directory = os.path.dirname(path) or "."
+        os.makedirs(directory, exist_ok=True)
+        if research is None:
+            research = read_research_context(directory)
+        Path(path).write_text(self.render_summary(research=research), encoding="utf-8")
 
     def save_all(self, plan_path: str | os.PathLike[str] = PLAN_PATH) -> None:
         """Write plan.json and regenerate the Markdown view alongside it."""
@@ -367,6 +521,46 @@ class Plan:
             if t.get("id") == task_id:
                 return t
         return None
+
+    # ---- remote identity (sync seam) ------------------------------------ #
+
+    @property
+    def configuring_agent_name(self) -> str:
+        return self.data.get("configuringAgentName", "")
+
+    def set_configuring_agent_name(self, name: str) -> None:
+        """Name the ESS agent this plan configures — required before a sync push.
+
+        Must be one of :data:`CONFIGURING_AGENT_NAMES` (mirrors the WeveNova
+        ``ConfiguringAgentName`` enum).
+        """
+        if name not in CONFIGURING_AGENT_NAMES:
+            raise ValueError(
+                "configuringAgentName must be one of " + ", ".join(CONFIGURING_AGENT_NAMES)
+            )
+        self.data["configuringAgentName"] = name
+
+    def set_remote_identity(
+        self,
+        *,
+        project_id: str | None = None,
+        plan_id: str | None = None,
+        etag: str | None = None,
+        synced_at: str | None = None,
+    ) -> None:
+        """Record the server ids / ETag this local cache now mirrors (sync seam).
+
+        ``syncedAt`` is refreshed to *now* unless an explicit value is given.
+        Only the arguments that are not ``None`` are written, so a partial stamp
+        (e.g. project id before the plan exists) leaves the rest untouched.
+        """
+        if project_id is not None:
+            self.data["projectId"] = project_id
+        if plan_id is not None:
+            self.data["planId"] = plan_id
+        if etag is not None:
+            self.data["etag"] = etag
+        self.data["syncedAt"] = synced_at if synced_at is not None else now_iso()
 
     # ---- context (intent) mutators -------------------------------------- #
 
@@ -415,7 +609,7 @@ class Plan:
         """
         slug = area.strip().lower().replace(" ", "-")
         return self.set_context(
-            f"system.{slug}", system, group="system",
+            f"system.{slug}", system, group=SYSTEM_GROUP,
             description=f"Target system for {area}", source=source,
         )
 
@@ -570,6 +764,52 @@ class Plan:
             resolved[key] = art.get("attributes", {}) if art else None
         return resolved
 
+    def blocking_inputs(self, task_id: str) -> dict[str, list[str]]:
+        """The task's consumed keys that have **no Active artifact yet**, each
+        mapped to the task ids declared to produce them.
+
+        This is the produces/consumes readiness signal: a task cannot truly
+        start (nor be legitimately ``Completed``) while it consumes an artifact
+        nothing has produced. Returns ``{key: [producerTaskId, ...]}`` for every
+        unmet key — the producer list is empty for an external input no task in
+        the plan produces. A task with no entry here is ready on the artifact
+        model. Pure/read-only: reflects the current ledger, never mutates it."""
+        task = self.task(task_id)
+        if not task:
+            return {}
+        unmet: dict[str, list[str]] = {}
+        for key in (task.get("consumes") or []):
+            if self.output(key) is not None:
+                continue  # satisfied by an Active artifact
+            producers = [
+                t.get("id")
+                for t in self.tasks
+                if key in (t.get("produces") or []) and t.get("id") != task_id
+            ]
+            unmet[key] = [p for p in producers if p]
+        return unmet
+
+    def waiting_on(self, task_id: str) -> list[str]:
+        """Flattened, de-duplicated, sorted list of what a task is blocked on:
+        the upstream producer task ids for its unproduced consumed artifacts,
+        plus ``needs <key>`` for any consumed key nothing in the plan produces.
+        Empty when the task is ready. Drives the task-list dependency marker."""
+        tokens: list[str] = []
+        for key, producers in self.blocking_inputs(task_id).items():
+            if producers:
+                tokens.extend(producers)
+            else:
+                tokens.append(f"needs {key}")
+        return sorted(dict.fromkeys(tokens))
+
+    def dependency_marker(self, task_id: str) -> str:
+        """Compact task-list marker for artifact readiness: ``""`` when the task
+        is ready (all consumed artifacts produced, or it consumes nothing), else
+        the comma-joined :meth:`waiting_on` tokens (e.g. ``"T2"`` or
+        ``"T1, T2"``). Render-time only — reflects the produces/consumes ledger,
+        never mutates it, and never changes stored task sequence or state."""
+        return ", ".join(self.waiting_on(task_id))
+
     def setup_task_id(self) -> str | None:
         """The plan's setup task id — the task that **produces** the primary
         environment (`primaryEnvironment`), i.e. the ``/setup`` task. Prefers the
@@ -634,6 +874,7 @@ class Plan:
             "state": task.get("state", ""),
             "kitSetup": self.kit_setup_nudge(task_id),
             "consumes": self.resolved_consumes(task_id),
+            "blockedBy": self.blocking_inputs(task_id),
             "produces": list(task.get("produces", [])),
         }
 
@@ -756,16 +997,20 @@ class Plan:
         """
         role_set = set(roles)
         grouped: dict[str, list[dict[str, Any]]] = {}
-        for task in self.tasks:
+        for task in self.ordered_tasks():
             if task.get("state") == "Completed":
                 continue  # Flow 2 surfaces work still waiting, not finished tasks
             assigned = task.get("assignedTo") or {}
             role = assignee_role_id(assigned) or "(no role)"
             owner = assignee_user_oid(assigned)
             if assigned.get("type") == "User" and owner == person_oid:
-                grouped.setdefault(role, []).append({"task": task, "relation": "assigned"})
+                grouped.setdefault(role, []).append(
+                    {"task": task, "relation": "assigned", "waitingOn": self.waiting_on(task.get("id"))}
+                )
             elif assigned.get("type") == "Role" and assignee_role_id(assigned) in role_set:
-                grouped.setdefault(role, []).append({"task": task, "relation": "pool"})
+                grouped.setdefault(role, []).append(
+                    {"task": task, "relation": "pool", "waitingOn": self.waiting_on(task.get("id"))}
+                )
         return grouped
 
     # ---- validation ------------------------------------------------------ #
@@ -777,6 +1022,10 @@ class Plan:
 
         if d.get("schemaVersion") != SCHEMA_VERSION:
             errors.append(f"schemaVersion should be {SCHEMA_VERSION}")
+
+        agent_name = d.get("configuringAgentName")
+        if agent_name and agent_name not in CONFIGURING_AGENT_NAMES:
+            errors.append(f"invalid configuringAgentName: {agent_name!r}")
 
         # Context
         if len(self.context) > Limits.MAX_CONTEXT_ENTRIES:
@@ -877,80 +1126,333 @@ class Plan:
 
     # ---- rendering ------------------------------------------------------- #
 
-    def render_summary(self) -> str:
-        """A human-readable Markdown view of the Plan — the editable surface a Plan
+    def ordered_tasks(self) -> list[dict[str, Any]]:
+        """Tasks in execution order: a task that **produces** an artifact another
+        task **consumes** is listed before that consumer.
+
+        A stable topological sort over the ``produces``/``consumes`` ledger.
+        Tasks with no dependency between them keep their original order (ties
+        break by original position), so the view only reorders where a real
+        producer -> consumer edge forces it. A ``produces``/``consumes`` cycle
+        degrades gracefully — tasks still tangled in it are appended in original
+        order — so rendering never drops or duplicates a task. Pure: it does not
+        mutate the stored task order (the shared planner stays authoritative on
+        sequence; this is a render-time convenience only)."""
+        tasks = self.tasks
+        n = len(tasks)
+        if n < 2:
+            return list(tasks)
+        # Map each produced key to the task positions that produce it.
+        producer_positions: dict[str, list[int]] = {}
+        for i, task in enumerate(tasks):
+            for key in (task.get("produces") or []):
+                producer_positions.setdefault(key, []).append(i)
+        # Edge producer -> consumer for every consumed key; indegree per consumer.
+        successors: list[set[int]] = [set() for _ in range(n)]
+        indegree = [0] * n
+        for i, task in enumerate(tasks):
+            producers: set[int] = set()
+            for key in (task.get("consumes") or []):
+                for p in producer_positions.get(key, []):
+                    if p != i:
+                        producers.add(p)
+            for p in producers:
+                if i not in successors[p]:
+                    successors[p].add(i)
+                    indegree[i] += 1
+        # Kahn's algorithm; original position as a stable tie-break so
+        # independent tasks never shuffle.
+        ready = [i for i in range(n) if indegree[i] == 0]
+        heapq.heapify(ready)
+        order: list[int] = []
+        while ready:
+            i = heapq.heappop(ready)
+            order.append(i)
+            for j in sorted(successors[i]):
+                indegree[j] -= 1
+                if indegree[j] == 0:
+                    heapq.heappush(ready, j)
+        if len(order) < n:  # produces/consumes cycle — keep the rest as-is.
+            placed = set(order)
+            order.extend(i for i in range(n) if i not in placed)
+        return [tasks[i] for i in order]
+
+    def render_summary(self, research: Any | None = None) -> str:
+        """A readable Markdown view of the Plan — the editable surface a Plan
         editor revises directly; edits are reconciled back into plan.json
-        (see src/skills/planner/edit.md)."""
-        d = self.data
+        (see src/skills/planner/edit.md).
+
+        The view is generated **from plan.json** — the local cache of the shared
+        WeveNova plan, hydrated on pull (src/skills/planner/sync.md) — so it always
+        reflects the persisted plan (status + sync identity render straight off it).
+        Instead of dumping the raw Context bag as ``group -> key: value`` bullets,
+        it groups the sponsor's intent into human sections: an Overview, the
+        Scenarios in scope (each with its capabilities, backing system and
+        dependencies), the Systems, the scenario-dependency ledger, the Tasks, and
+        any pinned outputs.
+
+        ``research`` is an optional, best-effort Learn-research corpus
+        (workspace/plan/research-context.json) used only to *enrich* the view with
+        grounding links at render/refresh time; the plan renders fully without it.
+        """
         lines: list[str] = []
+        self._render_header(lines)
+        self._render_overview(lines)
+        self._render_scenarios(lines, research)
+        self._render_systems(lines)
+        self._render_scenario_deps(lines)
+        self._render_tasks(lines)
+        self._render_outputs(lines)
+        self._render_more_context(lines)
+        self._render_learn(lines, research)
+        return "\n".join(lines).rstrip() + "\n"
+
+    # ---- render helpers (one readable section each) --------------------- #
+
+    def _context_group(self, group: str) -> list[dict[str, Any]]:
+        return [e for e in self.context if e.get("group") == group]
+
+    def _first_value(self, group: str, key: str | None = None) -> Any:
+        for entry in self.context:
+            if entry.get("group") == group and (key is None or entry.get("key") == key):
+                return entry.get("value")
+        return None
+
+    def _agent_display(self) -> str:
+        """The agent's friendly name off the pinned ``essAgent`` output (captured
+        by /setup and synced to WeveNova), or a not-set placeholder."""
+        for art in self.outputs:
+            if art.get("state") != "Active":
+                continue
+            if art.get("kind") == "Agent" or art.get("key") == "essAgent":
+                attrs = art.get("attributes", {}) or {}
+                name = attrs.get("name") or attrs.get("schemaName") or attrs.get("slug")
+                if name:
+                    return str(name)
+        return "not set yet"
+
+    def _render_header(self, lines: list[str]) -> None:
+        d = self.data
         objective = self.output_value_or_context("objective") or "(objective not set)"
-        lines.append(f"# Scenario plan — {objective}")
+        lines.append(f"# ESS scenario plan — {objective}")
         lines.append("")
-        planid = d.get("planId") or "(local, not synced)"
-        lines.append(f"Status: {d.get('status', '')}  |  Plan: {planid}")
+        agent = d.get("configuringAgentName") or self._agent_display()
+        plan_state = (
+            f"synced (plan `{d['planId']}`)" if d.get("planId") else "local, not synced"
+        )
+        header = (
+            f"**Status:** {d.get('status') or 'Draft'} | "
+            f"**Agent:** {agent} | **Plan:** {plan_state}"
+        )
+        if d.get("syncedAt"):
+            header += f" | **Synced:** {d.get('syncedAt')}"
+        lines.append(header)
         lines.append("")
 
-        # Intent, grouped.
-        if self.context:
-            lines.append("## Intent")
+    def _render_overview(self, lines: list[str]) -> None:
+        market = self._first_value(MARKET_GROUP)
+        persona = self._first_value(SCENARIO_CONTEXT_GROUP, "persona")
+        jtbd = self._first_value(SCENARIO_CONTEXT_GROUP, "jtbd")
+        goals = self._context_group(BUSINESS_GOALS_GROUP)
+        criteria = self._context_group(ACCEPTANCE_GROUP)
+        other_ctx = [
+            e for e in self._context_group(SCENARIO_CONTEXT_GROUP)
+            if e.get("key") not in ("persona", "jtbd")
+        ]
+        if not any([market, persona, jtbd, goals, criteria, other_ctx]):
+            return
+        lines.append("## Overview")
+        lines.append("")
+        if market:
+            lines.append(f"- **Market / rollout wave:** {market}")
+        if persona:
+            lines.append(f"- **Audience:** {persona}")
+        if jtbd:
+            lines.append(f"- **Jobs to be done:** {jtbd}")
+        for entry in other_ctx:
+            lines.append(f"- **{humanize(entry.get('key', ''))}:** {entry.get('value')}")
+        lines.append("")
+        if goals:
+            lines.append("**Business goals**")
             lines.append("")
-            by_group: dict[str, list[dict[str, Any]]] = {}
-            for entry in self.context:
-                by_group.setdefault(entry.get("group") or "other", []).append(entry)
-            for group in sorted(by_group):
-                lines.append(f"**{group}**")
-                for entry in by_group[group]:
-                    lines.append(f"- {entry.get('key')}: {entry.get('value')}")
+            for entry in goals:
+                lines.append(f"- {entry.get('value')}")
+            lines.append("")
+        if criteria:
+            lines.append("**Definition of done (pilot bar)**")
+            lines.append("")
+            for entry in criteria:
+                lines.append(f"- {entry.get('value')}")
+            lines.append("")
+
+    def _systems_by_area(self) -> dict[str, str]:
+        """``area -> system name`` from the ``system.<area>`` Context keys."""
+        systems: dict[str, str] = {}
+        for entry in self._context_group(SYSTEM_GROUP):
+            key = entry.get("key", "")
+            area = key[len("system."):] if key.startswith("system.") else key
+            systems[area] = entry.get("value", "")
+        return systems
+
+    @staticmethod
+    def _system_for_scenario(scenario_id: str, systems: dict[str, str]) -> str | None:
+        """Match a scenario to its backing system by area (a system area often
+        spans read/write scenarios, e.g. ``hr-profile`` backs ``hr-profile-read``
+        and ``hr-profile-write``). Longest matching area wins."""
+        best_area: str | None = None
+        for area in systems:
+            if (
+                scenario_id == area
+                or scenario_id.startswith(area + "-")
+                or area.startswith(scenario_id + "-")
+            ) and (best_area is None or len(area) > len(best_area)):
+                best_area = area
+        return systems.get(best_area) if best_area else None
+
+    def _capabilities_for(self, scenario_id: str) -> list[str]:
+        prefix = scenario_id + "."
+        caps: list[str] = []
+        for entry in self._context_group(CAPABILITY_GROUP):
+            key = entry.get("key", "")
+            if key.startswith(prefix):
+                caps.append(entry.get("value") or humanize(key[len(prefix):]))
+        return caps
+
+    def _render_scenarios(self, lines: list[str], research: Any) -> None:
+        scenarios = self.in_scope_scenarios()
+        if not scenarios:
+            return
+        systems = self._systems_by_area()
+        deps = self.scenario_dependency_status()
+        links = learn_links(research)
+        lines.append("## Scenarios in scope")
+        lines.append("")
+        for sid, label in scenarios.items():
+            lines.append(f"### {label or sid} (`{sid}`)")
+            system = self._system_for_scenario(sid, systems)
+            if system:
+                lines.append(f"Backed by **{system}**.")
+            lines.append("")
+            caps = self._capabilities_for(sid)
+            if caps:
+                lines.append("Capabilities:")
+                for cap in caps:
+                    lines.append(f"- {cap}")
+                lines.append("")
+            sdeps = [e for e in deps if e.get("scenario") == sid]
+            if sdeps:
+                parts = [
+                    f"`{e['dependsOn']}` ({e.get('kind')}, "
+                    f"{'in scope' if e.get('met') else 'missing — add it first'})"
+                    for e in sdeps
+                ]
+                lines.append(f"Depends on: {', '.join(parts)}")
+                lines.append("")
+            slinks = [link for link in links if link["scope"] == sid]
+            if slinks:
+                lines.append("Learn:")
+                for link in slinks:
+                    lines.append(f"- [{link['label']}]({link['url']})")
                 lines.append("")
 
-        # Tasks — described by title + role; the "how" lives in each task's
-        # description (shown in task-brief), keeping the table scannable.
+    def _render_systems(self, lines: list[str]) -> None:
+        systems = self._systems_by_area()
+        if not systems:
+            return
+        lines.append("## Systems")
+        lines.append("")
+        lines.append("| Area | System |")
+        lines.append("|------|--------|")
+        for area, name in systems.items():
+            lines.append(f"| {humanize(area)} | {name} |")
+        lines.append("")
+
+    def _render_scenario_deps(self, lines: list[str]) -> None:
+        # Show BOTH satisfied and unmet edges (whose dependent scenario is in
+        # scope) so a met dependency doesn't silently disappear from the view
+        # while `check-deps` still reports it.
+        status_edges = self.scenario_dependency_status()
+        if not status_edges:
+            return
+        lines.append("## Scenario dependencies")
+        lines.append("")
+        lines.append("| Scenario | Depends on | Kind | Status |")
+        lines.append("|----------|-----------|------|--------|")
+        for edge in status_edges:
+            status = "met" if edge.get("met") else "MISSING — add it first"
+            lines.append(
+                f"| {edge['scenario']} | {edge['dependsOn']} | {edge.get('kind')} | {status} |"
+            )
+        lines.append("")
+
+    def _render_tasks(self, lines: list[str]) -> None:
+        # Described by title + role; the "how" lives in each task's description
+        # (shown in task-brief), keeping the table scannable.
         lines.append("## Tasks")
         lines.append("")
         if self.tasks:
-            lines.append("| # | Task | Role / owner | State |")
-            lines.append("|---|------|--------------|-------|")
-            for task in self.tasks:
+            lines.append("| # | Task | Role / owner | State | Blocked by |")
+            lines.append("|---|------|--------------|-------|------------|")
+            for task in self.ordered_tasks():
+                marker = self.dependency_marker(task.get("id")) or "—"
                 lines.append(
                     f"| {task.get('id')} | {task.get('title')} | "
-                    f"{_render_assignee(task.get('assignedTo'))} | {task.get('state')} |"
+                    f"{_render_assignee(task.get('assignedTo'))} | {task.get('state')} | {marker} |"
                 )
         else:
             lines.append("_No tasks yet._")
         lines.append("")
 
-        # Scenario dependencies — show BOTH satisfied and unmet edges (whose
-        # dependent scenario is in scope) so a met dependency doesn't silently
-        # disappear from the view while `check-deps` still reports it.
-        status_edges = self.scenario_dependency_status()
-        if status_edges:
-            lines.append("## Scenario dependencies")
-            lines.append("")
-            lines.append("| Scenario | Depends on | Kind | Status |")
-            lines.append("|----------|-----------|------|--------|")
-            for edge in status_edges:
-                status = "met" if edge.get("met") else "MISSING — add it first"
-                lines.append(
-                    f"| {edge['scenario']} | {edge['dependsOn']} | {edge.get('kind')} | {status} |"
-                )
-            lines.append("")
-
-        # Outputs ledger.
+    def _render_outputs(self, lines: list[str]) -> None:
         active = [a for a in self.outputs if a.get("state") == "Active"]
-        if active:
-            lines.append("## Produced (pinned outputs)")
-            lines.append("")
-            lines.append("| Key | Kind | Attributes | By task |")
-            lines.append("|-----|------|------------|---------|")
-            for art in active:
-                attrs = ", ".join(f"{k}={v}" for k, v in art.get("attributes", {}).items())
-                lines.append(
-                    f"| {art.get('key')} | {art.get('kind')} | {attrs} | "
-                    f"{art.get('producedByTaskId')} |"
-                )
+        if not active:
+            return
+        lines.append("## Produced outputs")
+        lines.append("")
+        lines.append("| Key | Kind | Attributes | By task |")
+        lines.append("|-----|------|------------|---------|")
+        for art in active:
+            attrs = ", ".join(f"{k}={v}" for k, v in art.get("attributes", {}).items())
+            lines.append(
+                f"| {art.get('key')} | {art.get('kind')} | {attrs} | "
+                f"{art.get('producedByTaskId')} |"
+            )
+        lines.append("")
+
+    def _render_more_context(self, lines: list[str]) -> None:
+        """Any Context group the sections above don't consume — rendered as
+        readable bullets so no captured intent is silently dropped."""
+        extras: dict[str, list[dict[str, Any]]] = {}
+        for entry in self.context:
+            group = entry.get("group") or "other"
+            if group in _STRUCTURED_GROUPS:
+                continue
+            extras.setdefault(group, []).append(entry)
+        if not extras:
+            return
+        lines.append("## More context")
+        lines.append("")
+        for group in sorted(extras):
+            lines.append(f"**{humanize(group)}**")
+            for entry in extras[group]:
+                lines.append(f"- {humanize(entry.get('key', ''))}: {entry.get('value')}")
             lines.append("")
 
-        return "\n".join(lines).rstrip() + "\n"
+    def _render_learn(self, lines: list[str], research: Any) -> None:
+        links = learn_links(research)
+        if not links:
+            return
+        lines.append("## Learn references")
+        lines.append("")
+        lines.append(
+            "_Grounding pages this plan was researched from — refreshed from "
+            "Microsoft Learn at render time._"
+        )
+        lines.append("")
+        for link in links[:15]:
+            suffix = f" — {humanize(link['scope'])}" if link.get("scope") else ""
+            lines.append(f"- [{link['label']}]({link['url']}){suffix}")
+        lines.append("")
 
     def output_value_or_context(self, key: str) -> Any:
         for entry in self.context:
