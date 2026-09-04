@@ -249,7 +249,7 @@ def _resolve_refresh_target(args, config):
 
 
 def run_setup(env_url, args_bot_id, args_name, args_schema, args_managed,
-              paths, extra_flags=None):
+              paths, *, extra_flags=None):
     """Run setup.py with the given temp file paths."""
     print("\nRunning setup...\n")
     cmd = [

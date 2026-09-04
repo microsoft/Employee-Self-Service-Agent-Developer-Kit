@@ -11,7 +11,7 @@ description = "Internal test suite for the ESS Maker Kit. Not packaged for distr
 requires-python = ">=3.11"
 
 # Runtime deps live in solutions/ess-maker-skills/scripts/requirements.txt and
-# solutions/ess-maker-skills/src/mcp/{workday,servicenow}/requirements.txt.
+# solutions/ess-maker-skills/src/mcp/{agentconfig,workday,servicenow}/requirements.txt.
 # This file declares only the *test* dependencies needed by the suite under
 # tests/. Install with: pip install -e .[test]
 [project.optional-dependencies]
@@ -22,6 +22,7 @@ test = [
     "responses>=0.25,<1.0",
     "respx>=0.21,<1.0",            # for httpx-based code (src/mcp/workday/client.py)
     "PyYAML>=6.0,<7.0",
+    "mcp>=1.29.0,<2.0.0",
     "jsonschema>=4.0,<5.0",
 ]
 
