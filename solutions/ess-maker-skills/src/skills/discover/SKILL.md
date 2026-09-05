@@ -431,6 +431,12 @@ This tenant has more **{kind}** than the inventory records per resource type
   `0`. Report it as up-to-date; never as failed, withheld, or "saved nothing".
 - Never present an incomplete scope as updated, and never present a withheld run as
   saved.
+- **Do not add a `scripts/emit_capability.py discover` step to this skill.** Anonymous
+  capability telemetry is already emitted in-process by `discover_inventory.py`, once
+  per run, as soon as its arguments parse. `emit_capability_use()` does not dedupe, so a
+  shim step on top of that would double-count every `/discover` run on the Capability
+  Usage dashboard. The shim exists for skills that have no script to hook; this one
+  always runs a script.
 - `EntraApp` is read tenant-wide from Microsoft Graph (`GET /applications`) and needs
   no configured id. When `entraAppId` *is* known — resolved from the top-level key in
   `.local/config.json`, then `.local/connect/workday/config.json` (`entraAppId`), then

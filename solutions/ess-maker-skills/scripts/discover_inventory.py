@@ -780,6 +780,28 @@ def main(argv=None) -> int:
         ),
     )
     args = parser.parse_args(argv)
+
+    # Anonymous capability telemetry, emitted here -- right after argparse
+    # succeeds, so `--help` and bad arguments don't count -- rather than at the
+    # end. The "Capability Usage by Type" donut measures that a maker *used*
+    # /discover, not whether the crawl happened to succeed; gating the emit on
+    # a clean exit would silently undercount precisely the runs worth looking
+    # into. Demo runs count too: they still represent a maker driving the skill.
+    #
+    # This is the ONLY capability emit for /discover, and deliberately so. It is
+    # NOT also wired through scripts/emit_capability.py: emit_capability_use()
+    # does not dedupe, so a SKILL.md shim step layered on top of this would
+    # double-count every single run. The shim exists for skills that have no
+    # script to hook -- /discover always runs this one.
+    try:
+        import adk_telemetry
+
+        # block=True: short-lived CLI process, emit synchronously so the event
+        # isn't dropped when the interpreter exits and kills a daemon thread.
+        adk_telemetry.emit_capability_use("discover", block=True)
+    except Exception:  # noqa: BLE001 — telemetry must never break the flow
+        pass
+
     _resolve_write_path(args)
 
     config = DiscoveryConfig()

@@ -618,3 +618,76 @@ class TestResolveEntraAppId:
         # Deterministic precedence matters: the natural key is the appId, so an
         # unstable pick would create and retire rows on alternating runs.
         assert di._resolve_entra_app_id({}, str(tmp_path)) == "app-workday"
+
+
+class TestCapabilityTelemetry:
+    """/discover must appear on the ADK "Capability Usage by Type" donut.
+
+    The event is emitted in-process by ``main()`` rather than by a
+    ``scripts/emit_capability.py discover`` step in SKILL.md. Both would be
+    wrong: ``emit_capability_use()`` does not dedupe, so wiring the shim on top
+    of the in-process call double-counts every run. The shim exists for skills
+    with no script to hook, and /discover always runs this one.
+
+    It fires right after argparse succeeds, not on a clean exit. The donut
+    measures that a maker *used* the capability; gating on success would
+    undercount exactly the failed runs worth investigating.
+    """
+
+    _ARGV = ["--tenant-id", "demo-tenant", "--demo", "--local-only", "--quiet"]
+
+    def _spy(self, monkeypatch):
+        calls = []
+
+        def _record(capability, **kwargs):
+            calls.append((capability, kwargs))
+            return {"sent": True}
+
+        import adk_telemetry
+
+        monkeypatch.setattr(adk_telemetry, "emit_capability_use", _record)
+        return calls
+
+    def test_discover_is_canonical_so_it_cannot_bucket_to_unknown(self):
+        # The bug this guards is silent: an out-of-taxonomy value still emits,
+        # but lands in the "unknown" slice instead of its own.
+        import adk_telemetry
+
+        assert "discover" in adk_telemetry.ADK_CAPABILITIES
+        assert adk_telemetry.normalize_capability("discover") == "discover"
+
+    def test_a_run_emits_the_capability_exactly_once(self, tmp_path, monkeypatch):
+        calls = self._spy(monkeypatch)
+        monkeypatch.chdir(tmp_path)
+
+        assert di.main(list(self._ARGV)) == 0
+        assert [capability for capability, _ in calls] == ["discover"]
+
+    def test_the_emit_is_synchronous(self, tmp_path, monkeypatch):
+        calls = self._spy(monkeypatch)
+        monkeypatch.chdir(tmp_path)
+        di.main(list(self._ARGV))
+
+        # A short-lived CLI exits and kills a daemon emit thread before the
+        # event leaves the process, so the emit must block.
+        assert calls[0][1].get("block") is True
+
+    def test_bad_arguments_do_not_count_as_usage(self, tmp_path, monkeypatch):
+        calls = self._spy(monkeypatch)
+        monkeypatch.chdir(tmp_path)
+
+        # argparse exits before the emit, so --help and typos stay off the donut.
+        with pytest.raises(SystemExit):
+            di.main(["--demo"])  # --tenant-id is required
+        assert calls == []
+
+    def test_a_telemetry_failure_never_breaks_the_crawl(self, tmp_path, monkeypatch):
+        import adk_telemetry
+
+        def _boom(*_args, **_kwargs):
+            raise RuntimeError("collector unreachable")
+
+        monkeypatch.setattr(adk_telemetry, "emit_capability_use", _boom)
+        monkeypatch.chdir(tmp_path)
+
+        assert di.main(list(self._ARGV)) == 0
