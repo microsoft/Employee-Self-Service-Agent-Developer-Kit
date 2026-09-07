@@ -17,10 +17,11 @@ Parse the printed state. If `connect_ready` is true and `environment.locked` is
 true:
 
 1. Set ENV_URL to `environment.tenant_endpoint`, stripping any trailing slash.
-2. Do not list environments, ask how to provide an environment, or ask the
+2. Set ENVIRONMENT_ID to `environment.id`.
+3. Do not list environments, ask how to provide an environment, or ask the
    maker to select it again.
-3. Set FOUNDATION_REUSED to true.
-4. Continue directly to section 1.2.
+4. Set FOUNDATION_REUSED to true.
+5. Continue directly to section 1.2.
 
 Only continue to section 1.0 when no completed foundation state with a locked
 environment exists.
@@ -102,7 +103,8 @@ Map the selected URL to the unique matching `instanceUrl` in
 
 ## 1.1b — Use selection
 
-Read the selected object's `instanceUrl` field. Save it as ENV_URL.
+Read the selected object's `instanceUrl` field. Save it as ENV_URL. Read its
+`id` field and save it as ENVIRONMENT_ID.
 **Strip any trailing slash** from ENV_URL before using it (e.g.,
 `https://org.crm.dynamics.com/` becomes `https://org.crm.dynamics.com`).
 
@@ -126,6 +128,14 @@ Use the `vscode_askQuestions` tool:
 Save their answer as ENV_URL. **Strip any trailing
 slash** from ENV_URL before using it (e.g., `https://org.crm.dynamics.com/`
 becomes `https://org.crm.dynamics.com`).
+
+Resolve the manually entered URL:
+
+```text
+python scripts/discover.py --resolve-environment-url "{ENV_URL}"
+```
+
+Parse `SELECTED_ENV_JSON:` and save its `id` field as ENVIRONMENT_ID.
 
 ## 1.2 — Write the MCP config file
 

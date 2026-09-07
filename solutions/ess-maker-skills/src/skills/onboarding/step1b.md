@@ -3,7 +3,7 @@
 Every **Message** block is the exact text to show the user. Copy it verbatim.
 Do not rephrase, add commentary, or tell the user what tools you are calling.
 
-You should already have ENV_URL from Step 1.
+You should already have ENV_URL and ENVIRONMENT_ID from Step 1.
 
 ---
 

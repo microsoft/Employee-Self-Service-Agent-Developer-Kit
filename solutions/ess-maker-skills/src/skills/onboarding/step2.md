@@ -3,8 +3,8 @@
 Every **Message** block is the exact text to show the user. Copy it verbatim.
 Do not rephrase, add commentary, or tell the user what tools you are calling.
 
-You should already have these values from Step 1: ENV_URL, BOT_ID, BOT_NAME,
-SCHEMA_NAME, IS_MANAGED.
+You should already have these values from Step 1: ENV_URL, ENVIRONMENT_ID,
+BOT_ID, BOT_NAME, SCHEMA_NAME, IS_MANAGED.
 
 ---
 
@@ -19,7 +19,7 @@ Extracting your agent — this usually takes 10–20 seconds...
 Run this single command in the terminal (substitute all values):
 
 ```
-python scripts/fetch_and_setup.py --url "{ENV_URL}" --bot-id "{BOT_ID}" --name "{BOT_NAME}" --schema "{SCHEMA_NAME}" {--managed if IS_MANAGED is true}
+python scripts/fetch_and_setup.py --url "{ENV_URL}" --environment-id "{ENVIRONMENT_ID}" --bot-id "{BOT_ID}" --name "{BOT_NAME}" --schema "{SCHEMA_NAME}" {--managed if IS_MANAGED is true}
 ```
 
 The script authenticates to Dataverse via the browser (the user will see an
