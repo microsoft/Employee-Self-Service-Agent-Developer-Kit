@@ -174,6 +174,13 @@ def connected_mcs_connections(
                 created_by.get("userPrincipalName")
                 or created_by.get("email")
             ),
+            "lastModifiedTime": (
+                properties.get("lastModifiedTime")
+                or connection.get("lastModifiedTime")
+                or properties.get("createdTime")
+                or connection.get("createdTime")
+                or ""
+            ),
         })
     return sorted(
         connected,
@@ -222,8 +229,14 @@ def select_mcs_connection(
                 ).casefold(),
             }
         ]
-        if len(matching) == 1:
-            return matching[0]
+        if matching:
+            return max(
+                matching,
+                key=lambda item: (
+                    str(item.get("lastModifiedTime") or ""),
+                    item["id"],
+                ),
+            )
 
     raise EvaluationRunError(
         "Multiple Connected Copilot Studio profiles were found, but none "

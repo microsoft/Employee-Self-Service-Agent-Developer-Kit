@@ -554,6 +554,7 @@ def _connection(
     status="Connected",
     account_name=None,
     created_by_upn=None,
+    last_modified=None,
 ):
     return {
         "name": connection_id,
@@ -562,6 +563,7 @@ def _connection(
             "accountName": account_name,
             "createdBy": {"userPrincipalName": created_by_upn},
             "statuses": [{"status": status}],
+            "lastModifiedTime": last_modified,
         },
     }
 
@@ -605,6 +607,31 @@ def test_select_mcs_connection_matches_signed_in_account():
     )
 
     assert selected["id"] == "current"
+
+
+def test_select_mcs_connection_uses_latest_profile_for_signed_in_account():
+    selected = evaluation_runs.select_mcs_connection(
+        [
+            _connection(
+                "older",
+                account_name="maker@example.com",
+                last_modified="2026-08-01T00:00:00Z",
+            ),
+            _connection(
+                "newer",
+                account_name="maker@example.com",
+                last_modified="2026-09-01T00:00:00Z",
+            ),
+            _connection(
+                "other",
+                account_name="other@example.com",
+                last_modified="2026-09-02T00:00:00Z",
+            ),
+        ],
+        signed_in_username="maker@example.com",
+    )
+
+    assert selected["id"] == "newer"
 
 
 def test_select_mcs_connection_rejects_ambiguous_profiles():
