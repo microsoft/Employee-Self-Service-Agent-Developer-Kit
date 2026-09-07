@@ -524,6 +524,30 @@ def test_start_run_returns_api_details_without_local_mapping(tmp_path):
     assert not (tmp_path / "evaluations" / "runs.json").exists()
 
 
+def test_start_run_includes_resolved_tool_connections():
+    client = FakeClient()
+    tools_connections = [{
+        "botId": "bot-id",
+        "botSchemaName": "contoso_agent",
+        "connections": [{
+            "connectorId": "shared_alchemy",
+            "connectionId": "tool-connection",
+            "connectionReferenceName": "contoso_agent.shared_alchemy.ref",
+        }],
+    }]
+
+    evaluation_runs.start_run(
+        client,
+        "environment-id",
+        "bot-id",
+        {"id": "set-comp", "displayName": "Compensation"},
+        "profile-connection",
+        tools_connections=tools_connections,
+    )
+
+    assert client.started[0][3]["toolsConnections"] == tools_connections
+
+
 def _connection(
     connection_id,
     *,
@@ -583,18 +607,20 @@ def test_select_mcs_connection_matches_signed_in_account():
     assert selected["id"] == "current"
 
 
-def test_select_mcs_connection_uses_deterministic_valid_profile_when_ambiguous():
+def test_select_mcs_connection_rejects_ambiguous_profiles():
     connections = [
         _connection("second", created_by_upn="two@example.com"),
         _connection("first", created_by_upn="one@example.com"),
     ]
 
-    selected = evaluation_runs.select_mcs_connection(
-        connections,
-        signed_in_username="maker@example.com",
-    )
-
-    assert selected["id"] == "first"
+    with pytest.raises(
+        evaluation_runs.EvaluationRunError,
+        match="Multiple Connected",
+    ):
+        evaluation_runs.select_mcs_connection(
+            connections,
+            signed_in_username="maker@example.com",
+        )
 
 
 def test_select_mcs_connection_validates_explicit_profile_status():
@@ -612,6 +638,120 @@ def test_select_mcs_connection_validates_explicit_profile_status():
         assert "not Connected" in str(exc)
     else:
         raise AssertionError("Expected an invalid explicit profile to fail")
+
+
+def test_resolve_mcs_connection_uses_ppapi_signed_in_account(monkeypatch):
+    observed = {}
+
+    class FakeAdminClient:
+        signed_in_username = "maker@example.com"
+
+        def __init__(self, tenant_id):
+            observed["tenantId"] = tenant_id
+
+        def authenticate(self, **kwargs):
+            observed["authenticate"] = kwargs
+
+        def get_connector_connections(self, environment_id, connector_name):
+            return [
+                _connection("other", account_name="other@example.com"),
+                _connection("current", account_name="maker@example.com"),
+            ]
+
+    monkeypatch.setattr(
+        evaluation_runs,
+        "discover_tenant",
+        lambda env_url: "tenant-id",
+    )
+    monkeypatch.setattr(evaluation_runs, "PPAdminClient", FakeAdminClient)
+
+    selected = evaluation_runs.resolve_mcs_connection(
+        {"dataverseEndpoint": "https://example.crm.dynamics.com"},
+        "environment-id",
+        signed_in_username="maker@example.com",
+    )
+
+    assert selected["id"] == "current"
+    assert observed["authenticate"] == {
+        "include_flow": False,
+        "preferred_username": "maker@example.com",
+    }
+
+
+def test_resolve_tool_connections_uses_signed_in_account(
+    monkeypatch,
+    tmp_path,
+):
+    installation = tmp_path / "config.json"
+    installation.write_text(
+        json.dumps({
+            "installations": {
+                "cea.it": {
+                    "requiredConnection": {
+                        "connectorApiName": "shared_alchemy",
+                        "referenceLogicalName": (
+                            "contoso_agent.shared_alchemy.reference"
+                        ),
+                    }
+                }
+            }
+        }),
+        encoding="utf-8",
+    )
+    observed = {}
+
+    class FakeAdminClient:
+        signed_in_username = "maker@example.com"
+
+        def __init__(self, tenant_id):
+            pass
+
+        def authenticate(self, **kwargs):
+            observed["authenticate"] = kwargs
+
+        def get_connector_connections(self, environment_id, connector_name):
+            assert connector_name == "shared_alchemy"
+            return [
+                _connection("other", account_name="other@example.com"),
+                _connection("current", account_name="maker@example.com"),
+            ]
+
+    monkeypatch.setattr(
+        evaluation_runs,
+        "INSTALLATION_CONFIG_PATH",
+        installation,
+    )
+    monkeypatch.setattr(
+        evaluation_runs,
+        "discover_tenant",
+        lambda env_url: "tenant-id",
+    )
+    monkeypatch.setattr(evaluation_runs, "PPAdminClient", FakeAdminClient)
+
+    result = evaluation_runs.resolve_tool_connections(
+        {
+            "dataverseEndpoint": "https://example.crm.dynamics.com",
+            "agent": {"schemaName": "contoso_agent"},
+        },
+        "environment-id",
+        "bot-id",
+        "maker@example.com",
+    )
+
+    assert result == [{
+        "botId": "bot-id",
+        "botSchemaName": "contoso_agent",
+        "connections": [{
+            "connectorId": "shared_alchemy",
+            "connectionId": "current",
+            "connectionReferenceName": (
+                "contoso_agent.shared_alchemy.reference"
+            ),
+        }],
+    }]
+    assert observed["authenticate"]["preferred_username"] == (
+        "maker@example.com"
+    )
 
 
 def test_list_runs_uses_remote_api_and_joins_test_set_name():

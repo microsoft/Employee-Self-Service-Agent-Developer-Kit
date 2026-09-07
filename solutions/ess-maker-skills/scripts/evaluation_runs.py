@@ -27,6 +27,13 @@ from flightcheck.powerplatform_client import PowerPlatformClient
 
 
 MCS_CONNECTOR_NAME = "shared_microsoftcopilotstudio"
+INSTALLATION_CONFIG_PATH = (
+    Path(__file__).resolve().parents[1]
+    / "src"
+    / "reference"
+    / "ess-agent-installation"
+    / "config.json"
+)
 RUN_WAIT_GUIDANCE = (
     "Running your evaluation may take a while. Please return in 10-15 "
     "minutes to see the results."
@@ -218,18 +225,26 @@ def select_mcs_connection(
         if len(matching) == 1:
             return matching[0]
 
-    return connected[0]
+    raise EvaluationRunError(
+        "Multiple Connected Copilot Studio profiles were found, but none "
+        "uniquely matches the signed-in account. Sign in with the intended "
+        "profile or provide --mcs-connection-id."
+    )
 
 
 def resolve_mcs_connection(
     config: dict[str, Any],
     environment_id: str,
     requested_id: str | None = None,
+    signed_in_username: str | None = None,
 ) -> dict[str, Any]:
     """Discover and select the current user's Copilot Studio connection."""
     env_url = str(config["dataverseEndpoint"]).rstrip("/")
     client = PPAdminClient(discover_tenant(env_url))
-    client.authenticate(include_flow=False)
+    client.authenticate(
+        include_flow=False,
+        preferred_username=signed_in_username,
+    )
     connections = client.get_connector_connections(
         environment_id,
         MCS_CONNECTOR_NAME,
@@ -237,9 +252,96 @@ def resolve_mcs_connection(
     _raise_api_error(connections, "list Copilot Studio connections")
     return select_mcs_connection(
         connections,
-        client.signed_in_username,
+        signed_in_username or client.signed_in_username,
         requested_id,
     )
+
+
+def _required_agent_connection(config: dict[str, Any]) -> dict[str, Any] | None:
+    """Return the configured agent's required invoker connection, if any."""
+    agent = config.get("agent")
+    schema_name = (
+        str(agent.get("schemaName") or "").casefold()
+        if isinstance(agent, dict)
+        else ""
+    )
+    if not schema_name or not INSTALLATION_CONFIG_PATH.is_file():
+        return None
+    try:
+        installation = json.loads(
+            INSTALLATION_CONFIG_PATH.read_text(encoding="utf-8")
+        )
+    except (OSError, json.JSONDecodeError) as exc:
+        raise EvaluationRunError(
+            f"Unable to read agent installation config: {exc}"
+        ) from exc
+    installations = installation.get("installations")
+    if not isinstance(installations, dict):
+        return None
+    for variant in installations.values():
+        if not isinstance(variant, dict):
+            continue
+        required = variant.get("requiredConnection")
+        if not isinstance(required, dict):
+            continue
+        reference_name = str(
+            required.get("referenceLogicalName") or ""
+        )
+        if reference_name.casefold().startswith(f"{schema_name}."):
+            return required
+    return None
+
+
+def resolve_tool_connections(
+    config: dict[str, Any],
+    environment_id: str,
+    bot_id: str,
+    signed_in_username: str | None,
+) -> list[dict[str, Any]]:
+    """Resolve required agent tool connections for the signed-in account."""
+    required = _required_agent_connection(config)
+    if not required:
+        return []
+    connector_name = str(required.get("connectorApiName") or "").strip()
+    reference_name = str(
+        required.get("referenceLogicalName") or ""
+    ).strip()
+    agent = config.get("agent")
+    schema_name = (
+        str(agent.get("schemaName") or "").strip()
+        if isinstance(agent, dict)
+        else ""
+    )
+    if not connector_name or not reference_name or not schema_name:
+        raise EvaluationRunError(
+            "The configured agent's required connection metadata is "
+            "incomplete."
+        )
+
+    env_url = str(config["dataverseEndpoint"]).rstrip("/")
+    client = PPAdminClient(discover_tenant(env_url))
+    client.authenticate(
+        include_flow=False,
+        preferred_username=signed_in_username,
+    )
+    connections = client.get_connector_connections(
+        environment_id,
+        connector_name,
+    )
+    _raise_api_error(connections, f"list {connector_name} connections")
+    selected = select_mcs_connection(
+        connections,
+        signed_in_username or client.signed_in_username,
+    )
+    return [{
+        "botId": bot_id,
+        "botSchemaName": schema_name,
+        "connections": [{
+            "connectorId": connector_name,
+            "connectionId": selected["id"],
+            "connectionReferenceName": reference_name,
+        }],
+    }]
 
 
 def _runtime(config: dict[str, Any]) -> tuple[
@@ -398,6 +500,7 @@ def start_run(
     mcs_connection_id: str,
     run_name: str | None = None,
     run_on_published_bot: bool = False,
+    tools_connections: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Start an evaluation run and return its initial API state."""
     test_set_id = str(test_set["id"])
@@ -411,6 +514,8 @@ def start_run(
         "runOnPublishedBot": run_on_published_bot,
     }
     body["mcsConnectionId"] = mcs_connection_id
+    if tools_connections:
+        body["toolsConnections"] = tools_connections
 
     response = client.run_maker_evaluation_test_set(
         environment_id,
@@ -769,6 +874,13 @@ def main() -> int:
                 config,
                 environment_id,
                 args.mcs_connection_id,
+                client.signed_in_username,
+            )
+            tools_connections = resolve_tool_connections(
+                config,
+                environment_id,
+                bot_id,
+                client.signed_in_username,
             )
             _print_json(start_run(
                 client,
@@ -778,6 +890,7 @@ def main() -> int:
                 connection["id"],
                 run_name=args.run_name,
                 run_on_published_bot=args.published,
+                tools_connections=tools_connections,
             ))
         elif args.command == "list-runs":
             _print_json(list_runs(

@@ -145,7 +145,12 @@ class PPAdminClient:
         self._flow_token: str | None = None
         self.signed_in_username: str | None = None
 
-    def authenticate(self, *, include_flow: bool = True) -> str:
+    def authenticate(
+        self,
+        *,
+        include_flow: bool = True,
+        preferred_username: str | None = None,
+    ) -> str:
         """Acquire Power Platform access tokens.
 
         Always acquires the PowerApps audience token used for BAP, PowerApps
@@ -174,16 +179,29 @@ class PPAdminClient:
 
         def acquire(scope: str, label: str) -> tuple[str, str | None]:
             result = None
-            selected_account = accounts[0] if accounts else None
-            if accounts:
+            preferred = str(preferred_username or "").casefold()
+            selected_account = next(
+                (
+                    account for account in accounts
+                    if str(account.get("username") or "").casefold()
+                    == preferred
+                ),
+                accounts[0] if accounts and not preferred else None,
+            )
+            if selected_account:
                 result = app.acquire_token_silent(
                     [scope],
                     account=selected_account,
                 )
             if not result or "access_token" not in result:
                 print(f"Opening browser for Power Platform sign-in ({label})...")
+                selected_account = None
+                interactive_options = {"prompt": "select_account"}
+                if preferred_username:
+                    interactive_options["login_hint"] = preferred_username
                 result = app.acquire_token_interactive(
-                    [scope], prompt="select_account"
+                    [scope],
+                    **interactive_options,
                 )
             if "access_token" not in result:
                 # Don't echo error_description - it can include tenant IDs and

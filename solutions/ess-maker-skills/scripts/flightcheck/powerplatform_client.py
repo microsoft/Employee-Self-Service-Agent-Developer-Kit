@@ -76,6 +76,7 @@ class PowerPlatformClient:
     def __init__(self, tenant_id: str):
         self.tenant_id = tenant_id
         self._token: str | None = None
+        self.signed_in_username: str | None = None
 
     def authenticate(self) -> str:
         """Acquire a Power Platform API access token.
@@ -97,10 +98,15 @@ class PowerPlatformClient:
 
         accounts = app.get_accounts()
         result = None
-        if accounts:
-            result = app.acquire_token_silent([PP_API_SCOPE], account=accounts[0])
+        selected_account = accounts[0] if accounts else None
+        if selected_account:
+            result = app.acquire_token_silent(
+                [PP_API_SCOPE],
+                account=selected_account,
+            )
         if not result or "access_token" not in result:
             print("Opening browser for Power Platform API sign-in...")
+            selected_account = None
             result = app.acquire_token_interactive(
                 [PP_API_SCOPE], prompt="select_account"
             )
@@ -124,6 +130,12 @@ class PowerPlatformClient:
                 f.write(cache.serialize())
 
         self._token = result["access_token"]
+        claims = result.get("id_token_claims", {}) or {}
+        self.signed_in_username = (
+            claims.get("preferred_username")
+            or claims.get("upn")
+            or (selected_account or {}).get("username")
+        )
         return self._token
 
     @property
