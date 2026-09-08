@@ -18,11 +18,9 @@ from typing import Any
 
 import httpx
 
-# The AgentConfiguration MCP family lives at the ``src/mcp`` root as three sibling
-# folders: the shared ``agentconfig_core`` client core plus the two MCP servers
-# ``agentconfig_planner`` and ``agentconfig_landing_page``. There is no package
-# __init__.py, and each server launches with cwd set to its own folder on a flat
-# sys.path, so make the sibling ``agentconfig_core`` folder importable.
+# AgentConfiguration MCP surfaces and the shared ``agentconfig_core`` client live
+# in sibling folders under ``src/mcp``. Each server launches with its own folder
+# on a flat sys.path, so make the shared core importable.
 sys.path.insert(
     0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "agentconfig_core")
 )

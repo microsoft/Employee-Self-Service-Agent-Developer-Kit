@@ -379,3 +379,21 @@ def test_configure_rejects_repeated_env_name(tmp_path: Path) -> None:
             ["--env", "NAME=first", "--env", "NAME=second"],
             tmp_path,
         )
+
+
+def test_shipped_defaults_materialize_the_active_python_interpreter(
+    tmp_path: Path,
+) -> None:
+    defaults_source = SOLUTION_ROOT / mcp_config.DEFAULTS_PATH
+    defaults_destination = tmp_path / mcp_config.DEFAULTS_PATH
+    defaults_destination.parent.mkdir(parents=True)
+    shutil.copyfile(defaults_source, defaults_destination)
+
+    mcp_config.materialize_defaults(tmp_path)
+    config = json.loads((tmp_path / mcp_config.CONFIG_PATH).read_text())
+
+    assert config["servers"]["ess-landing-page-config"] == {
+        "command": str(Path(sys.executable).resolve()),
+        "args": ["server.py"],
+        "cwd": "${workspaceFolder}/src/mcp/agentconfig_landing_page",
+    }
