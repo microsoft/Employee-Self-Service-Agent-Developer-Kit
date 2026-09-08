@@ -34,7 +34,7 @@ import sys
 # file is run directly (mirrors scripts/flightcheck/cli.py).
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from planner import research
+from planner import research, setup_tasks
 from planner.capture import detect_config_artifacts, snapshot_config
 from planner.plan_model import (
     ARTIFACT_KINDS,
@@ -419,6 +419,27 @@ def cmd_research(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_setup_tasks(args: argparse.Namespace) -> int:
+    """Emit the grounded, attestable-mapped Tasks a system's setup checklist
+    decomposes into (Phase 3, model.md). Read-only and plan-free — it never
+    touches the plan; the skill runs it, reviews the rows, then feeds them to
+    ``add-task``. Default output is JSON; ``--commands`` prints copy-paste
+    ``add-task`` lines."""
+    try:
+        tasks = setup_tasks.system_setup_tasks(
+            args.system, skip_foundation=args.skip_foundation
+        )
+    except FileNotFoundError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+    if args.commands:
+        for task in tasks:
+            print(task.add_task_command())
+    else:
+        print(json.dumps([task.as_dict() for task in tasks], indent=2))
+    return 0
+
+
 def _extract_signals_for(selected: list[dict[str, str]]) -> dict[str, list[dict[str, str]]]:
     """Fetch each selected page and pull role/output candidates off it, grounded
     to the page they came from. Network + best-effort: pages that fail to fetch
@@ -703,6 +724,19 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--base", default=research.LEARN_SECTION_BASE)
     p.add_argument("--budget", type=int, default=18)
     p.set_defaults(func=cmd_research)
+
+    p = sub.add_parser(
+        "setup-tasks",
+        help="decompose a system's setup checklist into grounded, attestable tasks",
+    )
+    p.add_argument("--system", default="workday",
+                   help="setup system whose checklist to decompose (default: workday)")
+    p.add_argument("--skip-foundation", action="store_true",
+                   help="drop the shared foundation groups (Power Platform environment + "
+                        "ESS base agent) already produced by the backbone 'Run setup' task")
+    p.add_argument("--commands", action="store_true",
+                   help="print copy-paste add-task command lines instead of JSON")
+    p.set_defaults(func=cmd_setup_tasks)
 
     p = sub.add_parser("summary", help="render the plan's Markdown view (ESS-scenario-plan.md) and print it")
     p.set_defaults(func=cmd_summary)
