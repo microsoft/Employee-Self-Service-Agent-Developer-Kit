@@ -49,6 +49,68 @@ def test_router_distinguishes_explore_preview_and_direct_update() -> None:
     assert "complete `pivots` wire schema" in hard_rules
 
 
+def test_widget_opening_state_distinguishes_omitted_and_empty_drafts() -> None:
+    text = SKILL_PATH.read_text(encoding="utf-8")
+    state = _section(text, "Widget opening state")
+    hard_rules = _section(text, "Hard rules")
+
+    assert "Omitting `draft` opens existing values" in state
+    assert "preserving the baseline until Publish" in state
+    assert "An explicit empty section list previews clearing" in state
+    assert "must remain present in the draft payload" in state
+    for payload in (
+        '`draft: { "branding": { "theming": [] } }`',
+        '`draft: { "quickLinksConfig": { "quickLinks": [] } }`',
+        '`draft: { "pivots": [] }`',
+    ):
+        assert payload in state
+    assert "**Widget opening state**" in hard_rules
+
+
+def test_starter_prompt_guidance_covers_each_baseline_draft_combination() -> None:
+    text = SKILL_PATH.read_text(encoding="utf-8")
+    state = _section(text, "Widget opening state")
+    prompts = _section(text, "Starter prompts")
+
+    for baseline, draft, editor in (
+        ("Non-empty", "Omitted", "Existing saved prompts"),
+        ("Empty", "Omitted", "Localized default draft suggestions"),
+        ("Empty", "Non-empty `pivots`", "Supplied draft suggestions"),
+        ("Non-empty", "Non-empty `pivots`", "Supplied draft suggestions"),
+        (
+            "Non-empty",
+            '`{"pivots": []}`',
+            "Empty proposal previewing clearing of saved prompts",
+        ),
+        (
+            "Empty",
+            '`{"pivots": []}`',
+            "Explicit empty proposal with default suggestions suppressed",
+        ),
+    ):
+        assert f"| {baseline} | {draft} | {editor} |" in state
+
+    assert "only for this empty-baseline/omitted-draft combination" in prompts
+    assert "A supplied non-empty draft opens those suggestions" in prompts
+    assert "whether the saved baseline is empty or populated" in prompts
+    assert "opens an empty proposal and suppresses default suggestions" in prompts
+    assert "the editor opens the existing saved prompts" in prompts
+    assert "The saved baseline remains unchanged until Publish" in prompts
+
+
+def test_exact_clears_use_direct_updates_and_previews_require_explicit_intent() -> None:
+    text = SKILL_PATH.read_text(encoding="utf-8")
+    state = _section(text, "Widget opening state")
+    direct = _section(text, "Route exact changes directly")
+
+    assert "A request to clear or reset a section is an exact deterministic change" in state
+    assert "call `update_agent_config` directly with the empty section" in state
+    assert "only when the maker explicitly requests a preview or review" in state
+    assert 'For "clear my starter prompts", obtain the required destructive confirmation' in direct
+    assert '`update_agent_config` directly with `config: { "pivots": [] }`' in direct
+    assert "Do not call an `open_*` tool" in direct
+
+
 def test_suggested_preview_merges_and_validates_complete_sections() -> None:
     preview = _section(
         SKILL_PATH.read_text(encoding="utf-8"),
@@ -183,7 +245,10 @@ def test_suggested_preview_pins_consumer_wire_shapes() -> None:
         assert excluded in preview
 
     assert '`draft: { "pivots": [] }`' in preview
-    assert "without a draft over an empty" in preview
+    assert "with `draft` omitted opens existing values" in preview
+    assert "default draft suggestions when the saved baseline is empty" in preview
+    assert "previews an empty list and suppresses default suggestions" in preview
+    assert "**Widget opening state**" in preview
 
 
 def test_descriptive_accent_requests_preserve_an_untouched_theme() -> None:

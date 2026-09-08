@@ -127,9 +127,7 @@ unavailable, tell the maker to reload the VS Code window, rerun
      - "Upload these starter prompts: <attached CSV or inline list>" maps the
        supplied rows to the complete `pivots` wire schema, validates them, and
        calls `update_agent_config` directly.
-7. A suggested `draft` is unpublished preview state. The widget shows the
-   server section as its baseline, shows the draft as dirty edits, and owns the
-   first write when the maker selects Publish.
+7. A suggested `draft` is unpublished preview state. The widget keeps the saved server section as its baseline, displays the supplied draft as proposed edits, and owns the first write when the maker selects Publish. Omitting `draft` opens existing values; an explicit empty section list previews clearing. Follow **Widget opening state** for the Starter Prompts default-suggestion behavior.
 8. Treat every provided config section as a bulk replacement:
    - An omitted section remains unchanged.
    - A provided section replaces the complete section.
@@ -166,10 +164,7 @@ unavailable, tell the maker to reload the VS Code window, rerun
    match, do not respond to the maker or continue to another MCP call until
    the resolved `titleId` is persisted and verified in `.local/config.json`
    according to **Persist a discovered title ID**.
-20. When `open_starter_prompts` is called without a draft and its baseline has
-    no starter prompts, tell the maker that the widget opened with localized
-    defaults. An explicit `draft: { "pivots": [] }` previews a clear and does
-    not load defaults.
+20. When `open_starter_prompts` is called with `draft` omitted and an empty baseline, tell the maker that the widget opened with localized default draft suggestions. A supplied non-empty draft opens those suggestions over either an empty or populated baseline. An explicit `draft: { "pivots": [] }` previews an empty list and suppresses default suggestions. Exact clear requests use `update_agent_config` directly after the required confirmation.
 21. `delete_agent_config` removes every landing-page configuration section and
     restores the default landing-page experience. It is destructive. Always
     explain that effect and obtain explicit confirmation immediately before
@@ -370,7 +365,7 @@ When the maker asks to configure or set up the landing page:
 | Explore or edit quick links with an open value | Resolve the target and establish existence -> `open_quick_links` with `titleId` only; the widget validates and publishes |
 | Apply an exact starter-prompts list/CSV or deterministic prompt change | Resolve the target and establish existence -> get current pivots only when a merge is required -> validate the complete result -> `update_agent_config` -> report success |
 | Preview a synthesized starter-prompts proposal | Resolve the target and establish existence -> gather agent context and ask guiding questions -> build and validate the complete pivots section -> `open_starter_prompts` with `titleId` and `draft`; the widget reviews and publishes |
-| Explore or edit starter prompts with an open value | Resolve the target and establish existence -> `open_starter_prompts` with `titleId` only; the widget supplies localized defaults when empty, then validates and publishes |
+| Explore or edit starter prompts with an open value | Resolve the target and establish existence -> `open_starter_prompts` with `titleId` only; the widget opens existing values, or localized default draft suggestions when the saved baseline is empty, then validates and publishes |
 | Update insight cards or another surface without an editor | Resolve the target and establish existence -> use an available full config result or call `get_agent_config` -> merge and validate complete affected section(s) -> `update_agent_config` |
 | Remove all landing-page configuration | Follow **Delete all landing-page configuration** |
 | Update the agent name or icon | Explain that the field is read-only and do not call an update tool |
@@ -380,6 +375,25 @@ opens the editor with its server baseline. "Set my accent color to blue"
 synthesizes complete light and dark six-digit colors and opens them as a draft.
 "Change my light accent color to `#CCAA00`" supplies an exact change and uses
 `update_agent_config` directly.
+
+## Widget opening state
+
+The saved server section is the baseline. Omitting `draft` opens existing values. Supplying `draft` opens that complete proposed section while preserving the baseline until Publish. An explicit empty section list previews clearing; it is a supplied value and must remain present in the draft payload.
+
+For Starter Prompts, an absent or empty saved `pivots` array is an empty baseline:
+
+| Saved baseline | `draft` argument | Editor state |
+|---|---|---|
+| Non-empty | Omitted | Existing saved prompts |
+| Empty | Omitted | Localized default draft suggestions |
+| Empty | Non-empty `pivots` | Supplied draft suggestions |
+| Non-empty | Non-empty `pivots` | Supplied draft suggestions |
+| Non-empty | `{"pivots": []}` | Empty proposal previewing clearing of saved prompts |
+| Empty | `{"pivots": []}` | Explicit empty proposal with default suggestions suppressed |
+
+Use the complete surface-specific draft object for a clear preview: `draft: { "branding": { "theming": [] } }`, `draft: { "quickLinksConfig": { "quickLinks": [] } }`, or `draft: { "pivots": [] }`. Omitting `draft` preserves existing values, subject to the Starter Prompts default-suggestion behavior above.
+
+A request to clear or reset a section is an exact deterministic change. Obtain the required confirmation and call `update_agent_config` directly with the empty section. Open a clear preview only when the maker explicitly requests a preview or review of the removal before publishing.
 
 ## Gather context for suggested content
 
@@ -528,12 +542,7 @@ values.
    selects Publish. Do not issue a model-driven update after opening the
    widget.
 
-Drafts contain mutable wire fields only. Exclude `titleId`, `hoverColor`,
-`activeColor`, `quickLinksConfig.lastUpdatedAt`, and widget row keys. Preserve
-explicit empty arrays: `theming: []`, `quickLinks: []`, and `pivots: []` preview
-section resets. An explicit starter-prompts
-`draft: { "pivots": [] }` previews a clear. Calling `open_starter_prompts`
-without a draft over an empty baseline opens localized defaults.
+Drafts contain mutable wire fields only. Exclude `titleId`, `hoverColor`, `activeColor`, `quickLinksConfig.lastUpdatedAt`, and widget row keys. Preserve explicit empty arrays: `theming: []`, `quickLinks: []`, and `pivots: []` preview section resets. An explicit starter-prompts `draft: { "pivots": [] }` previews an empty list and suppresses default suggestions. Calling `open_starter_prompts` with `draft` omitted opens existing values, or localized default draft suggestions when the saved baseline is empty. Follow **Widget opening state** for each baseline/draft combination.
 
 ## Route exact changes directly
 
@@ -561,6 +570,8 @@ For an exact change:
 4. Call `update_agent_config` with only the affected complete section.
 5. Use the tool result as the operation result and tell the maker the update was
    made. Do not call an `open_*` tool and do not perform a follow-up read.
+
+For "clear my starter prompts", obtain the required destructive confirmation, then call `update_agent_config` directly with `config: { "pivots": [] }`. The same direct-update routing applies to exact quick-link clears and branding resets.
 
 For "add this prompt to the HR category":
 
@@ -697,10 +708,7 @@ complete draft. Generated drafts contain only `name` and `accentColor`.
 The backend allows at most five theme entries and theme names up to 30
 characters. This experience uses the `light` and `dark` themes.
 
-A direct branding reset submits `branding: { "theming": [] }` after
-confirmation. A reset preview passes
-`draft: { "branding": { "theming": [] } }` to `open_accent_color`. Resets do
-not run contrast validation.
+A direct branding reset submits `branding: { "theming": [] }` after confirmation. When the maker explicitly requests a reset preview, pass `draft: { "branding": { "theming": [] } }` to `open_accent_color`. Resets do not run contrast validation.
 
 ## Quick links
 
@@ -730,8 +738,7 @@ complete array after confirmation. A direct clear sends:
 }
 ```
 
-A clear preview passes
-`draft: { "quickLinksConfig": { "quickLinks": [] } }` to `open_quick_links`.
+When the maker explicitly requests a clear preview, pass `draft: { "quickLinksConfig": { "quickLinks": [] } }` to `open_quick_links`. An exact request to clear links uses `update_agent_config` directly after confirmation.
 
 ## Starter prompts
 
@@ -739,14 +746,11 @@ Categorized starter prompts show employees common ways to engage with the agent
 and guide them into the right scenarios. These tenant-level prompts override
 starter prompts configured in Copilot Studio.
 
-When `open_starter_prompts` returns an empty or absent `pivots` array, the widget
-opens with a default set of starter prompts. The tool also returns the agent's
-`schemaName`, which selects those defaults: an HR or IT agent opens with the
-single category matching its vertical, and any other agent opens with both the
-human-resources and IT-support categories. Accompany the widget with:
+When `open_starter_prompts` is called with `draft` omitted and the saved `pivots` baseline is empty or absent, the widget opens localized default draft suggestions. The tool returns the agent's `schemaName`, which selects those suggestions: an HR or IT agent opens with the single category matching its vertical, and any other agent opens with both the human-resources and IT-support categories. Show the following message only for this empty-baseline/omitted-draft combination:
 
-> No starter prompts are configured yet, so the editor is showing a default
-> set. You can update and publish them, or publish them as-is.
+> No starter prompts are configured yet, so the editor is showing default draft suggestions. You can edit and publish them, or publish them as-is.
+
+A supplied non-empty draft opens those suggestions whether the saved baseline is empty or populated. A supplied `draft: { "pivots": [] }` opens an empty proposal and suppresses default suggestions; with saved prompts, this previews clearing them. With a populated baseline and `draft` omitted, the editor opens the existing saved prompts. The saved baseline remains unchanged until Publish.
 
 Validate the complete replacement array before writing:
 
@@ -756,10 +760,7 @@ Validate the complete replacement array before writing:
 - Prompt `title`: non-null, maximum 128 characters.
 - Prompt `displayText`: non-null, maximum 4,000 characters.
 
-Add, remove, and reorder operations use read-merge-write for direct changes and
-read-merge-preview for suggested proposals. A direct clear sends `pivots: []`;
-a clear preview passes `draft: { "pivots": [] }` to
-`open_starter_prompts`.
+Add, remove, and reorder operations use read-merge-write for direct changes and read-merge-preview for suggested proposals. An exact clear request calls `update_agent_config` directly with `config: { "pivots": [] }` after confirmation. When the maker explicitly requests a clear preview, pass `draft: { "pivots": [] }` to `open_starter_prompts`.
 
 ## Insight cards
 
