@@ -169,7 +169,9 @@ def discover_tenant(env_url):
         verify=True,
     )
     auth_header = resp.headers.get("WWW-Authenticate", "")
-    match = re.search(r"login\.microsoftonline\.com/([^/]+)", auth_header)
+    match = re.search(
+        r"login\.microsoftonline\.com/([^/,\s\"?]+)", auth_header, re.IGNORECASE
+    )
     if match:
         return match.group(1)
     return "organizations"

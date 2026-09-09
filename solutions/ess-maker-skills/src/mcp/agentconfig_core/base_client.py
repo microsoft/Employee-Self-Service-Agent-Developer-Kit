@@ -10,13 +10,13 @@ page) and ``PlannerClient`` (planner) both inherit ``AgentConfigBaseClient``, ea
 own base URL and logger name.
 
 Token acquisition, in priority order:
-  1. AGENTCONFIG_ACCESS_TOKEN_FILE / AGENTCONFIG_ACCESS_TOKEN.
+  1. AGENTCONFIG_ACCESS_TOKEN_FILE/AGENTCONFIG_ACCESS_TOKEN.
   2. MSAL public-client sign-in with a local form_post callback.
 
-The tenant ID comes from the resolved token's ``tid`` claim and the caller
-object id from ``oid``. The API still validates the token and enforces
-authorization; the client decodes claims only to address tenant-scoped routes
-and to scope "for the caller" queries to the signed-in principal.
+The workspace's configured Dataverse tenant constrains authentication and the
+resolved token's ``tid`` claim. Unavailable configuration or tenant discovery
+uses the organizations authority with a warning. The caller object id comes
+from ``oid``. The API validates the token and enforces authorization.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ import json
 import logging
 import os
 import random
-import stat
+import sys
 import threading
 import urllib.parse
 import uuid
@@ -38,6 +38,9 @@ from typing import Any, Optional
 
 import httpx
 
+from _tenant_context import configured_tenant_id
+from _token_cache import create_token_cache
+
 
 logging.getLogger("httpx").setLevel(logging.WARNING)
 logging.getLogger("httpcore").setLevel(logging.WARNING)
@@ -45,8 +48,8 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 _CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
 _SCOPE = ["https://substrate.office.com/weve/.default"]
 _AUTHORITY = "https://login.microsoftonline.com/organizations"
-# Derived from this shared-core module's own location so every AgentConfiguration MCP
-# (landing-page, planner) shares ONE MSAL cache and ONE interactive sign-in.
+# AgentConfiguration MCPs share a cache rooted in the common module directory
+# so their token acquisitions can reuse persisted authentication state.
 _CORE_DIR = os.path.dirname(os.path.abspath(__file__))
 _LOCAL_STATE_DIR = os.path.join(_CORE_DIR, ".local")
 _TOKEN_CACHE_PATH = os.path.join(_LOCAL_STATE_DIR, "msal_token_cache.bin")
@@ -62,6 +65,7 @@ class AgentConfigApiError(RuntimeError):
 
 def _resolve_token() -> str:
     """Resolve a token without writing it to logs or MCP configuration."""
+    expected_tenant_id = configured_tenant_id()
     token_file = os.environ.get("AGENTCONFIG_ACCESS_TOKEN_FILE", "")
     if token_file:
         if not os.path.isfile(token_file):
@@ -74,13 +78,26 @@ def _resolve_token() -> str:
             raise ValueError(
                 f"AGENTCONFIG_ACCESS_TOKEN_FILE={token_file!r} is empty"
             )
-        return token
+        return _validate_token_tenant(token, expected_tenant_id)
 
     token = os.environ.get("AGENTCONFIG_ACCESS_TOKEN", "").strip()
     if token:
-        return token
+        return _validate_token_tenant(token, expected_tenant_id)
 
-    return acquire_token_msal_interactive()
+    token = acquire_token_msal_interactive(expected_tenant_id)
+    return _validate_token_tenant(token, expected_tenant_id)
+
+
+def _validate_token_tenant(token: str, expected_tenant_id: str | None) -> str:
+    if (
+        expected_tenant_id is not None
+        and _decode_tenant_id_from_jwt(token) != expected_tenant_id
+    ):
+        raise ValueError(
+            "The AgentConfiguration token tenant does not match the configured "
+            "Dataverse environment. Sign in to that tenant or provide a matching token."
+        )
+    return token
 
 
 class _FormPostCaptureHandler(http.server.BaseHTTPRequestHandler):
@@ -106,48 +123,19 @@ class _FormPostCaptureHandler(http.server.BaseHTTPRequestHandler):
         return
 
 
-def _load_msal_cache() -> Any:
-    import msal
-
-    cache = msal.SerializableTokenCache()
-    if os.path.exists(_TOKEN_CACHE_PATH):
-        with open(_TOKEN_CACHE_PATH, "r", encoding="utf-8") as handle:
-            cache.deserialize(handle.read())
-    return cache
-
-
-def _save_msal_cache(cache: Any) -> None:
-    if not cache.has_state_changed:
-        return
-
-    os.makedirs(_LOCAL_STATE_DIR, exist_ok=True)
-    try:
-        os.chmod(_LOCAL_STATE_DIR, 0o700)
-    except OSError:
-        pass
-
-    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
-    if hasattr(os, "O_BINARY"):
-        flags |= os.O_BINARY
-    descriptor = os.open(_TOKEN_CACHE_PATH, flags, 0o600)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(cache.serialize())
-    finally:
-        try:
-            os.chmod(_TOKEN_CACHE_PATH, stat.S_IRUSR | stat.S_IWUSR)
-        except OSError:
-            pass
-
-
-def acquire_token_msal_interactive() -> str:
+def acquire_token_msal_interactive(expected_tenant_id: str | None = None) -> str:
     """Acquire a delegated AgentConfiguration token through cached or interactive MSAL auth."""
     import msal
 
-    cache = _load_msal_cache()
+    cache = create_token_cache(_TOKEN_CACHE_PATH)
+    authority = (
+        f"https://login.microsoftonline.com/{expected_tenant_id}"
+        if expected_tenant_id is not None
+        else _AUTHORITY
+    )
     app = msal.PublicClientApplication(
         _CLIENT_ID,
-        authority=_AUTHORITY,
+        authority=authority,
         token_cache=cache,
     )
 
@@ -156,7 +144,6 @@ def acquire_token_msal_interactive() -> str:
     if not result or "access_token" not in result:
         result = _acquire_token_interactive_form_post(app)
 
-    _save_msal_cache(cache)
     if "access_token" not in result:
         error = result.get("error", "unknown_error")
         description = result.get("error_description", "")
@@ -178,7 +165,12 @@ def _acquire_token_interactive_form_post(app: Any) -> dict[str, Any]:
     thread = threading.Thread(target=server.handle_request, daemon=True)
     thread.start()
 
-    print(f"Opening browser for AgentConfiguration sign-in ({redirect_uri}) ...")
+    # Stdio MCP reserves stdout for JSON-RPC messages.
+    print(
+        f"Opening browser for AgentConfiguration sign-in ({redirect_uri}) ...",
+        file=sys.stderr,
+        flush=True,
+    )
     webbrowser.open(flow["auth_uri"])
     thread.join(timeout=300)
     server.server_close()
@@ -256,7 +248,7 @@ class AgentConfigBaseClient:
     session, and the retrying ``_request``. Subclasses supply their own base URL
     and logger name and layer their domain routes on top; they never duplicate
     auth or transport. ``AgentConfigApiError`` and ``_TOKEN_CACHE_PATH`` live
-    here so both MCPs raise one error type and share one interactive sign-in.
+    here so both MCPs raise one error type and share persisted authentication state.
     """
 
     def __init__(

@@ -28,3 +28,6 @@ defusedxml>=0.7.1,<0.8
 # acceptable range on win_arm64 so resolution lands on a wheel-having
 # version. Other platforms keep msal's own (wider) cryptography bound.
 cryptography>=46.0.0; sys_platform == "win32" and platform_machine == "ARM64"
+
+# Shared AgentConfiguration authentication and cache persistence
+-r ../src/mcp/agentconfig_core/requirements.txt
