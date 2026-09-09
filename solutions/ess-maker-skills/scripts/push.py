@@ -51,6 +51,11 @@ from evaluation_review import (
     metadata_description,
     parse_review_metadata,
 )
+from minimalbot_evaluation import (
+    MinimalBotEvaluationClient,
+    MinimalBotEvaluationError,
+    is_minimalbot,
+)
 
 EXCLUDE_DIRS = {".baseline", ".checkpoints"}
 EXCLUDE_FILES = {"snapshot.md", "_meta.json"}
@@ -1114,6 +1119,45 @@ def update_baseline_scoped(agent_dir, only_globs):
                 pass
 
 
+def _minimalbot_push(config, dry_run=False):
+    """Push evaluation sets to a Dataverse-free MinimalBot agent.
+
+    Uses the TEST Power Platform MinimalBot components API. Only evaluation
+    components are supported for MinimalBot agents today; other component
+    types (topics, workflows) still require a Dataverse-backed environment.
+    """
+    agent_dir = config["agent"]["folder"]
+    if not os.path.exists(agent_dir):
+        print(f"ERROR: Agent folder not found: {agent_dir}")
+        sys.exit(1)
+
+    print("MinimalBot agent detected (no Dataverse endpoint).")
+    print("Pushing evaluations via the TEST Power Platform MinimalBot API...")
+    try:
+        client = MinimalBotEvaluationClient.from_config(config)
+        if not dry_run:
+            client.authenticate()
+        result = client.push_agent_evaluations(agent_dir, dry_run=dry_run)
+    except MinimalBotEvaluationError as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
+
+    if client.signed_in_username:
+        print(f"Signed in as: {client.signed_in_username}")
+    if result.get("dryRun"):
+        print(f"\nDRY RUN — would push {len(result['sets'])} evaluation set(s), "
+              f"{result['componentCount']} component(s):")
+    else:
+        print(f"\n✅ Pushed {len(result['sets'])} evaluation set(s), "
+              f"{result['verifiedComponents']} component(s) verified:")
+    for entry in result["sets"]:
+        print(f"  • {entry['displayName']}")
+        print(f"      testSetId: {entry['testSetId']}  (cases: {entry['cases']})")
+    if not result.get("dryRun"):
+        print("\nRun a set with:")
+        print("  python scripts/evaluation_runs.py run --test-set-id <testSetId>")
+
+
 def main():
     dry_run = "--dry-run" in sys.argv
     auto_yes = "--yes" in sys.argv
@@ -1127,6 +1171,13 @@ def main():
     only_globs = parse_only_globs(sys.argv[1:])
 
     config = load_config()
+
+    # Dataverse-free MinimalBot agents cannot use the Dataverse Web API below.
+    # Route evaluation pushes through the TEST Power Platform MinimalBot
+    # components API instead (mirrors tools/minimalbot_evaluation_poc.py).
+    if is_minimalbot(config):
+        return _minimalbot_push(config, dry_run=dry_run)
+
     agent_dir = config["agent"]["folder"]
     env_url = config["dataverseEndpoint"]
     bot_id = config["agent"]["botId"]

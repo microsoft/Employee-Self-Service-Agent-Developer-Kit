@@ -24,6 +24,11 @@ from evaluation_review import (
 )
 from flightcheck.pp_admin_client import PPAdminClient
 from flightcheck.powerplatform_client import PowerPlatformClient
+from minimalbot_evaluation import (
+    MinimalBotEvaluationClient,
+    MinimalBotEvaluationError,
+    is_minimalbot,
+)
 
 
 MCS_CONNECTOR_NAME = "shared_microsoftcopilotstudio"
@@ -872,6 +877,50 @@ def _print_json(value: Any) -> None:
     print(json.dumps(value, indent=2, ensure_ascii=False))
 
 
+def _minimalbot_command(args: argparse.Namespace, config: dict[str, Any]) -> int:
+    """Handle evaluation subcommands for Dataverse-free MinimalBot agents.
+
+    ``list-sets``, ``run``, ``list-runs``, and ``results`` are supported on the
+    TEST ring. Run history and results use the standard Power Platform
+    ``makerevaluation/testruns`` API (not the MinimalBot components API);
+    ``list-connections`` is not wired for the test ring.
+    """
+    client = MinimalBotEvaluationClient.from_config(config)
+    client.authenticate()
+
+    if args.command == "list-sets":
+        sets = client.list_test_sets()
+        if getattr(args, "query", None):
+            needle = _normalized_name(args.query)
+            sets = [
+                item for item in sets
+                if needle in _normalized_name(item.get("displayName", ""))
+            ]
+        _print_json(sets)
+        return 0
+    if args.command == "run":
+        result = client.run_test_set(
+            args.test_set_id,
+            run_name=args.run_name,
+            run_on_published_bot=args.published,
+            mcs_connection_id=args.mcs_connection_id,
+        )
+        result["userGuidance"] = RUN_WAIT_GUIDANCE
+        _print_json(result)
+        return 0
+    if args.command == "list-runs":
+        _print_json(client.list_test_runs())
+        return 0
+    if args.command == "results":
+        _print_json(client.get_test_run(args.run_id))
+        return 0
+    raise MinimalBotEvaluationError(
+        f"The '{args.command}' command is not supported for MinimalBot "
+        "(Dataverse-free) agents. Use 'list-sets', 'run', 'list-runs', or "
+        "'results'."
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Run Copilot Studio evaluation test sets and get results."
@@ -897,6 +946,10 @@ def main() -> int:
     args = parser.parse_args()
     try:
         config = load_config()
+        # Dataverse-free MinimalBot agents use the TEST Power Platform
+        # MinimalBot API instead of the prod Dataverse-backed run path.
+        if is_minimalbot(config):
+            return _minimalbot_command(args, config)
         client, environment_id, bot_id, agent_folder = _runtime(config)
         if args.command == "list-sets":
             _print_json(list_agent_test_sets(
@@ -973,7 +1026,7 @@ def main() -> int:
                 agent_folder,
                 args.run_id,
             ))
-    except EvaluationRunError as exc:
+    except (EvaluationRunError, MinimalBotEvaluationError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     return 0

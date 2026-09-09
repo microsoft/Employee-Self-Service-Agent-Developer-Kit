@@ -529,3 +529,146 @@ def test_install_times_out_after_ten_minutes_and_reports_last_status(
         "Installation status (poll 1, 0s elapsed): Installing",
         "Installation status (poll 2, 300s elapsed): Installing",
     ]
+
+
+# --- Dataverse-free (TEST-ring) install path ---------------------------------
+
+
+class FakeInstallClient:
+    """Stand-in for MinimalBotInstallClient (constructed by env id + tenant)."""
+
+    def __init__(self, environment_id, tenant_id, *, packages, install_result=None):
+        self.environment_id = environment_id
+        self.tenant_id = tenant_id
+        self.packages = list(packages)
+        self.install_result = install_result or {}
+        self.authenticated = False
+        self.install_calls = []
+
+    def authenticate(self):
+        self.authenticated = True
+
+    def list_environment_application_packages(self, _environment_id):
+        if self.packages and isinstance(self.packages[0], list):
+            return self.packages.pop(0)
+        return self.packages
+
+    def install_application_package(self, environment_id, unique_name):
+        self.install_calls.append((environment_id, unique_name))
+        return self.install_result
+
+
+def test_install_by_env_id_installs_without_dataverse_or_bap():
+    import install_ess_agent
+
+    client = FakeInstallClient(
+        "env-guid-123",
+        "tenant-abc",
+        packages=[
+            [{"uniqueName": "msdyn_CopilotForEmployeeSelfServiceDAHR", "state": "None"}],
+            [{"uniqueName": "msdyn_CopilotForEmployeeSelfServiceDAHR", "state": "Installed"}],
+        ],
+        install_result={"lastOperation": {"state": "InstallRequested"}},
+    )
+    states = []
+    captured = {}
+
+    def factory(environment_id, tenant_id):
+        captured["environment_id"] = environment_id
+        captured["tenant_id"] = tenant_id
+        return client
+
+    schema = install_ess_agent.install_agent_by_env_id(
+        "env-guid-123",
+        "da",
+        "hr",
+        tenant_id="tenant-abc",
+        install_client_factory=factory,
+        poll_interval_seconds=0,
+        sleep=lambda _seconds: None,
+        installation_state_callback=states.append,
+    )
+
+    assert schema == "msdyn_CopilotForEmployeeSelfServiceDAHR"
+    assert captured == {"environment_id": "env-guid-123", "tenant_id": "tenant-abc"}
+    assert client.authenticated
+    assert client.install_calls == [
+        ("env-guid-123", "msdyn_CopilotForEmployeeSelfServiceDAHR")
+    ]
+    assert states == ["installing", "automatic-complete"]
+
+
+def test_install_by_env_id_skips_request_when_already_installed():
+    import install_ess_agent
+
+    client = FakeInstallClient(
+        "env-guid-123",
+        "organizations",
+        packages=[{
+            "uniqueName": "msdyn_CopilotForEmployeeSelfServiceCoreDA",
+            "state": "Installed",
+        }],
+    )
+
+    schema = install_ess_agent.install_agent_by_env_id(
+        "env-guid-123",
+        "da",
+        "hub",
+        install_client_factory=lambda _env, _tenant: client,
+    )
+
+    assert schema == "msdyn_CopilotForEmployeeSelfServiceCoreDA"
+    assert client.install_calls == []
+
+
+def test_install_by_env_id_defaults_tenant_to_organizations():
+    import install_ess_agent
+
+    captured = {}
+
+    def factory(environment_id, tenant_id):
+        captured["tenant_id"] = tenant_id
+        return FakeInstallClient(
+            environment_id,
+            tenant_id,
+            packages=[{
+                "uniqueName": "msdyn_CopilotForEmployeeSelfServiceCoreDA",
+                "state": "Installed",
+            }],
+        )
+
+    install_ess_agent.install_agent_by_env_id(
+        "env-guid-123",
+        "da",
+        "hub",
+        install_client_factory=factory,
+    )
+
+    assert captured["tenant_id"] == "organizations"
+
+
+def test_install_by_env_id_rejects_missing_environment_id():
+    import install_ess_agent
+
+    with pytest.raises(RuntimeError, match="environmentId is required"):
+        install_ess_agent.install_agent_by_env_id(
+            "",
+            "da",
+            "hr",
+            install_client_factory=lambda _env, _tenant: None,
+        )
+
+
+def test_install_by_env_id_refuses_agents_needing_a_connection():
+    import install_ess_agent
+
+    def factory(_env, _tenant):
+        pytest.fail("install client should not be built for a connection-gated agent")
+
+    with pytest.raises(RuntimeError, match="does not support"):
+        install_ess_agent.install_agent_by_env_id(
+            "env-guid-123",
+            "da",
+            "it",
+            install_client_factory=factory,
+        )

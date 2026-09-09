@@ -133,6 +133,26 @@ python scripts/install_ess_agent.py \
   [--connection-name "{CONNECTION_NAME}"]
 ```
 
+**Dataverse-free (TEST-ring) environments.** When the selected environment has
+no linked Dataverse database (a Cosmos-backed "MinimalBot" environment, which
+lives on the Power Platform TEST ring), the Dataverse URL / BAP discovery above
+cannot reach it. Install by the Power Platform `environmentId` GUID instead —
+this addresses the environment directly on the TEST ring, matching the
+no-Dataverse evaluation transport:
+
+```text
+python scripts/install_ess_agent.py \
+  --environment-id "{ENVIRONMENT_ID}" \
+  --experience "{da|cea}" \
+  --vertical "{hr|it|hub}" \
+  [--tenant-id "{TENANT_ID}"]
+```
+
+Provide exactly one of `--url` or `--environment-id`. The Dataverse-free path
+does not run the required-connection preflight (it reads connections over BAP),
+so agents that need a pre-created connection (the IT vertical) must be installed
+through the standard `--url` flow.
+
 The installer persists `installing`, `installed`, `manual-required`, or
 `failed` only for that product. A failure must preserve every other product's
 state. On timeout, follow the emitted manual-install guidance and verify with

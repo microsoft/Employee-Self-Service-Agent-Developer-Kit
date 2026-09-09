@@ -46,8 +46,8 @@ except ImportError:
     sys.exit(1)
 
 
-# Shared first-party public client used across the kit's MSAL flows.
-CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d"
+# Shared public client used across the ADK's MSAL flows.
+CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
 
 PP_API_BASE = "https://api.powerplatform.com"
 # The Power Platform API uses its own audience, distinct from the BAP /

@@ -38,10 +38,9 @@ except ImportError:
 from http_errors import APIError, raise_api_error  # noqa: E402
 
 
-# Microsoft public client ID for Power Platform CLI / Dataverse delegated access.
-# Source: https://learn.microsoft.com/power-platform/admin/programmability-authentication-v2
-# Scope: user_impersonation only (delegated, no admin consent).
-CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d"
+# Shared public client ID used across the ADK's MSAL flows (the MinimalBot
+# MCS eval POC app). Delegated access only (user_impersonation).
+CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
 
 # Delegated scope for the Power Automate Flow Management API
 # (https://api.flow.microsoft.com). The double slash is required — the resource

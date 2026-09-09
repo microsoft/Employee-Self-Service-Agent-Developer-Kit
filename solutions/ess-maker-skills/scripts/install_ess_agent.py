@@ -547,6 +547,109 @@ def install_agent(
 
     client = powerplatform_client_factory(tenant_id)
     client.authenticate()
+    return _install_and_wait(
+        client,
+        environment_id,
+        application_unique_name,
+        schema_name,
+        timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
+        sleep=sleep,
+        clock=clock,
+        status_callback=status_callback,
+        installation_state_callback=installation_state_callback,
+    )
+
+
+def install_agent_by_env_id(
+    environment_id: str,
+    experience: str,
+    vertical: str,
+    *,
+    tenant_id: str | None = None,
+    config_path: Path = CONFIG_PATH,
+    catalog_path: Path = CATALOG_PATH,
+    install_client_factory=None,
+    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
+    poll_interval_seconds: int = 20,
+    sleep=time.sleep,
+    clock=time.monotonic,
+    status_callback=lambda message: print(message, flush=True),
+    installation_state_callback=lambda _status: None,
+) -> str:
+    """Install the selected ESS app into a Dataverse-free (TEST-ring) env.
+
+    Mirrors :func:`install_agent` but addresses the environment by its Power
+    Platform ``environmentId`` GUID directly — no Dataverse URL, no BAP lookup
+    — and talks to the TEST ring, matching the no-Dataverse transport in
+    ``minimalbot_evaluation.py``. Used when the selected agent lives on a
+    Cosmos-backed "MinimalBot" environment that BAP/Dataverse discovery cannot
+    reach.
+
+    The required-connection preflight (``requiredConnection``) is not available
+    on this path because it reads connections over BAP; agents that need a
+    pre-created connection (currently the IT vertical) must be installed
+    through the standard Dataverse-linked flow.
+    """
+    if not environment_id:
+        raise RuntimeError(
+            "An environmentId is required for the Dataverse-free install path."
+        )
+    if install_client_factory is None:
+        from minimalbot_install import MinimalBotInstallClient
+
+        install_client_factory = MinimalBotInstallClient
+
+    config = load_installation_config(config_path, catalog_path)
+    installation_key = f"{experience}.{vertical}"
+    installation = config["installations"][installation_key]
+    schema_name = installation["solution"]["parentUniqueName"]
+    application_unique_name = installation["marketplaceApplication"]["uniqueName"]
+
+    if installation.get("requiredConnection") is not None:
+        raise RuntimeError(
+            f"The '{installation_key}' agent requires a pre-created "
+            f"{installation['requiredConnection']['displayName']} connection, "
+            "which the Dataverse-free install path does not support. Install it "
+            "through the standard Dataverse-linked environment flow instead."
+        )
+
+    client = install_client_factory(environment_id, tenant_id or "organizations")
+    client.authenticate()
+    return _install_and_wait(
+        client,
+        environment_id,
+        application_unique_name,
+        schema_name,
+        timeout_seconds=timeout_seconds,
+        poll_interval_seconds=poll_interval_seconds,
+        sleep=sleep,
+        clock=clock,
+        status_callback=status_callback,
+        installation_state_callback=installation_state_callback,
+    )
+
+
+def _install_and_wait(
+    client,
+    environment_id: str,
+    application_unique_name: str,
+    schema_name: str,
+    *,
+    timeout_seconds: int,
+    poll_interval_seconds: int,
+    sleep,
+    clock,
+    status_callback,
+    installation_state_callback,
+) -> str:
+    """Find the entitled package, install it if needed, and poll to completion.
+
+    Shared by the Dataverse-linked (:func:`install_agent`) and Dataverse-free
+    (:func:`install_agent_by_env_id`) paths. ``client`` must expose
+    ``list_environment_application_packages`` and
+    ``install_application_package`` with the PowerPlatformClient signatures.
+    """
     package = _find_package(
         _list_packages(client, environment_id),
         application_unique_name,
@@ -604,7 +707,19 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Install an Employee Self-Service agent application"
     )
-    parser.add_argument("--url", required=True, help="Dataverse environment URL")
+    parser.add_argument("--url", help="Dataverse environment URL")
+    parser.add_argument(
+        "--environment-id",
+        help=(
+            "Power Platform environment ID (GUID) for a Dataverse-free / TEST "
+            "-ring install. Provide this instead of --url when the environment "
+            "has no linked Dataverse database."
+        ),
+    )
+    parser.add_argument(
+        "--tenant-id",
+        help="Tenant ID for the Dataverse-free install path (defaults to organizations)",
+    )
     parser.add_argument(
         "--experience",
         required=True,
@@ -628,6 +743,19 @@ def main() -> None:
     )
     args = parser.parse_args()
 
+    if bool(args.url) == bool(args.environment_id):
+        parser.error(
+            "provide exactly one of --url (Dataverse-linked) or "
+            "--environment-id (Dataverse-free / TEST ring)."
+        )
+
+    dataverse_free = bool(args.environment_id)
+    env_ref = (
+        {"environmentId": args.environment_id}
+        if dataverse_free
+        else {"environmentUrl": args.url.rstrip("/")}
+    )
+
     from setup_state import persist_product_installation_status
 
     config = load_installation_config()
@@ -648,13 +776,22 @@ def main() -> None:
         )
 
     try:
-        schema_name = install_agent(
-            args.url,
-            args.experience,
-            args.vertical,
-            connection_name=args.connection_name,
-            installation_state_callback=persist_installation_state,
-        )
+        if dataverse_free:
+            schema_name = install_agent_by_env_id(
+                args.environment_id,
+                args.experience,
+                args.vertical,
+                tenant_id=args.tenant_id,
+                installation_state_callback=persist_installation_state,
+            )
+        else:
+            schema_name = install_agent(
+                args.url,
+                args.experience,
+                args.vertical,
+                connection_name=args.connection_name,
+                installation_state_callback=persist_installation_state,
+            )
     except InstallationTimeoutError as error:
         persist_product_installation_status(
             product_id,
@@ -664,7 +801,7 @@ def main() -> None:
             state_path=Path(args.state),
         )
         result = {
-            "environmentUrl": args.url.rstrip("/"),
+            **env_ref,
             "experience": args.experience,
             "vertical": args.vertical,
             "schemaName": error.unique_name,
@@ -689,7 +826,7 @@ def main() -> None:
         sys.exit(1)
 
     result = {
-        "environmentUrl": args.url.rstrip("/"),
+        **env_ref,
         "experience": args.experience,
         "vertical": args.vertical,
         "productId": product_id,
