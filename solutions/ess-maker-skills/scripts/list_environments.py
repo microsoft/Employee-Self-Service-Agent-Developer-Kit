@@ -14,8 +14,10 @@ Usage (standalone):
     python scripts/list_environments.py --select 2
 """
 
+import base64
 import json
 import os
+import re
 import sys
 from urllib.parse import urlparse
 
@@ -25,6 +27,37 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from flightcheck.pp_admin_client import PPAdminClient
 from flightcheck.powerplatform_client import PowerPlatformClient
 from auth import discover_tenant
+
+
+_GUID_SUFFIX = re.compile(
+    r"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+    r"[0-9a-f]{4}-[0-9a-f]{12})$",
+    re.IGNORECASE,
+)
+
+
+def extract_environment_guid(environment_name):
+    """Extract the AgentBuilder GUID from a BAP environment name."""
+    match = _GUID_SUFFIX.search(str(environment_name or ""))
+    return match.group(1).lower() if match else None
+
+
+def tenant_id_from_access_token(token):
+    """Read the tenant claim from an access token returned by MSAL."""
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+    except (IndexError, TypeError, ValueError, json.JSONDecodeError) as exc:
+        raise ValueError(
+            "Power Platform authentication returned an unreadable token."
+        ) from exc
+    tenant_id = claims.get("tid")
+    if not isinstance(tenant_id, str) or not tenant_id:
+        raise ValueError(
+            "Power Platform authentication token does not contain a tenant ID."
+        )
+    return tenant_id
 
 
 def parse_raw_environments(raw_envs):
@@ -48,6 +81,7 @@ def parse_raw_environments(raw_envs):
 
         environments.append({
             "id": env_id,
+            "agentBuilderEnvironmentId": extract_environment_guid(env_id),
             "displayName": display_name,
             "type": env_type,
             "state": state,
@@ -58,19 +92,17 @@ def parse_raw_environments(raw_envs):
     return environments
 
 
-def list_environments():
-    """Fetch all environments from the Power Platform Admin API.
+def _fetch_raw_environments():
+    """Fetch raw environments and return the authenticated access token.
 
     Authenticates using "organizations" authority (multi-tenant) so no
     prior configuration or URL is needed.
-
-    Returns a list of environment records with extracted metadata.
     """
     print("Authenticating to Power Platform Admin API...")
     print("A browser window will open for sign-in.")
     pp_admin = PPAdminClient("organizations")
     try:
-        pp_admin.authenticate(include_flow=False)
+        token = pp_admin.authenticate(include_flow=False)
     except Exception as e:
         print(f"ERROR: Power Platform authentication failed - {e}")
         print("Ensure you have Power Platform environment access.")
@@ -83,6 +115,23 @@ def list_environments():
         print("ERROR: Could not list environments. Insufficient permissions.")
         sys.exit(1)
 
+    return raw_envs, token
+
+
+def list_environments_with_tenant():
+    """Fetch normalized environments and the authenticated tenant ID."""
+    raw_envs, token = _fetch_raw_environments()
+    try:
+        tenant_id = tenant_id_from_access_token(token)
+    except ValueError as exc:
+        print(f"ERROR: Could not resolve the authenticated tenant - {exc}")
+        sys.exit(1)
+    return parse_raw_environments(raw_envs), tenant_id
+
+
+def list_environments():
+    """Fetch all normalized environments without returning auth context."""
+    raw_envs, _token = _fetch_raw_environments()
     return parse_raw_environments(raw_envs)
 
 

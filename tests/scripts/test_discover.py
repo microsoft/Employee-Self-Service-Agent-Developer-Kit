@@ -64,6 +64,50 @@ class TestListEnvironments:
         assert all(e["instanceUrl"] for e in dv_envs)
 
     @patch("list_environments.PPAdminClient")
+    def test_da_listing_keeps_environment_without_dataverse(self, mock_cls):
+        import base64
+
+        import list_environments
+
+        environment_id = "00000000-0000-4000-8000-000000001111"
+        tenant_id = "00000000-0000-4000-8000-000000009999"
+        payload = base64.urlsafe_b64encode(
+            json.dumps({"tid": tenant_id}).encode("utf-8")
+        ).decode("ascii").rstrip("=")
+        mock_instance = mock_cls.return_value
+        mock_instance.authenticate.return_value = (
+            f"header.{payload}.signature"
+        )
+        mock_instance.get_environments.return_value = [
+            {
+                "name": f"Default-{environment_id}",
+                "properties": {
+                    "displayName": "DA without Dataverse",
+                    "environmentSku": "Developer",
+                    "linkedEnvironmentMetadata": {},
+                    "states": {"runtime": {"id": "Enabled"}},
+                },
+            }
+        ]
+
+        environments, authenticated_tenant = (
+            list_environments.list_environments_with_tenant()
+        )
+
+        assert authenticated_tenant == tenant_id
+        assert environments == [
+            {
+                "id": f"Default-{environment_id}",
+                "agentBuilderEnvironmentId": environment_id,
+                "displayName": "DA without Dataverse",
+                "type": "Developer",
+                "state": "Enabled",
+                "instanceUrl": "",
+                "region": "",
+            }
+        ]
+
+    @patch("list_environments.PPAdminClient")
     def test_strips_trailing_slash_from_instance_url(self, mock_cls):
         """instanceUrl trailing slashes are normalized."""
         import list_environments
