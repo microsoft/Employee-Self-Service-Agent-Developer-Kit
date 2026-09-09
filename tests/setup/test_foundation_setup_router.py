@@ -14,6 +14,13 @@ _SOLUTION = _REPO_ROOT / "solutions" / "ess-maker-skills"
 _FOUNDATION = (
     _SOLUTION / "src" / "skills" / "foundation-setup" / "SKILL.md"
 )
+_DA_EXISTING_DEV = (
+    _SOLUTION
+    / "src"
+    / "skills"
+    / "foundation-setup"
+    / "da-existing-dev.md"
+)
 _SCOPE = _SOLUTION / "src" / "skills" / "foundation-setup" / "scope.md"
 _PREREQUISITES = (
     _SOLUTION / "src" / "skills" / "foundation-setup" / "prerequisites.md"
@@ -92,10 +99,54 @@ def test_foundation_dispatches_all_playbooks() -> None:
         "src/skills/foundation-setup/install-starters.md",
         "src/skills/foundation-setup/readiness.md",
         "src/skills/foundation-setup/handoff.md",
+        "src/skills/foundation-setup/da-existing-dev.md",
     }
 
     assert expected <= set(_PATH_RE.findall(text))
     assert ".local/connect/workday/config.json" not in text
+
+
+def test_existing_da_dev_route_precedes_dataverse_state() -> None:
+    router = _FOUNDATION.read_text(encoding="utf-8")
+    da_path = "src/skills/foundation-setup/da-existing-dev.md"
+
+    assert router.index(da_path) < router.index(
+        "python scripts/setup_state.py init"
+    )
+    assert ".local/setup/da-connection.json" in router
+    assert "Do not run `scripts/setup_state.py` for that path." in router
+    assert _DA_EXISTING_DEV.is_file()
+
+
+def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
+    text = _DA_EXISTING_DEV.read_text(encoding="utf-8")
+
+    assert "setup_existing_da.py list-environments" in text
+    assert "setup_existing_da.py status" in text
+    assert "setup_existing_da.py list-agents" in text
+    assert "setup_existing_da.py attach" in text
+    assert "--target-url" in text
+    assert "authenticated access token supplies the tenant identity" in text
+    assert "not a cross-tenant or non-production-ring inventory" in text
+    assert "Enter a known agent ID" in text
+    assert "Do not classify the agents as HR, IT, Hub" in text
+    assert "Do not run the Dataverse foundation steps" in text
+    assert "Do not claim that DA push, publish" in text
+    assert "scripts/setup_state.py" not in text
+    assert "scripts/discover.py" not in text
+
+
+def test_da_url_targeting_does_not_change_cea_playbooks() -> None:
+    cea_text = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (_SCOPE, _ENVIRONMENT)
+    )
+
+    assert "--target-url" not in cea_text
+    assert "setup_existing_da.py" not in cea_text
+    assert "python scripts/discover.py" in cea_text
+    assert "--resolve-environment-url" in cea_text
+    assert "flightcheck/cli.py" in cea_text
 
 
 def test_capacity_is_an_automated_blocking_gate() -> None:

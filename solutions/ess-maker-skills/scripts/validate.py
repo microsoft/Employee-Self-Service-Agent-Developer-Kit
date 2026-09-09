@@ -138,6 +138,12 @@ def main():
     name_filter = args[0].lower() if args else None
 
     config = load_config()
+    if config.get("agent", {}).get("transport") == "agentbuilder":
+        print(
+            "ERROR: Server-backed validation for AgentBuilder DA workspaces "
+            "is not available yet; no Dataverse request was attempted."
+        )
+        sys.exit(1)
     env_url = config["dataverseEndpoint"]
     agent_dir = config["agent"]["folder"]
     schema_name = config["agent"]["schemaName"]

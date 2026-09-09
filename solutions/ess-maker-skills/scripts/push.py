@@ -1087,6 +1087,13 @@ def main():
     only_globs = parse_only_globs(sys.argv[1:])
 
     config = load_config()
+    if config.get("agent", {}).get("transport") == "agentbuilder":
+        print(
+            "ERROR: This DA workspace uses AgentBuilder. Native DA push is "
+            "not available in this workstream yet; no Dataverse request was "
+            "attempted."
+        )
+        sys.exit(1)
     agent_dir = config["agent"]["folder"]
     env_url = config["dataverseEndpoint"]
     bot_id = config["agent"]["botId"]

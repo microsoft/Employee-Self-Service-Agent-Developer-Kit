@@ -64,6 +64,24 @@ class TestParseOnlyGlobs:
         assert globs == ["topics/A.mcs.yml", "topics/B.mcs.yml"]
 
 
+def test_da_push_stops_before_dataverse_configuration(
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setattr(
+        push,
+        "load_config",
+        lambda: {"agent": {"transport": "agentbuilder"}},
+    )
+    monkeypatch.setattr("sys.argv", ["push.py"])
+
+    with pytest.raises(SystemExit) as error:
+        push.main()
+
+    assert error.value.code == 1
+    assert "no Dataverse request was attempted" in capsys.readouterr().out
+
+
 class TestMatchesOnly:
     def test_empty_globs_matches_everything(self):
         assert push.matches_only("anything/at/all.yml", []) is True

@@ -24,6 +24,13 @@ are explicitly outside this skill.
 
 ## Start
 
+Before initializing canonical foundation state, use the existing DA Dev path when either condition is true:
+
+- the maker explicitly asks to connect an existing editable DA Dev agent; or
+- `.local/setup/da-connection.json` exists.
+
+Read `src/skills/foundation-setup/da-existing-dev.md` and follow it. Do not run `scripts/setup_state.py` for that path.
+
 Record anonymous usage telemetry best-effort:
 
 ```text
