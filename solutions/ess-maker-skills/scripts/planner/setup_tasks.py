@@ -329,6 +329,13 @@ _SYSTEM_SLOTS: dict[str, dict[tuple[int, str], _Slot]] = {
 }
 
 
+# Workstream/theme label a system's tasks group under in the plan view
+# (plan_model._render_tasks). Falls back to a title-cased form of the system id.
+_SYSTEM_STREAM: dict[str, str] = {
+    "workday": "Workday",
+}
+
+
 # --- decomposition ---------------------------------------------------------
 
 
@@ -350,6 +357,7 @@ class SetupTask:
     produces: list[str] = field(default_factory=list)
     consumes: list[str] = field(default_factory=list)
     command: str | None = None
+    stream: str = ""
 
     def as_dict(self) -> dict:
         return {
@@ -369,6 +377,7 @@ class SetupTask:
             "produces": list(self.produces),
             "consumes": list(self.consumes),
             "command": self.command,
+            "stream": self.stream,
         }
 
     def add_task_command(self) -> str:
@@ -376,6 +385,10 @@ class SetupTask:
         parts = [
             "python scripts/planner/cli.py add-task",
             f'--id {self.task_id}',
+        ]
+        if self.stream:
+            parts.append(f'--stream "{self.stream}"')
+        parts += [
             f'--title "{self.title}"',
             f'--description "{self.description}"',
             f"--role {self.role}",
@@ -463,6 +476,8 @@ def _build_task(
         role_line += " No attestable role fits — assign a person directly."
     description = f"{how}. {grounding} {role_line}"
 
+    stream_display = _SYSTEM_STREAM.get(system, system.replace("-", " ").title())
+
     return SetupTask(
         task_id=task_id,
         title=title,
@@ -480,6 +495,7 @@ def _build_task(
         produces=produces,
         consumes=consumes,
         command=command,
+        stream=stream_display,
     )
 
 

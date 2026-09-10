@@ -125,9 +125,9 @@ per **First** above instead of re-running the interview.)
 
 | Phase | What | Read |
 |-------|------|------|
-| 1. Research | Ground on Microsoft Learn (TOC crawl) → capabilities, prerequisites, roles, produced keys | `src/skills/planner/research.md` |
+| 1. Research | Ground on Microsoft Learn (TOC crawl) **and the kit's own skills** (setup/connect checklists + role maps) → capabilities, prerequisites, roles, produced/consumed keys, and the deterministic setup decomposition | `src/skills/planner/research.md` |
 | 2. Interview | Ask only what research couldn't ground; capture intent — then **eagerly render an eval preview** (golden prompts) once scenarios + goals are captured | `src/skills/planner/interview.md` |
-| 3. Model | Emit atomic Tasks (title + description + grounded role + produces) | `src/skills/planner/model.md` |
+| 3. Model | Emit the **full** atomic Task set (title + description + grounded role + produces/consumes), then **show its sequencing** — parallel waves, what's blocked, the critical path | `src/skills/planner/model.md` |
 | 4. Assign | Flow 1 — list holders of each grounded role, sponsor picks a person | `src/skills/planner/assign.md` |
 | 5. Evaluate (preview) | Render a scenario-based eval **preview** (golden prompts) — **render-only, generates nothing**; invoked **eagerly from Phase 2** once scenarios + goals are captured | `src/skills/planner/evaluate.md` |
 | 6. Capture | After a Task's work runs, observe/ask and pin what it produced | `src/skills/planner/capture.md` |
@@ -137,12 +137,17 @@ read `src/skills/planner/mytasks.md`.
 
 > **Critical — build the whole plan, not just setup.** Run *all six phases in
 > order*. Phase 3 must emit the **full task set** grounded in research and the
-> sponsor's chosen systems/scenarios: the setup task **plus** one connect task
-> per system (e.g. Workday, ServiceNow), authoring tasks per scenario, an evals
-> task, and publish — each with a Learn-grounded role and `produces`/`consumes`
+> sponsor's chosen systems/scenarios: the setup task **plus**, for each captured
+> system, its **role-boundary connect decomposition** researched from that
+> system's setup checklist (Phase 1 axis 2 — Workday is *seven* tasks across five
+> roles, not one coarse "connect" task), authoring tasks per scenario, an evals
+> task, and publish — each with a grounded role and `produces`/`consumes`
 > keys. **Do not stop after adding the "run setup" task.** The interview
 > (Phase 2) must capture *which systems* and *which scenarios* before Phase 3 —
-> those drive the tasks and the roles. As soon as scenarios + goals are captured
+> those drive the tasks and the roles. Once the full set is modelled, **show its
+> sequencing** — the parallel waves, what's blocked on whom, and the critical
+> path (`model.md` → *Sequence the tasks*) — so the rollout can be staffed in
+> parallel. As soon as scenarios + goals are captured
 > (Phase 2), the **eager eval preview** (Phase 5) renders them as golden prompts —
 > **render-only: it generates nothing and doesn't touch the eval skill**.
 > After setup runs, use Phase 6 to brief each downstream assignee with what setup
