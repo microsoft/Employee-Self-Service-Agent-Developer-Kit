@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from mcp.server.fastmcp.exceptions import ToolError
 from pydantic_settings.exceptions import IncompleteFieldDefinitionWarning
 
 
@@ -57,6 +58,9 @@ def test_widget_origin_uses_production_fallback() -> None:
 
 
 class _FakeClient:
+    def __init__(self) -> None:
+        self.open_calls: list[str] = []
+
     async def view_agent_icon(self, title_id: str) -> dict[str, Any]:
         icon = base64.b64encode(
             agentconfig_server.PNG_SIGNATURE + b"test-image-content"
@@ -68,12 +72,15 @@ class _FakeClient:
         }
 
     async def open_accent_color(self, title_id: str) -> dict[str, Any]:
+        self.open_calls.append("open_accent_color")
         return {"titleId": title_id, "branding": {"theming": []}}
 
     async def open_quick_links(self, title_id: str) -> dict[str, Any]:
+        self.open_calls.append("open_quick_links")
         return {"titleId": title_id, "quickLinksConfig": {"quickLinks": []}}
 
     async def open_starter_prompts(self, title_id: str) -> dict[str, Any]:
+        self.open_calls.append("open_starter_prompts")
         return {
             "titleId": title_id,
             "schemaName": "msdyn_copilotforemployeeselfservicehr",
@@ -193,13 +200,28 @@ def test_openers_and_app_tools_return_structured_content(monkeypatch) -> None:
             agentconfig_server.PNG_SIGNATURE
         )
 
-        for tool_name in WIDGETS:
+        expected_baselines = {
+            "open_accent_color": {
+                "titleId": "title-1",
+                "branding": {"theming": []},
+            },
+            "open_quick_links": {
+                "titleId": "title-1",
+                "quickLinksConfig": {"quickLinks": []},
+            },
+            "open_starter_prompts": {
+                "titleId": "title-1",
+                "schemaName": "msdyn_copilotforemployeeselfservicehr",
+                "pivots": [],
+            },
+        }
+        for tool_name, expected_baseline in expected_baselines.items():
             opened = await agentconfig_server.mcp.call_tool(
                 tool_name,
                 {"titleId": "title-1"},
             )
             assert opened.isError is False
-            assert opened.structuredContent["titleId"] == "title-1"
+            assert opened.structuredContent == expected_baseline
             assert opened.content
 
         updated = await agentconfig_server.mcp.call_tool(
@@ -243,6 +265,170 @@ def test_open_starter_prompts_carries_schema_name(monkeypatch) -> None:
         }
 
     asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "baseline", "draft"),
+    [
+        (
+            "open_accent_color",
+            {"titleId": "title-1", "branding": {"theming": []}},
+            {
+                "branding": {
+                    "theming": [
+                        {"name": "light", "accentColor": "#0F6CBD"},
+                        {"name": "dark", "accentColor": "#479EF5"},
+                    ]
+                }
+            },
+        ),
+        (
+            "open_quick_links",
+            {
+                "titleId": "title-1",
+                "quickLinksConfig": {"quickLinks": []},
+            },
+            {
+                "quickLinksConfig": {
+                    "quickLinks": [
+                        {
+                            "displayText": "Benefits",
+                            "address": "https://contoso.example/benefits",
+                        }
+                    ]
+                }
+            },
+        ),
+        (
+            "open_starter_prompts",
+            {
+                "titleId": "title-1",
+                "schemaName": "msdyn_copilotforemployeeselfservicehr",
+                "pivots": [],
+            },
+            {
+                "pivots": [
+                    {
+                        "displayName": "Human resources",
+                        "conversationStarterPrompts": [
+                            {
+                                "title": "Benefits",
+                                "displayText": "What benefits are available to me?",
+                            }
+                        ],
+                    }
+                ]
+            },
+        ),
+    ],
+)
+def test_openers_append_valid_drafts_to_fresh_baselines(
+    monkeypatch,
+    tool_name: str,
+    baseline: dict[str, Any],
+    draft: dict[str, Any],
+) -> None:
+    client = _FakeClient()
+    monkeypatch.setattr(agentconfig_server, "_client", client)
+
+    opened = asyncio.run(
+        agentconfig_server.mcp.call_tool(
+            tool_name,
+            {"titleId": "title-1", "draft": draft},
+        )
+    )
+
+    assert opened.isError is False
+    assert opened.structuredContent == {**baseline, "draft": draft}
+    assert client.open_calls == [tool_name]
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "draft"),
+    [
+        ("open_accent_color", {"branding": {"theming": []}}),
+        (
+            "open_quick_links",
+            {"quickLinksConfig": {"quickLinks": []}},
+        ),
+        ("open_starter_prompts", {"pivots": []}),
+    ],
+)
+def test_openers_preserve_explicit_empty_drafts(
+    monkeypatch,
+    tool_name: str,
+    draft: dict[str, Any],
+) -> None:
+    monkeypatch.setattr(agentconfig_server, "_client", _FakeClient())
+
+    opened = asyncio.run(
+        agentconfig_server.mcp.call_tool(
+            tool_name,
+            {"titleId": "title-1", "draft": draft},
+        )
+    )
+
+    assert opened.isError is False
+    assert opened.structuredContent["draft"] == draft
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "draft"),
+    [
+        (
+            "open_accent_color",
+            {
+                "branding": {
+                    "theming": [
+                        {
+                            "name": "light",
+                            "accentColor": "#0F6CBD",
+                            "hoverColor": "#115EA3",
+                        }
+                    ]
+                }
+            },
+        ),
+        (
+            "open_quick_links",
+            {
+                "quickLinksConfig": {
+                    "quickLinks": [],
+                    "lastUpdatedAt": "2026-09-03T00:00:00Z",
+                }
+            },
+        ),
+        (
+            "open_starter_prompts",
+            {
+                "pivots": [
+                    {
+                        "displayName": "Human resources",
+                        "conversationStarterPrompts": [],
+                        "rowKey": "widget-owned",
+                    }
+                ]
+            },
+        ),
+    ],
+)
+def test_openers_reject_client_owned_draft_fields(
+    monkeypatch,
+    tool_name: str,
+    draft: dict[str, Any],
+) -> None:
+    client = _FakeClient()
+    monkeypatch.setattr(agentconfig_server, "_client", client)
+
+    with pytest.raises(ToolError, match="validation error"):
+        asyncio.run(
+            agentconfig_server.mcp.call_tool(
+                tool_name,
+                {"titleId": "title-1", "draft": draft},
+            )
+        )
+
+    assert client.open_calls == []
 
 
 def test_view_agent_icon_returns_text_when_no_custom_icon_exists(

@@ -391,10 +391,12 @@ def test_shipped_defaults_materialize_the_active_python_interpreter(
     mcp_config.materialize_defaults(tmp_path)
     config = json.loads((tmp_path / mcp_config.CONFIG_PATH).read_text())
 
-    assert config["servers"]["ess-landing-page-config"] == {
-        "command": os.path.abspath(sys.executable),
-        "args": ["server.py"],
-        "cwd": "${workspaceFolder}/src/mcp/agentconfig_landing_page",
+    assert config["servers"] == {
+        "ess-landing-page-config": {
+            "command": os.path.abspath(sys.executable),
+            "args": ["server.py"],
+            "cwd": "${workspaceFolder}/src/mcp/agentconfig_landing_page",
+        },
     }
 
 

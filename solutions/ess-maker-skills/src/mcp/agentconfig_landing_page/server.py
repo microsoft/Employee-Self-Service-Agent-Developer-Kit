@@ -20,6 +20,12 @@ from mcp.server.fastmcp import FastMCP
 from mcp.types import CallToolResult, ImageContent, TextContent, ToolAnnotations
 
 from client import AgentConfigApiError, AgentConfigClient
+from drafts import (
+    AccentColorDraft,
+    DraftModel,
+    QuickLinksDraft,
+    StarterPromptsDraft,
+)
 
 # Import the telemetry SDK from scripts/ when launched directly. MCP Apps
 # binds widget tool calls to the connection serving the widget resources, so
@@ -223,11 +229,15 @@ async def _open_widget(
     request: Callable[[], Awaitable[dict[str, Any]]],
     *,
     success_message: str,
+    draft: DraftModel | None = None,
 ) -> CallToolResult:
     try:
         payload = await request()
     except (AgentConfigApiError, httpx.RequestError, ValueError) as error:
         return _widget_error_result(error)
+
+    if draft is not None:
+        payload = {**payload, "draft": draft.model_dump(mode="json")}
 
     return _structured_result(payload, success_message)
 
@@ -367,11 +377,15 @@ async def delete_agent_config(titleId: str) -> CallToolResult:
     meta=_widget_tool_meta(ACCENT_COLOR_RESOURCE_URI),
     annotations=_READ_ONLY_ANNOTATIONS,
 )
-async def open_accent_color(titleId: str) -> CallToolResult:
-    """Open the accent-color widget with the current branding section."""
+async def open_accent_color(
+    titleId: str,
+    draft: AccentColorDraft | None = None,
+) -> CallToolResult:
+    """Open the accent-color widget with its baseline and optional proposal."""
     return await _open_widget(
         lambda: get_client().open_accent_color(titleId),
         success_message="Opened the accent-color editor.",
+        draft=draft,
     )
 
 
@@ -379,11 +393,15 @@ async def open_accent_color(titleId: str) -> CallToolResult:
     meta=_widget_tool_meta(QUICK_LINKS_RESOURCE_URI),
     annotations=_READ_ONLY_ANNOTATIONS,
 )
-async def open_quick_links(titleId: str) -> CallToolResult:
-    """Open the quick-links widget with the current section."""
+async def open_quick_links(
+    titleId: str,
+    draft: QuickLinksDraft | None = None,
+) -> CallToolResult:
+    """Open the quick-links widget with its baseline and optional proposal."""
     return await _open_widget(
         lambda: get_client().open_quick_links(titleId),
         success_message="Opened the quick-links editor.",
+        draft=draft,
     )
 
 
@@ -391,11 +409,15 @@ async def open_quick_links(titleId: str) -> CallToolResult:
     meta=_widget_tool_meta(STARTER_PROMPTS_RESOURCE_URI),
     annotations=_READ_ONLY_ANNOTATIONS,
 )
-async def open_starter_prompts(titleId: str) -> CallToolResult:
-    """Open the starter-prompts widget with the current pivots."""
+async def open_starter_prompts(
+    titleId: str,
+    draft: StarterPromptsDraft | None = None,
+) -> CallToolResult:
+    """Open the starter-prompts widget with its baseline and optional proposal."""
     return await _open_widget(
         lambda: get_client().open_starter_prompts(titleId),
         success_message="Opened the starter-prompts editor.",
+        draft=draft,
     )
 
 

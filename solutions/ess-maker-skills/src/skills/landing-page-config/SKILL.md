@@ -4,7 +4,8 @@ description: >-
   Configure an ESS landing page through the AgentConfiguration MCP server.
   Use for branding and accent colors, quick links, starter prompts, Stay Up
   to Date, Quick Access, reading the agent name or icon, deleting all landing
-  page configuration, and any call to the ess-landing-page-config MCP server.
+  page configuration, suggesting context-grounded landing-page changes, and
+  any call to the ess-landing-page-config MCP server.
 ---
 
 # Landing Page Configuration
@@ -25,8 +26,9 @@ If the file does not exist, or its `setup` value is not `"complete"`, show:
 and STOP.
 
 Reuse the loaded configuration during target resolution. Requests that only ask
-what a landing-page setting controls do not require local setup; follow
-**Explain landing-page settings** directly.
+what a landing-page setting controls or what this skill can do do not require
+local setup; follow **Explain landing-page settings** or
+**Describe landing-page capabilities** directly.
 
 ## MCP availability check
 
@@ -100,15 +102,32 @@ unavailable, tell the maker to reload the VS Code window, rerun
    conversation. A new maker turn does not reset that state. Once existence is
    established, never call `get_agent_config` solely as a preflight; invoke the
    requested `open_*` tool directly.
-6. When the maker supplies exact values or an exact deterministic change, use
-   the direct-update flow. Read and merge the current section only when the
-   requested change does not provide its complete replacement. Call
-   `update_agent_config` directly, report the successful update, and do not open
-   an editing widget.
-7. When the maker wants to explore, choose, review, or edit a widget-supported
-   section without supplying an exact change, call that surface's `open_*` tool.
-   The widget loads the current section and owns editing, validation,
-   confirmation, and publishing.
+6. Classify every widget-supported request into one of three flows:
+   - For exploration or editing with an open value, call the matching `open_*`
+     tool with `titleId` only. Example: "Update my starter prompts" opens
+     `open_starter_prompts` with the current server baseline so the maker can
+     choose the changes in the widget.
+   - For preview or review of a proposal the agent can synthesize, build and
+     validate the complete replacement section, then call the matching `open_*`
+     tool with `titleId` and `draft`. Example: "Set my accent color to blue"
+     synthesizes complete light and dark `#RRGGBB` values and opens
+     `open_accent_color` with those values as the draft. Before synthesizing
+     Quick Links, Starter Prompts, or another content-bearing draft, follow
+     **Gather context for suggested content** and ask guiding questions.
+   - For exact values or another deterministic change, use the direct-update
+     flow. Read and merge the current section only when the request does not
+     provide its complete replacement, then call `update_agent_config`.
+     Examples:
+     - "Add a quick link for xyz" collects any missing `displayText` and
+       `address`, merges the link into the complete current section, and calls
+       `update_agent_config` directly.
+     - "Delete my starter prompts" obtains the required destructive
+       confirmation, then calls `update_agent_config` directly with
+       `pivots: []`.
+     - "Upload these starter prompts: <attached CSV or inline list>" maps the
+       supplied rows to the complete `pivots` wire schema, validates them, and
+       calls `update_agent_config` directly.
+7. A suggested `draft` is unpublished preview state. The widget keeps the saved server section as its baseline, displays the supplied draft as proposed edits, and owns the first write when the maker selects Publish. Omitting `draft` opens existing values; an explicit empty section list previews clearing. Follow **Widget opening state** for the Starter Prompts default-suggestion behavior.
 8. Treat every provided config section as a bulk replacement:
    - An omitted section remains unchanged.
    - A provided section replaces the complete section.
@@ -117,8 +136,12 @@ unavailable, tell the maker to reload the VS Code window, rerun
    the complete resulting section for chat-driven surfaces.
 10. Before a model-driven branding update containing colors, run
    `python scripts/validate_branding.py` for each changed theme.
-11. Treat failed contrast validation as advisory. Warn the maker, show the
-   result, and require explicit confirmation before submitting that color.
+11. A generated color proposal must pass contrast validation before it becomes
+   a widget draft. When a generated candidate fails, discard it, synthesize a
+   compliant candidate, and validate again. Do not show the failed candidate or
+   warn the maker about it. When the maker supplies an exact color and it fails
+   contrast validation, show the result and require explicit confirmation.
+   Call `update_agent_config` only after the maker confirms that exact value.
 12. Send only `name` and `accentColor` for each theme. The server derives
     `hoverColor` and `activeColor`.
 13. Confirm section clears and branding resets before writing. An exact
@@ -141,9 +164,7 @@ unavailable, tell the maker to reload the VS Code window, rerun
    match, do not respond to the maker or continue to another MCP call until
    the resolved `titleId` is persisted and verified in `.local/config.json`
    according to **Persist a discovered title ID**.
-20. When `open_starter_prompts` returns no starter prompts, tell the maker that
-    the widget opened with a default set of starter prompts. Explain that they
-    can edit and publish the defaults or publish them as-is.
+20. When `open_starter_prompts` is called with `draft` omitted and an empty baseline, tell the maker that the widget opened with localized default draft suggestions. A supplied non-empty draft opens those suggestions over either an empty or populated baseline. An explicit `draft: { "pivots": [] }` previews an empty list and suppresses default suggestions. Exact clear requests use `update_agent_config` directly after the required confirmation.
 21. `delete_agent_config` removes every landing-page configuration section and
     restores the default landing-page experience. It is destructive. Always
     explain that effect and obtain explicit confirmation immediately before
@@ -152,6 +173,9 @@ unavailable, tell the maker to reload the VS Code window, rerun
 22. When the maker asks what a setting controls for employees, follow
     **Explain landing-page settings**. Use Microsoft Learn for end-user behavior
     only; use this skill and the MCP tool contracts for configuration behavior.
+23. When the maker asks what they can do, asks for help, or asks whether the
+    skill can suggest changes, follow **Describe landing-page capabilities**.
+    Include context-grounded suggested drafts as a first-class capability.
 
 ## Resolve the target
 
@@ -279,6 +303,29 @@ the MCP tool contracts define how configuration is performed here.
 | Stay up to date | Show a personalized carousel of actionable cards for in-progress ticket status, required follow-ups, and time-sensitive tasks. Employees can select a card to start a related conversation. Cards come from configured ticket-related sources and do not create or modify tickets. |
 | Quick Access | Show personalized, high-frequency information cards, such as time-off balance/status, upcoming paid holidays, and service anniversaries. Employees can select a card to start a conversation. |
 
+## Describe landing-page capabilities
+
+When the maker asks what they can do, asks for landing-page help, or asks for
+available capabilities, explain that this skill can:
+
+- summarize the current landing-page configuration and explain what each
+  setting controls for employees;
+- open Accent Color, Quick Links, or Starter Prompts for interactive editing;
+- suggest context-grounded changes, open the complete proposal as an
+  unpublished widget draft, and let the maker review it before publishing;
+- apply exact values, deterministic edits, complete lists, and CSV/inline
+  imports directly after validation;
+- clear an individual section with the required confirmation, or remove all
+  landing-page configuration and restore defaults with explicit confirmation;
+  and
+- display the read-only agent name and icon.
+
+When describing suggested changes, explain that the agent can use the target
+agent's domain, configured topics, connected integrations, workflows, knowledge
+sources, evaluations, and current landing-page content to prepare a relevant
+draft. Content-bearing suggestions begin with guiding questions so the proposal
+reflects the maker's priorities.
+
 ## Start a guided configuration
 
 When the maker asks to configure or set up the landing page:
@@ -311,19 +358,191 @@ When the maker asks to configure or set up the landing page:
 | View the agent name | Resolve the target and establish existence -> use an available full config result or call `get_agent_config` -> report the read-only name |
 | Show the agent icon | Resolve `titleId` -> `view_agent_icon`; the tool displays the read-only PNG |
 | Apply exact branding/accent values | Resolve the target and establish existence -> get current branding only when a merge is required -> validate changed colors -> `update_agent_config` -> report success |
-| Explore or edit branding without exact values | Resolve the target and establish existence -> `open_accent_color`; the widget validates and publishes |
+| Preview a synthesized branding/accent proposal | Resolve the target and establish existence -> build the complete branding section -> validate changed colors -> `open_accent_color` with `titleId` and `draft`; the widget reviews and publishes |
+| Explore or edit branding with an open value | Resolve the target and establish existence -> `open_accent_color` with `titleId` only; the widget validates and publishes |
 | Apply an exact quick-links list/CSV or deterministic link change | Resolve the target and establish existence -> get current links only when a merge is required -> validate the complete result -> `update_agent_config` -> report success |
-| Explore or edit quick links without an exact change | Resolve the target and establish existence -> `open_quick_links`; the widget validates and publishes |
+| Preview a synthesized quick-links proposal | Resolve the target and establish existence -> gather agent context and ask guiding questions -> build and validate the complete quick-links section -> `open_quick_links` with `titleId` and `draft`; the widget reviews and publishes |
+| Explore or edit quick links with an open value | Resolve the target and establish existence -> `open_quick_links` with `titleId` only; the widget validates and publishes |
 | Apply an exact starter-prompts list/CSV or deterministic prompt change | Resolve the target and establish existence -> get current pivots only when a merge is required -> validate the complete result -> `update_agent_config` -> report success |
-| Explore or edit starter prompts without an exact change | Resolve the target and establish existence -> `open_starter_prompts`; the widget supplies defaults when empty, then validates and publishes |
+| Preview a synthesized starter-prompts proposal | Resolve the target and establish existence -> gather agent context and ask guiding questions -> build and validate the complete pivots section -> `open_starter_prompts` with `titleId` and `draft`; the widget reviews and publishes |
+| Explore or edit starter prompts with an open value | Resolve the target and establish existence -> `open_starter_prompts` with `titleId` only; the widget opens existing values, or localized default draft suggestions when the saved baseline is empty, then validates and publishes |
 | Update insight cards or another surface without an editor | Resolve the target and establish existence -> use an available full config result or call `get_agent_config` -> merge and validate complete affected section(s) -> `update_agent_config` |
 | Remove all landing-page configuration | Follow **Delete all landing-page configuration** |
 | Update the agent name or icon | Explain that the field is read-only and do not call an update tool |
 
-The maker does not need to name a tool explicitly. A request such as "change my
-accent color" opens the corresponding editor because the value is still open.
-A request such as "change my light accent color to `#CCAA00`" supplies an exact
-change and uses `update_agent_config` directly.
+The maker does not need to name a tool explicitly. "Change my accent color"
+opens the editor with its server baseline. "Set my accent color to blue"
+synthesizes complete light and dark six-digit colors and opens them as a draft.
+"Change my light accent color to `#CCAA00`" supplies an exact change and uses
+`update_agent_config` directly.
+
+## Widget opening state
+
+The saved server section is the baseline. Omitting `draft` opens existing values. Supplying `draft` opens that complete proposed section while preserving the baseline until Publish. An explicit empty section list previews clearing; it is a supplied value and must remain present in the draft payload.
+
+For Starter Prompts, an absent or empty saved `pivots` array is an empty baseline:
+
+| Saved baseline | `draft` argument | Editor state |
+|---|---|---|
+| Non-empty | Omitted | Existing saved prompts |
+| Empty | Omitted | Localized default draft suggestions |
+| Empty | Non-empty `pivots` | Supplied draft suggestions |
+| Non-empty | Non-empty `pivots` | Supplied draft suggestions |
+| Non-empty | `{"pivots": []}` | Empty proposal previewing clearing of saved prompts |
+| Empty | `{"pivots": []}` | Explicit empty proposal with default suggestions suppressed |
+
+Use the complete surface-specific draft object for a clear preview: `draft: { "branding": { "theming": [] } }`, `draft: { "quickLinksConfig": { "quickLinks": [] } }`, or `draft: { "pivots": [] }`. Omitting `draft` preserves existing values, subject to the Starter Prompts default-suggestion behavior above.
+
+A request to clear or reset a section is an exact deterministic change. Obtain the required confirmation and call `update_agent_config` directly with the empty section. Open a clear preview only when the maker explicitly requests a preview or review of the removal before publishing.
+
+## Gather context for suggested content
+
+Use this flow before synthesizing Quick Links, Starter Prompts, or another
+content-bearing draft. A bare request such as "suggest some starter prompts"
+starts discovery and guiding questions. Draft generation follows after the
+maker's priorities are clear.
+
+1. Read the target identity from the `.local/config.json` already loaded:
+   - use `name` and `schemaName` to distinguish HR, IT, and Core agents;
+   - use `folder` as the source of the target agent's current authored content;
+     and
+   - for a Core agent, ask whether the landing page should combine HR and IT
+     scenarios or emphasize one domain.
+2. Reuse the current AgentConfiguration result or call `get_agent_config`.
+   Preserve useful category names and ordering, avoid duplicate links/prompts,
+   and focus suggestions on gaps in the current landing page.
+3. Inspect current files under `{agent.folder}`:
+   - Read every `topics/*.mcs.yml` file. Treat `OnRecognizedIntent` topics with
+     `triggerQueries` or `modelDescription` as user-facing capabilities. Use
+     their names, trigger phrases, model descriptions, first `SendActivity`,
+     `InvokeFlowAction`, and `BeginDialog` targets to understand what employees
+     can actually ask the agent to do.
+   - Use `snapshot.md` as an index of topic categories, template-configuration
+     descriptions/status, workflows and their topic references, and evaluation
+     sets. Verify a candidate against the current source files before using it.
+   - Inspect `workflows/`, `connectionreferences.mcs.yml`, and locally available
+     workflow metadata to identify capabilities backed by configured
+     integrations.
+   - Inspect `knowledge/*.mcs.yml` to establish whether knowledge sources are
+     configured. Ask the maker which source content or employee need should be
+     represented, using local presence to make the question relevant.
+   - Use existing evaluation cases as secondary evidence for natural employee
+     phrasing and important scenarios only when a current topic supports the
+     capability.
+4. Inspect durable integration state when present:
+   - ServiceNow is connected when `.local/connect/servicenow/steps.md` exists
+     and every checklist item is complete.
+   - Workday is connected when `.local/connect/workday/config.json`
+     `setupStatus` marks every setup row complete.
+   - When available, use Workday `ootbTopics.selected` as confirmed scenario
+     context.
+5. Use bundled Workday, ServiceNow, Facilities, and evaluation examples only to
+   shape questions or phrasing for a capability verified in the target agent.
+   The static solution catalog describes possible packages; local agent files
+   and integration state establish configured capabilities.
+6. Ask focused guiding questions before drafting:
+   - For Quick Links, ask which employee destinations matter most, the intended
+     audience, preferred labels/order, and the exact employee-facing HTTPS URL
+     for each destination. Use a URL only when the maker supplies it or it is
+     already verified in the target's authored content. Never use a Dataverse,
+     connector, setup, or administration endpoint as an employee Quick Link.
+   - For Starter Prompts, ask which capabilities to feature, whether prompts
+     should focus on employees, managers, HR, IT, or a mixture, the preferred
+     categories, tone, and approximate breadth. Offer a concise set of
+     context-derived options when the inspected agent has clear capability
+     groups.
+   - For knowledge-backed content, ask which source or employee need should be
+     represented. Do not expose source internals, credentials, template values,
+     or implementation details in the prompt text.
+7. After the answers establish the intended content, synthesize the complete
+   section, validate it against the matching schema, and continue
+   **Preview suggested changes**.
+
+## Preview suggested changes
+
+A suggested-preview request asks the agent to propose, draft, synthesize,
+preview, or review a concrete configuration. A descriptive value such as a
+named color is also a suggested preview because the agent must choose the wire
+values.
+
+1. Resolve the target and establish that its configuration exists.
+2. Build the complete replacement section:
+   - For Quick Links, Starter Prompts, or another content-bearing proposal,
+     complete **Gather context for suggested content** first.
+   - When the request supplies a complete proposal, use it directly.
+   - For a partial proposal, reuse a complete configuration already available
+     in the conversation or call `get_agent_config`, then merge the requested
+     change into the current section.
+3. Validate the complete section against the matching surface schema and the
+   limits documented below. The agent can validate Quick Links and Starter
+   Prompts directly from those schemas. For a Branding proposal only, also run
+   `scripts/validate_branding.py` for each generated color before calling the
+   opener. When a candidate fails contrast validation, discard it, synthesize a
+   compliant candidate, and validate again. Open the proposal only after every
+   generated color passes. Do not surface failed generated candidates as
+   warnings in chat.
+4. Call the matching opener once with `titleId` and the surface-specific
+   `draft`:
+
+   ```json
+   // open_accent_color
+   {
+     "titleId": "<titleId>",
+     "draft": {
+       "branding": {
+         "theming": [
+           { "name": "light", "accentColor": "#0F6CBD" },
+           { "name": "dark", "accentColor": "#479EF5" }
+         ]
+       }
+     }
+   }
+   ```
+
+   ```json
+   // open_quick_links
+   {
+     "titleId": "<titleId>",
+     "draft": {
+       "quickLinksConfig": {
+         "quickLinks": [
+           {
+             "displayText": "Benefits",
+             "address": "https://contoso.example/benefits"
+           }
+         ]
+       }
+     }
+   }
+   ```
+
+   ```json
+   // open_starter_prompts
+   {
+     "titleId": "<titleId>",
+     "draft": {
+       "pivots": [
+         {
+           "displayName": "Human resources",
+           "conversationStarterPrompts": [
+             {
+               "title": "Benefits",
+               "displayText": "What benefits are available to me?"
+             }
+           ]
+         }
+       ]
+     }
+   }
+   ```
+
+5. Tell the maker that the widget contains unpublished edits and that Publish
+   applies them. The opener performs one server read and does not write.
+6. Let the widget make the first `update_agent_config` call when the maker
+   selects Publish. Do not issue a model-driven update after opening the
+   widget.
+
+Drafts contain mutable wire fields only. Exclude `titleId`, `hoverColor`, `activeColor`, `quickLinksConfig.lastUpdatedAt`, and widget row keys. Preserve explicit empty arrays: `theming: []`, `quickLinks: []`, and `pivots: []` preview section resets. An explicit starter-prompts `draft: { "pivots": [] }` previews an empty list and suppresses default suggestions. Calling `open_starter_prompts` with `draft` omitted opens existing values, or localized default draft suggestions when the saved baseline is empty. Follow **Widget opening state** for each baseline/draft combination.
 
 ## Route exact changes directly
 
@@ -351,6 +570,8 @@ For an exact change:
 4. Call `update_agent_config` with only the affected complete section.
 5. Use the tool result as the operation result and tell the maker the update was
    made. Do not call an `open_*` tool and do not perform a follow-up read.
+
+For "clear my starter prompts", obtain the required destructive confirmation, then call `update_agent_config` directly with `config: { "pivots": [] }`. The same direct-update routing applies to exact quick-link clears and branding resets.
 
 For "add this prompt to the HR category":
 
@@ -413,7 +634,7 @@ later `get_agent_config` or `open_*` call returns 404:
 5. Continue the maker's original request:
    - For a request to view or summarize configuration, present the
      configuration returned by `create_agent_config`.
-   - For a request handled by an `open_*` editor, call the originally requested
+   - For a request handled by an `open_*` editor, call the requested
      `open_*` tool with the initialized `titleId`.
    - For another update, use the created configuration as the current state,
      merge the requested change, and continue the normal update flow.
@@ -436,6 +657,11 @@ Accent colors control end-user styling for buttons, links, chat bubbles, and
 loading indicators in light and dark themes. Default Copilot colors apply when
 branding is unset.
 
+For a descriptive request that does not name a theme, synthesize complete
+six-digit light and dark values. When a descriptive request targets one theme,
+read the current branding section and preserve the untouched theme in the
+complete draft. Generated drafts contain only `name` and `accentColor`.
+
 1. Read the current branding section.
 2. Track the theme colors the maker requested to change.
 3. Normalize changed colors to uppercase `#RRGGBB`.
@@ -455,8 +681,13 @@ branding is unset.
 
 6. Interpret the exit code:
    - `0`: every changed color meets WCAG AA; continue.
-   - `1`: one or more changed colors have low contrast. Show the ratio,
-     background, and required ratio, then ask whether to publish.
+   - `1`: one or more changed colors have low contrast:
+     - For a generated proposal, discard the candidate, synthesize a compliant
+       replacement, and validate again. Do not open the widget or warn the maker
+       about the discarded candidate.
+     - For an exact color supplied by the maker, show the ratio, background, and
+       required ratio, then ask whether to apply that value. Call
+       `update_agent_config` only after the maker confirms.
    - `2`: invalid input. Correct it before continuing.
 7. Submit the complete merged section:
 
@@ -477,8 +708,7 @@ branding is unset.
 The backend allows at most five theme entries and theme names up to 30
 characters. This experience uses the `light` and `dark` themes.
 
-Reset branding by submitting `branding: { "theming": [] }` after confirmation.
-A reset does not run contrast validation.
+A direct branding reset submits `branding: { "theming": [] }` after confirmation. When the maker explicitly requests a reset preview, pass `draft: { "branding": { "theming": [] } }` to `open_accent_color`. Resets do not run contrast validation.
 
 ## Quick links
 
@@ -493,8 +723,9 @@ Validate the complete replacement array before writing:
 - `address`: non-empty, maximum 2,000 characters.
 - `address`: absolute HTTPS URL.
 
-Add, remove, and reorder operations use read-merge-write. A supplied list
-replaces the complete array after confirmation. Clearing sends:
+Add, remove, and reorder operations use read-merge-write for direct changes and
+read-merge-preview for suggested proposals. A supplied list replaces the
+complete array after confirmation. A direct clear sends:
 
 ```json
 {
@@ -507,20 +738,19 @@ replaces the complete array after confirmation. Clearing sends:
 }
 ```
 
+When the maker explicitly requests a clear preview, pass `draft: { "quickLinksConfig": { "quickLinks": [] } }` to `open_quick_links`. An exact request to clear links uses `update_agent_config` directly after confirmation.
+
 ## Starter prompts
 
 Categorized starter prompts show employees common ways to engage with the agent
 and guide them into the right scenarios. These tenant-level prompts override
 starter prompts configured in Copilot Studio.
 
-When `open_starter_prompts` returns an empty or absent `pivots` array, the widget
-opens with a default set of starter prompts. The tool also returns the agent's
-`schemaName`, which selects those defaults: an HR or IT agent opens with the
-single category matching its vertical, and any other agent opens with both the
-human-resources and IT-support categories. Accompany the widget with:
+When `open_starter_prompts` is called with `draft` omitted and the saved `pivots` baseline is empty or absent, the widget opens localized default draft suggestions. The tool returns the agent's `schemaName`, which selects those suggestions: an HR or IT agent opens with the single category matching its vertical, and any other agent opens with both the human-resources and IT-support categories. Show the following message only for this empty-baseline/omitted-draft combination:
 
-> No starter prompts are configured yet, so the editor is showing a default
-> set. You can update and publish them, or publish them as-is.
+> No starter prompts are configured yet, so the editor is showing default draft suggestions. You can edit and publish them, or publish them as-is.
+
+A supplied non-empty draft opens those suggestions whether the saved baseline is empty or populated. A supplied `draft: { "pivots": [] }` opens an empty proposal and suppresses default suggestions; with saved prompts, this previews clearing them. With a populated baseline and `draft` omitted, the editor opens the existing saved prompts. The saved baseline remains unchanged until Publish.
 
 Validate the complete replacement array before writing:
 
@@ -530,8 +760,7 @@ Validate the complete replacement array before writing:
 - Prompt `title`: non-null, maximum 128 characters.
 - Prompt `displayText`: non-null, maximum 4,000 characters.
 
-Add, remove, and reorder operations use read-merge-write. Clearing sends
-`pivots: []`.
+Add, remove, and reorder operations use read-merge-write for direct changes and read-merge-preview for suggested proposals. An exact clear request calls `update_agent_config` directly with `config: { "pivots": [] }` after confirmation. When the maker explicitly requests a clear preview, pass `draft: { "pivots": [] }` to `open_starter_prompts`.
 
 ## Insight cards
 
