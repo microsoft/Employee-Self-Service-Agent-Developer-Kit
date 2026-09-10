@@ -23,6 +23,31 @@ The kit walks you through connecting VS Code to your Power Platform environment 
 
 Run `/setup` and follow the prompts.
 
+### 🎨 Customize the ESS Landing Page
+
+Configure the active agent's tenant landing page directly from chat. Run
+`/landing-page`, ask `Customize my landing page`, or use the **Customize landing
+page** Quick Action.
+
+- **Categorized starter prompts** help employees understand the agent's
+  capabilities and guide them into common scenarios.
+- **Accent colors** apply your light/dark brand colors to buttons, links, chat
+  bubbles, and loading indicators.
+- **Quick links** give employees direct access to important tenant resources.
+- **Stay up to date** shows personalized, actionable cards for in-progress
+  ticket status, required follow-ups, and time-sensitive tasks.
+- **Quick Access** shows high-frequency personal information, such as time-off
+  balances, paid holidays, and service anniversaries, at a glance.
+
+The agent can apply exact changes directly or open rich editors for exploratory
+updates. Landing-page configuration is saved through the production
+AgentConfiguration service and does not use the local topic push pipeline.
+
+Landing-page configuration requires the target agent to be published from
+Copilot Studio and deployed to the organization. `/setup` installs and extracts
+the Power Platform agent; publication, admin approval, and Integrated apps
+deployment are separate steps.
+
 ### 📖 Pre-Loaded ESS Documentation, Samples & Best Practices
 
 The kit ships with a complete reference library that the AI agent reads at task time — you don't need to look anything up yourself.
@@ -306,6 +331,7 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 | Command | What it does |
 |---------|-------------|
 | `/setup` | First-time environment setup — authenticate, discover agent, extract, configure |
+| `/landing-page` | Configure landing-page branding and content |
 | `/connect` | Connect an external system (ServiceNow, Workday) — guided setup with MCP verification |
 | `/create` | Create an eval-driven topic, workflow, or evaluation test set |
 | `/update` | Update a simple topic with evals, a workflow, or an evaluation test set |

@@ -74,18 +74,19 @@ const CHAT_ONLY_LAYOUT = {
     'telemetry.telemetryLevel': 'error',
 };
 
-// Slash commands the user can fire via the right-hand button rail.
+// Copilot queries the user can fire through the Quick Actions button rail.
 // `requires` lists action ids that must already be "done" before this one
 // becomes clickable. The state is tracked in globalState and is also
 // inferred from workspace contents (e.g. presence of topic yaml files).
 const ACTIONS = [
-    { id: 'setup',       icon: '🔌', label: 'Setup',                sub: 'Sign in to your environment',  slash: '/setup',       requires: [] },
-    { id: 'create',      icon: '✨', label: 'Create a topic',       sub: 'Describe a new conversation',  slash: '/create',      requires: ['setup'] },
-    { id: 'update',      icon: '✏️', label: 'Update a topic',       sub: 'Tweak an existing topic',      slash: '/update',      requires: ['setup'] },
-    { id: 'scan',        icon: '🔍', label: 'Scan for issues',      sub: 'Find broken bindings',         slash: '/scan',        requires: ['setup'] },
-    { id: 'flightcheck', icon: '✈️', label: 'Run a flightcheck',    sub: '41+ readiness checks',         slash: '/flightcheck', requires: ['setup'] },
-    { id: 'evaluate',    icon: '📊', label: 'Generate tests',       sub: 'Build evaluation test sets',   slash: '/evaluate',    requires: ['setup'] },
-    { id: 'push',        icon: '🚀', label: 'Push to Copilot Studio', sub: 'Safely deploy your changes', slash: '/push',        requires: ['setup'] },
+    { id: 'setup',       icon: '🔌', label: 'Setup',                  sub: 'Sign in to your environment',  query: '/setup',                    requires: [] },
+    { id: 'landingPage', icon: '🎨', label: 'Customize landing page', sub: 'Branding, links, prompts, cards', query: 'Customize my landing page', requires: ['setup'] },
+    { id: 'create',      icon: '✨', label: 'Create a topic',         sub: 'Describe a new conversation',  query: '/create',                   requires: ['setup'] },
+    { id: 'update',      icon: '✏️', label: 'Update a topic',         sub: 'Tweak an existing topic',      query: '/update',                   requires: ['setup'] },
+    { id: 'scan',        icon: '🔍', label: 'Scan for issues',        sub: 'Find broken bindings',         query: '/scan',                     requires: ['setup'] },
+    { id: 'flightcheck', icon: '✈️', label: 'Run a flightcheck',      sub: '41+ readiness checks',         query: '/flightcheck',              requires: ['setup'] },
+    { id: 'evaluate',    icon: '📊', label: 'Generate tests',         sub: 'Build evaluation test sets',   query: '/evaluate',                 requires: ['setup'] },
+    { id: 'push',        icon: '🚀', label: 'Push to Copilot Studio', sub: 'Safely deploy your changes',   query: '/push',                     requires: ['setup'] },
 ];
 
 const STATE_KEY = 'essMaker.completedActions.v3';
@@ -502,6 +503,7 @@ function getTutorialHtml() {
     <nav>
         <a href="#how">How it works</a><span class="sep">·</span>
         <a href="#connect">Setup</a><span class="sep">·</span>
+        <a href="#landing-page">Landing page</a><span class="sep">·</span>
         <a href="#create">Create</a><span class="sep">·</span>
         <a href="#update">Update</a><span class="sep">·</span>
         <a href="#scan">Scan</a><span class="sep">·</span>
@@ -516,6 +518,7 @@ function getTutorialHtml() {
         <h3>The workflow</h3>
         <ol>
             <li><strong>Setup</strong> \u2014 Sign in to your Power Platform environment.</li>
+            <li><strong>Customize landing page</strong> \u2014 Configure branding, quick links, starter prompts, and insight cards.</li>
             <li><strong>Create a topic</strong> \u2014 Describe what you want in plain English. The kit generates everything.</li>
             <li><strong>Update a topic</strong> \u2014 Modify an existing topic by describing the change.</li>
             <li><strong>Scan</strong> \u2014 Check for broken references and configuration issues.</li>
@@ -537,6 +540,18 @@ function getTutorialHtml() {
         </ul>
         <p>When you click Setup, a chat opens with the <code>/setup</code> command \u2014 just answer the prompts (environment URL, then sign-in).</p>
         <blockquote><p>First time? You\u2019ll see a browser pop-up asking you to sign in with your work account. That\u2019s expected.</p></blockquote>
+    </section>
+
+    <section id="landing-page">
+        <h2>\u{1f3a8} Customize landing page</h2>
+        <p>The <strong>Customize landing page</strong> button opens a guided chat for configuring what employees see when they open the active agent.</p>
+        <ul>
+            <li><strong>Categorized starter prompts</strong> guide employees into common scenarios and show what the agent can do.</li>
+            <li><strong>Accent colors</strong> style buttons, links, chat bubbles, and loading indicators for light and dark themes.</li>
+            <li><strong>Quick links</strong> surface important tenant resources directly on the landing page.</li>
+            <li><strong>Stay up to date</strong> shows personalized ticket status, required follow-ups, and time-sensitive tasks.</li>
+            <li><strong>Quick Access</strong> shows personal information such as time-off balances, paid holidays, and service anniversaries.</li>
+        </ul>
     </section>
 
     <section id="create">
@@ -604,7 +619,7 @@ function getTutorialHtml() {
             <li>Create expected-response pairs for automated regression testing.</li>
             <li>Cover edge cases and variations the agent should handle.</li>
         </ul>
-        <p>The generated tests help you validate that future changes don\u2019t break existing conversations. This button is available after a flightcheck has passed.</p>
+        <p>The generated tests help you validate that future changes don\u2019t break existing conversations. This button is available after setup.</p>
     </section>
 
     <section id="push">
@@ -857,7 +872,7 @@ class ActionsViewProvider {
                 const completed = getCompleted(this._context);
                 const { enabled } = actionState(action, completed);
                 if (!enabled) return;
-                await openChatWithQuery(action.slash);
+                await openChatWithQuery(action.query);
                 // Don't optimistically mark as completed — the file watcher
                 // will detect when the actual artifact appears on disk and
                 // enable dependent buttons at that point.
@@ -1408,7 +1423,7 @@ function activate(context) {
     // Register slash-command bridges (also available from the command palette).
     for (const a of ACTIONS) {
         context.subscriptions.push(
-            vscode.commands.registerCommand(`essMaker.run_${a.id}`, () => openChatWithQuery(a.slash))
+            vscode.commands.registerCommand(`essMaker.run_${a.id}`, () => openChatWithQuery(a.query))
         );
     }
     // Legacy command IDs from 0.1.0 (still referenced by the walkthrough).

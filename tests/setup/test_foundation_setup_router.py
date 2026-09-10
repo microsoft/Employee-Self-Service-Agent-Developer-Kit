@@ -29,7 +29,7 @@ _ONBOARDING_STEP2 = (
     _SOLUTION / "src" / "skills" / "onboarding" / "step2.md"
 )
 _ONBOARDING_TASKS = (
-    _SOLUTION / "src" / "skills" / "onboarding" / "tasks.md"
+    _SOLUTION / "src" / "skills" / "onboarding" / "steps.md"
 )
 _ONBOARDING_STEP3 = (
     _SOLUTION / "src" / "skills" / "onboarding" / "step3-flightcheck.md"
@@ -52,6 +52,9 @@ _INSTALL_STARTERS = (
 _READINESS = (
     _SOLUTION / "src" / "skills" / "foundation-setup" / "readiness.md"
 )
+_HANDOFF = (
+    _SOLUTION / "src" / "skills" / "foundation-setup" / "handoff.md"
+)
 _INSTALLATION_CATALOG = (
     _SOLUTION / "src" / "reference" / "ess-agent-installation" / "config.json"
 )
@@ -62,6 +65,14 @@ _WORKDAY = _SOLUTION / "src" / "skills" / "setup" / "SKILL.md"
 _CONNECT_STEP1 = _SOLUTION / "src" / "skills" / "connect" / "step1.md"
 _INSTRUCTIONS = _SOLUTION / ".github" / "copilot-instructions.md"
 _SETUP_PROMPT = _SOLUTION / ".github" / "prompts" / "setup.prompt.md"
+_MENU_PROMPT = _SOLUTION / ".github" / "prompts" / "menu.prompt.md"
+_LANDING_PAGE_PROMPT = (
+    _SOLUTION / ".github" / "prompts" / "landing-page.prompt.md"
+)
+_LANDING_PAGE_SKILL = (
+    _SOLUTION / "src" / "skills" / "landing-page-config" / "SKILL.md"
+)
+_SCRIPT_REQUIREMENTS = _SOLUTION / "scripts" / "requirements.txt"
 _PATH_RE = re.compile(r"`(src/skills/[^`]+?\.md)`")
 
 
@@ -132,7 +143,7 @@ def test_alm_step_reuses_env009_as_an_optional_step_checkpoint() -> None:
         _SOLUTION / "src" / "skills" / "foundation-setup" / "alm-baseline.md"
     ).read_text(encoding="utf-8")
     tasks = (
-        _SOLUTION / "src" / "skills" / "foundation-setup" / "tasks.md"
+        _SOLUTION / "src" / "skills" / "foundation-setup" / "steps.md"
     ).read_text(encoding="utf-8")
 
     assert "--checkpoint ENV-009" in alm
@@ -357,6 +368,90 @@ def test_foundation_handoff_routes_directly_to_agent_inventory() -> None:
     assert "onboarding/step1b.md" in bootstrap
     assert "FOUNDATION_REUSED" in bootstrap
     assert "| # | Task | Status |" not in extraction
+
+
+def test_setup_installs_landing_page_runtime_dependencies() -> None:
+    setup_prompt = _SETUP_PROMPT.read_text(encoding="utf-8")
+    requirements = _SCRIPT_REQUIREMENTS.read_text(encoding="utf-8")
+
+    assert "pip install -r scripts/requirements.txt" in setup_prompt
+    assert "mcp_config.py materialize-defaults" in setup_prompt
+    assert "mcp>=1.29.0,<2.0.0" in requirements
+    assert "httpx>=0.27.0,<1.0" in requirements
+
+
+def test_landing_page_prompt_routes_to_setup_gated_skill() -> None:
+    prompt = _LANDING_PAGE_PROMPT.read_text(encoding="utf-8")
+    skill = _LANDING_PAGE_SKILL.read_text(encoding="utf-8")
+    normalized_skill = " ".join(skill.split())
+
+    assert "mode: agent" in prompt
+    assert "src/skills/landing-page-config/SKILL.md" in prompt
+    assert ".local/config.json" not in prompt
+    assert (
+        'If the file does not exist, or its `setup` value is not `"complete"`'
+        in normalized_skill
+    )
+    assert (
+        "Before using `/landing-page`, type `/setup` to set up your environment."
+        in normalized_skill
+    )
+    assert (
+        "mcp_config.py validate --server ess-landing-page-config"
+        in normalized_skill
+    )
+    assert "mcp_config.py materialize-defaults" in normalized_skill
+    assert "MCP: List Servers" in skill
+
+
+def test_all_mcp_writers_use_the_shared_materializer() -> None:
+    bootstrap = _FOUNDATION_BOOTSTRAP.read_text(encoding="utf-8")
+    onboarding = (
+        _SOLUTION / "src" / "skills" / "onboarding" / "step1.md"
+    ).read_text(encoding="utf-8")
+    servicenow = (
+        _SOLUTION / "src" / "skills" / "connect" / "servicenow" / "step1.md"
+    ).read_text(encoding="utf-8")
+
+    assert (
+        'mcp_config.py configure dataverse --environment-url "{ENV_URL}"'
+        in bootstrap
+    )
+    assert (
+        'mcp_config.py configure dataverse --environment-url "{ENV_URL}"'
+        in onboarding
+    )
+    assert "mcp_config.py configure servicenow --instance-url" in servicenow
+    assert "Create `.vscode/mcp.json`" not in bootstrap
+
+
+def test_landing_page_missing_target_explains_org_deployment() -> None:
+    skill = _LANDING_PAGE_SKILL.read_text(encoding="utf-8")
+    normalized_skill = " ".join(skill.replace("> ", "").split())
+
+    assert (
+        "`list_agent_configs` has no configured match and `search_agents` "
+        "returns no matching tenant-visible agent"
+        in normalized_skill
+    )
+    assert "Do not guess a `titleId` or call `create_agent_config`." in skill
+    assert "publish the agent from Copilot Studio" in normalized_skill
+    assert "submit it for admin approval" in normalized_skill
+    assert "administrator deploy it to your organization" in normalized_skill
+    assert "deploying through Integrated apps" in normalized_skill
+
+
+def test_foundation_and_onboarding_surface_landing_page_command() -> None:
+    surfaces = (
+        _FOUNDATION.read_text(encoding="utf-8"),
+        _HANDOFF.read_text(encoding="utf-8"),
+        _ONBOARDING.read_text(encoding="utf-8"),
+        _ONBOARDING_STEP2.read_text(encoding="utf-8"),
+        _MENU_PROMPT.read_text(encoding="utf-8"),
+    )
+
+    for content in surfaces:
+        assert "/landing-page" in content
 
 
 def test_onboarding_does_not_offer_legacy_optional_readiness_check() -> None:

@@ -18,6 +18,7 @@ For everything that isn't an attempt to use the kit (general questions, code exp
 
 1. **Explicit kit slash-command.** The user's message starts with (or is exactly) one of the kit's slash-commands:
    - `/setup`
+   - `/landing-page`
    - `/create`
    - `/connect`
    - `/delete`

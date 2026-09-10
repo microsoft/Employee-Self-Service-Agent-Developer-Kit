@@ -13,6 +13,7 @@ Here's what I can help you with:
 
 | Command | What it does |
 |---------|-------------|
+| `/landing-page` | Configure the branding and content employees see when they open the ESS agent |
 | `/connect` | Type Enter to connect ServiceNow or Workday to your agent |
 | `/create` | Create a simple topic with evals, a workflow, or an evaluation test set |
 | `/update` | Update a simple topic with evals, a workflow, or an evaluation test set |

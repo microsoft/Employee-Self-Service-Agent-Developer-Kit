@@ -43,7 +43,8 @@ overwrite corrupt state silently.
 If `connect_ready` is true, inspect `.local/config.json`:
 
 - If its `setup` value is `"complete"`, show that foundation and workspace setup
-  are complete and direct the maker to `/connect`.
+  are complete. Tell the maker they can run `/landing-page` or `/connect`, or
+  type `/menu` to see every capability.
 - Otherwise read `src/skills/onboarding/foundation-bootstrap.md` and follow it.
   The bootstrap must reuse `environment.tenant_endpoint`, must not render
   another setup checklist, and must proceed directly to the installed-agent

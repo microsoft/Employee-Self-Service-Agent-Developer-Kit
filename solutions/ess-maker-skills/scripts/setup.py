@@ -499,16 +499,6 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
     agents, `activeAgent` pointing to the current slug, and a backward-compat
     `agent` field that mirrors the active agent.
     """
-    bot_id = agent_info["botId"]
-    agent_entry = {
-        "name": agent_info["name"],
-        "botId": bot_id,
-        "schemaName": agent_info["schema"],
-        "isManaged": agent_info["managed"],
-        "slug": slug,
-        "folder": output_dir.replace("\\", "/"),
-    }
-
     # Load existing config to preserve other agents and connections
     local_dir = ".local"
     config_path = os.path.join(local_dir, "config.json")
@@ -520,6 +510,27 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
         except (json.JSONDecodeError, OSError):
             existing = {}
 
+    bot_id = agent_info["botId"]
+    existing_agents = existing.get("agents", [])
+    legacy_active_agent = existing.get("agent", {})
+    existing_agent = next(
+        (
+            entry for entry in existing_agents
+            if entry.get("botId") == bot_id
+        ),
+        legacy_active_agent
+        if legacy_active_agent.get("botId") == bot_id
+        else {},
+    )
+    agent_entry = dict(existing_agent)
+    agent_entry.update({
+        "name": agent_info["name"],
+        "botId": bot_id,
+        "schemaName": agent_info["schema"],
+        "isManaged": agent_info["managed"],
+        "slug": slug,
+        "folder": output_dir.replace("\\", "/"),
+    })
     # Detect schema migration. write_config always stamps the current
     # EXPECTED_CONFIG_VERSION; if the existing file was on an older
     # version, surface that to the operator so they know /setup just
@@ -533,10 +544,13 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
         )
 
     # Build or update agents array
-    agents = existing.get("agents", [])
+    agents = existing_agents
 
-    # Remove existing entry for this slug if present (update case)
-    agents = [a for a in agents if a.get("slug") != slug]
+    # Replace the selected agent even when a rename changed its derived slug.
+    agents = [
+        entry for entry in agents
+        if entry.get("slug") != slug and entry.get("botId") != bot_id
+    ]
     agents.append(agent_entry)
 
     # Sort by name for consistent ordering

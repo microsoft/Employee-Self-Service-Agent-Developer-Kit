@@ -75,8 +75,13 @@ Update `workspace/onboarding/steps.md` — change step 4 from `- [ ]` to `- [x]`
 
 You can now customize your agent or connect an integration.
 
+You can customize the active agent's landing page from chat, including accent
+colors, categorized starter prompts, quick links, Stay up to date cards, and
+Quick Access cards. Run `/landing-page` whenever you're ready.
+
 | Command | What it does |
 |---------|-------------|
+| `/landing-page` | Configure landing-page branding and content |
 | `/create` | Create a new topic or workflow |
 | `/connect` | Set up ServiceNow or Workday integration |
 | `/scan` | Scan for compile errors |

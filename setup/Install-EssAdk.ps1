@@ -798,9 +798,6 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions) {
     }
 }
 
-# ---------------------------------------------------------------------------
-# 6. FlightCheck config generation (FlightCheckOnly mode)
-# ---------------------------------------------------------------------------
 $workspace = Join-Path $repoPath 'solutions\ess-maker-skills'
 if (-not (Test-Path $workspace)) {
     Write-Warn2 "Expected workspace not found: $workspace"
@@ -808,6 +805,36 @@ if (-not (Test-Path $workspace)) {
     $workspace = $repoPath
 }
 
+# ---------------------------------------------------------------------------
+# 5d. Materialize ready-to-run MCP servers
+# ---------------------------------------------------------------------------
+if (-not $FlightCheckOnly) {
+    $mcpConfigScript = Join-Path $workspace 'scripts\mcp_config.py'
+    $mcpPython = Resolve-Python
+    if ($mcpPython -and (Test-Path $mcpConfigScript)) {
+        Write-Step 'Configuring default MCP servers'
+        if ($mcpPython -eq 'py -3.12') {
+            $mcpOutput = Invoke-Native { & py -3.12 $mcpConfigScript materialize-defaults }
+        } elseif ($mcpPython -eq 'py -3') {
+            $mcpOutput = Invoke-Native { & py -3 $mcpConfigScript materialize-defaults }
+        } else {
+            $mcpOutput = Invoke-Native { & $mcpPython $mcpConfigScript materialize-defaults }
+        }
+        $mcpExit = $LASTEXITCODE
+        foreach ($line in $mcpOutput) { if ($line) { Write-Host "      $line" } }
+        if ($mcpExit -eq 0) {
+            Write-Ok 'Default MCP servers configured'
+        } else {
+            Write-Warn2 'Default MCP server configuration failed. /setup will try again.'
+        }
+    } else {
+        Write-Warn2 'MCP configuration script or Python was not found. /setup will try again.'
+    }
+}
+
+# ---------------------------------------------------------------------------
+# 6. FlightCheck config generation (FlightCheckOnly mode)
+# ---------------------------------------------------------------------------
 if ($FlightCheckOnly) {
     Write-Step 'Configuring FlightCheck environment'
 

@@ -1,0 +1,16 @@
+{
+  "id": "dataverse",
+  "serverName": "Dataverse",
+  "parameters": {
+    "environmentUrl": {
+      "argument": "--environment-url",
+      "format": "https-url",
+      "stripTrailingSlash": true,
+      "required": true
+    }
+  },
+  "server": {
+    "type": "http",
+    "url": "{environmentUrl}/api/mcp"
+  }
+}
