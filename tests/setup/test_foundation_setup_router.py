@@ -122,13 +122,50 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
     text = _DA_EXISTING_DEV.read_text(encoding="utf-8")
 
     assert "setup_existing_da.py list-environments" in text
+    assert "setup_existing_da.py list-organizations" in text
     assert "setup_existing_da.py status" in text
     assert "setup_existing_da.py list-agents" in text
     assert "setup_existing_da.py attach" in text
     assert "--target-url" in text
     assert "authenticated access token supplies the tenant identity" in text
-    assert "not a cross-tenant or non-production-ring inventory" in text
+    assert "DA_ORGANIZATION_LIST_JSON:" in text
+    assert "display names and domains" in text
+    assert "Do not display organization IDs" in text
+    assert "Switch to another identity" in text
+    assert "recommended" in text
+    assert "--select-account" in text
+    assert "does not grant access" in text
+    assert "DA_EXISTING_DEV_DIAGNOSTIC_JSON:" in text
+    assert "I can connect to the target environment" in text
+    assert "no agents are discoverable" in text
+    assert "Do not enter organization recovery" in text
+    assert "Switch environments" in text
+    assert "Switch identities" in text
+    assert "Custom answer" in text
+    assert "DA_ENVIRONMENT_LIST_JSON:" in text
+    assert (
+        "ring resolved from recognized Copilot Studio hostname text"
+        in text
+    )
     assert "Enter a known agent ID" in text
+    assert "returns only explicit Dev agents" in text
+    assert "unverifiedAgentCount" in text
+    assert "unprojectedDialogCount" in text
+    recovery_prompt = text.index("How should I retry the connection?")
+    switch_environment = text.index(
+        "**Switch environments**",
+        recovery_prompt,
+    )
+    switch_identity = text.index("**Switch identities**", recovery_prompt)
+    known_agent = text.index("**Enter a known agent ID**", recovery_prompt)
+    custom_answer = text.index("**Custom answer**", recovery_prompt)
+    assert (
+        recovery_prompt
+        < switch_environment
+        < switch_identity
+        < known_agent
+        < custom_answer
+    )
     assert "Do not classify the agents as HR, IT, Hub" in text
     assert "Do not run the Dataverse foundation steps" in text
     assert "Do not claim that DA push, publish" in text
