@@ -259,6 +259,7 @@ def new_task(
     title: str,
     *,
     description: str = "",
+    stream: str = "",
     assigned_to: dict[str, Any] | None = None,
     produces: Iterable[str] | None = None,
     consumes: Iterable[str] | None = None,
@@ -274,6 +275,8 @@ def new_task(
         "produces": list(produces or []),
         "consumes": list(consumes or []),
     }
+    if stream:
+        task["stream"] = stream
     if checklist:
         task["checklist"] = list(checklist)
     return task
@@ -1390,18 +1393,44 @@ class Plan:
         # (shown in task-brief), keeping the table scannable.
         lines.append("## Tasks")
         lines.append("")
-        if self.tasks:
-            lines.append("| # | Task | Role / owner | State | Blocked by |")
-            lines.append("|---|------|--------------|-------|------------|")
-            for task in self.ordered_tasks():
-                marker = self.dependency_marker(task.get("id")) or "—"
-                lines.append(
-                    f"| {task.get('id')} | {task.get('title')} | "
-                    f"{_render_assignee(task.get('assignedTo'))} | {task.get('state')} | {marker} |"
-                )
-        else:
+        if not self.tasks:
             lines.append("_No tasks yet._")
-        lines.append("")
+            lines.append("")
+            return
+        ordered = self.ordered_tasks()
+        # Group under a stream/theme heading when tasks carry one (e.g. "Workday",
+        # "Setup", "Authoring") so the sponsor reads the plan by workstream; the
+        # per-task "Blocked by" column still shows the cross-stream sequencing.
+        # Streams are ordered by the earliest execution position of any task in
+        # them, and tasks keep execution order within a stream. A plan whose tasks
+        # carry no stream renders as a single flat table (unchanged).
+        if any((t.get("stream") or "").strip() for t in ordered):
+            buckets: dict[str, list[dict[str, Any]]] = {}
+            stream_order: list[str] = []
+            for task in ordered:
+                label = (task.get("stream") or "").strip() or "Other"
+                if label not in buckets:
+                    buckets[label] = []
+                    stream_order.append(label)
+                buckets[label].append(task)
+            for label in stream_order:
+                lines.append(f"### {label}")
+                lines.append("")
+                self._render_task_table(lines, buckets[label])
+                lines.append("")
+        else:
+            self._render_task_table(lines, ordered)
+            lines.append("")
+
+    def _render_task_table(self, lines: list[str], tasks: list[dict[str, Any]]) -> None:
+        lines.append("| # | Task | Role / owner | State | Blocked by |")
+        lines.append("|---|------|--------------|-------|------------|")
+        for task in tasks:
+            marker = self.dependency_marker(task.get("id")) or "—"
+            lines.append(
+                f"| {task.get('id')} | {task.get('title')} | "
+                f"{_render_assignee(task.get('assignedTo'))} | {task.get('state')} | {marker} |"
+            )
 
     def _render_outputs(self, lines: list[str]) -> None:
         active = [a for a in self.outputs if a.get("state") == "Active"]

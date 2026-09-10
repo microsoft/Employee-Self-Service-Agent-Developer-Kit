@@ -201,7 +201,7 @@ that is:
 
 ```
 # 1. PP admin onboards the ADK (records the environment AND clones the agent)
-python scripts/planner/cli.py add-task --id T1 --title "Run setup" --description "Run /setup to onboard the ADK to the deployed agent (records the environment and clones the agent)" --role EntraPowerPlatformAdministrator --produces "primaryEnvironment,essAgent"
+python scripts/planner/cli.py add-task --id T1 --stream "Setup" --title "Run setup" --description "Run /setup to onboard the ADK to the deployed agent (records the environment and clones the agent)" --role EntraPowerPlatformAdministrator --produces "primaryEnvironment,essAgent"
 # 2. Workday is MULTI-ROLE and ships a checklist — DON'T hand-write it. Emit the
 #    grounded, attestable rows straight from setup/workday/tasks.md (T1 already
 #    produced the env + base agent, so skip the two foundation groups):
@@ -210,17 +210,70 @@ python scripts/planner/cli.py setup-tasks --system workday --commands --skip-fou
 #       SSO -> EntraCloudApplicationAdministrator (NOT Global Administrator),
 #       tenant -> WorkdayAdmin, pack+connect -> PowerPlatformEnvironmentMaker,
 #       firewall -> EntraNetworkAdministrator, first topic -> PowerPlatformEnvironmentMaker.
+#    Each printed row already carries --stream "Workday" so they group together.
 # 3. ServiceNow — decompose per its OWN checklist role: items; split like Workday
 #    (config is a ServiceNow Administrator task; the pack install an Environment Maker one)
-python scripts/planner/cli.py add-task --id T-sn-config --title "Configure ServiceNow HRSD" --description "Configure the ServiceNow HRSD integration per its checklist — role: ServiceNow Administrator" --role ServiceNowAdmin --produces servicenowConfig --consumes primaryEnvironment
-python scripts/planner/cli.py add-task --id T-sn-connect --title "Install ServiceNow pack and connect" --description "Run /connect to install the ServiceNow extension pack and create the connection" --role PowerPlatformEnvironmentMaker --produces servicenowConnection --consumes "primaryEnvironment,servicenowConfig"
+python scripts/planner/cli.py add-task --id T-sn-config --stream "ServiceNow" --title "Configure ServiceNow HRSD" --description "Configure the ServiceNow HRSD integration per its checklist — role: ServiceNow Administrator" --role ServiceNowAdmin --produces servicenowConfig --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T-sn-connect --stream "ServiceNow" --title "Install ServiceNow pack and connect" --description "Run /connect to install the ServiceNow extension pack and create the connection" --role PowerPlatformEnvironmentMaker --produces servicenowConnection --consumes "primaryEnvironment,servicenowConfig"
 # 4. authoring per scenario area (knowledge before ticketing — register the dependency)
-python scripts/planner/cli.py add-task --id T-know --title "Set up HR knowledge" --description "Run /create to author the HR knowledge topics" --role PowerPlatformEnvironmentMaker --produces "topic:hr-knowledge" --consumes primaryEnvironment
-python scripts/planner/cli.py add-task --id T-tick --title "Author HR ticketing topics" --description "Run /create to author the HR ticketing topics" --role PowerPlatformEnvironmentMaker --produces "topic:hr-ticketing" --consumes "primaryEnvironment,servicenowConnection"
+python scripts/planner/cli.py add-task --id T-know --stream "Authoring" --title "Set up HR knowledge" --description "Run /create to author the HR knowledge topics" --role PowerPlatformEnvironmentMaker --produces "topic:hr-knowledge" --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T-tick --stream "Authoring" --title "Author HR ticketing topics" --description "Run /create to author the HR ticketing topics" --role PowerPlatformEnvironmentMaker --produces "topic:hr-ticketing" --consumes "primaryEnvironment,servicenowConnection"
 # 5. evals + publish
-python scripts/planner/cli.py add-task --id T-eval --title "Generate evals" --description "Run /evaluate to generate the eval suite" --role PowerPlatformEnvironmentMaker --produces evalSuite --consumes primaryEnvironment
-python scripts/planner/cli.py add-task --id T-pub --title "Publish the agent" --description "In the Power Platform admin center, publish the agent (see the Learn publish doc)" --role EntraPowerPlatformAdministrator --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T-eval --stream "Evaluation" --title "Generate evals" --description "Run /evaluate to generate the eval suite" --role PowerPlatformEnvironmentMaker --produces evalSuite --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T-pub --stream "Publish" --title "Publish the agent" --description "In the Power Platform admin center, publish the agent (see the Learn publish doc)" --role EntraPowerPlatformAdministrator --consumes primaryEnvironment
 ```
+
+**Give every task a `--stream` (workstream/theme) so the plan reads by workstream.**
+The summary groups tasks under a `### <stream>` heading (`plan_model._render_tasks`)
+so the sponsor sees the plan as **Workday**, **ServiceNow**, **Setup**,
+**Authoring**, **Evaluation**, **Publish** — not one flat wall of rows. Rules:
+
+- **A captured system → its own stream** (the system name: `Workday`,
+  `ServiceNow`). Every task from that system's checklist shares that stream —
+  the `setup-tasks` extractor already stamps `--stream "<System>"` on each row,
+  so pasting its lines verbatim groups them for free.
+- **Cross-cutting backbone tasks → a phase stream**: `Setup` (the `/setup` +
+  `/flightcheck` backbone), `Authoring` (the `/create` topic tasks), `Evaluation`
+  (`/evaluate`), `Publish`.
+- Keep stream labels **few and consistent** — a stream is a workstream a sponsor
+  staffs, not a per-task tag. The `Blocked by` column still carries the exact
+  cross-stream sequencing, so grouping never hides a dependency.
 
 Also register the scenarios and their dependencies (see `interview.md`) so the
 plan shows knowledge-before-ticketing. Then show the summary and go to Phase 4.
+
+## Sequence the tasks — show what's parallel, what's blocked, and the critical path
+
+`produces`/`consumes` aren't just per-task gates — together they form the plan's
+**dependency graph**. Once the full set is in, *reason across it* and show the
+sponsor the shape, so the work can be **staffed in parallel** instead of run one
+task at a time. This is derived entirely from the ledger — don't narrate an order
+the keys don't encode; if two tasks must be ordered, wire the key.
+
+- **Parallel waves.** A *wave* is every task whose consumed keys are all produced
+  by earlier waves — tasks **in the same wave have no dependency between them and
+  can run at once**. The summary's **Blocked by** column is the per-task view
+  (`—` == ready now). Present the plan as waves, not a flat list. For the Workday
+  backbone: environment provisioning and the firewall allowlist are both ready at
+  kickoff (Wave 0); once the environment exists, **SSO (Cloud App Admin) ∥ tenant
+  (Workday Admin) ∥ ESS install (Env Maker)** all open together (Wave 1) — three
+  roles working at once.
+- **Parallel across roles vs. one person.** Two same-wave tasks owned by
+  **different** roles are genuinely concurrent. Two owned by the **same** role are
+  independent in the graph but will **serialize on one assignee** — call that out
+  so the sponsor can staff a second holder when it sits on the long pole.
+- **Blocked = waiting on a producer.** A task can't start until **every** key it
+  consumes has been produced. The Workday connect task
+  (`consumes workdayEntraApp, workdayTenantConfig`) is a **cross-role join** — it
+  waits for both the Cloud App Admin's SSO task and the Workday Admin's tenant task.
+- **Critical path = the long pole.** The longest `produces`→`consumes` chain sets
+  the minimum end-to-end time; tasks off it have slack. Surface it so the sponsor
+  optimizes the right thing. For a knowledge→read→write rollout the **scenario
+  governance chain** (knowledge before reads, reads before writes) is usually the
+  critical path — *not* the Workday connection, whose identity/tenant/firewall
+  setup finishes early (by Wave 2) and then waits. The lever is to parallelize
+  **authoring** (a second Env Maker), not to rush the connector.
+
+Say all of this in plain language — the waves, who can go at once, what's blocked
+on whom, and the long pole — right after you show the task summary, then go to
+Phase 4.

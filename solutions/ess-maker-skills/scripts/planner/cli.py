@@ -179,6 +179,7 @@ def cmd_add_task(args: argparse.Namespace) -> int:
             args.id,
             args.title,
             description=args.description or "",
+            stream=args.stream or "",
             assigned_to=assigned,
             produces=_csv(args.produces),
             consumes=_csv(args.consumes),
@@ -646,6 +647,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--id", required=True)
     p.add_argument("--title", required=True)
     p.add_argument("--description", help="self-explanatory: what to do and how (incl. which command to run)")
+    p.add_argument("--stream", help="workstream/theme label to group this task under in the plan view (e.g. 'Workday', 'Setup', 'Authoring')")
     p.add_argument("--role", help="Learn-grounded role for this task")
     p.add_argument("--person", help="assign directly to a person (oid)")
     p.add_argument("--produces", help="comma-separated output keys")
