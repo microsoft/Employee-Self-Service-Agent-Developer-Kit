@@ -118,6 +118,87 @@ def test_client_uses_only_configured_environment_host() -> None:
     assert session.calls[3]["json"] == {}
 
 
+def test_lists_ring_environments_with_agentbuilder_token() -> None:
+    next_url = (
+        "https://api.test.powerplatform.com/"
+        "environmentmanagement/environments"
+        "?api-version=2024-10-01&$skip=1"
+    )
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "value": [
+                        {
+                            "id": ENVIRONMENT_ID,
+                            "displayName": "First Environment",
+                        }
+                    ],
+                    "@odata.nextlink": next_url,
+                }
+            ),
+            FakeResponse(
+                {
+                    "value": [
+                        {
+                            "id": "00000000-0000-4000-8000-000000006666",
+                            "displayName": "Second Environment",
+                        }
+                    ]
+                }
+            ),
+        ]
+    )
+
+    environments = agentbuilder.list_environments(
+        "fake-token",
+        "test",
+        session=session,
+    )
+
+    assert [environment["displayName"] for environment in environments] == [
+        "First Environment",
+        "Second Environment",
+    ]
+    assert [call["url"] for call in session.calls] == [
+        (
+            "https://api.test.powerplatform.com/"
+            "environmentmanagement/environments"
+        ),
+        next_url,
+    ]
+    assert all(
+        call["headers"]["Authorization"] == "Bearer fake-token"
+        for call in session.calls
+    )
+
+
+def test_ring_environment_listing_rejects_unsafe_next_link() -> None:
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "value": [],
+                    "@odata.nextLink": (
+                        "https://attacker.example/environmentmanagement/"
+                        "environments"
+                    ),
+                }
+            )
+        ]
+    )
+
+    with pytest.raises(
+        agentbuilder.AgentBuilderError,
+        match="unsafe continuation URL",
+    ):
+        agentbuilder.list_environments(
+            "fake-token",
+            "test",
+            session=session,
+        )
+
+
 def test_http_403_is_explicit_without_echoing_response_body() -> None:
     session = FakeSession(
         [
@@ -226,3 +307,46 @@ def test_first_run_authentication_returns_selected_token_tenant(
         "https://api.powerplatform.com/"
         "CopilotStudio.MinimalBot.ReadWrite"
     ]
+
+
+def test_targeted_authentication_can_force_account_selection(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    observed: dict[str, Any] = {}
+
+    class FakeApp:
+        def __init__(self, client_id, *, authority, token_cache) -> None:
+            observed["client_id"] = client_id
+            observed["authority"] = authority
+            observed["cache"] = token_cache
+
+        def get_accounts(self):
+            return [{"username": "cached@example.com"}]
+
+        def acquire_token_silent(self, *_args, **_kwargs):
+            raise AssertionError("forced selection must not use cached account")
+
+        def acquire_token_interactive(self, *, scopes, prompt):
+            observed["scopes"] = scopes
+            observed["prompt"] = prompt
+            return {"access_token": "selected-token"}
+
+    monkeypatch.setattr(
+        agentbuilder.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    result = agentbuilder.authenticate(
+        "00000000-0000-4000-8000-000000009999",
+        "prod",
+        cache_path=tmp_path / "token-cache.bin",
+        force_account_selection=True,
+    )
+
+    assert result == "selected-token"
+    assert observed["authority"].endswith(
+        "/00000000-0000-4000-8000-000000009999"
+    )
+    assert observed["prompt"] == "select_account"

@@ -141,6 +141,98 @@ def minimal_bot_scope(ring: str) -> str:
     )
 
 
+def _ring_api_host(ring: str) -> str:
+    config = RING_CONFIG.get(ring)
+    if config is None:
+        raise ValueError(f"Unsupported Power Platform ring: {ring!r}")
+    return str(config["audience"])
+
+
+def _validate_environment_continuation(url: str, ring: str) -> str:
+    expected = urlparse(_ring_api_host(ring))
+    parsed = urlparse(url)
+    if (
+        parsed.scheme != "https"
+        or parsed.username
+        or parsed.password
+        or parsed.port not in (None, 443)
+        or parsed.hostname != expected.hostname
+        or parsed.path != "/environmentmanagement/environments"
+        or parsed.fragment
+    ):
+        raise AgentBuilderError(
+            "Environment listing returned an unsafe continuation URL."
+        )
+    return url
+
+
+def list_environments(
+    token: str,
+    ring: str,
+    *,
+    api_version: str = DEFAULT_API_VERSION,
+    session: requests.Session | None = None,
+) -> list[dict[str, Any]]:
+    """List environments visible to an AgentBuilder identity in one ring."""
+    host = _ring_api_host(ring)
+    client = session or requests.Session()
+    if session is None:
+        retry = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset({"GET", "HEAD", "OPTIONS"}),
+            respect_retry_after_header=True,
+        )
+        client.mount("https://", HTTPAdapter(max_retries=retry))
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/json",
+        "x-ms-client-name": "EssAdk",
+    }
+    url = f"{host}/environmentmanagement/environments"
+    params: dict[str, str] | None = {"api-version": api_version}
+    environments: list[dict[str, Any]] = []
+    for _page in range(20):
+        response = client.request(
+            "GET",
+            url,
+            params=params,
+            headers=headers,
+            timeout=120,
+        )
+        if not response.ok:
+            _response_error(response, "Environment listing")
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise AgentBuilderError(
+                "Environment listing returned a non-JSON response."
+            ) from exc
+        values = body.get("value") if isinstance(body, dict) else None
+        if not isinstance(values, list) or not all(
+            isinstance(value, dict) for value in values
+        ):
+            raise AgentBuilderError(
+                "Environment listing returned an invalid shape."
+            )
+        environments.extend(values)
+        next_url = (
+            body.get("@odata.nextLink")
+            or body.get("@odata.nextlink")
+            or body.get("nextLink")
+        )
+        if not next_url:
+            return environments
+        if not isinstance(next_url, str):
+            raise AgentBuilderError(
+                "Environment listing returned an invalid continuation URL."
+            )
+        url = _validate_environment_continuation(next_url, ring)
+        params = None
+    raise AgentBuilderError("Environment listing exceeded 20 pages.")
+
+
 def _persist_token_cache(cache: msal.SerializableTokenCache, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     handle, temporary = tempfile.mkstemp(
@@ -202,6 +294,7 @@ def authenticate(
     ring: str,
     *,
     cache_path: Path = DEFAULT_TOKEN_CACHE,
+    force_account_selection: bool = False,
 ) -> str:
     """Acquire an ESS ADK delegated token without contacting Dataverse."""
     try:
@@ -220,7 +313,7 @@ def authenticate(
     accounts = app.get_accounts()
     result = (
         app.acquire_token_silent([scope], account=accounts[0])
-        if accounts
+        if accounts and not force_account_selection
         else None
     )
     if not result or "access_token" not in result:
