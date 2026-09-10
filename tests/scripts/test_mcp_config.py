@@ -6,8 +6,11 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
+import subprocess
 import sys
+import venv
 from pathlib import Path
 
 import pytest
@@ -134,9 +137,7 @@ def test_materialize_defaults_resolves_the_active_python_interpreter(
     mcp_config.materialize_defaults(tmp_path)
     config = json.loads((tmp_path / mcp_config.CONFIG_PATH).read_text())
 
-    assert config["servers"]["bundled"]["command"] == str(
-        Path(sys.executable).resolve()
-    )
+    assert config["servers"]["bundled"]["command"] == os.path.abspath(sys.executable)
 
 
 def test_configured_environment_override_survives_default_rematerialization(
@@ -305,9 +306,7 @@ def test_shipped_contextual_descriptors_render_complete_servers(
         "servicenowUsername",
         "servicenowPassword",
     ]
-    assert config["servers"]["ServiceNow"]["command"] == str(
-        Path(sys.executable).resolve()
-    )
+    assert config["servers"]["ServiceNow"]["command"] == os.path.abspath(sys.executable)
 
 
 def test_configure_merges_env_overrides_into_descriptor_env(tmp_path: Path) -> None:
@@ -394,8 +393,101 @@ def test_shipped_defaults_materialize_the_active_python_interpreter(
 
     assert config["servers"] == {
         "ess-landing-page-config": {
-            "command": str(Path(sys.executable).resolve()),
+            "command": os.path.abspath(sys.executable),
             "args": ["server.py"],
             "cwd": "${workspaceFolder}/src/mcp/agentconfig_landing_page",
         },
     }
+
+
+def test_runtime_interpreter_keeps_its_symlink_path(tmp_path, monkeypatch) -> None:
+    executable = tmp_path / "python"
+    try:
+        executable.symlink_to(sys.executable)
+    except OSError as error:
+        if os.name == "nt" and error.winerror == 1314:
+            pytest.skip("Creating symlinks requires Windows developer mode")
+        raise
+    monkeypatch.setattr(sys, "executable", str(executable))
+
+    assert mcp_config._render_runtime_values("{pythonExecutable}") == str(executable)
+
+
+def test_materialization_updates_managed_interpreter_without_overwriting_user_servers(
+    tmp_path, monkeypatch
+) -> None:
+    defaults = _defaults("bundled")
+    defaults["servers"]["bundled"]["command"] = "{pythonExecutable}"
+    _write_json(tmp_path / mcp_config.DEFAULTS_PATH, defaults)
+    monkeypatch.setattr(sys, "executable", str(tmp_path / "base-python"))
+    mcp_config.materialize_defaults(tmp_path)
+    config_path = tmp_path / mcp_config.CONFIG_PATH
+    config = json.loads(config_path.read_text())
+    config["servers"]["custom"] = {"command": "user-python"}
+    _write_json(config_path, config)
+
+    executable = str(tmp_path / "venv-python")
+    monkeypatch.setattr(sys, "executable", executable)
+    result = mcp_config.materialize_defaults(tmp_path)
+    config = json.loads(config_path.read_text())
+
+    assert result["updatedServers"] == ["bundled"]
+    assert config["servers"]["bundled"]["command"] == executable
+    assert config["servers"]["custom"] == {"command": "user-python"}
+
+
+@pytest.mark.parametrize("operation", ["materialize", "configure"])
+def test_rendered_interpreter_launches_in_the_installation_environment(
+    tmp_path, operation
+) -> None:
+    environment = tmp_path / "venv"
+    venv.EnvBuilder(with_pip=False, symlinks=os.name != "nt").create(environment)
+    executable = environment / (
+        "Scripts/python.exe" if os.name == "nt" else "bin/python"
+    )
+    site_packages = Path(
+        subprocess.run(
+            [str(executable), "-I", "-c", "import sysconfig; print(sysconfig.get_path('purelib'))"],
+            capture_output=True, text=True, check=True,
+        ).stdout.strip()
+    )
+    site_packages.mkdir(parents=True, exist_ok=True)
+    (site_packages / "mcp_environment_probe.py").write_text(
+        "VALUE = 'installed-in-venv'\n", encoding="utf-8"
+    )
+    server = {"command": "{pythonExecutable}", "args": ["server.py"]}
+    _write_json(
+        tmp_path / mcp_config.DEFAULTS_PATH,
+        {"servers": {"Example": server}},
+    )
+    _write_json(
+        tmp_path / "src/mcp/example/mcp.server.json",
+        {"id": "example", "serverName": "Example", "server": server},
+    )
+    action = (
+        "mcp_config.materialize_defaults(root)"
+        if operation == "materialize"
+        else "mcp_config.configure_server('example', [], root)"
+    )
+    subprocess.run(
+        [
+            str(executable), "-I", "-c",
+            "import sys; from pathlib import Path; "
+            f"sys.path.insert(0, {str(SOLUTION_ROOT / 'scripts')!r}); "
+            f"import mcp_config; root = Path({str(tmp_path)!r}); {action}",
+        ],
+        capture_output=True, text=True, check=True,
+    )
+    config = json.loads((tmp_path / mcp_config.CONFIG_PATH).read_text())
+    rendered = config["servers"]["Example"]["command"]
+    launched = subprocess.run(
+        [
+            rendered, "-I", "-c",
+            "import json, sys, mcp_environment_probe; "
+            "print(json.dumps([sys.prefix, mcp_environment_probe.VALUE]))",
+        ],
+        capture_output=True, text=True, check=True,
+    )
+
+    assert Path(rendered) == executable
+    assert json.loads(launched.stdout) == [str(environment), "installed-in-venv"]

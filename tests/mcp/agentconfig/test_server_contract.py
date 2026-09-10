@@ -57,7 +57,7 @@ def _tool_functions() -> dict[str, list[str]]:
 
 
 def test_server_exposes_the_skill_tool_contract() -> None:
-    assert _tool_functions() == {
+    expected_tools = {
         "list_agent_configs": [],
         "search_agents": ["searchString"],
         "create_agent_config": ["titleId"],
@@ -65,10 +65,13 @@ def test_server_exposes_the_skill_tool_contract() -> None:
         "view_agent_icon": ["titleId"],
         "update_agent_config": ["titleId", "config"],
         "delete_agent_config": ["titleId"],
-        "open_accent_color": ["titleId", "draft"],
-        "open_quick_links": ["titleId", "draft"],
-        "open_starter_prompts": ["titleId", "draft"],
+        "open_accent_color": ["titleId"],
+        "open_quick_links": ["titleId"],
+        "open_starter_prompts": ["titleId"],
     }
+    for tool_name in ("open_accent_color", "open_quick_links", "open_starter_prompts"):
+        expected_tools[tool_name].append("draft")
+    assert _tool_functions() == expected_tools
 
 
 def test_widget_openers_advertise_surface_specific_draft_schemas() -> None:

@@ -17,6 +17,11 @@ The workspace's configured Dataverse tenant constrains authentication and the
 resolved token's ``tid`` claim. Unavailable configuration or tenant discovery
 uses the organizations authority with a warning. The caller object id comes
 from ``oid``. The API validates the token and enforces authorization.
+
+A 401 allows one refresh and replay for the original account and tenant.
+The initial credential source is retained: explicit tokens are reread and
+MSAL refresh is silent. Unavailable credentials require renewed sign-in or
+a replacement token from the maker.
 """
 
 from __future__ import annotations
@@ -68,17 +73,7 @@ def _resolve_token() -> str:
     expected_tenant_id = configured_tenant_id()
     token_file = os.environ.get("AGENTCONFIG_ACCESS_TOKEN_FILE", "")
     if token_file:
-        if not os.path.isfile(token_file):
-            raise ValueError(
-                f"AGENTCONFIG_ACCESS_TOKEN_FILE={token_file!r} does not exist"
-            )
-        with open(token_file, "r", encoding="utf-8") as handle:
-            token = handle.read().strip()
-        if not token:
-            raise ValueError(
-                f"AGENTCONFIG_ACCESS_TOKEN_FILE={token_file!r} is empty"
-            )
-        return _validate_token_tenant(token, expected_tenant_id)
+        return _validate_token_tenant(_read_token_file(token_file), expected_tenant_id)
 
     token = os.environ.get("AGENTCONFIG_ACCESS_TOKEN", "").strip()
     if token:
@@ -86,6 +81,20 @@ def _resolve_token() -> str:
 
     token = acquire_token_msal_interactive(expected_tenant_id)
     return _validate_token_tenant(token, expected_tenant_id)
+
+
+def _read_token_file(token_file: str) -> str:
+    if not os.path.isfile(token_file):
+        raise ValueError(
+            f"AGENTCONFIG_ACCESS_TOKEN_FILE={token_file!r} does not exist"
+        )
+    with open(token_file, "r", encoding="utf-8") as handle:
+        token = handle.read().strip()
+    if not token:
+        raise ValueError(
+            f"AGENTCONFIG_ACCESS_TOKEN_FILE={token_file!r} is empty"
+        )
+    return token
 
 
 def _validate_token_tenant(token: str, expected_tenant_id: str | None) -> str:
@@ -123,8 +132,7 @@ class _FormPostCaptureHandler(http.server.BaseHTTPRequestHandler):
         return
 
 
-def acquire_token_msal_interactive(expected_tenant_id: str | None = None) -> str:
-    """Acquire a delegated AgentConfiguration token through cached or interactive MSAL auth."""
+def _create_msal_app(expected_tenant_id: str | None) -> Any:
     import msal
 
     cache = create_token_cache(_TOKEN_CACHE_PATH)
@@ -133,12 +141,16 @@ def acquire_token_msal_interactive(expected_tenant_id: str | None = None) -> str
         if expected_tenant_id is not None
         else _AUTHORITY
     )
-    app = msal.PublicClientApplication(
+    return msal.PublicClientApplication(
         _CLIENT_ID,
         authority=authority,
         token_cache=cache,
     )
 
+
+def acquire_token_msal_interactive(expected_tenant_id: str | None = None) -> str:
+    """Acquire a delegated AgentConfiguration token through cached or interactive MSAL auth."""
+    app = _create_msal_app(expected_tenant_id)
     accounts = app.get_accounts()
     result = app.acquire_token_silent(_SCOPE, account=accounts[0]) if accounts else None
     if not result or "access_token" not in result:
@@ -148,6 +160,41 @@ def acquire_token_msal_interactive(expected_tenant_id: str | None = None) -> str
         error = result.get("error", "unknown_error")
         description = result.get("error_description", "")
         raise ValueError(f"MSAL sign-in failed ({error}): {description}")
+    return result["access_token"]
+
+
+def _refresh_msal_token(tenant_id: str, object_id: str) -> str:
+    import msal
+
+    app = _create_msal_app(tenant_id)
+    # get_accounts() groups profiles by home account and can expose another
+    # tenant's local id. Resolve the original tenant profile through the cache.
+    home_account_ids = {
+        account["home_account_id"]
+        for account in app.token_cache.search(msal.TokenCache.CredentialType.ACCOUNT)
+        if isinstance(realm := account.get("realm"), str)
+        and realm.casefold() == tenant_id.casefold()
+        and isinstance(local_id := account.get("local_account_id"), str)
+        and local_id.casefold() == object_id.casefold()
+        and account.get("home_account_id")
+    }
+    accounts = [
+        account for account in app.get_accounts()
+        if account.get("home_account_id") in home_account_ids
+    ]
+    if len(accounts) != 1:
+        raise AgentConfigApiError(
+            "The original account is unavailable for token refresh. "
+            "Sign in again as that account and retry.",
+            http_status=401,
+        )
+    result = app.acquire_token_silent(_SCOPE, account=accounts[0], force_refresh=True)
+    if not result or not result.get("access_token"):
+        raise AgentConfigApiError(
+            "Could not refresh the access token for the original account. "
+            "Sign in again as that account and retry.",
+            http_status=401,
+        )
     return result["access_token"]
 
 
@@ -260,13 +307,18 @@ class AgentConfigBaseClient:
     ):
         self.base_url = base_url.rstrip("/")
         self._logger = logging.getLogger(logger_name)
+        token_file = os.environ.get("AGENTCONFIG_ACCESS_TOKEN_FILE", "")
+        self._token_file = os.path.abspath(token_file) if token_file else None
+        self._environment_token = bool(os.environ.get("AGENTCONFIG_ACCESS_TOKEN", "").strip())
         self._token = _resolve_token()
         self.tenant_id = _decode_tenant_id_from_jwt(self._token)
+        self._object_id = _decode_object_id_from_jwt(self._token)
         self.max_retries = 3
         self.timeout = 30.0
         self._transport = transport
         self._client: Optional[httpx.AsyncClient] = None
         self._client_lock = asyncio.Lock()
+        self._token_lock = asyncio.Lock()
 
     def __repr__(self) -> str:
         return (
@@ -307,6 +359,51 @@ class AgentConfigBaseClient:
             await self._client.aclose()
         self._client = None
 
+    def _acquire_replacement_token(self) -> str:
+        if self._object_id is None:
+            raise AgentConfigApiError(
+                "The original account cannot be identified for token refresh. "
+                "Provide a token with an object id and recreate the client.",
+                http_status=401,
+            )
+        if self._token_file:
+            token = _read_token_file(self._token_file)
+        elif self._environment_token:
+            token = os.environ.get("AGENTCONFIG_ACCESS_TOKEN", "").strip()
+            if not token:
+                raise AgentConfigApiError(
+                    "AGENTCONFIG_ACCESS_TOKEN is empty. Provide a replacement "
+                    "for the original account and retry.",
+                    http_status=401,
+                )
+        else:
+            token = _refresh_msal_token(self.tenant_id, self._object_id)
+
+        _validate_token_tenant(token, self.tenant_id)
+        object_id = _decode_object_id_from_jwt(token)
+        if object_id is None or object_id.casefold() != self._object_id.casefold():
+            raise AgentConfigApiError(
+                "The replacement token does not identify the original account. "
+                "Provide a matching token and retry.",
+                http_status=401,
+            )
+        return token
+
+    async def _refresh_token(self, rejected_token: str) -> None:
+        async with self._token_lock:
+            if self._token != rejected_token:
+                return
+            token = await asyncio.to_thread(self._acquire_replacement_token)
+            if token == rejected_token:
+                raise AgentConfigApiError(
+                    "No replacement access token is available. "
+                    "Renew credentials for the original account and retry.",
+                    http_status=401,
+                )
+            self._token = token
+            if self._client is not None:
+                self._client.headers["Authorization"] = f"Bearer {token}"
+
     async def _request(
         self,
         method: str,
@@ -317,6 +414,11 @@ class AgentConfigBaseClient:
         **kwargs: Any,
     ) -> Any:
         """Execute a request with bounded retry for transient responses.
+
+        One 401 recovery per request refreshes credentials for the original
+        account and tenant through the initial token source. MSAL refresh is
+        silent; explicit token sources are reread. Authentication failures
+        after the single replay are surfaced to the caller.
 
         ``transform_payload`` controls the landing-page camelCase/PascalCase key
         conversion applied to the response body. It defaults to ``True`` so the
@@ -339,10 +441,17 @@ class AgentConfigBaseClient:
         # duplicate on replay (unkeyed creates) opt out with idempotent=False.
         retry_safe = True if idempotent is None else idempotent
         last_error: Optional[Exception] = None
+        refreshed = False
         for attempt in range(self.max_retries):
             client = await self._ensure_client()
+            request_token = self._token
             try:
                 response = await client.request(method, path, **kwargs)
+                if response.status_code == 401 and not refreshed:
+                    await response.aclose()
+                    await self._refresh_token(request_token)
+                    refreshed = True
+                    response = await client.request(method, path, **kwargs)
                 if response.status_code == 429 or response.status_code in (
                     502,
                     503,

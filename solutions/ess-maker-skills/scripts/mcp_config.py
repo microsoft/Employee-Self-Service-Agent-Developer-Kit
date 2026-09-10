@@ -341,7 +341,8 @@ def _normalize_parameter(value: str, specification: dict[str, Any]) -> str:
 
 def _render_runtime_values(value: Any) -> Any:
     if value == "{pythonExecutable}":
-        return str(Path(sys.executable).resolve())
+        # A venv's executable can be a symlink; its launch path selects the venv.
+        return os.path.abspath(sys.executable)
     if isinstance(value, list):
         return [_render_runtime_values(item) for item in value]
     if isinstance(value, dict):
