@@ -10,6 +10,7 @@ import binascii
 import html
 import json
 import os
+import sys
 from collections.abc import Awaitable, Callable
 from typing import Any, Optional
 from urllib.parse import urlsplit
@@ -25,6 +26,13 @@ from drafts import (
     QuickLinksDraft,
     StarterPromptsDraft,
 )
+
+# Import the telemetry SDK from scripts/ when launched directly. MCP Apps
+# binds widget tool calls to the connection serving the widget resources, so
+# the telemetry bridge is registered on this server.
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", "..", "scripts"))
+
+import adk_telemetry  # type: ignore  # noqa: E402  # pylint: disable=import-error
 
 
 DEFAULT_WIDGET_ORIGIN = "https://workforceinsights.m365.cloud.microsoft"
@@ -52,6 +60,12 @@ _DELETE_ANNOTATIONS = ToolAnnotations(
     readOnlyHint=False,
     destructiveHint=True,
     idempotentHint=True,
+    openWorldHint=False,
+)
+_REPORT_CLIENT_EVENTS_ANNOTATIONS = ToolAnnotations(
+    readOnlyHint=False,
+    destructiveHint=False,
+    idempotentHint=False,
     openWorldHint=False,
 )
 
@@ -93,6 +107,11 @@ def _widget_tool_meta(resource_uri: str) -> dict[str, Any]:
 
 def _app_tool_meta() -> dict[str, Any]:
     return {"ui": {"visibility": ["model", "app"]}}
+
+
+def _app_only_tool_meta() -> dict[str, Any]:
+    """Callable by a widget on this connection, hidden from the model."""
+    return {"ui": {"visibility": ["app"]}}
 
 
 def _widget_resource_meta() -> dict[str, Any]:
@@ -399,6 +418,57 @@ async def open_starter_prompts(
         lambda: get_client().open_starter_prompts(titleId),
         success_message="Opened the starter-prompts editor.",
         draft=draft,
+    )
+
+
+@mcp.tool(
+    meta=_app_only_tool_meta(),
+    annotations=_REPORT_CLIENT_EVENTS_ANNOTATIONS,
+)
+async def report_client_events(
+    schemaVersion: Any = None,
+    correlationId: Any = None,
+    mountId: Any = None,
+    appName: Any = None,
+    buildEnvironment: Any = None,
+    buildNumber: Any = None,
+    events: Any = None,
+    toolCallId: Any = None,
+) -> CallToolResult:
+    """Accept Vorpal client telemetry batches through the app-only bridge.
+
+    MCP Apps binds tool calls to the connection serving the widget resources,
+    so this bridge shares the landing-page server with those resources.
+
+    ``Any`` parameters route malformed values through the bridge validator,
+    which returns an explicit accepted/rejected verdict in ``structuredContent``.
+    Vorpal treats a missing ``status`` as transient and retries, so validation
+    failures must retain that result shape.
+    """
+    envelope: dict[str, Any] = {
+        "schemaVersion": schemaVersion,
+        "correlationId": correlationId,
+        "mountId": mountId,
+        "appName": appName,
+        "buildEnvironment": buildEnvironment,
+        "buildNumber": buildNumber,
+        "events": events,
+    }
+    if toolCallId is not None:
+        envelope["toolCallId"] = toolCallId
+
+    # The SDK owns validation, exception handling, and the contract-shaped verdict.
+    result = adk_telemetry.report_client_events(envelope)
+
+    message = (
+        f"Accepted {result['acceptedEventCount']} client telemetry event(s)."
+        if result.get("status") == "accepted"
+        else "Rejected the client telemetry batch."
+    )
+    return CallToolResult(
+        content=[TextContent(type="text", text=message)],
+        structuredContent=result,
+        isError=result.get("status") == "rejected",
     )
 
 

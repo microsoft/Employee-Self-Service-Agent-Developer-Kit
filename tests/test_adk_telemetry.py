@@ -107,6 +107,38 @@ def captured_post(monkeypatch):
     return calls
 
 
+def _client_events_envelope(**overrides):
+    envelope = {
+        "schemaVersion": 1,
+        "correlationId": "corr-test",
+        "mountId": "mount-test",
+        "appName": "AgentIcon",
+        "buildEnvironment": "dev",
+        "buildNumber": "0",
+        "toolCallId": "tool-test",
+        "events": [
+            {
+                "eventName": "WidgetReady",
+                "timeSinceAppStart": 12,
+                "locale": "en-US",
+                "properties": {
+                    "count": 1,
+                    "flag": True,
+                    "label": "loaded",
+                    "tags": ["a", 2, False, None],
+                },
+            },
+            {
+                "eventName": "WidgetFunnelStage",
+                "timeSinceAppStart": 18.5,
+                "properties": {"stage": "loaded"},
+            },
+        ],
+    }
+    envelope.update(overrides)
+    return envelope
+
+
 # --- identity (instance_id; no developer identity) ------------------------
 def test_set_identity_stores_instance_and_raw_tenant(monkeypatch):
     monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
@@ -587,6 +619,691 @@ def test_buffer_oversize_drops_oldest_and_accepts_newest(monkeypatch):
         names = [json.loads(ln)["name"] for ln in f.read().splitlines() if ln.strip()]
     assert "adk.evt.19" in names      # newest kept
     assert "adk.evt.0" not in names   # oldest dropped
+
+
+# --- Vorpal client event bridge --------------------------------------------
+def test_report_client_events_accepts_and_posts_valid_batch(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+
+    result = adk.report_client_events(_client_events_envelope(), block=True)
+
+    assert result == {"status": "accepted", "acceptedEventCount": 2}
+    assert len(captured_post) == 1
+    _ikey, envelopes = captured_post[0]
+    assert [envelope["name"] for envelope in envelopes] == [
+        "adk.client.event",
+        "adk.client.event",
+    ]
+    first = envelopes[0]["data"]
+    assert first["client_event_name"] == "WidgetReady"
+    assert first["client_correlation_id"] == "corr-test"
+    assert first["client_mount_id"] == "mount-test"
+    assert first["client_tool_call_id"] == "tool-test"
+    assert first["client_app_name"] == "AgentIcon"
+    assert first["client_build_environment"] == "dev"
+    assert first["client_build_number"] == "0"
+    assert first["client_time_since_app_start_ms"] == 12
+    assert first["client_locale"] == "en-US"
+    assert json.loads(first["client_properties"]) == {
+        "count": 1,
+        "flag": True,
+        "label": "loaded",
+        "tags": ["a", 2, False, None],
+    }
+    assert first["client_prop_dropped_count"] == 0
+    # Property keys stay inside the JSON blob to keep the Aria field set fixed.
+    assert not any(key.startswith("client_prop_") and key != "client_prop_dropped_count" for key in first)
+    assert "developer_id" not in first
+
+
+def test_report_client_events_honors_opt_out_without_retrying(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_TELEMETRY", "off")
+
+    result = adk.report_client_events(_client_events_envelope(), block=True)
+
+    assert result == {"status": "accepted", "acceptedEventCount": 2}
+    assert captured_post == []
+
+
+def test_report_client_events_rejects_unsupported_schema(captured_post):
+    result = adk.report_client_events(
+        _client_events_envelope(schemaVersion=2),
+        block=True,
+    )
+
+    assert result == {
+        "status": "rejected",
+        "acceptedEventCount": 0,
+        "rejectedReason": "unsupported_schema_version",
+    }
+    assert captured_post == []
+
+
+def test_report_client_events_rejects_empty_and_oversized_batches(captured_post):
+    empty = adk.report_client_events(_client_events_envelope(events=[]), block=True)
+    oversized = adk.report_client_events(
+        _client_events_envelope(
+            events=[
+                {"eventName": f"Event{i}", "timeSinceAppStart": i}
+                for i in range(adk.CLIENT_EVENTS_MAX_BATCH_EVENTS + 1)
+            ]
+        ),
+        block=True,
+    )
+
+    assert empty["rejectedReason"] == "empty_batch"
+    assert oversized["rejectedReason"] == "batch_too_large"
+    assert captured_post == []
+
+
+_IDENTIFIER_FIELDS = {
+    "correlationId": "invalid_correlation_id",
+    "mountId": "invalid_mount_id",
+}
+
+
+@pytest.mark.parametrize("field", list(_IDENTIFIER_FIELDS))
+def test_each_identifier_field_reports_its_own_rejection_reason(field, captured_post):
+    """A rejection must name the field that actually failed.
+
+    Distinct reasons let dashboards distinguish correlation-id failures from
+    mount-id failures.
+    """
+    expected_reason = _IDENTIFIER_FIELDS[field]
+
+    # Exercise characters outside the accepted identifier format.
+    result = adk.report_client_events(
+        _client_events_envelope(**{field: "has spaces and @"}),
+        block=True,
+    )
+
+    assert result["rejectedReason"] == expected_reason
+    assert captured_post == []
+
+
+def test_identifier_rejection_reasons_are_distinct():
+    # Required stitching ids have distinct reasons; invalid optional tool-call
+    # ids are omitted without a rejection.
+    reasons = set(_IDENTIFIER_FIELDS.values())
+    assert len(reasons) == 2
+    assert reasons <= adk._CLIENT_EVENTS_REJECTED_REASONS
+
+
+def test_rejection_reasons_survive_the_bounded_value_list_guard():
+    # _rejection() coerces anything outside _CLIENT_EVENTS_REJECTED_REASONS to
+    # invalid_event_shape, so a new reason that was not registered there would
+    # be silently swallowed rather than reported.
+    assert (
+        adk._rejection(adk.CLIENT_EVENTS_REJECTED_INVALID_MOUNT_ID)["rejectedReason"]
+        == adk.CLIENT_EVENTS_REJECTED_INVALID_MOUNT_ID
+    )
+
+
+def test_retired_reasons_are_gone_from_the_value_list():
+    """Optional-field degradation has no batch-rejection reason.
+
+    Property faults drop properties and tool-call-id faults omit that field.
+    The rejection contract contains only conditions that reject a batch.
+    """
+    assert "invalid_property_type" not in adk._CLIENT_EVENTS_REJECTED_REASONS
+    assert "invalid_tool_call_id" not in adk._CLIENT_EVENTS_REJECTED_REASONS
+    assert not hasattr(adk, "CLIENT_EVENTS_REJECTED_INVALID_PROPERTY_TYPE")
+    assert not hasattr(adk, "CLIENT_EVENTS_REJECTED_INVALID_TOOL_CALL_ID")
+
+
+@pytest.mark.parametrize("field", list(_IDENTIFIER_FIELDS))
+@pytest.mark.parametrize(
+    "payload",
+    [
+        "jdoe@contoso.com",
+        "C:\\Users\\jdoe\\secret.docx",
+        "https://contoso.sharepoint.com/x",
+        "6f7c8f9c-1234-4abc-9def-0123456789ab is the object id",
+        "a b c",  # a space is enough to turn the field into free text
+        "x" * 65,  # one over the single length bound
+    ],
+)
+def test_correlation_identifiers_are_not_a_free_text_tunnel(field, payload, captured_post):
+    """The ephemeral ids are emitted verbatim, so they must be identifier-shaped.
+
+    Validate the whole value against the bounded ASCII format. Required ids
+    retain their exact values because redaction would collapse distinct
+    mounts and break event stitching.
+    """
+    expected_reason = _IDENTIFIER_FIELDS[field]
+
+    result = adk.report_client_events(
+        _client_events_envelope(**{field: payload}),
+        block=True,
+    )
+
+    assert result["rejectedReason"] == expected_reason
+    assert captured_post == []
+
+
+def test_well_formed_correlation_identifiers_are_accepted(captured_post, monkeypatch):
+    # Accept generated UUID-style ids and permitted dot/underscore/dash characters.
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            correlationId="corr-6f7c8f9c-1234-4abc-9def-0123456789ab",
+            mountId="mount-1a2b_3c.4d",
+            toolCallId="tool-Call.42",
+        ),
+        block=True,
+    )
+
+    assert result == {"status": "accepted", "acceptedEventCount": 2}
+    data = captured_post[0][1][0]["data"]
+    assert data["client_correlation_id"] == "corr-6f7c8f9c-1234-4abc-9def-0123456789ab"
+    assert data["client_mount_id"] == "mount-1a2b_3c.4d"
+    assert data["client_tool_call_id"] == "tool-Call.42"
+
+
+def test_identifiers_without_the_legacy_prefixes_are_accepted(captured_post, monkeypatch):
+    """Field names identify each id's role independently of its prefix.
+
+    Bare UUIDs and ULIDs satisfying the bounded format allow producers to
+    select an id scheme independently of ADK releases.
+    """
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            correlationId="6f7c8f9c-1234-4abc-9def-0123456789ab",
+            mountId="01JQZ8XKMNP7RSTVWXYZ",  # bare ULID-style, no prefix
+            toolCallId="call_abc.42",
+        ),
+        block=True,
+    )
+
+    assert result == {"status": "accepted", "acceptedEventCount": 2}
+    data = captured_post[0][1][0]["data"]
+    assert data["client_correlation_id"] == "6f7c8f9c-1234-4abc-9def-0123456789ab"
+    assert data["client_tool_call_id"] == "call_abc.42"
+
+
+def test_identifier_length_bound_is_single_and_applies_to_the_whole_value():
+    # The identifier format bounds the entire value to 1-64 characters.
+    assert adk._valid_client_identifier("a" * 64) is True
+    assert adk._valid_client_identifier("a" * 65) is False
+    assert adk._valid_client_identifier("") is False
+    assert adk._valid_client_identifier(123) is False
+
+
+def test_free_text_event_names_are_scrubbed_not_rejected(captured_post, monkeypatch):
+    """Event names occupy a fixed column and are scrubbed as string values.
+
+    Accept Unicode and descriptive names while redacting matched sensitive
+    content through the shared scrubber.
+    """
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[
+                {"eventName": "Widget\U0001f600Ready", "timeSinceAppStart": 1},
+                {
+                    "eventName": "opened C:\\Users\\jdoe\\secret.docx for jdoe@contoso.com",
+                    "timeSinceAppStart": 2,
+                },
+            ]
+        ),
+        block=True,
+    )
+
+    assert result == {"status": "accepted", "acceptedEventCount": 2}
+    names = [envelope["data"]["client_event_name"] for envelope in captured_post[0][1]]
+    assert names[0] == "Widget\U0001f600Ready"
+    # Redact the path and email embedded in the event name.
+    assert names[1] == "opened <path> for <email>"
+
+
+def test_oversized_property_strings_are_truncated_not_rejected(captured_post, monkeypatch):
+    # Bound the emitted string while retaining its event.
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[
+                {
+                    "eventName": "BigProp",
+                    "timeSinceAppStart": 1,
+                    "properties": {"blob": "x" * (adk.CLIENT_EVENTS_MAX_STRING_LENGTH + 1)},
+                }
+            ]
+        ),
+        block=True,
+    )
+
+    assert result == {"status": "accepted", "acceptedEventCount": 1}
+    props = json.loads(captured_post[0][1][0]["data"]["client_properties"])
+    assert props["blob"] == "x" * adk.CLIENT_EVENTS_MAX_STRING_LENGTH
+
+
+def test_long_appname_and_locale_are_truncated_not_rejected(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            appName="A" * 500,
+            events=[
+                {
+                    "eventName": "E",
+                    "timeSinceAppStart": 1,
+                    "locale": "L" * 500,
+                }
+            ],
+        ),
+        block=True,
+    )
+
+    assert result == {"status": "accepted", "acceptedEventCount": 1}
+    data = captured_post[0][1][0]["data"]
+    assert data["client_app_name"] == "A" * adk.CLIENT_EVENTS_MAX_STRING_LENGTH
+    assert data["client_locale"] == "L" * adk.CLIENT_EVENTS_MAX_STRING_LENGTH
+
+
+def test_many_properties_and_long_arrays_are_accepted(captured_post, monkeypatch):
+    # The serialized blob budget bounds property bags of varying cardinality.
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[
+                {
+                    "eventName": "Wide",
+                    "timeSinceAppStart": 1,
+                    "properties": {
+                        **{f"k{i}": i for i in range(40)},
+                        "tags": list(range(50)),
+                    },
+                }
+            ]
+        ),
+        block=True,
+    )
+
+    assert result == {"status": "accepted", "acceptedEventCount": 1}
+    props = json.loads(captured_post[0][1][0]["data"]["client_properties"])
+    assert len(props) == 41
+    assert props["tags"] == list(range(50))
+
+
+def test_non_identifier_property_keys_are_kept_but_length_bounded():
+    # Keys live inside a JSON string, so charset carries no schema risk.
+    # Only length is bounded, so one key cannot eat the blob budget.
+    blob, dropped = adk._client_properties_blob(
+        {
+            "bad-key": True,
+            "with space": 1,
+            "durationMs": 2,
+            "x" * (adk.CLIENT_EVENTS_MAX_PROPERTY_KEY_LENGTH + 1): "evicted",
+        }
+    )
+
+    assert json.loads(blob) == {"bad-key": True, "with space": 1, "durationMs": 2}
+    assert dropped == 1
+
+
+@pytest.mark.parametrize(
+    ("event", "reason"),
+    [
+        ({"eventName": "", "timeSinceAppStart": 1}, "invalid_event_shape"),
+        ({"eventName": 123, "timeSinceAppStart": 1}, "invalid_event_shape"),
+        ({"eventName": "BadLocale", "timeSinceAppStart": 1, "locale": 5}, "invalid_event_shape"),
+    ],
+)
+def test_report_client_events_rejects_out_of_contract_events(event, reason, captured_post):
+    result = adk.report_client_events(
+        _client_events_envelope(events=[event]),
+        block=True,
+    )
+
+    assert result["rejectedReason"] == reason
+    assert captured_post == []
+
+
+def test_non_finite_timing_degrades_to_a_sentinel(captured_post, monkeypatch):
+    """One unusable timing costs one column on one row, not the batch.
+
+    ``-1`` is unambiguous because ``performance.now()`` is non-negative, and
+    ``0`` has to stay a real value — a bootloader event legitimately fires at
+    time zero, so it cannot double as the failure marker.
+    """
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[
+                {"eventName": "NaNTime", "timeSinceAppStart": float("nan")},
+                {"eventName": "MissingTime"},
+                {"eventName": "StringTime", "timeSinceAppStart": "12"},
+                {"eventName": "ZeroTime", "timeSinceAppStart": 0},
+            ]
+        ),
+        block=True,
+    )
+
+    assert result == {"status": "accepted", "acceptedEventCount": 4}
+    times = [e["data"]["client_time_since_app_start_ms"] for e in captured_post[0][1]]
+    assert times == [-1, -1, -1, 0]
+
+
+def test_malformed_property_bag_costs_the_bag_not_the_event(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[
+                {"eventName": "ListBag", "timeSinceAppStart": 1, "properties": ["not", "a", "dict"]},
+                {
+                    "eventName": "MixedBag",
+                    "timeSinceAppStart": 2,
+                    "properties": {"keep": "yes", "nested": {"a": 1}, "nan": float("inf")},
+                },
+            ]
+        ),
+        block=True,
+    )
+
+    assert result == {"status": "accepted", "acceptedEventCount": 2}
+    first, second = (e["data"] for e in captured_post[0][1])
+    assert json.loads(first["client_properties"]) == {}
+    # A dropped bag stays distinguishable from an event that had no properties.
+    assert first["client_prop_dropped_count"] == 1
+    assert json.loads(second["client_properties"]) == {"keep": "yes"}
+    assert second["client_prop_dropped_count"] == 2
+
+
+def test_bad_tool_call_id_omits_the_field_and_keeps_the_batch(captured_post, monkeypatch):
+    """An incompatible host-generated tool-call id is omitted.
+
+    Correlation and mount ids provide required stitching metadata, so the
+    batch remains useful without the optional tool-call id.
+    """
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+
+    result = adk.report_client_events(
+        _client_events_envelope(toolCallId="tool/call:42"),
+        block=True,
+    )
+
+    assert result == {"status": "accepted", "acceptedEventCount": 2}
+    data = captured_post[0][1][0]["data"]
+    assert "client_tool_call_id" not in data
+    # The fields that DO stitch a mount together are still rejected, not omitted.
+    assert data["client_correlation_id"] == "corr-test"
+
+
+def test_client_level_is_accepted_and_emitted(captured_post, monkeypatch):
+    # Optional client levels are emitted when present.
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[
+                {"eventName": "E", "timeSinceAppStart": 1, "level": "error"},
+                {"eventName": "F", "timeSinceAppStart": 2},
+            ]
+        ),
+        block=True,
+    )
+
+    assert result == {"status": "accepted", "acceptedEventCount": 2}
+    first, second = (e["data"] for e in captured_post[0][1])
+    assert first["client_level"] == "error"
+    assert "client_level" not in second
+
+
+def test_unknown_envelope_fields_are_ignored_not_rejected(captured_post, monkeypatch):
+    """Direct SDK calls tolerate unknown envelope keys.
+
+    FastMCP's argument model drops extra top-level arguments on the tool path;
+    the SDK also ignores unknown keys when called directly.
+    """
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+
+    result = adk.report_client_events(
+        _client_events_envelope(rawPayload="ignored by the transport"),
+        block=True,
+    )
+
+    assert result == {"status": "accepted", "acceptedEventCount": 2}
+    # The unknown key is not carried onto the emitted rows either.
+    data = captured_post[0][1][0]["data"]
+    assert not any("rawPayload" in key for key in data)
+
+
+def test_unknown_event_fields_are_ignored_not_rejected(captured_post, monkeypatch):
+    """Optional event fields can be added independently of ADK releases.
+
+    Nested event keys reach the SDK unchanged. It reads known fields and
+    ignores extra metadata while emitting the supported event content.
+    """
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[
+                {
+                    "eventName": "WidgetReady",
+                    "timeSinceAppStart": 12,
+                    "someFutureField": "not yet known to ADK",
+                    "properties": {"stage": "loaded"},
+                }
+            ]
+        ),
+        block=True,
+    )
+
+    assert result == {"status": "accepted", "acceptedEventCount": 1}
+    # Only recognized event fields contribute to the emitted Aria columns.
+    data = captured_post[0][1][0]["data"]
+    assert not any("someFutureField" in key for key in data)
+    assert not any(value == "not yet known to ADK" for value in data.values())
+    assert data["client_event_name"] == "WidgetReady"
+    assert json.loads(data["client_properties"]) == {"stage": "loaded"}
+
+def test_report_client_events_scrubs_paths_urls_emails_and_guids(captured_post, monkeypatch):
+    # Bounded primitives still reach Aria verbatim unless they go through
+    # _scrub, so a widget property carrying a UPN/local path/object id would
+    # contradict the approved Data Profile ("no user-linkable IDs, no customer
+    # content"). Every string the bridge emits must be redacted.
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[
+                {
+                    "eventName": "WidgetReady",
+                    "timeSinceAppStart": 1,
+                    "properties": {
+                        "note": "C:\\Users\\jdoe\\secret.docx see https://contoso.sharepoint.com/x",
+                        "owner": "jdoe@contoso.com",
+                        "objectId": "6f7c8f9c-1234-4abc-9def-0123456789ab",
+                        "tags": ["a@b.com", "ok"],
+                        "count": 3,
+                    },
+                }
+            ]
+        ),
+        block=True,
+    )
+
+    assert result == {"status": "accepted", "acceptedEventCount": 1}
+    data = captured_post[0][1][0]["data"]
+    props = json.loads(data["client_properties"])
+    assert props["note"] == "<path> see <url>"
+    assert props["owner"] == "<email>"
+    assert props["objectId"] == "<guid>"
+    # Array elements are redacted too; non-strings pass through untouched.
+    assert props["tags"] == ["<email>", "ok"]
+    assert props["count"] == 3
+    # Keys are call-site literals and are never scrubbed — rewriting them would
+    # corrupt the field names analysts query inside the blob.
+    assert set(props) == {"note", "owner", "objectId", "tags", "count"}
+
+
+def test_properties_are_scrubbed_per_value_never_over_the_blob():
+    """Scrubbing the serialized blob would destroy it.
+
+    ``_scrub``'s ``(?<!\\w)/[^\\s]+`` -> ``<path>`` rule runs to the next
+    whitespace, and compact JSON has none. Applied to ``{"a":"/x","b":"y"}`` it
+    eats through the closing brace and leaves an unparseable document, taking
+    every property with it. Scrubbing each value first keeps the damage scoped
+    to the one field that actually carried a path.
+    """
+    blob, dropped = adk._client_properties_blob({"a": "/etc/passwd", "b": "y"})
+
+    assert json.loads(blob) == {"a": "<path>", "b": "y"}
+    assert dropped == 0
+    # The failure mode this guards against, made explicit.
+    assert adk._scrub('{"a":"/x","b":"y"}') != '{"a":"<path>","b":"y"}'
+
+
+def test_non_finite_numbers_are_filtered_before_serialization():
+    """``json.dumps`` emits bare ``NaN``/``Infinity``, which is not valid JSON.
+
+    Left in, they would make the entire blob unparseable by ``parse_json`` on
+    the KQL side, so a single bad number would cost every property on the event
+    rather than itself.
+    """
+    blob, dropped = adk._client_properties_blob(
+        {"good": 1.5, "nan": float("nan"), "inf": float("inf")}
+    )
+
+    assert json.loads(blob) == {"good": 1.5}
+    assert dropped == 2
+    assert "NaN" not in blob and "Infinity" not in blob
+
+
+def test_unserializable_property_values_are_dropped_individually():
+    blob, dropped = adk._client_properties_blob(
+        {"ok": "keep", "nested": {"a": 1}, "matrix": [[1, 2]], "obj": object()}
+    )
+
+    assert json.loads(blob) == {"ok": "keep"}
+    assert dropped == 3
+
+
+def test_oversized_properties_are_shed_until_the_blob_fits():
+    """Shed whole properties until the serialized bag fits its byte budget.
+
+    The largest properties are removed first, preserving a parseable JSON
+    object and accounting for every dropped property.
+    """
+    properties = {f"k{i}": "x" * 200 for i in range(60)}
+
+    blob, dropped = adk._client_properties_blob(properties)
+
+    assert len(blob.encode("utf-8")) <= adk.CLIENT_EVENTS_MAX_PROPERTIES_BYTES
+    survivors = json.loads(blob)  # still parseable, which truncation would not be
+    assert dropped > 0
+    assert len(survivors) == 60 - dropped
+    assert all(value == "x" * 200 for value in survivors.values())
+
+
+def test_missing_properties_still_emit_a_parseable_blob(captured_post, monkeypatch):
+    """The emitted field set must be fixed, or ``SCHEMA_VERSION`` means nothing."""
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[{"eventName": "NoProps", "timeSinceAppStart": 1}]
+        ),
+        block=True,
+    )
+
+    assert result == {"status": "accepted", "acceptedEventCount": 1}
+    data = captured_post[0][1][0]["data"]
+    assert json.loads(data["client_properties"]) == {}
+    assert data["client_prop_dropped_count"] == 0
+
+
+def test_report_client_events_rejection_leaves_no_session_side_effect(captured_post):
+    # get_session() WRITES ~/.adk/session.json: it mints a fresh id once the
+    # inactivity window lapses and stamps `last` on every call. A batch that is
+    # ultimately rejected must not mutate ADK session state.
+    import os
+
+    assert not os.path.exists(adk.SESSION_PATH)
+
+    result = adk.report_client_events(
+        _client_events_envelope(correlationId="not a valid id"),
+        block=True,
+    )
+
+    assert result["rejectedReason"] == "invalid_correlation_id"
+    assert not os.path.exists(adk.SESSION_PATH)
+    assert captured_post == []
+
+
+def test_report_client_events_fails_open_on_internal_fault(monkeypatch, captured_post):
+    # Vorpal reads a result without a `status` as a transient failure and
+    # retries the batch, so an internal ADK fault must never escape as an
+    # exception. It resolves to an acceptance for the WHOLE batch: Vorpal
+    # rejects an acknowledgement that doesn't account for every sent event.
+    def _boom(*args, **kwargs):
+        raise OSError("state dir gone")
+
+    monkeypatch.setattr(adk, "common_dimensions", _boom)
+
+    result = adk.report_client_events(_client_events_envelope(), block=True)
+
+    assert result == {"status": "accepted", "acceptedEventCount": 2}
+    assert captured_post == []
+
+
+def test_batch_cap_is_an_oom_guard_not_a_vorpal_contract():
+    """The out-of-memory guard leaves room for independent client batch sizing."""
+    assert adk.CLIENT_EVENTS_MAX_BATCH_EVENTS >= 1000
+
+
+def test_fail_open_echoes_the_full_sent_count(monkeypatch, captured_post):
+    """A fail-open acknowledgement echoes every event the caller sent.
+
+    Vorpal requires an acknowledgement to account for the whole batch so it
+    can finish handling every event without retrying.
+    """
+    def _boom(*_args, **_kwargs):
+        raise RecursionError("validator blew up")
+
+    monkeypatch.setattr(adk, "common_dimensions", _boom)
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[{"eventName": "E", "timeSinceAppStart": 1} for _ in range(20)]
+        ),
+        block=True,
+    )
+
+    assert result == {"status": "accepted", "acceptedEventCount": 20}
+    assert captured_post == []
+
+
+def test_oversized_batch_is_rejected_on_the_normal_path(captured_post):
+    # Accept a 100-event batch and reject a batch exceeding the safety cap.
+    ok = adk.report_client_events(
+        _client_events_envelope(
+            events=[{"eventName": "E", "timeSinceAppStart": 1} for _ in range(100)]
+        ),
+        block=True,
+    )
+    assert ok == {"status": "accepted", "acceptedEventCount": 100}
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[
+                {"eventName": "E", "timeSinceAppStart": 1}
+                for _ in range(adk.CLIENT_EVENTS_MAX_BATCH_EVENTS + 1)
+            ]
+        ),
+        block=True,
+    )
+
+    assert result["rejectedReason"] == "batch_too_large"
 
 
 # --- capability taxonomy + normalization ----------------------------------

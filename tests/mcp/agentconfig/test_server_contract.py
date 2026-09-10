@@ -68,6 +68,18 @@ def test_server_exposes_the_skill_tool_contract() -> None:
         "open_accent_color": ["titleId"],
         "open_quick_links": ["titleId"],
         "open_starter_prompts": ["titleId"],
+        # App-only telemetry shares the connection serving the widget resources
+        # and stays hidden from the model-visible tool list.
+        "report_client_events": [
+            "schemaVersion",
+            "correlationId",
+            "mountId",
+            "appName",
+            "buildEnvironment",
+            "buildNumber",
+            "events",
+            "toolCallId",
+        ],
     }
     for tool_name in ("open_accent_color", "open_quick_links", "open_starter_prompts"):
         expected_tools[tool_name].append("draft")
