@@ -89,7 +89,10 @@ class FakeClient:
             "testCasesResults": [{
                 "testCaseId": "case-1",
                 "state": "Completed",
-                "metricsResults": [],
+                "metricsResults": [{
+                    "type": "CompareMeaning",
+                    "result": {"status": "Pass"},
+                }],
             }],
         }
 
@@ -924,5 +927,41 @@ def test_analyze_run_results_groups_ai_reason_and_general_quality_failures():
     }
     assert any(
         "returned an error" in item["representativeEvidence"]
+        for item in analysis["failureGroups"]
+    )
+
+
+def test_analyze_run_results_treats_no_metrics_case_as_non_pass():
+    """A completed case that produced no metric results must not be counted
+    as a silent pass — it cannot be verified, so it is surfaced for review."""
+    result = {
+        "testSetName": "Compensation",
+        "testCasesResults": [
+            {
+                "testCaseName": "No metrics",
+                "state": "Completed",
+                "metricsResults": [],
+            },
+            {
+                "testCaseName": "Real pass",
+                "state": "Completed",
+                "metricsResults": [{
+                    "type": "CompareMeaning",
+                    "result": {"status": "Pass"},
+                }],
+            },
+        ],
+    }
+
+    analysis = evaluation_runs.analyze_run_results(result)
+
+    assert analysis["summary"] == {
+        "totalCases": 2,
+        "passedCases": 1,
+        "failedCases": 1,
+        "passRate": 50.0,
+    }
+    assert any(
+        item["category"] == "Execution or metric failure"
         for item in analysis["failureGroups"]
     )

@@ -638,12 +638,16 @@ def _metric_result(metric: dict[str, Any] | None) -> dict[str, Any]:
 def _case_passed(case: dict[str, Any]) -> bool:
     metrics = case.get("metricsResults")
     if not isinstance(metrics, list) or not metrics:
-        return str(case.get("state", "")).casefold() == "completed"
+        # A case with no metric results cannot be verified as passing, even if
+        # it reached the "completed" state. Treat it as non-pass so it surfaces
+        # for review (grouped under "Execution or metric failure") instead of
+        # being counted as a silent false-positive.
+        return False
     return all(
         str(_metric_result(metric).get("status", "")).casefold() == "pass"
         for metric in metrics
         if isinstance(metric, dict)
-    )
+    ) and any(isinstance(metric, dict) for metric in metrics)
 
 
 def _failure_pattern(case: dict[str, Any]) -> dict[str, str]:
