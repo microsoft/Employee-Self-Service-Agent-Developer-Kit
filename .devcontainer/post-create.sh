@@ -66,7 +66,6 @@ if ! command -v nuget >/dev/null 2>&1; then
     fi
 fi
 
-pip install --quiet --disable-pip-version-check -r "$SCRIPTS_DIR/requirements.txt"
 if command -v nuget >/dev/null 2>&1; then
     if ! python "$SCRIPTS_DIR/install_agentbuilder_object_model.py"; then
         echo "WARNING: Serialization support dependencies were not installed."
@@ -75,8 +74,3 @@ if command -v nuget >/dev/null 2>&1; then
         echo "  python $SCRIPTS_DIR/install_agentbuilder_object_model.py"
     fi
 fi
-
-echo ""
-echo "=== ESS Maker Kit ready! ==="
-echo "Open File > Open Folder and select solutions/ess-maker-skills, then run /setup in Copilot Chat."
-echo ""

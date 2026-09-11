@@ -51,9 +51,22 @@ def test_codespace_installs_optional_runtime_dependencies() -> None:
         )
     )
     assert "ghcr.io/devcontainers/features/dotnet:2" not in config["features"]
-    assert config["postCreateCommand"] == (
-        "bash ${containerWorkspaceFolder}/.devcontainer/post-create.sh"
+    post_create_command = config["postCreateCommand"]
+    requirements_command = (
+        "pip install --quiet --disable-pip-version-check "
+        '-r "${containerWorkspaceFolder}/solutions/ess-maker-skills/'
+        'scripts/requirements.txt"'
     )
+    serializer_command = (
+        'bash "${containerWorkspaceFolder}/.devcontainer/post-create.sh"'
+    )
+    assert requirements_command in post_create_command
+    assert serializer_command in post_create_command
+    assert post_create_command.index(requirements_command) < (
+        post_create_command.index(serializer_command)
+    )
+    assert "=== ESS Maker Kit ready! ===" in post_create_command
+
     post_create = (
         REPO_ROOT / ".devcontainer" / "post-create.sh"
     ).read_text(encoding="utf-8")
@@ -65,6 +78,8 @@ def test_codespace_installs_optional_runtime_dependencies() -> None:
     assert 'if ! python "$SCRIPTS_DIR/install_agentbuilder_object_model.py"' in (
         post_create
     )
+    assert "pip install" not in post_create
+    assert "=== ESS Maker Kit ready! ===" not in post_create
 
 
 def test_flightcheck_avoids_system_object_model_dependencies() -> None:
