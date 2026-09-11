@@ -133,8 +133,10 @@ Build the MCP URL by appending `/api/mcp` to ENV_URL. Double-check the
 result has exactly ONE slash between the domain and `api` — for example
 `https://org.crm.dynamics.com/api/mcp`, NOT `https://org.crm.dynamics.com//api/mcp`.
 
-Create `.vscode/mcp.json` with this exact content (replace the entire
-`url` value with the MCP URL you just built):
+Create `.vscode/mcp.json` with this exact content (replace **only** the
+Dataverse `url` value with the MCP URL you just built; leave the `workiq`
+entry exactly as-is — it is a static, no-credential developer tool
+(Microsoft Work IQ) with no tenant-specific values):
 
 ```json
 {
@@ -142,10 +144,20 @@ Create `.vscode/mcp.json` with this exact content (replace the entire
     "Dataverse": {
       "type": "http",
       "url": "https://org.crm.dynamics.com/api/mcp"
+    },
+    "workiq": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@microsoft/workiq@latest", "mcp"]
     }
   }
 }
 ```
+
+(The `workiq` server gives the maker's Copilot Microsoft 365 people/directory
+lookups during authoring — e.g. resolving a person to their Entra/AAD object
+id. It signs in interactively on first use and needs Node.js for `npx`; it is
+never part of the ESS agent's runtime. See `src/reference/work-iq-mcp.md`.)
 
 If FOUNDATION_REUSED is true, do not rerun the Allowed MCP Client prerequisite;
 it already passed in foundation `SETUP-02.2`. Continue directly to section 1.3.
