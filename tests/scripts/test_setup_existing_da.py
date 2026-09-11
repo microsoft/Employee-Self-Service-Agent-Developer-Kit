@@ -25,6 +25,78 @@ SCHEMA = "gptagent_copilotforemployeeselfservicehr"
 FAMILY = "00000000-0000-4000-8000-000000003333"
 
 
+def _normalize_object_model_keys(value: Any) -> Any:
+    if isinstance(value, dict):
+        if value.get("$kind") == "Message":
+            lines: list[str] = []
+            for line in value.get("text", []):
+                segments: list[str] = []
+                for segment in line.get("segments", []):
+                    if segment.get("$kind") == "TextSegment":
+                        segments.append(segment.get("value", ""))
+                    elif segment.get("$kind") == "ExpressionSegment":
+                        reference = segment.get("expression", {}).get(
+                            "variableReference",
+                            "",
+                        )
+                        segments.append(f"{{{reference}}}")
+                lines.append("".join(segments))
+            return "\n".join(lines)
+        return {
+            key.removeprefix("$"): _normalize_object_model_keys(child)
+            for key, child in value.items()
+        }
+    if isinstance(value, list):
+        return [_normalize_object_model_keys(child) for child in value]
+    return value
+
+
+def _convert_dialogs(
+    items: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for item in items:
+        kind = item["objectModel"]["$kind"]
+        if kind == "NonAdaptiveDialog":
+            results.append(
+                {
+                    "key": item["key"],
+                    "success": False,
+                    "error": {"message": "unsupported dialog kind"},
+                }
+            )
+            continue
+        dialog = _normalize_object_model_keys(item["objectModel"])
+        results.append(
+            {
+                "key": item["key"],
+                "success": True,
+                "yaml": yaml.safe_dump(dialog, sort_keys=False),
+            }
+        )
+    return results
+
+
+@pytest.fixture(autouse=True)
+def _isolate_external_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def reject_auth(*_args: Any, **_kwargs: Any) -> str:
+        raise AssertionError("Tests must stub AgentBuilder authentication.")
+
+    monkeypatch.setattr(
+        setup_existing_da,
+        "object_models_to_yaml",
+        _convert_dialogs,
+    )
+    monkeypatch.setattr(setup_existing_da, "authenticate", reject_auth)
+    monkeypatch.setattr(
+        setup_existing_da,
+        "authenticate_selected_tenant",
+        reject_auth,
+    )
+
+
 def _dialog() -> dict[str, Any]:
     return {
         "$kind": "AdaptiveDialog",
@@ -355,7 +427,7 @@ def test_attach_materializes_authorable_topics_and_da_identity(
     assert raw_cache["changeToken"] == "opaque-token"
 
 
-def test_canonical_converter_materializes_task_dialog_and_skips_failure(
+def test_materializes_converter_results_and_skips_failure(
     tmp_path: Path,
 ) -> None:
     changeset = _changeset()
@@ -1186,8 +1258,8 @@ def test_target_location_is_not_used_as_api_destination(
     )
     monkeypatch.setattr(
         setup_existing_da,
-        "authenticate",
-        lambda *_args, **_kwargs: "selected-token",
+        "authenticate_selected_tenant",
+        lambda *_args, **_kwargs: ("selected-token", TENANT_ID),
     )
     args = setup_existing_da.build_parser().parse_args(
         [

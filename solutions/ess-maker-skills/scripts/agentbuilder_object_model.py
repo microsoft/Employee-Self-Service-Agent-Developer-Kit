@@ -8,92 +8,178 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import subprocess
+import sys
+import sysconfig
+from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from agentbuilder_object_model_packages import (
+    RUNTIME_CONFIG_PATH,
+    assembly_paths,
+)
 
-PROJECT_PATH = (
-    Path(__file__).resolve().parent
-    / "agentbuilder-object-model"
-    / "AgentBuilder.ObjectModel.csproj"
-)
-HELPER_DLL = (
-    PROJECT_PATH.parent
-    / "bin"
-    / "Release"
-    / "net8.0"
-    / "AgentBuilder.ObjectModel.dll"
-)
-BUILD_TIMEOUT_SECONDS = 300
-CONVERSION_TIMEOUT_SECONDS = 120
-MAX_PROCESS_DETAIL = 4000
+
+MAX_ERROR_LENGTH = 2000
 
 
 class ObjectModelConverterError(RuntimeError):
-    """Raised when the canonical Object Model helper cannot run safely."""
+    """Raised when the canonical Object Model converter cannot run safely."""
 
 
-def _process_detail(completed: subprocess.CompletedProcess[str]) -> str:
-    detail = (completed.stderr or completed.stdout or "").strip()
-    return detail[-MAX_PROCESS_DETAIL:] or "No process output was returned."
+@dataclass(frozen=True)
+class _ObjectModelTypes:
+    bot_element: Any
+    dialog_base: Any
+    element_serializer: Any
+    json_serializer: Any
+    yaml_serializer: Any
 
 
-def _helper_needs_build() -> bool:
-    if not HELPER_DLL.is_file():
-        return True
-    output_time = HELPER_DLL.stat().st_mtime_ns
-    return any(
-        path.stat().st_mtime_ns > output_time
-        for path in PROJECT_PATH.parent.glob("*")
-        if path.is_file() and path.suffix in {".cs", ".csproj"}
+def _python_architecture() -> str:
+    platform_name = sysconfig.get_platform().lower()
+    if "arm64" in platform_name or "aarch64" in platform_name:
+        return "arm64"
+    if "amd64" in platform_name or "x86_64" in platform_name:
+        return "x64"
+    raise ObjectModelConverterError(
+        f"Unsupported Python architecture: {platform_name}"
     )
 
 
-def _dotnet_environment() -> dict[str, str]:
-    return {
-        **os.environ,
-        "DOTNET_CLI_TELEMETRY_OPTOUT": "1",
-        "DOTNET_NOLOGO": "1",
-    }
+def _dotnet_roots() -> tuple[Path, ...]:
+    architecture = _python_architecture()
+    candidates: list[Path] = []
 
+    architecture_root = os.environ.get(f"DOTNET_ROOT_{architecture.upper()}")
+    if architecture_root:
+        candidates.append(Path(architecture_root))
+    if os.environ.get("DOTNET_ROOT"):
+        candidates.append(Path(os.environ["DOTNET_ROOT"]))
 
-def _ensure_helper() -> tuple[str, Path]:
     dotnet = shutil.which("dotnet")
-    if not dotnet:
-        raise ObjectModelConverterError(
-            "The Microsoft Object Model converter requires the .NET 8 SDK."
+    if dotnet:
+        candidates.append(Path(dotnet).resolve().parent)
+
+    if sys.platform == "win32":
+        program_files = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+        if architecture == "x64":
+            candidates.append(program_files / "dotnet" / "x64")
+        candidates.append(program_files / "dotnet")
+    else:
+        candidates.extend(
+            (
+                Path("/usr/local/share/dotnet"),
+                Path("/usr/share/dotnet"),
+                Path.home() / ".dotnet",
+            )
         )
-    if _helper_needs_build():
+
+    unique: list[Path] = []
+    for candidate in candidates:
+        resolved = candidate.expanduser().resolve()
+        if resolved not in unique:
+            unique.append(resolved)
+    return tuple(unique)
+
+
+def _has_dotnet_10_runtime(root: Path) -> bool:
+    runtime_directory = root / "shared" / "Microsoft.NETCore.App"
+    return (
+        (root / "host" / "fxr").is_dir()
+        and runtime_directory.is_dir()
+        and any(runtime_directory.glob("10.*"))
+    )
+
+
+@lru_cache(maxsize=1)
+def _load_object_model() -> _ObjectModelTypes:
+    installed_assemblies = assembly_paths()
+    missing = [str(path) for path in installed_assemblies if not path.is_file()]
+    if missing:
+        raise ObjectModelConverterError(
+            "Microsoft Object Model dependencies are not installed. "
+            "Re-run the ESS ADK installer or run "
+            "`python scripts/install_agentbuilder_object_model.py`."
+        )
+
+    try:
+        from pythonnet import load
+    except ImportError as exc:
+        raise ObjectModelConverterError(
+            "Python.NET is not installed. Re-run the ESS ADK installer."
+        ) from exc
+
+    runtime_errors: list[str] = []
+    for root in _dotnet_roots():
+        if not _has_dotnet_10_runtime(root):
+            continue
         try:
-            completed = subprocess.run(
-                [
-                    dotnet,
-                    "build",
-                    str(PROJECT_PATH),
-                    "--configuration",
-                    "Release",
-                    "--nologo",
-                    "--verbosity",
-                    "quiet",
-                ],
-                cwd=PROJECT_PATH.parent,
-                capture_output=True,
-                text=True,
-                check=False,
-                timeout=BUILD_TIMEOUT_SECONDS,
-                env=_dotnet_environment(),
+            load(
+                "coreclr",
+                runtime_config=str(RUNTIME_CONFIG_PATH),
+                dotnet_root=str(root),
             )
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise ObjectModelConverterError(
-                "Could not build the Microsoft Object Model converter."
-            ) from exc
-        if completed.returncode != 0 or not HELPER_DLL.is_file():
-            raise ObjectModelConverterError(
-                "Could not build the Microsoft Object Model converter: "
-                f"{_process_detail(completed)}"
-            )
-    return dotnet, HELPER_DLL
+            break
+        except RuntimeError as exc:
+            runtime_errors.append(f"{root}: {exc}")
+    else:
+        detail = runtime_errors[-1] if runtime_errors else "No .NET 10 runtime found."
+        raise ObjectModelConverterError(
+            "A .NET 10 runtime matching the Python process architecture is "
+            f"required. Re-run the ESS ADK installer. {detail}"
+        )
+
+    library_directories = {str(path.parent) for path in installed_assemblies}
+    for directory in library_directories:
+        if directory not in sys.path:
+            sys.path.insert(0, directory)
+
+    try:
+        import clr
+
+        for assembly in installed_assemblies:
+            clr.AddReference(str(assembly))
+
+        from Microsoft.Agents.ObjectModel import (
+            BotElement,
+            DialogBase,
+            ElementSerializer,
+        )
+        from Microsoft.Agents.ObjectModel.Yaml import YamlSerializer
+        from System.Text.Json import JsonSerializer
+    except Exception as exc:
+        raise ObjectModelConverterError(
+            "Could not load the Microsoft Object Model assemblies."
+        ) from exc
+
+    return _ObjectModelTypes(
+        bot_element=BotElement,
+        dialog_base=DialogBase,
+        element_serializer=ElementSerializer,
+        json_serializer=JsonSerializer,
+        yaml_serializer=YamlSerializer,
+    )
+
+
+def _error_result(key: str, error: Exception) -> dict[str, Any]:
+    get_type = getattr(error, "GetType", None)
+    error_type = (
+        get_type().Name
+        if callable(get_type)
+        else type(error).__name__
+    )
+    message = str(error).strip() or error_type
+    return {
+        "key": key,
+        "success": False,
+        "error": {
+            "code": "object-model-conversion-failed",
+            "type": error_type,
+            "message": message[:MAX_ERROR_LENGTH],
+        },
+    }
 
 
 def object_models_to_yaml(
@@ -102,56 +188,41 @@ def object_models_to_yaml(
     """Convert Object Model JSON elements to canonical Copilot Studio YAML."""
     if not items:
         return []
-    dotnet, helper_dll = _ensure_helper()
-    request = {
-        "operation": "object-model-to-yaml",
-        "items": items,
-    }
-    try:
-        completed = subprocess.run(
-            [dotnet, str(helper_dll)],
-            cwd=PROJECT_PATH.parent,
-            input=json.dumps(request, ensure_ascii=True),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=CONVERSION_TIMEOUT_SECONDS,
-            env=_dotnet_environment(),
-        )
-    except (OSError, subprocess.TimeoutExpired) as exc:
-        raise ObjectModelConverterError(
-            "The Microsoft Object Model converter did not complete."
-        ) from exc
-    try:
-        response = json.loads(completed.stdout)
-    except json.JSONDecodeError as exc:
-        raise ObjectModelConverterError(
-            "The Microsoft Object Model converter returned unreadable output: "
-            f"{_process_detail(completed)}"
-        ) from exc
-    if completed.returncode != 0 or response.get("success") is not True:
-        error = response.get("error")
-        message = (
-            error.get("message")
-            if isinstance(error, dict)
-            else _process_detail(completed)
-        )
-        raise ObjectModelConverterError(
-            f"The Microsoft Object Model converter failed: {message}"
-        )
-    results = response.get("results")
-    if not isinstance(results, list) or len(results) != len(items):
-        raise ObjectModelConverterError(
-            "The Microsoft Object Model converter returned an incomplete result."
-        )
-    for expected, result in zip(items, results, strict=True):
-        if (
-            not isinstance(result, dict)
-            or result.get("key") != expected.get("key")
-            or not isinstance(result.get("success"), bool)
-        ):
+
+    types = _load_object_model()
+    options = types.element_serializer.CreateOptions(False)
+    results: list[dict[str, Any]] = []
+    for item in items:
+        key = item.get("key")
+        if not isinstance(key, str) or not key.strip():
             raise ObjectModelConverterError(
-                "The Microsoft Object Model converter returned a mismatched "
-                "result."
+                "Each item key must be a non-empty string."
             )
+        object_model = item.get("objectModel")
+        if not isinstance(object_model, dict):
+            raise ObjectModelConverterError("objectModel must be an object.")
+
+        try:
+            element = types.json_serializer.Deserialize[types.bot_element](
+                json.dumps(object_model, separators=(",", ":"), ensure_ascii=True),
+                options,
+            )
+            if element is None:
+                raise ValueError(
+                    "The Object Model JSON did not contain a BotElement."
+                )
+            if not isinstance(element, types.dialog_base):
+                raise ValueError(
+                    f"Expected a dialog but received {element.GetType().Name}."
+                )
+            results.append(
+                {
+                    "key": key,
+                    "success": True,
+                    "elementType": element.GetType().Name,
+                    "yaml": str(types.yaml_serializer.Serialize(element)),
+                }
+            )
+        except Exception as exc:
+            results.append(_error_result(key, exc))
     return results
