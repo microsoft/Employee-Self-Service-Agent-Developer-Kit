@@ -45,7 +45,9 @@ def _nuget_command() -> str:
     command = shutil.which("nuget")
     if not command:
         raise ObjectModelInstallError(
-            "NuGet is not installed. Re-run the ESS ADK installer."
+            "NuGet is not installed. See `setup/README.md` and the platform "
+            "setup path: `setup/Install-EssAdk.ps1`, "
+            "`setup/install-ess-adk.sh`, or `.devcontainer/post-create.sh`."
         )
     return command
 
