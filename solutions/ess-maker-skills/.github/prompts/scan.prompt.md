@@ -5,7 +5,7 @@ description: "Type Enter to scan your agent for errors and fix them"
 
 # Scan
 
-**Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`. If canonical state does not have `schema_version: 1` and `status: "complete"`, or local config does not have `setup: "complete"`, show:
+**Setup-state check.** Read `.local/setup/config.json`. If it does not have `schema_version: 1` and `status: "complete"`, show:
 
 > Welcome to the ESS Maker Kit. Before running `/scan`, type `/setup` to set up your environment.
 

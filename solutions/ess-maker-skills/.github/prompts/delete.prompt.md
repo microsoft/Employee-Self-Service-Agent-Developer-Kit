@@ -8,7 +8,7 @@ description: "Type Enter to delete a topic, workflow, or evaluation test set fro
 You are helping a customer delete a component from their ESS agent. This
 removes it from the local working copy AND from Copilot Studio.
 
-**Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`. If canonical state does not have `schema_version: 1` and `status: "complete"`, or local config does not have `setup: "complete"`, show:
+**Setup-state check.** Read `.local/setup/config.json`. If it does not have `schema_version: 1` and `status: "complete"`, show:
 
 > Welcome to the ESS Maker Kit. Before running `/delete`, type `/setup` to set up your environment.
 
