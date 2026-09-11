@@ -1,0 +1,492 @@
+interactions:
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      OData-MaxVersion:
+      - '4.0'
+      OData-Version:
+      - '4.0'
+      User-Agent:
+      - python-requests/2.34.2
+    method: GET
+    uri: https://orgmocktenant.crm.dynamics.com/api/data/v9.2/workflows?%24select=workflowid%2Cname%2Cstatecode&%24filter=name+eq+%27flightcheck-sn-run-001-probe%27+and+category+eq+5
+  response:
+    body:
+      string: '{"@odata.context":"https://orgmocktenant.crm.dynamics.com/api/data/v9.2/$metadata#workflows(workflowid,name,statecode)","value":[]}'
+    headers:
+      Allow:
+      - OPTIONS,GET,HEAD,POST
+      AuthActivityId:
+      - REDACTED
+      Cache-Control:
+      - no-cache
+      Content-Type:
+      - application/json; odata.metadata=minimal
+      Date:
+      - Tue, 11 Aug 2026 21:29:46 GMT
+      Expires:
+      - '-1'
+      OData-Version:
+      - '4.0'
+      Public:
+      - OPTIONS,GET,HEAD,POST
+      REQ_ID:
+      - REDACTED
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Vary:
+      - Accept-Encoding
+      X-Content-Type-Options:
+      - nosniff
+      X-Source:
+      - REDACTED
+      content-length:
+      - '127'
+      x-ms-dop-hint:
+      - '48'
+      x-ms-ratelimit-burst-remaining-xrm-requests:
+      - '7999'
+      x-ms-ratelimit-time-remaining-xrm-requests:
+      - 1,200.00
+      x-ms-service-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: '{"category":5,"name":"flightcheck-sn-run-001-probe","type":1,"description":"FlightCheck
+      SN-RUN-001 transient ServiceNow connector probe.","primaryentity":"none","clientdata":"{\"properties\":
+      {\"connectionReferences\": {\"shared_service-now\": {\"connectionName\": \"shared-service-now-00000000-0000-0000-0000-000000001111\",
+      \"source\": \"Embedded\", \"id\": \"/providers/Microsoft.PowerApps/apis/shared_service-now\",
+      \"tier\": \"Integrated\"}}, \"definition\": {\"$schema\": \"https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#\",
+      \"contentVersion\": \"1.0.0.0\", \"parameters\": {\"$connections\": {\"defaultValue\":
+      {}, \"type\": \"Object\"}, \"$authentication\": {\"defaultValue\": {}, \"type\":
+      \"SecureObject\"}}, \"triggers\": {\"manual\": {\"metadata\": {}, \"type\":
+      \"Request\", \"kind\": \"Http\", \"inputs\": {\"schema\": {\"type\": \"object\",
+      \"properties\": {}, \"required\": []}}}}, \"actions\": {\"Probe_ServiceNow\":
+      {\"runAfter\": {}, \"metadata\": {}, \"type\": \"OpenApiConnection\", \"inputs\":
+      {\"parameters\": {\"tableType\": \"sys_user\", \"sysparm_limit\": \"1\"}, \"host\":
+      {\"apiId\": \"/providers/Microsoft.PowerApps/apis/shared_service-now\", \"operationId\":
+      \"GetRecords\", \"connectionName\": \"shared_service-now\"}}}, \"Respond\":
+      {\"runAfter\": {\"Probe_ServiceNow\": [\"Succeeded\", \"Failed\", \"TimedOut\",
+      \"Skipped\"]}, \"metadata\": {}, \"type\": \"Response\", \"kind\": \"Http\",
+      \"inputs\": {\"statusCode\": 200, \"body\": {\"connectorActionStatus\": \"@actions(''Probe_ServiceNow'')?[''status'']\",
+      \"connectorStatusCode\": \"@outputs(''Probe_ServiceNow'')?[''statusCode'']\",
+      \"connectorErrorMessage\": \"@actions(''Probe_ServiceNow'')?[''error'']?[''message'']\",
+      \"connectorErrorCode\": \"@actions(''Probe_ServiceNow'')?[''code'']\", \"workdayActionStatus\":
+      \"@actions(''Probe_ServiceNow'')?[''status'']\", \"workdayStatusCode\": \"@outputs(''Probe_ServiceNow'')?[''statusCode'']\",
+      \"errorMessage\": \"@actions(''Probe_ServiceNow'')?[''error'']?[''message'']\",
+      \"errorCode\": \"@actions(''Probe_ServiceNow'')?[''code'']\"}}}}}}, \"schemaVersion\":
+      \"1.0.0.0\"}"}'
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '2145'
+      Content-Type:
+      - application/json
+      OData-MaxVersion:
+      - '4.0'
+      OData-Version:
+      - '4.0'
+      Prefer:
+      - return=representation
+      User-Agent:
+      - python-requests/2.34.2
+    method: POST
+    uri: https://orgmocktenant.crm.dynamics.com/api/data/v9.2/workflows
+  response:
+    body:
+      string: '{"@odata.context":"https://orgmocktenant.crm.dynamics.com/api/data/v9.2/$metadata#workflows/$entity","@odata.etag":"W/\"37119337\"","iscrmuiworkflow":false,"createstage":null,"istransacted":true,"modernflowtype":0,"xaml":null,"category":5,"componentstate":0,"suspensionreasondetails":null,"businessprocesstype":0,"entityimage":null,"_plugintypeid_value":null,"statuscode":1,"_createdby_value":"00000000-0000-0000-0000-000000001111","entityimage_url":null,"trustedaccess":false,"name":"flightcheck-sn-run-001-probe","_owninguser_value":"00000000-0000-0000-0000-000000001111","clientdataiscompressed":false,"scope":4,"_flowgroup_value":null,"overwritetime":"1900-01-01T00:00:00Z","_modifiedby_value":"00000000-0000-0000-0000-000000001111","billingcontext":null,"processroleassignment":null,"type":1,"languagecode":null,"dynamicssolutioncontext":null,"_licensee_value":null,"ondemand":false,"_licenseentitledby_value":null,"resourceid":null,"desktopflowmodules":null,"inputparameters":null,"_modifiedonbehalfby_value":null,"_ownerid_value":"00000000-0000-0000-0000-000000001111","entityimageid":null,"rank":null,"description":"FlightCheck
+        SN-RUN-001 transient ServiceNow connector probe.","clientdata":"{\"properties\":{\"connectionReferences\":{\"shared_service-now\":{\"connectionName\":\"shared-service-now-00000000-0000-0000-0000-000000001111\",\"source\":\"Embedded\",\"id\":\"/providers/Microsoft.PowerApps/apis/shared_service-now\",\"tier\":\"Integrated\"}},\"definition\":{\"$schema\":\"https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#\",\"contentVersion\":\"1.0.0.0\",\"parameters\":{\"$connections\":{\"defaultValue\":{},\"type\":\"Object\"},\"$authentication\":{\"defaultValue\":{},\"type\":\"SecureObject\"}},\"triggers\":{\"manual\":{\"metadata\":{},\"type\":\"Request\",\"kind\":\"Http\",\"inputs\":{\"schema\":{\"type\":\"object\",\"properties\":{},\"required\":[]}}}},\"actions\":{\"Probe_ServiceNow\":{\"runAfter\":{},\"metadata\":{},\"type\":\"OpenApiConnection\",\"inputs\":{\"parameters\":{\"tableType\":\"sys_user\",\"sysparm_limit\":\"1\"},\"host\":{\"apiId\":\"/providers/Microsoft.PowerApps/apis/shared_service-now\",\"operationId\":\"GetRecords\",\"connectionName\":\"shared_service-now\"}}},\"Respond\":{\"runAfter\":{\"Probe_ServiceNow\":[\"Succeeded\",\"Failed\",\"TimedOut\",\"Skipped\"]},\"metadata\":{},\"type\":\"Response\",\"kind\":\"Http\",\"inputs\":{\"statusCode\":200,\"body\":{\"connectorActionStatus\":\"@actions(''Probe_ServiceNow'')?[''status'']\",\"connectorStatusCode\":\"@outputs(''Probe_ServiceNow'')?[''statusCode'']\",\"connectorErrorMessage\":\"@actions(''Probe_ServiceNow'')?[''error'']?[''message'']\",\"connectorErrorCode\":\"@actions(''Probe_ServiceNow'')?[''code'']\",\"workdayActionStatus\":\"@actions(''Probe_ServiceNow'')?[''status'']\",\"workdayStatusCode\":\"@outputs(''Probe_ServiceNow'')?[''statusCode'']\",\"errorMessage\":\"@actions(''Probe_ServiceNow'')?[''error'']?[''message'']\",\"errorCode\":\"@actions(''Probe_ServiceNow'')?[''code'']\"}}}}}},\"schemaVersion\":\"1.0.0.0\"}","inputs":null,"modifiedon":"2026-08-11T21:29:47Z","createmetadata":null,"rendererobjecttypecode":null,"processtriggerscope":null,"_createdonbehalfby_value":null,"processorder":null,"definition":null,"updatestage":null,"triggeronupdateattributelist":null,"mode":0,"resourcecontainer":null,"workflowid":"00000000-0000-0000-0000-000000001111","metadata":null,"runas":1,"_owningteam_value":null,"planverified":false,"_owningbusinessunit_value":"00000000-0000-0000-0000-000000001111","deletestage":null,"statecode":0,"syncworkflowlogonfailure":false,"_parentworkflowid_value":null,"dependencies":null,"_activeworkflowid_value":null,"triggerondelete":false,"ismanaged":false,"throttlingbehavior":null,"introducedversion":"1.0.0.0","workflowidunique":"00000000-0000-0000-0000-000000001111","uiflowtype":null,"claims":null,"schemaversion":null,"primaryentity":"none","uidata":null,"processtriggerformid":null,"outputs":null,"modifymetadata":null,"solutionid":"00000000-0000-0000-0000-000000001111","formid":null,"uniquename":null,"asyncautodelete":false,"subprocess":false,"triggeroncreate":false,"credentials":null,"connectionreferences":null,"createdon":"2026-08-11T21:29:47Z","_sdkmessageid_value":null,"entityimage_timestamp":null,"versionnumber":37119337,"iscustomizable":{"Value":true,"CanBeChanged":true,"ManagedPropertyLogicalName":"iscustomizableanddeletable"},"iscustomprocessingstepallowedforotherpublishers":{"Value":true,"CanBeChanged":true,"ManagedPropertyLogicalName":"canbedeleted"}}'
+    headers:
+      Allow:
+      - OPTIONS,GET,HEAD,POST
+      AuthActivityId:
+      - REDACTED
+      Cache-Control:
+      - no-cache
+      Content-Length:
+      - '4548'
+      Content-Type:
+      - application/json; odata.metadata=minimal
+      Date:
+      - Tue, 11 Aug 2026 21:29:49 GMT
+      Expires:
+      - '-1'
+      OData-Version:
+      - '4.0'
+      Preference-Applied:
+      - return=representation
+      Public:
+      - OPTIONS,GET,HEAD,POST
+      REQ_ID:
+      - REDACTED
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      X-Content-Type-Options:
+      - nosniff
+      X-Source:
+      - REDACTED
+      x-ms-dop-hint:
+      - '48'
+      x-ms-ratelimit-burst-remaining-xrm-requests:
+      - '7999'
+      x-ms-ratelimit-time-remaining-xrm-requests:
+      - 1,200.00
+      x-ms-service-request-id:
+      - REDACTED
+    status:
+      code: 201
+      message: Created
+- request:
+    body: '{"statecode":1}'
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '16'
+      Content-Type:
+      - application/json
+      If-Match:
+      - '*'
+      OData-MaxVersion:
+      - '4.0'
+      OData-Version:
+      - '4.0'
+      User-Agent:
+      - python-requests/2.34.2
+    method: PATCH
+    uri: https://orgmocktenant.crm.dynamics.com/api/data/v9.2/workflows(00000000-0000-0000-0000-000000001111)
+  response:
+    body:
+      string: ''
+    headers:
+      Allow:
+      - OPTIONS,GET,HEAD,POST
+      AuthActivityId:
+      - REDACTED
+      Cache-Control:
+      - no-cache
+      Content-Type:
+      - text/html; charset=utf-8
+      Date:
+      - Tue, 11 Aug 2026 21:29:59 GMT
+      Expires:
+      - '-1'
+      Location:
+      - https://orgmocktenant.crm.dynamics.com/api/data/v9.2/workflows(00000000-0000-0000-0000-000000001111)
+      OData-EntityId:
+      - https://orgmocktenant.crm.dynamics.com/api/data/v9.2/workflows(00000000-0000-0000-0000-000000001111)
+      OData-Version:
+      - '4.0'
+      Public:
+      - OPTIONS,GET,HEAD,POST
+      REQ_ID:
+      - REDACTED
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      X-Content-Type-Options:
+      - nosniff
+      X-Source:
+      - REDACTED
+      x-ms-dop-hint:
+      - '48'
+      x-ms-ratelimit-burst-remaining-xrm-requests:
+      - '7999'
+      x-ms-ratelimit-time-remaining-xrm-requests:
+      - 1,200.00
+      x-ms-service-request-id:
+      - REDACTED
+    status:
+      code: 204
+      message: No Content
+- request:
+    body: '{}'
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '2'
+      Content-Type:
+      - application/json
+      User-Agent:
+      - python-requests/2.34.2
+    method: POST
+    uri: https://api.flow.microsoft.com/providers/Microsoft.ProcessSimple/environments/00000000-0000-0000-0000-000000001111/flows/00000000-0000-0000-0000-000000001111/triggers/manual/listCallbackUrl?api-version=2016-11-01
+  response:
+    body:
+      string: '{"response":{"value":"https://mockenv.00.environment.api.powerplatform.com:443/powerautomate/automations/direct/cu/30/workflows/00000000000000000000000000000000/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=REDACTED_SAS_SIG","method":"POST","basePath":"https://mockenv.00.environment.api.powerplatform.com/powerautomate/automations/direct/cu/30/workflows/00000000000000000000000000000000/triggers/manual/paths/invoke","queries":{"api-version":"1","sp":"/triggers/manual/run","sv":"1.0","sig":"m6Yo9hKZP0JX8HMuHmAzg4Xe_7UHUu_XhjqVMRKu8RE"}},"httpStatusCode":"OK"}'
+    headers:
+      Cache-Control:
+      - no-cache, no-store
+      Content-Length:
+      - '673'
+      Content-Type:
+      - application/json; charset=utf-8
+      Date:
+      - Tue, 11 Aug 2026 21:30:08 GMT
+      Server-Timing:
+      - x-ms-igw-upstream-headers;dur=7441.5,x-ms-igw-req-overhead;dur=0.4
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      X-Content-Type-Options:
+      - nosniff
+      mise-correlation-id:
+      - 00000000-0000-0000-0000-000000001111
+      x-ms-activity-vector:
+      - '00'
+      x-ms-armresiliency:
+      - 'False'
+      x-ms-correlation-id:
+      - REDACTED
+      x-ms-correlation-request-id:
+      - 00000000-0000-0000-0000-000000001111
+      x-ms-flow-mobile-ios-version:
+      - 3.0.421
+      x-ms-flow-routing-request-id:
+      - WESTUS:20260811T213008Z:00000000-0000-0000-0000-000000001111
+      x-ms-igw-tracking-id:
+      - beecb596-d5ce-4c8d-b63b-eb81f8102cc220260811213001_prdcm001wusgb0_1
+      x-ms-islandgateway:
+      - _prdcm001wusgb0_1
+      x-ms-request-id:
+      - REDACTED
+      x-ms-service-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+- request:
+    body: '{}'
+    headers:
+      Accept:
+      - '*/*'
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '2'
+      Content-Type:
+      - application/json
+      Prefer:
+      - wait
+      User-Agent:
+      - python-requests/2.34.2
+    method: POST
+    uri: https://mockenv.00.environment.api.powerplatform.com/powerautomate/automations/direct/cu/30/workflows/00000000000000000000000000000000/triggers/manual/paths/invoke?api-version=1&sp=%2Ftriggers%2Fmanual%2Frun&sv=1.0&sig=REDACTED_SAS_SIG
+  response:
+    body:
+      string: '{"connectorActionStatus":"Succeeded","connectorStatusCode":200,"connectorErrorMessage":null,"connectorErrorCode":"OK","workdayActionStatus":"Succeeded","workdayStatusCode":200,"errorMessage":null,"errorCode":"OK"}'
+    headers:
+      Cache-Control:
+      - no-store, no-cache
+      Content-Length:
+      - '213'
+      Content-Type:
+      - application/json; charset=utf-8
+      Date:
+      - Tue, 11 Aug 2026 21:30:09 GMT
+      Server-Timing:
+      - x-ms-igw-upstream-headers;dur=683.7,x-ms-igw-req-overhead;dur=0.1
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      X-Content-Type-Options:
+      - nosniff
+      x-ms-activity-vector:
+      - 00.00.IN.05.00
+      x-ms-client-tracking-id:
+      - 08584151230756064244416290495CU13
+      x-ms-correlation-id:
+      - REDACTED
+      x-ms-execution-location:
+      - eastus
+      x-ms-gateway-clusters:
+      - prdil107wus
+      x-ms-igw-tracking-id:
+      - 8dc48547-a3a9-4286-b3bb-49ec2474134220260811213009_prdil107wusgb0_1
+      - df4e8ada-bff7-44e7-bd0a-aeaafcab22d820260811213009_prdil107eusgb0_3
+      x-ms-islandgateway:
+      - _prdil107wusgb0_1
+      - _prdil107eusgb0_3
+      x-ms-ppapigateway:
+      - _prdil107wusgb0_0
+      x-ms-ratelimit-burst-remaining-workflow-writes:
+      - '11249'
+      x-ms-ratelimit-remaining-workflow-download-contentsize:
+      - '402652971'
+      x-ms-ratelimit-remaining-workflow-upload-contentsize:
+      - '402653182'
+      x-ms-ratelimit-time-remaining-directapirequests:
+      - '37499488'
+      x-ms-request-id:
+      - REDACTED
+      x-ms-service-request-id:
+      - REDACTED
+      x-ms-tracking-id:
+      - 00000000-0000-0000-0000-000000001111
+      x-ms-trigger-history-name:
+      - 08584151230756064244416290495CU13
+      x-ms-workflow-id:
+      - '00000000000000000000000000000000'
+      x-ms-workflow-name:
+      - 00000000-0000-0000-0000-000000001111
+      x-ms-workflow-run-id:
+      - 08584151230756064244416290495CU13
+      x-ms-workflow-system-id:
+      - /locations/eastus/scaleunits/prod-30/workflows/00000000000000000000000000000000
+      x-ms-workflow-version:
+      - 08584151230867938900
+      x-servicefabric:
+      - NoRetry
+    status:
+      code: 200
+      message: OK
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      Content-Length:
+      - '0'
+      OData-MaxVersion:
+      - '4.0'
+      OData-Version:
+      - '4.0'
+      User-Agent:
+      - python-requests/2.34.2
+    method: DELETE
+    uri: https://orgmocktenant.crm.dynamics.com/api/data/v9.2/workflows(00000000-0000-0000-0000-000000001111)
+  response:
+    body:
+      string: ''
+    headers:
+      Allow:
+      - OPTIONS,GET,HEAD,POST
+      AuthActivityId:
+      - REDACTED
+      Cache-Control:
+      - no-cache
+      Content-Type:
+      - text/html; charset=utf-8
+      Date:
+      - Tue, 11 Aug 2026 21:30:15 GMT
+      Expires:
+      - '-1'
+      OData-Version:
+      - '4.0'
+      Public:
+      - OPTIONS,GET,HEAD,POST
+      REQ_ID:
+      - REDACTED
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      X-Content-Type-Options:
+      - nosniff
+      X-Source:
+      - REDACTED
+      x-ms-dop-hint:
+      - '48'
+      x-ms-ratelimit-burst-remaining-xrm-requests:
+      - '7998'
+      x-ms-ratelimit-time-remaining-xrm-requests:
+      - 1,199.99
+      x-ms-service-request-id:
+      - REDACTED
+    status:
+      code: 204
+      message: No Content
+- request:
+    body: null
+    headers:
+      Accept:
+      - application/json
+      Accept-Encoding:
+      - gzip, deflate
+      Connection:
+      - keep-alive
+      OData-MaxVersion:
+      - '4.0'
+      OData-Version:
+      - '4.0'
+      User-Agent:
+      - python-requests/2.34.2
+    method: GET
+    uri: https://orgmocktenant.crm.dynamics.com/api/data/v9.2/workflows?%24select=workflowid%2Cname%2Cstatecode&%24filter=name+eq+%27flightcheck-sn-run-001-probe%27+and+category+eq+5
+  response:
+    body:
+      string: '{"@odata.context":"https://orgmocktenant.crm.dynamics.com/api/data/v9.2/$metadata#workflows(workflowid,name,statecode)","value":[]}'
+    headers:
+      Allow:
+      - OPTIONS,GET,HEAD,POST
+      AuthActivityId:
+      - REDACTED
+      Cache-Control:
+      - no-cache
+      Content-Type:
+      - application/json; odata.metadata=minimal
+      Date:
+      - Tue, 11 Aug 2026 21:30:17 GMT
+      Expires:
+      - '-1'
+      OData-Version:
+      - '4.0'
+      Public:
+      - OPTIONS,GET,HEAD,POST
+      REQ_ID:
+      - REDACTED
+      Set-Cookie:
+      - REDACTED
+      Strict-Transport-Security:
+      - max-age=31536000; includeSubDomains
+      Vary:
+      - Accept-Encoding
+      X-Content-Type-Options:
+      - nosniff
+      X-Source:
+      - REDACTED
+      content-length:
+      - '127'
+      x-ms-dop-hint:
+      - '48'
+      x-ms-ratelimit-burst-remaining-xrm-requests:
+      - '7997'
+      x-ms-ratelimit-time-remaining-xrm-requests:
+      - 1,196.44
+      x-ms-service-request-id:
+      - REDACTED
+    status:
+      code: 200
+      message: OK
+version: 1
