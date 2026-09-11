@@ -18,9 +18,11 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from _mcp_modules import (  # noqa: E402
     load_landing_page_modules,
+    load_org_announcements_modules,
 )
 
 LANDING = load_landing_page_modules()
+ANNOUNCEMENTS = load_org_announcements_modules()
 from agent_discovery import AgentDiscoveryClient  # noqa: E402
 from base_client import AgentConfigApiError  # noqa: E402
 
@@ -28,6 +30,7 @@ from base_client import AgentConfigApiError  # noqa: E402
 TENANT = "00000000-0000-0000-0000-000000001111"
 CLIENTS = [
     LANDING["client"].AgentConfigClient,
+    ANNOUNCEMENTS["client"].OrgAnnouncementsClient,
 ]
 
 
@@ -104,7 +107,7 @@ def test_malformed_collections_do_not_become_empty_successes(token, client_type,
     asyncio.run(run())
 
 
-@pytest.mark.parametrize("modules", [LANDING])
+@pytest.mark.parametrize("modules", [LANDING, ANNOUNCEMENTS])
 def test_feature_owned_tools_delegate_without_initializing_configuration(monkeypatch, modules):
     calls = []
 
@@ -117,10 +120,13 @@ def test_feature_owned_tools_delegate_without_initializing_configuration(monkeyp
             calls.append(("search", query))
             return [{"titleId": "deployed-title"}]
 
+    async def get_async_client():
+        return DiscoveryOnly()
+
     server = modules["server"]
     monkeypatch.setattr(
         server, "get_client",
-        lambda: DiscoveryOnly(),
+        get_async_client if modules is ANNOUNCEMENTS else lambda: DiscoveryOnly(),
     )
 
     async def run():
@@ -129,9 +135,12 @@ def test_feature_owned_tools_delegate_without_initializing_configuration(monkeyp
         tools = {tool.name: tool for tool in await server.mcp.list_tools()}
         for name, properties in [("list_agent_configs", set()), ("search_agents", {"searchString"})]:
             assert set(tools[name].inputSchema["properties"]) == properties
-            # Preserve the existing provider's metadata as well as its wire
-            # arguments; request-level tests establish read-only behavior.
-            assert tools[name].annotations is None
+            if modules is ANNOUNCEMENTS:
+                assert tools[name].annotations.readOnlyHint is True
+            else:
+                # Preserve the sibling's existing tool metadata as well as its
+                # wire arguments; request-level tests establish read-only behavior.
+                assert tools[name].annotations is None
             assert not (tools[name].meta or {}).get("ui", {}).get("resourceUri")
 
     asyncio.run(run())

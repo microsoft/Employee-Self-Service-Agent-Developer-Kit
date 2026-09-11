@@ -106,6 +106,7 @@ jobs:
       run: >-
         python -m pytest
         tests/mcp/agentconfig_core
+        tests/mcp/test_import_isolation.py
         tests/scripts/test_mcp_config.py
         tests/scripts/test_auth.py
         -q
@@ -163,9 +164,7 @@ jobs:
     - name: Run Org Announcements tests
       run: >-
         python -m pytest
-        tests/mcp/agentconfig_org_announcements/test_authoring_client.py
-        tests/mcp/agentconfig_org_announcements/test_drafts.py
-        tests/mcp/agentconfig_org_announcements/test_graph_directory.py
+        tests/mcp/agentconfig_org_announcements
         -q
 
   flightcheck-tests:
