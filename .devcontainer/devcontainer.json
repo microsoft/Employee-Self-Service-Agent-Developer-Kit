@@ -18,10 +18,6 @@
   },
 
   "features": {
-    "ghcr.io/devcontainers/features/github-cli:1": {},
-    "ghcr.io/devcontainers/features/dotnet:2": {
-      "version": "none",
-      "dotnetRuntimeVersions": "10.0"
-    }
+    "ghcr.io/devcontainers/features/github-cli:1": {}
   }
 }
