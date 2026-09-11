@@ -151,7 +151,7 @@ def test_invalid_config_encoding_warns_and_falls_back(config_path, caplog) -> No
     assert "configuration could not be read" in caplog.text
 
 
-@pytest.mark.parametrize("launch_folder", ["agentconfig_landing_page"])
+@pytest.mark.parametrize("launch_folder", ["agentconfig_landing_page", "agentconfig_org_announcements"])
 def test_discovers_configured_environment_from_feature_launch_directory(
     config_path, monkeypatch, launch_folder
 ) -> None:
@@ -209,7 +209,7 @@ def test_runtime_install_paths_include_the_shared_foundation() -> None:
     assert "-r ../src/mcp/agentconfig_core/requirements.txt" in (
         solution / "scripts" / "requirements.txt"
     ).read_text()
-    for feature in ("agentconfig_landing_page",):
+    for feature in ("agentconfig_landing_page", "agentconfig_org_announcements"):
         assert "-r ../agentconfig_core/requirements.txt" in (
             CORE_DIR.parent / feature / "requirements.txt"
         ).read_text()
