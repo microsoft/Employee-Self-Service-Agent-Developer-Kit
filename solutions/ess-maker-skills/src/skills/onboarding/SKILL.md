@@ -58,7 +58,8 @@ If dependency installation fails, show the error and stop.
 **Message:**
 
 Setup is already complete! Run `/landing-page` to configure the branding and
-content employees see, or type `/menu` to see everything you can do.
+content employees see, `/org-announcements` to post an announcement for your
+selected deployed agent, or type `/menu` to see everything you can do.
 
 **End message.**
 
