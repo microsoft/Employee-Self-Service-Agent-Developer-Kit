@@ -19,8 +19,8 @@ pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
 Read `src/skills/connect/step1.md` and follow it.
 
 (Step 1 asks which integration, detects existing state, and dispatches —
-ServiceNow to its own step files, Workday to the setup orchestrator
-`src/skills/setup/SKILL.md`.)
+ServiceNow to its own step files and Workday to the hybrid-extension boundary
+in `src/skills/setup/SKILL.md`.)
 
 ---
 
@@ -43,13 +43,10 @@ Workday delegates to the setup orchestrator:
   - Step 3 (Basic): `step3-basic.md` — install extension pack (Basic fields)
   - Step 4: `step4.md` — verify connection
 
-- **Workday**: handled by the **setup orchestrator**
-  (`src/skills/setup/SKILL.md`), not a `connect/workday/` step sequence.
-  `src/skills/connect/step1.md` routes the Workday branch straight there. The
-  orchestrator sequences the six Workday setup skills (environment, ESS install,
-  Entra app, tenant config, extension pack, topic) using the master checklist as
-  a resume-aware spine, and persists state under `.local/setup/workday/tasks.md`
-  + `setupStatus` in `.local/connect/workday/config.json`.
+- **Workday**: routes to `src/skills/setup/SKILL.md`, which reports that the
+  separately owned hybrid-extension setup contract is not yet available. It
+  does not execute the retained legacy Workday playbooks or any retired
+  foundation setup operation.
 
 Each integration's steps.md and config.json persist after completion.
 Running `/connect` again lets the user add a different integration

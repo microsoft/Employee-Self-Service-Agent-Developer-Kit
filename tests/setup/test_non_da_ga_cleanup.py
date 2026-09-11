@@ -15,6 +15,7 @@ _FOUNDATION = (
 )
 _PROMPTS = _SOLUTION / ".github" / "prompts"
 _INSTRUCTIONS = _SOLUTION / ".github" / "copilot-instructions.md"
+_WORKDAY_SETUP = _SOLUTION / "src" / "skills" / "setup" / "SKILL.md"
 
 
 def test_setup_stops_at_explicit_unavailable_surface() -> None:
@@ -36,38 +37,55 @@ def test_retired_setup_implementation_is_absent() -> None:
         "scripts/install_ess_agent.py",
         "scripts/ess_connection_binding.py",
         "scripts/preferred_solution.py",
-        "scripts/backup_template_configs.py",
-        "scripts/restore_template_configs.py",
         "src/reference/ess-agent-installation/config.json",
         "src/reference/solution-catalog.md",
         "src/skills/onboarding/SKILL.md",
         "src/skills/foundation-setup/install-starters.md",
-        "src/skills/backup-template-configs/SKILL.md",
-        "src/skills/restore-template-configs/SKILL.md",
     )
 
     for path in retired_paths:
         assert not (_SOLUTION / path).exists(), path
 
 
-def test_retired_commands_keep_explicit_public_stubs() -> None:
-    for name in (
-        "backup-template-configs.prompt.md",
-        "restore-template-configs.prompt.md",
-    ):
+def test_hybrid_workday_config_commands_remain_bounded() -> None:
+    surfaces = {
+        "backup-template-configs.prompt.md": (
+            "scripts/backup_template_configs.py",
+            "src/skills/backup-template-configs/SKILL.md",
+        ),
+        "restore-template-configs.prompt.md": (
+            "scripts/restore_template_configs.py",
+            "src/skills/restore-template-configs/SKILL.md",
+        ),
+    }
+
+    for name, (script_path, skill_path) in surfaces.items():
         prompt = (_PROMPTS / name).read_text(encoding="utf-8")
-        assert "no longer supported" in prompt, name
-        assert "retired" in prompt, name
-        assert "SKILL.md" not in prompt, name
-        assert "scripts/" not in prompt, name
+        skill = (_SOLUTION / skill_path).read_text(encoding="utf-8")
+        assert (_SOLUTION / script_path).is_file(), name
+        assert (_SOLUTION / skill_path).is_file(), name
+        assert skill_path in prompt, name
+        assert "hybrid Workday" in prompt, name
+        assert "hybrid Workday" in skill, name
+        assert "preferred solution" in skill, name
 
 
-def test_global_routing_has_no_deleted_skill_references() -> None:
+def test_global_routing_preserves_only_hybrid_workday_config_tools() -> None:
     instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
 
     assert "setup is not available in this build" in instructions
-    assert "src/skills/backup-template-configs" not in instructions
-    assert "src/skills/restore-template-configs" not in instructions
+    assert "src/skills/backup-template-configs/SKILL.md" in instructions
+    assert "src/skills/restore-template-configs/SKILL.md" in instructions
+
+
+def test_workday_setup_stops_at_unimplemented_hybrid_boundary() -> None:
+    text = _WORKDAY_SETUP.read_text(encoding="utf-8")
+
+    assert "Hybrid Workday extension setup is not available" in text
+    assert "Do not run the retained Workday setup playbooks" in text
+    assert "install_ess_agent.py" not in text
+    assert "ess_connection_binding.py" not in text
+    assert "preferred_solution.py" not in text
 
 
 def test_flightcheck_discovery_has_no_product_catalog_dependency() -> None:
