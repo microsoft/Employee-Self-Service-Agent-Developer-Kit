@@ -124,6 +124,15 @@ def load_landing_page_modules() -> dict[str, ModuleType]:
     )
 
 
+def load_org_announcements_client_modules() -> dict[str, ModuleType]:
+    """Load contract/client tests without importing optional runtime modules."""
+    return load_mcp_modules(
+        MCP_ROOT / "agentconfig_org_announcements",
+        ("client", "drafts"),
+        "ess_mcp_org_announcements",
+    )
+
+
 def load_org_announcements_modules() -> dict[str, ModuleType]:
     return load_mcp_modules(
         MCP_ROOT / "agentconfig_org_announcements",
