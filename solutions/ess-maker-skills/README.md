@@ -4,6 +4,10 @@ Customize your Employee Self-Service (ESS) agent using GitHub Copilot in VS Code
 
 > **This repo is intended as an example or learning tool.** It demonstrates how to customize Employee Self-Service (ESS) agents using GitHub Copilot in VS Code. It is not a Microsoft product or a supported service. See [SUPPORT.md](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/blob/main/SUPPORT.md) for the support model and [SECURITY.md](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/blob/main/SECURITY.md) for reporting security issues.
 
+> **Setup availability:** The retired CEA and Dataverse-inclusive DA-Preview
+> setup paths are not available in this build. Existing configured workspaces
+> can continue to use the shared authoring tools.
+
 ## Why This Kit
 
 Building and customizing an ESS agent means working across topic YAML, Power Automate workflow schemas, ServiceNow/Workday connector patterns, adaptive card JSON, and Dataverse template configurations. The ESS Maker Kit packages all of that domain knowledge into a VS Code workspace so GitHub Copilot can do the heavy lifting — you describe the scenario, and the agent builds it.
@@ -12,16 +16,10 @@ Building and customizing an ESS agent means working across topic YAML, Power Aut
 
 ## Features
 
-### 🔌 Guided Dataverse MCP Setup
+### 🔌 Setup Availability
 
-The kit walks you through connecting VS Code to your Power Platform environment via the Dataverse MCP server. Once connected, the agent can read your agent's components, create template configuration records, and push changes directly to Copilot Studio — all without leaving VS Code.
-
-- Authenticates to your environment
-- Discovers your deployed ESS agent and its components
-- Creates a local working copy for safe editing
-- Validates connectivity before proceeding
-
-Run `/setup` and follow the prompts.
+`/setup` reports that no setup path is available in this build. Existing
+configured workspaces retain their local authoring files and shared commands.
 
 ### 📖 Pre-Loaded ESS Documentation, Samples & Best Practices
 
@@ -312,7 +310,7 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 
 | Command | What it does |
 |---------|-------------|
-| `/setup` | First-time environment setup — authenticate, discover agent, extract, configure |
+| `/setup` | Report current setup availability |
 | `/connect` | Connect an external system (ServiceNow, Workday) — guided setup with MCP verification |
 | `/create` | Create an eval-driven topic, workflow, or evaluation test set |
 | `/update` | Update a simple topic with evals, a workflow, or an evaluation test set |
@@ -322,8 +320,8 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 | `/run` | Run pushed evaluation test sets and inspect history or results |
 | `/flightcheck` | Run pre-deployment readiness validation — licenses, environment, integrations, agent files |
 | `/push` | Push all local changes to Copilot Studio |
-| `/backup-template-configs` | Capture customised Workday HCM reference-data template configs before an ESS package update |
-| `/restore-template-configs` | Restore captured Workday HCM template configs after an ESS package update |
+| `/backup-template-configs` | Capture hybrid Workday reference-data template configs before an extension update |
+| `/restore-template-configs` | Restore hybrid Workday reference-data template configs after an extension update |
 | `/menu` | See all available commands |
 
 You can also describe what you want in plain English — the agent will figure out the right approach.

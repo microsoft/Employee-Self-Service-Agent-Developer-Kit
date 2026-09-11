@@ -9,6 +9,12 @@ Records are matched by `msdyn_uniquename` (stable across envs), so the same
 backup file can also be used to port customisations from dev to prod (warns
 once, proceed-or-cancel).
 
+This is a bounded **hybrid Workday** operation. It writes only the
+`msdyn_value` field of matching Workday reference-data template configurations
+in the extension's Dataverse environment. It does not install an ESS parent
+solution, discover or bind a Dataverse bot, register flows, or configure a
+preferred solution.
+
 Every **Message** block is the exact text to show the user. Copy it
 verbatim. Do not rephrase, add commentary, or tell the user what tools you
 are calling.
@@ -17,20 +23,22 @@ are calling.
 
 ## Start
 
-Read `.local/config.json` to confirm setup is complete and get the
-`dataverseEndpoint`.
+Read `.local/config.json` and get `dataverseEndpoint`.
 
-If setup is not complete, show:
+If `dataverseEndpoint` is missing or empty, show:
 
 **Message:**
 
-You need to run `/setup` first before restoring template configs.
+Workday template-config restore needs the Dataverse environment used by your
+hybrid Workday extension. That extension has not recorded a Dataverse endpoint
+in this workspace, so no records were changed.
 
 **End message.**
 
 Stop here.
 
-If setup is complete, proceed.
+Do not invoke foundation setup, install a solution, bind a flow, or infer an
+endpoint. Once the Workday extension has recorded `dataverseEndpoint`, proceed.
 
 ---
 
