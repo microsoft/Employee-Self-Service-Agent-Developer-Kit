@@ -2,7 +2,7 @@
   "name": "ESS Maker Kit",
   "image": "mcr.microsoft.com/devcontainers/python:3.12",
 
-  "postCreateCommand": "bash ${containerWorkspaceFolder}/.devcontainer/post-create.sh",
+  "postCreateCommand": "pip install --quiet --disable-pip-version-check -r \"${containerWorkspaceFolder}/solutions/ess-maker-skills/scripts/requirements.txt\" && bash \"${containerWorkspaceFolder}/.devcontainer/post-create.sh\" && echo '' && echo '=== ESS Maker Kit ready! ===' && echo 'Open File > Open Folder and select solutions/ess-maker-skills, then run /setup in Copilot Chat.' && echo ''",
 
   "customizations": {
     "vscode": {
