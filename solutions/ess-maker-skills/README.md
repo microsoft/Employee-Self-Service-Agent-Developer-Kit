@@ -48,6 +48,47 @@ Copilot Studio and deployed to the organization. `/setup` installs and extracts
 the Power Platform agent; publication, admin approval, and Integrated apps
 deployment are separate steps.
 
+### 📢 Post Organization Announcements
+
+Publish announcements for the selected deployed ESS agent and its audiences. Run
+`/org-announcements`, ask `Create an announcement`, or use the **Post an
+announcement** Quick Action.
+
+- **Standard announcements** carry a title, description, priority, and up to two
+  actions.
+- **Alerts** carry a single link action for time-sensitive notices.
+- **Audiences** are security groups, mail-enabled security groups, or classic
+  distribution groups, searched by name or email in one combined query.
+- **Scheduling** publishes an announcement for a start/end window, and expired
+  announcements can be published again through the normal editor after reviewing
+  and updating their schedule.
+- **Lifecycle** actions archive, unarchive, move back to draft, duplicate, or
+  delete an announcement.
+
+Describe the announcement in chat and the kit opens a pre-filled editor for you
+to review — nothing is saved until you publish or save a draft in that editor.
+
+Org Announcements are **scoped to the authenticated tenant and selected agent's
+`titleId`**, not shared across agents. The current100 limit and latest50 archive
+window apply per tenant-and-agent pair. There is no tenant-wide fallback.
+The title is resolved using `list_agent_configs` and `search_agents` on the
+`ess-org-announcements` provider. Discovery shares neutral Python code with the
+landing-page provider, but does not require its MCP process or initialize its
+configuration. Announcement authoring
+requires the Org Announcements feature to be enabled for your tenant, and
+audience search requires the `Directory.Read.All` Microsoft Graph permission to
+be consented in your tenant.
+
+Graph uses a separate resource token for the same authoring tenant and account.
+The current account-context check requires readable `tid` and `oid` claims;
+opaque tokens or credentials missing those claims return an explicit
+authentication failure rather than using a different account. The API still
+validates tokens and authorizes every request.
+
+This development surface requires the matching agent-qualified v1.1 backend
+and scoped widget. The MCP rejects unscoped canonical responses instead of
+silently consuming records from an older backend.
+
 ### 📖 Pre-Loaded ESS Documentation, Samples & Best Practices
 
 The kit ships with a complete reference library that the AI agent reads at task time — you don't need to look anything up yourself.
@@ -332,6 +373,7 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 |---------|-------------|
 | `/setup` | First-time environment setup — authenticate, discover agent, extract, configure |
 | `/landing-page` | Configure landing-page branding and content |
+| `/org-announcements` | Create and manage announcements for the selected ESS agent |
 | `/connect` | Connect an external system (ServiceNow, Workday) — guided setup with MCP verification |
 | `/create` | Create an eval-driven topic, workflow, or evaluation test set |
 | `/update` | Update a simple topic with evals, a workflow, or an evaluation test set |

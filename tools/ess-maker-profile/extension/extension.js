@@ -81,6 +81,7 @@ const CHAT_ONLY_LAYOUT = {
 const ACTIONS = [
     { id: 'setup',       icon: '🔌', label: 'Setup',                  sub: 'Sign in to your environment',  query: '/setup',                    requires: [] },
     { id: 'landingPage', icon: '🎨', label: 'Customize landing page', sub: 'Branding, links, prompts, cards', query: 'Customize my landing page', requires: ['setup'] },
+    { id: 'announcements', icon: '📢', label: 'Post an announcement', sub: 'Reach audiences in the selected agent', query: 'Create an organization announcement', requires: ['setup'] },
     { id: 'create',      icon: '✨', label: 'Create a topic',         sub: 'Describe a new conversation',  query: '/create',                   requires: ['setup'] },
     { id: 'update',      icon: '✏️', label: 'Update a topic',         sub: 'Tweak an existing topic',      query: '/update',                   requires: ['setup'] },
     { id: 'scan',        icon: '🔍', label: 'Scan for issues',        sub: 'Find broken bindings',         query: '/scan',                     requires: ['setup'] },
@@ -504,6 +505,7 @@ function getTutorialHtml() {
         <a href="#how">How it works</a><span class="sep">·</span>
         <a href="#connect">Setup</a><span class="sep">·</span>
         <a href="#landing-page">Landing page</a><span class="sep">·</span>
+        <a href="#announcements">Announcements</a><span class="sep">·</span>
         <a href="#create">Create</a><span class="sep">·</span>
         <a href="#update">Update</a><span class="sep">·</span>
         <a href="#scan">Scan</a><span class="sep">·</span>
@@ -519,6 +521,7 @@ function getTutorialHtml() {
         <ol>
             <li><strong>Setup</strong> \u2014 Sign in to your Power Platform environment.</li>
             <li><strong>Customize landing page</strong> \u2014 Configure branding, quick links, starter prompts, and insight cards.</li>
+            <li><strong>Post an announcement</strong> \u2014 Publish a notice for the selected ESS agent and its audiences.</li>
             <li><strong>Create a topic</strong> \u2014 Describe what you want in plain English. The kit generates everything.</li>
             <li><strong>Update a topic</strong> \u2014 Modify an existing topic by describing the change.</li>
             <li><strong>Scan</strong> \u2014 Check for broken references and configuration issues.</li>
@@ -552,6 +555,18 @@ function getTutorialHtml() {
             <li><strong>Stay up to date</strong> shows personalized ticket status, required follow-ups, and time-sensitive tasks.</li>
             <li><strong>Quick Access</strong> shows personal information such as time-off balances, paid holidays, and service anniversaries.</li>
         </ul>
+    </section>
+
+    <section id="announcements">
+        <h2>\u{1f4e2} Post an announcement</h2>
+        <p>The <strong>Post an announcement</strong> button opens a guided chat for publishing a notice within the selected deployed ESS agent.</p>
+        <ul>
+            <li><strong>Agent-scoped</strong> \u2014 announcements and the 100-current/50-archived window are separate for each agent in your signed-in tenant.</li>
+            <li><strong>Standard or alert</strong> \u2014 standard notices carry a priority and up to two actions; alerts carry a single link.</li>
+            <li><strong>Audiences</strong> \u2014 target security groups, mail-enabled security groups, or distribution lists by name.</li>
+            <li><strong>Scheduling</strong> \u2014 set a start and end date, and republish an expired announcement with a new window.</li>
+        </ul>
+        <blockquote><p>Describe the announcement in plain English and the kit opens a pre-filled editor. Nothing is published until you choose <strong>Publish</strong> there.</p></blockquote>
     </section>
 
     <section id="create">
