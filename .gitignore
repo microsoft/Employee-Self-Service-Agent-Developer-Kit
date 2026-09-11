@@ -9,6 +9,7 @@
 !.devcontainer/
 .devcontainer/*
 !.devcontainer/devcontainer.json
+!.devcontainer/post-create.sh
 !.github/
 !.gitignore
 !.vscode/
