@@ -28,52 +28,20 @@ sys.path.insert(
 from _odata import (  # noqa: E402
     _require_odata_id,
     _validate_https_base_url,
-    _validate_odata_string,
+    _validate_title_id,
 )
-from base_client import AgentConfigApiError, AgentConfigBaseClient  # noqa: E402
+from agent_discovery import (  # noqa: E402
+    AgentDiscoveryClient,
+    _to_api_payload,
+    _to_tool_payload,
+)
+from base_client import AgentConfigApiError as AgentConfigApiError  # noqa: E402
 
 
 DEFAULT_AGENTCONFIG_BASE_URL = "https://substrate.office.com/weveb2/api/v1.1"
-_MAX_TITLE_ID_LENGTH = 256
-_MAX_SEARCH_LENGTH = 256
 
 
-def _validate_title_id(title_id: str) -> str:
-    _validate_odata_string(title_id, "titleId")
-    if len(title_id) > _MAX_TITLE_ID_LENGTH:
-        raise ValueError(
-            f"titleId must not exceed {_MAX_TITLE_ID_LENGTH} characters"
-        )
-    return title_id
-
-
-def _convert_key_case(value: Any, *, upper: bool) -> Any:
-    """Recursively convert the first character of JSON object keys."""
-    if isinstance(value, list):
-        return [_convert_key_case(item, upper=upper) for item in value]
-    if not isinstance(value, dict):
-        return value
-
-    converted: dict[str, Any] = {}
-    for key, item in value.items():
-        if key and key[0].isalpha():
-            first = key[0].upper() if upper else key[0].lower()
-            converted_key = first + key[1:]
-        else:
-            converted_key = key
-        converted[converted_key] = _convert_key_case(item, upper=upper)
-    return converted
-
-
-def _to_api_payload(value: Any) -> Any:
-    return _convert_key_case(value, upper=True)
-
-
-def _to_tool_payload(value: Any) -> Any:
-    return _convert_key_case(value, upper=False)
-
-
-class AgentConfigClient(AgentConfigBaseClient):
+class AgentConfigClient(AgentDiscoveryClient):
     """Async client for production EmployeeAgents list/search/create/get/PATCH.
 
     Inherits auth, token decode, the httpx session, and the retrying
@@ -97,40 +65,11 @@ class AgentConfigClient(AgentConfigBaseClient):
         return _to_tool_payload(payload)
 
     def _collection_path(self) -> str:
-        return f"tenants('{self.tenant_id}')/EmployeeAgents"
+        return self._agent_collection_path()
 
     def _agent_path(self, title_id: str) -> str:
         encoded = _require_odata_id(_validate_title_id(title_id), "titleId")
         return f"{self._collection_path()}('{encoded}')"
-
-    @staticmethod
-    def _unwrap_collection(payload: Any) -> list[dict[str, Any]]:
-        if isinstance(payload, list):
-            return payload
-        if isinstance(payload, dict) and isinstance(payload.get("value"), list):
-            return payload["value"]
-        raise AgentConfigApiError(
-            "AgentConfiguration API returned an invalid collection response"
-        )
-
-    async def list_agent_configs(self) -> list[dict[str, Any]]:
-        payload = await self._request("GET", self._collection_path())
-        return self._unwrap_collection(payload)
-
-    async def search_agents(self, search_string: str) -> list[dict[str, Any]]:
-        if not isinstance(search_string, str) or not search_string.strip():
-            raise ValueError("searchString must be a non-empty string")
-        normalized = search_string.strip()
-        if len(normalized) > _MAX_SEARCH_LENGTH:
-            raise ValueError(
-                f"searchString must not exceed {_MAX_SEARCH_LENGTH} characters"
-            )
-        payload = await self._request(
-            "POST",
-            f"{self._collection_path()}/SearchAgents",
-            json={"SearchString": normalized},
-        )
-        return self._unwrap_collection(payload)
 
     async def create_agent_config(self, title_id: str) -> dict[str, Any]:
         title_id = _validate_title_id(title_id)

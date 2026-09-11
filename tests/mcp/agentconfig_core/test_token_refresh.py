@@ -414,8 +414,11 @@ def test_unavailable_original_file_does_not_fall_back_to_another_source(
 
     async def run():
         try:
-            with pytest.raises(ValueError, match="does not exist"):
+            with pytest.raises(base_client.AgentConfigApiError) as caught:
                 await client._request("GET", "/resource")
+            assert caught.value.http_status == 401
+            assert isinstance(caught.value.__cause__, ValueError)
+            assert str(path) not in str(caught.value)
         finally:
             await client.aclose()
 

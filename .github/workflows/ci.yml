@@ -7,7 +7,11 @@ on:
   push:
     branches: [ "main", "release/**" ]
   pull_request:
-    branches: [ "main", "release/**" ]
+    branches:
+      - "main"
+      - "release/**"
+      - "users/rebova/org-announcements-prerelease"
+      - "users/rebova/org-announcements-review-*"
     types: [ "opened", "synchronize", "reopened", "edited" ]
 
 permissions:
@@ -103,6 +107,7 @@ jobs:
         python -m pytest
         tests/mcp/agentconfig_core
         tests/scripts/test_mcp_config.py
+        tests/scripts/test_auth.py
         -q
 
   landing-page-config:
