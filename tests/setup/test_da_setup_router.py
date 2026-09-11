@@ -106,10 +106,13 @@ def test_maker_profile_requires_only_canonical_completion() -> None:
 
 def test_workday_routing_remains_separate() -> None:
     step1 = _CONNECT_STEP1.read_text(encoding="utf-8")
+    workday = _WORKDAY.read_text(encoding="utf-8")
 
     assert "src/skills/setup/SKILL.md" in step1
     assert "src/skills/foundation-setup/SKILL.md" not in step1
     assert _WORKDAY.is_file()
+    assert "Hybrid Workday extension setup is not available" in workday
+    assert "Do not run the retained Workday setup playbooks" in workday
 
 
 def test_foundation_routes_only_to_existing_dev_da_setup() -> None:
@@ -154,14 +157,10 @@ def test_non_da_ga_setup_implementation_is_absent() -> None:
         "scripts/install_ess_agent.py",
         "scripts/ess_connection_binding.py",
         "scripts/preferred_solution.py",
-        "scripts/backup_template_configs.py",
-        "scripts/restore_template_configs.py",
         "src/reference/ess-agent-installation/config.json",
         "src/reference/solution-catalog.md",
         "src/skills/onboarding/SKILL.md",
         "src/skills/foundation-setup/install-starters.md",
-        "src/skills/backup-template-configs/SKILL.md",
-        "src/skills/restore-template-configs/SKILL.md",
     )
 
     for path in retired_paths:
@@ -176,15 +175,33 @@ def test_da_commands_degrade_by_operation() -> None:
         "troubleshoot.prompt.md": (
             "requires the corresponding product extension guidance"
         ),
-        "backup-template-configs.prompt.md": ("retired Dataverse-based agent model"),
-        "restore-template-configs.prompt.md": ("retired Dataverse-based agent model"),
     }
 
     for name, text in expected_text.items():
         prompt = (_PROMPTS / name).read_text(encoding="utf-8")
         assert text in prompt, name
-        if not name.startswith(("backup-", "restore-")):
-            assert 'transport: "agentbuilder"' in prompt, name
+        assert 'transport: "agentbuilder"' in prompt, name
+
+
+def test_hybrid_workday_config_commands_remain_available() -> None:
+    routes = {
+        "backup-template-configs.prompt.md": (
+            "src/skills/backup-template-configs/SKILL.md",
+            "scripts/backup_template_configs.py",
+        ),
+        "restore-template-configs.prompt.md": (
+            "src/skills/restore-template-configs/SKILL.md",
+            "scripts/restore_template_configs.py",
+        ),
+    }
+
+    for name, (skill_path, script_path) in routes.items():
+        prompt = (_PROMPTS / name).read_text(encoding="utf-8")
+        skill = (_SOLUTION / skill_path).read_text(encoding="utf-8")
+        assert skill_path in prompt, name
+        assert "hybrid Workday" in prompt, name
+        assert "hybrid Workday" in skill, name
+        assert (_SOLUTION / script_path).is_file(), name
 
 
 def test_da_local_capabilities_remain_available() -> None:
