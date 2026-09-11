@@ -546,3 +546,4 @@ def test_cache_and_directory_have_private_posix_permissions(tmp_path: Path) -> N
 
     assert stat.S_IMODE(directory.stat().st_mode) == 0o700
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
+    assert stat.S_IMODE(Path(str(path) + ".lockfile").stat().st_mode) == 0o600
