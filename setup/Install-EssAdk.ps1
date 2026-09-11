@@ -8,10 +8,10 @@
     a single PowerShell invocation. Specifically, it:
 
       1. Verifies prerequisites (Windows 10/11, winget present).
-      2. Runs `winget configure` against ess-adk-setup.winget.yaml to install
-         VS Code, Python 3.12, PowerShell 7, Git, and GitHub CLI.
-      3. Installs Python pip dependencies from requirements.txt (msal, requests,
-         PyYAML, defusedxml, etc.) so that /setup scripts work immediately.
+      2. Uses winget to install VS Code, Python 3.12, PowerShell 7, Git,
+         GitHub CLI, the .NET 10 runtime, and NuGet.
+      3. Installs Python pip and Microsoft Object Model dependencies so that
+         /setup scripts work immediately.
       4. Installs the VS Code extensions required by the maker kit
          (GitHub.copilot, GitHub.copilot-chat, ms-python.python).
       5. Clones the Employee-Self-Service-Agent-Developer-Kit repo to a known
@@ -165,6 +165,63 @@ function Resolve-Python {
     return $null
 }
 
+function Get-PythonArchitecture {
+    param([string] $PythonExe = (Resolve-Python))
+
+    if (-not $PythonExe) { return $null }
+    if ($PythonExe -eq 'py -3.12' -or $PythonExe -eq 'py -3') {
+        $pyVersion = ($PythonExe -split ' ')[1]
+        $platform = Invoke-Native {
+            & py $pyVersion -c 'import sysconfig; print(sysconfig.get_platform())'
+        }
+    } else {
+        $platform = Invoke-Native {
+            & $PythonExe -c 'import sysconfig; print(sysconfig.get_platform())'
+        }
+    }
+    if ($LASTEXITCODE -ne 0) { return $null }
+
+    $platformName = "$($platform | Select-Object -Last 1)".Trim().ToLowerInvariant()
+    if ($platformName -match 'arm64|aarch64') { return 'arm64' }
+    if ($platformName -match 'amd64|x86_64') { return 'x64' }
+    return $null
+}
+
+function Test-DotNet10Runtime {
+    param([Parameter(Mandatory)] [ValidateSet('arm64', 'x64')] [string] $Architecture)
+
+    $candidateExecutables = @()
+    $dotnet = Get-Command dotnet -ErrorAction SilentlyContinue
+    if ($dotnet) { $candidateExecutables += $dotnet.Source }
+    foreach ($rootVariable in @('DOTNET_ROOT', 'DOTNET_ROOT_ARM64', 'DOTNET_ROOT_X64')) {
+        $root = [Environment]::GetEnvironmentVariable($rootVariable)
+        if ($root) { $candidateExecutables += (Join-Path $root 'dotnet.exe') }
+    }
+    $candidateExecutables += @(
+        "$env:ProgramFiles\dotnet\dotnet.exe",
+        "$env:ProgramFiles\dotnet\arm64\dotnet.exe",
+        "$env:ProgramFiles\dotnet\x64\dotnet.exe"
+    )
+
+    foreach ($candidate in ($candidateExecutables | Select-Object -Unique)) {
+        if (-not (Test-Path -LiteralPath $candidate)) { continue }
+        $info = Invoke-Native { & $candidate --info }
+        if ($LASTEXITCODE -ne 0) { continue }
+        $reportedArchitecture = $info |
+            Select-String '^\s*Architecture:\s*(\S+)\s*$' |
+            Select-Object -First 1
+        if (-not $reportedArchitecture -or
+            $reportedArchitecture.Matches[0].Groups[1].Value.ToLowerInvariant() -ne $Architecture) {
+            continue
+        }
+        $runtimes = Invoke-Native { & $candidate --list-runtimes }
+        if ($LASTEXITCODE -eq 0 -and $runtimes -match '^Microsoft\.NETCore\.App 10\.') {
+            return $true
+        }
+    }
+    return $false
+}
+
 # Helper: detect Windows ARM64 host. Used to add ARM64-specific guardrails to
 # pip install (cryptography only shipped win_arm64 wheels in 46.0+; older
 # resolutions fall back to a Rust source-build that needs VS Build Tools).
@@ -304,6 +361,7 @@ function Get-EssStepKey {
         'Preflight'                { 'preflight'; break }
         'winget|toolchain'         { 'toolchain'; break }
         'pip'                      { 'pip_dependencies'; break }
+        'Object Model'             { 'object_model_dependencies'; break }
         'extension'                { 'vscode_extensions'; break }
         'Clon|clone|repo'          { 'clone'; break }
         'Maker Profile'            { 'maker_profile'; break }
@@ -394,7 +452,9 @@ if ($FlightCheckOnly) {
         @{ Id = 'Python.Python.3.12';         Name = 'Python 3.12'; Cmd = 'python'      },
         @{ Id = 'Microsoft.PowerShell';       Name = 'PowerShell 7'; Cmd = 'pwsh'       },
         @{ Id = 'Git.Git';                    Name = 'Git for Windows'; Cmd = 'git'     },
-        @{ Id = 'GitHub.cli';                 Name = 'GitHub CLI'; Cmd = 'gh'           }
+        @{ Id = 'GitHub.cli';                 Name = 'GitHub CLI'; Cmd = 'gh'           },
+        @{ Id = 'Microsoft.DotNet.Runtime.10'; Name = '.NET 10 Runtime'; Cmd = 'dotnet'  },
+        @{ Id = 'Microsoft.NuGet';             Name = 'NuGet'; Cmd = 'nuget'             }
     )
 }
 
@@ -408,6 +468,13 @@ if (-not $wingetAvailable) {
             $resolved = Resolve-Python
             if ($resolved) {
                 Write-Ok "$($pkg.Name) (found: $resolved)"
+            } else {
+                $missingTools += $pkg.Name
+            }
+        } elseif ($pkg.Id -eq 'Microsoft.DotNet.Runtime.10') {
+            $pythonArchitecture = Get-PythonArchitecture
+            if ($pythonArchitecture -and (Test-DotNet10Runtime -Architecture $pythonArchitecture)) {
+                Write-Ok "$($pkg.Name) ($pythonArchitecture, already installed)"
             } else {
                 $missingTools += $pkg.Name
             }
@@ -429,6 +496,8 @@ if (-not $wingetAvailable) {
             Write-Err2 '  VS Code: https://code.visualstudio.com/download'
             Write-Err2 '  PowerShell 7: https://aka.ms/powershell-release?tag=stable'
             Write-Err2 '  GitHub CLI: https://cli.github.com/'
+            Write-Err2 '  .NET 10 Runtime: https://dotnet.microsoft.com/download/dotnet/10.0'
+            Write-Err2 '  NuGet: https://www.nuget.org/downloads'
         }
         throw "Required tools are missing and winget is not available to install them."
     }
@@ -448,27 +517,68 @@ if (-not $wingetAvailable) {
     if ($LASTEXITCODE -ne 0) {
         throw "winget configure failed with exit code $LASTEXITCODE. If you see 'Extended features are not enabled', run 'winget configure --enable' once and retry, or omit -UseDsc to use the direct-install path."
     }
+    if (-not $FlightCheckOnly) {
+        $pythonArchitecture = Get-PythonArchitecture
+        if (-not $pythonArchitecture) {
+            throw 'Could not determine the installed Python architecture.'
+        }
+        if (-not (Test-DotNet10Runtime -Architecture $pythonArchitecture)) {
+            Write-Step "Installing .NET 10 Runtime for $pythonArchitecture Python"
+            $null = Invoke-Native {
+                & winget install --id Microsoft.DotNet.Runtime.10 `
+                                 --source winget `
+                                 --exact `
+                                 --architecture $pythonArchitecture `
+                                 --force `
+                                 --silent `
+                                 --accept-package-agreements `
+                                 --accept-source-agreements `
+                                 --disable-interactivity
+            }
+            if ($LASTEXITCODE -ne 0) {
+                throw "winget install Microsoft.DotNet.Runtime.10 ($pythonArchitecture) failed with exit code $LASTEXITCODE"
+            }
+        }
+    }
 } else {
     # Default path - direct `winget install` per package. Works on any GA
     # winget without enabling extended features. Idempotent: re-running just
     # logs "already installed" for present packages.
     foreach ($pkg in $packages) {
         # Skip if already installed (avoids unnecessary winget calls + elevation prompts)
-        $existing = if ($pkg.Cmd -eq 'python') { Resolve-Python } else { Get-Command $pkg.Cmd -ErrorAction SilentlyContinue }
+        $existing = if ($pkg.Cmd -eq 'python') {
+            Resolve-Python
+        } elseif ($pkg.Id -eq 'Microsoft.DotNet.Runtime.10') {
+            $pythonArchitecture = Get-PythonArchitecture
+            $pythonArchitecture -and (Test-DotNet10Runtime -Architecture $pythonArchitecture)
+        } else {
+            Get-Command $pkg.Cmd -ErrorAction SilentlyContinue
+        }
         if ($existing) {
             Write-Ok "$($pkg.Name) (already installed)"
             continue
         }
 
         Start-Spinner "installing $($pkg.Name) ($($pkg.Id))"
+        $wingetArgs = @(
+            'install',
+            '--id', $pkg.Id,
+            '--source', 'winget',
+            '--exact',
+            '--silent',
+            '--accept-package-agreements',
+            '--accept-source-agreements',
+            '--disable-interactivity'
+        )
+        if ($pkg.Id -eq 'Microsoft.DotNet.Runtime.10') {
+            $pythonArchitecture = Get-PythonArchitecture
+            if (-not $pythonArchitecture) {
+                throw 'Could not determine the installed Python architecture.'
+            }
+            $wingetArgs += @('--architecture', $pythonArchitecture, '--force')
+        }
         $wingetOutput = Invoke-Native {
-            & winget install --id $pkg.Id `
-                             --source winget `
-                             --exact `
-                             --silent `
-                             --accept-package-agreements `
-                             --accept-source-agreements `
-                             --disable-interactivity
+            & winget @wingetArgs
         }
         Stop-Spinner
         foreach ($rawLine in $wingetOutput) {
@@ -485,6 +595,10 @@ if (-not $wingetAvailable) {
         # Both mean "we're good", anything else is a real failure.
         $code = $LASTEXITCODE
         if ($code -eq 0 -or $code -eq -1978335189) {
+            if ($pkg.Id -eq 'Microsoft.DotNet.Runtime.10' -and
+                -not (Test-DotNet10Runtime -Architecture $pythonArchitecture)) {
+                throw "winget did not install a .NET 10 Runtime matching $pythonArchitecture Python."
+            }
             Write-Ok "$($pkg.Name)"
         } else {
             if ($FlightCheckOnly) {
@@ -691,7 +805,7 @@ if (-not $SkipClone) {
 }
 
 # ---------------------------------------------------------------------------
-# 5b. Deferred pip install (if requirements.txt was not available pre-clone)
+# 5b. Post-clone dependencies
 # ---------------------------------------------------------------------------
 if ($deferPip) {
     $requirementsFile = Join-Path $repoPath 'solutions\ess-maker-skills\scripts\requirements.txt'
@@ -706,6 +820,36 @@ if ($deferPip) {
     } else {
         Write-Warn2 'requirements.txt not found in cloned repo - pip dependencies not installed'
     }
+}
+
+if (-not $FlightCheckOnly) {
+    $objectModelInstaller = Join-Path $repoPath 'solutions\ess-maker-skills\scripts\install_agentbuilder_object_model.py'
+    if (-not (Test-Path -LiteralPath $objectModelInstaller)) {
+        throw "Object Model dependency installer not found: $objectModelInstaller"
+    }
+    $pythonExe = Resolve-Python
+    if (-not $pythonExe) {
+        throw 'Python not found. Cannot install Microsoft Object Model dependencies.'
+    }
+
+    Write-Step 'Installing Microsoft Object Model dependencies'
+    if ($pythonExe -eq 'py -3.12' -or $pythonExe -eq 'py -3') {
+        $pyVersion = ($pythonExe -split ' ')[1]
+        $objectModelOutput = Invoke-Native {
+            & py $pyVersion $objectModelInstaller
+        }
+    } else {
+        $objectModelOutput = Invoke-Native {
+            & $pythonExe $objectModelInstaller
+        }
+    }
+    foreach ($line in $objectModelOutput) {
+        if ($line) { Write-Host "      $line" }
+    }
+    if ($LASTEXITCODE -ne 0) {
+        throw "Microsoft Object Model dependency installation failed with exit code $LASTEXITCODE"
+    }
+    Write-Ok 'Microsoft Object Model dependencies installed'
 }
 
 # ---------------------------------------------------------------------------
