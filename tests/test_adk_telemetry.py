@@ -297,6 +297,23 @@ def test_classify_tenant_env_allowlist_extends(monkeypatch):
     assert _fc.classify_tenant("11111111-1111-1111-1111-111111111111") == "customer"
 
 
+def test_classify_tenant_hardcoded_internal_dogfood_tenants(monkeypatch):
+    # Well-known internal dogfood/demo tenants (EmployeeHub + the two Contoso
+    # test tenancies surfaced by usage analysis) must classify as ``internal``
+    # even when the env-var allow-list is empty. Without this, the External
+    # dashboard silently attributes Microsoft-internal dogfooding to real
+    # customers — the exact issue that motivated PR #242's customer-attribution
+    # audit and this follow-up.
+    monkeypatch.delenv("ESS_ADK_INTERNAL_TENANTS", raising=False)
+    _fc._parse_internal_tenant_ids.cache_clear()
+    assert _fc.classify_tenant(_fc.EMPLOYEEHUB_TENANT_ID) == "internal"
+    assert _fc.classify_tenant(_fc.CONTOSO_INTERNAL_TENANT_ID) == "internal"
+    assert _fc.classify_tenant(_fc.CRONTOSO_INTERNAL_TENANT_ID) == "internal"
+    assert _fc.classify_tenant(_fc.COCREATE_TEST_TENANT_ID) == "internal"
+    # Case / whitespace insensitive on the new hardcoded entries too.
+    assert _fc.classify_tenant(f"  {_fc.CONTOSO_INTERNAL_TENANT_ID.upper()} ") == "internal"
+
+
 def test_classify_tenant_non_guid_maps_to_unknown():
     # Defense-in-depth: a non-empty tenant_id that isn't a canonical Entra
     # tenant GUID must NEVER classify as "customer" — otherwise the External
