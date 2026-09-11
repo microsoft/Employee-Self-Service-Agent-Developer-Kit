@@ -1,7 +1,13 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Install the pinned Microsoft Object Model packages with NuGet."""
+"""Install and verify the pinned Microsoft Object Model packages with NuGet.
+
+This shared Python entry point keeps package acquisition aligned with the
+runtime loader's package manifest. It avoids either duplicating installation
+and verification logic across the Windows, macOS, and Codespaces scripts or
+introducing a language-neutral manifest and another orchestration mechanism.
+"""
 
 from __future__ import annotations
 
