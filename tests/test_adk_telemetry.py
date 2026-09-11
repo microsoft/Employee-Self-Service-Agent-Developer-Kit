@@ -109,8 +109,8 @@ def captured_post(monkeypatch):
 
 def _client_events_envelope(**overrides):
     envelope = {
-        "schemaVersion": 1,
-        "correlationId": "corr-test",
+        "schemaVersion": 2,
+        "batchId": "batch-test",
         "mountId": "mount-test",
         "appName": "AgentIcon",
         "buildEnvironment": "dev",
@@ -119,7 +119,10 @@ def _client_events_envelope(**overrides):
         "events": [
             {
                 "eventName": "WidgetReady",
-                "timeSinceAppStart": 12,
+                "level": "info",
+                "eventTimestampMs": 1_700_000_000_000,
+                "timeSinceMount": 12,
+                "sequenceNumber": 1,
                 "locale": "en-US",
                 "properties": {
                     "count": 1,
@@ -130,12 +133,29 @@ def _client_events_envelope(**overrides):
             },
             {
                 "eventName": "WidgetFunnelStage",
-                "timeSinceAppStart": 18.5,
+                "level": "info",
+                "eventTimestampMs": 1_700_000_000_010,
+                "timeSinceMount": 18.5,
+                "sequenceNumber": 2,
                 "properties": {"stage": "loaded"},
             },
         ],
     }
     envelope.update(overrides)
+    events = envelope.get("events")
+    if isinstance(events, list):
+        normalized_events = []
+        for index, event in enumerate(events):
+            if not isinstance(event, dict):
+                normalized_events.append(event)
+                continue
+            normalized = dict(event)
+            normalized.setdefault("level", "info")
+            normalized.setdefault("eventTimestampMs", 1_700_000_000_000 + index)
+            normalized.setdefault("timeSinceMount", index + 1)
+            normalized.setdefault("sequenceNumber", index + 1)
+            normalized_events.append(normalized)
+        envelope["events"] = normalized_events
     return envelope
 
 
@@ -147,6 +167,19 @@ def test_set_identity_stores_instance_and_raw_tenant(monkeypatch):
     assert "developer_id" not in ident
     assert ident["instance_id"] == "install-guid-1"
     assert ident["tenant_id"] == "00000000-0000-0000-0000-0000000000ab"
+
+
+def test_initialize_tenant_identity_uses_explicit_cache_root(tmp_path, monkeypatch):
+    local_dir = str(tmp_path / "solution-local")
+    tenant_id = "00000000-0000-0000-0000-0000000000ab"
+    _fc.cache_tenant_name(tenant_id, "Contoso", local_dir=local_dir)
+    monkeypatch.setattr(_fc, "get_instance_id", lambda: "install-guid-1")
+
+    ident = adk.initialize_tenant_identity(tenant_id, local_dir=local_dir)
+
+    assert ident["tenant_id"] == tenant_id
+    assert ident["tenant_name"] == "Contoso"
+    assert _fc.get_cached_tenant_id(local_dir=local_dir) == tenant_id
 
 
 def test_set_identity_stores_tenant_name(monkeypatch):
@@ -636,13 +669,16 @@ def test_report_client_events_accepts_and_posts_valid_batch(captured_post, monke
     ]
     first = envelopes[0]["data"]
     assert first["client_event_name"] == "WidgetReady"
-    assert first["client_correlation_id"] == "corr-test"
+    assert first["client_batch_id"] == "batch-test"
     assert first["client_mount_id"] == "mount-test"
     assert first["client_tool_call_id"] == "tool-test"
     assert first["client_app_name"] == "AgentIcon"
     assert first["client_build_environment"] == "dev"
     assert first["client_build_number"] == "0"
-    assert first["client_time_since_app_start_ms"] == 12
+    assert first["client_level"] == "info"
+    assert first["client_event_timestamp_ms"] == 1_700_000_000_000
+    assert first["client_time_since_mount_ms"] == 12
+    assert first["client_sequence_number"] == 1
     assert first["client_locale"] == "en-US"
     assert json.loads(first["client_properties"]) == {
         "count": 1,
@@ -656,6 +692,169 @@ def test_report_client_events_accepts_and_posts_valid_batch(captured_post, monke
     assert "developer_id" not in first
 
 
+def test_v2_optional_fields_are_projected_without_generic_scrubbing(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    operation_id = "6f7c8f9c-1234-4abc-9def-0123456789ab"
+    user_agent = "Mozilla/5.0 synthetic@example.test"
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            buildNumber="",
+            platform="Win32",
+            userAgent=user_agent,
+            events=[
+                {
+                    "eventName": "Save.Started",
+                    "level": "info",
+                    "eventTimestampMs": 1_700_000_000_123.5,
+                    "timeSinceMount": 12.25,
+                    "sequenceNumber": 42,
+                    "locale": "en-US",
+                    "displayMode": "inline",
+                    "themeName": "dark",
+                    "operationId": operation_id,
+                    "properties": {"operationId": operation_id},
+                }
+            ],
+        ),
+        block=True,
+    )
+
+    assert result == {"status": "accepted", "acceptedEventCount": 1}
+    data = captured_post[0][1][0]["data"]
+    assert data["client_build_number"] == ""
+    assert data["client_platform"] == "Win32"
+    assert data["client_user_agent"] == user_agent
+    assert data["client_event_timestamp_ms"] == 1_700_000_000_123.5
+    assert data["client_time_since_mount_ms"] == 12.25
+    assert data["client_sequence_number"] == 42
+    assert data["client_display_mode"] == "inline"
+    assert data["client_theme_name"] == "dark"
+    assert data["client_operation_id"] == operation_id
+    assert json.loads(data["client_properties"]) == {"operationId": "<guid>"}
+
+
+def test_unavailable_v2_optional_fields_remain_absent(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            toolCallId=None,
+            events=[
+                {
+                    "eventName": "WidgetReady",
+                    "level": "info",
+                    "eventTimestampMs": 1_700_000_000_000,
+                    "timeSinceMount": 0,
+                    "sequenceNumber": 1,
+                }
+            ],
+        ),
+        block=True,
+    )
+
+    assert result == {"status": "accepted", "acceptedEventCount": 1}
+    data = captured_post[0][1][0]["data"]
+    for field in (
+        "client_tool_call_id",
+        "client_platform",
+        "client_user_agent",
+        "client_locale",
+        "client_display_mode",
+        "client_theme_name",
+        "client_operation_id",
+    ):
+        assert field not in data
+
+
+def test_vorpal_owns_event_names_and_sequence_order(captured_post, monkeypatch):
+    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+
+    result = adk.report_client_events(
+        _client_events_envelope(
+            events=[
+                {
+                    "eventName": "WidgetReady",
+                    "level": "info",
+                    "eventTimestampMs": 1_700_000_000_020,
+                    "timeSinceMount": 20,
+                    "sequenceNumber": 100,
+                },
+                {
+                    "eventName": "Widget.Ready",
+                    "level": "info",
+                    "eventTimestampMs": 1_700_000_000_010,
+                    "timeSinceMount": 10,
+                    "sequenceNumber": 100,
+                },
+                {
+                    "eventName": "Future.Name.From.Vorpal",
+                    "level": "error",
+                    "eventTimestampMs": 1_700_000_000_005,
+                    "timeSinceMount": 5,
+                    "sequenceNumber": 4,
+                },
+            ],
+        ),
+        block=True,
+    )
+
+    assert result == {"status": "accepted", "acceptedEventCount": 3}
+    rows = [envelope["data"] for envelope in captured_post[0][1]]
+    assert [row["client_event_name"] for row in rows] == [
+        "WidgetReady",
+        "Widget.Ready",
+        "Future.Name.From.Vorpal",
+    ]
+    assert [row["client_sequence_number"] for row in rows] == [100, 100, 4]
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("sequenceNumber", 0),
+        ("sequenceNumber", -1),
+        ("sequenceNumber", 1.5),
+        ("sequenceNumber", True),
+        ("sequenceNumber", None),
+        ("themeName", "system"),
+        ("themeName", {}),
+        ("operationId", "6F7C8F9C-1234-4ABC-9DEF-0123456789AB"),
+        ("operationId", "not-a-guid"),
+    ],
+)
+def test_invalid_v2_occurrence_metadata_rejects_the_batch(field, value, captured_post):
+    event = {
+        "eventName": "InvalidMetadata",
+        "level": "info",
+        "eventTimestampMs": 1_700_000_000_000,
+        "timeSinceMount": 1,
+        "sequenceNumber": 1,
+    }
+    event[field] = value
+
+    result = adk.report_client_events(
+        _client_events_envelope(events=[event]),
+        block=True,
+    )
+
+    assert result["rejectedReason"] == "invalid_event_shape"
+    assert captured_post == []
+
+
+@pytest.mark.parametrize("field", ["platform", "userAgent", "buildNumber"])
+def test_raw_v2_strings_are_size_bounded_without_truncation(field, captured_post):
+    result = adk.report_client_events(
+        _client_events_envelope(
+            **{field: "x" * (adk.CLIENT_EVENTS_MAX_STRING_LENGTH + 1)}
+        ),
+        block=True,
+    )
+
+    assert result["rejectedReason"] == "invalid_event_shape"
+    assert captured_post == []
+
+
 def test_report_client_events_honors_opt_out_without_retrying(captured_post, monkeypatch):
     monkeypatch.setenv("ESS_ADK_TELEMETRY", "off")
 
@@ -665,9 +864,68 @@ def test_report_client_events_honors_opt_out_without_retrying(captured_post, mon
     assert captured_post == []
 
 
-def test_report_client_events_rejects_unsupported_schema(captured_post):
+def test_client_source_chronology_survives_buffer_reemission(monkeypatch):
+    operation_id = "6f7c8f9c-1234-4abc-9def-0123456789ab"
+    calls = []
+
+    def _failing_post(_ikey, _envelopes):
+        raise OSError("offline")
+
+    monkeypatch.setattr(_fc, "_post", _failing_post)
+    first = adk.report_client_events(
+        _client_events_envelope(
+            batchId="batch-retry",
+            events=[
+                {
+                    "eventName": "Save.Started",
+                    "level": "info",
+                    "eventTimestampMs": 1_700_000_000_123.5,
+                    "timeSinceMount": 12.25,
+                    "sequenceNumber": 42,
+                    "operationId": operation_id,
+                }
+            ],
+        ),
+        block=True,
+    )
+
+    assert first == {"status": "accepted", "acceptedEventCount": 1}
+
+    def _successful_post(_ikey, envelopes):
+        calls.append(envelopes)
+        return 200
+
+    monkeypatch.setattr(_fc, "_post", _successful_post)
+    second = adk.report_client_events(
+        _client_events_envelope(
+            batchId="batch-next",
+            events=[
+                {
+                    "eventName": "Save.Completed",
+                    "level": "info",
+                    "eventTimestampMs": 1_700_000_000_200,
+                    "timeSinceMount": 20,
+                    "sequenceNumber": 43,
+                    "operationId": operation_id,
+                }
+            ],
+        ),
+        block=True,
+    )
+
+    assert second == {"status": "accepted", "acceptedEventCount": 1}
+    replayed = calls[0][0]["data"]
+    assert replayed["client_batch_id"] == "batch-retry"
+    assert replayed["client_event_timestamp_ms"] == 1_700_000_000_123.5
+    assert replayed["client_time_since_mount_ms"] == 12.25
+    assert replayed["client_sequence_number"] == 42
+    assert replayed["client_operation_id"] == operation_id
+
+
+@pytest.mark.parametrize("schema_version", [1, 2.0, True, "2", None])
+def test_report_client_events_rejects_unsupported_schema(schema_version, captured_post):
     result = adk.report_client_events(
-        _client_events_envelope(schemaVersion=2),
+        _client_events_envelope(schemaVersion=schema_version),
         block=True,
     )
 
@@ -684,7 +942,7 @@ def test_report_client_events_rejects_empty_and_oversized_batches(captured_post)
     oversized = adk.report_client_events(
         _client_events_envelope(
             events=[
-                {"eventName": f"Event{i}", "timeSinceAppStart": i}
+                {"eventName": f"Event{i}", "timeSinceMount": i}
                 for i in range(adk.CLIENT_EVENTS_MAX_BATCH_EVENTS + 1)
             ]
         ),
@@ -697,7 +955,7 @@ def test_report_client_events_rejects_empty_and_oversized_batches(captured_post)
 
 
 _IDENTIFIER_FIELDS = {
-    "correlationId": "invalid_correlation_id",
+    "batchId": "invalid_correlation_id",
     "mountId": "invalid_mount_id",
 }
 
@@ -706,7 +964,7 @@ _IDENTIFIER_FIELDS = {
 def test_each_identifier_field_reports_its_own_rejection_reason(field, captured_post):
     """A rejection must name the field that actually failed.
 
-    Distinct reasons let dashboards distinguish correlation-id failures from
+    The existing reason vocabulary distinguishes the batch identifier from
     mount-id failures.
     """
     expected_reason = _IDENTIFIER_FIELDS[field]
@@ -763,7 +1021,7 @@ def test_retired_reasons_are_gone_from_the_value_list():
         "x" * 65,  # one over the single length bound
     ],
 )
-def test_correlation_identifiers_are_not_a_free_text_tunnel(field, payload, captured_post):
+def test_client_identifiers_are_not_a_free_text_tunnel(field, payload, captured_post):
     """The ephemeral ids are emitted verbatim, so they must be identifier-shaped.
 
     Validate the whole value against the bounded ASCII format. Required ids
@@ -781,13 +1039,13 @@ def test_correlation_identifiers_are_not_a_free_text_tunnel(field, payload, capt
     assert captured_post == []
 
 
-def test_well_formed_correlation_identifiers_are_accepted(captured_post, monkeypatch):
+def test_well_formed_client_identifiers_are_accepted(captured_post, monkeypatch):
     # Accept generated UUID-style ids and permitted dot/underscore/dash characters.
     monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
 
     result = adk.report_client_events(
         _client_events_envelope(
-            correlationId="corr-6f7c8f9c-1234-4abc-9def-0123456789ab",
+            batchId="batch-6f7c8f9c-1234-4abc-9def-0123456789ab",
             mountId="mount-1a2b_3c.4d",
             toolCallId="tool-Call.42",
         ),
@@ -796,7 +1054,7 @@ def test_well_formed_correlation_identifiers_are_accepted(captured_post, monkeyp
 
     assert result == {"status": "accepted", "acceptedEventCount": 2}
     data = captured_post[0][1][0]["data"]
-    assert data["client_correlation_id"] == "corr-6f7c8f9c-1234-4abc-9def-0123456789ab"
+    assert data["client_batch_id"] == "batch-6f7c8f9c-1234-4abc-9def-0123456789ab"
     assert data["client_mount_id"] == "mount-1a2b_3c.4d"
     assert data["client_tool_call_id"] == "tool-Call.42"
 
@@ -811,7 +1069,7 @@ def test_identifiers_without_the_legacy_prefixes_are_accepted(captured_post, mon
 
     result = adk.report_client_events(
         _client_events_envelope(
-            correlationId="6f7c8f9c-1234-4abc-9def-0123456789ab",
+            batchId="6f7c8f9c-1234-4abc-9def-0123456789ab",
             mountId="01JQZ8XKMNP7RSTVWXYZ",  # bare ULID-style, no prefix
             toolCallId="call_abc.42",
         ),
@@ -820,7 +1078,7 @@ def test_identifiers_without_the_legacy_prefixes_are_accepted(captured_post, mon
 
     assert result == {"status": "accepted", "acceptedEventCount": 2}
     data = captured_post[0][1][0]["data"]
-    assert data["client_correlation_id"] == "6f7c8f9c-1234-4abc-9def-0123456789ab"
+    assert data["client_batch_id"] == "6f7c8f9c-1234-4abc-9def-0123456789ab"
     assert data["client_tool_call_id"] == "call_abc.42"
 
 
@@ -843,10 +1101,10 @@ def test_free_text_event_names_are_scrubbed_not_rejected(captured_post, monkeypa
     result = adk.report_client_events(
         _client_events_envelope(
             events=[
-                {"eventName": "Widget\U0001f600Ready", "timeSinceAppStart": 1},
+                {"eventName": "Widget\U0001f600Ready", "timeSinceMount": 1},
                 {
                     "eventName": "opened C:\\Users\\jdoe\\secret.docx for jdoe@contoso.com",
-                    "timeSinceAppStart": 2,
+                    "timeSinceMount": 2,
                 },
             ]
         ),
@@ -869,7 +1127,7 @@ def test_oversized_property_strings_are_truncated_not_rejected(captured_post, mo
             events=[
                 {
                     "eventName": "BigProp",
-                    "timeSinceAppStart": 1,
+                    "timeSinceMount": 1,
                     "properties": {"blob": "x" * (adk.CLIENT_EVENTS_MAX_STRING_LENGTH + 1)},
                 }
             ]
@@ -891,7 +1149,7 @@ def test_long_appname_and_locale_are_truncated_not_rejected(captured_post, monke
             events=[
                 {
                     "eventName": "E",
-                    "timeSinceAppStart": 1,
+                    "timeSinceMount": 1,
                     "locale": "L" * 500,
                 }
             ],
@@ -914,7 +1172,7 @@ def test_many_properties_and_long_arrays_are_accepted(captured_post, monkeypatch
             events=[
                 {
                     "eventName": "Wide",
-                    "timeSinceAppStart": 1,
+                    "timeSinceMount": 1,
                     "properties": {
                         **{f"k{i}": i for i in range(40)},
                         "tags": list(range(50)),
@@ -950,9 +1208,9 @@ def test_non_identifier_property_keys_are_kept_but_length_bounded():
 @pytest.mark.parametrize(
     ("event", "reason"),
     [
-        ({"eventName": "", "timeSinceAppStart": 1}, "invalid_event_shape"),
-        ({"eventName": 123, "timeSinceAppStart": 1}, "invalid_event_shape"),
-        ({"eventName": "BadLocale", "timeSinceAppStart": 1, "locale": 5}, "invalid_event_shape"),
+        ({"eventName": "", "timeSinceMount": 1}, "invalid_event_shape"),
+        ({"eventName": 123, "timeSinceMount": 1}, "invalid_event_shape"),
+        ({"eventName": "BadLocale", "timeSinceMount": 1, "locale": 5}, "invalid_event_shape"),
     ],
 )
 def test_report_client_events_rejects_out_of_contract_events(event, reason, captured_post):
@@ -965,30 +1223,59 @@ def test_report_client_events_rejects_out_of_contract_events(event, reason, capt
     assert captured_post == []
 
 
-def test_non_finite_timing_degrades_to_a_sentinel(captured_post, monkeypatch):
-    """One unusable timing costs one column on one row, not the batch.
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("eventTimestampMs", float("nan")),
+        ("eventTimestampMs", float("inf")),
+        ("eventTimestampMs", -1),
+        ("eventTimestampMs", "1700000000000"),
+        ("eventTimestampMs", True),
+        ("timeSinceMount", float("nan")),
+        ("timeSinceMount", float("inf")),
+        ("timeSinceMount", -1),
+        ("timeSinceMount", "12"),
+        ("timeSinceMount", False),
+    ],
+)
+def test_invalid_source_timing_rejects_the_batch(field, value, captured_post):
+    event = {
+        "eventName": "InvalidTiming",
+        "level": "info",
+        "eventTimestampMs": 1_700_000_000_000,
+        "timeSinceMount": 0,
+        "sequenceNumber": 1,
+    }
+    event[field] = value
 
-    ``-1`` is unambiguous because ``performance.now()`` is non-negative, and
-    ``0`` has to stay a real value — a bootloader event legitimately fires at
-    time zero, so it cannot double as the failure marker.
-    """
-    monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
+    result = adk.report_client_events(
+        _client_events_envelope(events=[event]),
+        block=True,
+    )
 
+    assert result["rejectedReason"] == "invalid_event_shape"
+    assert captured_post == []
+
+
+def test_time_since_app_start_is_not_a_v2_alias(captured_post):
     result = adk.report_client_events(
         _client_events_envelope(
             events=[
-                {"eventName": "NaNTime", "timeSinceAppStart": float("nan")},
-                {"eventName": "MissingTime"},
-                {"eventName": "StringTime", "timeSinceAppStart": "12"},
-                {"eventName": "ZeroTime", "timeSinceAppStart": 0},
+                {
+                    "eventName": "LegacyTiming",
+                    "level": "info",
+                    "eventTimestampMs": 1_700_000_000_000,
+                    "sequenceNumber": 1,
+                    "timeSinceAppStart": 12,
+                    "timeSinceMount": None,
+                }
             ]
         ),
         block=True,
     )
 
-    assert result == {"status": "accepted", "acceptedEventCount": 4}
-    times = [e["data"]["client_time_since_app_start_ms"] for e in captured_post[0][1]]
-    assert times == [-1, -1, -1, 0]
+    assert result["rejectedReason"] == "invalid_event_shape"
+    assert captured_post == []
 
 
 def test_malformed_property_bag_costs_the_bag_not_the_event(captured_post, monkeypatch):
@@ -997,10 +1284,10 @@ def test_malformed_property_bag_costs_the_bag_not_the_event(captured_post, monke
     result = adk.report_client_events(
         _client_events_envelope(
             events=[
-                {"eventName": "ListBag", "timeSinceAppStart": 1, "properties": ["not", "a", "dict"]},
+                {"eventName": "ListBag", "timeSinceMount": 1, "properties": ["not", "a", "dict"]},
                 {
                     "eventName": "MixedBag",
-                    "timeSinceAppStart": 2,
+                    "timeSinceMount": 2,
                     "properties": {"keep": "yes", "nested": {"a": 1}, "nan": float("inf")},
                 },
             ]
@@ -1020,7 +1307,7 @@ def test_malformed_property_bag_costs_the_bag_not_the_event(captured_post, monke
 def test_bad_tool_call_id_omits_the_field_and_keeps_the_batch(captured_post, monkeypatch):
     """An incompatible host-generated tool-call id is omitted.
 
-    Correlation and mount ids provide required stitching metadata, so the
+    Batch and mount ids provide required stitching metadata, so the
     batch remains useful without the optional tool-call id.
     """
     monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
@@ -1034,18 +1321,17 @@ def test_bad_tool_call_id_omits_the_field_and_keeps_the_batch(captured_post, mon
     data = captured_post[0][1][0]["data"]
     assert "client_tool_call_id" not in data
     # The fields that DO stitch a mount together are still rejected, not omitted.
-    assert data["client_correlation_id"] == "corr-test"
+    assert data["client_batch_id"] == "batch-test"
 
 
-def test_client_level_is_accepted_and_emitted(captured_post, monkeypatch):
-    # Optional client levels are emitted when present.
+def test_client_level_is_required_and_emitted(captured_post, monkeypatch):
     monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
 
     result = adk.report_client_events(
         _client_events_envelope(
             events=[
-                {"eventName": "E", "timeSinceAppStart": 1, "level": "error"},
-                {"eventName": "F", "timeSinceAppStart": 2},
+                {"eventName": "E", "timeSinceMount": 1, "level": "error"},
+                {"eventName": "F", "timeSinceMount": 2, "level": "info"},
             ]
         ),
         block=True,
@@ -1054,7 +1340,7 @@ def test_client_level_is_accepted_and_emitted(captured_post, monkeypatch):
     assert result == {"status": "accepted", "acceptedEventCount": 2}
     first, second = (e["data"] for e in captured_post[0][1])
     assert first["client_level"] == "error"
-    assert "client_level" not in second
+    assert second["client_level"] == "info"
 
 
 def test_unknown_envelope_fields_are_ignored_not_rejected(captured_post, monkeypatch):
@@ -1089,7 +1375,7 @@ def test_unknown_event_fields_are_ignored_not_rejected(captured_post, monkeypatc
             events=[
                 {
                     "eventName": "WidgetReady",
-                    "timeSinceAppStart": 12,
+                    "timeSinceMount": 12,
                     "someFutureField": "not yet known to ADK",
                     "properties": {"stage": "loaded"},
                 }
@@ -1118,7 +1404,7 @@ def test_report_client_events_scrubs_paths_urls_emails_and_guids(captured_post, 
             events=[
                 {
                     "eventName": "WidgetReady",
-                    "timeSinceAppStart": 1,
+                    "timeSinceMount": 1,
                     "properties": {
                         "note": "C:\\Users\\jdoe\\secret.docx see https://contoso.sharepoint.com/x",
                         "owner": "jdoe@contoso.com",
@@ -1211,7 +1497,7 @@ def test_missing_properties_still_emit_a_parseable_blob(captured_post, monkeypat
 
     result = adk.report_client_events(
         _client_events_envelope(
-            events=[{"eventName": "NoProps", "timeSinceAppStart": 1}]
+            events=[{"eventName": "NoProps", "timeSinceMount": 1}]
         ),
         block=True,
     )
@@ -1231,7 +1517,7 @@ def test_report_client_events_rejection_leaves_no_session_side_effect(captured_p
     assert not os.path.exists(adk.SESSION_PATH)
 
     result = adk.report_client_events(
-        _client_events_envelope(correlationId="not a valid id"),
+        _client_events_envelope(batchId="not a valid id"),
         block=True,
     )
 
@@ -1274,7 +1560,7 @@ def test_fail_open_echoes_the_full_sent_count(monkeypatch, captured_post):
 
     result = adk.report_client_events(
         _client_events_envelope(
-            events=[{"eventName": "E", "timeSinceAppStart": 1} for _ in range(20)]
+            events=[{"eventName": "E", "timeSinceMount": 1} for _ in range(20)]
         ),
         block=True,
     )
@@ -1287,7 +1573,7 @@ def test_oversized_batch_is_rejected_on_the_normal_path(captured_post):
     # Accept a 100-event batch and reject a batch exceeding the safety cap.
     ok = adk.report_client_events(
         _client_events_envelope(
-            events=[{"eventName": "E", "timeSinceAppStart": 1} for _ in range(100)]
+            events=[{"eventName": "E", "timeSinceMount": 1} for _ in range(100)]
         ),
         block=True,
     )
@@ -1296,7 +1582,7 @@ def test_oversized_batch_is_rejected_on_the_normal_path(captured_post):
     result = adk.report_client_events(
         _client_events_envelope(
             events=[
-                {"eventName": "E", "timeSinceAppStart": 1}
+                {"eventName": "E", "timeSinceMount": 1}
                 for _ in range(adk.CLIENT_EVENTS_MAX_BATCH_EVENTS + 1)
             ]
         ),

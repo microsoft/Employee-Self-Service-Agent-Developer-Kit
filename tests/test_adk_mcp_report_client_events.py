@@ -81,6 +81,31 @@ def test_report_client_events_tool_is_app_only():
     assert tool.annotations.openWorldHint is False
 
 
+def test_authenticated_client_initializes_telemetry_identity(monkeypatch):
+    server = _load_adk_server()
+    captured = {}
+
+    class FakeClient:
+        tenant_id = "00000000-0000-0000-0000-0000000000ab"
+
+    monkeypatch.setattr(server, "_client", None)
+    monkeypatch.setattr(server, "AgentConfigClient", FakeClient)
+    monkeypatch.setattr(
+        server.adk_telemetry,
+        "initialize_tenant_identity",
+        lambda tenant_id, *, local_dir: captured.update(
+            tenant_id=tenant_id,
+            local_dir=local_dir,
+        ),
+    )
+
+    assert isinstance(server.get_client(), FakeClient)
+    assert captured == {
+        "tenant_id": FakeClient.tenant_id,
+        "local_dir": server.SOLUTION_LOCAL_DIR,
+    }
+
+
 def test_report_client_events_tool_returns_structured_bridge_result(monkeypatch):
     server = _load_adk_server()
     captured = {}
@@ -93,26 +118,52 @@ def test_report_client_events_tool_returns_structured_bridge_result(monkeypatch)
 
     result = asyncio.run(
         server.report_client_events(
-            schemaVersion=1,
-            correlationId="corr-test",
+            schemaVersion=2,
+            batchId="batch-test",
             mountId="mount-test",
             appName="AgentIcon",
             buildEnvironment="dev",
             buildNumber="0",
             toolCallId="tool-test",
-            events=[{"eventName": "WidgetReady", "timeSinceAppStart": 1}],
+            platform="windows",
+            userAgent="Vorpal/Test",
+            events=[
+                {
+                    "eventName": "WidgetReady",
+                    "level": "info",
+                    "eventTimestampMs": 1_700_000_000_000,
+                    "timeSinceMount": 1,
+                    "sequenceNumber": 1,
+                    "displayMode": "inline",
+                    "themeName": "dark",
+                    "operationId": "6f7c8f9c-1234-4abc-9def-0123456789ab",
+                }
+            ],
         )
     )
 
     assert captured["envelope"] == {
-        "schemaVersion": 1,
-        "correlationId": "corr-test",
+        "schemaVersion": 2,
+        "batchId": "batch-test",
         "mountId": "mount-test",
         "appName": "AgentIcon",
         "buildEnvironment": "dev",
         "buildNumber": "0",
+        "platform": "windows",
+        "userAgent": "Vorpal/Test",
         "toolCallId": "tool-test",
-        "events": [{"eventName": "WidgetReady", "timeSinceAppStart": 1}],
+        "events": [
+            {
+                "eventName": "WidgetReady",
+                "level": "info",
+                "eventTimestampMs": 1_700_000_000_000,
+                "timeSinceMount": 1,
+                "sequenceNumber": 1,
+                "displayMode": "inline",
+                "themeName": "dark",
+                "operationId": "6f7c8f9c-1234-4abc-9def-0123456789ab",
+            }
+        ],
     }
     assert result.structuredContent == {"status": "accepted", "acceptedEventCount": 1}
     assert result.isError is False
@@ -133,8 +184,8 @@ def test_report_client_events_tool_marks_rejection_as_error(monkeypatch):
 
     result = asyncio.run(
         server.report_client_events(
-            schemaVersion=1,
-            correlationId="corr-test",
+            schemaVersion=2,
+            batchId="batch-test",
             mountId="mount-test",
             appName="AgentIcon",
             buildEnvironment="dev",
@@ -153,13 +204,21 @@ def test_report_client_events_tool_marks_rejection_as_error(monkeypatch):
 
 def _valid_tool_args():
     return {
-        "schemaVersion": 1,
-        "correlationId": "corr-test",
+        "schemaVersion": 2,
+        "batchId": "batch-test",
         "mountId": "mount-test",
         "appName": "AgentIcon",
         "buildEnvironment": "dev",
         "buildNumber": "0",
-        "events": [{"eventName": "WidgetReady", "timeSinceAppStart": 1}],
+        "events": [
+            {
+                "eventName": "WidgetReady",
+                "level": "info",
+                "eventTimestampMs": 1_700_000_000_000,
+                "timeSinceMount": 1,
+                "sequenceNumber": 1,
+            }
+        ],
     }
 
 
@@ -167,9 +226,9 @@ def _valid_tool_args():
     ("mutation", "expected_reason"),
     [
         ({"events": [1, 2]}, "invalid_event_shape"),
-        ({"correlationId": 123}, "invalid_correlation_id"),
+        ({"batchId": 123}, "invalid_correlation_id"),
         ({"mountId": 123}, "invalid_mount_id"),
-        ({"schemaVersion": "2"}, "unsupported_schema_version"),
+        ({"schemaVersion": 1}, "unsupported_schema_version"),
         ({"buildNumber": None}, "invalid_event_shape"),
         ({"events": None}, "empty_batch"),
     ],
@@ -205,31 +264,38 @@ def test_valid_envelope_is_accepted_through_the_real_call_tool_path():
     assert result.isError is False
 
 
-@pytest.mark.parametrize(
-    ("level", "expected"),
-    [
-        ("error", "error"),
-        ("", ""),
-        ("error synthetic@example.test", "error <email>"),
-        ("x" * 201, "x" * 200),
-        (None, None),
-        ({"owner": "synthetic@example.test"}, None),
-        (["synthetic@example.test"], None),
-        ({}, None),
-        ([], None),
-        (0, None),
-        (1.5, None),
-        (True, None),
-        (False, None),
-    ],
-)
-def test_client_level_is_string_only_without_losing_events(monkeypatch, level, expected):
+@pytest.mark.parametrize("level", ["", "warning", None, 0, True, {}])
+def test_invalid_required_levels_are_rejected_through_call_tool(level):
+    server = _load_adk_server()
+    args = {
+        **_valid_tool_args(),
+        "events": [
+            {
+                "eventName": "InvalidLevel",
+                "level": level,
+                "eventTimestampMs": 1_700_000_000_000,
+                "timeSinceMount": 1,
+                "sequenceNumber": 1,
+            }
+        ],
+    }
+
+    result = asyncio.run(server.mcp.call_tool("report_client_events", args))
+
+    assert result.structuredContent == {
+        "status": "rejected",
+        "acceptedEventCount": 0,
+        "rejectedReason": "invalid_event_shape",
+    }
+    assert result.isError is True
+
+
+def test_all_v2_fields_survive_the_real_call_tool_path(monkeypatch):
     server = _load_adk_server()
     emitted = []
+    operation_id = "6f7c8f9c-1234-4abc-9def-0123456789ab"
     monkeypatch.setattr(server.adk_telemetry, "get_session", lambda surface: ("test", False))
-    monkeypatch.setattr(
-        server.adk_telemetry, "common_dimensions", lambda *args, **kwargs: {}
-    )
+    monkeypatch.setattr(server.adk_telemetry, "common_dimensions", lambda *args, **kwargs: {})
     monkeypatch.setattr(
         server.adk_telemetry,
         "_emit_many",
@@ -237,22 +303,53 @@ def test_client_level_is_string_only_without_losing_events(monkeypatch, level, e
     )
     args = {
         **_valid_tool_args(),
+        "toolCallId": "call_host-generated",
+        "platform": "windows",
+        "userAgent": "Mozilla/5.0 synthetic@example.test",
         "events": [
-            {"eventName": "WithLevel", "timeSinceAppStart": 1, "level": level},
-            {"eventName": "WithoutLevel", "timeSinceAppStart": 2},
+            {
+                "eventName": "Widget.Ready",
+                "level": "error",
+                "eventTimestampMs": 1_700_000_000_123.5,
+                "timeSinceMount": 12.25,
+                "sequenceNumber": 42,
+                "locale": "en-US",
+                "displayMode": "inline",
+                "themeName": "dark",
+                "operationId": operation_id,
+                "properties": {"objectId": operation_id},
+                "someFutureField": {"nested": True},
+            }
         ],
     }
 
     result = asyncio.run(server.mcp.call_tool("report_client_events", args))
 
-    assert result.structuredContent == {"status": "accepted", "acceptedEventCount": 2}
+    assert result.structuredContent == {"status": "accepted", "acceptedEventCount": 1}
     assert result.isError is False
-    assert [row["client_event_name"] for row in emitted] == ["WithLevel", "WithoutLevel"]
-    if expected is None:
-        assert "client_level" not in emitted[0]
-    else:
-        assert emitted[0]["client_level"] == expected
-    assert "client_level" not in emitted[1]
+    assert emitted == [
+        {
+            "client_event_name": "Widget.Ready",
+            "client_batch_id": "batch-test",
+            "client_mount_id": "mount-test",
+            "client_app_name": "AgentIcon",
+            "client_build_environment": "dev",
+            "client_build_number": "0",
+            "client_level": "error",
+            "client_event_timestamp_ms": 1_700_000_000_123.5,
+            "client_time_since_mount_ms": 12.25,
+            "client_sequence_number": 42,
+            "client_tool_call_id": "call_host-generated",
+            "client_platform": "windows",
+            "client_user_agent": "Mozilla/5.0 synthetic@example.test",
+            "client_locale": "en-US",
+            "client_display_mode": "inline",
+            "client_theme_name": "dark",
+            "client_operation_id": operation_id,
+            "client_properties": '{"objectId":"<guid>"}',
+            "client_prop_dropped_count": 0,
+        }
+    ]
 
 
 def test_unknown_event_field_survives_the_real_call_tool_path():
@@ -265,7 +362,12 @@ def test_unknown_event_field_survives_the_real_call_tool_path():
     server = _load_adk_server()
     args = {
         **_valid_tool_args(),
-        "events": [{"eventName": "WidgetReady", "timeSinceAppStart": 1, "someFutureField": "x"}],
+        "events": [
+            {
+                **_valid_tool_args()["events"][0],
+                "someFutureField": "x",
+            }
+        ],
     }
 
     result = asyncio.run(server.mcp.call_tool("report_client_events", args))
@@ -289,7 +391,16 @@ def test_bridge_is_total_so_the_wrapper_needs_no_guard(monkeypatch):
 
     args = {
         **_valid_tool_args(),
-        "events": [{"eventName": "E", "timeSinceAppStart": 1} for _ in range(20)],
+        "events": [
+            {
+                "eventName": "E",
+                "level": "info",
+                "eventTimestampMs": 1_700_000_000_000 + index,
+                "timeSinceMount": index,
+                "sequenceNumber": index + 1,
+            }
+            for index in range(20)
+        ],
     }
     result = asyncio.run(server.report_client_events(**args))
 

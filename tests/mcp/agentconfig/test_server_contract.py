@@ -72,11 +72,13 @@ def test_server_exposes_the_skill_tool_contract() -> None:
         # and stays hidden from the model-visible tool list.
         "report_client_events": [
             "schemaVersion",
-            "correlationId",
+            "batchId",
             "mountId",
             "appName",
             "buildEnvironment",
             "buildNumber",
+            "platform",
+            "userAgent",
             "events",
             "toolCallId",
         ],
