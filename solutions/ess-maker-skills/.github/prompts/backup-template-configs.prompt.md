@@ -1,13 +1,11 @@
 ---
 mode: agent
-description: "Type Enter to check template-config backup availability"
+description: "Type Enter to back up hybrid Workday template configs"
 ---
 
 # Backup Template Configs
 
-Tell the user:
-
-> Template-config backup is no longer supported. It belonged to the retired
-> Dataverse-based agent setup.
-
-Then stop. Do not read another skill or run a script.
+Read `src/skills/backup-template-configs/SKILL.md` and follow it. This command
+is limited to the Dataverse-backed configuration retained by the hybrid
+Workday extension. It must not invoke foundation setup or any retired
+CEA/DA-Preview installer, bot-binding, or preferred-solution path.

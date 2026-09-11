@@ -24,8 +24,8 @@ Here's what I can help you with:
 | `/run` | Type Enter to run evaluation test sets or view run results |
 | `/flightcheck` | Type Enter to run a pre-deployment readiness check |
 | `/push` | Type Enter to push all local changes to Copilot Studio |
-| `/backup-template-configs` | Show the retired command's support status |
-| `/restore-template-configs` | Show the retired command's support status |
+| `/backup-template-configs` | Back up hybrid Workday reference-data template configs |
+| `/restore-template-configs` | Restore hybrid Workday reference-data template configs |
 | `/troubleshoot` | Type Enter to diagnose connectivity or auth errors |
 
 Tip: Switch to **Plan** mode (type `/plan`) if you'd like to brainstorm or discuss changes before making them.

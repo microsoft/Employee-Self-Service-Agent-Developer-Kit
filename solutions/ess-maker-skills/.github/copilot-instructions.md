@@ -335,8 +335,8 @@ After a successful push, `.baseline/` is updated to match the new state.
 | Validate / quality-check evaluation test sets | `src/skills/evaluations/validate/SKILL.md` |
 | Troubleshoot connectivity/auth issues | `src/skills/troubleshoot/SKILL.md` |
 | Debug Workday ISU errors | `src/skills/troubleshoot/SKILL.md` |
-| Back up or save Workday HCM template configs | Report that the retired command is no longer supported |
-| Restore or re-apply Workday HCM template configs | Report that the retired command is no longer supported |
+| Back up or save hybrid Workday HCM template configs | `src/skills/backup-template-configs/SKILL.md` |
+| Restore or re-apply hybrid Workday HCM template configs | `src/skills/restore-template-configs/SKILL.md` |
 
 **Trigger phrases for connect:** "connect ServiceNow", "set up ServiceNow",
 "integrate ServiceNow", "connect Workday", "set up Workday", "add ServiceNow",

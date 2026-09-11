@@ -320,8 +320,8 @@ Then **run `/setup`** in GitHub Copilot Chat to configure your environment.
 | `/run` | Run pushed evaluation test sets and inspect history or results |
 | `/flightcheck` | Run pre-deployment readiness validation — licenses, environment, integrations, agent files |
 | `/push` | Push all local changes to Copilot Studio |
-| `/backup-template-configs` | Report that the retired command is no longer supported |
-| `/restore-template-configs` | Report that the retired command is no longer supported |
+| `/backup-template-configs` | Capture hybrid Workday reference-data template configs before an extension update |
+| `/restore-template-configs` | Restore hybrid Workday reference-data template configs after an extension update |
 | `/menu` | See all available commands |
 
 You can also describe what you want in plain English — the agent will figure out the right approach.
