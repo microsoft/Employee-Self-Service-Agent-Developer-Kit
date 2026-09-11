@@ -415,7 +415,9 @@ support burden when they 404. A missing link is always better than a broken one.
 
 ## User Config
 
-The file `.local/config.json` stores the user's setup state and agent details:
+The file `.local/config.json` stores active workspace and agent details. Its
+`setup` property is retained as operational metadata; setup admission is based
+only on `.local/setup/config.json`.
 
 ```json
 {

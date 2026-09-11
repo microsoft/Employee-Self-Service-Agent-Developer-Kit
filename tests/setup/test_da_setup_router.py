@@ -42,18 +42,36 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
     assert '`status` equal to `"complete"`' in instructions
     assert "connect_ready" not in instructions
 
-    gated_prompts = [
-        path
-        for path in _PROMPTS.glob("*.prompt.md")
-        if "**Setup-state check.**" in path.read_text(encoding="utf-8")
-    ]
-    assert gated_prompts
-    for path in gated_prompts:
+    gated_prompts = (
+        "backup-template-configs.prompt.md",
+        "connect.prompt.md",
+        "create.prompt.md",
+        "delete.prompt.md",
+        "evaluate.prompt.md",
+        "flightcheck.prompt.md",
+        "push.prompt.md",
+        "restore-template-configs.prompt.md",
+        "review.prompt.md",
+        "run.prompt.md",
+        "scan.prompt.md",
+        "test.prompt.md",
+        "troubleshoot.prompt.md",
+        "update.prompt.md",
+    )
+    for name in gated_prompts:
+        path = _PROMPTS / name
         text = path.read_text(encoding="utf-8")
         assert ".local/setup/config.json" in text, path
         assert "schema_version: 1" in text, path
         assert 'status: "complete"' in text, path
-        assert 'or local config does not have `setup: "complete"`' not in text, path
+        normalized = " ".join(text.split())
+        assert 'or local config does not have `setup: "complete"`' not in normalized, (
+            path
+        )
+        assert (
+            '`.local/config.json` is missing or `setup` is not `"complete"`'
+            not in normalized
+        ), path
 
     assert (
         "read `.local/setup/config.json` and `.local/config.json`"
