@@ -3,9 +3,9 @@
 ## MANDATORY FIRST ACTION — Do This Before Anything Else
 
 **YOUR VERY FIRST ACTION on every new conversation must be: use your file
-reading tool to try to read `.local/setup/config.json` and `.local/config.json`.**
+reading tool to try to read `.local/setup/config.json`.**
 Do NOT skip this step. Do NOT respond to the user's message first. Do NOT greet
-the user first. Do NOT list capabilities. Read both files FIRST, then decide what
+the user first. Do NOT list capabilities. Read this file FIRST, then decide what
 to do based on the result.
 
 ### If setup is missing or not ready

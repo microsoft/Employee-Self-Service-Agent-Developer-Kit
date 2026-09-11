@@ -5,10 +5,10 @@ description: "Type Enter to run a pre-deployment readiness check on your ESS age
 
 # FlightCheck
 
-**Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`.
-If local config has `flightCheckOnly: true`, proceed without canonical setup
-state. Otherwise, if canonical state does not have `schema_version: 1` and
-`status: "complete"`, or local config does not have `setup: "complete"`, show:
+**Setup-state check.** Read `.local/setup/config.json`. If it does not have
+`schema_version: 1` and `status: "complete"`, read `.local/config.json`. If
+local config has `flightCheckOnly: true`, proceed without canonical setup
+state. Otherwise, show:
 
 > Welcome to the ESS Maker Kit. Before running this command, type `/setup` 
 > to set up your environment.

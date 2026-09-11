@@ -11,15 +11,9 @@ from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SOLUTION = _REPO_ROOT / "solutions" / "ess-maker-skills"
-_FOUNDATION = (
-    _SOLUTION / "src" / "skills" / "foundation-setup" / "SKILL.md"
-)
+_FOUNDATION = _SOLUTION / "src" / "skills" / "foundation-setup" / "SKILL.md"
 _DA_EXISTING_DEV = (
-    _SOLUTION
-    / "src"
-    / "skills"
-    / "foundation-setup"
-    / "da-existing-dev.md"
+    _SOLUTION / "src" / "skills" / "foundation-setup" / "da-existing-dev.md"
 )
 _WORKDAY = _SOLUTION / "src" / "skills" / "setup" / "SKILL.md"
 _CONNECT_STEP1 = _SOLUTION / "src" / "skills" / "connect" / "step1.md"
@@ -45,7 +39,7 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
     instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
 
     assert "`schema_version` equal to `1`" in instructions
-    assert "`status` equal to `\"complete\"`" in instructions
+    assert '`status` equal to `"complete"`' in instructions
     assert "connect_ready" not in instructions
 
     gated_prompts = [
@@ -59,7 +53,16 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
         assert ".local/setup/config.json" in text, path
         assert "schema_version: 1" in text, path
         assert 'status: "complete"' in text, path
-        assert ".local/config.json" in text, path
+        assert 'or local config does not have `setup: "complete"`' not in text, path
+
+    assert (
+        "read `.local/setup/config.json` and `.local/config.json`"
+        not in instructions.casefold()
+    )
+    assert (
+        "If `.local/config.json` does not exist or its `setup` value"
+        not in instructions
+    )
 
 
 def test_global_gate_preserves_flightcheck_only_mode() -> None:
@@ -71,14 +74,16 @@ def test_global_gate_preserves_flightcheck_only_mode() -> None:
     assert "This exception applies only to `/flightcheck`" in normalized
 
 
-def test_maker_profile_requires_canonical_and_workspace_completion() -> None:
+def test_maker_profile_requires_only_canonical_completion() -> None:
     text = _MAKER_PROFILE.read_text(encoding="utf-8")
 
-    assert "canonicalComplete && workspaceComplete" in text
+    assert "if (canonicalComplete) met.add('setup')" in text
     assert "json.schema_version === 1" in text
     assert "json.status === 'complete'" in text
-    assert "json.setup === 'complete'" in text
     assert "'.local/setup/config.json'" in text
+    assert "workspaceComplete" not in text
+    assert "json.setup === 'complete'" not in text
+    assert "configPattern" not in text
 
 
 def test_workday_routing_remains_separate() -> None:
@@ -120,13 +125,29 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
 
 def test_foundation_router_paths_resolve() -> None:
     referenced = set(_PATH_RE.findall(_FOUNDATION.read_text(encoding="utf-8")))
-    missing = [
-        path
-        for path in sorted(referenced)
-        if not (_SOLUTION / path).is_file()
-    ]
+    missing = [path for path in sorted(referenced) if not (_SOLUTION / path).is_file()]
 
     assert not missing
+
+
+def test_non_da_ga_setup_implementation_is_absent() -> None:
+    retired_paths = (
+        "scripts/setup_state.py",
+        "scripts/install_ess_agent.py",
+        "scripts/ess_connection_binding.py",
+        "scripts/preferred_solution.py",
+        "scripts/backup_template_configs.py",
+        "scripts/restore_template_configs.py",
+        "src/reference/ess-agent-installation/config.json",
+        "src/reference/solution-catalog.md",
+        "src/skills/onboarding/SKILL.md",
+        "src/skills/foundation-setup/install-starters.md",
+        "src/skills/backup-template-configs/SKILL.md",
+        "src/skills/restore-template-configs/SKILL.md",
+    )
+
+    for path in retired_paths:
+        assert not (_SOLUTION / path).exists(), path
 
 
 def test_da_commands_degrade_by_operation() -> None:
@@ -137,12 +158,8 @@ def test_da_commands_degrade_by_operation() -> None:
         "troubleshoot.prompt.md": (
             "requires the corresponding product extension guidance"
         ),
-        "backup-template-configs.prompt.md": (
-            "retired Dataverse-based agent model"
-        ),
-        "restore-template-configs.prompt.md": (
-            "retired Dataverse-based agent model"
-        ),
+        "backup-template-configs.prompt.md": ("retired Dataverse-based agent model"),
+        "restore-template-configs.prompt.md": ("retired Dataverse-based agent model"),
     }
 
     for name, text in expected_text.items():
@@ -162,8 +179,7 @@ def test_da_local_capabilities_remain_available() -> None:
     evaluate = (_PROMPTS / "evaluate.prompt.md").read_text(encoding="utf-8")
     normalized_evaluate = " ".join(evaluate.split())
     assert (
-        "continue generating or editing evaluation files locally"
-        in normalized_evaluate
+        "continue generating or editing evaluation files locally" in normalized_evaluate
     )
     assert "skip every instruction to push them" in normalized_evaluate
 
