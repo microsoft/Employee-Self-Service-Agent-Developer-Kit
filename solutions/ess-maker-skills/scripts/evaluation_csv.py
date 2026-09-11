@@ -101,7 +101,7 @@ def _set_documents(set_folder: Path) -> tuple[
         kind = document.get("kind")
         if kind == "EvaluationSet":
             parent = document
-        elif kind == "EvaluationData":
+        elif kind in ("EvaluationData", "MultiTurnEvaluationCase"):
             cases.append((document, path))
     if parent is None:
         raise EvaluationCSVError(
@@ -137,27 +137,65 @@ def _grader(parent: dict[str, Any], rows: list[dict[str, Any]]) -> tuple[
     return "GeneralQuality", None
 
 
-def generate_set_csv(
-    set_folder: str | Path,
-    exports_folder: str | Path,
-    timestamp: str | None = None,
+def _activity_role(activity: dict[str, Any]) -> str | None:
+    outer = activity.get("activity")
+    if not isinstance(outer, dict):
+        return None
+    value = outer.get("value")
+    if not isinstance(value, dict):
+        return None
+    sender = value.get("from")
+    if not isinstance(sender, dict):
+        return None
+    role = sender.get("role")
+    return role if isinstance(role, str) else None
+
+
+def _activity_text(activity: dict[str, Any]) -> str:
+    text_field = activity.get("text")
+    if isinstance(text_field, list) and text_field:
+        first = text_field[0]
+        return "" if first is None else str(first)
+    if isinstance(text_field, str):
+        return text_field
+    return ""
+
+
+def _multi_turn_pairs(document: dict[str, Any]) -> list[tuple[str, str]]:
+    """Flatten a MultiTurnEvaluationCase into (question, response) pairs.
+
+    Mirrors the Copilot Studio conversation import template: each user turn is
+    a question row; the immediately following agent turn (if any) supplies the
+    optional reference response.
+    """
+    pairs: list[tuple[str, str]] = []
+    activities = document.get("activities")
+    if not isinstance(activities, list):
+        return pairs
+    pending_question: str | None = None
+    for activity in activities:
+        if not isinstance(activity, dict):
+            continue
+        role = _activity_role(activity)
+        text = _activity_text(activity)
+        if role == "user":
+            if pending_question is not None:
+                pairs.append((pending_question, ""))
+            pending_question = text
+        elif role == "agent" and pending_question is not None:
+            pairs.append((pending_question, text))
+            pending_question = None
+    if pending_question is not None:
+        pairs.append((pending_question, ""))
+    return pairs
+
+
+def _resolve_export_path(
+    parent: dict[str, Any],
+    folder: Path,
+    exports: Path,
+    timestamp: str | None,
 ) -> Path:
-    """Generate or refresh one evaluation set's CSV export."""
-    folder = Path(set_folder)
-    exports = Path(exports_folder)
-    parent, case_documents = _set_documents(folder)
-
-    rows: list[dict[str, Any]] = []
-    for document, _ in case_documents:
-        document_rows = document.get("rows")
-        if isinstance(document_rows, list):
-            rows.extend(row for row in document_rows if isinstance(row, dict))
-
-    method, passing_score = _grader(parent, rows)
-    headers = ["Prompt", "Expected response", "Test Method Type"]
-    if passing_score is not None:
-        headers.append("Passing Score")
-
     exports.mkdir(parents=True, exist_ok=True)
     suffix = timestamp or datetime.now().strftime("%Y%m%d")
     date = re.sub(r"[^0-9]", "", suffix)[:8]
@@ -173,6 +211,60 @@ def generate_set_csv(
     ]
     for stale in {*legacy_exports, *dated_exports} - {output}:
         stale.unlink()
+    return output
+
+
+def generate_set_csv(
+    set_folder: str | Path,
+    exports_folder: str | Path,
+    timestamp: str | None = None,
+) -> Path:
+    """Generate or refresh one evaluation set's CSV export.
+
+    Single-turn sets (`EvaluationData`) export the Prompt/Expected-response
+    grid; conversational sets (`MultiTurnEvaluationCase`) export the Copilot
+    Studio conversation-import format so multi-turn cases are preserved rather
+    than silently omitted.
+    """
+    folder = Path(set_folder)
+    exports = Path(exports_folder)
+    parent, case_documents = _set_documents(folder)
+
+    single_turn_docs = [
+        (document, path)
+        for document, path in case_documents
+        if document.get("kind") == "EvaluationData"
+    ]
+    multi_turn_docs = [
+        (document, path)
+        for document, path in case_documents
+        if document.get("kind") == "MultiTurnEvaluationCase"
+    ]
+    output = _resolve_export_path(parent, folder, exports, timestamp)
+
+    if multi_turn_docs and not single_turn_docs:
+        with output.open("w", newline="", encoding="utf-8") as stream:
+            writer = csv.writer(stream, quoting=csv.QUOTE_MINIMAL)
+            writer.writerow(["conversationNumber", "question", "response"])
+            for index, (document, _) in enumerate(multi_turn_docs, start=1):
+                for question, response in _multi_turn_pairs(document):
+                    writer.writerow([
+                        index,
+                        _formula_safe(question),
+                        _formula_safe(response),
+                    ])
+        return output
+
+    rows: list[dict[str, Any]] = []
+    for document, _ in single_turn_docs:
+        document_rows = document.get("rows")
+        if isinstance(document_rows, list):
+            rows.extend(row for row in document_rows if isinstance(row, dict))
+
+    method, passing_score = _grader(parent, rows)
+    headers = ["Prompt", "Expected response", "Test Method Type"]
+    if passing_score is not None:
+        headers.append("Passing Score")
 
     with output.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.writer(stream, quoting=csv.QUOTE_MINIMAL)

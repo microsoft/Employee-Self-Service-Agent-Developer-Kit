@@ -395,6 +395,99 @@ def test_list_agent_test_sets_explains_unpushed_review_completion(tmp_path):
     )
 
 
+class _RemoteMarkerClient(FakeClient):
+    """FakeClient variant that stamps a review marker on the remote set,
+    simulating the live Dataverse description for set-comp."""
+
+    def __init__(self, remote_status):
+        super().__init__()
+        self._remote_status = remote_status
+
+    def list_maker_evaluation_test_sets(self, environment_id, bot_id):
+        sets = super().list_maker_evaluation_test_sets(environment_id, bot_id)
+        for item in sets:
+            if item["id"] == "set-comp":
+                item["description"] = f"[ADK-REVIEW status={self._remote_status}]"
+        return sets
+
+
+def test_list_agent_test_sets_blocks_when_remote_requested_but_local_untagged(
+    tmp_path,
+):
+    """Untagged local copy must not run while the live remote set is
+    review_requested — the remote marker governs when there is no pending
+    local change."""
+    evaluations = tmp_path / "evaluations" / "compensation"
+    evaluations.mkdir(parents=True)
+    (evaluations / "compensation.mcs.yml").write_text(
+        "kind: EvaluationSet\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".component-map.json").write_text(
+        json.dumps({
+            "evaluations/compensation/compensation.mcs.yml": {
+                "botcomponentid": "set-comp",
+                "componenttype": 19,
+                "name": "Compensation",
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    sets = evaluation_runs.list_agent_test_sets(
+        _RemoteMarkerClient("review_requested"),
+        "environment-id",
+        "bot-id",
+        tmp_path,
+        include_blocked=True,
+    )
+
+    assert len(sets) == 1
+    assert sets[0]["runnable"] is False
+    assert sets[0]["blockedReason"] == evaluation_runs.REVIEW_PENDING_GUIDANCE
+
+
+def test_list_agent_test_sets_clears_when_remote_completed_after_local_request(
+    tmp_path,
+):
+    """A stale local+baseline review_requested must clear once the live
+    remote set is review_completed — no genuine pending local change, so
+    the remote marker governs."""
+    evaluations = tmp_path / "evaluations" / "compensation"
+    baseline = tmp_path / ".baseline" / "evaluations" / "compensation"
+    evaluations.mkdir(parents=True)
+    baseline.mkdir(parents=True)
+    (evaluations / "compensation.mcs.yml").write_text(
+        "kind: EvaluationSet\n",
+        encoding="utf-8",
+    )
+    for review_dir in (evaluations, baseline):
+        (review_dir / "review.json").write_text(
+            json.dumps({"status": "review_requested"}),
+            encoding="utf-8",
+        )
+    (tmp_path / ".component-map.json").write_text(
+        json.dumps({
+            "evaluations/compensation/compensation.mcs.yml": {
+                "botcomponentid": "set-comp",
+                "componenttype": 19,
+                "name": "Compensation",
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    sets = evaluation_runs.list_agent_test_sets(
+        _RemoteMarkerClient("review_completed"),
+        "environment-id",
+        "bot-id",
+        tmp_path,
+    )
+
+    assert [item["id"] for item in sets] == ["set-comp"]
+    assert sets[0]["runnable"] is True
+
+
 def test_run_command_reports_review_block_reason(
     monkeypatch,
     capsys,

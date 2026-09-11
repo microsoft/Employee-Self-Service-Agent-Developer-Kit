@@ -17,9 +17,11 @@ from urllib.parse import urlparse
 
 from auth import discover_tenant, load_config
 from evaluation_review import (
+    REVIEW_COMPLETED,
     REVIEW_FILENAME,
     REVIEW_REQUESTED,
     ReviewMetadataError,
+    parse_review_marker,
     parse_review_metadata,
 )
 from flightcheck.pp_admin_client import PPAdminClient
@@ -473,14 +475,38 @@ def list_agent_test_sets(
                     f"Unable to read review metadata {review_path}: {exc}"
                 ) from exc
             review_statuses.append(review_status)
-        local_review_status, deployed_review_status = review_statuses
+        local_review_status, baseline_review_status = review_statuses
+        remote_review_status = None
+        remote_description = remote.get("description")
+        if isinstance(remote_description, str):
+            remote_marker = parse_review_marker(remote_description)
+            if remote_marker:
+                remote_review_status = remote_marker["status"]
+        # Reconcile the live remote review marker with any unpushed local
+        # transition. A local review.json that differs from the pushed
+        # baseline is a genuine pending change and governs eligibility;
+        # otherwise the live remote/deployed state decides whether the set
+        # can run, so a remote-completed set clears and a remote-requested
+        # set blocks even when the local copy is untagged.
+        deployed_review_status = (
+            remote_review_status
+            if remote_review_status is not None
+            else baseline_review_status
+        )
+        pending_local_change = local_review_status != baseline_review_status
         blocked_reason = None
-        if (
-            local_review_status == "review_completed"
-            and deployed_review_status != "review_completed"
-        ):
-            blocked_reason = REVIEW_COMPLETION_NOT_PUSHED_GUIDANCE
-        elif REVIEW_REQUESTED in review_statuses:
+        if pending_local_change:
+            if (
+                local_review_status == REVIEW_COMPLETED
+                and deployed_review_status != REVIEW_COMPLETED
+            ):
+                blocked_reason = REVIEW_COMPLETION_NOT_PUSHED_GUIDANCE
+            elif (
+                local_review_status == REVIEW_REQUESTED
+                or baseline_review_status == REVIEW_REQUESTED
+            ):
+                blocked_reason = REVIEW_PENDING_GUIDANCE
+        elif deployed_review_status == REVIEW_REQUESTED:
             blocked_reason = REVIEW_PENDING_GUIDANCE
         if blocked_reason and not include_blocked:
             continue
@@ -488,7 +514,13 @@ def list_agent_test_sets(
         local_count = sum(
             1
             for path in set_folder.glob("*.mcs.yml")
-            if "kind: EvaluationData" in path.read_text(encoding="utf-8")
+            if any(
+                marker in path.read_text(encoding="utf-8")
+                for marker in (
+                    "kind: EvaluationData",
+                    "kind: MultiTurnEvaluationCase",
+                )
+            )
         )
         local_sets.append({
             **remote,

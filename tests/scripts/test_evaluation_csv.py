@@ -20,6 +20,57 @@ def test_passing_score_defaults_for_invalid_threshold():
     assert evaluation_csv._passing_score(None) == "70"
 
 
+def test_regenerate_exports_creates_multi_turn_conversation_csv(tmp_path):
+    set_folder = tmp_path / "evaluations" / "onboarding-multi-turn"
+    set_folder.mkdir(parents=True)
+    (set_folder / "onboarding.mcs.yml").write_text(
+        "kind: EvaluationSet\n"
+        "displayName: Onboarding Multi-Turn\n"
+        "graders:\n"
+        "  - kind: GeneralQualityGrader\n",
+        encoding="utf-8",
+    )
+    (set_folder / "conversation.mcs.yml").write_text(
+        "kind: MultiTurnEvaluationCase\n"
+        "activities:\n"
+        "  - activity:\n"
+        "      value:\n"
+        "        from:\n"
+        "          role: user\n"
+        "    text:\n"
+        '      - "How do I enroll in benefits?"\n'
+        "  - activity:\n"
+        "      value:\n"
+        "        from:\n"
+        "          role: agent\n"
+        "    text:\n"
+        '      - "Open the Benefits portal and choose Enroll."\n'
+        "  - activity:\n"
+        "      value:\n"
+        "        from:\n"
+        "          role: user\n"
+        "    text:\n"
+        '      - "What is the deadline?"\n',
+        encoding="utf-8",
+    )
+
+    paths = evaluation_csv.regenerate_evaluation_exports(
+        tmp_path,
+        timestamp="20260821-1200",
+    )
+
+    assert len(paths) == 1
+    assert paths[0].name == "20260821_Onboarding_Multi_Turn.csv"
+    with paths[0].open(newline="", encoding="utf-8") as stream:
+        rows = list(csv.reader(stream))
+    assert rows == [
+        ["conversationNumber", "question", "response"],
+        ["1", "How do I enroll in benefits?",
+         "Open the Benefits portal and choose Enroll."],
+        ["1", "What is the deadline?", ""],
+    ]
+
+
 def test_regenerate_exports_creates_general_quality_csv(tmp_path):
     set_folder = tmp_path / "evaluations" / "general"
     set_folder.mkdir(parents=True)

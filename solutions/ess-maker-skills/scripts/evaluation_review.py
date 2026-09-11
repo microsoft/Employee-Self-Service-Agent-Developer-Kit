@@ -170,16 +170,20 @@ def set_review_metadata(
 
 
 def _evaluation_case_count(folder: Path) -> int:
-    """Count EvaluationData files in an evaluation set folder."""
+    """Count single-turn and multi-turn case files in a set folder."""
     count = 0
     for candidate in folder.glob("*.mcs.yml"):
         try:
-            if "kind: EvaluationData" in candidate.read_text(encoding="utf-8"):
-                count += 1
+            content = candidate.read_text(encoding="utf-8")
         except OSError as exc:
             raise ReviewMetadataError(
                 f"Unable to read evaluation file {candidate}: {exc}"
             ) from exc
+        if (
+            "kind: EvaluationData" in content
+            or "kind: MultiTurnEvaluationCase" in content
+        ):
+            count += 1
     return count
 
 
@@ -187,7 +191,15 @@ def _configured_agent_folders(
     config_path: Path,
     solution_root: Path,
 ) -> list[tuple[str, Path]]:
-    """Return configured agent labels and resolved workspace folders."""
+    """Return the active configured agent's label and workspace folder.
+
+    Only the active agent (``config["agent"]``) is returned, mirroring the
+    single agent that ``push.py`` operates on. Discovering sets across every
+    entry in ``config["agents"]`` would surface sets that the review-completion
+    push cannot reach, producing "Nothing to push in the selected scope" when a
+    different agent is active. Keeping discovery and push scoped to the same
+    agent keeps the review handoff actionable.
+    """
     if not config_path.is_file():
         return []
     try:
@@ -201,9 +213,6 @@ def _configured_agent_folders(
     agent = config.get("agent")
     if isinstance(agent, dict):
         configured.append(agent)
-    agents = config.get("agents")
-    if isinstance(agents, list):
-        configured.extend(item for item in agents if isinstance(item, dict))
 
     folders: list[tuple[str, Path]] = []
     seen: set[Path] = set()

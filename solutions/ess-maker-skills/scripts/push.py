@@ -1766,8 +1766,6 @@ def main():
             }
             review_description = _review_description_for_create(
                 filepath, working_files)
-            if review_description is not None:
-                record_data["description"] = review_description
             try:
                 new_id = _call_with_refresh(auth, create_record,
                                             env_url, auth.token,
@@ -1778,9 +1776,15 @@ def main():
                     "schemaname": schema,
                     "componenttype": 19,
                     "name": record_data["name"],
-                    "description": record_data.get("description", ""),
+                    "description": "",
                 }
                 eval_parent_ids[filepath] = new_id
+                # Defer the review marker until every evaluation mutation
+                # (including the child cases created below) succeeds, so a
+                # failed child upload never leaves an incomplete remote set
+                # tagged for review. Mirrors the existing-parent staging path.
+                if review_description is not None:
+                    pending_descriptions[filepath] = review_description
                 success += 1
             except Exception as e:
                 print(f"  ❌ Failed: {filepath}: {e}")
@@ -2111,8 +2115,19 @@ def main():
     # while the reviewed YAML is stale or only partially updated.
     if errors == 0:
         for parent_path, description in pending_descriptions.items():
-            parent_entry = component_map.get(parent_path, {})
+            # New parents aren't merged into component_map until the atomic
+            # persist below, so fall back to pending_creates to resolve their
+            # freshly-minted component ID.
+            parent_entry = (
+                component_map.get(parent_path)
+                or pending_creates.get(parent_path, {})
+            )
             parent_id = parent_entry.get("botcomponentid")
+            if not parent_id:
+                print(f"  ❌ Failed review status: {parent_path}: "
+                      "parent has no component ID")
+                errors += 1
+                continue
             try:
                 _call_with_refresh(
                     auth, update_record, env_url, auth.token,

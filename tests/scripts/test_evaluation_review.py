@@ -329,6 +329,68 @@ def test_pushed_review_request_is_available_for_review(tmp_path):
     assert result[0]["nextAction"] == "review"
 
 
+def test_discovery_restricts_to_active_agent_so_push_can_reach_it(tmp_path):
+    # Two agents are configured, but only the active one (config["agent"]) is
+    # the agent push.py operates on. Sets owned by the non-active agent must be
+    # excluded from discovery; otherwise the review-completion push handoff
+    # targets the active agent and reports "Nothing to push in the selected
+    # scope."
+    def _write_set(agent_slug: str) -> None:
+        for root in (
+            tmp_path / "workspace" / "agents" / agent_slug
+            / "evaluations" / "compensation",
+            tmp_path / "workspace" / "agents" / agent_slug
+            / ".baseline" / "evaluations" / "compensation",
+        ):
+            root.mkdir(parents=True)
+            (root / "compensation.mcs.yml").write_text(
+                "kind: EvaluationSet\n",
+                encoding="utf-8",
+            )
+            (root / "review.json").write_text(
+                json.dumps({"status": "review_requested"}),
+                encoding="utf-8",
+            )
+
+    _write_set("alpha")
+    _write_set("beta")
+
+    config_path = tmp_path / ".local" / "config.json"
+    config_path.parent.mkdir()
+    config_path.write_text(
+        json.dumps({
+            "activeAgent": "alpha",
+            "agent": {
+                "name": "Alpha",
+                "slug": "alpha",
+                "folder": "workspace/agents/alpha",
+            },
+            "agents": [
+                {
+                    "name": "Alpha",
+                    "slug": "alpha",
+                    "folder": "workspace/agents/alpha",
+                },
+                {
+                    "name": "Beta",
+                    "slug": "beta",
+                    "folder": "workspace/agents/beta",
+                },
+            ],
+        }),
+        encoding="utf-8",
+    )
+
+    review_sets = evaluation_review.discover_review_sets(
+        tmp_path / "workspace",
+        config_path,
+    )
+
+    assert [item["source"] for item in review_sets] == [
+        "Configured agent: Alpha",
+    ]
+
+
 def test_match_evaluation_sets_ranks_named_set_without_auto_selecting():
     matches = evaluation_review.match_evaluation_sets(
         [
