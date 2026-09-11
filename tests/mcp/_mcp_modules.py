@@ -133,6 +133,15 @@ def load_org_announcements_client_modules() -> dict[str, ModuleType]:
     )
 
 
+def load_org_announcements_directory_modules() -> dict[str, ModuleType]:
+    """Load directory tests without depending on MCP tools or telemetry."""
+    return load_mcp_modules(
+        MCP_ROOT / "agentconfig_org_announcements",
+        ("client", "drafts", "graph_directory_client"),
+        "ess_mcp_org_announcements",
+    )
+
+
 def load_org_announcements_modules() -> dict[str, ModuleType]:
     return load_mcp_modules(
         MCP_ROOT / "agentconfig_org_announcements",
