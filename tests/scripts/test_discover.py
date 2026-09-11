@@ -169,6 +169,95 @@ class TestListEnvironments:
             list_environments.get_dataverse_environments()
         assert exc_info.value.code == 1
 
+
+class TestStandaloneFlightCheckAgentDiscovery:
+    @patch("auth.query_all")
+    def test_discovers_agents_without_product_classification(
+        self,
+        query_all,
+    ) -> None:
+        import discover
+
+        query_all.return_value = [
+            {
+                "botid": "bot-1",
+                "name": "Employee Self-Service",
+                "schemaname": "contoso_ess",
+                "ismanaged": True,
+            }
+        ]
+
+        agents = discover.discover_agents(
+            "https://org.crm.dynamics.com",
+            "token",
+        )
+
+        assert agents == [
+            {
+                "botid": "bot-1",
+                "name": "Employee Self-Service",
+                "schemaname": "contoso_ess",
+                "ismanaged": True,
+            }
+        ]
+        assert set(agents[0]) == {
+            "botid",
+            "name",
+            "schemaname",
+            "ismanaged",
+        }
+
+    def test_url_selection_emits_installer_contract(
+        self,
+        monkeypatch,
+        capsys,
+    ) -> None:
+        import auth
+        import discover
+
+        agents = [
+            {
+                "botid": "bot-1",
+                "name": "First",
+                "schemaname": "first",
+                "ismanaged": False,
+            },
+            {
+                "botid": "bot-2",
+                "name": "Second",
+                "schemaname": "second",
+                "ismanaged": True,
+            },
+        ]
+        monkeypatch.setattr(auth, "authenticate", lambda _url: "token")
+        monkeypatch.setattr(
+            discover,
+            "discover_agents",
+            lambda _url, _token: agents,
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "discover.py",
+                "--url",
+                "https://org.crm.dynamics.com/",
+                "--select",
+                "2",
+            ],
+        )
+
+        discover.main()
+
+        output = capsys.readouterr().out
+        marker = next(
+            line
+            for line in output.splitlines()
+            if line.startswith("SELECTED_AGENT_JSON:")
+        )
+        assert json.loads(marker.removeprefix("SELECTED_AGENT_JSON:")) == (
+            agents[1]
+        )
+
     @patch("list_environments.PPAdminClient")
     def test_exits_on_auth_failure(self, mock_cls):
         """PPAdminClient.authenticate() raising causes sys.exit."""
@@ -465,127 +554,3 @@ class TestDiscoverListEnvironmentsMode:
 
         assert exc_info.value.code == 1
         assert "did not match" in capsys.readouterr().out
-
-
-class TestEssAgentInventory:
-    def test_inventory_only_succeeds_when_no_agents_are_installed(
-        self,
-        capsys,
-        monkeypatch,
-    ):
-        import discover
-
-        monkeypatch.setattr(discover, "authenticate", lambda _url: "token")
-        monkeypatch.setattr(
-            discover,
-            "discover_agents",
-            lambda _url, _token: [],
-        )
-        monkeypatch.setattr(
-            "sys.argv",
-            [
-                "discover.py",
-                "--url",
-                "https://org.crm.dynamics.com",
-                "--inventory-only",
-            ],
-        )
-
-        discover.main()
-
-        output = capsys.readouterr().out
-        json_line = [
-            line
-            for line in output.splitlines()
-            if line.startswith("ESS_AGENT_DISCOVERY_JSON:")
-        ][0]
-        payload = json.loads(
-            json_line.split("ESS_AGENT_DISCOVERY_JSON:", 1)[1]
-        )
-        assert payload["agents"] == []
-        assert len(payload["availableInstallations"]) == 6
-        assert "No supported ESS agents found" not in output
-
-    def test_excludes_installed_product_and_unrelated_bots(self):
-        import discover
-        import install_ess_agent
-
-        inventory = discover.build_ess_agent_inventory(
-            [
-                {
-                    "botid": "ess",
-                    "name": "ESS HR",
-                    "schemaname": "msdyn_CopilotForEmployeeSelfServiceDAHR",
-                    "ismanaged": True,
-                },
-                {
-                    "botid": "other",
-                    "name": "Unrelated",
-                    "schemaname": "new_unrelated",
-                    "ismanaged": False,
-                },
-            ],
-            install_ess_agent.load_installation_config(),
-        )
-
-        assert [agent["botid"] for agent in inventory["agents"]] == ["ess"]
-        assert inventory["installedInstallationKeys"] == ["da.hr"]
-        assert [
-            option["configKey"]
-            for option in inventory["availableInstallations"]
-        ] == [
-            "da.essit",
-            "da.esshub",
-            "cea.esshr",
-            "cea.essit",
-            "cea.esshub",
-        ]
-
-    @patch("discover.load_installation_config")
-    @patch("discover.discover_agents")
-    @patch("discover.authenticate")
-    def test_cli_emits_inventory_for_onboarding_choice(
-        self,
-        authenticate,
-        discover_agents,
-        load_config,
-        capsys,
-        monkeypatch,
-    ):
-        import discover
-        import install_ess_agent
-
-        authenticate.return_value = "token"
-        load_config.return_value = install_ess_agent.load_installation_config()
-        discover_agents.return_value = [{
-            "botid": "ess",
-            "name": "ESS HR",
-            "schemaname": "msdyn_CopilotForEmployeeSelfServiceDAHR",
-            "ismanaged": True,
-        }]
-        monkeypatch.setattr(
-            "sys.argv",
-            ["discover.py", "--url", "https://org.crm.dynamics.com"],
-        )
-
-        discover.main()
-
-        output = capsys.readouterr().out
-        marker = next(
-            line
-            for line in output.splitlines()
-            if line.startswith("ESS_AGENT_DISCOVERY_JSON:")
-        )
-        payload = json.loads(marker.split(":", 1)[1])
-        assert len(payload["agents"]) == 1
-        assert len(payload["availableInstallations"]) == 5
-
-    def test_url_required_without_list_environments(self, monkeypatch):
-        """Without --list-environments, --url is required."""
-        monkeypatch.setattr("sys.argv", ["discover.py"])
-
-        import discover
-
-        with pytest.raises(SystemExit) as exc_info:
-            discover.main()
-        assert exc_info.value.code == 2  # argparse error

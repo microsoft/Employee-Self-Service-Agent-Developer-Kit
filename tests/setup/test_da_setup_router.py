@@ -129,6 +129,26 @@ def test_foundation_router_paths_resolve() -> None:
     assert not missing
 
 
+def test_non_da_ga_setup_implementation_is_absent() -> None:
+    retired_paths = (
+        "scripts/setup_state.py",
+        "scripts/install_ess_agent.py",
+        "scripts/ess_connection_binding.py",
+        "scripts/preferred_solution.py",
+        "scripts/backup_template_configs.py",
+        "scripts/restore_template_configs.py",
+        "src/reference/ess-agent-installation/config.json",
+        "src/reference/solution-catalog.md",
+        "src/skills/onboarding/SKILL.md",
+        "src/skills/foundation-setup/install-starters.md",
+        "src/skills/backup-template-configs/SKILL.md",
+        "src/skills/restore-template-configs/SKILL.md",
+    )
+
+    for path in retired_paths:
+        assert not (_SOLUTION / path).exists(), path
+
+
 def test_da_commands_degrade_by_operation() -> None:
     expected_text = {
         "push.prompt.md": "DA-GA agent is not yet available",
