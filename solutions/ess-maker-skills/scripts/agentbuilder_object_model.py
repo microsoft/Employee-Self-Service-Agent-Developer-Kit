@@ -100,15 +100,19 @@ def _load_object_model() -> _ObjectModelTypes:
     if missing:
         raise ObjectModelConverterError(
             "Microsoft Object Model dependencies are not installed. "
-            "Re-run the ESS ADK installer or run "
-            "`python scripts/install_agentbuilder_object_model.py`."
+            "Run `python scripts/install_agentbuilder_object_model.py`. "
+            "If .NET or NuGet is also missing, see `setup/README.md` and "
+            "the platform setup path: `setup/Install-EssAdk.ps1`, "
+            "`setup/install-ess-adk.sh`, or `.devcontainer/post-create.sh`."
         )
 
     try:
         from pythonnet import load
     except ImportError as exc:
         raise ObjectModelConverterError(
-            "Python.NET is not installed. Re-run the ESS ADK installer."
+            "Python.NET is not installed. See `setup/README.md` and the "
+            "platform setup path: `setup/Install-EssAdk.ps1`, "
+            "`setup/install-ess-adk.sh`, or `.devcontainer/post-create.sh`."
         ) from exc
 
     runtime_errors: list[str] = []
@@ -128,7 +132,9 @@ def _load_object_model() -> _ObjectModelTypes:
         detail = runtime_errors[-1] if runtime_errors else "No .NET 10 runtime found."
         raise ObjectModelConverterError(
             "A .NET 10 runtime matching the Python process architecture is "
-            f"required. Re-run the ESS ADK installer. {detail}"
+            "required. See `setup/README.md` and the platform setup path: "
+            "`setup/Install-EssAdk.ps1`, `setup/install-ess-adk.sh`, or "
+            f"`.devcontainer/post-create.sh`. {detail}"
         )
 
     library_directories = {str(path.parent) for path in installed_assemblies}

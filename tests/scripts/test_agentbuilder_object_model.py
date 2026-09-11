@@ -116,12 +116,30 @@ def test_missing_packages_report_installer_command(
         "assembly_paths",
         lambda: (tmp_path / "missing.dll",),
     )
-    with pytest.raises(
-        converter.ObjectModelConverterError,
-        match="install_agentbuilder_object_model.py",
-    ):
+    with pytest.raises(converter.ObjectModelConverterError) as exc_info:
         converter._load_object_model()
+    message = str(exc_info.value)
+    assert "install_agentbuilder_object_model.py" in message
+    assert "setup/README.md" in message
+    assert "setup/Install-EssAdk.ps1" in message
+    assert "setup/install-ess-adk.sh" in message
+    assert ".devcontainer/post-create.sh" in message
     converter._load_object_model.cache_clear()
+
+
+def test_missing_nuget_reports_platform_setup_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(package_installer.shutil, "which", lambda _: None)
+
+    with pytest.raises(package_installer.ObjectModelInstallError) as exc_info:
+        package_installer._nuget_command()
+
+    message = str(exc_info.value)
+    assert "setup/README.md" in message
+    assert "setup/Install-EssAdk.ps1" in message
+    assert "setup/install-ess-adk.sh" in message
+    assert ".devcontainer/post-create.sh" in message
 
 
 def test_x64_python_prefers_x64_dotnet_on_windows_arm(
