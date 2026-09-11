@@ -5,8 +5,8 @@
 ESS Maker Kit - Environment Listing Module
 
 Lists all Power Platform environments in a tenant via the BAP Admin API.
-Used by discover.py during onboarding so users can pick their environment
-without typing the URL manually.
+Used by FlightCheck and extension setup flows that still require a
+Dataverse-linked environment.
 
 Usage (standalone):
     python scripts/list_environments.py
