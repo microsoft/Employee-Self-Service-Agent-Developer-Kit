@@ -93,6 +93,7 @@ The "how" is the **description** (say which command to run in prose); `produces`
 |------|--------|----------|----------|-----------------|
 | Run setup | Run `/setup` to onboard the ADK to the deployed agent — records the environment **and clones the agent** into the workspace | `primaryEnvironment, essAgent` | — | `power-platform-admin` |
 | Check readiness | Run `/flightcheck` to validate the environment | `readinessReport` | `primaryEnvironment` | `power-platform-admin` |
+| Discover the tenant inventory | Run `/discover` to crawl the configured environment and record what already exists | `tenantInventory` | `primaryEnvironment` | `power-platform-admin` |
 | Set up Workday SSO (Entra) | Register/configure the Workday enterprise app for SSO — `setup/workday/tasks.md` §3 | `workdayEntraApp` | `primaryEnvironment` | `app-cloud-app-admin` |
 | Configure the Workday tenant | Create the API client & tenant config in Workday — §4 | `workdayTenantConfig` | `primaryEnvironment` | `workday-administrator` |
 | Install Workday pack & connect | Run `/connect` — install the Workday extension pack and create the connection — §5 | `workdayConnection` | `workdayEntraApp, workdayTenantConfig` | `environment-maker` |
@@ -109,6 +110,20 @@ The "how" is the **description** (say which command to run in prose); `produces`
 recorded) — the environment, the cloned agent, and anything else the run wrote
 (a connection, an app…) — even outputs the task didn't pre-declare (see
 `capture.md`).
+
+**`tenantInventory` is the one backbone output `capture-setup` cannot see.**
+`/discover` writes its findings to `.local/inventory.json` and leaves only two
+top-level *strings* in `.local/config.json` (`inventoryPath`, `inventoryUpdatedAt`).
+The generic sweep pins **id-bearing objects**, so it skips both. Close that task
+with `pin-output` instead — a task with unresolved `produces` is refused
+`Completed`, so a discover task that declares `tenantInventory` and is never
+pinned stays open forever:
+
+```
+python scripts/planner/cli.py pin-output --task <T#> --key tenantInventory \
+  --kind Custom --attr inventoryPath=.local/inventory.json --complete
+```
+
 When the tasks are in, show the summary and go to Phase 4.
 
 **Native connector vs. custom flow.** A "run `/connect`" task is only valid for a
@@ -160,19 +175,21 @@ that is:
 ```
 # 1. PP admin onboards the ADK (records the environment AND clones the agent)
 python scripts/planner/cli.py add-task --id T1 --title "Run setup" --description "Run /setup to onboard the ADK to the deployed agent (records the environment and clones the agent)" --role power-platform-admin --produces "primaryEnvironment,essAgent"
-# 2. Workday is MULTI-ROLE — read setup/workday/tasks.md and emit one task per role
-python scripts/planner/cli.py add-task --id T2 --title "Set up Workday SSO (Entra)" --description "Register/configure the Workday enterprise app for SSO — role: App/Cloud App Admin (setup/workday/tasks.md S3.1-S3.7)" --role app-cloud-app-admin --produces workdayEntraApp --consumes primaryEnvironment
-python scripts/planner/cli.py add-task --id T3 --title "Configure the Workday tenant" --description "Create the API client and tenant config in Workday — role: Workday Administrator (S4.1-S4.4)" --role workday-administrator --produces workdayTenantConfig --consumes primaryEnvironment
-python scripts/planner/cli.py add-task --id T4 --title "Install Workday pack & connect" --description "Run /connect to install the Workday extension pack and create the connection — role: Environment Maker (S5.1-S5.7)" --role environment-maker --produces workdayConnection --consumes "workdayEntraApp,workdayTenantConfig"
-python scripts/planner/cli.py add-task --id T5 --title "Allow Workday through the firewall" --description "Attest the Workday egress allowlist — role: InfoSec/IT (S5.8)" --role infosec-it --produces workdayNetworkAllowlist
-# 3. ServiceNow — decompose per its OWN checklist role: items (read setup/servicenow/tasks.md); shown here collapsed
-python scripts/planner/cli.py add-task --id T6 --title "Connect ServiceNow" --description "Run /connect to connect ServiceNow (split per its checklist role: items)" --role environment-maker --produces servicenowConnection --consumes primaryEnvironment
-# 4. authoring per scenario area (knowledge before ticketing — register the dependency)
-python scripts/planner/cli.py add-task --id T7 --title "Set up HR knowledge" --description "Run /create to author the HR knowledge topics" --role maker --produces "topic:hr-knowledge" --consumes primaryEnvironment
-python scripts/planner/cli.py add-task --id T8 --title "Author HR ticketing topics" --description "Run /create to author the HR ticketing topics" --role maker --produces "topic:hr-ticketing" --consumes "primaryEnvironment,servicenowConnection"
-# 5. evals + publish
-python scripts/planner/cli.py add-task --id T9 --title "Generate evals" --description "Run /evaluate to generate the eval suite" --role eval-author --produces evalSuite --consumes primaryEnvironment
-python scripts/planner/cli.py add-task --id T10 --title "Publish the agent" --description "In the Power Platform admin center, publish the agent (see the Learn publish doc)" --role power-platform-admin --consumes primaryEnvironment
+# 2. PP admin takes stock of the tenant BEFORE any connect work is planned
+python scripts/planner/cli.py add-task --id T2 --title "Discover the tenant inventory" --description "Run /discover to crawl the environment configured during /setup and record the tenant's existing agent resources (environments, app registrations, connectors, connections, SharePoint sites, knowledge sources, extension packs, scenario templates)" --role power-platform-admin --produces tenantInventory --consumes primaryEnvironment
+# 3. Workday is MULTI-ROLE — read setup/workday/tasks.md and emit one task per role
+python scripts/planner/cli.py add-task --id T3 --title "Set up Workday SSO (Entra)" --description "Register/configure the Workday enterprise app for SSO — role: App/Cloud App Admin (setup/workday/tasks.md S3.1-S3.7)" --role app-cloud-app-admin --produces workdayEntraApp --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T4 --title "Configure the Workday tenant" --description "Create the API client and tenant config in Workday — role: Workday Administrator (S4.1-S4.4)" --role workday-administrator --produces workdayTenantConfig --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T5 --title "Install Workday pack & connect" --description "Run /connect to install the Workday extension pack and create the connection — role: Environment Maker (S5.1-S5.7)" --role environment-maker --produces workdayConnection --consumes "workdayEntraApp,workdayTenantConfig"
+python scripts/planner/cli.py add-task --id T6 --title "Allow Workday through the firewall" --description "Attest the Workday egress allowlist — role: InfoSec/IT (S5.8)" --role infosec-it --produces workdayNetworkAllowlist
+# 4. ServiceNow — decompose per its OWN checklist role: items (read setup/servicenow/tasks.md); shown here collapsed
+python scripts/planner/cli.py add-task --id T7 --title "Connect ServiceNow" --description "Run /connect to connect ServiceNow (split per its checklist role: items)" --role environment-maker --produces servicenowConnection --consumes primaryEnvironment
+# 5. authoring per scenario area (knowledge before ticketing — register the dependency)
+python scripts/planner/cli.py add-task --id T8 --title "Set up HR knowledge" --description "Run /create to author the HR knowledge topics" --role maker --produces "topic:hr-knowledge" --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T9 --title "Author HR ticketing topics" --description "Run /create to author the HR ticketing topics" --role maker --produces "topic:hr-ticketing" --consumes "primaryEnvironment,servicenowConnection"
+# 6. evals + publish
+python scripts/planner/cli.py add-task --id T10 --title "Generate evals" --description "Run /evaluate to generate the eval suite" --role eval-author --produces evalSuite --consumes primaryEnvironment
+python scripts/planner/cli.py add-task --id T11 --title "Publish the agent" --description "In the Power Platform admin center, publish the agent (see the Learn publish doc)" --role power-platform-admin --consumes primaryEnvironment
 ```
 
 Also register the scenarios and their dependencies (see `interview.md`) so the

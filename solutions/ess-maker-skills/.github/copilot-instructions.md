@@ -320,6 +320,7 @@ After a successful push, `.baseline/` is updated to match the new state.
 | Test/debug a topic | `src/skills/topics/test/SKILL.md` |
 | Test/debug a workflow | `src/skills/workflows/test/SKILL.md` |
 | Run pre-deployment readiness check | `src/skills/flightcheck/SKILL.md` |
+| Discover / crawl tenant inventory (`/discover`) | `src/skills/discover/SKILL.md` |
 | Fix compile errors | `src/skills/cleanup/SKILL.md` |
 | Generate evaluation test sets | `src/skills/evaluations/create/SKILL.md` |
 | Update/modify evaluation test cases | `src/skills/evaluations/update/SKILL.md` |

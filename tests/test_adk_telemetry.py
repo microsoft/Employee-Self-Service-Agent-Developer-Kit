@@ -641,6 +641,9 @@ def test_wired_capabilities_are_in_canonical_list():
         # emit_capability_use(...) from the Python entry points
         "setup", "evaluations",
         "backup_template_configs", "restore_template_configs",
+        # discover_inventory.py emits directly (script-backed skill, no shim --
+        # emit_capability_use does not dedupe, so wiring both would double-count)
+        "discover",
         # emit_build_*/flightcheck_* event families
         "publishing", "flightcheck",
         # emit_capability.py shim invocations across the SKILL.md skills

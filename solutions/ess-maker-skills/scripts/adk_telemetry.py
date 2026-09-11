@@ -90,20 +90,26 @@ EVENT_FLIGHTCHECK_ERROR = "adk.flightcheck.error"
 
 # --- Canonical ADK capability value-list (single source of truth) ---------
 # Every ``adk_capability`` value emitted anywhere in the kit MUST be one of
-# these. This is the ONE place the taxonomy is defined: the synthetic
-# emitter, the ``emit_capability.py`` shim, and the Aria "Capability Usage by
-# Type" donut value-list are all kept in sync with it. When you add a
-# capability here, also add it to that Aria cube dimension value-list (see the
-# telemetry dashboards story, ADO #7532631) so the new slice renders.
+# these. This is the ONE place the taxonomy is defined: the synthetic emitter
+# and the ``emit_capability.py`` shim both normalize against it.
+#
+# Adding a value here is sufficient to make it show up. The Aria "Capability
+# Usage by Type" donut discovers dimension values on its own, so a new slice
+# renders with no cube-side change (telemetry dashboards story, ADO #7532631).
 #
 # One capability per real maker-facing ADK skill / entry point:
-#   setup                   -> first-run environment setup + discovery
-#                              (discover / list_environments are sub-steps of
-#                              this flow and do NOT emit their own capability;
-#                              the adk.agent.create event at the end of setup is
-#                              tracked separately by the "Agents Created" KPI and
-#                              is NOT a capability-donut slice)
+#   setup                   -> first-run environment setup + environment
+#                              discovery (the list_environments / environment
+#                              picker sub-step belongs to this flow and does
+#                              NOT emit its own capability; the
+#                              adk.agent.create event at the end of setup is
+#                              tracked separately by the "Agents Created" KPI
+#                              and is NOT a capability-donut slice)
 #   connect                 -> ServiceNow / Workday connection setup
+#   discover                -> /discover tenant inventory crawl + syncInventory
+#                              upload. A standalone maker-facing skill, NOT the
+#                              same thing as the setup-time environment
+#                              discovery sub-step called out above.
 #   topic_*                 -> topic authoring (create / update / delete)
 #   workflow_*              -> workflow authoring (create / update / delete)
 #   evaluations             -> eval test-set authoring + validation runs
@@ -116,6 +122,7 @@ EVENT_FLIGHTCHECK_ERROR = "adk.flightcheck.error"
 ADK_CAPABILITIES = (
     "setup",
     "connect",
+    "discover",
     "topic_create",
     "topic_update",
     "topic_delete",
