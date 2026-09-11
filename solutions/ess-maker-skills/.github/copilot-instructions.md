@@ -8,7 +8,7 @@ Do NOT skip this step. Do NOT respond to the user's message first. Do NOT greet
 the user first. Do NOT list capabilities. Read both files FIRST, then decide what
 to do based on the result.
 
-### If foundation setup is missing or not ready
+### If setup is missing or not ready
 
 Foundation setup is ready only when `.local/setup/config.json` exists and
 `connect_ready` is `true`.
@@ -21,7 +21,7 @@ Do not say "hello" or introduce yourself.
 Respond with ONLY this exact message and nothing else:
 
 > Hey! Welcome to the ESS Maker Kit. Before we dive in, I need to set up
-> your environment. Type `/setup` to get started — it only takes a couple minutes.
+> your environment, but setup is not available in this build.
 
 **Exceptions:**
 
@@ -47,16 +47,16 @@ Respond with ONLY this exact message and nothing else:
 **Except for the cases above, this gate applies to ALL user messages** —
 including "hello", "hi", "help",
 "what can you do", "I need a topic", "create a workflow", or any other request.
-If foundation setup isn't ready, and the user didn't say `/setup`,
+If setup isn't ready, and the user didn't say `/setup`,
 show ONLY the welcome message above. No other text. No capabilities list. No greeting.
 
-### If foundation is ready but the local workspace is not initialized
+### If setup state exists but the local workspace is not initialized
 
 If `.local/config.json` does not exist or its `setup` value is not `"complete"`,
-apply the same gate and exceptions above. `/setup` resumes at the local
-onboarding bootstrap through `src/skills/foundation-setup/SKILL.md`.
+apply the same gate and exceptions above. `/setup` reports the current setup
+availability through `src/skills/foundation-setup/SKILL.md`.
 
-### If foundation and local workspace setup are complete
+### If setup state and the local workspace are complete
 
 Read its contents to get the agent folder, schema name, and configuration.
 Then proceed normally with the user's request.
@@ -335,10 +335,8 @@ After a successful push, `.baseline/` is updated to match the new state.
 | Validate / quality-check evaluation test sets | `src/skills/evaluations/validate/SKILL.md` |
 | Troubleshoot connectivity/auth issues | `src/skills/troubleshoot/SKILL.md` |
 | Debug Workday ISU errors | `src/skills/troubleshoot/SKILL.md` |
-| Back up Workday HCM template configs before an ESS package update | `src/skills/backup-template-configs/SKILL.md` |
-| Save / capture / snapshot Workday reference-data customisations | `src/skills/backup-template-configs/SKILL.md` |
-| Restore Workday HCM template configs after a package update | `src/skills/restore-template-configs/SKILL.md` |
-| Re-apply / put back Workday reference-data customisations | `src/skills/restore-template-configs/SKILL.md` |
+| Back up or save Workday HCM template configs | Report that the retired command is no longer supported |
+| Restore or re-apply Workday HCM template configs | Report that the retired command is no longer supported |
 
 **Trigger phrases for connect:** "connect ServiceNow", "set up ServiceNow",
 "integrate ServiceNow", "connect Workday", "set up Workday", "add ServiceNow",

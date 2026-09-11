@@ -1149,7 +1149,7 @@ if (-not $SkipLaunch) {
                     Write-Warn2 "If you have an older VS Code (pre-1.102 / June 2025), update VS Code and re-run, or run /setup manually in Copilot Chat."
                     Start-Process -FilePath $codePath -ArgumentList @($workspace) | Out-Null
                     Write-Ok "Launched VS Code at $workspace"
-                    Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect Dataverse." -ForegroundColor Green
+                    Write-Host "Next: in VS Code, open Copilot Chat and run /setup to check setup availability." -ForegroundColor Green
                 } else {
                     Write-Ok "Requested /setup in Copilot Chat at $workspace"
                     Write-Host "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts and /setup will run." -ForegroundColor Yellow
@@ -1166,11 +1166,11 @@ if (-not $SkipLaunch) {
         } finally { Pop-Location }
     } else {
         Write-Warn2 "code CLI not on PATH. Open this folder manually: $workspace"
-        Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect Dataverse." -ForegroundColor Green
+        Write-Host "Next: in VS Code, open Copilot Chat and run /setup to check setup availability." -ForegroundColor Green
     }
 } else {
     Write-Warn2 'Skipping launch per -SkipLaunch'
-    Write-Host "Next: in VS Code, open Copilot Chat and run /setup to connect Dataverse." -ForegroundColor Green
+    Write-Host "Next: in VS Code, open Copilot Chat and run /setup to check setup availability." -ForegroundColor Green
 }
 
 Write-Host "`nDone. Workspace: $workspace" -ForegroundColor Green

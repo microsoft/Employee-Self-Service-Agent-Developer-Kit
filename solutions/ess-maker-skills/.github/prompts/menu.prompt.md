@@ -24,13 +24,13 @@ Here's what I can help you with:
 | `/run` | Type Enter to run evaluation test sets or view run results |
 | `/flightcheck` | Type Enter to run a pre-deployment readiness check |
 | `/push` | Type Enter to push all local changes to Copilot Studio |
-| `/backup-template-configs` | Type Enter to back up Workday HCM template config customisations before an ESS package update |
-| `/restore-template-configs` | Type Enter to restore Workday HCM template configs from a backup file after a package update |
+| `/backup-template-configs` | Show the retired command's support status |
+| `/restore-template-configs` | Show the retired command's support status |
 | `/troubleshoot` | Type Enter to diagnose connectivity or auth errors |
 
 Tip: Switch to **Plan** mode (type `/plan`) if you'd like to brainstorm or discuss changes before making them.
 
-Note: `/setup` is intentionally not listed here - it runs once during initial environment setup. To re-run it (which replaces your local agent files), type `/setup` directly.
+Note: `/setup` is intentionally not listed here because setup is unavailable in this build.
 
 Type `/menu` anytime to see this again, or just describe what you'd like to do in plain English.
 
