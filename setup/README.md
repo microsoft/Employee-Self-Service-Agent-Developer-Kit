@@ -189,6 +189,8 @@ The devcontainer provides an equivalent pre-built environment:
 
 The full installer retrieves the exact Microsoft Object Model package versions required by the kit. NuGet uses the standard machine, user, and repository configuration hierarchy, including enterprise feeds, credentials, proxies, and package-source mappings.
 
+If the runtime, NuGet, or Object Model packages cannot be installed, setup warns and continues. Object Model serialization remains unavailable until the reported dependency is installed and the package installer below is rerun.
+
 To use a specific NuGet configuration, set `ESS_ADK_NUGET_CONFIG` before running the installer. To use one package source or an offline package directory, set `ESS_ADK_NUGET_SOURCE` instead.
 
 For an existing clone, install the packages directly:

@@ -25,6 +25,7 @@ FLIGHTCHECK_ONLY="${FLIGHTCHECK_ONLY:-false}"
 SKIP_MAKER_PROFILE="${SKIP_MAKER_PROFILE:-false}"
 REPO_URL="https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit.git"
 REPO_NAME="Employee-Self-Service-Agent-Developer-Kit"
+OBJECT_MODEL_INSTALLER_PATH="$INSTALL_ROOT/$REPO_NAME/solutions/ess-maker-skills/scripts/install_agentbuilder_object_model.py"
 CODE_CMD=""
 
 # ---------------------------------------------------------------------------
@@ -181,6 +182,38 @@ install_brew_cask() {
     fi
 }
 
+install_optional_brew_pkg() {
+    local pkg="$1"
+    local name="$2"
+    local follow_up="${3:-}"
+    if brew list "$pkg" &>/dev/null; then
+        ok "$name (already installed)"
+    elif brew install "$pkg"; then
+        ok "$name"
+    else
+        warn "Serialization support dependency '$name' was not installed."
+        warn "ESS ADK setup will continue."
+        warn "Install it later with: brew install $pkg"
+        if [[ -n "$follow_up" ]]; then
+            warn "Then install the serialization packages: $follow_up"
+        fi
+    fi
+}
+
+install_optional_brew_cask() {
+    local cask="$1"
+    local name="$2"
+    if brew list --cask "$cask" &>/dev/null; then
+        ok "$name (already installed)"
+    elif brew install --cask "$cask"; then
+        ok "$name"
+    else
+        warn "Serialization support dependency '$name' was not installed."
+        warn "ESS ADK setup will continue."
+        warn "Install it later with: brew install --cask $cask"
+    fi
+}
+
 # Core tools (always needed)
 install_brew_pkg "python@3.12" "Python 3.12"
 
@@ -198,12 +231,15 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
     if command -v dotnet &>/dev/null && dotnet --list-runtimes 2>/dev/null | grep -q '^Microsoft\.NETCore\.App 10\.'; then
         ok ".NET 10 Runtime (already installed)"
     else
-        install_brew_cask "dotnet-runtime" ".NET 10 Runtime"
+        install_optional_brew_cask "dotnet-runtime" ".NET 10 Runtime"
     fi
     if command -v nuget &>/dev/null; then
         ok "NuGet (already installed at $(command -v nuget))"
     else
-        install_brew_pkg "nuget" "NuGet"
+        install_optional_brew_pkg \
+            "nuget" \
+            "NuGet" \
+            "$INSTALL_ROOT/$REPO_NAME/.venv/bin/python $OBJECT_MODEL_INSTALLER_PATH"
     fi
 fi
 
@@ -288,11 +324,17 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
     step "Installing Microsoft Object Model dependencies"
     OBJECT_MODEL_INSTALLER="$REPO_PATH/solutions/ess-maker-skills/scripts/install_agentbuilder_object_model.py"
     if [[ ! -f "$OBJECT_MODEL_INSTALLER" ]]; then
-        err "Object Model dependency installer not found: $OBJECT_MODEL_INSTALLER"
-        exit 1
+        warn "Serialization support dependencies were not installed."
+        warn "ESS ADK setup will continue."
+        warn "The dependency installer was not found: $OBJECT_MODEL_INSTALLER"
+    elif "$VENV_PATH/bin/python" "$OBJECT_MODEL_INSTALLER"; then
+        ok "Microsoft Object Model dependencies installed"
+    else
+        warn "Serialization support dependencies were not installed."
+        warn "ESS ADK setup will continue."
+        warn "After resolving the reported NuGet issue, run:"
+        warn "  $VENV_PATH/bin/python $OBJECT_MODEL_INSTALLER"
     fi
-    "$VENV_PATH/bin/python" "$OBJECT_MODEL_INSTALLER"
-    ok "Microsoft Object Model dependencies installed"
 fi
 
 # ---------------------------------------------------------------------------
