@@ -76,3 +76,23 @@ properties:
         id: GitHub.cli
         source: winget
         Ensure: Present
+
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: dotnet-runtime
+      directives:
+        description: Install the .NET 10 runtime used by the Object Model serializer
+        allowPrerelease: false
+      settings:
+        id: Microsoft.DotNet.Runtime.10
+        source: winget
+        Ensure: Present
+
+    - resource: Microsoft.WinGet.DSC/WinGetPackage
+      id: nuget
+      directives:
+        description: Install NuGet for Object Model package acquisition
+        allowPrerelease: false
+      settings:
+        id: Microsoft.NuGet
+        source: winget
+        Ensure: Present

@@ -3,9 +3,10 @@
 # ESS ADK — macOS One-Shot Installer
 #
 # Installs the full ESS Maker Kit toolchain on macOS:
-#   Homebrew, Python 3.12, Git, GitHub CLI, VS Code, Copilot extensions,
-#   pip dependencies, clones the repo, launches VS Code, and auto-requests
-#   /setup in Copilot Chat (requires VS Code 1.102+).
+#   Homebrew, Python 3.12, Git, GitHub CLI, VS Code, the .NET 10 runtime,
+#   NuGet, Copilot extensions, pip and Object Model dependencies, clones
+#   the repo, launches VS Code, and auto-requests /setup in Copilot Chat
+#   (requires VS Code 1.102+).
 #
 # Usage (full maker kit):
 #   /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-mac.sh)"
@@ -49,6 +50,7 @@ ess_step_key() {
         *Checking*)             echo preflight ;;
         *toolchain*|*Homebrew*) echo toolchain ;;
         *pip*)                  echo pip_dependencies ;;
+        *Object\ Model*)        echo object_model_dependencies ;;
         *Resolving\ Python*)    echo resolve_python ;;
         *Cloning*|*repository*) echo clone ;;
         *extension*)            echo vscode_extensions ;;
@@ -193,6 +195,16 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
     # Full maker kit tools
     install_brew_pkg "gh" "GitHub CLI"
     install_brew_cask "visual-studio-code" "Visual Studio Code" "/Applications/Visual Studio Code.app"
+    if command -v dotnet &>/dev/null && dotnet --list-runtimes 2>/dev/null | grep -q '^Microsoft\.NETCore\.App 10\.'; then
+        ok ".NET 10 Runtime (already installed)"
+    else
+        install_brew_cask "dotnet-runtime" ".NET 10 Runtime"
+    fi
+    if command -v nuget &>/dev/null; then
+        ok "NuGet (already installed at $(command -v nuget))"
+    else
+        install_brew_pkg "nuget" "NuGet"
+    fi
 fi
 
 ok "Toolchain installed / verified"
@@ -270,6 +282,17 @@ if [[ -f "$REQUIREMENTS_FILE" ]]; then
     ok "pip dependencies installed (virtualenv at .venv/)"
 else
     warn "requirements.txt not found at $REQUIREMENTS_FILE"
+fi
+
+if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
+    step "Installing Microsoft Object Model dependencies"
+    OBJECT_MODEL_INSTALLER="$REPO_PATH/solutions/ess-maker-skills/scripts/install_agentbuilder_object_model.py"
+    if [[ ! -f "$OBJECT_MODEL_INSTALLER" ]]; then
+        err "Object Model dependency installer not found: $OBJECT_MODEL_INSTALLER"
+        exit 1
+    fi
+    "$VENV_PATH/bin/python" "$OBJECT_MODEL_INSTALLER"
+    ok "Microsoft Object Model dependencies installed"
 fi
 
 # ---------------------------------------------------------------------------
