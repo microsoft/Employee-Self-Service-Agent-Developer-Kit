@@ -397,6 +397,11 @@ def test_shipped_defaults_materialize_the_active_python_interpreter(
             "args": ["server.py"],
             "cwd": "${workspaceFolder}/src/mcp/agentconfig_landing_page",
         },
+        "ess-org-announcements": {
+            "command": os.path.abspath(sys.executable),
+            "args": ["server.py"],
+            "cwd": "${workspaceFolder}/src/mcp/agentconfig_org_announcements",
+        },
     }
 
 

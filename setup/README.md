@@ -36,7 +36,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 This installs everything the standard installer does, plus the **ESS Maker Profile** extension which provides:
 - A chat-only layout with all developer surfaces hidden
-- Big-button "Quick Actions" rail for common tasks (Connect, Customize landing page, Create, Scan, FlightCheck, Push)
+- Big-button "Quick Actions" rail for common tasks (Connect, Customize landing page, Post an announcement, Create, Scan, FlightCheck, Push)
 - A built-in tutorial explaining each button
 
 You can switch between lite mode and standard VS Code at any time using the toggle buttons in the Quick Actions panel.

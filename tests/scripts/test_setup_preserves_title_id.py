@@ -6,9 +6,40 @@
 from __future__ import annotations
 
 import json
+import importlib.util
 from pathlib import Path
+import sys
 
-import setup
+
+_SETUP_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "solutions" / "ess-maker-skills" / "scripts" / "setup.py"
+)
+
+
+def _load_setup_module():
+    # tests/setup is also importable as "setup" in a combined run. Resolve the
+    # script by path under a distinct name so cwd and collection order cannot
+    # silently substitute that test package for the implementation.
+    spec = importlib.util.spec_from_file_location("ess_maker_setup_under_test", _SETUP_PATH)
+    if spec is None or spec.loader is None:
+        raise ImportError(f"Cannot load the maker setup module at {_SETUP_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        sys.modules.pop(spec.name, None)
+        raise
+    return module
+
+
+setup = _load_setup_module()
+
+
+def test_setup_module_is_loaded_from_the_active_checkout() -> None:
+    assert Path(setup.__file__).resolve() == _SETUP_PATH
+    assert callable(setup.write_config)
 
 
 def _agent_info(**overrides: object) -> dict[str, object]:
