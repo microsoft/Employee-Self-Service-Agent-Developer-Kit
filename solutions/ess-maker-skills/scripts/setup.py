@@ -584,6 +584,9 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
         "slug": slug,
         "folder": output_dir.replace("\\", "/"),
     }
+    environment_id = str(agent_info.get("environmentId") or "").strip()
+    if environment_id:
+        agent_entry["environmentId"] = environment_id
 
     # Load existing config to preserve other agents and connections
     local_dir = ".local"
@@ -630,6 +633,10 @@ def write_config(agent_info, slug, output_dir, template_configs_discovered,
         "workflowCount": workflow_count,
         "evaluationCount": evaluation_count,
     }
+    if environment_id:
+        config["environmentId"] = environment_id
+    elif existing.get("environmentId"):
+        config["environmentId"] = existing["environmentId"]
 
     # Preserve existing connections and other user-set fields
     for key in ("connections", "workdayTestEmployeeId", "referenceSource", "environmentSku"):
@@ -753,6 +760,10 @@ def main():
         description="ESS Maker Kit — one-shot setup")
     parser.add_argument("--url", required=True,
                         help="Power Platform environment URL")
+    parser.add_argument(
+        "--environment-id",
+        help="Power Platform environment ID selected during discovery",
+    )
     parser.add_argument("--bot-id", required=True,
                         help="Selected bot ID from Dataverse")
     parser.add_argument("--name", required=True,
@@ -781,6 +792,7 @@ def main():
         "schema": args.schema,
         "managed": args.managed,
         "url": args.url,
+        "environmentId": args.environment_id,
     }
 
     # --- Idempotency gate: refuse silent overwrite of existing agent dir ---

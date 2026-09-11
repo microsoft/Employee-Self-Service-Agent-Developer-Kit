@@ -18,7 +18,6 @@ from setup_state import (
     ProductId,
     SetupState,
     SetupStateError,
-    SetupStateService,
     SetupWorkflow,
     StepMode,
     StepStatus,
@@ -167,6 +166,7 @@ def test_current_state_view_is_compact() -> None:
         "connect_ready": False,
         "environment": {
             "locked": False,
+            "id": None,
             "tenant_endpoint": None,
         },
         "completed_steps": [],

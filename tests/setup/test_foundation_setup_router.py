@@ -330,6 +330,7 @@ def test_onboarding_reuses_locked_foundation_environment() -> None:
 
     assert "python scripts/setup_state.py show --view report" in onboarding
     assert "environment.tenant_endpoint" in onboarding
+    assert "environment.id" in onboarding
     assert "Do not list environments" in onboarding
 
 

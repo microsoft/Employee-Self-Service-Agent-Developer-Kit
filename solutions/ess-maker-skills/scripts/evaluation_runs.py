@@ -254,6 +254,24 @@ def resolve_mcs_connection(
     signed_in_username: str | None = None,
 ) -> dict[str, Any]:
     """Discover and select the current user's Copilot Studio connection."""
+    connections, effective_username = _discover_mcs_connections(
+        config,
+        environment_id,
+        signed_in_username,
+    )
+    return select_mcs_connection(
+        connections,
+        effective_username,
+        requested_id,
+    )
+
+
+def _discover_mcs_connections(
+    config: dict[str, Any],
+    environment_id: str,
+    signed_in_username: str | None = None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Return raw Copilot Studio connections and the authenticated username."""
     env_url = str(config["dataverseEndpoint"]).rstrip("/")
     client = PPAdminClient(discover_tenant(env_url))
     client.authenticate(
@@ -265,11 +283,40 @@ def resolve_mcs_connection(
         MCS_CONNECTOR_NAME,
     )
     _raise_api_error(connections, "list Copilot Studio connections")
-    return select_mcs_connection(
-        connections,
-        signed_in_username or client.signed_in_username,
-        requested_id,
+    if not isinstance(connections, list):
+        raise EvaluationRunError(
+            "Power Platform API returned an invalid connection list."
+        )
+    return connections, signed_in_username or client.signed_in_username
+
+
+def list_mcs_connections(
+    config: dict[str, Any],
+    environment_id: str,
+    signed_in_username: str | None = None,
+) -> list[dict[str, Any]]:
+    """List connected profiles so the user can explicitly choose one."""
+    connections, effective_username = _discover_mcs_connections(
+        config,
+        environment_id,
+        signed_in_username,
     )
+    username = str(effective_username or "").casefold()
+    return [
+        {
+            **connection,
+            "matchesSignedInAccount": bool(
+                username
+                and username in {
+                    str(connection.get("accountName") or "").casefold(),
+                    str(
+                        connection.get("createdByUserPrincipalName") or ""
+                    ).casefold(),
+                }
+            ),
+        }
+        for connection in connected_mcs_connections(connections)
+    ]
 
 
 def _required_agent_connection(config: dict[str, Any]) -> dict[str, Any] | None:
@@ -877,6 +924,7 @@ def main() -> int:
     run_parser.add_argument("--published", action="store_true")
     run_parser.add_argument("--mcs-connection-id")
 
+    subparsers.add_parser("list-connections")
     subparsers.add_parser("list-runs")
 
     results_parser = subparsers.add_parser("results")
@@ -940,6 +988,12 @@ def main() -> int:
                 run_name=args.run_name,
                 run_on_published_bot=args.published,
                 tools_connections=tools_connections,
+            ))
+        elif args.command == "list-connections":
+            _print_json(list_mcs_connections(
+                config,
+                environment_id,
+                client.signed_in_username,
             ))
         elif args.command == "list-runs":
             _print_json(list_runs(

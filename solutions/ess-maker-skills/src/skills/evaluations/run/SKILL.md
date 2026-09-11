@@ -92,12 +92,27 @@ Copilot Studio connections in the selected environment and keeps only profiles
 whose status is `Connected`.
 
 - If exactly one profile is connected, use it automatically.
-- If multiple profiles exist, use the one that uniquely matches the signed-in
+- If multiple profiles exist, use the latest profile matching the signed-in
   Power Apps account.
-- If multiple connected profiles remain, automatically use the first profile
-  in deterministic name/ID order and try the run without asking the user.
-- If none are connected, stop and explain that the user must create or repair
-  the connection in Power Apps or Power Automate.
+- If automatic matching fails, run:
+
+  ```text
+  python scripts/evaluation_runs.py list-connections
+  ```
+
+  Display every returned profile with its display name, account name, creator,
+  and connection ID. Ask the user to select one using `vscode_askQuestions`,
+  then **STOP**. Do not start the evaluation in the same turn.
+- After the user selects a profile, retry the previously selected test set:
+
+  ```text
+  python scripts/evaluation_runs.py run --test-set-id "{id}" --test-set-name "{displayName}" --mcs-connection-id "{connectionId}"
+  ```
+
+- If no connected profile is returned, explain that the connection must be
+  created or repaired in Power Apps or Power Automate. Ask the user to choose
+  **Retry connection discovery** when ready, then stop. On their next turn,
+  rerun `list-connections`.
 
 Every run must include a validated `mcsConnectionId`; do not start an
 anonymous evaluation run.

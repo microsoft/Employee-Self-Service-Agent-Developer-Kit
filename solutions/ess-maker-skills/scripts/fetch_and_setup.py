@@ -240,7 +240,7 @@ def save_temp_files(components, template_configs, workflows):
 
 
 def _resolve_refresh_target(args, config):
-    """Resolve the (env, bot, name, schema, managed) target for a refresh.
+    """Resolve the (env URL/ID, bot, name, schema, managed) refresh target.
 
     Explicit CLI overrides win over the stored config so ``--refresh`` can
     retarget an agent to a second environment. Without ``--url`` this is a
@@ -254,15 +254,20 @@ def _resolve_refresh_target(args, config):
     agent = config.get("agent", {})
     retargeting = bool(args.url)
     env_url = args.url.rstrip("/") if args.url else config["dataverseEndpoint"]
+    environment_id = (
+        args.environment_id
+        or agent.get("environmentId")
+        or config.get("environmentId")
+    )
     bot_id = args.bot_id or agent.get("botId")
     name = args.name or agent.get("name")
     schema = args.schema or agent.get("schemaName")
     managed = args.managed if retargeting else agent.get("isManaged", False)
-    return env_url, bot_id, name, schema, managed
+    return env_url, environment_id, bot_id, name, schema, managed
 
 
-def run_setup(env_url, args_bot_id, args_name, args_schema, args_managed,
-              paths, extra_flags=None):
+def run_setup(env_url, environment_id, args_bot_id, args_name, args_schema,
+              args_managed, paths, extra_flags=None):
     """Run setup.py with the given temp file paths."""
     print("\nRunning setup...\n")
     cmd = [
@@ -273,6 +278,8 @@ def run_setup(env_url, args_bot_id, args_name, args_schema, args_managed,
         "--schema", args_schema,
         "--components", paths["components"],
     ]
+    if environment_id:
+        cmd.extend(["--environment-id", environment_id])
     if args_managed:
         cmd.append("--managed")
     if "template_configs" in paths:
@@ -292,6 +299,10 @@ def main():
     parser.add_argument("--url",
                         help="Power Platform environment URL "
                              "(e.g. https://org.crm.dynamics.com)")
+    parser.add_argument(
+        "--environment-id",
+        help="Power Platform environment ID selected during discovery",
+    )
     parser.add_argument("--bot-id",
                         help="Bot ID (GUID) from Dataverse")
     parser.add_argument("--name",
@@ -308,7 +319,14 @@ def main():
     # retarget to a different env/bot (see _resolve_refresh_target) ---
     if args.refresh:
         config = load_config()
-        env_url, bot_id, name, schema, managed = _resolve_refresh_target(
+        (
+            env_url,
+            environment_id,
+            bot_id,
+            name,
+            schema,
+            managed,
+        ) = _resolve_refresh_target(
             args, config)
 
         if args.url:
@@ -332,8 +350,16 @@ def main():
             print(e.format_for_terminal())
             sys.exit(1)
         paths = save_temp_files(components, template_configs, workflows)
-        rc = run_setup(env_url, bot_id, name, schema, managed,
-                       paths, extra_flags=["--refresh"])
+        rc = run_setup(
+            env_url,
+            environment_id,
+            bot_id,
+            name,
+            schema,
+            managed,
+            paths,
+            extra_flags=["--refresh"],
+        )
         sys.exit(rc)
 
     # --- Normal mode: requires all arguments ---
@@ -362,8 +388,15 @@ def main():
         print(e.format_for_terminal())
         sys.exit(1)
     paths = save_temp_files(components, template_configs, workflows)
-    rc = run_setup(env_url, args.bot_id, args.name, args.schema,
-                   args.managed, paths)
+    rc = run_setup(
+        env_url,
+        args.environment_id,
+        args.bot_id,
+        args.name,
+        args.schema,
+        args.managed,
+        paths,
+    )
     sys.exit(rc)
 
 

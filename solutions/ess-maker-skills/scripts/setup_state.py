@@ -1187,6 +1187,7 @@ def _state_view(state: SetupState, view: str) -> dict[str, Any]:
         "connect_ready": state.connect_ready,
         "environment": {
             "locked": bool(state.environment.get("locked")),
+            "id": state.environment.get("id"),
             "tenant_endpoint": state.environment.get("tenant_endpoint"),
         },
         "completed_steps": [
