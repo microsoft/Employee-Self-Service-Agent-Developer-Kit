@@ -6,6 +6,11 @@ artifacts, and pushing the `.mcs.yml` representation directly to Copilot Studio
 via Dataverse. Test cases are stored as `botcomponent` records with
 `componenttype=19` in a parent→child hierarchy (EvaluationSet → EvaluationData).
 
+When `.local/config.json` has `transport: "agentbuilder"`, generate and validate
+evaluation files locally, but skip every dry-run, push, and
+deployment-verification instruction. Finish by saying the local files are ready
+and DA-GA evaluation deployment is not yet available.
+
 ## Rules
 
 - ALWAYS read `.local/config.json` to get the agent folder name and slug.

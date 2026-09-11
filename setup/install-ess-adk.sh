@@ -668,7 +668,7 @@ if [[ -n "$CODE_CMD" ]]; then
             warn "'code chat' failed or is unsupported. Falling back to opening the workspace only."
             warn "If you have an older VS Code (pre-1.102 / June 2025), update VS Code and re-run, or run /setup manually in Copilot Chat."
             "$CODE_CMD" "$WORKSPACE_PATH" || warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
-            echo "Next: in VS Code, open Copilot Chat and run /setup to check setup availability."
+            echo "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent."
         fi
     else
         step "Opening workspace in VS Code"
@@ -678,12 +678,12 @@ if [[ -n "$CODE_CMD" ]]; then
             echo -e "    ${YELLOW}If VS Code prompts you to trust the workspace, accept the prompt.${NC}"
         else
             warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
-            echo "Next: in VS Code, open Copilot Chat and run /setup to check setup availability."
+            echo "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent."
         fi
     fi
 else
     warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
-    echo "Next: in VS Code, open Copilot Chat and run /setup to check setup availability."
+    echo "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent."
 fi
 
 echo ""

@@ -2,6 +2,11 @@
 
 This skill scans a cloned ESS agent for compile errors and walks the user through fixing them.
 
+When `.local/config.json` has `transport: "agentbuilder"`, complete the
+checkpoint, local fixes, and re-scan, but skip every `push.py` instruction.
+Finish by saying the local fixes are ready and DA-GA deployment is not yet
+available in this release.
+
 ## Rules
 
 - Do NOT run terminal commands or scripts EXCEPT the kit's own helper scripts under `scripts/` (specifically `python scripts/checkpoint.py`, `python scripts/push.py`, and `python scripts/emit_capability.py`, which Steps 2b and 6 require). For everything else - file edits, validation, lookups - use your built-in file reading, writing, and editing tools only. Do NOT use Python, PowerShell, Node.js, or any other scripting language to do work the editing tools can do.
