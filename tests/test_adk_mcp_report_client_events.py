@@ -131,7 +131,7 @@ def test_report_client_events_tool_returns_structured_bridge_result(monkeypatch)
                 {
                     "eventName": "WidgetReady",
                     "level": "info",
-                    "eventTimestampMs": 1_700_000_000_000,
+                    "eventTimestamp": "2026-09-11T23:21:26.196Z",
                     "timeSinceMount": 1,
                     "sequenceNumber": 1,
                     "displayMode": "inline",
@@ -156,7 +156,7 @@ def test_report_client_events_tool_returns_structured_bridge_result(monkeypatch)
             {
                 "eventName": "WidgetReady",
                 "level": "info",
-                "eventTimestampMs": 1_700_000_000_000,
+                "eventTimestamp": "2026-09-11T23:21:26.196Z",
                 "timeSinceMount": 1,
                 "sequenceNumber": 1,
                 "displayMode": "inline",
@@ -214,7 +214,7 @@ def _valid_tool_args():
             {
                 "eventName": "WidgetReady",
                 "level": "info",
-                "eventTimestampMs": 1_700_000_000_000,
+                "eventTimestamp": "2026-09-11T23:21:26.196Z",
                 "timeSinceMount": 1,
                 "sequenceNumber": 1,
             }
@@ -273,7 +273,7 @@ def test_invalid_required_levels_are_rejected_through_call_tool(level):
             {
                 "eventName": "InvalidLevel",
                 "level": level,
-                "eventTimestampMs": 1_700_000_000_000,
+                "eventTimestamp": "2026-09-11T23:21:26.196Z",
                 "timeSinceMount": 1,
                 "sequenceNumber": 1,
             }
@@ -310,7 +310,7 @@ def test_all_v2_fields_survive_the_real_call_tool_path(monkeypatch):
             {
                 "eventName": "Widget.Ready",
                 "level": "error",
-                "eventTimestampMs": 1_700_000_000_123.5,
+                "eventTimestamp": "2026-09-11T23:21:26.198Z",
                 "timeSinceMount": 12.25,
                 "sequenceNumber": 42,
                 "locale": "en-US",
@@ -336,7 +336,7 @@ def test_all_v2_fields_survive_the_real_call_tool_path(monkeypatch):
             "client_build_environment": "dev",
             "client_build_number": "0",
             "client_level": "error",
-            "client_event_timestamp_ms": 1_700_000_000_123.5,
+            "client_event_timestamp": "2026-09-11T23:21:26.198Z",
             "client_time_since_mount_ms": 12.25,
             "client_sequence_number": 42,
             "client_tool_call_id": "call_host-generated",
@@ -395,7 +395,7 @@ def test_bridge_is_total_so_the_wrapper_needs_no_guard(monkeypatch):
             {
                 "eventName": "E",
                 "level": "info",
-                "eventTimestampMs": 1_700_000_000_000 + index,
+                "eventTimestamp": f"2026-09-11T23:21:{index:02d}.000Z",
                 "timeSinceMount": index,
                 "sequenceNumber": index + 1,
             }

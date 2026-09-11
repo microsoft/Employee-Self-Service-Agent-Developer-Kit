@@ -59,6 +59,7 @@ import sys
 import threading
 import time
 import uuid
+from datetime import datetime
 from typing import Any
 
 # Reuse the OneCollector transport + helpers from the FlightCheck emitter.
@@ -773,6 +774,17 @@ def _valid_client_number(value: Any) -> bool:
     return _is_finite_number(value) and value >= 0
 
 
+def _valid_client_timestamp(value: Any) -> bool:
+    """Validate a timezone-aware ISO-8601 timestamp without rewriting it."""
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
+
+
 def _valid_client_sequence_number(value: Any) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
@@ -933,7 +945,7 @@ def _validate_client_events_envelope(envelope: Any) -> tuple[str | None, list[di
         level = event.get("level")
         if not isinstance(level, str) or level not in {"info", "error"}:
             return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
-        if not _valid_client_number(event.get("eventTimestampMs")):
+        if not _valid_client_timestamp(event.get("eventTimestamp")):
             return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
         if not _valid_client_number(event.get("timeSinceMount")):
             return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
@@ -974,7 +986,7 @@ def _validate_client_events_envelope(envelope: Any) -> tuple[str | None, list[di
                 "client_build_environment": _scrub_client_scalar(envelope["buildEnvironment"]),
                 "client_build_number": envelope["buildNumber"],
                 "client_level": event["level"],
-                "client_event_timestamp_ms": event["eventTimestampMs"],
+                "client_event_timestamp": event["eventTimestamp"],
                 "client_time_since_mount_ms": event["timeSinceMount"],
                 "client_sequence_number": event["sequenceNumber"],
             }

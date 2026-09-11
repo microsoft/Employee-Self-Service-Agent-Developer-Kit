@@ -187,7 +187,7 @@ essmakerkit_flightcheck_run
 // 8) VORPAL CLIENT EVENTS (schemaVersion 2)
 // -----------------------------------------------------------------------------
 // Vorpal supplies the source chronology. ADK's EventInfo_Time remains the
-// collector timestamp and does not replace client_event_timestamp_ms,
+// collector timestamp and does not replace client_event_timestamp,
 // client_time_since_mount_ms, or client_sequence_number.
 //
 // Envelope projection on every row:
@@ -203,7 +203,7 @@ essmakerkit_flightcheck_run
 // Event projection:
 //   eventName        -> client_event_name
 //   level            -> client_level
-//   eventTimestampMs -> client_event_timestamp_ms
+//   eventTimestamp   -> client_event_timestamp
 //   timeSinceMount   -> client_time_since_mount_ms
 //   sequenceNumber   -> client_sequence_number
 //   locale           -> client_locale             (optional)
@@ -219,7 +219,7 @@ essmakerkit_flightcheck_run
 adk_client_event
 | where EventInfo_Time > ago(30d)
 | summarize arg_max(EventInfo_Time, *) by client_mount_id, client_sequence_number
-| order by client_event_timestamp_ms asc, client_sequence_number asc
+| order by client_event_timestamp asc, client_sequence_number asc
 | project EventInfo_Time,
           client_batch_id,
           client_mount_id,
@@ -231,7 +231,7 @@ adk_client_event
           client_user_agent,
           client_event_name,
           client_level,
-          client_event_timestamp_ms,
+          client_event_timestamp,
           client_time_since_mount_ms,
           client_sequence_number,
           client_locale,

@@ -120,7 +120,7 @@ def _client_events_envelope(**overrides):
             {
                 "eventName": "WidgetReady",
                 "level": "info",
-                "eventTimestampMs": 1_700_000_000_000,
+                "eventTimestamp": "2026-09-11T23:21:26.196Z",
                 "timeSinceMount": 12,
                 "sequenceNumber": 1,
                 "locale": "en-US",
@@ -134,7 +134,7 @@ def _client_events_envelope(**overrides):
             {
                 "eventName": "WidgetFunnelStage",
                 "level": "info",
-                "eventTimestampMs": 1_700_000_000_010,
+                "eventTimestamp": "2026-09-11T23:21:26.206Z",
                 "timeSinceMount": 18.5,
                 "sequenceNumber": 2,
                 "properties": {"stage": "loaded"},
@@ -151,7 +151,7 @@ def _client_events_envelope(**overrides):
                 continue
             normalized = dict(event)
             normalized.setdefault("level", "info")
-            normalized.setdefault("eventTimestampMs", 1_700_000_000_000 + index)
+            normalized.setdefault("eventTimestamp", "2026-09-11T23:21:26.196Z")
             normalized.setdefault("timeSinceMount", index + 1)
             normalized.setdefault("sequenceNumber", index + 1)
             normalized_events.append(normalized)
@@ -676,7 +676,7 @@ def test_report_client_events_accepts_and_posts_valid_batch(captured_post, monke
     assert first["client_build_environment"] == "dev"
     assert first["client_build_number"] == "0"
     assert first["client_level"] == "info"
-    assert first["client_event_timestamp_ms"] == 1_700_000_000_000
+    assert first["client_event_timestamp"] == "2026-09-11T23:21:26.196Z"
     assert first["client_time_since_mount_ms"] == 12
     assert first["client_sequence_number"] == 1
     assert first["client_locale"] == "en-US"
@@ -706,7 +706,7 @@ def test_v2_optional_fields_are_projected_without_generic_scrubbing(captured_pos
                 {
                     "eventName": "Save.Started",
                     "level": "info",
-                    "eventTimestampMs": 1_700_000_000_123.5,
+                    "eventTimestamp": "2026-09-11T23:21:26.198Z",
                     "timeSinceMount": 12.25,
                     "sequenceNumber": 42,
                     "locale": "en-US",
@@ -725,7 +725,7 @@ def test_v2_optional_fields_are_projected_without_generic_scrubbing(captured_pos
     assert data["client_build_number"] == ""
     assert data["client_platform"] == "Win32"
     assert data["client_user_agent"] == user_agent
-    assert data["client_event_timestamp_ms"] == 1_700_000_000_123.5
+    assert data["client_event_timestamp"] == "2026-09-11T23:21:26.198Z"
     assert data["client_time_since_mount_ms"] == 12.25
     assert data["client_sequence_number"] == 42
     assert data["client_display_mode"] == "inline"
@@ -744,7 +744,7 @@ def test_unavailable_v2_optional_fields_remain_absent(captured_post, monkeypatch
                 {
                     "eventName": "WidgetReady",
                     "level": "info",
-                    "eventTimestampMs": 1_700_000_000_000,
+                    "eventTimestamp": "2026-09-11T23:21:26.196Z",
                     "timeSinceMount": 0,
                     "sequenceNumber": 1,
                 }
@@ -776,21 +776,21 @@ def test_vorpal_owns_event_names_and_sequence_order(captured_post, monkeypatch):
                 {
                     "eventName": "WidgetReady",
                     "level": "info",
-                    "eventTimestampMs": 1_700_000_000_020,
+                    "eventTimestamp": "2026-09-11T23:21:26.216Z",
                     "timeSinceMount": 20,
                     "sequenceNumber": 100,
                 },
                 {
                     "eventName": "Widget.Ready",
                     "level": "info",
-                    "eventTimestampMs": 1_700_000_000_010,
+                    "eventTimestamp": "2026-09-11T23:21:26.206Z",
                     "timeSinceMount": 10,
                     "sequenceNumber": 100,
                 },
                 {
                     "eventName": "Future.Name.From.Vorpal",
                     "level": "error",
-                    "eventTimestampMs": 1_700_000_000_005,
+                    "eventTimestamp": "2026-09-11T23:21:26.201Z",
                     "timeSinceMount": 5,
                     "sequenceNumber": 4,
                 },
@@ -827,7 +827,7 @@ def test_invalid_v2_occurrence_metadata_rejects_the_batch(field, value, captured
     event = {
         "eventName": "InvalidMetadata",
         "level": "info",
-        "eventTimestampMs": 1_700_000_000_000,
+        "eventTimestamp": "2026-09-11T23:21:26.196Z",
         "timeSinceMount": 1,
         "sequenceNumber": 1,
     }
@@ -879,7 +879,7 @@ def test_client_source_chronology_survives_buffer_reemission(monkeypatch):
                 {
                     "eventName": "Save.Started",
                     "level": "info",
-                    "eventTimestampMs": 1_700_000_000_123.5,
+                    "eventTimestamp": "2026-09-11T23:21:26.198Z",
                     "timeSinceMount": 12.25,
                     "sequenceNumber": 42,
                     "operationId": operation_id,
@@ -903,7 +903,7 @@ def test_client_source_chronology_survives_buffer_reemission(monkeypatch):
                 {
                     "eventName": "Save.Completed",
                     "level": "info",
-                    "eventTimestampMs": 1_700_000_000_200,
+                    "eventTimestamp": "2026-09-11T23:21:26.200Z",
                     "timeSinceMount": 20,
                     "sequenceNumber": 43,
                     "operationId": operation_id,
@@ -916,7 +916,7 @@ def test_client_source_chronology_survives_buffer_reemission(monkeypatch):
     assert second == {"status": "accepted", "acceptedEventCount": 1}
     replayed = calls[0][0]["data"]
     assert replayed["client_batch_id"] == "batch-retry"
-    assert replayed["client_event_timestamp_ms"] == 1_700_000_000_123.5
+    assert replayed["client_event_timestamp"] == "2026-09-11T23:21:26.198Z"
     assert replayed["client_time_since_mount_ms"] == 12.25
     assert replayed["client_sequence_number"] == 42
     assert replayed["client_operation_id"] == operation_id
@@ -1226,11 +1226,12 @@ def test_report_client_events_rejects_out_of_contract_events(event, reason, capt
 @pytest.mark.parametrize(
     ("field", "value"),
     [
-        ("eventTimestampMs", float("nan")),
-        ("eventTimestampMs", float("inf")),
-        ("eventTimestampMs", -1),
-        ("eventTimestampMs", "1700000000000"),
-        ("eventTimestampMs", True),
+        ("eventTimestamp", 1_700_000_000_000),
+        ("eventTimestamp", ""),
+        ("eventTimestamp", "1700000000000"),
+        ("eventTimestamp", "2026-09-11T23:21:26.196"),
+        ("eventTimestamp", "not-a-timestamp"),
+        ("eventTimestamp", True),
         ("timeSinceMount", float("nan")),
         ("timeSinceMount", float("inf")),
         ("timeSinceMount", -1),
@@ -1242,7 +1243,7 @@ def test_invalid_source_timing_rejects_the_batch(field, value, captured_post):
     event = {
         "eventName": "InvalidTiming",
         "level": "info",
-        "eventTimestampMs": 1_700_000_000_000,
+        "eventTimestamp": "2026-09-11T23:21:26.196Z",
         "timeSinceMount": 0,
         "sequenceNumber": 1,
     }
@@ -1257,7 +1258,7 @@ def test_invalid_source_timing_rejects_the_batch(field, value, captured_post):
     assert captured_post == []
 
 
-def test_time_since_app_start_is_not_a_v2_alias(captured_post):
+def test_legacy_timing_fields_are_not_v2_aliases(captured_post):
     result = adk.report_client_events(
         _client_events_envelope(
             events=[
