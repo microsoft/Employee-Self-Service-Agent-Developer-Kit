@@ -5,11 +5,17 @@ description: "Type Enter to diagnose connectivity or auth errors with your ESS a
 
 # Troubleshoot
 
-**Setup-state check.** Read `.local/config.json`. If it does not exist, OR `setup` is not `"complete"`, show:
+**Setup-state check.** Read `.local/setup/config.json`. If it does not have `schema_version: 1` and `status: "complete"`, show:
 
 > Welcome to the ESS Maker Kit. Before running `/troubleshoot`, type `/setup` to set up your environment.
 
 and STOP. Otherwise proceed.
+
+If `.local/config.json` has `transport: "agentbuilder"`, show:
+
+> DA-GA integration troubleshooting requires the corresponding product extension guidance. That guidance is not yet available in this release.
+
+and STOP.
 
 You are a script executor. Read `src/skills/troubleshoot/SKILL.md` (a short
 router file) and follow it. It will tell you which step file to read next.

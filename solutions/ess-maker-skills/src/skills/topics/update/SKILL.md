@@ -4,6 +4,12 @@ This skill guides the user through modifying an existing Copilot Studio topic.
 Updating means editing the local working copy AND pushing the change to the
 live environment via push.
 
+When `.local/config.json` has `transport: "agentbuilder"`, this skill is
+local-only. Complete the checkpoint, edit, scan, and review, but skip every
+push, publish, or server-backed validation instruction. Finish by saying the
+local topic is ready and DA-GA deployment is not yet available. Do not offer to
+test the change because it is not deployed.
+
 ## CRITICAL — Local Files Are a Working Copy
 
 The files in `workspace/agents/{slug}/` are a **working copy** of what's deployed in
@@ -155,10 +161,12 @@ If the user prefers to publish manually instead, point them at [Copilot Studio](
 
 ## Step 9: Continue into test, or offer next steps
 
-Offer to continue straight into a debug drive of the change — and if the user says yes, **do it in the same flow, don't make them start over**:
+Unless the workspace uses AgentBuilder, offer to continue straight into a debug drive of the change — and if the user says yes, **do it in the same flow, don't make them start over**:
 
 - "Want to check it works? I can drive **{TopicName}** now and exercise its happy path and failure handling."
   - On yes: read `src/skills/topics/test/SKILL.md` and run its debug-and-validate loop **scoped to {TopicName}** — you already know the component (this was a topic update), so **skip the "topic or workflow?" question**, and reuse the signed-in test-pane session if one is already open (only do the launch → sign-in handoff if no browser is ready). Build the probe set (failure paths first) for {TopicName} and drive it.
+- For AgentBuilder, do not make this offer; say runtime testing is deferred
+  because the local change is not deployed.
 - "Would you like to make another change?"
 - "Type `/scan` to check for errors."
 - "Type `/menu` to see all available commands."

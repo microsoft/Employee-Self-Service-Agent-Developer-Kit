@@ -7,6 +7,12 @@ validation, and the manifest for future automated eval execution.
 This is the default topic path used by `/update` for simple topics:
 informational responses, clarification, routing, and handoff.
 
+When `.local/config.json` has `transport: "agentbuilder"`, complete local
+materialization, validation, and review, but skip every dry-run, push, and
+deployment-verification instruction. Finish by saying the local files are ready
+and DA-GA deployment is not yet available. Do not offer to test the change
+because it is not deployed.
+
 ## Rules
 
 - Read `.local/config.json` first and use the active agent folder.
@@ -203,10 +209,13 @@ State that static update and deployment are complete and the manifest is
 available for a future automated eval-level validation pipeline. Do not claim
 that runtime behavior passed.
 
-Then offer to test the updated topic:
+Unless the workspace uses AgentBuilder, offer to test the updated topic:
 
 - "Want to check it works? I can drive **{TopicName}** now and exercise its
   happy path and failure handling."
 - On yes, read `src/skills/topics/test/SKILL.md` and run its
   debug-and-validate loop scoped to `{TopicName}`. Skip the component-selection
   question because this flow just updated the topic.
+
+For AgentBuilder, do not make this offer; say runtime testing is deferred
+because the local change is not deployed.

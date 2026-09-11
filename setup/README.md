@@ -1,6 +1,6 @@
 # ESS ADK — One-Shot Installer
 
-A single command that installs everything needed for the ESS Maker Kit: VS Code, Python 3.12, Git, GitHub CLI, Copilot extensions, pip dependencies, and clones the repo.
+A single command that installs everything needed for the ESS Maker Kit: VS Code, Python 3.12, Git, GitHub CLI, the .NET runtime, NuGet, Copilot extensions, pip dependencies, and clones the repo.
 
 **Windows** (PowerShell):
 
@@ -14,7 +14,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-mac.sh)"
 ```
 
-Once complete, VS Code opens at `solutions/ess-maker-skills/`. The full maker setup path is unavailable in this build; the standalone FlightCheck installer remains available.
+Once complete, VS Code opens at `solutions/ess-maker-skills/` and `/setup` is automatically requested in Copilot Chat. You'll be prompted to trust the workspace and sign in to GitHub/Copilot — accept these prompts and `/setup` will connect the workspace to an existing editable DA Dev agent.
 
 > **GitHub Copilot subscription is required** for the in-editor maker experience. This script installs the toolchain and extension scaffolding; it does not grant the Copilot entitlement.
 
@@ -52,7 +52,7 @@ For users who prefer a cloud-based development environment — no local toolchai
 The Codespace comes pre-configured with Python 3.12, pip dependencies, and GitHub Copilot. Select the **2-core** machine type (sufficient for the maker kit). Once it starts:
 
 1. Open the `solutions/ess-maker-skills` folder (File → Open Folder → `/workspaces/Employee-Self-Service-Agent-Developer-Kit/solutions/ess-maker-skills`)
-2. `/setup` currently reports that the full maker setup path is unavailable
+2. Run `/setup` in Copilot Chat to connect an existing editable DA Dev agent
 
 ### FlightCheck via Codespaces
 
@@ -154,6 +154,8 @@ The installer provisions the following dependencies. Users do not need to instal
 | GitHub CLI (`gh`) | Latest | Device-code auth flow for private repo clone | ❌ |
 | VS Code | Latest | Editor and Copilot host | ❌ |
 | PowerShell 7 | Latest | Script execution (Windows only) | ❌ |
+| .NET runtime | 10 | Runtime for Microsoft Object Model serialization | ❌ |
+| NuGet | Latest available | Retrieves Microsoft Object Model packages using configured package sources | ❌ |
 
 ### Python packages (installed via pip from `scripts/requirements.txt`)
 
@@ -164,6 +166,7 @@ The installer provisions the following dependencies. Users do not need to instal
 | `urllib3` | HTTP transport layer (requests dependency, pinned) |
 | `PyYAML` | YAML parsing for topic schema validation |
 | `defusedxml` | Safe XML parsing for Workday SOAP responses (XXE-hardened) |
+| `pythonnet` | Loads the Microsoft Object Model serializer in Python (full install only) |
 
 ### VS Code extensions
 
@@ -180,6 +183,21 @@ The devcontainer provides an equivalent pre-built environment:
 - **Python packages:** Installed from `scripts/requirements.txt` via `postCreateCommand`
 - **VS Code extensions:** Copilot, Copilot Chat, Python (specified in `customizations.vscode.extensions`)
 - **Additional features:** GitHub CLI (via devcontainer features)
+- **Additional runtime:** .NET 10, Mono, and NuGet for Microsoft Object Model serialization
+
+### Microsoft Object Model packages
+
+The full installer retrieves the exact Microsoft Object Model package versions required by the kit. NuGet uses the standard machine, user, and repository configuration hierarchy, including enterprise feeds, credentials, proxies, and package-source mappings.
+
+If the runtime, NuGet, or Object Model packages cannot be installed, setup warns and continues. Object Model serialization remains unavailable until the reported dependency is installed and the package installer below is rerun.
+
+To use a specific NuGet configuration, set `ESS_ADK_NUGET_CONFIG` before running the installer. To use one package source or an offline package directory, set `ESS_ADK_NUGET_SOURCE` instead.
+
+For an existing clone, install the packages directly:
+
+```powershell
+python solutions\ess-maker-skills\scripts\install_agentbuilder_object_model.py
+```
 
 ## How to test it locally
 
