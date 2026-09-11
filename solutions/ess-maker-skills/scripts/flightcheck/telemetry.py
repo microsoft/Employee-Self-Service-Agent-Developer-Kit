@@ -113,11 +113,19 @@ _POST_TIMEOUT = (3.05, 5)
 # Aria cube, because 1DS RTA cubes map an event property straight to a
 # dimension and cannot derive one dimension's value from another.
 #
-# Seeded with the Microsoft corporate Entra tenant only. Additional internal /
-# dogfood tenants can be added WITHOUT a code change via the
-# ``ESS_ADK_INTERNAL_TENANTS`` env var (comma-separated GUIDs) — preferred over
-# growing a hard-coded list.
+# Seeded with the two permanent internal Microsoft tenants we know about:
+#   - Microsoft corporate Entra tenant (72f988bf...)
+#   - EmployeeHub dogfood tenant (935884d7...) -- the primary ESS-team internal
+#     dogfooding tenancy. Its events were previously classified as ``customer``
+#     and leaked to the External dashboard whenever a chart-level ``tenant_id
+#     notIn`` filter was missing; hardcoding here ensures every event is
+#     classified as internal at emit time regardless of dashboard config.
+# Additional internal / dogfood tenants can still be added WITHOUT a code
+# change via the ``ESS_ADK_INTERNAL_TENANTS`` env var (comma-separated GUIDs)
+# -- preferred over growing this hard-coded list for one-off / short-lived
+# dogfood tenancies.
 MICROSOFT_CORP_TENANT_ID = "72f988bf-86f1-41af-91ab-2d7cd011db47"
+EMPLOYEEHUB_TENANT_ID = "935884d7-bdee-469b-a461-fcc530a3ac83"
 
 TENANT_CLASS_INTERNAL = "internal"
 TENANT_CLASS_CUSTOMER = "customer"
@@ -150,7 +158,7 @@ def _internal_tenant_ids() -> frozenset[str]:
 @lru_cache(maxsize=8)
 def _parse_internal_tenant_ids(extra: str) -> frozenset[str]:
     """Parse the comma-separated allow-list, cached per distinct env value."""
-    ids = {MICROSOFT_CORP_TENANT_ID}
+    ids = {MICROSOFT_CORP_TENANT_ID, EMPLOYEEHUB_TENANT_ID}
     ids.update(t.strip().lower() for t in extra.split(",") if t.strip())
     return frozenset(ids)
 

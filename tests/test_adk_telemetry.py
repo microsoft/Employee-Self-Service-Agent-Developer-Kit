@@ -277,6 +277,19 @@ def test_classify_tenant_microsoft_corp_is_internal():
     assert _fc.classify_tenant(f"  {_fc.MICROSOFT_CORP_TENANT_ID.upper()} ") == "internal"
 
 
+def test_classify_tenant_employeehub_is_internal():
+    """EmployeeHub is the primary ESS-team dogfood tenant. Its events must
+    classify as ``internal`` at emit time without any env-var setup so they
+    never leak to the External dashboard even if a chart-level ``tenant_id
+    notIn`` filter is missing or misconfigured. Regression pin -- see prior
+    dashboard leak where EmployeeHub session_start events shipped with
+    ``tenant_class = "customer"``.
+    """
+    assert _fc.classify_tenant(_fc.EMPLOYEEHUB_TENANT_ID) == "internal"
+    # case / whitespace insensitive, matching the corp-tenant contract
+    assert _fc.classify_tenant(f"  {_fc.EMPLOYEEHUB_TENANT_ID.upper()} ") == "internal"
+
+
 def test_classify_tenant_other_tenant_is_customer():
     assert _fc.classify_tenant("11111111-1111-1111-1111-111111111111") == "customer"
 
