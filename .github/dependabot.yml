@@ -14,6 +14,8 @@ updates:
     labels:
       - "dependencies"
       - "github-actions"
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: "pip"
     # Uses the directories: array (Dependabot 2024+) so a single ecosystem
