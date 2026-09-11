@@ -76,6 +76,7 @@ class PowerPlatformClient:
     def __init__(self, tenant_id: str):
         self.tenant_id = tenant_id
         self._token: str | None = None
+        self.signed_in_username: str | None = None
 
     def authenticate(self) -> str:
         """Acquire a Power Platform API access token.
@@ -97,10 +98,15 @@ class PowerPlatformClient:
 
         accounts = app.get_accounts()
         result = None
-        if accounts:
-            result = app.acquire_token_silent([PP_API_SCOPE], account=accounts[0])
+        selected_account = accounts[0] if accounts else None
+        if selected_account:
+            result = app.acquire_token_silent(
+                [PP_API_SCOPE],
+                account=selected_account,
+            )
         if not result or "access_token" not in result:
             print("Opening browser for Power Platform API sign-in...")
+            selected_account = None
             result = app.acquire_token_interactive(
                 [PP_API_SCOPE], prompt="select_account"
             )
@@ -124,6 +130,12 @@ class PowerPlatformClient:
                 f.write(cache.serialize())
 
         self._token = result["access_token"]
+        claims = result.get("id_token_claims", {}) or {}
+        self.signed_in_username = (
+            claims.get("preferred_username")
+            or claims.get("upn")
+            or (selected_account or {}).get("username")
+        )
         return self._token
 
     @property
@@ -261,6 +273,106 @@ class PowerPlatformClient:
             f"/appmanagement/environments/{environment_id}/applicationPackages",
             params={"api-version": API_VERSION},
         )
+
+    def list_maker_evaluation_test_sets(
+        self,
+        environment_id: str,
+        bot_id: str,
+    ) -> list | dict:
+        """List Copilot Studio maker evaluation test sets for an agent.
+
+        Microsoft Learn:
+        https://learn.microsoft.com/rest/api/power-platform/copilotstudio/bots/list-maker-evaluation-test-sets
+        """
+        return self._get_all(
+            (
+                f"/copilotstudio/environments/{environment_id}/bots/{bot_id}"
+                "/api/makerevaluation/testsets"
+            ),
+            params={"api-version": API_VERSION},
+        )
+
+    def run_maker_evaluation_test_set(
+        self,
+        environment_id: str,
+        bot_id: str,
+        test_set_id: str,
+        body: dict,
+    ) -> dict:
+        """Start one asynchronous Copilot Studio maker evaluation run.
+
+        Microsoft Learn:
+        https://learn.microsoft.com/rest/api/power-platform/copilotstudio/bots/run-maker-evaluation-test-set
+        """
+        url = (
+            f"{PP_API_BASE}/copilotstudio/environments/{environment_id}"
+            f"/bots/{bot_id}/api/makerevaluation/testsets/{test_set_id}/run"
+        )
+        resp = _SESSION.post(
+            url,
+            headers={**self.headers, "Content-Type": "application/json"},
+            params={"api-version": API_VERSION},
+            json=body,
+            timeout=120,
+        )
+        if resp.status_code in (401, 403):
+            return {
+                "_error": "insufficient_permissions",
+                "_status": resp.status_code,
+            }
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, dict) else {}
+
+    def list_maker_evaluation_test_runs(
+        self,
+        environment_id: str,
+        bot_id: str,
+    ) -> list | dict:
+        """List prior Copilot Studio maker evaluation runs for an agent.
+
+        Microsoft Learn:
+        https://learn.microsoft.com/rest/api/power-platform/copilotstudio/bots/list-maker-evaluation-test-runs
+        """
+        return self._get_all(
+            (
+                f"/copilotstudio/environments/{environment_id}/bots/{bot_id}"
+                "/api/makerevaluation/testruns"
+            ),
+            params={"api-version": API_VERSION},
+        )
+
+    def get_maker_evaluation_test_run(
+        self,
+        environment_id: str,
+        bot_id: str,
+        run_id: str,
+    ) -> dict:
+        """Get status and case-level results for one maker evaluation run.
+
+        Microsoft Learn:
+        https://learn.microsoft.com/rest/api/power-platform/copilotstudio/bots/get-maker-evaluation-test-run
+        """
+        url = (
+            f"{PP_API_BASE}/copilotstudio/environments/{environment_id}"
+            f"/bots/{bot_id}/api/makerevaluation/testruns/{run_id}"
+        )
+        resp = _SESSION.get(
+            url,
+            headers=self.headers,
+            params={"api-version": API_VERSION},
+            timeout=120,
+        )
+        if resp.status_code in (401, 403):
+            return {
+                "_error": "insufficient_permissions",
+                "_status": resp.status_code,
+            }
+        if resp.status_code == 404:
+            return {"_error": "not_found", "_status": 404}
+        resp.raise_for_status()
+        data = resp.json()
+        return data if isinstance(data, dict) else {}
 
     def install_application_package(
         self,

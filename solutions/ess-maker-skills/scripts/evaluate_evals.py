@@ -11,6 +11,7 @@ Usage:
     python scripts/evaluate_evals.py
     python scripts/evaluate_evals.py --agent employee-self-service-hr
     python scripts/evaluate_evals.py --category topic-triggering
+    python scripts/evaluate_evals.py --evaluation-folder workspace/evaluations/my-set
     python scripts/evaluate_evals.py --sample 20
     python scripts/evaluate_evals.py --output results/eval-quality.json
 """
@@ -82,6 +83,21 @@ QUALITY_DIMENSION_HINTS = {
 
 # Categories where topic alignment check applies
 TOPIC_ALIGNMENT_CATEGORIES = {"topic-triggering", "integration-data"}
+
+
+def resolve_evaluation_folder(value: str, repo_root: Path) -> Path:
+    """Resolve an explicit evaluation-set folder from an absolute or local path."""
+    supplied = Path(value)
+    candidates = [supplied] if supplied.is_absolute() else [
+        Path.cwd() / supplied,
+        repo_root / supplied,
+    ]
+    for candidate in candidates:
+        resolved = candidate.resolve()
+        if resolved.is_dir():
+            return resolved
+    raise FileNotFoundError(value)
+
 
 def load_eval_file(path: Path) -> dict | None:
     """Load and parse a single .mcs.yml eval file. Returns None if unreadable."""
@@ -456,6 +472,13 @@ def main():
         help="Evaluate only this category (e.g. topic-triggering).",
     )
     parser.add_argument(
+        "--evaluation-folder",
+        help=(
+            "Exact folder containing one evaluation set's .mcs.yml files. "
+            "Supports workspace-level and configured-agent evaluation sets."
+        ),
+    )
+    parser.add_argument(
         "--sample", "-s",
         type=int,
         default=DEFAULT_SAMPLE,
@@ -489,52 +512,107 @@ def main():
     # ── Locate agent folder ──────────────────────────────────────────────────
     repo_root = Path(__file__).parent.parent
     agents_dir = repo_root / "workspace" / "agents"
+    agent_dir = None
 
-    if not agents_dir.exists():
-        print(f"ERROR: No workspace/agents/ folder found at {agents_dir}", file=sys.stderr)
-        sys.exit(1)
-
-    if args.agent:
-        agent_dir = agents_dir / args.agent
-        if not agent_dir.exists():
-            print(f"ERROR: Agent folder not found: {agent_dir}", file=sys.stderr)
+    if args.evaluation_folder:
+        if args.category:
+            print(
+                "ERROR: Use --evaluation-folder or --category, not both.",
+                file=sys.stderr,
+            )
             sys.exit(1)
+        try:
+            evaluation_folder = resolve_evaluation_folder(
+                args.evaluation_folder,
+                repo_root,
+            )
+        except FileNotFoundError:
+            print(
+                f"ERROR: Evaluation folder not found: "
+                f"{args.evaluation_folder}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        category_dirs = [evaluation_folder]
+        if args.agent:
+            candidate_agent = agents_dir / args.agent
+            if candidate_agent.is_dir():
+                agent_dir = candidate_agent
+        if agent_dir is None:
+            for parent in evaluation_folder.parents:
+                if parent.parent == agents_dir:
+                    agent_dir = parent
+                    break
+        agent_name = agent_dir.name if agent_dir else evaluation_folder.name
     else:
-        agent_dirs = [d for d in agents_dir.iterdir() if d.is_dir()]
-        if not agent_dirs:
-            print("ERROR: No agent folders found in workspace/agents/", file=sys.stderr)
+        if not agents_dir.exists():
+            print(
+                f"ERROR: No workspace/agents/ folder found at {agents_dir}",
+                file=sys.stderr,
+            )
             sys.exit(1)
-        if len(agent_dirs) > 1:
-            print("Multiple agents found. Specify one with --agent:", file=sys.stderr)
-            for d in agent_dirs:
-                print(f"  {d.name}", file=sys.stderr)
+
+        if args.agent:
+            agent_dir = agents_dir / args.agent
+            if not agent_dir.exists():
+                print(
+                    f"ERROR: Agent folder not found: {agent_dir}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+        else:
+            agent_dirs = [d for d in agents_dir.iterdir() if d.is_dir()]
+            if not agent_dirs:
+                print(
+                    "ERROR: No agent folders found in workspace/agents/",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+            if len(agent_dirs) > 1:
+                print(
+                    "Multiple agents found. Specify one with --agent:",
+                    file=sys.stderr,
+                )
+                for directory in agent_dirs:
+                    print(f"  {directory.name}", file=sys.stderr)
+                sys.exit(1)
+            agent_dir = agent_dirs[0]
+
+        evals_dir = agent_dir / "evaluations"
+        if not evals_dir.exists():
+            print(
+                f"ERROR: No evaluations/ folder found at {evals_dir}",
+                file=sys.stderr,
+            )
             sys.exit(1)
-        agent_dir = agent_dirs[0]
 
-    evals_dir = agent_dir / "evaluations"
-    if not evals_dir.exists():
-        print(f"ERROR: No evaluations/ folder found at {evals_dir}", file=sys.stderr)
-        sys.exit(1)
-
-    agent_name = agent_dir.name
-
-    # ── Discover categories ───────────────────────────────────────────────────
-    if args.category:
-        category_dirs = [evals_dir / args.category]
-        if not category_dirs[0].exists():
-            print(f"ERROR: Category folder not found: {category_dirs[0]}", file=sys.stderr)
-            sys.exit(1)
-    else:
-        category_dirs = sorted(
-            [d for d in evals_dir.iterdir() if d.is_dir()]
-        )
+        agent_name = agent_dir.name
+        if args.category:
+            category_dirs = [evals_dir / args.category]
+            if not category_dirs[0].exists():
+                print(
+                    f"ERROR: Category folder not found: {category_dirs[0]}",
+                    file=sys.stderr,
+                )
+                sys.exit(1)
+        else:
+            category_dirs = sorted(
+                [directory for directory in evals_dir.iterdir()
+                 if directory.is_dir()]
+            )
 
     if not category_dirs:
         print("No evaluation categories found.", file=sys.stderr)
         sys.exit(1)
 
     # ── Load topic context ────────────────────────────────────────────────────
-    topics_dir = Path(args.topics_dir) if args.topics_dir else agent_dir / "topics"
+    topics_dir = (
+        Path(args.topics_dir)
+        if args.topics_dir
+        else agent_dir / "topics"
+        if agent_dir
+        else Path()
+    )
     topic_context = load_topic_context(topics_dir)
     if topic_context:
         print(f"  Loaded {len(topic_context)} topic definitions for alignment checks.")

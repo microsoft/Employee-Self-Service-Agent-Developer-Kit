@@ -143,8 +143,14 @@ class PPAdminClient:
         self.tenant_id = tenant_id
         self._token: str | None = None
         self._flow_token: str | None = None
+        self.signed_in_username: str | None = None
 
-    def authenticate(self, *, include_flow: bool = True) -> str:
+    def authenticate(
+        self,
+        *,
+        include_flow: bool = True,
+        preferred_username: str | None = None,
+    ) -> str:
         """Acquire Power Platform access tokens.
 
         Always acquires the PowerApps audience token used for BAP, PowerApps
@@ -171,25 +177,48 @@ class PPAdminClient:
 
         accounts = app.get_accounts()
 
-        def acquire(scope: str, label: str) -> str:
+        def acquire(scope: str, label: str) -> tuple[str, str | None]:
             result = None
-            if accounts:
-                result = app.acquire_token_silent([scope], account=accounts[0])
+            preferred = str(preferred_username or "").casefold()
+            selected_account = next(
+                (
+                    account for account in accounts
+                    if str(account.get("username") or "").casefold()
+                    == preferred
+                ),
+                accounts[0] if accounts and not preferred else None,
+            )
+            if selected_account:
+                result = app.acquire_token_silent(
+                    [scope],
+                    account=selected_account,
+                )
             if not result or "access_token" not in result:
                 print(f"Opening browser for Power Platform sign-in ({label})...")
+                selected_account = None
+                interactive_options = {"prompt": "select_account"}
+                if preferred_username:
+                    interactive_options["login_hint"] = preferred_username
                 result = app.acquire_token_interactive(
-                    [scope], prompt="select_account"
+                    [scope],
+                    **interactive_options,
                 )
             if "access_token" not in result:
                 # Don't echo error_description - it can include tenant IDs and
                 # internal flow details (CWE-209). Mirrors the auth.py pattern.
                 error = result.get("error", "unknown_error")
                 raise RuntimeError(f"Power Platform auth failed for {label} ({error}).")
-            return result["access_token"]
+            claims = result.get("id_token_claims", {}) or {}
+            username = (
+                claims.get("preferred_username")
+                or claims.get("upn")
+                or (selected_account or {}).get("username")
+            )
+            return result["access_token"], username
 
-        pp_token = acquire(PP_SCOPE, "PowerApps/BAP")
+        pp_token, pp_username = acquire(PP_SCOPE, "PowerApps/BAP")
         flow_token = (
-            acquire(FLOW_SCOPE, "Power Automate (Flow)")
+            acquire(FLOW_SCOPE, "Power Automate (Flow)")[0]
             if include_flow
             else None
         )
@@ -209,6 +238,7 @@ class PPAdminClient:
 
         self._token = pp_token
         self._flow_token = flow_token
+        self.signed_in_username = pp_username
         return self._token
 
     def authenticate_silent(self) -> bool:
@@ -446,6 +476,21 @@ class PPAdminClient:
             POWERAPPS_BASE,
             f"/providers/Microsoft.PowerApps/scopes/admin/environments/{env_id}/connections",
             params={"api-version": "2016-11-01"},
+        )
+
+    def get_connector_connections(
+        self,
+        env_id: str,
+        connector_name: str,
+    ) -> list | dict:
+        """List the signed-in user's connections for one connector."""
+        return self._get_all(
+            POWERAPPS_BASE,
+            f"/providers/Microsoft.PowerApps/apis/{connector_name}/connections",
+            params={
+                "api-version": "2016-11-01",
+                "$filter": f"environment eq '{env_id}'",
+            },
         )
 
     # ----- DLP Policy APIs -----

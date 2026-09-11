@@ -110,3 +110,39 @@ jobs:
 
     - name: Run FlightCheck offline test suite
       run: python -m pytest tests/flightcheck -q
+
+  script-tests:
+    name: Lifecycle script test suite
+    runs-on: ubuntu-latest
+
+    # Runs the tests/scripts suites, which cover the evaluation lifecycle
+    # (create/generate, review, runs, CSV export, push scoping) and the other
+    # scripts helpers. Previously only tests/flightcheck ran in CI, so these
+    # suites — including the evaluation review/run/CSV lifecycle tests — were
+    # never enforced on a PR. Every test here is offline (no live tenant).
+    #
+    # test_installer_launch.py and test_installer_maker_profile.py are ignored:
+    # they are red-by-design TDD tests for an unimplemented installer
+    # maker-profile feature (they assert the setup scripts branch on
+    # MAKER_PROFILE_INSTALLED, which they do not yet). Those failures predate
+    # this job and are unrelated to the script suites; remove the ignores when
+    # that installer feature lands.
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.11'
+
+    - name: Install runtime and test dependencies
+      run: |
+        pip install -r solutions/ess-maker-skills/scripts/requirements.txt
+        pip install -e .[test]
+
+    - name: Run lifecycle script test suite
+      run: >-
+        python -m pytest tests/scripts
+        --ignore=tests/scripts/test_installer_launch.py
+        --ignore=tests/scripts/test_installer_maker_profile.py
+        -q

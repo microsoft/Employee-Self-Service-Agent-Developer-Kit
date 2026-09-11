@@ -56,6 +56,7 @@ def normalize_components(raw_records):
             "schemaname": r.get("schemaname"),
             "componenttype": r.get("componenttype"),
             "data": r.get("data"),
+            "description": r.get("description") or "",
             "parentbotcomponentid": r.get("_parentbotcomponentid_value"),
         })
     return normalized
@@ -115,6 +116,24 @@ def discover_flow_ids_from_components(components):
 # Main
 # ---------------------------------------------------------------------------
 
+def _component_select():
+    return (
+        "botcomponentid,name,schemaname,componenttype,data,description,"
+        "_parentbotcomponentid_value"
+    )
+
+
+def fetch_components(env_url, token, bot_id):
+    """Fetch all agent components, including every evaluation test set."""
+    raw_components = query_all(
+        env_url, token,
+        entity_set="botcomponents",
+        select=_component_select(),
+        filter_expr=f"_parentbotid_value eq '{bot_id}'",
+    )
+    return normalize_components(raw_components)
+
+
 def fetch_all(env_url, token, bot_id, components=None):
     """Fetch components, template configs, and workflows from Dataverse.
 
@@ -127,13 +146,7 @@ def fetch_all(env_url, token, bot_id, components=None):
     # --- Fetch components ---
     if components is None:
         print("Fetching agent components...")
-        raw_components = query_all(
-            env_url, token,
-            entity_set="botcomponents",
-            select="botcomponentid,name,schemaname,componenttype,data,_parentbotcomponentid_value",
-            filter_expr=f"_parentbotid_value eq '{bot_id}'",
-        )
-        components = normalize_components(raw_components)
+        components = fetch_components(env_url, token, bot_id)
         print(f"  {len(components)} components fetched.\n")
 
     # --- Fetch template configs (full records) ---
