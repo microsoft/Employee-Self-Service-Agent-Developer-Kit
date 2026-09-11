@@ -41,8 +41,10 @@ from flightcheck.azure_arm_client import AzureArmClient
 
 ATTACH_METADATA = ".agentbuilder/attach.json"
 RAW_CHANGESET = ".agentbuilder/components.json"
+CANONICAL_SETUP_STATE = Path(".local/setup/config.json")
 DA_CONNECTION_STATE = Path(".local/setup/da-connection.json")
 DA_COMPONENT_SNAPSHOT = Path(".local/setup/da-components.json")
+CANONICAL_SETUP_SCHEMA_VERSION = 1
 PROJECTION_ENGINE = "microsoft-agents-objectmodel"
 STUDIO_RING_BY_HOST = {
     "copilotstudio.microsoft.com": "prod",
@@ -276,6 +278,132 @@ def _load_json(path: Path) -> dict[str, Any]:
 
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _load_canonical_setup_state(
+    kit_root: Path,
+) -> dict[str, Any] | None:
+    path = kit_root / CANONICAL_SETUP_STATE
+    if not path.exists():
+        return None
+    state = _load_json(path)
+    required_fields = {
+        "schema_version",
+        "status",
+        "setup_source",
+        "environment",
+        "agent",
+        "workspace",
+        "completed_at",
+    }
+    if set(state) != required_fields:
+        raise ExistingDASetupError(
+            "This workspace has setup state from an unsupported release. "
+            "Open a new workspace for DA setup."
+        )
+    if (
+        state.get("schema_version") != CANONICAL_SETUP_SCHEMA_VERSION
+        or state.get("status") != "complete"
+        or state.get("setup_source") != "existing-dev"
+    ):
+        raise ExistingDASetupError(
+            "This workspace has setup state from an unsupported release. "
+            "Open a new workspace for DA setup."
+        )
+    environment = state.get("environment")
+    agent = state.get("agent")
+    workspace = state.get("workspace")
+    if (
+        not isinstance(environment, dict)
+        or not isinstance(agent, dict)
+        or not isinstance(workspace, dict)
+        or workspace.get("status") != "qualified-complete"
+    ):
+        raise ExistingDASetupError(
+            "Canonical DA setup state is incomplete or malformed."
+        )
+    return state
+
+
+def _canonical_state_matches_connection(
+    state: dict[str, Any],
+    connection: dict[str, Any],
+) -> bool:
+    environment = state["environment"]
+    agent = state["agent"]
+    return (
+        environment.get("id") == connection["environment"]["id"]
+        and environment.get("tenant_id")
+        == connection["environment"]["tenantId"]
+        and environment.get("power_platform_api_endpoint")
+        == connection["environment"]["powerPlatformApiEndpoint"]
+        and environment.get("ring") == connection["environment"]["ring"]
+        and environment.get("api_version")
+        == connection["environment"]["apiVersion"]
+        and agent.get("id") == connection["agent"]["id"]
+        and agent.get("schema_name") == connection["agent"]["schemaName"]
+        and agent.get("realm") == connection["agent"]["realm"]
+        and agent.get("alm_family_id")
+        == connection["agent"]["almFamilyId"]
+    )
+
+
+def _record_canonical_setup_complete(
+    kit_root: Path,
+    connection: dict[str, Any],
+    workspace: dict[str, Any],
+) -> dict[str, Any]:
+    """Write the shared contract here until another DA setup source needs it."""
+    existing = _load_canonical_setup_state(kit_root)
+    if existing is not None and not _canonical_state_matches_connection(
+        existing,
+        connection,
+    ):
+        raise ExistingDASetupError(
+            "Canonical setup state identifies a different environment or "
+            "agent. Open a new workspace before changing the setup target."
+        )
+    state = {
+        "schema_version": CANONICAL_SETUP_SCHEMA_VERSION,
+        "status": "complete",
+        "setup_source": "existing-dev",
+        "environment": {
+            "id": connection["environment"]["id"],
+            "tenant_id": connection["environment"]["tenantId"],
+            "power_platform_api_endpoint": connection["environment"][
+                "powerPlatformApiEndpoint"
+            ],
+            "ring": connection["environment"]["ring"],
+            "api_version": connection["environment"]["apiVersion"],
+        },
+        "agent": {
+            "id": connection["agent"]["id"],
+            "name": connection["agent"]["name"],
+            "schema_name": connection["agent"]["schemaName"],
+            "realm": connection["agent"]["realm"],
+            "alm_family_id": connection["agent"]["almFamilyId"],
+            "workspace_slug": connection["agent"]["workspaceSlug"],
+        },
+        "workspace": {
+            "status": workspace["status"],
+            "folder": workspace["folder"],
+            "topic_count": workspace["topicCount"],
+            "projected_component_kinds": workspace[
+                "projectedComponentKinds"
+            ],
+            "unprojected_component_kinds": workspace[
+                "unprojectedComponentKinds"
+            ],
+            "unprojected_dialog_count": workspace[
+                "unprojectedDialogCount"
+            ],
+        },
+        "completed_at": (
+            existing["completed_at"] if existing is not None else _utc_now()
+        ),
+    }
+    _write_json(kit_root / CANONICAL_SETUP_STATE, state)
+    return state
 
 
 def _find_listed_agent(
@@ -548,11 +676,17 @@ def persist_da_connection_state(
 ) -> dict[str, Any]:
     """Persist connection identity without regressing later DA setup phases."""
     path = kit_root / DA_CONNECTION_STATE
-    canonical_state = kit_root / ".local" / "setup" / "config.json"
-    if canonical_state.exists():
+    canonical_state = _load_canonical_setup_state(kit_root)
+    if (
+        canonical_state is not None
+        and not _canonical_state_matches_connection(
+            canonical_state,
+            connection,
+        )
+    ):
         raise ExistingDASetupError(
-            "This workspace already has foundation setup state for another "
-            "platform. Use a new workspace for DA setup."
+            "This workspace already has setup state for another environment "
+            "or agent. Use a new workspace for DA setup."
         )
     workspace_config = kit_root / ".local" / "config.json"
     if workspace_config.exists():
@@ -1214,11 +1348,18 @@ def attach_existing_dev(
         component_counts=component_counts,
         unprojected_dialogs=unprojected_dialogs,
     )
+    canonical_state = _record_canonical_setup_complete(
+        kit_root,
+        final_state,
+        final_state["workspace"],
+    )
     return {
         **result,
         "connectionState": DA_CONNECTION_STATE.as_posix(),
         "connectionStatus": final_state["status"],
         "workspace": final_state["workspace"],
+        "setupState": CANONICAL_SETUP_STATE.as_posix(),
+        "setupStatus": canonical_state["status"],
     }
 
 

@@ -2,6 +2,11 @@
 
 This skill guides the user through creating a new Power Automate cloud flow for their Copilot Studio agent.
 
+When `.local/config.json` has `transport: "agentbuilder"`, this skill is
+local-only. Finish by saying the local workflow is ready and DA-GA deployment
+is not yet available. Do not offer workflow testing because it requires remote
+run-history inspection.
+
 ## IMPORTANT: When NOT to Create a New Workflow
 
 **Do NOT create a standalone workflow for ServiceNow, Workday, or SAP scenarios.**
@@ -15,13 +20,10 @@ template configs and topics. See `src/reference/ess-docs/customization/customize
 - The customer needs a custom connector for an internal API
 - The user explicitly requests a standalone workflow after being informed about the template config pattern
 
-If the user asks to create a workflow for ServiceNow, Workday, or SAP, redirect them:
-"ESS already has a shared flow for that integration — it's installed with the
-extension pack. Instead of creating a new workflow, I'll create a topic that uses
-the existing shared flow with a template configuration in Dataverse. This is the
-recommended ESS pattern."
-Then read `src/skills/topics/create/SKILL.md` and follow the template-config
-path. Integration topics remain on the existing path in this PR.
+If the user asks to create a workflow for ServiceNow, Workday, or SAP, explain
+that the corresponding DA-GA product extension is required and its setup
+guidance is not yet available in this release. Do not create a standalone flow
+or enter the retired Dataverse template-config path.
 
 ## Rules
 
@@ -117,8 +119,10 @@ python scripts/emit_capability.py workflow_create
 After the workflow is created, the user needs a topic to call it. Tell them:
 - "Your workflow is ready with ID `{GUID}`. To use it from a topic, add an `InvokeFlowAction` with `flowId: {GUID}`."
 - "Would you like me to create a topic that calls this workflow?"
-- "Want to check it works? I can exercise **{WorkflowName}** now and read its run history."
+- Unless the workspace uses AgentBuilder, ask: "Want to check it works? I can exercise **{WorkflowName}** now and read its run history."
   - On yes: read `src/skills/workflows/test/SKILL.md` and run its debug-and-validate loop **scoped to {WorkflowName}** — you already know the component (you just created this workflow), so **skip the "topic or workflow?" question**. Exercise the flow's failure inputs (missing record, unauthorized, malformed) alongside the valid request, then inspect the run.
+- For AgentBuilder, say workflow testing is not yet available because it
+  requires remote run-history inspection.
 
 If they say yes, hand off to the existing topic creation skill
 (`src/skills/topics/create/SKILL.md`).

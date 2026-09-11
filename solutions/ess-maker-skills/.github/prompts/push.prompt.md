@@ -1,15 +1,21 @@
 ---
 mode: agent
-description: "Type Enter to push local changes to your Copilot Studio agent"
+description: "Type Enter to check DA-GA deployment availability"
 ---
 
 # Push
 
-**Setup-state check.** Read `.local/config.json`. If it does not exist, OR `setup` is not `"complete"`, show:
+**Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`. If canonical state does not have `schema_version: 1` and `status: "complete"`, or local config does not have `setup: "complete"`, show:
 
 > Welcome to the ESS Maker Kit. Before running `/push`, type `/setup` to set up your environment.
 
 and STOP. Otherwise proceed.
+
+If `.local/config.json` has `transport: "agentbuilder"`, show:
+
+> Pushing local changes to a DA-GA agent is not yet available in this release. Your local files have not been changed.
+
+and STOP.
 
 Run a dry-run first so the user sees the exact diff before any mutation:
 

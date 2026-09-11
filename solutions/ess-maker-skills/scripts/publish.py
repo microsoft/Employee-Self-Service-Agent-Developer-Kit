@@ -39,6 +39,15 @@ def main():
     auto_yes = "--yes" in sys.argv
 
     config = load_config()
+    if (
+        config.get("transport") == "agentbuilder"
+        or config.get("agent", {}).get("transport") == "agentbuilder"
+    ):
+        print(
+            "ERROR: Publishing DA-GA AgentBuilder workspaces is not yet "
+            "available in this release."
+        )
+        sys.exit(2)
     env_url = config["dataverseEndpoint"]
     agent = config["agent"]
     bot_id = agent["botId"]

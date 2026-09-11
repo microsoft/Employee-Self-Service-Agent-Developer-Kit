@@ -360,6 +360,8 @@ def test_attach_materializes_authorable_topics_and_da_identity(
         setup_existing_da.PROJECTION_ENGINE
     )
     assert result["connectionStatus"] == "workspace-ready"
+    assert result["setupStatus"] == "complete"
+    assert result["setupState"] == ".local/setup/config.json"
     assert result["workspace"]["status"] == "qualified-complete"
     assert result["workspace"]["unprojectedComponentKinds"] == {
         "GlobalVariableComponent": 1
@@ -419,6 +421,42 @@ def test_attach_materializes_authorable_topics_and_da_identity(
         "GlobalVariableComponent": 1
     }
     assert connection["workspace"]["unprojectedDialogCount"] == 0
+    canonical = json.loads(
+        (
+            tmp_path / ".local" / "setup" / "config.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert canonical == {
+        "schema_version": 1,
+        "status": "complete",
+        "setup_source": "existing-dev",
+        "environment": {
+            "id": ENVIRONMENT_ID,
+            "tenant_id": TENANT_ID,
+            "power_platform_api_endpoint": FakeClient.host,
+            "ring": FakeClient.ring,
+            "api_version": FakeClient.api_version,
+        },
+        "agent": {
+            "id": AGENT_ID,
+            "name": "Employee Self-Service HR",
+            "schema_name": SCHEMA,
+            "realm": "dev",
+            "alm_family_id": FAMILY,
+            "workspace_slug": "employee-self-service-hr",
+        },
+        "workspace": {
+            "status": "qualified-complete",
+            "folder": "workspace/agents/employee-self-service-hr",
+            "topic_count": 1,
+            "projected_component_kinds": ["DialogComponent"],
+            "unprojected_component_kinds": {
+                "GlobalVariableComponent": 1
+            },
+            "unprojected_dialog_count": 0,
+        },
+        "completed_at": canonical["completed_at"],
+    }
     raw_cache = json.loads(
         (
             tmp_path / ".local" / "setup" / "da-components.json"
@@ -1747,7 +1785,7 @@ def test_da_connection_rejects_another_platform_workspace(
 
     with pytest.raises(
         setup_existing_da.ExistingDASetupError,
-        match="another platform|non-DA",
+        match="unsupported release|non-DA",
     ):
         setup_existing_da.attach_existing_dev(
             FakeClient(),

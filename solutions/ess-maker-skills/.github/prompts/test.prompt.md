@@ -15,11 +15,18 @@ component and diagnoses faults. It is **not** the eval gate: to author evaluatio
 `/evaluate`, and running an eval set as a graded pass/fail over the deployed agent is a
 separate runtime-eval runner, not this command.
 
-**Setup-state check.** Read `.local/config.json`. If it does not exist, OR `setup` is not `"complete"`, show:
+**Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`. If canonical state does not have `schema_version: 1` and `status: "complete"`, or local config does not have `setup: "complete"`, show:
 
 > Welcome to the ESS Maker Kit. Before running `/test`, type `/setup` to set up your environment.
 
 and STOP. Otherwise proceed.
+
+If `.local/config.json` has `transport: "agentbuilder"`, retain browser-based
+topic driving and reply classification, but do not run
+`flow_run_inspect.py`, `plant_debug.py`, or `strip_debug.py`. Report that these
+server-side diagnostics are not yet available for DA-GA workspaces. Workflow
+testing depends on run-history inspection, so if the requested component is a
+workflow, report that DA-GA workflow testing is not yet available and STOP.
 
 **IMPORTANT: When the user just types `/test` with no additional text, do
 NOT silently route anywhere. Ask the user what they want to test first.**
@@ -32,6 +39,8 @@ NOT silently route anywhere. Ask the user what they want to test first.**
    - **topic** (e.g., "topic", "a topic", "the topic I just made")
      -> Read `src/skills/topics/test/SKILL.md` and follow its instructions.
    - **workflow** (e.g., "workflow", "a workflow", "the flow")
-     -> Read `src/skills/workflows/test/SKILL.md` and follow its instructions.
+     -> For an AgentBuilder workspace, report that DA-GA workflow testing is
+        not yet available and STOP. Otherwise, read
+        `src/skills/workflows/test/SKILL.md` and follow its instructions.
 
 Do NOT proceed without reading the appropriate skill file first.
