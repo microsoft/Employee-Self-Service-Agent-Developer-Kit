@@ -4,6 +4,11 @@ This skill guides the user through modifying existing evaluation test cases
 in their Copilot Studio agent. Updating means editing the local `.mcs.yml`
 files AND pushing changes to Copilot Studio via push.
 
+When `.local/config.json` has `transport: "agentbuilder"`, complete the
+checkpoint, local edit, and validation, but skip every push or
+deployment-verification instruction. Finish by saying the local files are ready
+and DA-GA evaluation deployment is not yet available.
+
 ## CRITICAL — Local Files Are a Working Copy
 
 The files in `workspace/agents/{slug}/evaluations/` are a **working copy** of the

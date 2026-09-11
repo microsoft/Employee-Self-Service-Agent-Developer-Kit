@@ -5,11 +5,16 @@ description: "Type Enter to generate evaluation test sets for your agent"
 
 # Evaluate
 
-**Setup-state check.** Read `.local/config.json`. If it does not exist, OR `setup` is not `"complete"`, show:
+**Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`. If canonical state does not have `schema_version: 1` and `status: "complete"`, or local config does not have `setup: "complete"`, show:
 
 > Welcome to the ESS Maker Kit. Before running `/evaluate`, type `/setup` to set up your environment.
 
 and STOP. Otherwise proceed.
+
+If `.local/config.json` has `transport: "agentbuilder"`, continue generating or
+editing evaluation files locally but skip every instruction to push them.
+Finish by stating that the local files were saved and DA-GA evaluation
+deployment is not yet available in this release.
 
 ## Flow
 

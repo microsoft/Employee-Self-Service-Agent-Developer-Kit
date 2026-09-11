@@ -18,6 +18,7 @@ URIs. These tests pin that behavior so it doesn't regress.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -192,6 +193,67 @@ class TestInfrastructureScopeAuthGating:
         assert exc.value.code == 1
 
 
+class TestAgentBuilderLocalScope:
+    def test_runs_without_dataverse_or_remote_authentication(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        local_dir = tmp_path / ".local"
+        local_dir.mkdir()
+        (local_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "transport": "agentbuilder",
+                    "environmentId": "environment-id",
+                    "agents": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(cli, "FlightCheckRunner", _FakeRunner)
+        monkeypatch.setattr(
+            cli,
+            "_print_prioritized_summary",
+            lambda _result: None,
+        )
+        monkeypatch.setattr(cli, "save_results", lambda _result, _output: None)
+        for client_name in (
+            "GraphClient",
+            "PPAdminClient",
+            "PVAClient",
+            "PowerPlatformClient",
+            "AzureArmClient",
+        ):
+            monkeypatch.setattr(
+                cli,
+                client_name,
+                lambda *_args, _name=client_name, **_kwargs: (
+                    _ for _ in ()
+                ).throw(
+                    AssertionError(
+                        f"{_name} auth should be skipped"
+                    )
+                ),
+            )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "cli.py",
+                "--scope",
+                "local",
+                "--no-open",
+                "--no-telemetry",
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+
+        assert exc.value.code == 0
+
+
 class _OkClient:
     """Minimal client stub whose authenticate() succeeds and does nothing."""
 
@@ -266,4 +328,3 @@ class TestPvaScopeGating:
 
         assert exc.value.code == 0
         assert _RecordingPVA.instantiated is True
-

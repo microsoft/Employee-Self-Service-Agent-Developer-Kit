@@ -1,7 +1,7 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
-# Connect an Existing DA Dev Agent
+# Set Up an Existing DA Dev Agent
 
-Use this path when the maker wants to connect this ADK workspace to an existing editable DA Dev agent. Do not run the Dataverse foundation steps, request a Dataverse URL, create a preferred solution, or start Dataverse MCP.
+This is the current DA-GA setup path. It connects this ADK workspace to an existing editable DA Dev agent. Do not run the Dataverse foundation steps, request a Dataverse URL, create a preferred solution, or start Dataverse MCP.
 
 This path supports one Power Platform environment and one active platform per ADK workspace. If the command reports existing setup for another platform, tell the maker to open or create a separate ADK workspace and stop.
 
@@ -151,7 +151,11 @@ Dialog components are converted through the Microsoft Object Model serializer. I
 
 Parse `DA_EXISTING_DEV_SETUP_JSON:`. When `connectionStatus` is `workspace-ready`, show:
 
-**{agent display name}** is connected as the editable Dev agent. Its available topics are in your local workspace and ready for customization.
+**{agent display name}** is set up as the editable Dev agent. Its available topics are in your local workspace and ready for customization.
+
+Treat setup as complete only when the result also reports `setupStatus` as
+`complete`. The command writes `.local/setup/config.json` only after the
+workspace and active-agent configuration are ready.
 
 If the result reports unprojected component kinds or a nonzero `unprojectedDialogCount`, add:
 

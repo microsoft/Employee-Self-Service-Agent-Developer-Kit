@@ -9,11 +9,18 @@ You are helping a customer create a new component for their ESS agent. This
 generates and pushes the component, and then helps the maker **validate its
 runtime behaviour**.
 
-**Setup-state check.** Read `.local/config.json`. If it does not exist, OR `setup` is not `"complete"`, show:
+**Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`. If canonical state does not have `schema_version: 1` and `status: "complete"`, or local config does not have `setup: "complete"`, show:
 
 > Welcome to the ESS Maker Kit. Before running `/create`, type `/setup` to set up your environment.
 
 and STOP. Otherwise proceed.
+
+If `.local/config.json` has `transport: "agentbuilder"`, continue with local
+authoring but skip every instruction to push, publish, or run server-backed
+validation. Finish by stating that the local files were saved and DA-GA
+deployment is not yet available in this release. Do not offer `/test` as
+validation of the new local component because `/test` can exercise only the
+unchanged deployed agent.
 
 **IMPORTANT: When the user just types `/create` with no additional text, do NOT silently route anywhere. Ask the user what they want to create first.**
 
@@ -58,7 +65,11 @@ When `/create` includes additional text, explicit component intent always wins:
 
 Do NOT proceed without reading the appropriate skill file first.
 
-## Completion gate — offer `/test` before finishing
+## Completion gate — deployed changes only
+
+This gate does not apply when `.local/config.json` has
+`transport: "agentbuilder"`. In that mode, state that runtime testing is
+deferred until a supported deployment path can make the local component live.
 
 A scan, a push, `validate.py` (flow **registration** check), or a publish is a
 deploy step, **not** a behavioural test — do not treat any of them as validating
