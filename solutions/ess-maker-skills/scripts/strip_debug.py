@@ -41,6 +41,15 @@ def main(argv=None) -> int:
     from auth import authenticate, load_config
 
     config = load_config()
+    if (
+        config.get("transport") == "agentbuilder"
+        or config.get("agent", {}).get("transport") == "agentbuilder"
+    ):
+        print(
+            "ERROR: Server-side debug stripping is not yet available for "
+            "DA-GA AgentBuilder workspaces."
+        )
+        return 2
     env_url = config["dataverseEndpoint"]
     bot_id = config["agent"]["botId"]
 

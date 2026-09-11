@@ -10,13 +10,21 @@ and workflows are generated and pushed, then the maker is helped to **validate
 their runtime behaviour**. Evaluation test sets may instead be generated as
 local starter artifacts, depending on the source the maker chooses.
 
-**Setup-state note.** Read `.local/config.json`. Creating a **topic** or
-**workflow** requires a configured agent; if `.local/config.json` does not exist
-OR `setup` is not `"complete"`, show the message below and STOP **for those two
-choices**. Creating an **evaluation** test set does NOT require setup — a
-catalogue-grounded starter set can be generated with no agent configured.
+**Setup-state note.** Creating a **topic** or **workflow** requires completed
+canonical setup. Read `.local/setup/config.json`; if it does not have
+`schema_version: 1` and `status: "complete"`, show the message below and STOP
+**for those two choices**. Creating an **evaluation** test set does NOT require
+setup — a catalogue-grounded starter set can be generated with no agent
+configured.
 
 > Welcome to the ESS Maker Kit. Before creating a topic or workflow, type `/setup` to set up your environment.
+
+If `.local/config.json` has `transport: "agentbuilder"`, continue with local
+authoring but skip every instruction to push, publish, or run server-backed
+validation. Finish by stating that the local files were saved and DA-GA
+deployment is not yet available in this release. Do not offer `/test` as
+validation of the new local component because `/test` can exercise only the
+unchanged deployed agent.
 
 **IMPORTANT: When the user just types `/create` with no additional text, do NOT silently route anywhere. Ask the user what they want to create first.**
 
@@ -65,7 +73,11 @@ When `/create` includes additional text, explicit component intent always wins:
 
 Do NOT proceed without reading the appropriate skill file first.
 
-## Topic/workflow completion gate — offer `/test` before finishing
+## Topic/workflow completion gate
+
+This gate does not apply when `.local/config.json` has
+`transport: "agentbuilder"`. In that mode, state that runtime testing is
+deferred until a supported deployment path can make the local component live.
 
 For topic or workflow creation, a scan, a push, `validate.py` (flow
 **registration** check), or a publish is a deploy step, **not** a behavioural

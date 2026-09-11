@@ -4,6 +4,12 @@ This skill guides the user through modifying an existing Power Automate cloud
 flow (workflow) in their Copilot Studio agent. Updating means editing the
 local working copy AND pushing the change to the live environment via push.
 
+When `.local/config.json` has `transport: "agentbuilder"`, this skill is
+local-only. Complete the checkpoint, edit, and scan, but skip every push or
+deployment-verification instruction. Finish by saying the local workflow is
+ready and DA-GA deployment is not yet available. Do not offer workflow testing
+because it requires remote run-history inspection.
+
 ## CRITICAL — Local Files Are a Working Copy
 
 The files in `workspace/agents/{slug}/` are a **working copy** of what's deployed in
@@ -113,9 +119,11 @@ python scripts/push.py --yes
 
 ## Step 9: Continue into test, or offer next steps
 
-Offer to continue straight into debugging the change — and if the user says yes, **do it in the same flow, don't make them start over**:
+Unless the workspace uses AgentBuilder, offer to continue straight into debugging the change — and if the user says yes, **do it in the same flow, don't make them start over**:
 
 - "Want to check it works? I can exercise **{WorkflowName}** now and read its run history."
   - On yes: read `src/skills/workflows/test/SKILL.md` and run its debug-and-validate loop **scoped to {WorkflowName}** — you already know the component (this was a workflow update), so **skip the "topic or workflow?" question**. Exercise the flow's failure inputs (missing record, unauthorized, malformed) alongside the valid request, then inspect the run.
+- For AgentBuilder, do not make this offer; say workflow testing is not yet
+  available because it requires remote run-history inspection.
 - "Would you like to make another change?"
 - "Type `/menu` to see all available commands."

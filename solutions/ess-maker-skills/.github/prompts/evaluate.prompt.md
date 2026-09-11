@@ -10,6 +10,11 @@ not require a configured agent. Updating can also proceed without setup when
 workspace-level evaluation sets exist. Deleting deployed agent sets requires a
 configured agent.
 
+If `.local/config.json` has `transport: "agentbuilder"`, continue generating or
+editing evaluation files locally but skip every instruction to push them.
+Finish by stating that the local files were saved and DA-GA evaluation
+deployment is not yet available in this release.
+
 ## Flow
 
 1. Ask the user: "What would you like to do with evaluation test sets -
