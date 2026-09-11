@@ -13,21 +13,31 @@ These topics extend the base ESS agent with additional Workday scenarios. They u
 
 The following are included in the **EssITWorkdayHCM** and **EssHRWorkdayHCM** base solutions. Confirm they are active before adding any topic here.
 
-1. In Copilot Studio, go to **Topics** and confirm **WorkdaySystemGetRESTExecution** is present and turned on.
+1. In Copilot Studio, go to **Topics** and confirm **WorkdaySystemGetRESTExecution** is present and turned on. Every topic here calls it to reach the Workday REST API.
 
-2. In this topic, go to the node where the flow is configured as **WorkdayRESTExecution** and navigate to this flow (Power Automate page) and confirm its status is **On**. If it is off, open it and turn it on. You may be asked to authorize the Workday connection.
+2. `WorkdaySystemGetRESTExecution` invokes the **WorkdayRESTExecution** flow internally. Open that flow on its Power Automate page and confirm its status is **On**. If it is off, turn it on. You may be asked to authorize the Workday connection.
 
-If either is missing, import the latest EssITWorkdayHCM or EssHRWorkdayHCM solution first.
+3. **`TransferEmployee.yaml` only** — it also calls **WorkdayManagerCheck** as its first action (to confirm the caller is a manager). Confirm that topic is present and turned on before adding `TransferEmployee.yaml`.
+
+If any of these is missing, import the latest EssITWorkdayHCM or EssHRWorkdayHCM solution first.
 
 ## Namespace check
 
-Each topic references other topics by their full namespace. Copilot Studio resolves these automatically based on which solution you have deployed. After saving a topic, verify in the code editor that all `dialog:` references match your solution's namespace.
+Each topic references other topics by their full namespace in the `dialog:` field. **These samples ship using the base namespace `msdyn_copilotforemployeeselfservice.topic.`** — for example:
+
+```yaml
+dialog: msdyn_copilotforemployeeselfservice.topic.WorkdaySystemGetRESTExecution
+```
+
+One exception: `TransferEmployee.yaml` references the manager-check topic on the HR namespace (`msdyn_copilotforemployeeselfservicehr.topic.WorkdayManagerCheck`).
+
+If your deployed solution uses a suffixed namespace, update every `dialog:` reference in the code editor to match before publishing:
 
 **EssITWorkdayHCM** — references should use `msdyn_copilotforemployeeselfserviceit.topic.`
 
 **EssHRWorkdayHCM** — references should use `msdyn_copilotforemployeeselfservicehr.topic.`
 
-If any reference does not match, update it manually in the code editor before publishing.
+After saving a topic, verify in the code editor that all `dialog:` references resolve against your solution's namespace. If any reference does not resolve, update it manually before publishing.
 
 ## How to add a topic
 
@@ -69,12 +79,32 @@ If your Workday tenant requires a job change reason for transfers, replace `""` 
 
 ## Adjustable limits
 
-Both `GetInboxTasks.yaml` and `GetPaySlips.yaml` have a variable at the top that controls how many records are fetched. Change the value in the code editor after pasting if needed.
+Both `GetInboxTasks.yaml` and `GetPaySlips.yaml` have a variable at the top that controls how many records are fetched (passed straight to the Workday API's `limit`). Change the value in the code editor after pasting if needed. The maximum below reflects the largest `limit` the Workday REST API accepts per call.
 
 | Topic | Variable | Default | Maximum |
 | --- | --- | --- | --- |
 | GetInboxTasks | `Topic.MaxTasks` | 20 | 100 |
 | GetPaySlips | `Topic.MaxSlips` | 10 | 100 |
+
+## Other customization points
+
+These are optional edits made in the code editor after pasting a topic. None are required for the topic to run.
+
+**Employee identity (all topics).** Every topic identifies the signed-in user through the global variable `Global.ESS_UserContext_Employee_Id`, which the base ESS solution populates at conversation start. The worker ID is sent to Workday as `Employee_ID=<value>`. If your environment sources the employee ID differently, update the `parameters` binding on the relevant `BeginDialog` node, for example:
+
+```yaml
+parameters: ="{""workerID"":""Employee_ID=" & Global.ESS_UserContext_Employee_Id & """,""limit"":" & Topic.MaxSlips & ",""offset"":0}"
+```
+
+**RequestFeedback.yaml — expiration window.** The request defaults to expiring 14 days out. Change the day count in the `expirationDate` input to adjust:
+
+```yaml
+value: Text(DateAdd(Today(), 14, TimeUnit.Days), "yyyy-MM-dd")
+```
+
+**RequestFeedback.yaml — sharing options.** The card offers "Share with me only" and "Also share with my manager". Choosing the manager option sets `feedbackConfidential = true` (so the responder's identity stays private from the subject while the manager can see it). Edit the choice labels or the `set_confidential` mapping if your tenant models feedback visibility differently.
+
+**TransferEmployee.yaml — effective date and team move.** The effective date defaults to today (`Text(Today(), "yyyy-MM-dd")`); the manager can change it in the card. The submit binding sends `moveManagersTeam: false`, so only the selected employee moves. Set it to `true` if you want the whole team to move with the manager.
 
 ## Previews
 

@@ -1,0 +1,13 @@
+{
+  "envName": "provision3",
+  "envUrl": "https://org4cd8d7db.crm10.dynamics.com",
+  "envId": "2e91422d-4b77-eba9-a61b-31d3410e09a1",
+  "organizationId": "83506b16-a74e-f111-a817-7ced8d6e2e7b",
+  "mode": "create",
+  "ring": "preprod",
+  "persona": "hr",
+  "isv": "workday",
+  "status": "ready",
+  "completedAt": "2026-05-13T17:00:00Z",
+  "createdAt": "2026-05-13T09:00:00Z"
+}
