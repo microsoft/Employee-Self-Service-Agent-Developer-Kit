@@ -452,9 +452,7 @@ if ($FlightCheckOnly) {
         @{ Id = 'Python.Python.3.12';         Name = 'Python 3.12'; Cmd = 'python'      },
         @{ Id = 'Microsoft.PowerShell';       Name = 'PowerShell 7'; Cmd = 'pwsh'       },
         @{ Id = 'Git.Git';                    Name = 'Git for Windows'; Cmd = 'git'     },
-        @{ Id = 'GitHub.cli';                 Name = 'GitHub CLI'; Cmd = 'gh'           },
-        @{ Id = 'Microsoft.DotNet.Runtime.10'; Name = '.NET 10 Runtime'; Cmd = 'dotnet'  },
-        @{ Id = 'Microsoft.NuGet';             Name = 'NuGet'; Cmd = 'nuget'             }
+        @{ Id = 'GitHub.cli';                 Name = 'GitHub CLI'; Cmd = 'gh'           }
     )
 }
 
@@ -468,13 +466,6 @@ if (-not $wingetAvailable) {
             $resolved = Resolve-Python
             if ($resolved) {
                 Write-Ok "$($pkg.Name) (found: $resolved)"
-            } else {
-                $missingTools += $pkg.Name
-            }
-        } elseif ($pkg.Id -eq 'Microsoft.DotNet.Runtime.10') {
-            $pythonArchitecture = Get-PythonArchitecture
-            if ($pythonArchitecture -and (Test-DotNet10Runtime -Architecture $pythonArchitecture)) {
-                Write-Ok "$($pkg.Name) ($pythonArchitecture, already installed)"
             } else {
                 $missingTools += $pkg.Name
             }
@@ -496,8 +487,6 @@ if (-not $wingetAvailable) {
             Write-Err2 '  VS Code: https://code.visualstudio.com/download'
             Write-Err2 '  PowerShell 7: https://aka.ms/powershell-release?tag=stable'
             Write-Err2 '  GitHub CLI: https://cli.github.com/'
-            Write-Err2 '  .NET 10 Runtime: https://dotnet.microsoft.com/download/dotnet/10.0'
-            Write-Err2 '  NuGet: https://www.nuget.org/downloads'
         }
         throw "Required tools are missing and winget is not available to install them."
     }
@@ -517,29 +506,6 @@ if (-not $wingetAvailable) {
     if ($LASTEXITCODE -ne 0) {
         throw "winget configure failed with exit code $LASTEXITCODE. If you see 'Extended features are not enabled', run 'winget configure --enable' once and retry, or omit -UseDsc to use the direct-install path."
     }
-    if (-not $FlightCheckOnly) {
-        $pythonArchitecture = Get-PythonArchitecture
-        if (-not $pythonArchitecture) {
-            throw 'Could not determine the installed Python architecture.'
-        }
-        if (-not (Test-DotNet10Runtime -Architecture $pythonArchitecture)) {
-            Write-Step "Installing .NET 10 Runtime for $pythonArchitecture Python"
-            $null = Invoke-Native {
-                & winget install --id Microsoft.DotNet.Runtime.10 `
-                                 --source winget `
-                                 --exact `
-                                 --architecture $pythonArchitecture `
-                                 --force `
-                                 --silent `
-                                 --accept-package-agreements `
-                                 --accept-source-agreements `
-                                 --disable-interactivity
-            }
-            if ($LASTEXITCODE -ne 0) {
-                throw "winget install Microsoft.DotNet.Runtime.10 ($pythonArchitecture) failed with exit code $LASTEXITCODE"
-            }
-        }
-    }
 } else {
     # Default path - direct `winget install` per package. Works on any GA
     # winget without enabling extended features. Idempotent: re-running just
@@ -548,9 +514,6 @@ if (-not $wingetAvailable) {
         # Skip if already installed (avoids unnecessary winget calls + elevation prompts)
         $existing = if ($pkg.Cmd -eq 'python') {
             Resolve-Python
-        } elseif ($pkg.Id -eq 'Microsoft.DotNet.Runtime.10') {
-            $pythonArchitecture = Get-PythonArchitecture
-            $pythonArchitecture -and (Test-DotNet10Runtime -Architecture $pythonArchitecture)
         } else {
             Get-Command $pkg.Cmd -ErrorAction SilentlyContinue
         }
@@ -570,13 +533,6 @@ if (-not $wingetAvailable) {
             '--accept-source-agreements',
             '--disable-interactivity'
         )
-        if ($pkg.Id -eq 'Microsoft.DotNet.Runtime.10') {
-            $pythonArchitecture = Get-PythonArchitecture
-            if (-not $pythonArchitecture) {
-                throw 'Could not determine the installed Python architecture.'
-            }
-            $wingetArgs += @('--architecture', $pythonArchitecture, '--force')
-        }
         $wingetOutput = Invoke-Native {
             & winget @wingetArgs
         }
@@ -595,16 +551,100 @@ if (-not $wingetAvailable) {
         # Both mean "we're good", anything else is a real failure.
         $code = $LASTEXITCODE
         if ($code -eq 0 -or $code -eq -1978335189) {
-            if ($pkg.Id -eq 'Microsoft.DotNet.Runtime.10' -and
-                -not (Test-DotNet10Runtime -Architecture $pythonArchitecture)) {
-                throw "winget did not install a .NET 10 Runtime matching $pythonArchitecture Python."
-            }
             Write-Ok "$($pkg.Name)"
         } else {
             if ($FlightCheckOnly) {
                 Write-Warn2 "$($pkg.Name) install exited $code. Will check if usable anyway."
             } else {
                 throw "winget install $($pkg.Id) failed with exit code $code"
+            }
+        }
+    }
+}
+
+if (-not $FlightCheckOnly) {
+    Write-Step 'Installing optional Object Model tools'
+    $pythonArchitecture = Get-PythonArchitecture
+    $objectModelRecoveryPath = Join-Path (
+        Join-Path $InstallRoot ([IO.Path]::GetFileNameWithoutExtension(($RepoUrl -split '/')[-1]))
+    ) 'solutions\ess-maker-skills\scripts\install_agentbuilder_object_model.py'
+    $objectModelTools = @(
+        @{
+            Id = 'Microsoft.DotNet.Runtime.10'
+            Name = '.NET 10 Runtime'
+            Architecture = $pythonArchitecture
+            IsInstalled = {
+                $pythonArchitecture -and
+                (Test-DotNet10Runtime -Architecture $pythonArchitecture)
+            }
+            Manual = if ($pythonArchitecture) {
+                "winget install --id Microsoft.DotNet.Runtime.10 --architecture $pythonArchitecture"
+            } else {
+                'https://dotnet.microsoft.com/download/dotnet/10.0'
+            }
+            FollowUp = $null
+        },
+        @{
+            Id = 'Microsoft.NuGet'
+            Name = 'NuGet'
+            Architecture = $null
+            IsInstalled = { [bool](Get-Command nuget -ErrorAction SilentlyContinue) }
+            Manual = 'winget install --id Microsoft.NuGet'
+            FollowUp = "python `"$objectModelRecoveryPath`""
+        }
+    )
+
+    foreach ($tool in $objectModelTools) {
+        if (& $tool.IsInstalled) {
+            Write-Ok "$($tool.Name) (already installed)"
+            continue
+        }
+        if (-not $wingetAvailable) {
+            Write-Warn2 "Serialization support dependency '$($tool.Name)' was not installed."
+            Write-Warn2 'ESS ADK setup will continue.'
+            Write-Warn2 "Install it later with: $($tool.Manual)"
+            if ($tool.FollowUp) {
+                Write-Warn2 "Then install the serialization packages: $($tool.FollowUp)"
+            }
+            continue
+        }
+
+        $wingetArgs = @(
+            'install',
+            '--id', $tool.Id,
+            '--source', 'winget',
+            '--exact',
+            '--silent',
+            '--accept-package-agreements',
+            '--accept-source-agreements',
+            '--disable-interactivity'
+        )
+        if ($tool.Architecture) {
+            $wingetArgs += @('--architecture', $tool.Architecture, '--force')
+        }
+        Start-Spinner "installing $($tool.Name) ($($tool.Id))"
+        $wingetOutput = Invoke-Native { & winget @wingetArgs }
+        $code = $LASTEXITCODE
+        Stop-Spinner
+        foreach ($rawLine in $wingetOutput) {
+            $line = "$rawLine".Trim()
+            if ($line -and $line -notmatch '^[\\/\|\-]$' -and $line -notmatch '[^\x20-\x7E]') {
+                Write-Host "      $line"
+            }
+        }
+        if ($code -eq 0 -or $code -eq -1978335189) {
+            $env:Path = [Environment]::GetEnvironmentVariable('Path','Machine') + ';' +
+                        [Environment]::GetEnvironmentVariable('Path','User')
+        }
+
+        if (($code -eq 0 -or $code -eq -1978335189) -and (& $tool.IsInstalled)) {
+            Write-Ok "$($tool.Name)"
+        } else {
+            Write-Warn2 "Serialization support dependency '$($tool.Name)' was not installed."
+            Write-Warn2 'ESS ADK setup will continue.'
+            Write-Warn2 "Install it later with: $($tool.Manual)"
+            if ($tool.FollowUp) {
+                Write-Warn2 "Then install the serialization packages: $($tool.FollowUp)"
             }
         }
     }
@@ -825,31 +865,39 @@ if ($deferPip) {
 if (-not $FlightCheckOnly) {
     $objectModelInstaller = Join-Path $repoPath 'solutions\ess-maker-skills\scripts\install_agentbuilder_object_model.py'
     if (-not (Test-Path -LiteralPath $objectModelInstaller)) {
-        throw "Object Model dependency installer not found: $objectModelInstaller"
-    }
-    $pythonExe = Resolve-Python
-    if (-not $pythonExe) {
-        throw 'Python not found. Cannot install Microsoft Object Model dependencies.'
-    }
-
-    Write-Step 'Installing Microsoft Object Model dependencies'
-    if ($pythonExe -eq 'py -3.12' -or $pythonExe -eq 'py -3') {
-        $pyVersion = ($pythonExe -split ' ')[1]
-        $objectModelOutput = Invoke-Native {
-            & py $pyVersion $objectModelInstaller
-        }
+        Write-Warn2 'Serialization support dependencies were not installed.'
+        Write-Warn2 'ESS ADK setup will continue.'
+        Write-Warn2 "The dependency installer was not found: $objectModelInstaller"
     } else {
-        $objectModelOutput = Invoke-Native {
-            & $pythonExe $objectModelInstaller
+        $pythonExe = Resolve-Python
+        if (-not $pythonExe) {
+            Write-Warn2 'Python not found. Cannot install Microsoft Object Model dependencies.'
+        } else {
+            Write-Step 'Installing Microsoft Object Model dependencies'
+            if ($pythonExe -eq 'py -3.12' -or $pythonExe -eq 'py -3') {
+                $pyVersion = ($pythonExe -split ' ')[1]
+                $objectModelOutput = Invoke-Native {
+                    & py $pyVersion $objectModelInstaller
+                }
+            } else {
+                $objectModelOutput = Invoke-Native {
+                    & $pythonExe $objectModelInstaller
+                }
+            }
+            $objectModelExit = $LASTEXITCODE
+            foreach ($line in $objectModelOutput) {
+                if ($line) { Write-Host "      $line" }
+            }
+            if ($objectModelExit -eq 0) {
+                Write-Ok 'Microsoft Object Model dependencies installed'
+            } else {
+                Write-Warn2 "Serialization support dependencies were not installed (exit $objectModelExit)."
+                Write-Warn2 'ESS ADK setup will continue.'
+                Write-Warn2 'After resolving the reported NuGet issue, run:'
+                Write-Warn2 '  python solutions\ess-maker-skills\scripts\install_agentbuilder_object_model.py'
+            }
         }
     }
-    foreach ($line in $objectModelOutput) {
-        if ($line) { Write-Host "      $line" }
-    }
-    if ($LASTEXITCODE -ne 0) {
-        throw "Microsoft Object Model dependency installation failed with exit code $LASTEXITCODE"
-    }
-    Write-Ok 'Microsoft Object Model dependencies installed'
 }
 
 # ---------------------------------------------------------------------------
