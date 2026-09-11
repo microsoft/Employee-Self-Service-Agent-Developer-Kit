@@ -8,6 +8,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+import yaml
+
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _SOLUTION = _REPO_ROOT / "solutions" / "ess-maker-skills"
@@ -71,6 +73,19 @@ _LANDING_PAGE_PROMPT = (
 )
 _LANDING_PAGE_SKILL = (
     _SOLUTION / "src" / "skills" / "landing-page-config" / "SKILL.md"
+)
+_ORG_ANNOUNCEMENTS_PROMPT = (
+    _SOLUTION / ".github" / "prompts" / "org-announcements.prompt.md"
+)
+_ORG_ANNOUNCEMENTS_SKILL = (
+    _SOLUTION / "src" / "skills" / "org-announcements" / "SKILL.md"
+)
+_ORG_ANNOUNCEMENTS_REQUIREMENTS = (
+    _SOLUTION
+    / "src"
+    / "mcp"
+    / "agentconfig_org_announcements"
+    / "requirements.txt"
 )
 _SCRIPT_REQUIREMENTS = _SOLUTION / "scripts" / "requirements.txt"
 _PATH_RE = re.compile(r"`(src/skills/[^`]+?\.md)`")
@@ -404,6 +419,98 @@ def test_landing_page_prompt_routes_to_setup_gated_skill() -> None:
     assert "MCP: List Servers" in skill
 
 
+def test_org_announcements_prompt_routes_to_setup_gated_skill() -> None:
+    prompt = _ORG_ANNOUNCEMENTS_PROMPT.read_text(encoding="utf-8")
+    skill = _ORG_ANNOUNCEMENTS_SKILL.read_text(encoding="utf-8")
+    normalized_skill = " ".join(skill.split())
+
+    assert "mode: agent" in prompt
+    assert "src/skills/org-announcements/SKILL.md" in prompt
+    assert ".local/config.json" not in prompt
+    assert (
+        'If the file does not exist, or its `setup` value is not `"complete"`'
+        in normalized_skill
+    )
+    assert (
+        "Before using `/org-announcements`, type `/setup` to set up your "
+        "environment." in normalized_skill
+    )
+    assert (
+        "mcp_config.py validate --server ess-org-announcements"
+        in normalized_skill
+    )
+    assert "mcp_config.py materialize-defaults" in normalized_skill
+    assert "MCP: List Servers" in skill
+
+
+def test_org_announcements_skill_discloses_tenant_and_agent_scope() -> None:
+    skill = " ".join(
+        _ORG_ANNOUNCEMENTS_SKILL.read_text(encoding="utf-8").split()
+    )
+
+    assert "one deployed ESS agent in the authenticated tenant" in skill
+    assert "required `titleId`" in skill
+    assert "100-current-item limit and latest-50 archived window" in skill
+    assert "never supply `tenantId` to a tool" in skill
+
+
+def test_org_announcements_skill_permits_one_opener_and_no_model_write() -> None:
+    skill = " ".join(
+        _ORG_ANNOUNCEMENTS_SKILL.read_text(encoding="utf-8").split()
+    )
+
+    assert "at most once per maker turn" in skill
+    assert "`open_org_announcements` reads only" in skill
+    assert (
+        "Do not call `save_bulletin`, `transition_bulletin`, or "
+        "`duplicate_bulletin`" in skill
+    )
+    assert (
+        "Do not issue any further `search_audience_groups` call once the "
+        "widget is open" in skill
+    )
+    assert "Never claim an announcement was created, saved, published" in skill
+
+
+def test_org_announcements_resolves_title_without_initializing_landing_config() -> None:
+    skill = " ".join(_ORG_ANNOUNCEMENTS_SKILL.read_text(encoding="utf-8").split())
+
+    assert "maker's explicit `titleId`" in skill
+    assert "`list_agent_configs`, then `search_agents`" in skill
+    assert "Ask the maker to choose among ambiguous candidates" in skill
+    assert "Never fall back to tenant-wide announcements" in skill
+    assert "Never call `create_agent_config` or `update_agent_config`" in skill
+    assert "Also update `agent.titleId`" in skill
+    assert "Reread to verify both copies" in skill
+    assert "force `get_agent_config` before each opener" in skill
+    assert "Audience search remains `{query}`" in skill
+
+
+def test_org_announcements_is_registered_across_entry_points() -> None:
+    menu = _MENU_PROMPT.read_text(encoding="utf-8")
+    instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
+    onboarding_step2 = _ONBOARDING_STEP2.read_text(encoding="utf-8")
+
+    assert "`/org-announcements`" in menu
+    assert "src/skills/org-announcements/SKILL.md" in instructions
+    assert "`ess-org-announcements` MCP server" in instructions
+    assert "`/org-announcements`" in onboarding_step2
+
+
+def test_setup_installs_org_announcements_runtime_dependencies() -> None:
+    onboarding_step1 = _ONBOARDING_STEP1.read_text(encoding="utf-8")
+    requirements = _ORG_ANNOUNCEMENTS_REQUIREMENTS.read_text(encoding="utf-8")
+
+    assert (
+        "pip install -r src/mcp/agentconfig_org_announcements/requirements.txt"
+        in onboarding_step1
+    )
+    assert "mcp>=1.29.0,<2.0.0" in requirements
+    assert "httpx>=0.27.0,<1.0" in requirements
+    assert "pydantic>=2.0,<3.0" in requirements
+    assert "msal>=1.35.0" in requirements
+
+
 def test_all_mcp_writers_use_the_shared_materializer() -> None:
     bootstrap = _FOUNDATION_BOOTSTRAP.read_text(encoding="utf-8")
     onboarding = (
@@ -511,3 +618,64 @@ def test_onboarding_guidance_uses_precise_markdown_formatting() -> None:
     )
     assert "`Save`." in installation
     assert "In make.powerapps.com, select the target environment" not in catalog
+
+
+def test_announcements_discovery_uses_only_its_own_provider():
+    skill = _ORG_ANNOUNCEMENTS_SKILL.read_text(encoding="utf-8")
+    instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
+    prompt = _ORG_ANNOUNCEMENTS_PROMPT.read_text(encoding="utf-8")
+    assert "src/skills/org-announcements/SKILL.md" in prompt
+    assert "`list_agent_configs`, then `search_agents`" in skill
+    assert "Both tools belong to `ess-org-announcements`" in skill
+    assert "ess-landing-page-config" not in skill
+    assert "except announcement target discovery" not in instructions
+    assert "Exception: announcement target discovery" not in instructions
+    assert "do not start or call\nthe landing-page server" in instructions
+    assert "Discovery does **not** initialize landing-page configuration" in skill
+    assert '"mode": "republish"' not in skill
+    assert 'Republishing uses the ordinary **Edit** flow' in skill
+
+
+def test_ci_keeps_separate_feature_jobs_and_upstream_branch_policy():
+    workflow = yaml.load(
+        (_REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8"),
+        Loader=yaml.BaseLoader,
+    )
+    assert workflow["on"]["push"]["branches"] == ["main", "release/**"]
+    assert workflow["on"]["pull_request"]["branches"] == [
+        "main", "release/**",
+        "users/rebova/org-announcements-prerelease",
+        "users/rebova/org-announcements-review-*",
+    ]
+    assert workflow["on"]["pull_request"]["types"] == [
+        "opened", "synchronize", "reopened", "edited",
+    ]
+    jobs = workflow["jobs"]
+    assert {"lint", "installer-scripts", "flightcheck-tests", "mcp-foundation",
+            "landing-page-config", "org-announcements"} <= set(jobs)
+
+    def commands(job):
+        return "\n".join(step.get("run", "") for step in jobs[job]["steps"])
+
+    foundation = commands("mcp-foundation")
+    landing = commands("landing-page-config")
+    announcements = commands("org-announcements")
+    assert "tests/mcp/agentconfig_core" in foundation
+    assert "tests/mcp/test_import_isolation.py" in foundation
+    assert "agentconfig_org_announcements" not in foundation
+    assert "agentconfig_landing_page/requirements.txt" in landing
+    assert "tests/mcp/agentconfig" in landing
+    assert "agentconfig_org_announcements" not in landing
+    assert "agentconfig_org_announcements/requirements.txt" in announcements
+    assert "tests/mcp/agentconfig_org_announcements" in announcements
+    assert "agentconfig_landing_page" not in announcements
+
+
+def test_announcements_errors_distinguish_sdk_errors_from_coded_feature_errors():
+    skill = " ".join(_ORG_ANNOUNCEMENTS_SKILL.read_text(encoding="utf-8").split())
+    assert "Ordinary announcement-tool failures return coded structured errors" in skill
+    assert "agent-discovery tools `list_agent_configs` and `search_agents`" in skill
+    assert "SDK tool errors without a coded structured envelope" in skill
+    assert "Malformed opener arguments also produce SDK tool errors" in skill
+    assert "Do not expect a structured code from these SDK errors" in skill
+    assert "never treat failed discovery as an empty result" in skill

@@ -79,9 +79,13 @@ You can customize the active agent's landing page from chat, including accent
 colors, categorized starter prompts, quick links, Stay up to date cards, and
 Quick Access cards. Run `/landing-page` whenever you're ready.
 
+You can also post announcements for the selected deployed ESS agent and its
+chosen audiences. Run `/org-announcements` to create or manage them.
+
 | Command | What it does |
 |---------|-------------|
 | `/landing-page` | Configure landing-page branding and content |
+| `/org-announcements` | Create and manage announcements for the selected ESS agent |
 | `/create` | Create a new topic or workflow |
 | `/connect` | Set up ServiceNow or Workday integration |
 | `/scan` | Scan for compile errors |

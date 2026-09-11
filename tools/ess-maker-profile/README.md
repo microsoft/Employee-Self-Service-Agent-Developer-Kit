@@ -13,6 +13,7 @@ When the extension activates inside the ESS Maker workspace it:
 3. **Pins a "Quick actions" button rail in the primary sidebar** — a custom Webview view with big icon-labeled buttons:
    - **Connect** → `/setup`
    - **Customize landing page** → guided landing-page configuration
+   - **Post an announcement** → guided organization-announcement authoring
    - **Create a topic** → `/create`
    - **Update a topic** → `/update`
    - **Scan for issues** → `/scan`

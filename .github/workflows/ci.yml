@@ -165,6 +165,7 @@ jobs:
       run: >-
         python -m pytest
         tests/mcp/agentconfig_org_announcements
+        tests/setup/test_foundation_setup_router.py
         -q
 
   flightcheck-tests:
