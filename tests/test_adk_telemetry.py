@@ -461,6 +461,58 @@ def test_no_runtime_notice_symbol_exists():
     )
 
 
+def test_emit_shows_notice_before_dispatch(monkeypatch, captured_post):
+    """Regression: the opt-out notice MUST reach the maker before the first
+    network round-trip. Prior order was ``emit -> notice`` inside setup.py,
+    which meant the direct-clone bypass path (no installer) sent one event
+    with no disclosure. Fix routes notice through ``_emit`` so every emit
+    path is disclosed first.
+    """
+    # Fresh install: no ``noticeShown`` flag yet.
+    order: list[str] = []
+    real_maybe = adk.maybe_print_notice
+    real_post = adk._fc._post
+
+    def spy_notice(stream=None):
+        order.append("notice")
+        return real_maybe(stream=stream)
+
+    def spy_post(ikey, envs):
+        order.append("post")
+        return real_post(ikey, envs)
+
+    monkeypatch.setattr(adk, "maybe_print_notice", spy_notice)
+    monkeypatch.setattr(adk._fc, "_post", spy_post)
+
+    adk.emit_capability_use("setup", block=True)
+
+    assert order[:2] == ["notice", "post"], (
+        f"expected notice before post, got {order}"
+    )
+
+
+def test_emit_skips_notice_when_opted_out(monkeypatch):
+    """Users who already opted out shouldn't be pestered with the notice
+    again from the emit path — there's nothing to disclose."""
+    monkeypatch.setenv("ESS_ADK_TELEMETRY", "off")
+    called: list[int] = []
+    monkeypatch.setattr(
+        adk, "maybe_print_notice", lambda stream=None: called.append(1) or False
+    )
+    adk.emit_capability_use("setup", block=True)
+    assert called == []
+
+
+def test_emit_notice_swallows_errors(monkeypatch, captured_post):
+    """A failure in ``maybe_print_notice`` must never break a caller's emit."""
+    def boom(stream=None):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(adk, "maybe_print_notice", boom)
+    res = adk.emit_capability_use("setup", block=True)
+    assert res.get("sent") is True
+
+
 def test_disabled_emit_does_not_post(monkeypatch, captured_post):
     monkeypatch.setenv("ESS_ADK_TELEMETRY", "off")
     res = adk.emit_capability_use("setup", block=True)

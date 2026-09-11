@@ -584,8 +584,40 @@ def _emit_sync(event_name: str, data: dict[str, Any]) -> dict[str, Any]:
                 "event": event_name, "reason": f"{type(e).__name__}: {e}"}
 
 
+def _notice_before_emit() -> None:
+    """Show the one-time telemetry notice on the first emit from this install.
+
+    Called from ``_emit`` before any dispatch so the maker sees the consent
+    text *before* any network round-trip has a chance to leak data. Skipped
+    when telemetry is already opted out — no point telling someone who
+    turned it off how to turn it off, and we won't be sending anyway.
+
+    Idempotent via the persisted ``noticeShown`` config flag written by
+    ``maybe_print_notice`` (or by the installer's ``Show-EssTelemetryNotice``
+    at install-time), so this is a cheap no-op after the first run.
+    Best-effort: any IO error is swallowed — a notice-config write must
+    never break a caller's flow.
+    """
+    try:
+        if not telemetry_enabled():
+            return
+        maybe_print_notice()
+    except Exception:  # noqa: BLE001 - notice must never break a caller
+        pass
+
+
 def _emit(event_name: str, data: dict[str, Any], *, block: bool = False) -> dict[str, Any]:
     """Dispatch an emit. Async (daemon thread) unless sync/block requested."""
+    # Notice MUST fire before we dispatch so the maker has a realistic chance
+    # to see the opt-out instructions before the very first event leaves this
+    # install. Installer-bootstrapped users already have ``noticeShown=true``
+    # in ``~/.adk/config`` (set by ``setup/telemetry/install-telemetry.ps1``'s
+    # ``Show-EssTelemetryNotice``) so this is a cheap no-op for them; the
+    # direct-clone bypass path (git-clone without running the installer) is
+    # the case this call actually catches — previously the notice was printed
+    # deep inside ``scripts/setup.py`` well after ``emit_capability_use``
+    # had already flushed the first event.
+    _notice_before_emit()
     if _SYNC or block:
         return _emit_sync(event_name, data)
     t = threading.Thread(target=_emit_sync, args=(event_name, data), daemon=True)
