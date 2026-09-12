@@ -353,7 +353,7 @@ def _record_canonical_setup_complete(
     connection: dict[str, Any],
     workspace: dict[str, Any],
 ) -> dict[str, Any]:
-    """Write the shared contract here until another DA setup source needs it."""
+    """Record the completed agent and the ALM source used to establish it."""
     existing = _load_canonical_setup_state(kit_root)
     if existing is not None and not _canonical_state_matches_connection(
         existing,
