@@ -26,3 +26,4 @@ class Finding:
     line: int
     message: str
     suggestion: str
+    source: str = "regex"
