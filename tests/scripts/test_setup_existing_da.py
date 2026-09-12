@@ -395,6 +395,7 @@ def test_attach_materializes_authorable_topics_and_da_identity(
     assert "dataverseEndpoint" not in config
     assert config["releaseLine"] == "da"
     assert config["transport"] == "agentbuilder"
+    assert config["agent"]["setupSource"] == "existing-dev"
     assert config["agent"]["realm"] == "dev"
     assert config["agent"]["almFamilyId"] == FAMILY
     assert config["agent"]["environmentId"] == ENVIRONMENT_ID
