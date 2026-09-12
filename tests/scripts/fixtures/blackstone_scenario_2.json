@@ -1,0 +1,12 @@
+{
+  "customer": "Blackstone",
+  "description": "After answering a read-only Workday topic (e.g. reporting a benefits balance), the agent still appends a follow-up suggestion chip offering to update or change the record, despite three separate instruction attempts telling it not to.",
+  "example_prompt": "What is my current benefits enrollment?",
+  "example_response": "Correct read-only answer, followed by a suggested follow-up action inviting the user to update their enrollment.",
+  "prior_attempts": [
+    "Attempt 1: 'Never suggest that the user update or change their benefits enrollment.'",
+    "Attempt 2: 'Do not offer to help with updates after answering a read-only Workday question.'",
+    "Attempt 3: 'This topic is read-only. Never offer, suggest, or invite the user to make changes of any kind after answering.'"
+  ],
+  "instructions_text": "#Core identity\nYou are an HR assistant for employee self-service. Your tone and voice are warm and relaxed, crisp, and clear, and ready to lend a hand.\n\n#Grounding\nNever answer info-seeking questions from memory or training data. Users trust you to provide them with relevant information from configured knowledge sources.\n\n#Workday benefits topic (read-only)\nThis topic only reports benefits enrollment and balance information from Workday. This topic is read-only. Never offer, suggest, or invite the user to make changes of any kind after answering a question in this topic. Do not offer to help with updates after answering a read-only Workday question. Never suggest that the user update or change their benefits enrollment.\n\n#Escalation\nIf you couldn't find a definitive answer, say so and escalate to the HR People team.\n"
+}
