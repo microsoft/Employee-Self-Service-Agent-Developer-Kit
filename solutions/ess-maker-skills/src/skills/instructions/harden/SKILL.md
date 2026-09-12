@@ -133,10 +133,31 @@ differently. Wanting the agent "locked down" before a rollout is not a reported 
 
 ## Step 3: Read the instructions and the reference guidance
 
-Read the full `instructions:` value and `src/reference/ess-docs/hardening/instruction-rules.md`.
+Read the full `instructions:` value and
+`scripts/instruction_engine/semantic_rules/instruction-rules.md`.
 
 Split the instructions into numbered **sentences** so findings can be anchored precisely (see "Anchoring").
 Keep the maker's original wording, spelling, and casing exactly — you will quote it back and diff against it.
+
+**If the maker reported specific bad responses in Step 2**, before doing anything else check whether the
+instructions already cover the reported behavior correctly. Write the maker's report to a temporary
+problems file and run:
+
+```
+python -m instruction_engine --instructions {instructions_file} --problems {problems_file} --json
+```
+
+Read the `coverage_verdicts` entry for the reported problem:
+
+- `likely_platform_limitation` — the instructions already state the rule correctly and clearly; the
+  behavior is being produced by something this skill cannot reach by editing instruction text (the
+  platform, the pipeline, or a retrieval step). Say this plainly to the maker in Step 8 instead of proposing
+  another reworded prohibition — a maker who has already tried this more than once needs to hear that the
+  lever they are pulling does not reach the problem, not a fourth attempt at the same lever. Route them
+  toward `/flightcheck` or escalation rather than another instruction edit.
+- `fix_proposed` — the engine found a real, on-topic gap or contradiction. Continue to Step 4 and Step 5 as
+  normal; use the verdict's evidence and suggested diff as a starting point, not a substitute for your own
+  anchoring.
 
 ## Step 4: Contradiction pass (always runs)
 
@@ -416,7 +437,9 @@ evidence that the agent is fine.
 
 ## References
 
-- `src/reference/ess-docs/hardening/instruction-rules.md` — contradiction classes, grounding and
+- `scripts/instruction_engine/semantic_rules/instruction-rules.md` — contradiction classes, grounding and
   over-commitment risks, over-restriction risks, rewriting principles, and the shipped-template markers.
 - `scripts/list_agent_capabilities.py` — topic and workflow inventory (Step 5).
 - `scripts/check_instruction_budget.py` — character-budget measurement (Step 7).
+- `python -m instruction_engine` — coverage-check triage for reported problems (Step 3) and the combined
+  regex/semantic sweep it wraps.

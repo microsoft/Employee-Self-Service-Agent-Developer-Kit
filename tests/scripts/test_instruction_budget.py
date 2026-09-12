@@ -239,7 +239,7 @@ def test_harden_prompt_and_skill_are_present():
     link is silent at runtime — the maker just gets an unguided response."""
     prompt = _SKILL_ROOT / ".github" / "prompts" / "harden.prompt.md"
     skill = _SKILL_ROOT / "src" / "skills" / "instructions" / "harden" / "SKILL.md"
-    rules = (_SKILL_ROOT / "src" / "reference" / "ess-docs" / "hardening"
+    rules = (_SKILL_ROOT / "scripts" / "instruction_engine" / "semantic_rules"
              / "instruction-rules.md")
 
     assert prompt.is_file()
@@ -250,9 +250,10 @@ def test_harden_prompt_and_skill_are_present():
     assert "src/skills/instructions/harden/SKILL.md" in prompt_text
 
     skill_text = skill.read_text(encoding="utf-8")
-    assert "src/reference/ess-docs/hardening/instruction-rules.md" in skill_text
+    assert "scripts/instruction_engine/semantic_rules/instruction-rules.md" in skill_text
     assert "scripts/check_instruction_budget.py" in skill_text
     assert "scripts/list_agent_capabilities.py" in skill_text
+    assert "python -m instruction_engine" in skill_text
     assert "emit_capability.py harden" in skill_text
     # The checkpoint rule is safety-critical and previously pointed at the
     # wrong step; a stale cross-reference here is a real defect.
