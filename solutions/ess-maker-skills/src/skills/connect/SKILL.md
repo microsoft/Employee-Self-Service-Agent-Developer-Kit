@@ -12,9 +12,9 @@ Record anonymous usage telemetry (best-effort, non-blocking — no user-facing
 message, and it never fails the step): `python scripts/emit_capability.py connect`
 
 If the user specified an integration as an argument (e.g., the user said
-"servicenow" or "workday", or the prompt was invoked as `/connect servicenow`),
-pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
-"which system" question and go directly to routing for that integration.
+"servicenow", "workday", or "workday-hybrid"), pass it to step1 as
+PRE_SELECTED_INTEGRATION. Step1 will skip the "which system" question and go
+directly to routing for that integration.
 
 Read `src/skills/connect/step1.md` and follow it.
 
@@ -50,6 +50,13 @@ Workday delegates to the setup orchestrator:
   Entra app, tenant config, extension pack, topic) using the master checklist as
   a resume-aware spine, and persists state under `.local/setup/workday/tasks.md`
   + `setupStatus` in `.local/connect/workday/config.json`.
+
+- **Workday hybrid**: `src/skills/connect/workday-hybrid/SKILL.md`
+  - Lightweight, stateless authorization for an already-installed
+    Cosmos-backed Workday hybrid agent.
+  - Collects the bot ID and workflow IDs, then runs the ADK Dataverse
+    authorization script.
+  - Does not invoke or update the standard Workday setup orchestrator.
 
 Each integration's steps.md and config.json persist after completion.
 Running `/connect` again lets the user add a different integration

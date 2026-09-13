@@ -20,8 +20,9 @@ Build a list of connected integrations (if any):
 ## 1.2 — Ask which system
 
 **If PRE_SELECTED_INTEGRATION was passed from SKILL.md** (the user already
-specified "servicenow" or "workday"): skip this question entirely. Set the
-selection to the pre-selected value and go directly to section 1.3.
+specified "servicenow", "workday", or "workday-hybrid"): skip this question
+entirely. Set the selection to the pre-selected value and go directly to
+section 1.3.
 
 If there are connected integrations, show them first:
 
@@ -33,6 +34,7 @@ Which system do you want to connect next?
 
 1. **ServiceNow** — IT tickets, HR cases, service catalog
 2. **Workday** — Payroll, time off, employee data
+3. **Workday hybrid** — Enable flows for an existing hybrid-packaged agent
 
 **End message.**
 
@@ -44,6 +46,7 @@ Which system do you want to connect to your agent?
 
 1. **ServiceNow** — IT tickets, HR cases, service catalog
 2. **Workday** — Payroll, time off, employee data
+3. **Workday hybrid** — Enable flows for an existing hybrid-packaged agent
 
 **End message.**
 
@@ -52,6 +55,10 @@ Wait for the user to respond.
 ---
 
 ## 1.3 — Route by selection
+
+Match integration names exactly. In particular, route `workday-hybrid` before
+considering the standard `workday` branch; never treat it as a partial match for
+`workday`.
 
 ### If the user chose ServiceNow (1 or "servicenow")
 
@@ -204,7 +211,15 @@ Let's connect ServiceNow to your agent.
 
 Now read `src/skills/connect/servicenow/step1.md` and follow it.
 
-### If the user chose Workday (2 or "workday")
+### If the user chose Workday hybrid (3 or exactly "workday-hybrid")
+
+This is a lightweight flow-authorization path for an already-installed
+Cosmos-backed hybrid agent. It does not run or update the standard Workday
+setup orchestrator.
+
+Read `src/skills/connect/workday-hybrid/SKILL.md` and follow it.
+
+### If the user chose Workday (2 or exactly "workday")
 
 Workday connection is handled by the **setup orchestrator**, which provisions
 the Power Platform environment, installs the ESS base agent, provisions the
@@ -219,7 +234,8 @@ Now read `src/skills/setup/SKILL.md` and follow it.
 
 **Message:**
 
-I didn't catch that. Enter **1** for ServiceNow or **2** for Workday.
+I didn't catch that. Enter **1** for ServiceNow, **2** for Workday, or **3** for
+Workday hybrid.
 
 **End message.**
 
