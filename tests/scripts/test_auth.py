@@ -237,6 +237,57 @@ def test_authenticate_replaces_dataverse_rejected_cached_token(
     ) == "refreshed"
 
 
+def test_authenticate_force_interactive_skips_silent_token(
+    tmp_path, monkeypatch
+) -> None:
+    import auth
+
+    calls = []
+
+    class FakeCache:
+        has_state_changed = False
+
+        def deserialize(self, value: str) -> None:
+            assert value == "cached"
+
+        def serialize(self) -> str:
+            return ""
+
+    class FakeApp:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def get_accounts(self) -> list[dict]:
+            return [{"home_account_id": "cached-account"}]
+
+        def acquire_token_silent(self, scopes, account):
+            pytest.fail("forced authentication must not acquire silently")
+
+        def acquire_token_interactive(self, scopes, prompt):
+            calls.append(prompt)
+            return {"access_token": "interactive-token"}
+
+    monkeypatch.chdir(tmp_path)
+    local = tmp_path / ".local"
+    local.mkdir()
+    (local / ".token_cache.bin").write_text("cached", encoding="utf-8")
+    monkeypatch.setattr(auth, "discover_tenant", lambda _url: "tenant-id")
+    monkeypatch.setattr(auth.msal, "SerializableTokenCache", FakeCache)
+    monkeypatch.setattr(auth.msal, "PublicClientApplication", FakeApp)
+    monkeypatch.setattr(
+        "flightcheck.graph_client.resolve_tenant_display_name_silent",
+        lambda _tenant_id: "",
+    )
+
+    token = auth.authenticate(
+        "https://example.crm.dynamics.com",
+        force_interactive=True,
+    )
+
+    assert token == "interactive-token"
+    assert calls == ["select_account"]
+
+
 def test_authenticate_resolves_tenant_name_before_start_session(
     tmp_path, monkeypatch
 ) -> None:

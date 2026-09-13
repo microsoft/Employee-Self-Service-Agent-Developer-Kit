@@ -38,7 +38,15 @@ def test_workday_hybrid_route_has_required_files_and_command():
     assert "--bot-id <BOT_ID>" in skill
     assert "--workflow-id <FLOW_ID>" in skill
     assert "--validate-only" in skill
+    assert "--url \"<ENV_URL>\"" in skill
+    assert "--interactive-auth" in skill
     assert "--yes" in skill
-    assert "Never ask the user for an access" in skill
+    assert "python scripts/discover.py --list-environments" in skill
+    assert "--resolve-environment-url" in skill
+    assert "Use configured environment" in skill
+    assert "Do not preselect an environment" in skill
+    assert "Microsoft will ask you to" in skill
+    assert "choose the account" in skill
+    assert "Never ask the user for an access" in " ".join(skill.split())
     assert "token" in skill
     assert "paste the command's complete error output verbatim" in skill

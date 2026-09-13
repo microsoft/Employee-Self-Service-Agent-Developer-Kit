@@ -265,6 +265,42 @@ def test_validate_only_uses_config_without_authenticating(monkeypatch, capsys):
     assert "Validated bot ID and 1 unique workflow ID(s)" in output
 
 
+def test_interactive_auth_flag_forces_account_picker(monkeypatch):
+    auth_calls = []
+
+    monkeypatch.setattr(
+        hybrid,
+        "authenticate",
+        lambda env_url, *, force_interactive: (
+            auth_calls.append((env_url, force_interactive)) or TOKEN
+        ),
+    )
+    monkeypatch.setattr(
+        hybrid,
+        "enable_authorization",
+        lambda *_args: None,
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "enable_workday_hybrid_flow_authorization.py",
+            "--url",
+            ENV_URL,
+            "--bot-id",
+            BOT_ID,
+            "--workflow-id",
+            WORKFLOW_ID,
+            "--interactive-auth",
+            "--yes",
+        ],
+    )
+
+    hybrid.main()
+
+    assert auth_calls == [(ENV_URL, True)]
+
+
 def test_confirmation_treats_closed_stdin_as_cancel(monkeypatch):
     monkeypatch.setattr(
         "builtins.input",

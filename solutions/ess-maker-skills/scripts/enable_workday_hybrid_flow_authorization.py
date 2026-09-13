@@ -405,6 +405,11 @@ def main() -> None:
         help="Skip the confirmation prompt.",
     )
     parser.add_argument(
+        "--interactive-auth",
+        action="store_true",
+        help="Always open the Microsoft account picker before accessing Dataverse.",
+    )
+    parser.add_argument(
         "--validate-only",
         action="store_true",
         help="Validate configuration and GUID arguments without authenticating or writing.",
@@ -440,7 +445,10 @@ def main() -> None:
             return
 
         print(f"Authenticating to Dataverse at {env_url}...")
-        token = authenticate(env_url)
+        token = authenticate(
+            env_url,
+            force_interactive=args.interactive_auth,
+        )
         print("Authenticated.")
         enable_authorization(
             env_url,

@@ -10,18 +10,85 @@ or modify its checklist.
 
 ---
 
-## 1 — Collect identifiers
+## 1 — Select environment
 
-Read `dataverseEndpoint` from `.local/config.json`. If it is missing:
+Read `dataverseEndpoint` from `.local/config.json` if the file exists. Save the
+value without a trailing slash as CONFIGURED_ENV_URL.
 
-**Message:**
+Use `vscode_askQuestions`. Include the first option only when
+CONFIGURED_ENV_URL is available:
 
-I couldn't find a configured Dataverse environment. Run `/setup` first, then
-run `/connect workday-hybrid` again.
+```json
+[
+  {
+    "header": "Environment",
+    "question": "Which Power Platform environment should receive the Workday hybrid authorization?",
+    "options": [
+      {
+        "label": "Use configured environment — {CONFIGURED_ENV_URL}",
+        "description": "Use the environment currently configured in this workspace",
+        "recommended": true
+      },
+      {
+        "label": "Choose from my environments",
+        "description": "Sign in and select a Dataverse environment from your tenant"
+      },
+      {
+        "label": "Enter an environment URL",
+        "description": "Provide a specific Dataverse environment URL"
+      }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
 
-**End message.**
+- **Use configured environment**: set ENV_URL to CONFIGURED_ENV_URL.
+- **Choose from my environments**: show the following message, then run the
+  discovery command.
 
-Stop.
+  **Message (do NOT wait for a response — continue immediately):**
+
+  A browser window may open for Microsoft sign-in while I retrieve the
+  Dataverse environments available to your account.
+
+  **End message.**
+
+  ```text
+  python scripts/discover.py --list-environments
+  ```
+
+  Parse `ENVIRONMENT_LIST_JSON:` from stdout. Build a `vscode_askQuestions`
+  option for each environment using `{displayName} — {instanceUrl}` as the
+  label and `{type}` as the description. Do not preselect an environment.
+  Set ENV_URL to the selected `instanceUrl`.
+- **Enter an environment URL**: ask:
+
+  ```json
+  [
+    {
+      "header": "Environment URL",
+      "question": "Enter the Dataverse environment URL. Example: https://yourorg.crm.dynamics.com",
+      "allowFreeformInput": true
+    }
+  ]
+  ```
+
+  Trim the answer, remove the trailing slash, and run:
+
+  ```text
+  python scripts/discover.py --resolve-environment-url "<ENV_URL>"
+  ```
+
+  Continue only when `SELECTED_ENV_JSON:` confirms the URL belongs to a
+  Dataverse environment available to the signed-in account.
+
+If environment discovery or URL resolution fails, show the exact command
+error and stop. Never fall back silently to CONFIGURED_ENV_URL.
+
+---
+
+## 2 — Collect identifiers
 
 **Message:**
 
@@ -53,19 +120,27 @@ not attempt to repair malformed identifiers.
 Run a local validation without making Dataverse calls:
 
 ```text
-python scripts/enable_workday_hybrid_flow_authorization.py --bot-id <BOT_ID> --workflow-id <FLOW_ID> [--workflow-id <FLOW_ID> ...] --validate-only
+python scripts/enable_workday_hybrid_flow_authorization.py --url "<ENV_URL>" --bot-id <BOT_ID> --workflow-id <FLOW_ID> [--workflow-id <FLOW_ID> ...] --validate-only
 ```
 
 If it reports an invalid GUID, show that error and return to this section.
 
 ---
 
-## 2 — Confirm
+## 3 — Confirm
 
 **Message:**
 
-This will create or reuse a delegated authorization and access team in
-Dataverse, then grant that team access to the requested workflows.
+This will create or reuse Dataverse authorization records with the following
+target:
+
+Environment: `{ENV_URL}`
+Agent bot ID: `{BOT_ID}`
+Workflow IDs:
+{one `- {FLOW_ID}` line per workflow}
+
+After you confirm, a browser window will open and Microsoft will ask you to
+choose the account used for this environment.
 
 Do you want me to continue?
 
@@ -77,7 +152,7 @@ Use `vscode_askQuestions`:
 [
   {
     "header": "Enable authorization",
-    "question": "Apply Workday hybrid flow authorization in the configured environment?",
+    "question": "Sign in and apply Workday hybrid flow authorization to {ENV_URL}?",
     "options": [
       {
         "label": "Enable authorization",
@@ -106,18 +181,19 @@ Stop.
 
 ---
 
-## 3 — Run
+## 4 — Run
 
 Run from the `solutions/ess-maker-skills` directory, using one
 `--workflow-id` argument per workflow:
 
 ```text
-python scripts/enable_workday_hybrid_flow_authorization.py --bot-id <BOT_ID> --workflow-id <FLOW_ID> [--workflow-id <FLOW_ID> ...] --yes
+python scripts/enable_workday_hybrid_flow_authorization.py --url "<ENV_URL>" --bot-id <BOT_ID> --workflow-id <FLOW_ID> [--workflow-id <FLOW_ID> ...] --interactive-auth --yes
 ```
 
-The script uses the ADK's cached Microsoft sign-in and the
-`dataverseEndpoint` from `.local/config.json`. Never ask the user for an access
-token.
+The `--interactive-auth` flag must always be present for this skill. It skips
+silent token acquisition and opens Microsoft's account picker even when the
+ADK has a cached session. It does not delete the shared token cache. Never ask
+the user for an access token.
 
 If the command succeeds:
 

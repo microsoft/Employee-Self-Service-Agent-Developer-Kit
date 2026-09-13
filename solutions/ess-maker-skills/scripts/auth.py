@@ -194,11 +194,13 @@ def _dataverse_accepts_token(env_url, token):
     return resp.status_code != 401
 
 
-def authenticate(env_url):
+def authenticate(env_url, *, force_interactive=False):
     """Get a Dataverse access token via MSAL interactive browser auth.
 
     Uses a token cache so repeat runs within the same session don't re-prompt.
-    Discovers the correct tenant from the environment automatically.
+    Set ``force_interactive`` to require the Microsoft account picker without
+    deleting the shared token cache. Discovers the correct tenant from the
+    environment automatically.
     """
     _validate_https_url(env_url)
     tenant = discover_tenant(env_url)
@@ -218,7 +220,7 @@ def authenticate(env_url):
     # Try silent first (cached token from previous run)
     accounts = app.get_accounts()
     result = None
-    if accounts:
+    if accounts and not force_interactive:
         result = app.acquire_token_silent([scope], account=accounts[0])
 
     if (
