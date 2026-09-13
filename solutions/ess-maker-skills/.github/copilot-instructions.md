@@ -318,6 +318,7 @@ After a successful push, `.baseline/` is updated to match the new state.
 |-------------|--------------|
 | Run common ESS foundation setup (`/setup`) | `src/skills/foundation-setup/SKILL.md` |
 | Provision/connect the Workday setup environment (`/connect workday`) | `src/skills/setup/SKILL.md` |
+| Enable flows for a hybrid-packaged Workday agent (`/connect workday-hybrid`) | `src/skills/connect/workday-hybrid/SKILL.md` |
 | Connect to ServiceNow/Workday | `src/skills/connect/SKILL.md` |
 | Create a topic | `src/skills/topics/create-eval-driven/SKILL.md` |
 | Create a workflow | `src/skills/workflows/create/SKILL.md` |
@@ -341,7 +342,8 @@ After a successful push, `.baseline/` is updated to match the new state.
 | Re-apply / put back Workday reference-data customisations | `src/skills/restore-template-configs/SKILL.md` |
 
 **Trigger phrases for connect:** "connect ServiceNow", "set up ServiceNow",
-"integrate ServiceNow", "connect Workday", "set up Workday", "add ServiceNow",
+"integrate ServiceNow", "connect Workday", "set up Workday",
+"connect workday-hybrid", "enable Workday hybrid flows", "add ServiceNow",
 "I want to connect to ServiceNow", "ServiceNow integration".
 
 **Trigger phrases for troubleshooting:** "Workday error", "ISU not working",

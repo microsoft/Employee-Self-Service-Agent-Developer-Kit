@@ -1,6 +1,6 @@
 ---
 mode: agent
-description: "Connect your ESS agent to an external system like ServiceNow or Workday"
+description: "Connect ServiceNow or Workday, or enable Workday hybrid flows"
 ---
 
 # Connect
@@ -25,6 +25,6 @@ Rules:
 4. Do not compose your own messages. If there is no Message block for a
    situation, stay silent and proceed to the next action.
 
-After reading SKILL.md, your first action is to check for
-`.local/connect/steps.md`. If starting fresh, your first message to the user
-is the checklist table from the Fresh Start section.
+After reading SKILL.md, follow the selected integration route. The
+`workday-hybrid` route is intentionally stateless and does not use a setup
+checklist.
