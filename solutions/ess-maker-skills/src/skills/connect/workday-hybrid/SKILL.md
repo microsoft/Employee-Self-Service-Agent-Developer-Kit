@@ -132,8 +132,16 @@ If the command fails:
 
 **Message:**
 
-Workday hybrid flow authorization failed. Review the reported Dataverse error,
-correct the bot ID, workflow IDs, permissions, or environment as indicated,
-then run `/connect workday-hybrid` again.
+Workday hybrid flow authorization failed.
+
+Command error:
+
+~~~
+{paste the command's complete error output verbatim}
+~~~
+
+Review the reported Dataverse error, correct the bot ID, workflow IDs,
+permissions, or environment as indicated, then run
+`/connect workday-hybrid` again.
 
 **End message.**

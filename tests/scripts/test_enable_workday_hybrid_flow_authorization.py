@@ -6,8 +6,10 @@ from __future__ import annotations
 import sys
 
 import pytest
+import requests
 
 import enable_workday_hybrid_flow_authorization as hybrid
+from http_errors import APIError
 
 
 BOT_ID = "923db1bf-2512-4378-a43b-71b944ea717c"
@@ -270,3 +272,76 @@ def test_confirmation_treats_closed_stdin_as_cancel(monkeypatch):
     )
 
     assert not hybrid._confirm(ENV_URL, BOT_ID, [WORKFLOW_ID])
+
+
+def _error_response(status_code, body, request_id="request-123"):
+    response = requests.Response()
+    response.status_code = status_code
+    response.headers["x-ms-request-id"] = request_id
+    response._content = body.encode("utf-8")
+    response.request = requests.Request(
+        "POST",
+        f"{ENV_URL}/api/data/v9.2/GrantAccess?access_token=query-secret",
+    ).prepare()
+    return response
+
+
+def test_format_request_error_includes_safe_dataverse_detail():
+    response = _error_response(
+        400,
+        (
+            '{"error":{"code":"0x80040216","message":'
+            '"Invalid principal. Bearer secret-token access_token=body-secret"}}'
+        ),
+    )
+    error = APIError(
+        response=response,
+        resource_name="GrantAccess",
+        operation="execute",
+    )
+
+    output = hybrid.format_request_error(error)
+
+    assert "HTTP 400" in output
+    assert "POST https://example.crm.dynamics.com/api/data/v9.2/GrantAccess" in output
+    assert "Request ID: request-123" in output
+    assert "Dataverse detail: 0x80040216: Invalid principal." in output
+    assert "secret-token" not in output
+    assert "body-secret" not in output
+    assert "query-secret" not in output
+
+
+def test_format_request_error_handles_plain_http_error_and_non_json_body():
+    response = _error_response(500, "<html>Server error</html>")
+    error = requests.HTTPError(response=response)
+
+    output = hybrid.format_request_error(error)
+
+    assert output == (
+        "ERROR: Dataverse request failed: HTTP 500 "
+        "POST https://example.crm.dynamics.com/api/data/v9.2/GrantAccess\n"
+        "Request ID: request-123"
+    )
+
+
+def test_sanitize_error_detail_redacts_bearer_credentials():
+    secret = "sensitive" + "-bearer-value"
+
+    output = hybrid._sanitize_error_detail("Bearer " + secret)
+
+    assert secret not in output
+
+
+def test_format_request_error_truncates_long_dataverse_messages():
+    response = _error_response(
+        400,
+        '{"error":{"code":"LongMessage","message":"' + ("x" * 700) + '"}}',
+    )
+    error = requests.HTTPError(response=response)
+
+    output = hybrid.format_request_error(error)
+    detail = output.split("Dataverse detail: ", 1)[1]
+
+    assert detail.startswith("LongMessage: ")
+    assert detail.endswith("...")
+    assert len(detail) <= len("LongMessage: ") + hybrid.MAX_ERROR_DETAIL_LENGTH

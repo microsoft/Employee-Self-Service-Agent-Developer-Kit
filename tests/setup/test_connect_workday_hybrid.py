@@ -41,3 +41,4 @@ def test_workday_hybrid_route_has_required_files_and_command():
     assert "--yes" in skill
     assert "Never ask the user for an access" in skill
     assert "token" in skill
+    assert "paste the command's complete error output verbatim" in skill

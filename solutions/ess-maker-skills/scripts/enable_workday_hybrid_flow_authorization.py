@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
 import uuid
 
@@ -36,6 +37,7 @@ from http_errors import APIError  # noqa: E402
 PROVIDER_TYPE_MCSBOT = 3
 TEAM_TYPE_ACCESS = 1
 ACCESS_MASK = "ReadAccess,WriteAccess,AppendAccess,AppendToAccess,ShareAccess"
+MAX_ERROR_DETAIL_LENGTH = 500
 
 
 def normalize_guid(value: str, label: str) -> str:
@@ -48,6 +50,72 @@ def normalize_guid(value: str, label: str) -> str:
 
 def _records(response: dict | None) -> list[dict]:
     return list((response or {}).get("value") or [])
+
+
+def _sanitize_error_detail(value: object) -> str:
+    detail = " ".join(str(value or "").split())
+    detail = re.sub(
+        r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+",
+        "Bearer [REDACTED]",
+        detail,
+    )
+    detail = re.sub(
+        r"(?i)(access[_-]?token\s*[:=]\s*)[\"']?[^,\s\"']+",
+        r"\1[REDACTED]",
+        detail,
+    )
+    if len(detail) > MAX_ERROR_DETAIL_LENGTH:
+        return f"{detail[:MAX_ERROR_DETAIL_LENGTH - 3]}..."
+    return detail
+
+
+def _dataverse_error_detail(exc: requests.RequestException) -> str | None:
+    response = getattr(exc, "response", None)
+    if response is None:
+        return None
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    if not isinstance(error, dict):
+        return None
+    code = _sanitize_error_detail(error.get("code"))
+    message = _sanitize_error_detail(error.get("message"))
+    if code and message:
+        return f"{code}: {message}"
+    return code or message or None
+
+
+def format_request_error(exc: requests.RequestException) -> str:
+    if isinstance(exc, APIError):
+        lines = [exc.format_for_terminal().strip()]
+    else:
+        response = getattr(exc, "response", None)
+        if response is None:
+            lines = [
+                "ERROR: Dataverse request failed: "
+                f"{_sanitize_error_detail(exc)}"
+            ]
+        else:
+            request = getattr(response, "request", None)
+            method = str(getattr(request, "method", None) or "REQUEST").upper()
+            url = str(getattr(request, "url", None) or "").split("?")[0]
+            target = f" {method} {url}" if url else ""
+            lines = [
+                f"ERROR: Dataverse request failed: HTTP "
+                f"{response.status_code}{target}"
+            ]
+            request_id = response.headers.get("x-ms-request-id")
+            if request_id:
+                lines.append(f"Request ID: {request_id}")
+
+    detail = _dataverse_error_detail(exc)
+    if detail:
+        lines.append(f"Dataverse detail: {detail}")
+    return "\n".join(lines)
 
 
 def find_delegated_authorizations(env_url: str, token: str, bot_id: str) -> list[dict]:
@@ -382,12 +450,10 @@ def main() -> None:
             _print_report,
         )
     except (AuthExpiredError, APIError) as exc:
-        print(exc.format_for_terminal())
+        print(format_request_error(exc))
         raise SystemExit(1) from exc
     except requests.RequestException as exc:
-        response = getattr(exc, "response", None)
-        status = f"HTTP {response.status_code}: " if response is not None else ""
-        print(f"ERROR: Dataverse request failed: {status}{exc}")
+        print(format_request_error(exc))
         raise SystemExit(1) from exc
     except (RuntimeError, ValueError) as exc:
         print(f"ERROR: {exc}")
