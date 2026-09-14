@@ -7,8 +7,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .coverage_check import CoverageVerdict, ReportedProblem, check_coverage
-from .models import Finding
+from .coverage_check import check_coverage
 from .parser import parse
 from .regex_rules import run_rules as run_regex_rules
 from .semantic_rules.runner import run_semantic_pass
