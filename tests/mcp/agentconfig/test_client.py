@@ -23,9 +23,15 @@ AGENTCONFIG_DIR = (
     / "mcp"
     / "agentconfig_landing_page"
 )
-sys.path.insert(0, str(AGENTCONFIG_DIR))
+# Sibling MCP servers share the top-level names ``client``/``server``, so the
+# modules are loaded through the shared isolated importer rather than by a plain
+# ``import`` off ``sys.path``. See tests/mcp/_mcp_modules.py.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import client as agentconfig_client  # noqa: E402
+from _mcp_modules import load_landing_page_modules  # noqa: E402
+
+_LANDING_MODULES = load_landing_page_modules()
+agentconfig_client = _LANDING_MODULES["client"]
 
 
 TENANT_ID = "11111111-2222-3333-4444-555555555555"
