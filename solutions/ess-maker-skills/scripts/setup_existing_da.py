@@ -46,6 +46,7 @@ DA_CONNECTION_STATE = Path(".local/setup/da-connection.json")
 DA_COMPONENT_SNAPSHOT = Path(".local/setup/da-components.json")
 CANONICAL_SETUP_SCHEMA_VERSION = 1
 PROJECTION_ENGINE = "microsoft-agents-objectmodel"
+SETUP_SOURCES = frozenset({"existing-dev", "alm-import"})
 STUDIO_RING_BY_HOST = {
     "copilotstudio.microsoft.com": "prod",
     "copilotstudio.preprod.microsoft.com": "preprod",
@@ -112,6 +113,14 @@ def _normalize_environment_id(value: str) -> str:
     if candidate.casefold().startswith("default-"):
         candidate = candidate[len("Default-") :]
     return _normalize_guid(candidate, "Environment ID")
+
+
+def _validate_setup_source(value: str) -> str:
+    if value not in SETUP_SOURCES:
+        raise ExistingDASetupError(
+            f"Unsupported DA setup source: {value!r}."
+        )
+    return value
 
 
 def parse_da_target_url(target_url: str) -> dict[str, str]:
@@ -304,7 +313,7 @@ def _load_canonical_setup_state(
     if (
         state.get("schema_version") != CANONICAL_SETUP_SCHEMA_VERSION
         or state.get("status") != "complete"
-        or state.get("setup_source") != "existing-dev"
+        or state.get("setup_source") not in SETUP_SOURCES
     ):
         raise ExistingDASetupError(
             "This workspace has setup state from an unsupported release. "
@@ -332,7 +341,8 @@ def _canonical_state_matches_connection(
     environment = state["environment"]
     agent = state["agent"]
     return (
-        environment.get("id") == connection["environment"]["id"]
+        state.get("setup_source") == connection.get("setupSource")
+        and environment.get("id") == connection["environment"]["id"]
         and environment.get("tenant_id")
         == connection["environment"]["tenantId"]
         and environment.get("power_platform_api_endpoint")
@@ -366,7 +376,7 @@ def _record_canonical_setup_complete(
     state = {
         "schema_version": CANONICAL_SETUP_SCHEMA_VERSION,
         "status": "complete",
-        "setup_source": "existing-dev",
+        "setup_source": connection["setupSource"],
         "environment": {
             "id": connection["environment"]["id"],
             "tenant_id": connection["environment"]["tenantId"],
@@ -514,8 +524,10 @@ def validate_existing_dev_connection(
     environment_id: str,
     agent_id: str,
     selection_source: str | None = None,
+    setup_source: str = "existing-dev",
 ) -> dict[str, Any]:
     """Validate a directly addressable agent as editable Dev identity."""
+    normalized_setup_source = _validate_setup_source(setup_source)
     normalized_environment_id = _normalize_environment_id(environment_id)
     normalized_agent_id = _normalize_guid(agent_id, "Agent ID")
     agent_inspection: dict[str, Any] | None = None
@@ -570,7 +582,7 @@ def validate_existing_dev_connection(
         "stateKind": "da-existing-dev-connection",
         "status": "connected",
         "releaseLine": "da",
-        "setupSource": "existing-dev",
+        "setupSource": normalized_setup_source,
         "transport": "agentbuilder",
         "environment": {
             "id": normalized_environment_id,
@@ -642,6 +654,7 @@ def load_da_connection_state(kit_root: Path) -> dict[str, Any]:
         raise ExistingDASetupError(
             "Temporary DA setup state is missing connection identity."
         )
+    _validate_setup_source(str(state.get("setupSource")))
     if not state.get("agent", {}).get("workspaceSlug"):
         raise ExistingDASetupError(
             "Temporary DA setup state is missing its workspace identity."
@@ -1147,6 +1160,7 @@ def attach_existing_dev(
     kit_root: Path,
     refresh: bool = False,
     selection_source: str | None = None,
+    setup_source: str = "existing-dev",
 ) -> dict[str, Any]:
     """Resolve an existing Dev agent and materialize its local DA workspace."""
     connection = validate_existing_dev_connection(
@@ -1154,6 +1168,7 @@ def attach_existing_dev(
         environment_id=environment_id,
         agent_id=agent_id,
         selection_source=selection_source,
+        setup_source=setup_source,
     )
     connection = persist_da_connection_state(kit_root, connection)
     normalized_environment_id = connection["environment"]["id"]
@@ -1268,7 +1283,7 @@ def attach_existing_dev(
                 "schemaName": schema_name,
                 "realm": "dev",
                 "almFamilyId": family_id,
-                "setupSource": "existing-dev",
+                "setupSource": connection["setupSource"],
                 "selectedBy": connection["selectedBy"],
                 "changesetSha256": changeset_sha,
                 "topicCount": len(topics),
@@ -1322,7 +1337,7 @@ def attach_existing_dev(
         "powerPlatformApiEndpoint": client.host,
         "realm": "dev",
         "almFamilyId": family_id,
-        "setupSource": "existing-dev",
+        "setupSource": connection["setupSource"],
         "agentBuilderChangeSetPath": (
             destination.relative_to(kit_root) / RAW_CHANGESET
         ).as_posix(),

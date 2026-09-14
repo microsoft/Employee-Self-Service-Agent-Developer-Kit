@@ -29,8 +29,14 @@ Record anonymous usage telemetry best-effort:
 python scripts/emit_capability.py setup
 ```
 
-Read `src/skills/foundation-setup/da-existing-dev.md` and follow it. This is the
-only supported setup path in the current DA-GA implementation. Do not run the
-retired Dataverse foundation or onboarding playbooks.
+When the maker has already supplied a native agent package or explicitly asked
+to use one, read `src/skills/foundation-setup/da-alm-import.md` and follow it.
+This is an advanced handoff, not a setup option to advertise or recommend.
+
+For every other request, read
+`src/skills/foundation-setup/da-existing-dev.md` and follow it. Existing
+editable Dev remains the default setup path.
+
+Do not run the retired Dataverse foundation or onboarding playbooks.
 
 Never route from `/setup` into an integration or topic playbook.

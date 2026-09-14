@@ -466,6 +466,48 @@ def test_attach_materializes_authorable_topics_and_da_identity(
     assert raw_cache["changeToken"] == "opaque-token"
 
 
+def test_imported_agent_reuses_workspace_with_import_provenance(
+    tmp_path: Path,
+) -> None:
+    setup_existing_da.attach_existing_dev(
+        FakeClient(),
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+        setup_source="alm-import",
+        selection_source="alm-import-result",
+    )
+
+    config = json.loads(
+        (tmp_path / ".local" / "config.json").read_text(encoding="utf-8")
+    )
+    canonical = json.loads(
+        (
+            tmp_path / ".local" / "setup" / "config.json"
+        ).read_text(encoding="utf-8")
+    )
+    connection = json.loads(
+        (
+            tmp_path / ".local" / "setup" / "da-connection.json"
+        ).read_text(encoding="utf-8")
+    )
+    metadata = json.loads(
+        (
+            tmp_path
+            / "workspace"
+            / "agents"
+            / "employee-self-service-hr"
+            / ".agentbuilder"
+            / "attach.json"
+        ).read_text(encoding="utf-8")
+    )
+
+    assert config["agent"]["setupSource"] == "alm-import"
+    assert canonical["setup_source"] == "alm-import"
+    assert connection["setupSource"] == "alm-import"
+    assert metadata["setupSource"] == "alm-import"
+
+
 def test_materializes_converter_results_and_skips_failure(
     tmp_path: Path,
 ) -> None:
