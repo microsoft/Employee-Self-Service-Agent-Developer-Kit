@@ -98,6 +98,8 @@ python scripts/emit_capability.py setup
 
 Use context already supplied with the setup request. When it identifies an agent, do not ask whether the agent is Dev or Prod; use service inspection to establish its realm.
 
+When the maker has already supplied a native agent package or explicitly asked to use one, read `src/skills/foundation-setup/da-alm-import.md` and follow it. This is an advanced handoff, not a setup option to advertise or recommend.
+
 When the request does not identify an agent or environment, ask:
 
 > Do you already have an ESS agent in Copilot Studio?

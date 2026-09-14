@@ -15,6 +15,9 @@ _FOUNDATION = _SOLUTION / "src" / "skills" / "foundation-setup" / "SKILL.md"
 _DA_EXISTING_DEV = (
     _SOLUTION / "src" / "skills" / "foundation-setup" / "da-existing-dev.md"
 )
+_DA_ALM_IMPORT = (
+    _SOLUTION / "src" / "skills" / "foundation-setup" / "da-alm-import.md"
+)
 _WORKDAY = _SOLUTION / "src" / "skills" / "setup" / "SKILL.md"
 _CONNECT_STEP1 = _SOLUTION / "src" / "skills" / "connect" / "step1.md"
 _INSTRUCTIONS = _SOLUTION / ".github" / "copilot-instructions.md"
@@ -145,16 +148,19 @@ def test_workday_routing_remains_separate() -> None:
     assert "Do not run the retained Workday setup playbooks" in workday
 
 
-def test_foundation_routes_only_to_existing_dev_da_setup() -> None:
+def test_foundation_routes_supported_da_setup_paths() -> None:
     text = _FOUNDATION.read_text(encoding="utf-8")
 
     assert set(_PATH_RE.findall(text)) == {
+        "src/skills/foundation-setup/da-alm-import.md",
         "src/skills/foundation-setup/da-existing-dev.md"
     }
+    assert "not a setup option to advertise or recommend" in text
     assert "scripts/setup_state.py" not in text
     assert "Dataverse foundation or onboarding playbooks" in text
     assert "connector authentication" in text
     assert _DA_EXISTING_DEV.is_file()
+    assert _DA_ALM_IMPORT.is_file()
 
 
 def test_foundation_uses_maker_facing_progress_without_duplicate_state() -> None:
