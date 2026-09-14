@@ -87,8 +87,11 @@ def _resolve_token() -> str:
 def _read_token_file(token_file: str) -> str:
     if not os.path.isfile(token_file):
         raise ValueError("AGENTCONFIG_ACCESS_TOKEN_FILE does not exist")
-    with open(token_file, "r", encoding="utf-8") as handle:
-        token = handle.read().strip()
+    try:
+        with open(token_file, "r", encoding="utf-8") as handle:
+            token = handle.read().strip()
+    except OSError as error:
+        raise ValueError("AGENTCONFIG_ACCESS_TOKEN_FILE could not be read") from error
     if not token:
         raise ValueError("AGENTCONFIG_ACCESS_TOKEN_FILE is empty")
     return token

@@ -13,9 +13,11 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import errno
 import json
 import sys
 from pathlib import Path
+from unittest.mock import Mock, mock_open
 
 import httpx
 import msal
@@ -236,6 +238,91 @@ def test_token_file_keeps_precedence_over_environment_token(
     else:
         with pytest.raises(ValueError, match="token tenant does not match"):
             base_client._resolve_token()
+
+
+@pytest.mark.parametrize("entry_point", ["helper", "resolve", "constructor"])
+@pytest.mark.parametrize("environment_token", [False, True])
+@pytest.mark.parametrize(
+    ("failure_stage", "error_type", "error_number"),
+    [
+        ("open", PermissionError, errno.EACCES),
+        ("read", PermissionError, errno.EACCES),
+        ("open", OSError, errno.EIO),
+        ("read", OSError, errno.EIO),
+        ("open", FileNotFoundError, errno.ENOENT),
+    ],
+)
+def test_unreadable_token_file_has_a_path_free_error_without_credential_fallback(
+    monkeypatch, tmp_path, capsys, caplog, entry_point, environment_token,
+    failure_stage, error_type, error_number,
+) -> None:
+    token = _token_for_tenant(TENANT_ID)
+    path = tmp_path / "private-access-token"
+    path.write_text(token, encoding="utf-8")
+    monkeypatch.setenv("AGENTCONFIG_ACCESS_TOKEN_FILE", str(path))
+    if environment_token:
+        monkeypatch.setenv("AGENTCONFIG_ACCESS_TOKEN", token)
+
+    error = error_type(error_number, "Token file I/O failed", str(path))
+    open_file = mock_open(read_data=token)
+    if failure_stage == "open":
+        # Includes disappearance after the real isfile check succeeds.
+        open_file.side_effect = error
+    else:
+        open_file.return_value.read.side_effect = error
+    monkeypatch.setattr(base_client, "open", open_file, raising=False)
+    acquire = Mock(side_effect=AssertionError("Must not fall back to MSAL"))
+    monkeypatch.setattr(base_client, "acquire_token_msal_interactive", acquire)
+    request = Mock(side_effect=AssertionError("Must not contact the authoring API"))
+
+    with pytest.raises(ValueError) as caught:
+        if entry_point == "helper":
+            base_client._read_token_file(str(path))
+        elif entry_point == "resolve":
+            base_client._resolve_token()
+        else:
+            base_client.AgentConfigBaseClient(
+                base_url="https://authoring.example.test",
+                logger_name="test",
+                transport=httpx.MockTransport(request),
+            )
+
+    assert str(caught.value) == "AGENTCONFIG_ACCESS_TOKEN_FILE could not be read"
+    assert caught.value.__cause__ is error
+    assert str(path) not in str(caught.value)
+    assert token not in str(caught.value)
+    open_file.assert_called_once_with(str(path), "r", encoding="utf-8")
+    if failure_stage == "read":
+        open_file.return_value.__exit__.assert_called_once()
+    acquire.assert_not_called()
+    request.assert_not_called()
+    assert capsys.readouterr() == ("", "")
+    assert caplog.text == ""
+
+
+@pytest.mark.parametrize(
+    ("contents", "message"),
+    [
+        (None, "AGENTCONFIG_ACCESS_TOKEN_FILE does not exist"),
+        ("", "AGENTCONFIG_ACCESS_TOKEN_FILE is empty"),
+        (" \n\t", "AGENTCONFIG_ACCESS_TOKEN_FILE is empty"),
+        (" \n token \t", None),
+    ],
+)
+def test_token_file_preserves_missing_empty_and_success_behavior(
+    tmp_path, contents, message
+) -> None:
+    path = tmp_path / "access-token"
+    if contents is not None:
+        path.write_text(contents, encoding="utf-8")
+
+    if message is None:
+        assert base_client._read_token_file(str(path)) == "token"
+    else:
+        with pytest.raises(ValueError) as caught:
+            base_client._read_token_file(str(path))
+        assert str(caught.value) == message
+        assert caught.value.__cause__ is None
 
 
 @pytest.mark.parametrize("tenant", [TENANT_ID, None])

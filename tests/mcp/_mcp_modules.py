@@ -38,6 +38,8 @@ from pathlib import Path
 from types import ModuleType
 from typing import Sequence
 
+from pydantic_settings.exceptions import IncompleteFieldDefinitionWarning
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MCP_ROOT = REPO_ROOT / "solutions" / "ess-maker-skills" / "src" / "mcp"
@@ -98,7 +100,9 @@ def load_mcp_modules(
                         # which the suite's ``filterwarnings = error`` would
                         # otherwise turn into a collection failure. Suppressed
                         # here, once, instead of at every call site.
-                        warnings.simplefilter("ignore")
+                        warnings.simplefilter(
+                            "ignore", IncompleteFieldDefinitionWarning
+                        )
                         spec.loader.exec_module(module)
                 except BaseException:
                     sys.modules.pop(alias, None)
