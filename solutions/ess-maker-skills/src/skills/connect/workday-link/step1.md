@@ -13,6 +13,19 @@ Read `.local/config.json` for the agent details (`dataverseEndpoint`,
 
 ---
 
+## 1.0 — Initialize state
+
+If `.local/connect/workday-link/steps.md` does not exist, copy
+`src/skills/connect/workday-link/steps.md` to
+`.local/connect/workday-link/steps.md`.
+
+**If step 1 is already checked** in that file, skip to the first unchecked
+step: read `src/skills/connect/workday-link/step2.md` if step 2 is
+unchecked, otherwise read `src/skills/connect/workday-link/step3.md`. Stop
+following this file.
+
+---
+
 ## 1.1 — Check the extension pack and connections
 
 Run each checkpoint in isolation:
