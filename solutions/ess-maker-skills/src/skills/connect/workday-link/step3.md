@@ -11,6 +11,9 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 python scripts/flightcheck/cli.py --checkpoint WD-RUN-001
 ```
 
+Render the result per `src/skills/setup/shared/checklist-updater.md`
+§U.0–U.0a before continuing.
+
 **If `PASSED` (or `Warning` from an inconclusive live probe backed by recent
 run history):** continue to 3.2.
 

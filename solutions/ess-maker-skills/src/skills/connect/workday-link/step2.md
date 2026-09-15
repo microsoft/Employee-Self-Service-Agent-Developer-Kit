@@ -22,6 +22,9 @@ into this agent.
 python scripts/flightcheck/cli.py --checkpoint WD-REST-002
 ```
 
+Render the result per `src/skills/setup/shared/checklist-updater.md`
+§U.0–U.0a before continuing.
+
 - **`PASSED`** — already wired. Update
   `.local/connect/workday-link/steps.md` step 2 to `- [x]` and continue
   to step 3 (`src/skills/connect/workday-link/step3.md`).
@@ -80,6 +83,9 @@ Re-verify:
 ```
 python scripts/flightcheck/cli.py --checkpoint WD-REST-002
 ```
+
+Render the result per `src/skills/setup/shared/checklist-updater.md`
+§U.0–U.0a before continuing.
 
 **If `PASSED`:** update `.local/connect/workday-link/steps.md` step 2 to
 `- [x]` and continue to step 3.

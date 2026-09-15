@@ -11,6 +11,15 @@ orchestrator's job.
 Read `.local/config.json` for the agent details (`dataverseEndpoint`,
 `agent.botId`, `agent.name`, `agent.schemaName`, `agent.isManaged`).
 
+**After every checkpoint run in this flow, show its result in chat first.**
+As soon as a `python scripts/flightcheck/cli.py --checkpoint <ID>` run
+returns, render the result to the user per
+`src/skills/setup/shared/checklist-updater.md` §U.0–U.0a — the compact
+result table and, for any `Manual`, `Warning`, or `NotConfigured` row, its
+full verification steps — before you show any later **Message** or branch
+on the outcome. Single-checkpoint runs never open the HTML report, so this
+in-chat render is the only place the user sees the finding.
+
 ---
 
 ## 1.0 — Initialize state
@@ -35,6 +44,8 @@ python scripts/flightcheck/cli.py --checkpoint WD-PKG-001
 python scripts/flightcheck/cli.py --checkpoint WD-CONN-012
 python scripts/flightcheck/cli.py --checkpoint DV-CONN-001
 ```
+
+Render all three results per the convention above before continuing.
 
 **If all three report `PASSED`:**
 

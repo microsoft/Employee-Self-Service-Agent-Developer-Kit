@@ -237,6 +237,9 @@ already exists somewhere in this environment:
 python scripts/flightcheck/cli.py --checkpoint WD-PKG-001
 ```
 
+Render the result per `src/skills/setup/shared/checklist-updater.md`
+§U.0–U.0a before continuing.
+
 **If `PASSED`** (an extension pack is already installed and its connections
 are present):
 
