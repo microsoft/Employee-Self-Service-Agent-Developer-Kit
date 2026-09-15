@@ -41,7 +41,6 @@ from setup_existing_da import (
     _client_from_args,
     _normalize_environment_id,
     _utc_now,
-    attach_existing_dev,
     resolve_da_target,
 )
 
@@ -294,11 +293,14 @@ def _create_fuse(path: Path, content: str) -> None:
             stream.write(content)
             stream.flush()
             os.fsync(stream.fileno())
-    except OSError:
+    except OSError as exc:
         try:
             path.unlink(missing_ok=True)
-        except OSError:
-            pass
+        except OSError as cleanup_error:
+            exc.add_note(
+                "The partial attempt fuse could not be removed: "
+                f"{redact_text(str(cleanup_error))}"
+            )
         raise
 
 
@@ -351,10 +353,8 @@ def _parse_response_body(response: requests.Response) -> tuple[Any, bool]:
 def _extract_identity(body: Any) -> dict[str, str] | None:
     """Extract a usable {cdsBotId, schemaName} pair when present.
 
-    This only checks that both fields are non-empty strings. Deeper
-    identity validation (a real GUID, a real Dev agent) is
-    ``attach_existing_dev``'s job, not this script's -- it is the sole
-    authoritative Dev validation boundary.
+    This only checks that both fields are non-empty strings. The existing
+    attach command remains the authoritative Dev validation boundary.
     """
     if not isinstance(body, dict):
         return None
@@ -375,8 +375,8 @@ def _emit_annotations(
     *,
     marker: str = _CREATE_MARKER,
 ) -> None:
-    # Redacted like the response body: an attachment/local exception message
-    # (for example ``attachmentError``) is caller-supplied text, not a
+    # Redacted like the response body: a transport/local exception message
+    # (for example ``transportError``) is caller-supplied text, not a
     # trusted, pre-vetted value, so a credential pattern inside it must not
     # leak through annotations either.
     print(
@@ -439,6 +439,8 @@ def create_from_starter_package(
     try:
         response = client.create_agent_from_starter_package(package_id)
     except (requests.exceptions.RequestException, OSError) as exc:
+        annotations["transportErrorType"] = type(exc).__name__
+        annotations["transportError"] = str(exc)
         reason = _pre_dispatch_reason(exc)
         if reason is not None:
             fuse_path.unlink(missing_ok=True)
@@ -482,39 +484,13 @@ def create_from_starter_package(
             )
         annotations["agentId"] = identity["cdsBotId"]
         annotations["schemaName"] = identity["schemaName"]
-        try:
-            connection = attach_existing_dev(
-                client,
-                environment_id=normalized_environment_id,
-                agent_id=identity["cdsBotId"],
-                kit_root=resolved_kit_root,
-                selection_source="mos-starter-result",
-                setup_source="mos-starter",
-            )
-        except (
-            AgentBuilderError,
-            ExistingDASetupError,
-            OSError,
-            ValueError,
-        ) as exc:
-            annotations["fuseDisposition"] = "retained"
-            annotations["outcome"] = "attachment-failed"
-            annotations["attachmentError"] = str(exc)
-            _print_evidence(annotations, body, body_is_json)
-            raise MosStarterSetupError(
-                "The service created agent "
-                f"{identity['cdsBotId']} (schema {identity['schemaName']}) "
-                f"but attachment failed: {exc} The attempt fuse was "
-                "retained. Run `setup_existing_da.py attach` directly with "
-                "this logged identity and `--setup-source mos-starter`; do "
-                "not run create again."
-            ) from exc
-        fuse_path.unlink(missing_ok=True)
-        annotations["fuseDisposition"] = "removed"
-        annotations["outcome"] = "success"
+        annotations["fuseDisposition"] = "retained"
+        annotations["outcome"] = "created"
         _print_evidence(annotations, body, body_is_json)
         return {
-            **connection,
+            "environmentId": normalized_environment_id,
+            "agentId": identity["cdsBotId"],
+            "schemaName": identity["schemaName"],
             "starterPackageId": package_id,
             "starterPackageName": package_name,
             "starterPackageVersion": package_version,
@@ -621,10 +597,10 @@ def main(argv: list[str] | None = None) -> int:
         ExistingDASetupError,
         MosStarterSetupError,
         OSError,
-        RuntimeError,
         ValueError,
     ) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        details = "\n".join((str(exc), *getattr(exc, "__notes__", ())))
+        print(f"ERROR: {redact_text(details)}", file=sys.stderr)
         return 1
 
 

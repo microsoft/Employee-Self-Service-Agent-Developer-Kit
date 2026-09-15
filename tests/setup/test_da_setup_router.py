@@ -241,6 +241,9 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "setup_mos_starter.py create" in text
     assert "DA_MOS_STARTER_CREATE_ANNOTATIONS_JSON:" in text
     assert "DA_MOS_STARTER_CREATE_JSON:" in text
+    assert "setup_existing_da.py attach" in text
+    assert "--setup-source mos-starter" in text
+    assert "outcome: created" in text
     assert "Never show a package's" in normalized
     assert "internal `packageId` to the maker" in normalized
     assert "Never infer whether a replay is safe from the response message text" in (
