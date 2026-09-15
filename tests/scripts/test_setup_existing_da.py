@@ -786,7 +786,10 @@ def test_identical_rerun_removes_dead_projection_metadata(
     assert "unprojectedDialogs" not in persisted
 
 
-@pytest.mark.parametrize("setup_source", ("alm-import", "prod-to-dev"))
+@pytest.mark.parametrize(
+    "setup_source",
+    ("alm-import", "prod-to-dev", "mos-starter"),
+)
 def test_identical_rerun_preserves_strongest_provenance(
     tmp_path: Path,
     setup_source: str,
@@ -984,9 +987,19 @@ def test_main_attach_preflights_serializer_before_authentication(
     assert "serializer unavailable" in error
 
 
-def test_main_attach_forwards_alm_import_provenance(
+@pytest.mark.parametrize(
+    ("setup_source", "selection_source"),
+    (
+        ("alm-import", "alm-import-result"),
+        ("prod-to-dev", "prod-to-dev-result"),
+        ("mos-starter", "mos-starter-result"),
+    ),
+)
+def test_main_attach_forwards_setup_provenance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    setup_source: str,
+    selection_source: str,
 ) -> None:
     observed: dict[str, Any] = {}
     monkeypatch.setattr(
@@ -1014,13 +1027,13 @@ def test_main_attach_forwards_alm_import_provenance(
             "--kit-root",
             str(tmp_path),
             "--setup-source",
-            "alm-import",
+            setup_source,
         ]
     )
 
     assert result == 0
-    assert observed["selection_source"] == "alm-import-result"
-    assert observed["setup_source"] == "alm-import"
+    assert observed["selection_source"] == selection_source
+    assert observed["setup_source"] == setup_source
 
 
 def test_parser_exposes_only_composable_setup_operations() -> None:

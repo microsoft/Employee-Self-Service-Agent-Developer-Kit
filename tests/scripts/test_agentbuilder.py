@@ -465,6 +465,189 @@ def test_ring_environment_listing_rejects_unsafe_next_link() -> None:
         )
 
 
+def test_list_starter_packages_paginates_and_validates_shape() -> None:
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "packages": [{"packageId": "pkg-1", "name": "First"}],
+                    "continuationToken": "page-2",
+                }
+            ),
+            FakeResponse({"packages": [{"packageId": "pkg-2", "name": "Second"}]}),
+        ]
+    )
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    packages = client.list_starter_packages()
+
+    assert [package["packageId"] for package in packages] == ["pkg-1", "pkg-2"]
+    assert session.calls[0]["url"].endswith(
+        "/copilotstudio/minimalBots/agentStarterPackages"
+    )
+    assert session.calls[0]["params"] == {
+        "api-version": agentbuilder.DEFAULT_API_VERSION,
+        "pageSize": 200,
+    }
+    assert session.calls[1]["params"]["continuationToken"] == "page-2"
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"packages": "not-a-list"},
+        {"packages": [{"packageId": "ok"}, "not-a-dict"]},
+        {"notPackages": []},
+        ["not", "a", "dict"],
+    ],
+)
+def test_list_starter_packages_rejects_malformed_shape(body: Any) -> None:
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession([FakeResponse(body)]),
+    )
+
+    with pytest.raises(agentbuilder.AgentBuilderError, match="invalid shape"):
+        client.list_starter_packages()
+
+
+def test_list_starter_packages_rejects_non_string_continuation_token() -> None:
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession(
+            [FakeResponse({"packages": [], "continuationToken": 123})]
+        ),
+    )
+
+    with pytest.raises(agentbuilder.AgentBuilderError, match="continuation token"):
+        client.list_starter_packages()
+
+
+def test_list_starter_packages_bounds_page_count() -> None:
+    session = FakeSession(
+        [
+            FakeResponse({"packages": [], "continuationToken": "next"})
+            for _ in range(3)
+        ]
+    )
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    with pytest.raises(agentbuilder.AgentBuilderError, match="exceeded 3 pages"):
+        client.list_starter_packages(max_pages=3)
+
+
+def test_create_agent_from_starter_package_sends_one_empty_body_post() -> None:
+    session = FakeSession(
+        [FakeResponse({"cdsBotId": AGENT_ID, "schemaName": "gptagent_esshr"})]
+    )
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    response = client.create_agent_from_starter_package("pkg-1")
+
+    assert len(session.calls) == 1
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith(
+        "/copilotstudio/minimalBots/agentStarterPackages/pkg-1/create"
+    )
+    assert call["json"] == {}
+    assert call["allow_redirects"] is False
+    assert "POST" not in session.mounts["https://"].max_retries.allowed_methods
+    # The client returns the raw response untouched -- no parsing, no
+    # raising on a non-2xx status -- so the wrapper owns evidence
+    # rendering and fuse disposition.
+    assert response.json() == {
+        "cdsBotId": AGENT_ID,
+        "schemaName": "gptagent_esshr",
+    }
+
+
+def test_create_agent_from_starter_package_url_encodes_reserved_characters() -> None:
+    session = FakeSession(
+        [FakeResponse({"cdsBotId": AGENT_ID, "schemaName": "gptagent_esshr"})]
+    )
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    client.create_agent_from_starter_package("pkg/weird?id#1 two")
+
+    assert len(session.calls) == 1
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith(
+        "/copilotstudio/minimalBots/agentStarterPackages/"
+        "pkg%2Fweird%3Fid%231%20two/create"
+    )
+    # Exactly one path segment for the encoded ID: no unescaped "/" split it.
+    encoded_segment = call["url"].rsplit("agentStarterPackages/", 1)[1].split(
+        "/create"
+    )[0]
+    assert "/" not in encoded_segment
+    assert call["json"] == {}
+    assert call["allow_redirects"] is False
+    assert "POST" not in session.mounts["https://"].max_retries.allowed_methods
+
+
+def test_create_agent_from_starter_package_does_not_raise_on_error_status() -> None:
+    session = FakeSession(
+        [FakeResponse({"error": {"code": "Conflict"}}, status_code=409)]
+    )
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    response = client.create_agent_from_starter_package("pkg-1")
+
+    assert response.status_code == 409
+    assert len(session.calls) == 1
+
+
+def test_create_agent_from_starter_package_rejects_blank_package_id() -> None:
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession([]),
+    )
+
+    with pytest.raises(ValueError, match="non-empty string"):
+        client.create_agent_from_starter_package("   ")
+
+
 def test_http_403_is_explicit_without_echoing_response_body() -> None:
     session = FakeSession(
         [
@@ -498,6 +681,37 @@ def test_http_403_is_explicit_without_echoing_response_body() -> None:
     assert error.value.response.json()["error"]["message"] == (
         "sensitive platform detail"
     )
+
+
+def test_http_error_carries_raw_response_without_leaking_it_into_str() -> None:
+    raw_response = FakeResponse(
+        {
+            "error": {
+                "code": "Forbidden",
+                "message": "sensitive platform detail",
+            }
+        },
+        status_code=403,
+    )
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession([raw_response]),
+    )
+
+    with pytest.raises(agentbuilder.AgentBuilderHTTPError) as error:
+        client.list_agents()
+
+    assert error.value.response is raw_response
+    assert "sensitive platform detail" not in str(error.value)
+
+
+def test_http_error_response_defaults_to_none_for_existing_callers() -> None:
+    error = agentbuilder.AgentBuilderHTTPError("Agent listing", 500)
+
+    assert error.response is None
 
 
 def test_extracts_guid_from_default_and_regular_environment_names() -> None:

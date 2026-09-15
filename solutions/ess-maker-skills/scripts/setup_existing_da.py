@@ -1941,7 +1941,11 @@ def main(argv: list[str] | None = None) -> int:
                 else (
                     "prod-to-dev-result"
                     if args.setup_source == "prod-to-dev"
-                    else target.get("agentSelection")
+                    else (
+                        "mos-starter-result"
+                        if args.setup_source == "mos-starter"
+                        else target.get("agentSelection")
+                    )
                 )
             ),
             setup_source=args.setup_source,

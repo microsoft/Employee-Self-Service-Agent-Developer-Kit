@@ -142,6 +142,12 @@ When the maker has already supplied a native agent package or explicitly asked t
 
 When the request identifies an environment but not an agent, read `src/skills/foundation-setup/da-existing-dev.md` and follow its environment-candidate selection path.
 
+When the maker has no existing agent and wants a fresh installation, read
+`src/skills/foundation-setup/da-mos-starter.md` and follow it. That skill
+lists entitled MOS starter packages and creates a new Dev agent from the
+maker's exact confirmed choice; it never replaces the default existing-Dev
+path for a maker who already has an agent.
+
 When the request does not identify an agent or environment, ask:
 
 > Do you already have an ESS agent in Copilot Studio?
@@ -149,6 +155,6 @@ When the request does not identify an agent or environment, ask:
 Offer exactly:
 
 - **Yes, I have an agent** — ask for its Copilot Studio URL.
-- **No, I need a fresh agent** — explain that this setup path connects an existing editable Dev agent and stop without suggesting a package import.
+- **No, I need a fresh agent** — follow `src/skills/foundation-setup/da-mos-starter.md`.
 
 Do not run Dataverse foundation or onboarding playbooks. Never route from `/setup` into an integration or topic playbook.
