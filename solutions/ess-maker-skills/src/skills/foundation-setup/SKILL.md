@@ -111,6 +111,12 @@ That skill owns the explicit package handoff and reads the canonical import
 reference. This is an advanced handoff, not a setup option to advertise or
 recommend.
 
+When the maker has no existing agent and wants a fresh installation, read
+`src/skills/foundation-setup/da-mos-starter.md` and follow it. That skill
+lists entitled MOS starter packages and creates a new Dev agent from the
+maker's exact confirmed choice; it never replaces the default existing-Dev
+path for a maker who already has an agent.
+
 For requests that do not identify an agent, read
 `src/skills/foundation-setup/da-existing-dev.md` and follow it. Existing
 editable Dev remains the default setup path.

@@ -21,8 +21,14 @@ _DA_ALM_IMPORT = (
 _DA_PROD_TO_DEV = (
     _SOLUTION / "src" / "skills" / "foundation-setup" / "da-prod-to-dev.md"
 )
+_DA_MOS_STARTER = (
+    _SOLUTION / "src" / "skills" / "foundation-setup" / "da-mos-starter.md"
+)
 _NATIVE_ALM_REFERENCE = (
     _SOLUTION / "src" / "reference" / "native-alm-import.md"
+)
+_MOS_STARTER_REFERENCE = (
+    _SOLUTION / "src" / "reference" / "mos-starter-package.md"
 )
 _WORKDAY = _SOLUTION / "src" / "skills" / "setup" / "SKILL.md"
 _CONNECT_STEP1 = _SOLUTION / "src" / "skills" / "connect" / "step1.md"
@@ -137,6 +143,7 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
         "src/skills/foundation-setup/da-alm-import.md",
         "src/skills/foundation-setup/da-existing-dev.md",
         "src/skills/foundation-setup/da-prod-to-dev.md",
+        "src/skills/foundation-setup/da-mos-starter.md",
     }
     assert "not a setup option to advertise or recommend" in normalized
     assert "src/reference/native-alm-import.md" in import_text
@@ -161,6 +168,9 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     assert text.index("setup_existing_da.py inspect-agent") < text.index(
         "da-prod-to-dev.md"
     )
+    assert _DA_MOS_STARTER.is_file()
+    assert _MOS_STARTER_REFERENCE.is_file()
+    assert "no existing agent and wants a fresh installation" in normalized
 
 
 def test_prod_to_dev_reference_composes_durable_boundaries() -> None:
@@ -215,6 +225,42 @@ def test_prod_to_dev_reference_composes_durable_boundaries() -> None:
     assert "Do not generate HTTP code or an end-to-end setup script" in normalized
     assert "setup_prod_to_dev.py" not in text
     assert len(text.splitlines()) < 180
+
+
+def test_mos_starter_reference_composes_durable_boundaries() -> None:
+    foundation = _FOUNDATION.read_text(encoding="utf-8")
+    normalized_foundation = " ".join(foundation.split())
+    text = _DA_MOS_STARTER.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+    reference = _MOS_STARTER_REFERENCE.read_text(encoding="utf-8")
+
+    assert "no existing agent and wants a fresh installation" in normalized_foundation
+    assert "src/reference/mos-starter-package.md" in text
+    assert "setup_mos_starter.py list" in text
+    assert "DA_MOS_STARTER_PACKAGES_JSON:" in text
+    assert "setup_mos_starter.py create" in text
+    assert "DA_MOS_STARTER_CREATE_ANNOTATIONS_JSON:" in text
+    assert "DA_MOS_STARTER_CREATE_JSON:" in text
+    assert "Never show a package's" in normalized
+    assert "internal `packageId` to the maker" in normalized
+    assert "Never infer whether a replay is safe from the response message text" in (
+        normalized
+    )
+    assert "run `create` again for this package" in normalized
+    assert "Never invoke" in normalized and "/connect" in normalized
+    assert "setup_setup_mos_starter.py" not in text
+    assert "setup_mos_starter.py resolve" not in text
+    assert "setup_mos_starter.py status" not in text
+    assert len(text.splitlines()) < 130
+
+    assert "Pending live validation." in reference
+    assert "create-only" in reference.casefold()
+    assert "Do not describe a pending-validation claim" in reference
+    assert "Fuse disposition matrix" in reference
+    assert "PERSONA" not in reference
+    assert "resolve_starter_package" not in reference
+    assert "setup_mos_starter.py resolve" not in reference
+    assert "setup_mos_starter.py status" not in reference
 
 
 def test_foundation_resolves_python_and_announces_authorization_wait() -> None:
