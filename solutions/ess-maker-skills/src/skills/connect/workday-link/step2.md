@@ -51,7 +51,7 @@ python scripts/checkpoint.py "Add User Context redirect to Workday"
 ```
 
 Resolve the installed Workday "Set User Context" system topic's dialog id
-under `.local/agents/{slug}/topics/` — use the actual installed topic name
+under `workspace/agents/{slug}/topics/` — use the actual installed topic name
 (`WorkdaySystemGetUserContextV2` on the simplified pack; the legacy name on a
 full install), do not assume one over the other.
 

@@ -209,12 +209,35 @@ Now read `src/skills/connect/servicenow/step1.md` and follow it.
 ### If the user chose Workday (2 or "workday")
 
 **If this agent is already connected to Workday** (per the check in 1.1,
-either full setup done or already wired to an extension): show the current
-state and stop.
+either full setup done or already wired to an extension): show which mode
+it's connected in and stop.
+
+**If full setup completed** (`.local/connect/workday/config.json` shows
+every row done):
 
 **Message:**
 
-Workday is already connected to this agent.
+Workday is already connected to this agent — full setup was completed.
+
+1. `/create` — build a new topic that uses Workday
+2. `/flightcheck` — verify the connection is still healthy
+3. `/menu` — see everything else you can do
+
+**End message.**
+
+Stop here.
+
+**If wired to an already-installed extension**
+(`.local/connect/workday-link/steps.md` shows every step checked):
+
+**Message:**
+
+Workday is already connected to this agent — wired to an extension already
+installed in this environment.
+
+1. `/create` — build a new topic that uses Workday
+2. `/flightcheck` — verify the connection is still healthy
+3. `/menu` — see everything else you can do
 
 **End message.**
 

@@ -45,6 +45,10 @@ python scripts/flightcheck/cli.py --checkpoint WD-CONN-012
 python scripts/flightcheck/cli.py --checkpoint DV-CONN-001
 ```
 
+This does not re-check `WD-CONN-AUTH-001` — that's a manual attestation on
+the environment's shared Workday connection, already confirmed when the
+extension was first installed. It isn't re-asked per agent that links to it.
+
 Render all three results per the convention above before continuing.
 
 **If all three report `PASSED`:**
@@ -52,7 +56,27 @@ Render all three results per the convention above before continuing.
 Update `.local/connect/workday-link/steps.md` — change step 1 from
 `- [ ]` to `- [x]`.
 
-Continue to step 2 (`src/skills/connect/workday-link/step2.md`).
+The extension was installed to Dataverse independently of this agent's
+local workspace, so its topics (including the Workday system topic step 2
+needs to wire) may not exist on disk yet. Refresh the local workspace before
+continuing:
+
+**Message:**
+
+Extension confirmed. Refreshing your agent's local files to pick up the
+Workday topics...
+
+**End message.**
+
+```
+python scripts/fetch_and_setup.py --refresh
+```
+
+**If the refresh fails:** show the exact error and stop — step 2 cannot
+resolve the Workday system topic without an up-to-date local workspace.
+
+**If it succeeds:** continue to step 2
+(`src/skills/connect/workday-link/step2.md`).
 
 **If any report anything other than `PASSED`** (`FAILED`, `WARNING`,
 `NotConfigured`, or `Skipped`):
