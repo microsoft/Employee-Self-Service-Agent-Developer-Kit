@@ -11,17 +11,23 @@ Build a list of connected integrations (if any):
 
 - **ServiceNow** — connected if `.local/connect/servicenow/steps.md` exists and
   all items are checked.
-- **Workday** — connected if `.local/connect/workday/config.json` exists and its
-  `setupStatus` shows every setup row (`S1.1` … `S6.2`) in state `done` (the
-  setup orchestrator owns this state).
+- **Workday (full setup)** — connected if `.local/connect/workday/config.json`
+  exists and its `setupStatus` shows every setup row (`S1.1` … `S6.2`) in state
+  `done` (the setup orchestrator owns this state).
+- **Connect Workday (wire an existing extension)** — connected if
+  `.local/connect/connect-workday/steps.md` exists and all items are
+  checked. This is independent of the `setupStatus` rows above — it wires
+  this agent to a Workday extension that's already installed elsewhere
+  rather than installing one.
 
 ---
 
 ## 1.2 — Ask which system
 
 **If PRE_SELECTED_INTEGRATION was passed from SKILL.md** (the user already
-specified "servicenow" or "workday"): skip this question entirely. Set the
-selection to the pre-selected value and go directly to section 1.3.
+specified "servicenow", "workday", or "connect-workday"): skip this question
+entirely. Set the selection to the pre-selected value and go directly to
+section 1.3.
 
 If there are connected integrations, show them first:
 
@@ -32,7 +38,10 @@ Currently connected: {list of connected integration names, e.g. "ServiceNow"}
 Which system do you want to connect next?
 
 1. **ServiceNow** — IT tickets, HR cases, service catalog
-2. **Workday** — Payroll, time off, employee data
+2. **Workday (full setup)** — Payroll, time off, employee data — set up
+   everything from scratch
+3. **Connect Workday** — Wire this agent to a Workday extension that's
+   already installed elsewhere
 
 **End message.**
 
@@ -43,11 +52,17 @@ If nothing is connected yet:
 Which system do you want to connect to your agent?
 
 1. **ServiceNow** — IT tickets, HR cases, service catalog
-2. **Workday** — Payroll, time off, employee data
+2. **Workday (full setup)** — Payroll, time off, employee data — set up
+   everything from scratch
+3. **Connect Workday** — Wire this agent to a Workday extension that's
+   already installed elsewhere
 
 **End message.**
 
 Wait for the user to respond.
+
+If the user said "connect-workday" (e.g. `/connect connect-workday`), treat
+it as option 3 directly — do not ask the disambiguation question above.
 
 ---
 
@@ -204,7 +219,7 @@ Let's connect ServiceNow to your agent.
 
 Now read `src/skills/connect/servicenow/step1.md` and follow it.
 
-### If the user chose Workday (2 or "workday")
+### If the user chose Workday full setup (2 or "workday")
 
 Workday connection is handled by the **setup orchestrator**, which provisions
 the Power Platform environment, installs the ESS base agent, provisions the
@@ -215,11 +230,21 @@ already done.
 
 Now read `src/skills/setup/SKILL.md` and follow it.
 
+### If the user chose Connect Workday (3 or "connect-workday")
+
+This does not install anything — it wires this agent to a Workday extension
+that's already installed and connected in this environment: it verifies the
+extension pack and connections, wires the user-context redirect topic, and
+confirms Workday topics work.
+
+Read `src/skills/connect/connect-workday/step1.md` and follow it.
+
 ### If the user said something else
 
 **Message:**
 
-I didn't catch that. Enter **1** for ServiceNow or **2** for Workday.
+I didn't catch that. Enter **1** for ServiceNow, **2** for Workday full
+setup, or **3** for Connect Workday.
 
 **End message.**
 
