@@ -233,6 +233,8 @@ Connect your agent to ServiceNow for IT tickets, HR cases, and service catalog i
 
 Connect your agent to Workday for employee data, compensation, time off, and org lookups. Run `/connect workday` to start.
 
+**If a Workday extension is already installed** elsewhere in the environment, the kit detects it and offers to wire this agent to it directly — a much faster path than full setup.
+
 **Two supported install paths** — the kit detects which one applies and routes automatically:
 
 - **Simplified** (Microsoft's default for new installs) — just one Workday connection (OAuthUser via Entra ID) plus Dataverse. No ISU service accounts, security groups, or custom reports. User context comes from the Workday REST `/workers/me` endpoint.
