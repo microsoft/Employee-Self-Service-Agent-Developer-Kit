@@ -20,6 +20,7 @@ Here's what I can help you with:
 | `/delete` | Type Enter to delete a topic or workflow from your agent |
 | `/scan` | Type Enter to scan your agent for compile errors and fix them |
 | `/review` | Type Enter to review a topic or evaluation test sets tagged for review |
+| `/harden` | Type Enter to review and harden your agent's instructions against ungrounded or over-committing answers |
 | `/test` | Type Enter to drive and debug a topic or workflow's runtime behaviour until it's right |
 | `/evaluate` | Type Enter to create, update, tag, review, run, view results, or delete evaluation test sets |
 | `/run` | Type Enter to run evaluation test sets or view run results |

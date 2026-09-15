@@ -1659,6 +1659,7 @@ def test_wired_capabilities_are_in_canonical_list():
         "topic_create", "topic_update", "topic_delete",
         "workflow_create", "workflow_update", "workflow_delete",
         "cleanup", "troubleshoot",
+        "harden",
     }
     missing = wired - set(adk.ADK_CAPABILITIES)
     assert not missing, f"wired capabilities not in ADK_CAPABILITIES: {missing}"
