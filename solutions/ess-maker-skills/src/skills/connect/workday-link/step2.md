@@ -1,4 +1,4 @@
-# Connect Workday Step 2: Wire Workday Topics to This Agent
+# Workday Link Step 2: Wire Workday Topics to This Agent
 
 Every **Message** block is the exact text to show the user. Copy it verbatim.
 Do not rephrase, add commentary, or tell the user what tools you are calling.
@@ -23,8 +23,8 @@ python scripts/flightcheck/cli.py --checkpoint WD-REST-002
 ```
 
 - **`PASSED`** — already wired. Update
-  `.local/connect/connect-workday/steps.md` step 2 to `- [x]` and continue
-  to step 3 (`src/skills/connect/connect-workday/step3.md`).
+  `.local/connect/workday-link/steps.md` step 2 to `- [x]` and continue
+  to step 3 (`src/skills/connect/workday-link/step3.md`).
 - **`Skipped`** — not applicable to this install. Update step 2 to `- [x]`
   and continue to step 3.
 - **`FAILED`** or **`NotConfigured`** — continue to 2.2.
@@ -81,7 +81,7 @@ Re-verify:
 python scripts/flightcheck/cli.py --checkpoint WD-REST-002
 ```
 
-**If `PASSED`:** update `.local/connect/connect-workday/steps.md` step 2 to
+**If `PASSED`:** update `.local/connect/workday-link/steps.md` step 2 to
 `- [x]` and continue to step 3.
 
 **If it still fails:** roll back with the checkpoint saved above, then show:

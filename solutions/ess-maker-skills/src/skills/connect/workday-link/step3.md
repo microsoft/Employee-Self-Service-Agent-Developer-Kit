@@ -1,4 +1,4 @@
-# Connect Workday Step 3: Verify Connection
+# Workday Link Step 3: Verify Connection
 
 Every **Message** block is the exact text to show the user. Copy it verbatim.
 Do not rephrase, add commentary, or tell the user what tools you are calling.
@@ -33,7 +33,7 @@ Stop here.
 List the Workday-prefixed topics under
 `workspace/agents/{slug}/topics/`.
 
-Update `.local/connect/connect-workday/steps.md` step 3 to `- [x]`.
+Update `.local/connect/workday-link/steps.md` step 3 to `- [x]`.
 
 **Message:**
 
@@ -52,6 +52,7 @@ This agent can now use these Workday topics:
 | Command | What it does |
 |---------|-------------|
 | `/create` | Create a new topic that uses Workday |
+| `/test` | Drive a real conversation turn through a Workday topic for a live, end-to-end check |
 | `/flightcheck` | Run the full readiness check |
 | `/menu` | See all available commands |
 
