@@ -208,14 +208,22 @@ Now read `src/skills/connect/servicenow/step1.md` and follow it.
 
 ### If the user chose Workday (2 or "workday")
 
-**If this agent is already connected to Workday** (per the check in 1.1,
-either full setup done or already wired to an extension): show which mode
-it's connected in and stop.
-
 **If full setup completed** (`.local/connect/workday/config.json` shows
-every row done):
+every row done) **or wired to an already-installed extension**
+(`.local/connect/workday-link/steps.md` shows every step checked): a
+persisted "done" doesn't mean it's still true — re-verify before saying so.
 
-**Message:**
+```
+python scripts/flightcheck/cli.py --checkpoint WD-RUN-001
+```
+
+Render the result per `src/skills/setup/shared/checklist-updater.md`
+§U.0–U.0a before continuing.
+
+**If `PASSED`** (or `Warning` from an inconclusive live probe backed by
+recent run history):
+
+**Message (full setup completed):**
 
 Workday is already connected to this agent — full setup was completed.
 
@@ -225,12 +233,7 @@ Workday is already connected to this agent — full setup was completed.
 
 **End message.**
 
-Stop here.
-
-**If wired to an already-installed extension**
-(`.local/connect/workday-link/steps.md` shows every step checked):
-
-**Message:**
+**Message (wired to an existing extension):**
 
 Workday is already connected to this agent — wired to an extension already
 installed in this environment.
@@ -238,6 +241,17 @@ installed in this environment.
 1. `/create` — build a new topic that uses Workday
 2. `/flightcheck` — verify the connection is still healthy
 3. `/menu` — see everything else you can do
+
+**End message.**
+
+Show whichever message matches how this agent was connected. Stop here.
+
+**If `FAILED`:**
+
+**Message:**
+
+This agent was connected to Workday before, but the connection isn't
+responding right now. Run `/flightcheck` for the full diagnosis.
 
 **End message.**
 

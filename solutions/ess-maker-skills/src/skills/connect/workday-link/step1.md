@@ -28,10 +28,13 @@ If `.local/connect/workday-link/steps.md` does not exist, copy
 `src/skills/connect/workday-link/steps.md` to
 `.local/connect/workday-link/steps.md`.
 
-**If step 1 is already checked** in that file, skip to the first unchecked
+**If step 1 is already checked** in that file, a prior run doesn't mean it's
+still true — continue to 1.1 and re-verify before skipping ahead. If 1.1
+still reports `PASSED` on all three checkpoints, skip to the first unchecked
 step: read `src/skills/connect/workday-link/step2.md` if step 2 is
-unchecked, otherwise read `src/skills/connect/workday-link/step3.md`. Stop
-following this file.
+unchecked, otherwise read `src/skills/connect/workday-link/step3.md`. If 1.1
+now reports anything else, follow its non-`PASSED` branch instead of
+skipping ahead — it falls back to full setup.
 
 ---
 
@@ -75,8 +78,10 @@ python scripts/fetch_and_setup.py --refresh
 **If the refresh fails:** show the exact error and stop — step 2 cannot
 resolve the Workday system topic without an up-to-date local workspace.
 
-**If it succeeds:** continue to step 2
-(`src/skills/connect/workday-link/step2.md`).
+**If it succeeds:** read `.local/connect/workday-link/steps.md` — if step 2
+is unchecked, continue to step 2 (`src/skills/connect/workday-link/step2.md`);
+otherwise step 2 was already wired in an earlier run, so continue to step 3
+(`src/skills/connect/workday-link/step3.md`).
 
 **If any report anything other than `PASSED`** (`FAILED`, `WARNING`,
 `NotConfigured`, or `Skipped`):
