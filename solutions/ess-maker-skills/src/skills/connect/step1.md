@@ -11,9 +11,11 @@ Build a list of connected integrations (if any):
 
 - **ServiceNow** — connected if `.local/connect/servicenow/steps.md` exists and
   all items are checked.
-- **Workday** — connected if `.local/connect/workday/config.json` exists and its
-  `setupStatus` shows every setup row (`S1.1` … `S6.2`) in state `done` (the
-  setup orchestrator owns this state).
+- **Workday** — connected if either:
+  - `.local/connect/workday/config.json` exists and its `setupStatus` shows
+    every setup row (`S1.1` … `S6.2`) in state `done` (full setup completed), or
+  - `.local/connect/workday-link/steps.md` exists and all items are checked
+    (this agent was wired to an already-installed extension).
 
 ---
 
@@ -206,6 +208,141 @@ Now read `src/skills/connect/servicenow/step1.md` and follow it.
 
 ### If the user chose Workday (2 or "workday")
 
+**If full setup completed** (`.local/connect/workday/config.json` shows
+every row done) **or wired to an already-installed extension**
+(`.local/connect/workday-link/steps.md` shows every step checked): a
+persisted "done" doesn't mean it's still true — re-verify before saying so.
+
+```
+python scripts/flightcheck/cli.py --checkpoint WD-RUN-001
+```
+
+Render the result per `src/skills/setup/shared/checklist-updater.md`
+§U.0–U.0a before continuing.
+
+**If `PASSED`** (or `Warning` from an inconclusive live probe backed by
+recent run history):
+
+**Message (full setup completed):**
+
+Workday is already connected to this agent — full setup was completed.
+
+1. `/create` — build a new topic that uses Workday
+2. `/flightcheck` — verify the connection is still healthy
+3. `/menu` — see everything else you can do
+
+**End message.**
+
+**Message (wired to an existing extension):**
+
+Workday is already connected to this agent — wired to an extension already
+installed in this environment.
+
+1. `/create` — build a new topic that uses Workday
+2. `/flightcheck` — verify the connection is still healthy
+3. `/menu` — see everything else you can do
+
+**End message.**
+
+Show whichever message matches how this agent was connected. Stop here.
+
+**If `FAILED`:**
+
+**Message:**
+
+This agent was connected to Workday before, but the connection isn't
+responding right now. Run `/flightcheck` for the full diagnosis.
+
+**End message.**
+
+Stop here.
+
+**If `.local/connect/workday-link/steps.md` exists but some items are
+unchecked** (a wiring flow was started but not finished): read
+`src/skills/connect/workday-link/step1.md` and follow it — it re-checks
+each item and picks up from the first incomplete one.
+
+**If `.local/connect/workday/config.json` exists with `setupStatus` rows
+still in progress** (full setup was started but not finished): read
+`src/skills/setup/SKILL.md` and follow it — it resumes from the first
+unverified step.
+
+**Otherwise** (nothing started yet), check whether a Workday extension
+already exists somewhere in this environment:
+
+```
+python scripts/flightcheck/cli.py --checkpoint WD-PKG-001
+```
+
+Render the result per `src/skills/setup/shared/checklist-updater.md`
+§U.0–U.0a before continuing.
+
+**If `PASSED`** (an extension pack is already installed and its connections
+are present):
+
+**Message:**
+
+I found a Workday extension already installed in this environment.
+
+**End message.**
+
+Use the `vscode_askQuestions` tool:
+
+```json
+[
+  {
+    "header": "Workday",
+    "question": "How do you want to connect this agent to Workday?",
+    "options": [
+      { "label": "Wire this agent to the existing extension", "description": "Faster — reuses what's already installed", "recommended": true },
+      { "label": "Set up Workday from scratch for this agent", "description": "Provisions a new environment, tenant config, and extension pack" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+- If the user picked **wire to the existing extension**: read
+  `src/skills/connect/workday-link/step1.md` and follow it.
+- If the user picked **set up from scratch**: read
+  `src/skills/setup/SKILL.md` and follow it.
+
+**If `FAILED` or `WARNING`** (Workday connection references exist but don't
+match a known install shape — partial or unrecognized install):
+
+**Message:**
+
+I found some Workday connection references in this environment, but they
+don't match a complete install. Setup may have been started and not
+finished, or the shape is one I don't recognize.
+
+**End message.**
+
+Use the `vscode_askQuestions` tool:
+
+```json
+[
+  {
+    "header": "Workday",
+    "question": "How do you want to proceed?",
+    "options": [
+      { "label": "Try wiring this agent to it anyway", "description": "Runs the same checks again — falls back to full setup if it's not usable", "recommended": true },
+      { "label": "Set up Workday from scratch for this agent", "description": "Provisions a new environment, tenant config, and extension pack" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+- If the user picked **try wiring it anyway**: read
+  `src/skills/connect/workday-link/step1.md` and follow it. It re-runs
+  `WD-PKG-001` itself and redirects to full setup if the extension still
+  isn't usable.
+- If the user picked **set up from scratch**: read
+  `src/skills/setup/SKILL.md` and follow it.
+
+**If `NotConfigured` or `Skipped`** (no extension found):
+
 Workday connection is handled by the **setup orchestrator**, which provisions
 the Power Platform environment, installs the ESS base agent, provisions the
 Entra app, configures the Workday tenant, installs the extension pack, and
@@ -213,7 +350,7 @@ verifies the connection. It is resume-aware: if setup was already started it
 picks up at the first unverified step, and it fast-forwards steps that are
 already done.
 
-Now read `src/skills/setup/SKILL.md` and follow it.
+Read `src/skills/setup/SKILL.md` and follow it.
 
 ### If the user said something else
 

@@ -19,15 +19,17 @@ pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
 Read `src/skills/connect/step1.md` and follow it.
 
 (Step 1 asks which integration, detects existing state, and dispatches —
-ServiceNow to its own step files, Workday to the setup orchestrator
-`src/skills/setup/SKILL.md`.)
+ServiceNow to its own step files; for Workday, it checks whether an
+extension already exists in the environment and offers to wire this agent
+to it, or falls back to the setup orchestrator when nothing exists yet.)
 
 ---
 
 ## Routing
 
 Each integration routes differently — ServiceNow has its own step files;
-Workday delegates to the setup orchestrator:
+Workday branches between wiring an existing extension and the setup
+orchestrator:
 
 - **ServiceNow**: `src/skills/connect/servicenow/`
   - Steps template: `src/skills/connect/servicenow/steps.md`
@@ -43,13 +45,22 @@ Workday delegates to the setup orchestrator:
   - Step 3 (Basic): `step3-basic.md` — install extension pack (Basic fields)
   - Step 4: `step4.md` — verify connection
 
-- **Workday**: handled by the **setup orchestrator**
-  (`src/skills/setup/SKILL.md`), not a `connect/workday/` step sequence.
-  `src/skills/connect/step1.md` routes the Workday branch straight there. The
-  orchestrator sequences the six Workday setup skills (environment, ESS install,
-  Entra app, tenant config, extension pack, topic) using the master checklist as
-  a resume-aware spine, and persists state under `.local/setup/workday/tasks.md`
-  + `setupStatus` in `.local/connect/workday/config.json`.
+- **Workday**: `src/skills/connect/step1.md` checks `WD-PKG-001` to see
+  whether a Workday extension already exists in the environment, then
+  branches:
+  - **Extension already exists** — offers to wire this agent to it via
+    `src/skills/connect/workday-link/`:
+    - Steps template: `src/skills/connect/workday-link/steps.md`
+    - State file: `.local/connect/workday-link/steps.md`
+    - Step 1: `step1.md` — verify the extension pack and connections
+    - Step 2: `step2.md` — wire the user-context redirect topic
+    - Step 3: `step3.md` — verify the connection
+  - **No extension yet** — hands off to the **setup orchestrator**
+    (`src/skills/setup/SKILL.md`), which provisions the environment, ESS
+    base agent, Entra app, tenant config, extension pack, and topic, using
+    the master checklist as a resume-aware spine. State persists under
+    `.local/setup/workday/tasks.md` + `setupStatus` in
+    `.local/connect/workday/config.json`.
 
 Each integration's steps.md and config.json persist after completion.
 Running `/connect` again lets the user add a different integration
