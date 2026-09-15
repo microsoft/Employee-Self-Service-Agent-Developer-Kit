@@ -1,20 +1,30 @@
-# Copyright (c) Microsoft Corporation.
-# Licensed under the MIT License.
+# Copyright (c) Microsoft Corporation. Licensed under the MIT License.
 
-"""Import a native DA package through the guarded foundation setup path."""
+"""Import one native DA package and return a verified editable Dev identity."""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
 import json
+import socket
 import sys
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-from agentbuilder import AgentBuilderClient, AgentBuilderError
+import requests
+
+from agentbuilder import (
+    AgentBuilderClient,
+    AgentBuilderError,
+    AgentBuilderHTTPError,
+)
+from agentbuilder_object_model import (
+    ObjectModelConverterError,
+    validate_object_model_runtime,
+)
 from setup_existing_da import (
     CANONICAL_SETUP_STATE,
     ExistingDASetupError,
@@ -24,14 +34,17 @@ from setup_existing_da import (
     _normalize_guid,
     _utc_now,
     _write_json,
-    attach_existing_dev,
     resolve_da_target,
     validate_existing_dev_connection,
 )
 
 
-IMPORT_RECEIPT = Path(".local/setup/da-alm-import.json")
+IMPORT_RECORDS = Path(".local/setup/alm-import")
 MAX_MANIFEST_BYTES = 1024 * 1024
+UNRESOLVED_STATUSES = frozenset(
+    {"prepared", "ambiguous", "invalid-success", "imported"}
+)
+SAFE_RETRY_STATUSES = frozenset({"pre-dispatch-failure", "rejected"})
 
 
 class AlmImportSetupError(RuntimeError):
@@ -111,21 +124,19 @@ def inspect_alm_package(package_path: Path) -> AlmPackageInfo:
                 raise AlmImportSetupError(
                     "The native agent package does not declare packageType."
                 )
-            agent_manifests: list[tuple[zipfile.ZipInfo, str]] = []
-            for entry in files:
-                parts = PurePosixPath(entry.filename).parts
-                if (
-                    len(parts) == 4
-                    and parts[:2] == ("Plugin", "Agents")
-                    and parts[3] == "agent.yml"
-                    and parts[2]
-                ):
-                    agent_manifests.append((entry, parts[2]))
-            if len(agent_manifests) != 1:
+            schemas = {
+                parts[2]
+                for entry in files
+                if len(parts := PurePosixPath(entry.filename).parts) == 4
+                and parts[:2] == ("Plugin", "Agents")
+                and parts[3] == "agent.yml"
+                and parts[2]
+            }
+            if len(schemas) != 1:
                 raise AlmImportSetupError(
                     "The native agent package must contain exactly one agent."
                 )
-            schema_name = agent_manifests[0][1]
+            schema_name = next(iter(schemas))
     except (OSError, zipfile.BadZipFile) as exc:
         raise AlmImportSetupError(
             "The native agent package is not a readable ZIP archive."
@@ -137,7 +148,7 @@ def inspect_alm_package(package_path: Path) -> AlmPackageInfo:
     )
 
 
-def _receipt_identity(
+def _operation_identity(
     client: AgentBuilderClient,
     *,
     environment_id: str,
@@ -163,59 +174,156 @@ def _receipt_identity(
     }
 
 
-def _load_receipt(
-    path: Path,
-    expected_identity: dict[str, Any],
-) -> dict[str, str] | None:
-    if not path.exists():
-        return None
+def _record_path(kit_root: Path, identity: dict[str, Any]) -> Path:
+    canonical = json.dumps(
+        identity,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    operation_id = hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
+    return kit_root / IMPORT_RECORDS / f"{operation_id}.json"
+
+
+def _read_record(path: Path, identity: dict[str, Any]) -> dict[str, Any]:
     try:
-        receipt = json.loads(path.read_text(encoding="utf-8"))
+        record = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
         raise AlmImportSetupError(
-            "The native ALM import receipt is unreadable."
+            "The native ALM import record is unreadable."
         ) from exc
-    if not isinstance(receipt, dict) or (
-        receipt.get("schemaVersion") != 1
-        or receipt.get("input") != expected_identity
+    if not isinstance(record, dict) or (
+        record.get("schemaVersion") != 1
+        or record.get("input") != identity
     ):
         raise AlmImportSetupError(
-            "This workspace contains a receipt for a different native ALM "
-            "import. Use a new workspace for another import."
+            "The native ALM import record does not match this operation."
         )
-    if receipt.get("status") == "response-invalid":
-        raise AlmImportSetupError(
-            "The environment accepted the import request but returned an "
-            "invalid result. The operation will not be retried automatically."
-        )
-    if receipt.get("status") != "imported":
-        raise AlmImportSetupError(
-            "The native ALM import receipt has an unsupported status."
-        )
-    result = receipt.get("result")
-    if (
-        not isinstance(result, dict)
-        or not isinstance(result.get("cdsBotId"), str)
-        or not isinstance(result.get("schemaName"), str)
-    ):
-        raise AlmImportSetupError(
-            "The native ALM import receipt is incomplete."
-        )
-    return {
-        "cdsBotId": result["cdsBotId"],
-        "schemaName": result["schemaName"],
+    return record
+
+
+def _write_record(
+    path: Path,
+    identity: dict[str, Any],
+    *,
+    status: str,
+    outcome: dict[str, Any] | None = None,
+    result: dict[str, str] | None = None,
+) -> None:
+    record: dict[str, Any] = {
+        "schemaVersion": 1,
+        "status": status,
+        "input": identity,
+        "updatedAt": _utc_now(),
     }
+    if outcome is not None:
+        record["outcome"] = outcome
+    if result is not None:
+        record["result"] = result
+    _write_json(path, record)
 
 
-def _validate_empty_import_workspace(kit_root: Path) -> None:
+def _load_other_records(
+    directory: Path,
+    current_path: Path,
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    if not directory.is_dir():
+        return records
+    for path in directory.glob("*.json"):
+        if path == current_path:
+            continue
+        try:
+            record = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise AlmImportSetupError(
+                "A native ALM import record is unreadable."
+            ) from exc
+        if not isinstance(record, dict) or record.get("schemaVersion") != 1:
+            raise AlmImportSetupError(
+                "A native ALM import record has an unsupported shape."
+            )
+        records.append(record)
+    return records
+
+
+def _guard_other_operations(
+    directory: Path,
+    current_path: Path,
+    *,
+    mode: str,
+) -> None:
+    for record in _load_other_records(directory, current_path):
+        status = record.get("status")
+        if status in UNRESOLVED_STATUSES:
+            raise AlmImportSetupError(
+                "Another native ALM import has an unresolved outcome. "
+                "Reconcile it before starting a new mutation."
+            )
+        other_input = record.get("input")
+        if (
+            mode == "create"
+            and status == "verified"
+            and isinstance(other_input, dict)
+            and other_input.get("mode") == "create"
+        ):
+            raise AlmImportSetupError(
+                "This workspace already contains a successful create import. "
+                "Attach that identity before starting another create."
+            )
+
+
+def _validate_empty_create_workspace(kit_root: Path) -> None:
     conflicts = (
         CANONICAL_SETUP_STATE,
         Path(".local/config.json"),
     )
     if any((kit_root / path).exists() for path in conflicts):
         raise AlmImportSetupError(
-            "This workspace already contains agent setup state. Use a new "
-            "workspace before importing another agent."
+            "This workspace already contains agent setup state. Use the "
+            "existing agent or an explicitly confirmed replacement."
+        )
+
+
+def _validate_local_replacement_target(
+    kit_root: Path,
+    *,
+    environment_id: str,
+    agent_id: str,
+) -> None:
+    path = kit_root / DA_CONNECTION_STATE
+    if not path.exists():
+        return
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+        state_environment = state["environment"]["id"]
+        state_agent = state["agent"]["id"]
+    except (KeyError, OSError, TypeError, json.JSONDecodeError) as exc:
+        raise AlmImportSetupError(
+            "The existing DA connection state is unreadable."
+        ) from exc
+    if (
+        str(state_environment).casefold() != environment_id.casefold()
+        or str(state_agent).casefold() != agent_id.casefold()
+    ):
+        raise AlmImportSetupError(
+            "This workspace is connected to a different editable Dev agent."
+        )
+
+
+def _validate_replacement_result(
+    result: dict[str, str],
+    replacement: dict[str, Any],
+) -> None:
+    expected_agent = replacement["agent"]
+    if (
+        result["cdsBotId"].casefold()
+        != str(expected_agent["id"]).casefold()
+        or result["schemaName"].casefold()
+        != str(expected_agent["schemaName"]).casefold()
+    ):
+        raise AlmImportSetupError(
+            "Native ALM replacement returned a different agent identity."
         )
 
 
@@ -240,23 +348,74 @@ def _classify_import_outcome(
     }, ""
 
 
-def _validate_replacement_result(
+def _pre_dispatch_reason(error: BaseException) -> str | None:
+    if isinstance(error, requests.ConnectTimeout):
+        return "connect-timeout"
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        if isinstance(current, socket.gaierror):
+            return "name-resolution"
+        if type(current).__name__ == "NameResolutionError":
+            return "name-resolution"
+        current = current.__cause__ or current.__context__
+    return None
+
+
+def _failure_outcome(
+    identity: dict[str, Any],
+    *,
+    kind: str,
+    status_code: int | None = None,
+    error_code: str | None = None,
+    request_id: str | None = None,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    outcome: dict[str, Any] = {
+        "kind": kind,
+        "importMode": identity["mode"],
+        "packageType": identity["packageType"],
+        "environmentId": identity["environmentId"],
+    }
+    if status_code is not None:
+        outcome["statusCode"] = status_code
+    if error_code:
+        outcome["errorCode"] = error_code
+    if request_id:
+        outcome["requestId"] = request_id
+    if reason:
+        outcome["reason"] = reason
+    return outcome
+
+
+def _verified_outcome(
+    identity: dict[str, Any],
     result: dict[str, str],
-    replacement: dict[str, Any],
-) -> None:
-    expected_agent = replacement["agent"]
-    if (
-        result["cdsBotId"].casefold()
-        != str(expected_agent["id"]).casefold()
-        or result["schemaName"].casefold()
-        != str(expected_agent["schemaName"]).casefold()
-    ):
-        raise AlmImportSetupError(
-            "Native ALM replacement returned a different agent identity."
-        )
+    connection: dict[str, Any],
+    *,
+    resumed: bool,
+) -> dict[str, Any]:
+    agent = connection["agent"]
+    environment = connection["environment"]
+    return {
+        "kind": "success",
+        "importStatus": "resumed" if resumed else "imported",
+        "importMode": identity["mode"],
+        "packageType": identity["packageType"],
+        "environmentId": identity["environmentId"],
+        "tenantId": environment["tenantId"],
+        "host": environment["powerPlatformApiEndpoint"],
+        "ring": environment["ring"],
+        "apiVersion": environment["apiVersion"],
+        "agentId": result["cdsBotId"],
+        "schemaName": result["schemaName"],
+        "agentName": agent["name"],
+        "setupSource": "alm-import",
+    }
 
 
-def import_and_attach(
+def import_package_once(
     client: AgentBuilderClient,
     *,
     environment_id: str,
@@ -264,15 +423,12 @@ def import_and_attach(
     kit_root: Path,
     replacement_agent_id: str | None = None,
     confirmed_replacement_agent_id: str | None = None,
-    refresh: bool = False,
+    retry_safe_failure: bool = False,
 ) -> dict[str, Any]:
-    """Import or resume one package, then materialize the returned Dev agent."""
+    """Run or resume one guarded import without materializing a workspace."""
     package = inspect_alm_package(package_path)
     normalized_environment_id = _normalize_environment_id(environment_id)
     resolved_kit_root = kit_root.resolve()
-    receipt_path = resolved_kit_root / IMPORT_RECEIPT
-    if not receipt_path.exists():
-        _validate_empty_import_workspace(resolved_kit_root)
     replacement: dict[str, Any] | None = None
     if replacement_agent_id:
         normalized_replacement_id = _normalize_guid(
@@ -291,79 +447,204 @@ def import_and_attach(
             raise AlmImportSetupError(
                 "Replacement confirmation does not match the target agent."
             )
+        _validate_local_replacement_target(
+            resolved_kit_root,
+            environment_id=normalized_environment_id,
+            agent_id=normalized_replacement_id,
+        )
         replacement = validate_existing_dev_connection(
             client,
             environment_id=normalized_environment_id,
             agent_id=normalized_replacement_id,
             selection_source="explicit-replacement",
+            setup_source="alm-import",
         )
     elif confirmed_replacement_agent_id:
         raise AlmImportSetupError(
             "Replacement confirmation was supplied without a target agent."
         )
 
-    identity = _receipt_identity(
+    identity = _operation_identity(
         client,
         environment_id=normalized_environment_id,
         package=package,
         replacement=replacement,
     )
-    imported = _load_receipt(receipt_path, identity)
-    resumed = imported is not None
-    if imported is None:
-        outcome = client.import_package(
-            package_path.resolve(),
-            replacement_schema_name=(
-                replacement["agent"]["schemaName"]
-                if replacement
-                else None
-            ),
-        )
-        imported, invalid_reason = _classify_import_outcome(outcome)
-        if imported is None:
-            _write_json(
-                receipt_path,
-                {
-                    "schemaVersion": 1,
-                    "status": "response-invalid",
-                    "input": identity,
-                    "responseClassification": invalid_reason,
-                    "receivedAt": _utc_now(),
-                },
+    record_path = _record_path(resolved_kit_root, identity)
+    existing = (
+        _read_record(record_path, identity)
+        if record_path.exists()
+        else None
+    )
+    imported: dict[str, str] | None = None
+    resumed = False
+    if existing is not None:
+        status = existing.get("status")
+        if status == "verified":
+            outcome = existing.get("outcome")
+            if not isinstance(outcome, dict):
+                raise AlmImportSetupError(
+                    "The verified native ALM import record is incomplete."
+                )
+            return {**outcome, "importStatus": "resumed"}
+        if status == "imported":
+            result = existing.get("result")
+            if not isinstance(result, dict):
+                raise AlmImportSetupError(
+                    "The native ALM import record is incomplete."
+                )
+            imported, reason = _classify_import_outcome(
+                {"responseStatus": "valid", "result": result}
             )
+            if imported is None:
+                raise AlmImportSetupError(
+                    f"The native ALM import record is invalid: {reason}."
+                )
+            resumed = True
+        elif status in SAFE_RETRY_STATUSES and retry_safe_failure:
+            existing = None
+        elif status in {"conflict", *SAFE_RETRY_STATUSES}:
+            outcome = existing.get("outcome")
+            if not isinstance(outcome, dict):
+                raise AlmImportSetupError(
+                    "The native ALM import failure record is incomplete."
+                )
+            return {**outcome, "importStatus": "cached"}
+        else:
             raise AlmImportSetupError(
-                "The environment accepted the import request but returned an "
-                "invalid result. The operation will not be retried "
-                "automatically."
+                "This native ALM import has an unresolved outcome and will "
+                "not be retried automatically."
             )
-        _write_json(
-            receipt_path,
-            {
-                "schemaVersion": 1,
-                "status": "imported",
-                "input": identity,
-                "result": imported,
-                "importedAt": _utc_now(),
-            },
+    elif retry_safe_failure:
+        raise AlmImportSetupError(
+            "No safely retryable native ALM import record was found."
         )
+
+    if imported is None:
+        _guard_other_operations(
+            record_path.parent,
+            record_path,
+            mode=identity["mode"],
+        )
+        if replacement is None:
+            _validate_empty_create_workspace(resolved_kit_root)
+        _write_record(record_path, identity, status="prepared")
+        try:
+            raw_outcome = client.import_package(
+                package_path.resolve(),
+                replacement_schema_name=(
+                    replacement["agent"]["schemaName"]
+                    if replacement
+                    else None
+                ),
+            )
+        except AgentBuilderHTTPError as exc:
+            kind = "conflict" if exc.status_code == 409 else "rejected"
+            outcome = _failure_outcome(
+                identity,
+                kind=kind,
+                status_code=exc.status_code,
+                error_code=exc.error_code,
+                request_id=exc.request_id,
+            )
+            _write_record(
+                record_path,
+                identity,
+                status=kind,
+                outcome=outcome,
+            )
+            return outcome
+        except requests.RequestException as exc:
+            reason = _pre_dispatch_reason(exc)
+            kind = "pre-dispatch-failure" if reason else "ambiguous"
+            outcome = _failure_outcome(
+                identity,
+                kind=kind,
+                reason=reason or "transport-ended-without-response",
+            )
+            _write_record(
+                record_path,
+                identity,
+                status=kind,
+                outcome=outcome,
+            )
+            return outcome
+        except OSError:
+            outcome = _failure_outcome(
+                identity,
+                kind="pre-dispatch-failure",
+                reason="local-io",
+            )
+            _write_record(
+                record_path,
+                identity,
+                status="pre-dispatch-failure",
+                outcome=outcome,
+            )
+            return outcome
+        except AgentBuilderError:
+            outcome = _failure_outcome(
+                identity,
+                kind="ambiguous",
+                reason="request-ended-without-classified-response",
+            )
+            _write_record(
+                record_path,
+                identity,
+                status="ambiguous",
+                outcome=outcome,
+            )
+            return outcome
+
+        imported, invalid_reason = _classify_import_outcome(raw_outcome)
+        if imported is None:
+            outcome = _failure_outcome(
+                identity,
+                kind="invalid-success",
+                reason=invalid_reason,
+            )
+            _write_record(
+                record_path,
+                identity,
+                status="invalid-success",
+                outcome=outcome,
+            )
+            return outcome
+        _write_record(
+            record_path,
+            identity,
+            status="imported",
+            result=imported,
+        )
+
     if replacement:
         _validate_replacement_result(imported, replacement)
-
-    setup = attach_existing_dev(
+    connection = validate_existing_dev_connection(
         client,
         environment_id=normalized_environment_id,
         agent_id=imported["cdsBotId"],
-        kit_root=resolved_kit_root,
-        refresh=refresh,
         selection_source="alm-import-result",
         setup_source="alm-import",
     )
-    return {
-        **setup,
-        "importStatus": "resumed" if resumed else "imported",
-        "importMode": identity["mode"],
-        "packageType": package.package_type,
-    }
+    verified_schema = str(connection["agent"]["schemaName"])
+    if verified_schema.casefold() != imported["schemaName"].casefold():
+        raise AlmImportSetupError(
+            "The imported agent schema does not match direct Dev validation."
+        )
+    outcome = _verified_outcome(
+        identity,
+        imported,
+        connection,
+        resumed=resumed,
+    )
+    _write_record(
+        record_path,
+        identity,
+        status="verified",
+        outcome=outcome,
+        result=imported,
+    )
+    return outcome
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -373,9 +654,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--replace-agent-id")
     parser.add_argument("--confirm-replace-agent-id")
     parser.add_argument(
-        "--refresh",
+        "--retry-safe-failure",
         action="store_true",
-        help="Checkpoint and replace a changed existing workspace.",
+        help=(
+            "Retry only a recorded pre-dispatch failure or normal rejection "
+            "after its cause was resolved and the maker approved another try."
+        ),
     )
     return parser
 
@@ -383,6 +667,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        validate_object_model_runtime()
         target = resolve_da_target(
             target_url=args.target_url,
             environment_id=args.environment_id,
@@ -395,7 +680,7 @@ def main(argv: list[str] | None = None) -> int:
             target["environmentId"],
             target["ring"],
         )
-        result = import_and_attach(
+        result = import_package_once(
             client,
             environment_id=target["environmentId"],
             package_path=args.package,
@@ -404,23 +689,20 @@ def main(argv: list[str] | None = None) -> int:
             confirmed_replacement_agent_id=(
                 args.confirm_replace_agent_id
             ),
-            refresh=args.refresh,
+            retry_safe_failure=args.retry_safe_failure,
         )
     except (
         AgentBuilderError,
         AlmImportSetupError,
         ExistingDASetupError,
-        OSError,
+        ObjectModelConverterError,
         RuntimeError,
         ValueError,
     ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
-    print(
-        "DA_ALM_IMPORT_SETUP_JSON:"
-        f"{json.dumps(result, ensure_ascii=True)}"
-    )
-    return 0
+    print(f"DA_ALM_IMPORT_JSON:{json.dumps(result, ensure_ascii=True)}")
+    return 0 if result["kind"] == "success" else 2
 
 
 if __name__ == "__main__":

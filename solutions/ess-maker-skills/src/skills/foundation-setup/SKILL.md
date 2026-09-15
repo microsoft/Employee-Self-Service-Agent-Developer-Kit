@@ -88,6 +88,27 @@ continue to the next candidate. If no launcher works, report the missing Python
 prerequisite and stop. When child guidance shows `python`, substitute the
 resolved launcher.
 
+## Interactive authorization
+
+Before starting a command that can open Microsoft sign-in, tell the maker:
+
+> Microsoft sign-in will open. Select the account you use to access this
+> environment. If the expected account is not shown, choose **Use another
+> account**.
+
+If the terminal returns control while that command is still waiting for the
+browser callback, immediately tell the maker:
+
+> **Waiting for authorization**
+>
+> Complete the Microsoft sign-in in your browser. I will continue automatically
+> after authorization finishes.
+
+Do not describe an authorization wait as service processing, do not start a
+second command, and do not infer that a remote mutation has started.
+
+---
+
 ## Start
 
 Record anonymous usage telemetry best-effort:
@@ -98,7 +119,7 @@ python scripts/emit_capability.py setup
 
 Use context already supplied with the setup request. When it identifies an agent, do not ask whether the agent is Dev or Prod; use service inspection to establish its realm.
 
-When the maker has already supplied a native agent package or explicitly asked to use one, read `src/skills/foundation-setup/da-alm-import.md` and follow it. This is an advanced handoff, not a setup option to advertise or recommend.
+When the maker has already supplied a native agent package or explicitly asked to use one, read `src/skills/foundation-setup/da-alm-import.md` and follow it. That skill owns the explicit package handoff and reads the canonical import reference. This is an advanced handoff, not a setup option to advertise or recommend.
 
 When the request does not identify an agent or environment, ask:
 

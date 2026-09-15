@@ -188,6 +188,15 @@ def _validate_setup_source(value: str) -> str:
     return value
 
 
+def _preferred_setup_source(existing: str, requested: str) -> str:
+    """Preserve package-import provenance for the same DA identity."""
+    return (
+        "alm-import"
+        if "alm-import" in {existing, requested}
+        else requested
+    )
+
+
 def parse_da_target_url(target_url: str) -> dict[str, str]:
     """Extract recognized ring and resource tokens from supplied text."""
     target = unquote(target_url.strip())
@@ -1376,6 +1385,10 @@ def attach_existing_dev(
     )
     existing_setup = _validate_setup_target(kit_root, connection)
     if existing_setup is not None:
+        connection["setupSource"] = _preferred_setup_source(
+            _validate_setup_source(str(existing_setup["setup_source"])),
+            connection["setupSource"],
+        )
         connection["agent"]["workspaceSlug"] = existing_setup["agent"][
             "workspace_slug"
         ]

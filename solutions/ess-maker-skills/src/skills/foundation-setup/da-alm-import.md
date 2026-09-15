@@ -3,28 +3,29 @@
 
 This is an advanced handoff for a maker who has already supplied a native agent
 package or explicitly asked to use one. Do not advertise package import as a
-primary `/setup` choice. Do not describe package classifications, schema names,
-realm numbers, API routes, or setup-source values to the maker.
+primary `/setup` choice.
 
-This path supports one Power Platform environment and one active platform per
-ADK workspace. It creates an editable Dev agent by default. It replaces an
-existing Dev agent only after the maker explicitly approves that exact target.
+Read `src/reference/native-alm-import.md` before acting. The reference owns the
+service facts, safety boundaries, outcome meanings, and unresolved limitations.
+This skill owns the maker interaction and the handoff into existing-Dev setup.
 
 ## Identify the target
 
-Ask for the target Power Platform environment URL if the maker has not already
-provided it. Apply the authentication and environment-selection guidance from
-`src/skills/foundation-setup/da-existing-dev.md`. Do not ask the maker to select
-a service ring or supply a tenant ID before authentication.
+Ask for a Copilot Studio environment URL if the maker has not supplied one. A
+recognized Copilot Studio URL is preferred because it identifies both the
+environment and service ring. Do not ask the maker to choose a ring or tenant.
 
 Do not inspect, extract, rewrite, or summarize package content yourself. The
-guarded command reads only the required package metadata and lets the service
-decide whether the package is compatible.
+durable import command observes only the bounded metadata needed for safety.
 
-## Create the editable agent
+## Preflight and create
 
-Tell the maker to select the identity they use for the target Power Platform
-environment if browser authentication appears. Run:
+The import command validates local projection dependencies before
+authentication or remote mutation. If preflight fails, follow the reported
+setup prerequisite and rerun only after it is resolved.
+
+Tell the maker that Microsoft sign-in may open, using the exact authorization
+message from the parent skill. Run:
 
 ```text
 python scripts/setup_alm_import.py \
@@ -32,13 +33,36 @@ python scripts/setup_alm_import.py \
   --package "{NATIVE_AGENT_PACKAGE_PATH}"
 ```
 
-Omitting a replacement target is mandatory for the first attempt. Never infer
-permission to replace an agent from the package, environment, or a prior setup
-attempt.
+The first operation must omit both replacement arguments. Never infer
+replacement permission from the package, collision, environment, schema, or a
+prior setup attempt.
 
-Parse `DA_ALM_IMPORT_SETUP_JSON:`. Treat setup as complete only when the result
-reports both `connectionStatus` as `workspace-ready` and `setupStatus` as
+Parse `DA_ALM_IMPORT_JSON:` even when the command exits nonzero.
+
+## Complete workspace setup
+
+When `kind` is `success`, use the returned environment, tenant, host, ring, API
+version, and agent identity only as internal command inputs. Do not display
+those identifiers. Run:
+
+```text
+python scripts/setup_existing_da.py attach \
+  --environment-id "{ENVIRONMENT_ID}" \
+  --tenant-id "{TENANT_ID}" \
+  --host "{VALIDATED_HOST}" \
+  --ring "{RING}" \
+  --api-version "{API_VERSION}" \
+  --agent-id "{RETURNED_AGENT_ID}" \
+  --setup-source alm-import
+```
+
+Parse `DA_EXISTING_DEV_SETUP_JSON:`. Treat setup as complete only when the
+result reports `connectionStatus` as `workspace-ready` and `setupStatus` as
 `complete`.
+
+If attachment reports that the managed workspace changed, use the explicit
+checkpoint-and-refresh choice from `da-existing-dev.md`. A refresh never
+repeats the import.
 
 When complete, show:
 
@@ -51,31 +75,38 @@ If the result reports unprojected component kinds or a nonzero
 Some agent content was retained safely in the fetched snapshot but is not
 editable through this ADK version yet.
 
-Do not claim that the agent was published, deployed, promoted, or configured
-with optional product integrations.
+Do not claim publication, deployment, promotion, or optional integration
+configuration.
 
-## Handle an existing-agent collision
+## Handle a collision
 
-An HTTP 409 response means create-only protection prevented an existing agent
-from being replaced. Explain:
+When `kind` is `conflict`, explain:
 
 An editable agent created from this package already exists in the target
 environment. I did not replace it.
 
-Offer to use the existing agent through the normal existing-Dev path. Offer
-replacement only when the maker explicitly needs the supplied package to
-replace that Dev agent.
+Offer to use the existing agent through `da-existing-dev.md`. Offer replacement
+only when the maker explicitly needs the supplied package to overwrite that
+agent.
 
-Before replacement, identify and validate the exact existing Dev agent using
-the discovery and direct-lookup guidance in
-`src/skills/foundation-setup/da-existing-dev.md`. Show its display name, then
-ask:
+Before replacement, directly validate the exact existing Dev agent using its
+Copilot Studio URL or known agent ID without attaching it or writing setup
+state:
+
+```text
+python scripts/setup_existing_da.py validate-agent \
+  --target-url "{COPILOT_STUDIO_AGENT_URL}"
+```
+
+Parse `DA_AGENT_VALIDATION_JSON:`. Show its display name, then ask:
 
 Replacing **{agent display name}** will overwrite its current editable content
 with the supplied package. Continue?
 
-Continue only after explicit approval. Pass the selected internal agent ID in
-both confirmation arguments without displaying it:
+When presenting structured choices, default to **Use existing agent** or
+**Cancel setup**. Never preselect or recommend **Continue replacement**.
+Continue only after the maker explicitly selects replacement. Pass the same
+validated internal ID in both confirmation arguments:
 
 ```text
 python scripts/setup_alm_import.py \
@@ -85,30 +116,29 @@ python scripts/setup_alm_import.py \
   --confirm-replace-agent-id "{INTERNAL_AGENT_ID}"
 ```
 
-The command validates the target as Dev and verifies that replacement retained
-the same agent identity. A mismatch is a hard failure.
+After a successful replacement, complete workspace setup through the existing
+attach command above. If local files differ, obtain separate approval before
+checkpointing and refreshing them.
 
-## Handle interrupted or failed import
+## Handle other outcomes
 
-If the service returned a normal error response, explain the actionable error
-without displaying package content or service diagnostics. Do not write setup
-completion state and do not describe the agent as created.
+- `pre-dispatch-failure`: no request reached the service. Explain the local,
+  DNS, or connection prerequisite. Do not retry automatically.
+- `rejected`: the service returned a normal error response. Explain the
+  actionable error without exposing diagnostics. Do not retry automatically.
+- `invalid-success` or `ambiguous`: the mutation may have completed, but no
+  usable identity is available. Do not retry. Follow the manual reconciliation
+  procedure in `src/reference/native-alm-import.md`.
 
-If the request ended without a response, say:
+If the command exits during direct verification after recording status
+`imported`, the mutation already returned an identity. Do not start another
+import. Resolve the reported verification prerequisite, then rerun the
+identical command. Receipt replay resumes verification without another POST.
+If verification still fails, stop and retain the receipt.
 
-The environment did not return an import result, so I cannot confirm whether
-the editable agent was created. I will not retry automatically because that
-could repeat a completed operation.
+The command caches every operation outcome. Repeating the same command returns
+the cached result without another POST. After the cause of a recorded
+`pre-dispatch-failure` or `rejected` outcome is resolved, another request
+requires explicit maker approval and `--retry-safe-failure`.
 
-Ask the maker to check the target environment in Copilot Studio. If the agent
-exists, continue through the existing-Dev setup path using its URL. If it does
-not exist, the maker may explicitly retry the create operation.
-
-Never add polling, retry a mutating request automatically, or convert an
-uncertain outcome into success.
-
-## Repair a changed workspace
-
-Use the same explicit refresh flow documented in
-`src/skills/foundation-setup/da-existing-dev.md`. Refresh checkpoints and
-replaces local workspace content; it does not re-import the package.
+Never remove or edit import records merely to permit another mutation.
