@@ -36,6 +36,30 @@ Render the result per `src/skills/setup/shared/checklist-updater.md`
 
 ## 2.2 — Wire the redirect
 
+Apply the shared [`permission-gate.md`](../../setup/shared/permission-gate.md)
+before making any change, with:
+
+- `REQUIRED_ROLE` = `"Environment Maker"`
+- `GATE_MODE` = `"programmatic"`
+- `STEP_ID` = `"workday-link-2"`
+- `ROLE_QUERY` = a Dataverse security-role membership check for the
+  signed-in user. Read `dataverseEndpoint` from `.local/config.json`; call it
+  `{ENV_URL}`. Resolve the caller and their roles:
+
+  ```
+  az rest --method GET --resource "{ENV_URL}" --url "{ENV_URL}/api/data/v9.2/WhoAmI" --query "UserId" -o tsv
+  ```
+
+  ```
+  az rest --method GET --resource "{ENV_URL}" --url "{ENV_URL}/api/data/v9.2/systemusers%28{USER_ID}%29/systemuserroles_association?%24select=name" --query "value[].name" -o json
+  ```
+
+  Pass if the result contains `Environment Maker`, `System Customizer`, or
+  `System Administrator`.
+
+If `GATE_RESULT` is `"stop"`, halt here — the gate has already shown the
+user why.
+
 **Message:**
 
 I'll wire the **User Context** topic to call the Workday user-context system
@@ -71,6 +95,18 @@ beginDialog:
       displayName: Redirect to Workday System Get User Context
       dialog: {USER_CONTEXT_DIALOG}
 ```
+
+Check for errors across the full agent folder using the diagnostics tool. If
+errors exist in the edited file, fix them before proceeding.
+
+Run a dry run:
+
+```
+python scripts/push.py --dry-run
+```
+
+Show the user the diff summary. It should show `user-context-setup.mcs.yml`
+as modified.
 
 Push the change:
 
