@@ -14,7 +14,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-mac.sh)"
 ```
 
-Once complete, VS Code opens at `solutions/ess-maker-skills/` and `/setup` is automatically requested in Copilot Chat. You'll be prompted to trust the workspace and sign in to GitHub/Copilot — accept these prompts and `/setup` will run and connect your Dataverse environment.
+Once complete, VS Code opens at `solutions/ess-maker-skills/`. The full maker setup path is unavailable in this build; the standalone FlightCheck installer remains available.
 
 > **GitHub Copilot subscription is required** for the in-editor maker experience. This script installs the toolchain and extension scaffolding; it does not grant the Copilot entitlement.
 
@@ -52,7 +52,7 @@ For users who prefer a cloud-based development environment — no local toolchai
 The Codespace comes pre-configured with Python 3.12, pip dependencies, and GitHub Copilot. Select the **2-core** machine type (sufficient for the maker kit). Once it starts:
 
 1. Open the `solutions/ess-maker-skills` folder (File → Open Folder → `/workspaces/Employee-Self-Service-Agent-Developer-Kit/solutions/ess-maker-skills`)
-2. Run `/setup` in Copilot Chat to connect your Dataverse environment
+2. `/setup` currently reports that the full maker setup path is unavailable
 
 ### FlightCheck via Codespaces
 
