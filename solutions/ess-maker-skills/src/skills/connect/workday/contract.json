@@ -33,9 +33,5 @@
       "checkpoints": ["WD-RUN-001"],
       "mutates": false
     }
-  ],
-  "pendingScopedProfile": {
-    "note": "FlightCheck scoped connect profiles (e.g. a single 'workday connect readiness' check standing in for WD-PKG-001 + DV-CONN-001 + WD-CONN-012) are proposed but not yet available; this contract runs the equivalent individual checkpoints until they ship.",
-    "tracking": "ADO 7865450"
-  }
+  ]
 }

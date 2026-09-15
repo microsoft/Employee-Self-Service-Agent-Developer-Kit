@@ -23,7 +23,6 @@ reads a contract, runs the checkpoints it names, and renders results.
 | `displayName` | string | yes | Human name shown to the user (e.g. `"Workday"`). |
 | `detect` | object | yes | How the runner's caller decides this lifecycle applies at all — see "Detect block" below. |
 | `phases` | array | yes | Ordered list of phase objects — see "Phase fields" below. Executed strictly in array order; a phase never starts until every phase before it is `done` (or `skipped`, see below). |
-| `pendingScopedProfile` | object | no | Documents a FlightCheck capability this contract is standing in for until it ships (see "Pending scoped profiles" below). Never used to fabricate a result — informational only. |
 
 ### Detect block
 
@@ -56,23 +55,18 @@ reads a contract, runs the checkpoints it names, and renders results.
 | `actionDoc` | string (path) | required when `mutates` is `true` | Path to a provider-owned markdown fragment containing the bespoke steps needed to make the phase's checkpoint(s) pass (e.g. editing a topic file and pushing it). The runner reads and follows this file; it contains its own Message blocks and is written by the provider, not the runner. |
 | `rollbackLabel` | string | no | Passed to `scripts/checkpoint.py` before a mutating action runs, so the operator has a named restore point. |
 
-### Pending scoped profiles
+### Evolving a phase's checkpoint list
 
 FlightCheck may later ship purpose-built "connect lifecycle" scoped profiles
-(tracked separately) that replace a phase's individual checkpoint list with
-one pre-composed check. Until a profile exists, a contract lists the
-individual checkpoints that cover the same ground today. Record the target
-profile as documentation only:
+that replace a phase's individual checkpoint list with one pre-composed
+check. Until a profile exists, a contract simply lists the individual
+checkpoints that cover the same ground today — there's no separate field for
+this; it's just how `checkpoints` is populated in the meantime. When a
+consolidated profile ships, update the phase's `checkpoints` list to use it.
 
-```json
-"pendingScopedProfile": {
-  "note": "FlightCheck scoped connect profiles are proposed but not yet available; this contract runs the equivalent individual checkpoints until they ship.",
-  "tracking": "ADO 7865450"
-}
-```
-
-Never mark a phase `done` because a scoped profile is "assumed" to pass — only
-a real checkpoint run (or a real, attested manual step) advances a phase.
+Never mark a phase `done` because a future profile is "assumed" to pass —
+only a real checkpoint run (or a real, attested manual step) advances a
+phase.
 
 ---
 
