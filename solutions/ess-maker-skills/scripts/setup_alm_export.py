@@ -26,12 +26,57 @@ from setup_existing_da import (
     _client_from_args,
     _normalize_environment_id,
     _normalize_guid,
+    _write_json,
     resolve_da_target,
 )
 
 
+ACTIVE_EXPORT_RECORD = Path(".local/setup/alm-export/active.json")
+TEMP_PACKAGE_PREFIX = "ess-adk-prod-to-dev-"
+TEMP_PACKAGE_SUFFIX = ".zip"
+
+
 class AlmExportSetupError(RuntimeError):
     """Raised when a Prod source cannot be inspected or exported safely."""
+
+
+def cleanup_active_export(kit_root: Path) -> dict[str, str]:
+    """Remove the one recorded disposable export, if present."""
+    resolved_kit_root = kit_root.resolve()
+    record_path = resolved_kit_root / ACTIVE_EXPORT_RECORD
+    if not record_path.exists():
+        return {"status": "not-found"}
+    try:
+        record = json.loads(record_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise AlmExportSetupError(
+            "The active native ALM export record is unreadable."
+        ) from exc
+    package_value = (
+        record.get("packagePath") if isinstance(record, dict) else None
+    )
+    if (
+        not isinstance(record, dict)
+        or record.get("schemaVersion") != 1
+        or not isinstance(package_value, str)
+    ):
+        raise AlmExportSetupError(
+            "The active native ALM export record is invalid."
+        )
+    package_path = Path(package_value)
+    if (
+        not package_path.is_absolute()
+        or not package_path.name.startswith(TEMP_PACKAGE_PREFIX)
+        or package_path.suffix.casefold() != TEMP_PACKAGE_SUFFIX
+        or package_path == resolved_kit_root
+        or resolved_kit_root in package_path.parents
+    ):
+        raise AlmExportSetupError(
+            "The active native ALM export path is invalid."
+        )
+    package_path.unlink(missing_ok=True)
+    record_path.unlink()
+    return {"status": "removed"}
 
 
 def _matches_realm(value: Any, realm: int) -> bool:
@@ -133,8 +178,8 @@ def export_prod_source(
         agent_id=agent_id,
     )
     handle, temporary = tempfile.mkstemp(
-        prefix="ess-adk-prod-to-dev-",
-        suffix=".zip",
+        prefix=TEMP_PACKAGE_PREFIX,
+        suffix=TEMP_PACKAGE_SUFFIX,
     )
     os.close(handle)
     package_path = Path(temporary).resolve()
@@ -153,6 +198,13 @@ def export_prod_source(
             raise AlmExportSetupError(
                 "Native ALM export returned an empty package."
             )
+        _write_json(
+            resolved_kit_root / ACTIVE_EXPORT_RECORD,
+            {
+                "schemaVersion": 1,
+                "packagePath": str(package_path),
+            },
+        )
         exported = True
     finally:
         if not exported:
@@ -175,12 +227,22 @@ def build_parser() -> argparse.ArgumentParser:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("inspect", parents=[common])
     commands.add_parser("export", parents=[common])
+    cleanup = commands.add_parser("cleanup")
+    cleanup.add_argument("--kit-root", type=Path, default=Path.cwd())
     return parser
 
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.command == "cleanup":
+            result = cleanup_active_export(args.kit_root)
+            print(
+                "DA_ALM_EXPORT_CLEANUP_JSON:"
+                f"{json.dumps(result, ensure_ascii=True)}"
+            )
+            return 0
+        cleanup_active_export(args.kit_root)
         source = resolve_da_target(
             target_url=args.source_url,
             environment_id=None,

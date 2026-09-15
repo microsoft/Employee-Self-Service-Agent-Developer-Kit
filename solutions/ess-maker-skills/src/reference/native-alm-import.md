@@ -133,6 +133,11 @@ unresolved record blocks replay of that same operation. Records are evidence,
 not a global workflow lock; the session interprets unrelated records before
 selecting another operation.
 
+For create-only recovery, `--resume-verified-create` can return the sole
+verified create result for the same target after its disposable package has
+already been removed. This explicit recovery does not inspect another package,
+send another import request, or apply to replacement.
+
 ### Recover an imported but unverified agent
 
 If direct verification does not finish after the service returns an identity:
