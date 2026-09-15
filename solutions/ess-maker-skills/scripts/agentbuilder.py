@@ -528,6 +528,9 @@ class AgentBuilderClient:
     def get_dev_configuration(self, agent_id: str) -> dict[str, Any]:
         return self.get_realm_configuration(agent_id, DEV_REALM)
 
+    def get_prod_configuration(self, agent_id: str) -> dict[str, Any]:
+        return self.get_realm_configuration(agent_id, PROD_REALM)
+
     def fetch_components(self, agent_id: str) -> dict[str, Any]:
         body = self._json(
             "POST",
@@ -609,6 +612,31 @@ class AgentBuilderClient:
                 "schemaName": schema_name.strip(),
             },
         }
+
+    def export_package(
+        self,
+        agent_id: str,
+        destination: Path,
+        *,
+        timeout: int = 300,
+    ) -> None:
+        """Export one native package to a caller-owned path."""
+        request_headers = {
+            name: value
+            for name, value in self.headers.items()
+            if name.casefold() != "content-type"
+        }
+        response = self.session.request(
+            "POST",
+            f"{self.host}/copilotstudio/minimalBots/alm/{agent_id}/export",
+            params={"api-version": self.api_version},
+            headers=request_headers,
+            timeout=timeout,
+            allow_redirects=False,
+        )
+        if not 200 <= response.status_code < 300:
+            _response_error(response, "Native ALM export")
+        destination.write_bytes(response.content)
 
 
 def canonical_json(value: Any) -> str:

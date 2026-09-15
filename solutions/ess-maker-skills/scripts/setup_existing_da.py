@@ -102,6 +102,12 @@ SUPPORTED_SETUP_SOURCES = {
 }
 PROJECTION_ENGINE = "microsoft-agents-objectmodel"
 WORKSPACE_PROJECTION_VERSION = 2
+SETUP_SOURCE_PRIORITY = {
+    "existing-dev": 0,
+    "alm-import": 1,
+    "prod-to-dev": 2,
+    "mos-starter": 3,
+}
 STUDIO_RING_BY_HOST = {
     "copilotstudio.microsoft.com": "prod",
     "copilotstudio.preprod.microsoft.com": "preprod",
@@ -189,11 +195,10 @@ def _validate_setup_source(value: str) -> str:
 
 
 def _preferred_setup_source(existing: str, requested: str) -> str:
-    """Preserve package-import provenance for the same DA identity."""
-    return (
-        "alm-import"
-        if "alm-import" in {existing, requested}
-        else requested
+    """Preserve the strongest provenance for the same DA identity."""
+    return max(
+        (existing, requested),
+        key=SETUP_SOURCE_PRIORITY.__getitem__,
     )
 
 
@@ -1933,7 +1938,11 @@ def main(argv: list[str] | None = None) -> int:
             selection_source=(
                 "alm-import-result"
                 if args.setup_source == "alm-import"
-                else target.get("agentSelection")
+                else (
+                    "prod-to-dev-result"
+                    if args.setup_source == "prod-to-dev"
+                    else target.get("agentSelection")
+                )
             ),
             setup_source=args.setup_source,
         )

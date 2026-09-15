@@ -786,15 +786,17 @@ def test_identical_rerun_removes_dead_projection_metadata(
     assert "unprojectedDialogs" not in persisted
 
 
-def test_identical_rerun_preserves_alm_import_provenance(
+@pytest.mark.parametrize("setup_source", ("alm-import", "prod-to-dev"))
+def test_identical_rerun_preserves_strongest_provenance(
     tmp_path: Path,
+    setup_source: str,
 ) -> None:
     setup_existing_da.attach_existing_dev(
         FakeClient(),
         environment_id=ENVIRONMENT_ID,
         agent_id=AGENT_ID,
         kit_root=tmp_path,
-        setup_source="alm-import",
+        setup_source=setup_source,
     )
 
     result = _attach(FakeClient(), tmp_path)
@@ -803,9 +805,9 @@ def test_identical_rerun_preserves_alm_import_provenance(
             encoding="utf-8"
         )
     )
-    assert result["setupSource"] == "alm-import"
-    assert state["setup_source"] == "alm-import"
-    assert state["setup_source"] == "alm-import"
+
+    assert result["setupSource"] == setup_source
+    assert state["setup_source"] == setup_source
 
 
 def test_changed_remote_content_requires_explicit_refresh(tmp_path: Path) -> None:
