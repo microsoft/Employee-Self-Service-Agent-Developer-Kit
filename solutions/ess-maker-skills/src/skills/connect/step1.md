@@ -11,9 +11,13 @@ Build a list of connected integrations (if any):
 
 - **ServiceNow** — connected if `.local/connect/servicenow/steps.md` exists and
   all items are checked.
-- **Workday** — connected if `.local/connect/workday/config.json` exists and its
-  `setupStatus` shows every setup row (`S1.1` … `S6.2`) in state `done` (the
-  setup orchestrator owns this state).
+- **Workday** — connected if either:
+  - `.local/connect/workday/config.json` exists and its `setupStatus` shows
+    every setup row (`S1.1` … `S6.2`) in state `done` (the setup orchestrator
+    ran a full install for this agent), or
+  - `.local/connect/workday/lifecycle.json` exists and every phase is
+    `done` (this agent was wired to an extension already installed
+    elsewhere — see 1.3 below).
 
 ---
 
@@ -206,14 +210,36 @@ Now read `src/skills/connect/servicenow/step1.md` and follow it.
 
 ### If the user chose Workday (2 or "workday")
 
-Workday connection is handled by the **setup orchestrator**, which provisions
+**If `.local/connect/workday/lifecycle.json` already exists** (this agent was
+previously wired to an already-installed extension via 1.3's second path
+below): read `src/skills/connect/workday/SKILL.md` and follow it. It
+re-verifies everything live before reporting "connected" — it never trusts
+the saved state on its own.
+
+**Otherwise**, check whether a Workday extension already exists **anywhere in
+this environment**, independent of whether this particular agent has been
+set up against it yet:
+
+```
+python scripts/flightcheck/cli.py --checkpoint WD-PKG-001
+```
+
+**If `Passed`:** a Workday extension is already installed in this
+environment — this agent likely just needs to be wired to it, not a full
+install. Read `src/skills/connect/workday/SKILL.md` and follow it; it shows
+the user what it will check before doing anything, and only makes changes
+once they confirm.
+
+**If anything other than `Passed`** (no extension installed yet, or its
+package can't be confirmed): fall back to the full setup path. Workday
+connection is then handled by the **setup orchestrator**, which provisions
 the Power Platform environment, installs the ESS base agent, provisions the
 Entra app, configures the Workday tenant, installs the extension pack, and
 verifies the connection. It is resume-aware: if setup was already started it
 picks up at the first unverified step, and it fast-forwards steps that are
 already done.
 
-Now read `src/skills/setup/SKILL.md` and follow it.
+Read `src/skills/setup/SKILL.md` and follow it.
 
 ### If the user said something else
 
