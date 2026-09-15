@@ -25,6 +25,14 @@ from urllib3.util.retry import Retry
 CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
 DEFAULT_API_VERSION = "2024-10-01"
 DEFAULT_TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
+DEV_REALM = 0
+TEST_REALM = 1
+PROD_REALM = 2
+REALM_NAMES = {
+    DEV_REALM: "Dev",
+    TEST_REALM: "Test",
+    PROD_REALM: "Prod",
+}
 RING_CONFIG = {
     "prod": {
         "audience": "https://api.powerplatform.com",
@@ -484,18 +492,41 @@ class AgentBuilderClient:
             raise AgentBuilderError("Direct agent lookup returned an invalid shape.")
         return body
 
-    def get_dev_configuration(self, agent_id: str) -> dict[str, Any]:
+    def get_realms(self, agent_id: str) -> dict[str, Any]:
         body = self._json(
             "GET",
-            f"/copilotstudio/minimalBots/alm/{agent_id}/configure",
-            "Dev realm configuration",
-            params={"realm": 0},
+            f"/copilotstudio/minimalBots/alm/{agent_id}/realms",
+            "Agent realm family",
         )
         if not isinstance(body, dict):
             raise AgentBuilderError(
-                "Dev realm configuration returned an invalid shape."
+                "Agent realm family returned an invalid shape."
             )
         return body
+
+    def get_realm_configuration(
+        self,
+        agent_id: str,
+        realm: int,
+    ) -> dict[str, Any]:
+        if type(realm) is not int or realm not in REALM_NAMES:
+            raise ValueError("Realm must be the numeric Dev, Test, or Prod value.")
+        operation = f"{REALM_NAMES[realm]} realm configuration"
+        body = self._json(
+            "GET",
+            f"/copilotstudio/minimalBots/alm/{agent_id}/configure",
+            operation,
+            params={"realm": realm},
+        )
+        if not isinstance(body, dict):
+            raise AgentBuilderError(f"{operation} returned an invalid shape.")
+        return body
+
+    def get_dev_configuration(self, agent_id: str) -> dict[str, Any]:
+        return self.get_realm_configuration(agent_id, DEV_REALM)
+
+    def get_prod_configuration(self, agent_id: str) -> dict[str, Any]:
+        return self.get_realm_configuration(agent_id, PROD_REALM)
 
     def fetch_components(self, agent_id: str) -> dict[str, Any]:
         body = self._json(
@@ -578,6 +609,31 @@ class AgentBuilderClient:
                 "schemaName": schema_name.strip(),
             },
         }
+
+    def export_package(
+        self,
+        agent_id: str,
+        destination: Path,
+        *,
+        timeout: int = 300,
+    ) -> None:
+        """Export one native package to a caller-owned path."""
+        request_headers = {
+            name: value
+            for name, value in self.headers.items()
+            if name.casefold() != "content-type"
+        }
+        response = self.session.request(
+            "POST",
+            f"{self.host}/copilotstudio/minimalBots/alm/{agent_id}/export",
+            params={"api-version": self.api_version},
+            headers=request_headers,
+            timeout=timeout,
+            allow_redirects=False,
+        )
+        if not 200 <= response.status_code < 300:
+            _response_error(response, "Native ALM export")
+        destination.write_bytes(response.content)
 
 
 def canonical_json(value: Any) -> str:

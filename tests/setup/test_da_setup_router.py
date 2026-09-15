@@ -18,6 +18,9 @@ _DA_EXISTING_DEV = (
 _DA_ALM_IMPORT = (
     _SOLUTION / "src" / "skills" / "foundation-setup" / "da-alm-import.md"
 )
+_DA_PROD_TO_DEV = (
+    _SOLUTION / "src" / "skills" / "foundation-setup" / "da-prod-to-dev.md"
+)
 _NATIVE_ALM_REFERENCE = (
     _SOLUTION / "src" / "reference" / "native-alm-import.md"
 )
@@ -128,7 +131,8 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
 
     assert set(_PATH_RE.findall(text)) == {
         "src/skills/foundation-setup/da-alm-import.md",
-        "src/skills/foundation-setup/da-existing-dev.md"
+        "src/skills/foundation-setup/da-existing-dev.md",
+        "src/skills/foundation-setup/da-prod-to-dev.md",
     }
     assert "not a setup option to advertise or recommend" in normalized
     assert "src/reference/native-alm-import.md" in import_text
@@ -142,7 +146,36 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     assert "Dataverse foundation or onboarding playbooks" in text
     assert _DA_EXISTING_DEV.is_file()
     assert _DA_ALM_IMPORT.is_file()
+    assert _DA_PROD_TO_DEV.is_file()
     assert _NATIVE_ALM_REFERENCE.is_file()
+
+
+def test_prod_to_dev_reference_composes_durable_boundaries() -> None:
+    foundation = _FOUNDATION.read_text(encoding="utf-8")
+    normalized_foundation = " ".join(foundation.split())
+    text = _DA_PROD_TO_DEV.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "known Prod Copilot Studio agent URL" in normalized_foundation
+    assert "target Dev environment URL" in normalized_foundation
+    assert foundation.index("da-prod-to-dev.md") < foundation.index(
+        "emit_capability.py setup"
+    )
+    assert "does not emit setup telemetry" in foundation
+    assert "src/reference/native-alm-import.md" in text
+    assert "da-existing-dev.md" in text
+    assert "setup_alm_export.py inspect" in text
+    assert "DA_ALM_EXPORT_INSPECTION_JSON:" in text
+    assert "setup_existing_da.py validate-agent" in text
+    assert "setup_alm_export.py export" in text
+    assert "DA_ALM_EXPORT_JSON:" in text
+    assert "setup_alm_import.py" in text
+    assert "Immediately delete the temporary ZIP" in normalized
+    assert "setup_existing_da.py attach" in text
+    assert "--setup-source prod-to-dev" in text
+    assert "Do not generate HTTP code or an end-to-end setup script" in normalized
+    assert "setup_prod_to_dev.py" not in text
+    assert len(text.splitlines()) < 130
 
 
 def test_foundation_resolves_python_and_announces_authorization_wait() -> None:

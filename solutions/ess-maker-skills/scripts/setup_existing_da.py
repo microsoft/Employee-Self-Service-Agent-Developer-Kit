@@ -46,7 +46,12 @@ DA_CONNECTION_STATE = Path(".local/setup/da-connection.json")
 DA_COMPONENT_SNAPSHOT = Path(".local/setup/da-components.json")
 CANONICAL_SETUP_SCHEMA_VERSION = 1
 PROJECTION_ENGINE = "microsoft-agents-objectmodel"
-SETUP_SOURCES = frozenset({"existing-dev", "alm-import"})
+SETUP_SOURCE_PRIORITY = {
+    "existing-dev": 0,
+    "alm-import": 1,
+    "prod-to-dev": 2,
+}
+SETUP_SOURCES = frozenset(SETUP_SOURCE_PRIORITY)
 STUDIO_RING_BY_HOST = {
     "copilotstudio.microsoft.com": "prod",
     "copilotstudio.preprod.microsoft.com": "preprod",
@@ -626,11 +631,10 @@ def _connection_identity(state: dict[str, Any]) -> tuple[Any, ...]:
 
 
 def _preferred_setup_source(existing: str, requested: str) -> str:
-    """Preserve package-import provenance for the same DA identity."""
-    return (
-        "alm-import"
-        if "alm-import" in {existing, requested}
-        else requested
+    """Preserve the strongest provenance for the same DA identity."""
+    return max(
+        (existing, requested),
+        key=SETUP_SOURCE_PRIORITY.__getitem__,
     )
 
 
@@ -1748,7 +1752,11 @@ def main(argv: list[str] | None = None) -> int:
             selection_source=(
                 "alm-import-result"
                 if args.setup_source == "alm-import"
-                else target.get("agentSelection")
+                else (
+                    "prod-to-dev-result"
+                    if args.setup_source == "prod-to-dev"
+                    else target.get("agentSelection")
+                )
             ),
             setup_source=args.setup_source,
         )

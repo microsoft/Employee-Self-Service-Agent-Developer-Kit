@@ -65,6 +65,11 @@ second command, and do not infer that a remote mutation has started.
 
 ## Start
 
+When the maker supplies both a known Prod Copilot Studio agent URL and a target
+Dev environment URL, read
+`src/skills/foundation-setup/da-prod-to-dev.md` and follow it. This experimental
+path does not emit setup telemetry.
+
 Record anonymous usage telemetry best-effort:
 
 ```text

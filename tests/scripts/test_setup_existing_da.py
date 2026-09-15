@@ -466,16 +466,18 @@ def test_attach_materializes_authorable_topics_and_da_identity(
     assert raw_cache["changeToken"] == "opaque-token"
 
 
-def test_imported_agent_reuses_workspace_with_import_provenance(
+@pytest.mark.parametrize("setup_source", ("alm-import", "prod-to-dev"))
+def test_seeded_agent_reuses_workspace_with_source_provenance(
     tmp_path: Path,
+    setup_source: str,
 ) -> None:
     setup_existing_da.attach_existing_dev(
         FakeClient(),
         environment_id=ENVIRONMENT_ID,
         agent_id=AGENT_ID,
         kit_root=tmp_path,
-        setup_source="alm-import",
-        selection_source="alm-import-result",
+        setup_source=setup_source,
+        selection_source=f"{setup_source}-result",
     )
 
     config = json.loads(
@@ -502,10 +504,10 @@ def test_imported_agent_reuses_workspace_with_import_provenance(
         ).read_text(encoding="utf-8")
     )
 
-    assert config["agent"]["setupSource"] == "alm-import"
-    assert canonical["setup_source"] == "alm-import"
-    assert connection["setupSource"] == "alm-import"
-    assert metadata["setupSource"] == "alm-import"
+    assert config["agent"]["setupSource"] == setup_source
+    assert canonical["setup_source"] == setup_source
+    assert connection["setupSource"] == setup_source
+    assert metadata["setupSource"] == setup_source
 
 
 def test_materializes_converter_results_and_skips_failure(
@@ -1804,10 +1806,19 @@ def test_list_environments_parser_accepts_ring_source_url() -> None:
     assert args.target_url.endswith(f"/environments/{ENVIRONMENT_ID}/home")
 
 
-def test_attach_command_preserves_alm_import_provenance(
+@pytest.mark.parametrize(
+    ("setup_source", "selection_source"),
+    (
+        ("alm-import", "alm-import-result"),
+        ("prod-to-dev", "prod-to-dev-result"),
+    ),
+)
+def test_attach_command_preserves_setup_source_provenance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    setup_source: str,
+    selection_source: str,
 ) -> None:
     observed: dict[str, Any] = {}
     monkeypatch.setattr(
@@ -1831,13 +1842,13 @@ def test_attach_command_preserves_alm_import_provenance(
             "--kit-root",
             str(tmp_path),
             "--setup-source",
-            "alm-import",
+            setup_source,
         ]
     )
 
     assert result == 0
-    assert observed["selection_source"] == "alm-import-result"
-    assert observed["setup_source"] == "alm-import"
+    assert observed["selection_source"] == selection_source
+    assert observed["setup_source"] == setup_source
     assert json.loads(
         capsys.readouterr().out.split("DA_EXISTING_DEV_SETUP_JSON:", 1)[1]
     ) == {"status": "created"}
@@ -1883,8 +1894,10 @@ def test_validate_agent_command_is_read_only(
     assert not (tmp_path / "workspace").exists()
 
 
-def test_same_agent_upgrade_preserves_alm_import_provenance(
+@pytest.mark.parametrize("setup_source", ("alm-import", "prod-to-dev"))
+def test_same_agent_upgrade_preserves_strongest_provenance(
     tmp_path: Path,
+    setup_source: str,
 ) -> None:
     setup_existing_da.attach_existing_dev(
         FakeClient(),
@@ -1898,8 +1911,8 @@ def test_same_agent_upgrade_preserves_alm_import_provenance(
         environment_id=ENVIRONMENT_ID,
         agent_id=AGENT_ID,
         kit_root=tmp_path,
-        selection_source="alm-import-result",
-        setup_source="alm-import",
+        selection_source=f"{setup_source}-result",
+        setup_source=setup_source,
     )
     repeated = setup_existing_da.attach_existing_dev(
         FakeClient(),
@@ -1908,8 +1921,8 @@ def test_same_agent_upgrade_preserves_alm_import_provenance(
         kit_root=tmp_path,
     )
 
-    assert upgraded["setupSource"] == "alm-import"
-    assert repeated["setupSource"] == "alm-import"
+    assert upgraded["setupSource"] == setup_source
+    assert repeated["setupSource"] == setup_source
     connection = json.loads(
         (
             tmp_path / ".local" / "setup" / "da-connection.json"
@@ -1930,9 +1943,27 @@ def test_same_agent_upgrade_preserves_alm_import_provenance(
             / "attach.json"
         ).read_text(encoding="utf-8")
     )
-    assert connection["setupSource"] == "alm-import"
-    assert canonical["setup_source"] == "alm-import"
-    assert metadata["setupSource"] == "alm-import"
+    assert connection["setupSource"] == setup_source
+    assert canonical["setup_source"] == setup_source
+    assert metadata["setupSource"] == setup_source
+
+
+@pytest.mark.parametrize(
+    ("existing", "requested", "expected"),
+    (
+        ("alm-import", "prod-to-dev", "prod-to-dev"),
+        ("prod-to-dev", "alm-import", "prod-to-dev"),
+    ),
+)
+def test_prod_to_dev_provenance_has_highest_precedence(
+    existing: str,
+    requested: str,
+    expected: str,
+) -> None:
+    assert (
+        setup_existing_da._preferred_setup_source(existing, requested)
+        == expected
+    )
 
 
 @pytest.mark.parametrize(
