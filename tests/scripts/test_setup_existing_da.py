@@ -166,7 +166,45 @@ def _changeset() -> dict[str, Any]:
                     "id": "00000000-0000-4000-8000-000000005555",
                     "parentBotId": AGENT_ID,
                     "schemaName": f"{SCHEMA}.component.Locale",
-                    "variable": {"$kind": "GlobalVariable", "name": "Locale"},
+                    "variable": {
+                        "$kind": "GlobalVariable",
+                        "name": "Locale",
+                        "scope": "User",
+                        "isExternalInitializationAllowed": False,
+                    },
+                },
+            },
+            {
+                "$kind": "BotComponentInsert",
+                "component": {
+                    "$kind": "GptComponent",
+                    "version": 1,
+                    "displayName": "Employee Self-Service HR",
+                    "id": "00000000-0000-4000-8000-000000006666",
+                    "parentBotId": AGENT_ID,
+                    "schemaName": f"{SCHEMA}.gpt.default",
+                    "metadata": {
+                        "$kind": "GptComponentMetadata",
+                        "instructions": {
+                            "$kind": "TemplateLine",
+                            "segments": [
+                                {
+                                    "$kind": "TextSegment",
+                                    "value": "Help employees.",
+                                }
+                            ],
+                        },
+                        "conversationStarters": [
+                            {
+                                "$kind": "ConversationStarter",
+                                "title": "Ask HR",
+                                "text": "How can HR help me?",
+                            }
+                        ],
+                        "gptCapabilities": {
+                            "$kind": "GptCapabilities",
+                        },
+                    },
                 },
             },
         ],
@@ -360,6 +398,7 @@ def test_attach_materializes_authorable_topics_and_da_identity(
     assert result["selectedBy"] == "direct-id-fallback"
     assert result["realm"] == "dev"
     assert result["topicCount"] == 1
+    assert result["variableCount"] == 1
     assert result["projectionEngine"] == (
         setup_existing_da.PROJECTION_ENGINE
     )
@@ -367,9 +406,7 @@ def test_attach_materializes_authorable_topics_and_da_identity(
     assert result["setupStatus"] == "complete"
     assert result["setupState"] == ".local/setup/config.json"
     assert result["workspace"]["status"] == "qualified-complete"
-    assert result["workspace"]["unprojectedComponentKinds"] == {
-        "GlobalVariableComponent": 1
-    }
+    assert result["workspace"]["unprojectedComponentKinds"] == {}
     workspace = (
         tmp_path
         / "workspace"
@@ -385,6 +422,32 @@ def test_attach_materializes_authorable_topics_and_da_identity(
     assert topic["beginDialog"]["actions"][0]["activity"] == (
         "Hello {System.User.DisplayName}"
     )
+    agent = yaml.safe_load(
+        (workspace / "agent.mcs.yml").read_text(encoding="utf-8")
+    )
+    assert agent["kind"] == "GptComponentMetadata"
+    assert agent["displayName"] == "Employee Self-Service HR"
+    assert agent["instructions"]["segments"][0]["value"] == "Help employees."
+    assert agent["conversationStarters"] == [
+        {
+            "kind": "ConversationStarter",
+            "title": "Ask HR",
+            "text": "How can HR help me?",
+        }
+    ]
+    variable = yaml.safe_load(
+        (
+            workspace
+            / "variables"
+            / "Locale.mcs.yml"
+        ).read_text(encoding="utf-8")
+    )
+    assert variable == {
+        "kind": "GlobalVariable",
+        "name": "Locale",
+        "scope": "User",
+        "isExternalInitializationAllowed": False,
+    }
     assert (workspace / ".baseline" / "topics" / "Greeting.mcs.yml").is_file()
     raw = json.loads(
         (workspace / ".agentbuilder" / "components.json").read_text(
@@ -420,11 +483,11 @@ def test_attach_materializes_authorable_topics_and_da_identity(
     assert connection["acquisition"]["status"] == "acquired"
     assert connection["workspace"]["status"] == "qualified-complete"
     assert connection["workspace"]["projectedComponentKinds"] == [
-        "DialogComponent"
+        "DialogComponent",
+        "GlobalVariableComponent",
+        "GptComponent",
     ]
-    assert connection["workspace"]["unprojectedComponentKinds"] == {
-        "GlobalVariableComponent": 1
-    }
+    assert connection["workspace"]["unprojectedComponentKinds"] == {}
     assert connection["workspace"]["unprojectedDialogCount"] == 0
     canonical = json.loads(
         (
@@ -453,11 +516,15 @@ def test_attach_materializes_authorable_topics_and_da_identity(
         "workspace": {
             "status": "qualified-complete",
             "folder": "workspace/agents/employee-self-service-hr",
+            "agent_path": "agent.mcs.yml",
             "topic_count": 1,
-            "projected_component_kinds": ["DialogComponent"],
-            "unprojected_component_kinds": {
-                "GlobalVariableComponent": 1
-            },
+            "variable_count": 1,
+            "projected_component_kinds": [
+                "DialogComponent",
+                "GlobalVariableComponent",
+                "GptComponent",
+            ],
+            "unprojected_component_kinds": {},
             "unprojected_dialog_count": 0,
         },
         "completed_at": canonical["completed_at"],
@@ -906,6 +973,39 @@ def test_identical_rerun_resumes_without_overwriting_local_topic(
     assert result["status"] == "resumed"
     assert result["selectedBy"] == "list"
     assert topic_path.read_text(encoding="utf-8") == "local customization\n"
+
+
+def test_older_projection_requires_explicit_checkpointed_refresh(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient()
+    setup_existing_da.attach_existing_dev(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+    )
+    metadata_path = (
+        tmp_path
+        / "workspace"
+        / "agents"
+        / "employee-self-service-hr"
+        / setup_existing_da.ATTACH_METADATA
+    )
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["projectionVersion"] = 1
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="older projection",
+    ):
+        setup_existing_da.attach_existing_dev(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            agent_id=AGENT_ID,
+            kit_root=tmp_path,
+        )
 
 
 def test_rerun_ignores_change_token_and_top_level_change_order(

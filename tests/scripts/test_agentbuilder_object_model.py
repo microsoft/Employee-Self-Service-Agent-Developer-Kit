@@ -226,7 +226,6 @@ def test_object_models_to_yaml_preserves_result_contract(
 ) -> None:
     types = converter._ObjectModelTypes(
         bot_element=object,
-        dialog_base=_FakeDialog,
         element_serializer=_FakeElementSerializer,
         json_serializer=_FakeJsonSerializer,
         yaml_serializer=_FakeYamlSerializer,

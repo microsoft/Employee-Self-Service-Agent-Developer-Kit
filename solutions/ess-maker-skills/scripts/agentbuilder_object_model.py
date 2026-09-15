@@ -31,7 +31,6 @@ class ObjectModelConverterError(RuntimeError):
 @dataclass(frozen=True)
 class _ObjectModelTypes:
     bot_element: Any
-    dialog_base: Any
     element_serializer: Any
     json_serializer: Any
     yaml_serializer: Any
@@ -150,7 +149,6 @@ def _load_object_model() -> _ObjectModelTypes:
 
         from Microsoft.Agents.ObjectModel import (
             BotElement,
-            DialogBase,
             ElementSerializer,
         )
         from Microsoft.Agents.ObjectModel.Yaml import YamlSerializer
@@ -162,7 +160,6 @@ def _load_object_model() -> _ObjectModelTypes:
 
     return _ObjectModelTypes(
         bot_element=BotElement,
-        dialog_base=DialogBase,
         element_serializer=ElementSerializer,
         json_serializer=JsonSerializer,
         yaml_serializer=YamlSerializer,
@@ -221,10 +218,6 @@ def object_models_to_yaml(
             if element is None:
                 raise ValueError(
                     "The Object Model JSON did not contain a BotElement."
-                )
-            if not isinstance(element, types.dialog_base):
-                raise ValueError(
-                    f"Expected a dialog but received {element.GetType().Name}."
                 )
             results.append(
                 {

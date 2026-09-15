@@ -48,6 +48,7 @@ DA_CONNECTION_STATE = Path(".local/setup/da-connection.json")
 DA_COMPONENT_SNAPSHOT = Path(".local/setup/da-components.json")
 CANONICAL_SETUP_SCHEMA_VERSION = 1
 PROJECTION_ENGINE = "microsoft-agents-objectmodel"
+WORKSPACE_PROJECTION_VERSION = 2
 SETUP_SOURCE_PRIORITY = {
     "existing-dev": 0,
     "alm-import": 1,
@@ -450,7 +451,9 @@ def _record_canonical_setup_complete(
         "workspace": {
             "status": workspace["status"],
             "folder": workspace["folder"],
+            "agent_path": workspace["agentPath"],
             "topic_count": workspace["topicCount"],
+            "variable_count": workspace["variableCount"],
             "projected_component_kinds": workspace[
                 "projectedComponentKinds"
             ],
@@ -897,10 +900,18 @@ def _record_workspace_ready(
     *,
     folder: Path,
     topic_count: int,
+    variable_count: int,
     component_counts: Counter[str],
     unprojected_dialogs: list[dict[str, str]],
 ) -> dict[str, Any]:
-    projected_kinds = {"DialogComponent"}
+    supported_kinds = {
+        "DialogComponent",
+        "GlobalVariableComponent",
+        "GptComponent",
+    }
+    projected_kinds = {
+        kind for kind in supported_kinds if component_counts.get(kind, 0)
+    }
     unprojected = {
         kind: count
         for kind, count in sorted(component_counts.items())
@@ -912,7 +923,9 @@ def _record_workspace_ready(
         "workspace": {
             "status": "qualified-complete",
             "folder": folder.relative_to(kit_root).as_posix(),
+            "agentPath": "agent.mcs.yml",
             "topicCount": topic_count,
+            "variableCount": variable_count,
             "projectedComponentKinds": sorted(projected_kinds),
             "unprojectedComponentKinds": unprojected,
             "unprojectedDialogCount": len(unprojected_dialogs),
@@ -949,47 +962,95 @@ def _validate_changeset_identity(
         )
 
 
-def _materialize_topics(
+def _materialize_workspace(
     changeset: dict[str, Any],
     destination: Path,
 ) -> tuple[
+    list[dict[str, Any]],
     list[dict[str, Any]],
     Counter[str],
     list[dict[str, str]],
 ]:
     topic_entries: list[dict[str, Any]] = []
+    projected_entries: list[dict[str, Any]] = []
     component_counts: Counter[str] = Counter()
     dialog_components: list[dict[str, Any]] = []
+    variable_components: list[dict[str, Any]] = []
+    gpt_components: list[dict[str, Any]] = []
     for change in _component_changes(changeset):
         component = change.get("component")
         if not isinstance(component, dict):
             continue
         component_kind = str(component.get("$kind") or "Unknown")
         component_counts[component_kind] += 1
-        if component_kind != "DialogComponent":
-            continue
-        schema_name = str(component.get("schemaName") or "")
-        dialog = component.get("dialog")
-        if not schema_name or not isinstance(dialog, dict):
-            raise ExistingDASetupError(
-                "Dialog component is missing its schema or dialog body."
-            )
-        dialog_components.append(component)
+        if component_kind == "DialogComponent":
+            schema_name = str(component.get("schemaName") or "")
+            dialog = component.get("dialog")
+            if not schema_name or not isinstance(dialog, dict):
+                raise ExistingDASetupError(
+                    "Dialog component is missing its schema or dialog body."
+                )
+            dialog_components.append(component)
+        elif component_kind == "GlobalVariableComponent":
+            schema_name = str(component.get("schemaName") or "")
+            variable = component.get("variable")
+            if not schema_name or not isinstance(variable, dict):
+                raise ExistingDASetupError(
+                    "Global variable component is missing its schema or "
+                    "variable body."
+                )
+            variable_components.append(component)
+        elif component_kind == "GptComponent":
+            metadata = component.get("metadata")
+            if not isinstance(metadata, dict):
+                raise ExistingDASetupError(
+                    "GPT component is missing its agent metadata."
+                )
+            gpt_components.append(component)
+
+    if len(gpt_components) != 1:
+        raise ExistingDASetupError(
+            "Component fetch must return exactly one GPT component for the "
+            "agent definition."
+        )
 
     try:
-        converted_dialogs = object_models_to_yaml(
+        converted_components = object_models_to_yaml(
             [
                 {
-                    "key": str(index),
+                    "key": f"dialog:{index}",
                     "objectModel": component["dialog"],
                 }
                 for index, component in enumerate(dialog_components)
+            ]
+            + [
+                {
+                    "key": "agent",
+                    "objectModel": {
+                        **gpt_components[0]["metadata"],
+                        "displayName": (
+                            gpt_components[0].get("displayName")
+                            or changeset["bot"].get("displayName")
+                        ),
+                    },
+                }
+            ]
+            + [
+                {
+                    "key": f"variable:{index}",
+                    "objectModel": component["variable"],
+                }
+                for index, component in enumerate(variable_components)
             ]
         )
     except ObjectModelConverterError as exc:
         raise ExistingDASetupError(
             f"Could not run the Microsoft Object Model converter: {exc}"
         ) from exc
+
+    converted_dialogs = converted_components[: len(dialog_components)]
+    converted_agent = converted_components[len(dialog_components)]
+    converted_variables = converted_components[len(dialog_components) + 1 :]
 
     unprojected_dialogs: list[dict[str, str]] = []
     for component, converted in zip(
@@ -1042,13 +1103,72 @@ def _materialize_topics(
                 "version": component.get("version"),
             }
         )
+    projected_entries.extend(topic_entries)
     if not topic_entries:
         raise ExistingDASetupError(
             "The Microsoft Object Model converter could not materialize any "
             "authorable dialog components."
         )
+
+    agent_yaml = converted_agent.get("yaml")
+    if (
+        converted_agent.get("success") is not True
+        or not isinstance(agent_yaml, str)
+        or not agent_yaml.strip()
+    ):
+        raise ExistingDASetupError(
+            "The Microsoft Object Model converter could not materialize the "
+            "agent definition."
+        )
+    agent_path = destination / "agent.mcs.yml"
+    agent_path.write_text(agent_yaml, encoding="utf-8", newline="")
+    projected_entries.append(
+        {
+            "path": "agent.mcs.yml",
+            "componentKind": "GptComponent",
+            "componentId": gpt_components[0].get("id"),
+            "schemaName": gpt_components[0].get("schemaName"),
+            "displayName": gpt_components[0].get("displayName"),
+            "version": gpt_components[0].get("version"),
+        }
+    )
+
+    for component, converted in zip(
+        variable_components,
+        converted_variables,
+        strict=True,
+    ):
+        yaml_content = converted.get("yaml")
+        if (
+            converted.get("success") is not True
+            or not isinstance(yaml_content, str)
+            or not yaml_content.strip()
+        ):
+            raise ExistingDASetupError(
+                "The Microsoft Object Model converter could not materialize "
+                f"global variable {component['schemaName']}."
+            )
+        variable_path = (
+            destination
+            / "variables"
+            / f"{_schema_suffix(str(component['schemaName']))}.mcs.yml"
+        )
+        variable_path.parent.mkdir(parents=True, exist_ok=True)
+        variable_path.write_text(yaml_content, encoding="utf-8", newline="")
+        projected_entries.append(
+            {
+                "path": variable_path.relative_to(destination).as_posix(),
+                "componentKind": "GlobalVariableComponent",
+                "componentId": component.get("id"),
+                "schemaName": component.get("schemaName"),
+                "displayName": component.get("displayName"),
+                "version": component.get("version"),
+            }
+        )
+
     return (
         topic_entries,
+        projected_entries,
         component_counts,
         sorted(
             unprojected_dialogs,
@@ -1066,6 +1186,7 @@ def _write_snapshot(
     agent_name: str,
     schema_name: str,
     topics: list[dict[str, Any]],
+    variable_count: int,
     counts: Counter[str],
     unprojected_dialogs: list[dict[str, str]],
 ) -> None:
@@ -1085,6 +1206,15 @@ def _write_snapshot(
     lines.extend(
         f"- `{entry['path']}`"
         for entry in sorted(topics, key=lambda item: item["path"])
+    )
+    lines.extend(
+        [
+            "",
+            "## Agent definition and variables",
+            "",
+            "- `agent.mcs.yml`",
+            f"- `{variable_count}` global variable file(s) under `variables/`",
+        ]
     )
     lines.extend(
         [
@@ -1254,6 +1384,7 @@ def attach_existing_dev(
     )
     unprojected_dialogs: list[dict[str, str]] = []
     topics: list[dict[str, Any]]
+    projected_entries: list[dict[str, Any]] = []
     materialize = not destination.exists()
     if destination.exists():
         if not metadata_path.is_file():
@@ -1275,6 +1406,22 @@ def attach_existing_dev(
                 metadata.get("changesetSha256") == changeset_sha
                 or stored_changeset_sha == changeset_sha
             )
+        )
+        if (
+            unchanged
+            and metadata.get("projectionVersion")
+            != WORKSPACE_PROJECTION_VERSION
+            and not refresh
+        ):
+            raise ExistingDASetupError(
+                "The local DA workspace uses an older projection. Run the "
+                "explicit refresh flow to checkpoint local files and "
+                "materialize the complete agent workspace."
+            )
+        unchanged = (
+            unchanged
+            and metadata.get("projectionVersion")
+            == WORKSPACE_PROJECTION_VERSION
         )
         if unchanged and not refresh:
             stored_unprojected = metadata.get("unprojectedDialogs", [])
@@ -1323,9 +1470,10 @@ def attach_existing_dev(
         try:
             (
                 topics,
+                projected_entries,
                 component_counts,
                 unprojected_dialogs,
-            ) = _materialize_topics(changeset, temporary)
+            ) = _materialize_workspace(changeset, temporary)
             _write_json(temporary / RAW_CHANGESET, changeset)
             _write_json(
                 temporary / ".component-map.json",
@@ -1335,14 +1483,20 @@ def attach_existing_dev(
                         for key, value in entry.items()
                         if key != "path"
                     }
-                    for entry in topics
+                    for entry in projected_entries
                 },
+            )
+            variable_paths = sorted(
+                entry["path"]
+                for entry in projected_entries
+                if entry["componentKind"] == "GlobalVariableComponent"
             )
             metadata = {
                 "status": "refreshed" if destination.exists() else "created",
                 "releaseLine": "da",
                 "transport": "agentbuilder",
                 "projectionEngine": PROJECTION_ENGINE,
+                "projectionVersion": WORKSPACE_PROJECTION_VERSION,
                 "environmentId": normalized_environment_id,
                 "host": client.host,
                 "apiVersion": client.api_version,
@@ -1356,6 +1510,9 @@ def attach_existing_dev(
                 "changesetSha256": changeset_sha,
                 "topicCount": len(topics),
                 "topicPaths": sorted(entry["path"] for entry in topics),
+                "agentPath": "agent.mcs.yml",
+                "variableCount": len(variable_paths),
+                "variablePaths": variable_paths,
                 "componentCounts": dict(sorted(component_counts.items())),
                 "unprojectedDialogs": unprojected_dialogs,
             }
@@ -1365,6 +1522,7 @@ def attach_existing_dev(
                 agent_name=agent_name,
                 schema_name=schema_name,
                 topics=topics,
+                variable_count=len(variable_paths),
                 counts=component_counts,
                 unprojected_dialogs=unprojected_dialogs,
             )
@@ -1428,6 +1586,7 @@ def attach_existing_dev(
         connection,
         folder=destination,
         topic_count=int(result["topicCount"]),
+        variable_count=int(result["variableCount"]),
         component_counts=component_counts,
         unprojected_dialogs=unprojected_dialogs,
     )
