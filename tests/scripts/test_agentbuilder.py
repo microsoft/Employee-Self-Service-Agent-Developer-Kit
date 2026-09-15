@@ -7,6 +7,7 @@ import base64
 import json
 import socket
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -116,6 +117,147 @@ def test_client_uses_only_configured_environment_host() -> None:
     assert session.calls[2]["params"]["realm"] == 0
     assert session.calls[3]["method"] == "POST"
     assert session.calls[3]["json"] == {}
+
+
+def test_import_package_sends_multipart_create_without_json_content_type(
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "agent.zip"
+    package.write_bytes(b"PK\x03\x04package")
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "cdsBotId": AGENT_ID,
+                    "schemaName": "gptagent_esshr",
+                }
+            )
+        ]
+    )
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    result = client.import_package(package)
+
+    assert result == {
+        "responseStatus": "valid",
+        "result": {
+            "cdsBotId": AGENT_ID,
+            "schemaName": "gptagent_esshr",
+        },
+    }
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["params"] == {"api-version": "2024-10-01"}
+    assert "Content-Type" not in call["headers"]
+    assert call["data"] == {}
+    filename, stream, content_type = call["files"]["package"]
+    assert filename == "agent.zip"
+    assert stream.closed
+    assert content_type == "application/zip"
+    assert "json" not in call
+    assert call["allow_redirects"] is False
+
+
+def test_import_package_sends_explicit_replacement_schema(
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "agent.zip"
+    package.write_bytes(b"PK\x03\x04package")
+    session = FakeSession(
+        [
+            FakeResponse(
+                {
+                    "cdsBotId": AGENT_ID.upper(),
+                    "schemaName": "gptagent_existing",
+                }
+            )
+        ]
+    )
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    result = client.import_package(
+        package,
+        replacement_schema_name="gptagent_existing",
+    )
+
+    assert result["result"]["cdsBotId"] == AGENT_ID
+    assert session.calls[0]["data"] == {
+        "schemaName": "gptagent_existing"
+    }
+
+
+def test_import_package_does_not_follow_redirects(
+    tmp_path: Path,
+) -> None:
+    package = tmp_path / "agent.zip"
+    package.write_bytes(b"PK\x03\x04package")
+    session = FakeSession(
+        [
+            FakeResponse(
+                {},
+                status_code=307,
+                headers={"Location": "https://attacker.example/import"},
+            )
+        ]
+    )
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    with pytest.raises(
+        agentbuilder.AgentBuilderHTTPError,
+        match="HTTP 307",
+    ):
+        client.import_package(package)
+
+    assert len(session.calls) == 1
+    assert session.calls[0]["allow_redirects"] is False
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {},
+        {"cdsBotId": "not-a-guid", "schemaName": "gptagent_esshr"},
+        {"cdsBotId": AGENT_ID, "schemaName": ""},
+    ],
+)
+def test_import_package_classifies_invalid_success_shape(
+    tmp_path: Path,
+    response: dict[str, Any],
+) -> None:
+    package = tmp_path / "agent.zip"
+    package.write_bytes(b"PK\x03\x04package")
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession([FakeResponse(response)]),
+    )
+
+    outcome = client.import_package(package)
+
+    assert outcome == {
+        "responseStatus": "invalid",
+        "reason": "invalid-agent-identity",
+    }
 
 
 def test_lists_ring_environments_with_agentbuilder_token() -> None:

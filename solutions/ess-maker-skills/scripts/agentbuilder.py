@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""AgentBuilder authentication, host resolution, and read operations."""
+"""AgentBuilder authentication, host resolution, and API operations."""
 
 from __future__ import annotations
 
@@ -395,7 +395,7 @@ def _response_error(response: requests.Response, operation: str) -> None:
 
 
 class AgentBuilderClient:
-    """Thin client for the live-proven existing-Dev read surface."""
+    """Thin client for the live-proven AgentBuilder API surface."""
 
     def __init__(
         self,
@@ -508,6 +508,76 @@ class AgentBuilderClient:
         if not isinstance(body, dict):
             raise AgentBuilderError("Component fetch returned an invalid shape.")
         return body
+
+    def import_package(
+        self,
+        package_path: Path,
+        *,
+        replacement_schema_name: str | None = None,
+        timeout: int = 300,
+    ) -> dict[str, Any]:
+        """Import one package without replaying or exposing its response body."""
+        request_headers = {
+            name: value
+            for name, value in self.headers.items()
+            if name.casefold() != "content-type"
+        }
+        form = (
+            {"schemaName": replacement_schema_name}
+            if replacement_schema_name
+            else {}
+        )
+        with package_path.open("rb") as package:
+            response = self.session.request(
+                "POST",
+                f"{self.host}/copilotstudio/minimalBots/alm/import",
+                params={"api-version": self.api_version},
+                headers=request_headers,
+                files={
+                    "package": (
+                        package_path.name,
+                        package,
+                        "application/zip",
+                    )
+                },
+                data=form,
+                timeout=timeout,
+                allow_redirects=False,
+            )
+        if not 200 <= response.status_code < 300:
+            _response_error(response, "Native ALM import")
+        try:
+            body = response.json()
+        except ValueError:
+            return {
+                "responseStatus": "invalid",
+                "reason": "non-json-response",
+            }
+        if not isinstance(body, dict):
+            return {
+                "responseStatus": "invalid",
+                "reason": "invalid-agent-identity",
+            }
+        try:
+            agent_id = str(uuid.UUID(str(body.get("cdsBotId") or "")))
+        except ValueError:
+            return {
+                "responseStatus": "invalid",
+                "reason": "invalid-agent-identity",
+            }
+        schema_name = body.get("schemaName")
+        if not isinstance(schema_name, str) or not schema_name.strip():
+            return {
+                "responseStatus": "invalid",
+                "reason": "invalid-agent-identity",
+            }
+        return {
+            "responseStatus": "valid",
+            "result": {
+                "cdsBotId": agent_id,
+                "schemaName": schema_name.strip(),
+            },
+        }
 
 
 def canonical_json(value: Any) -> str:
