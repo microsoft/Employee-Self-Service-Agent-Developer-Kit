@@ -95,6 +95,7 @@ def _isolate_external_dependencies(
         "authenticate_selected_tenant",
         reject_auth,
     )
+    monkeypatch.setattr(setup_existing_da, "assembly_paths", lambda: ())
 
 
 def _dialog() -> dict[str, Any]:
@@ -165,7 +166,45 @@ def _changeset() -> dict[str, Any]:
                     "id": "00000000-0000-4000-8000-000000005555",
                     "parentBotId": AGENT_ID,
                     "schemaName": f"{SCHEMA}.component.Locale",
-                    "variable": {"$kind": "GlobalVariable", "name": "Locale"},
+                    "variable": {
+                        "$kind": "GlobalVariable",
+                        "name": "Locale",
+                        "scope": "User",
+                        "isExternalInitializationAllowed": False,
+                    },
+                },
+            },
+            {
+                "$kind": "BotComponentInsert",
+                "component": {
+                    "$kind": "GptComponent",
+                    "version": 1,
+                    "displayName": "Employee Self-Service HR",
+                    "id": "00000000-0000-4000-8000-000000006666",
+                    "parentBotId": AGENT_ID,
+                    "schemaName": f"{SCHEMA}.gpt.default",
+                    "metadata": {
+                        "$kind": "GptComponentMetadata",
+                        "instructions": {
+                            "$kind": "TemplateLine",
+                            "segments": [
+                                {
+                                    "$kind": "TextSegment",
+                                    "value": "Help employees.",
+                                }
+                            ],
+                        },
+                        "conversationStarters": [
+                            {
+                                "$kind": "ConversationStarter",
+                                "title": "Ask HR",
+                                "text": "How can HR help me?",
+                            }
+                        ],
+                        "gptCapabilities": {
+                            "$kind": "GptCapabilities",
+                        },
+                    },
                 },
             },
         ],
@@ -205,6 +244,9 @@ class FakeClient:
             "schemaName": SCHEMA,
             "managedProperties": {"isManaged": True},
         }
+
+    def get_realms(self, _agent_id: str) -> dict[str, Any]:
+        return {"routeRealm": self.realm}
 
     def get_dev_configuration(self, _agent_id: str) -> dict[str, Any]:
         return {
@@ -356,6 +398,7 @@ def test_attach_materializes_authorable_topics_and_da_identity(
     assert result["selectedBy"] == "direct-id-fallback"
     assert result["realm"] == "dev"
     assert result["topicCount"] == 1
+    assert result["variableCount"] == 1
     assert result["projectionEngine"] == (
         setup_existing_da.PROJECTION_ENGINE
     )
@@ -363,9 +406,7 @@ def test_attach_materializes_authorable_topics_and_da_identity(
     assert result["setupStatus"] == "complete"
     assert result["setupState"] == ".local/setup/config.json"
     assert result["workspace"]["status"] == "qualified-complete"
-    assert result["workspace"]["unprojectedComponentKinds"] == {
-        "GlobalVariableComponent": 1
-    }
+    assert result["workspace"]["unprojectedComponentKinds"] == {}
     workspace = (
         tmp_path
         / "workspace"
@@ -381,6 +422,32 @@ def test_attach_materializes_authorable_topics_and_da_identity(
     assert topic["beginDialog"]["actions"][0]["activity"] == (
         "Hello {System.User.DisplayName}"
     )
+    agent = yaml.safe_load(
+        (workspace / "agent.mcs.yml").read_text(encoding="utf-8")
+    )
+    assert agent["kind"] == "GptComponentMetadata"
+    assert agent["displayName"] == "Employee Self-Service HR"
+    assert agent["instructions"]["segments"][0]["value"] == "Help employees."
+    assert agent["conversationStarters"] == [
+        {
+            "kind": "ConversationStarter",
+            "title": "Ask HR",
+            "text": "How can HR help me?",
+        }
+    ]
+    variable = yaml.safe_load(
+        (
+            workspace
+            / "variables"
+            / "Locale.mcs.yml"
+        ).read_text(encoding="utf-8")
+    )
+    assert variable == {
+        "kind": "GlobalVariable",
+        "name": "Locale",
+        "scope": "User",
+        "isExternalInitializationAllowed": False,
+    }
     assert (workspace / ".baseline" / "topics" / "Greeting.mcs.yml").is_file()
     raw = json.loads(
         (workspace / ".agentbuilder" / "components.json").read_text(
@@ -416,11 +483,11 @@ def test_attach_materializes_authorable_topics_and_da_identity(
     assert connection["acquisition"]["status"] == "acquired"
     assert connection["workspace"]["status"] == "qualified-complete"
     assert connection["workspace"]["projectedComponentKinds"] == [
-        "DialogComponent"
+        "DialogComponent",
+        "GlobalVariableComponent",
+        "GptComponent",
     ]
-    assert connection["workspace"]["unprojectedComponentKinds"] == {
-        "GlobalVariableComponent": 1
-    }
+    assert connection["workspace"]["unprojectedComponentKinds"] == {}
     assert connection["workspace"]["unprojectedDialogCount"] == 0
     canonical = json.loads(
         (
@@ -449,11 +516,15 @@ def test_attach_materializes_authorable_topics_and_da_identity(
         "workspace": {
             "status": "qualified-complete",
             "folder": "workspace/agents/employee-self-service-hr",
+            "agent_path": "agent.mcs.yml",
             "topic_count": 1,
-            "projected_component_kinds": ["DialogComponent"],
-            "unprojected_component_kinds": {
-                "GlobalVariableComponent": 1
-            },
+            "variable_count": 1,
+            "projected_component_kinds": [
+                "DialogComponent",
+                "GlobalVariableComponent",
+                "GptComponent",
+            ],
+            "unprojected_component_kinds": {},
             "unprojected_dialog_count": 0,
         },
         "completed_at": canonical["completed_at"],
@@ -466,16 +537,18 @@ def test_attach_materializes_authorable_topics_and_da_identity(
     assert raw_cache["changeToken"] == "opaque-token"
 
 
-def test_imported_agent_reuses_workspace_with_import_provenance(
+@pytest.mark.parametrize("setup_source", ("alm-import", "prod-to-dev"))
+def test_seeded_agent_reuses_workspace_with_source_provenance(
     tmp_path: Path,
+    setup_source: str,
 ) -> None:
     setup_existing_da.attach_existing_dev(
         FakeClient(),
         environment_id=ENVIRONMENT_ID,
         agent_id=AGENT_ID,
         kit_root=tmp_path,
-        setup_source="alm-import",
-        selection_source="alm-import-result",
+        setup_source=setup_source,
+        selection_source=f"{setup_source}-result",
     )
 
     config = json.loads(
@@ -502,10 +575,10 @@ def test_imported_agent_reuses_workspace_with_import_provenance(
         ).read_text(encoding="utf-8")
     )
 
-    assert config["agent"]["setupSource"] == "alm-import"
-    assert canonical["setup_source"] == "alm-import"
-    assert connection["setupSource"] == "alm-import"
-    assert metadata["setupSource"] == "alm-import"
+    assert config["agent"]["setupSource"] == setup_source
+    assert canonical["setup_source"] == setup_source
+    assert connection["setupSource"] == setup_source
+    assert metadata["setupSource"] == setup_source
 
 
 def test_materializes_converter_results_and_skips_failure(
@@ -900,6 +973,39 @@ def test_identical_rerun_resumes_without_overwriting_local_topic(
     assert result["status"] == "resumed"
     assert result["selectedBy"] == "list"
     assert topic_path.read_text(encoding="utf-8") == "local customization\n"
+
+
+def test_older_projection_requires_explicit_checkpointed_refresh(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient()
+    setup_existing_da.attach_existing_dev(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+    )
+    metadata_path = (
+        tmp_path
+        / "workspace"
+        / "agents"
+        / "employee-self-service-hr"
+        / setup_existing_da.ATTACH_METADATA
+    )
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["projectionVersion"] = 1
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="older projection",
+    ):
+        setup_existing_da.attach_existing_dev(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            agent_id=AGENT_ID,
+            kit_root=tmp_path,
+        )
 
 
 def test_rerun_ignores_change_token_and_top_level_change_order(
@@ -1804,10 +1910,19 @@ def test_list_environments_parser_accepts_ring_source_url() -> None:
     assert args.target_url.endswith(f"/environments/{ENVIRONMENT_ID}/home")
 
 
-def test_attach_command_preserves_alm_import_provenance(
+@pytest.mark.parametrize(
+    ("setup_source", "selection_source"),
+    (
+        ("alm-import", "alm-import-result"),
+        ("prod-to-dev", "prod-to-dev-result"),
+    ),
+)
+def test_attach_command_preserves_setup_source_provenance(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    setup_source: str,
+    selection_source: str,
 ) -> None:
     observed: dict[str, Any] = {}
     monkeypatch.setattr(
@@ -1831,13 +1946,13 @@ def test_attach_command_preserves_alm_import_provenance(
             "--kit-root",
             str(tmp_path),
             "--setup-source",
-            "alm-import",
+            setup_source,
         ]
     )
 
     assert result == 0
-    assert observed["selection_source"] == "alm-import-result"
-    assert observed["setup_source"] == "alm-import"
+    assert observed["selection_source"] == selection_source
+    assert observed["setup_source"] == setup_source
     assert json.loads(
         capsys.readouterr().out.split("DA_EXISTING_DEV_SETUP_JSON:", 1)[1]
     ) == {"status": "created"}
@@ -1883,8 +1998,88 @@ def test_validate_agent_command_is_read_only(
     assert not (tmp_path / "workspace").exists()
 
 
-def test_same_agent_upgrade_preserves_alm_import_provenance(
+@pytest.mark.parametrize(
+    ("route_realm", "expected"),
+    ((0, "dev"), ("Prod", "prod")),
+)
+def test_inspect_agent_command_uses_server_reported_route_realm(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    route_realm: Any,
+    expected: str,
+) -> None:
+    class RouteClient(FakeClient):
+        def get_realms(self, _agent_id: str) -> dict[str, Any]:
+            return {"routeRealm": route_realm}
+
+        def get_dev_configuration(self, _agent_id: str) -> dict[str, Any]:
+            raise AssertionError("Route inspection must not request Dev config.")
+
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_client_from_args",
+        lambda *_args: RouteClient(),
+    )
+
+    result = setup_existing_da.main(
+        [
+            "inspect-agent",
+            "--target-url",
+            "https://copilotstudio.test.microsoft.com/environments/"
+            f"{ENVIRONMENT_ID}/copilots/{AGENT_ID}/details",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    )
+
+    payload = json.loads(
+        capsys.readouterr().out.split("DA_AGENT_ROUTE_JSON:", 1)[1]
+    )
+    assert result == 0
+    assert payload["realm"] == expected
+    assert payload["agentId"] == AGENT_ID
+    assert not (tmp_path / ".local" / "setup").exists()
+
+
+def test_attach_checks_projection_dependencies_before_authentication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    missing = tmp_path / "missing.dll"
+    monkeypatch.setattr(
+        setup_existing_da,
+        "assembly_paths",
+        lambda: (missing,),
+    )
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_client_from_args",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("Authentication must not start.")
+        ),
+    )
+
+    result = setup_existing_da.main(
+        [
+            "attach",
+            "--target-url",
+            "https://copilotstudio.test.microsoft.com/environments/"
+            f"{ENVIRONMENT_ID}/copilots/{AGENT_ID}/details",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert result == 1
+    assert "dependencies are not installed" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("setup_source", ("alm-import", "prod-to-dev"))
+def test_same_agent_upgrade_preserves_strongest_provenance(
+    tmp_path: Path,
+    setup_source: str,
 ) -> None:
     setup_existing_da.attach_existing_dev(
         FakeClient(),
@@ -1898,8 +2093,8 @@ def test_same_agent_upgrade_preserves_alm_import_provenance(
         environment_id=ENVIRONMENT_ID,
         agent_id=AGENT_ID,
         kit_root=tmp_path,
-        selection_source="alm-import-result",
-        setup_source="alm-import",
+        selection_source=f"{setup_source}-result",
+        setup_source=setup_source,
     )
     repeated = setup_existing_da.attach_existing_dev(
         FakeClient(),
@@ -1908,8 +2103,8 @@ def test_same_agent_upgrade_preserves_alm_import_provenance(
         kit_root=tmp_path,
     )
 
-    assert upgraded["setupSource"] == "alm-import"
-    assert repeated["setupSource"] == "alm-import"
+    assert upgraded["setupSource"] == setup_source
+    assert repeated["setupSource"] == setup_source
     connection = json.loads(
         (
             tmp_path / ".local" / "setup" / "da-connection.json"
@@ -1930,9 +2125,27 @@ def test_same_agent_upgrade_preserves_alm_import_provenance(
             / "attach.json"
         ).read_text(encoding="utf-8")
     )
-    assert connection["setupSource"] == "alm-import"
-    assert canonical["setup_source"] == "alm-import"
-    assert metadata["setupSource"] == "alm-import"
+    assert connection["setupSource"] == setup_source
+    assert canonical["setup_source"] == setup_source
+    assert metadata["setupSource"] == setup_source
+
+
+@pytest.mark.parametrize(
+    ("existing", "requested", "expected"),
+    (
+        ("alm-import", "prod-to-dev", "prod-to-dev"),
+        ("prod-to-dev", "alm-import", "prod-to-dev"),
+    ),
+)
+def test_prod_to_dev_provenance_has_highest_precedence(
+    existing: str,
+    requested: str,
+    expected: str,
+) -> None:
+    assert (
+        setup_existing_da._preferred_setup_source(existing, requested)
+        == expected
+    )
 
 
 @pytest.mark.parametrize(

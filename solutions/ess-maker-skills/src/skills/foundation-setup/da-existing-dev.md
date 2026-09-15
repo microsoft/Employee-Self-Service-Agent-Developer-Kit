@@ -23,18 +23,40 @@ Do not display persisted IDs, API hosts, service rings, API versions, state name
 
 ## Identify the target
 
-Ask the maker for the URL of the existing editable agent in Copilot Studio. A URL copied from the agent's browser page is preferred because it identifies both the environment and agent without tenant-wide inventory permissions.
+Ask the maker for the URL of the agent in Copilot Studio. Do not describe it as editable or Dev before server-backed realm inspection. A URL copied from the agent's browser page is preferred because it identifies both the environment and agent without tenant-wide inventory permissions.
 
 Do not ask the maker for a service ring. Recognized Copilot Studio hostname text selects `prod`, `preprod`, or `test`; the supplied network location is never used as an API destination. Other target text and direct IDs default to `prod`. Use an explicit `preprod` or `test` override only when a Microsoft internal maker supplies a target without recognized Copilot Studio hostname text.
 
-If the URL identifies an agent, continue directly to validation and attach:
+If `SKILL.md` already inspected an agent URL and routed its server-reported
+realm to this Dev path, continue directly to validation and attach using the
+inspection's internal context:
 
 ```text
 python scripts/setup_existing_da.py attach \
-  --target-url "{COPILOT_STUDIO_AGENT_URL}"
+  --environment-id "{INTERNAL_ENVIRONMENT_ID}" \
+  --tenant-id "{INTERNAL_TENANT_ID}" \
+  --host "{VALIDATED_HOST}" \
+  --ring "{RING}" \
+  --api-version "{API_VERSION}" \
+  --agent-id "{AGENT_ID}"
 ```
 
-The first URL-based run lets the maker select an account. Before running it, tell the maker to select the identity they use to open this agent in Copilot Studio and to choose **Use another account** if that identity is not shown. The authenticated access token supplies the tenant identity. Do not infer a tenant from an environment ID or ask the maker for a tenant ID before authentication.
+The earlier inspection lets the maker select an account. Before running that
+inspection, tell the maker to select the identity they use to open this agent
+in Copilot Studio and to choose **Use another account** if that identity is not
+shown. The authenticated access token supplies the tenant identity. Do not
+infer a tenant from an environment ID or ask the maker for a tenant ID before
+authentication.
+
+Before the first attach command, ensure the Microsoft Object Model dependencies
+are installed. If attach reports that they are missing, run:
+
+```text
+python scripts/install_agentbuilder_object_model.py
+```
+
+Then rerun the same attach command. This prerequisite check occurs before
+authentication or connection state is written.
 
 After every attach attempt, parse `DA_EXISTING_DEV_DIAGNOSTIC_JSON:` before handling a terminal error. When `environmentStatus` is `accessible` and `agentStatus` is `not-found`, environment access has been established and only the supplied agent failed direct lookup. Do not enter organization recovery from this state.
 
@@ -147,7 +169,7 @@ Explain that this inventory covers only the tenant selected during Power Platfor
 
 The command must explicitly validate the Dev realm and matching agent identity before persisting the connection. A selected agent that resolves to another realm or identity is a hard failure.
 
-Dialog components are converted through the Microsoft Object Model serializer. If one dialog cannot be converted, setup must retain and report that dialog while continuing with every dialog that converted successfully. A converter infrastructure failure or a result with no convertible dialogs is a hard failure.
+Agent metadata, dialog components, and global variables are converted through the Microsoft Object Model serializer. If one dialog cannot be converted, setup must retain and report that dialog while continuing with every dialog that converted successfully. Agent metadata and global variables are required authoring projections; failure to convert either is a hard failure. A converter infrastructure failure or a result with no convertible dialogs is also a hard failure.
 
 Parse `DA_EXISTING_DEV_SETUP_JSON:`. When `connectionStatus` is `workspace-ready`, show:
 
@@ -166,6 +188,12 @@ Do not claim that DA push, publish, server-backed validation, or optional produc
 ## Repair a changed workspace
 
 If attach reports that the Dev snapshot changed, do not overwrite the workspace automatically. Explain that refresh will save a reversible checkpoint and then replace the active agent files with the latest Dev snapshot.
+
+If attach instead reports an older local projection, explain that the workspace
+was created by an earlier ADK projection that did not materialize every
+supported authoring component. Do not describe the remote agent or its content
+as newer. Explain that the same checkpointed refresh will rebuild the local
+workspace with the current projection while leaving the live agent unchanged.
 
 Ask the maker whether to refresh. Continue only with explicit approval, then rerun the attach command with `--refresh`.
 

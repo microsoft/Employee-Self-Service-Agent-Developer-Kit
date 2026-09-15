@@ -226,13 +226,13 @@ def _write_record(
 
 def _load_other_records(
     directory: Path,
-    current_path: Path,
+    current_path: Path | None,
 ) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
     if not directory.is_dir():
         return records
     for path in directory.glob("*.json"):
-        if path == current_path:
+        if current_path is not None and path == current_path:
             continue
         try:
             record = json.loads(path.read_text(encoding="utf-8"))
@@ -246,6 +246,47 @@ def _load_other_records(
             )
         records.append(record)
     return records
+
+
+def _resume_verified_create(
+    client: AgentBuilderClient,
+    *,
+    environment_id: str,
+    kit_root: Path,
+) -> dict[str, Any] | None:
+    """Recover the sole verified create result after package cleanup."""
+    target = {
+        "environmentId": environment_id,
+        "tenantId": client.tenant_id,
+        "host": client.host,
+        "ring": client.ring,
+        "apiVersion": client.api_version,
+    }
+    matches: list[dict[str, Any]] = []
+    for record in _load_other_records(kit_root / IMPORT_RECORDS, None):
+        identity = record.get("input")
+        if (
+            record.get("status") != "verified"
+            or not isinstance(identity, dict)
+            or identity.get("mode") != "create"
+            or any(identity.get(key) != value for key, value in target.items())
+        ):
+            continue
+        outcome = record.get("outcome")
+        if not isinstance(outcome, dict) or outcome.get("kind") != "success":
+            raise AlmImportSetupError(
+                "The verified native ALM import record is incomplete."
+            )
+        matches.append(outcome)
+    if len(matches) > 1:
+        raise AlmImportSetupError(
+            "Multiple verified create imports match this target."
+        )
+    return (
+        {**matches[0], "importStatus": "resumed"}
+        if matches
+        else None
+    )
 
 
 def _guard_other_operations(
@@ -426,11 +467,26 @@ def import_package_once(
     replacement_agent_id: str | None = None,
     confirmed_replacement_agent_id: str | None = None,
     retry_safe_failure: bool = False,
+    resume_verified_create: bool = False,
 ) -> dict[str, Any]:
     """Run or resume one guarded import without materializing a workspace."""
-    package = inspect_alm_package(package_path)
     normalized_environment_id = _normalize_environment_id(environment_id)
     resolved_kit_root = kit_root.resolve()
+    if (
+        resume_verified_create
+        and not package_path.exists()
+        and not replacement_agent_id
+        and not confirmed_replacement_agent_id
+        and not retry_safe_failure
+    ):
+        resumed = _resume_verified_create(
+            client,
+            environment_id=normalized_environment_id,
+            kit_root=resolved_kit_root,
+        )
+        if resumed is not None:
+            return resumed
+    package = inspect_alm_package(package_path)
     replacement: dict[str, Any] | None = None
     if replacement_agent_id:
         normalized_replacement_id = _normalize_guid(
@@ -656,6 +712,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--replace-agent-id")
     parser.add_argument("--confirm-replace-agent-id")
     parser.add_argument(
+        "--resume-verified-create",
+        action="store_true",
+        help=(
+            "Return the sole verified create result for this target when its "
+            "former disposable package has already been removed."
+        ),
+    )
+    parser.add_argument(
         "--retry-safe-failure",
         action="store_true",
         help=(
@@ -692,6 +756,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.confirm_replace_agent_id
             ),
             retry_safe_failure=args.retry_safe_failure,
+            resume_verified_create=args.resume_verified_create,
         )
     except (
         AgentBuilderError,
