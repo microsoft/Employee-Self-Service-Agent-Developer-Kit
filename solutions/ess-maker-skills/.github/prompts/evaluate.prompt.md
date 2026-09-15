@@ -5,10 +5,15 @@ description: "Generate or manage evaluation test sets"
 
 # Evaluate
 
-**Setup-state note.** Read `.local/config.json`. Creating a fresh test set does
-not require a configured agent. Updating can also proceed without setup when
-workspace-level evaluation sets exist. Deleting deployed agent sets requires a
-configured agent.
+**Workspace note.** Creating a fresh test set does not require a configured
+agent. Updating can also proceed without setup when workspace-level evaluation
+sets exist. Deleting deployed agent sets requires completed canonical setup and
+a configured agent.
+
+If `.local/config.json` has `transport: "agentbuilder"`, continue generating or
+editing evaluation files locally but skip every instruction to push them.
+Finish by stating that the local files were saved and DA-GA evaluation
+deployment is not yet available in this release.
 
 ## Flow
 
@@ -32,9 +37,10 @@ configured agent.
      the 10-15-minute wait notice is mandatory.
    - **view results** / **show run IDs** -> read
      `src/skills/evaluations/run/SKILL.md` and follow **Flow B**.
-   - **delete** -> if `.local/config.json` is missing or `setup` is not
-     `"complete"`, show the message below and STOP; otherwise read
-     `src/skills/evaluations/delete/SKILL.md` and follow it.
+   - **delete** -> read `.local/setup/config.json`. If it does not have
+     `schema_version: 1` and `status: "complete"`, show the message below and
+     STOP; otherwise read `src/skills/evaluations/delete/SKILL.md` and follow
+     it.
 4. If the answer is ambiguous, ask once more before routing.
 
 The phrase **"review test sets"** means review sets tagged

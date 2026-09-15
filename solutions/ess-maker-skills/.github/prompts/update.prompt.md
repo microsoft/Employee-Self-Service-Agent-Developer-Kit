@@ -14,6 +14,13 @@ Workspace-level evaluation updates and review-tag workflows do not. Apply the
 setup gate only after the user chooses a topic or workflow, or when an
 evaluation operation needs a configured agent for push.
 
+If `.local/config.json` has `transport: "agentbuilder"`, continue with local
+authoring but skip every instruction to push, publish, or run server-backed
+validation. Finish by stating that the local files were saved and DA-GA
+deployment is not yet available in this release. Do not offer `/test` as
+validation of the local change because `/test` can exercise only the unchanged
+deployed version.
+
 **IMPORTANT: When the user just types `/update` with no additional text, do
 NOT silently route anywhere. Ask the user what they want to update first.**
 
@@ -42,8 +49,9 @@ When `/update` includes additional text, explicit component intent always wins:
 2. Wait for the user to answer.
 3. Route based on their answer:
    - **topic**
-     -> If `.local/config.json` is missing or `setup` is not `"complete"`,
-     show the setup message below and STOP. Otherwise read
+     -> Read `.local/setup/config.json`. If it does not have
+     `schema_version: 1` and `status: "complete"`, show the setup message below
+     and STOP. Otherwise read
      `src/skills/topics/update-eval-driven/SKILL.md` and follow its
      instructions. It handles simple topics with evals and delegates
      integration topics to the existing topic-update skill.
@@ -62,7 +70,11 @@ When `/update` includes additional text, explicit component intent always wins:
 
 Do NOT proceed without reading the appropriate skill file first.
 
-## Topic/workflow completion gate — offer `/test` before finishing
+## Topic/workflow completion gate
+
+This gate does not apply when `.local/config.json` has
+`transport: "agentbuilder"`. In that mode, state that runtime testing is
+deferred until a supported deployment path can make the local change live.
 
 This gate applies only to topic and workflow updates. Evaluation updates and
 evaluation review workflows follow their evaluation skill's completion steps.

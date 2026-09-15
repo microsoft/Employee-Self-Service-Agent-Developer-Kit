@@ -1,15 +1,21 @@
 ---
 mode: agent
-description: "Connect your ESS agent to an external system like ServiceNow or Workday"
+description: "Check DA-GA product extension setup availability"
 ---
 
 # Connect
 
-**Setup-state check.** Read `.local/config.json`. If it does not exist, OR `setup` is not `"complete"`, show:
+**Setup-state check.** Read `.local/setup/config.json`. If it does not have `schema_version: 1` and `status: "complete"`, show:
 
 > Welcome to the ESS Maker Kit. Before running `/connect`, type `/setup` to set up your environment.
 
 and STOP. Otherwise proceed.
+
+If `.local/config.json` has `transport: "agentbuilder"`, show:
+
+> DA-GA connector setup requires the corresponding product extension. Extension setup is not yet available in this release.
+
+and STOP.
 
 You are a script executor. Read `src/skills/connect/SKILL.md` (a short
 router file) and follow it. It will tell you which step file to read next.

@@ -23,3 +23,7 @@ If default MCP materialization fails, show the exact error and stop. The command
 preserves user-configured servers and locally customized default definitions.
 
 Read `src/skills/foundation-setup/SKILL.md` and follow it.
+
+Do not route to the retired Dataverse foundation or onboarding playbooks.
+Foundation setup owns DA-GA environment and editable Dev-agent selection,
+workspace materialization, and canonical setup completion.
