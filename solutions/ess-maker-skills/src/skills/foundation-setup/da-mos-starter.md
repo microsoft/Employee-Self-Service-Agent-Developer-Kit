@@ -81,28 +81,37 @@ the annotations report `fuseDisposition` and, on a definitive outcome,
 whether it is safe to retry. Never rerun `create` merely because a message
 sounds retryable.
 
-When the annotations report `outcome: success`, complete setup as in
-`da-existing-dev.md`: show the agent's display name and confirm topics are
-ready for customization. Do not claim publication, deployment, or
-promotion.
+When the annotations report `outcome: created`, take the internal
+`agentId` from `DA_MOS_STARTER_CREATE_JSON:` and run:
 
-When the outcome is `attachment-failed`, the annotations already contain
-the created `agentId` and `schemaName`. Run
-`setup_existing_da.py attach` directly with that logged identity and
-`--setup-source mos-starter`; do not run `create` again for this package.
+```text
+python scripts/setup_existing_da.py attach \
+  --target-url "{POWER_PLATFORM_ENVIRONMENT_URL}" \
+  --agent-id "{RETURNED_AGENT_ID}" \
+  --setup-source mos-starter
+```
 
-For every other non-success outcome (`pre-dispatch-failure`,
-`collision`, `rejected`, `malformed-success`, or an uncertain response or
-transport failure), do not retry automatically. Use the existing read-only
-`list` and `setup_existing_da.py validate-agent`/`list-agents` commands to
-inspect the target environment, following the fuse disposition matrix in
+Parse `DA_EXISTING_DEV_DIAGNOSTIC_JSON:` before handling an attachment
+error, then parse `DA_EXISTING_DEV_SETUP_JSON:` on success as described in
+`da-existing-dev.md`. Treat setup as complete only when
+`connectionStatus` is `workspace-ready` and `setupStatus` is `complete`.
+The create fuse intentionally remains as an audit note; canonical setup
+state independently prevents a second create. If attachment fails, inspect
+and rerun only `setup_existing_da.py attach` with the same logged identity.
+Never run `create` again for this package.
+
+For every non-created outcome (`pre-dispatch-failure`, `collision`,
+`rejected`, `malformed-success`, or an uncertain response or transport
+failure), do not retry automatically. Use the existing read-only `list`
+and `setup_existing_da.py validate-agent`/`list-agents` commands to inspect
+the target environment, following the fuse disposition matrix in
 `src/reference/mos-starter-package.md`, before deciding with the maker how
 to proceed.
 
 ## Hybrid follow-up
 
-If the maker's earlier product selection was a hybrid ISV (Workday or
-ServiceNow) rather than the core ESS experience, recommend running
-`/connect` afterward to wire that product's connection. Never invoke
-`/connect`, install a connector, or configure Dataverse, publishing,
-promotion, or telemetry from this skill yourself.
+After attachment completes, if the maker's earlier product selection was
+a hybrid ISV (Workday or ServiceNow) rather than the core ESS experience,
+recommend running `/connect` afterward to wire that product's connection.
+Never invoke `/connect`, install a connector, or configure Dataverse,
+publishing, promotion, or telemetry from this skill yourself.

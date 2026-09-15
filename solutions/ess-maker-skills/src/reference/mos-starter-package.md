@@ -15,9 +15,10 @@ and redacted response evidence. It has no persona/ISV matching, no
 judgment belongs to the maker and
 `src/skills/foundation-setup/da-mos-starter.md`. `setup_existing_da.py
 attach` (via `attach_existing_dev`) still owns component acquisition,
-projection, and canonical workspace completion; this path hands off to it
-instead of duplicating it, and never calls `validate_existing_dev_connection`
-separately.
+projection, and canonical workspace completion. The executing session
+hands the logged create identity to that existing command instead of
+extending the create transaction, and never calls
+`validate_existing_dev_connection` separately.
 
 ## Current evidence
 
@@ -74,9 +75,10 @@ create call is exercised, and update this table alongside it.
 8. Redact only secret-bearing fields and headers (recursively,
    case-insensitively); preserve every other field, message, and unknown
    detail as closely to verbatim as possible.
-9. Directly verify the returned agent ID and schema as editable Dev by
-   delegating to `attach_existing_dev`, never by a separate validation
-   call.
+9. End the create transaction after emitting a usable returned identity.
+   The executing session must pass that identity to the existing
+   `setup_existing_da.py attach` command, which remains the sole Dev
+   validation, projection, and canonical-completion boundary.
 
 ## Durable command boundary
 
@@ -89,8 +91,8 @@ create call is exercised, and update this table alongside it.
 - one non-retried, non-redirected create request (`create`);
 - redacted, near-verbatim response evidence;
 - extraction of a usable `{cdsBotId, schemaName}` identity when present;
-- delegation to `setup_existing_da.attach_existing_dev` for the sole Dev
-  validation, projection, and canonical-completion boundary.
+- a deterministic fuse disposition based only on transport and response
+  facts.
 
 It does not:
 
@@ -98,15 +100,18 @@ It does not:
 - offer a `resolve` or `status` command;
 - persist a receipt, a hash-keyed operation record, or a formal status
   taxonomy;
+- validate or attach the returned Dev agent;
 - fetch or project components itself;
 - write canonical setup completion itself;
 - install, configure, or infer any hybrid Dataverse extension;
 - publish, deploy, or promote the agent.
 
-`create` is the only mutating command. `list` never mutates. On success,
-the command emits `DA_MOS_STARTER_PACKAGES_JSON:` for `list` (a
-`packages` array plus a `catalogWarnings` array, empty when every row
-was valid). On a failed `list`, it instead emits
+`create` is the only remotely mutating command. `list` never mutates. An
+accepted create response emits the returned identity but does not attach
+it or report setup complete. A successful `list` emits
+`DA_MOS_STARTER_PACKAGES_JSON:` with a `packages` array plus a
+`catalogWarnings` array, empty when every row was valid. A failed `list`
+instead emits
 `DA_MOS_STARTER_LIST_ANNOTATIONS_JSON:` and either
 `DA_MOS_STARTER_LIST_RESPONSE_JSON:` or
 `DA_MOS_STARTER_LIST_RESPONSE_TEXT:` before the CLI fails. For `create`,
@@ -127,15 +132,17 @@ inspects the prior response itself. The maker's session is directed to
 inspect its own persistent transcript for that response, then to reconcile
 by read-only inspecting the target environment (the existing `list` and
 `setup_existing_da.py validate-agent`/`list-agents` commands) before trying
-again.
+again. The fuse remains after an accepted create response. Once attachment
+writes canonical setup state, the empty-workspace guard independently
+prevents another create; the fuse remains a plain audit note and does not
+become a completion record.
 
 ### Fuse disposition matrix
 
 | Observed outcome | Fuse | Safe next action |
 | --- | --- | --- |
 | Pre-dispatch failure (DNS, refused connection, connect timeout) | Removed | The request never reached the service; retry once the local/DNS/connection issue is resolved |
-| 2xx with a usable identity, and attachment succeeds | Removed (only after canonical completion) | Setup is complete |
-| 2xx with a usable identity, but attachment fails | Retained | Run `setup_existing_da.py attach` directly with the logged identity and `--setup-source mos-starter`; do not create again |
+| 2xx with a usable identity | Retained | Run `setup_existing_da.py attach` with the logged identity and `--setup-source mos-starter`; do not create again |
 | 2xx that is malformed or non-JSON (no usable identity) | Retained | Reconcile the target environment read-only; do not retry |
 | 3xx (redirects are disabled, so this is unexpected) | Retained | Reconcile read-only; do not retry |
 | 400, 401, 403, 404, 409, 412, 422 (definitive normal rejection) | Removed | 409 specifically means a collision: inspect the existing Dev agent instead of retrying; other codes may be retried after resolving the reported cause |
@@ -172,13 +179,14 @@ Request headers and tokens are never printed at all.
 
 Canonical setup provenance is `mos-starter`
 (`setup_existing_da.SETUP_SOURCE_PRIORITY`), ranked above `prod-to-dev`,
-with selection evidence `mos-starter-result`. The canonical setup schema is
-not extended with package fields: this session's transcript (the printed
-annotations and response evidence) is the only durable record of which
-package, name, and version were used. Durable, machine-readable
-package/version persistence and read-back verification remain a
-formalization gap pending the real catalog/create contract; see Open
-validation.
+with selection evidence `mos-starter-result`, written only when the
+executing session runs `setup_existing_da.py attach --setup-source
+mos-starter`. The canonical setup schema is not extended with package
+fields: this session's transcript (the printed annotations and response
+evidence) is the only durable record of which package, name, and version
+were used. Durable, machine-readable package/version persistence and
+read-back verification remain a formalization gap pending the real
+catalog/create contract; see Open validation.
 
 ## Open validation
 

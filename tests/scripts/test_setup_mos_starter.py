@@ -13,9 +13,7 @@ import pytest
 import requests
 
 import agentbuilder
-import setup_existing_da
 import setup_mos_starter as mos
-from setup_existing_da import ExistingDASetupError
 
 
 ENVIRONMENT_ID = "00000000-0000-4000-8000-000000001111"
@@ -26,36 +24,8 @@ HOST = (
     "1.environment.api.test.powerplatform.com"
 )
 SCHEMA = "gptagent_freshstarter"
-FAMILY = "00000000-0000-4000-8000-000000003333"
 FUSE_RELATIVE = ".local/setup/mos-starter/create-attempted"
 _MISSING = object()
-
-
-def _dialog() -> dict[str, Any]:
-    """A minimal Object Model dialog, converted by ``_stub_convert_dialogs``."""
-    return {
-        "$kind": "AdaptiveDialog",
-        "beginDialog": {"$kind": "OnRecognizedIntent", "id": "main", "actions": []},
-        "inputType": {"$kind": "Record"},
-        "outputType": {"$kind": "Record"},
-    }
-
-
-def _stub_convert_dialogs(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Stand in for the real (.NET-backed) Object Model converter in tests."""
-    return [
-        {"key": item["key"], "success": True, "yaml": "kind: AdaptiveDialog\n"}
-        for item in items
-    ]
-
-
-@pytest.fixture(autouse=True)
-def _stub_object_model(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setattr(
-        setup_existing_da,
-        "object_models_to_yaml",
-        _stub_convert_dialogs,
-    )
 
 
 class FakeHTTPResponse:
@@ -81,7 +51,7 @@ class FakeHTTPResponse:
 
 
 class FakeMosClient:
-    """Fakes both the create POST and every ``attach_existing_dev`` call."""
+    """Fakes the single create POST."""
 
     host = HOST
     ring = "test"
@@ -94,14 +64,12 @@ class FakeMosClient:
         create_response: FakeHTTPResponse | None = None,
         create_exception: BaseException | None = None,
         kit_root: Path | None = None,
-        fetch_error: BaseException | None = None,
     ) -> None:
         self.create_calls = 0
         self.fuse_existed_at_dispatch: bool | None = None
         self._create_response = create_response
         self._create_exception = create_exception
         self._kit_root = kit_root
-        self._fetch_error = fetch_error
 
     def create_agent_from_starter_package(self, package_id: str) -> FakeHTTPResponse:
         self.create_calls += 1
@@ -113,46 +81,6 @@ class FakeMosClient:
             raise self._create_exception
         assert self._create_response is not None
         return self._create_response
-
-    def list_agents(self) -> list[dict[str, Any]]:
-        return []
-
-    def get_agent(self, agent_id: str) -> dict[str, Any]:
-        return {
-            "fullBotName": "Fresh Starter Agent",
-            "realm": "dev",
-            "schemaName": SCHEMA,
-        }
-
-    def get_dev_configuration(self, agent_id: str) -> dict[str, Any]:
-        return {
-            "realm": "Dev",
-            "cdsBotId": agent_id,
-            "schemaName": SCHEMA,
-            "grsRepositoryId": FAMILY,
-        }
-
-    def fetch_components(self, agent_id: str) -> dict[str, Any]:
-        if self._fetch_error is not None:
-            raise self._fetch_error
-        return {
-            "bot": {"cdsBotId": agent_id, "schemaName": SCHEMA},
-            "changeToken": "opaque-token",
-            "botComponentChanges": [
-                {
-                    "$kind": "BotComponentInsert",
-                    "component": {
-                        "$kind": "DialogComponent",
-                        "version": 1,
-                        "displayName": "Greeting",
-                        "id": "00000000-0000-4000-8000-000000004444",
-                        "parentBotId": agent_id,
-                        "schemaName": f"{SCHEMA}.topic.Greeting",
-                        "dialog": _dialog(),
-                    },
-                }
-            ],
-        }
 
 
 class FakeCatalogClient:
@@ -344,7 +272,7 @@ def test_redact_text_bearer_substitution_uses_the_redacted_marker() -> None:
 # --- fuse lifecycle ------------------------------------------------------
 
 
-def test_create_fuse_exists_before_dispatch_and_is_removed_after_success(
+def test_create_fuse_exists_before_dispatch_and_is_retained_after_create(
     tmp_path: Path,
 ) -> None:
     client = FakeMosClient(
@@ -365,19 +293,15 @@ def test_create_fuse_exists_before_dispatch_and_is_removed_after_success(
     )
 
     assert client.fuse_existed_at_dispatch is True
-    assert not (tmp_path / FUSE_RELATIVE).exists()
-    assert result["setupSource"] == "mos-starter"
-    assert result["connectionStatus"] == "workspace-ready"
-    assert result["setupStatus"] == "complete"
+    assert (tmp_path / FUSE_RELATIVE).is_file()
+    assert result["environmentId"] == ENVIRONMENT_ID
+    assert result["agentId"] == AGENT_ID
+    assert result["schemaName"] == SCHEMA
     assert result["starterPackageId"] == "pkg-1"
     assert result["starterPackageName"] == "First Package"
     assert result["starterPackageVersion"] == "1.0.0"
-    canonical = json.loads(
-        (tmp_path / ".local" / "setup" / "config.json").read_text(
-            encoding="utf-8"
-        )
-    )
-    assert canonical["setup_source"] == "mos-starter"
+    assert not (tmp_path / ".local" / "setup" / "config.json").exists()
+    assert not (tmp_path / "workspace").exists()
 
 
 def test_existing_fuse_blocks_a_second_create_without_dispatching(
@@ -485,6 +409,40 @@ def test_create_keeps_fuse_on_uncertain_transport_failure(
     assert (tmp_path / FUSE_RELATIVE).is_file()
 
 
+def test_uncertain_transport_preserves_redacted_runtime_context(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    transport_error = requests.exceptions.ConnectionError(
+        "connection reset after Authorization: Bearer abc.def.ghi"
+    )
+    client = FakeMosClient(
+        create_exception=transport_error,
+        kit_root=tmp_path,
+    )
+
+    with pytest.raises(mos.MosStarterSetupError) as raised:
+        mos.create_from_starter_package(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            package_id="pkg-1",
+            kit_root=tmp_path,
+        )
+
+    annotations = json.loads(
+        capsys.readouterr()
+        .out.split("DA_MOS_STARTER_CREATE_ANNOTATIONS_JSON:", 1)[1]
+        .splitlines()[0]
+    )
+    assert raised.value.__cause__ is transport_error
+    assert annotations["transportErrorType"] == "ConnectionError"
+    assert annotations["transportError"] == (
+        "connection reset after Authorization: <redacted>"
+    )
+    assert annotations["outcome"] == "uncertain-transport"
+    assert annotations["fuseDisposition"] == "retained"
+
+
 def test_create_keeps_fuse_on_malformed_2xx_missing_identity(
     tmp_path: Path,
 ) -> None:
@@ -586,72 +544,14 @@ def test_create_removes_fuse_and_reports_collision_on_409(tmp_path: Path) -> Non
     assert not (tmp_path / FUSE_RELATIVE).exists()
 
 
-def test_create_keeps_fuse_and_surfaces_identity_when_attachment_fails(
-    tmp_path: Path,
-) -> None:
-    client = FakeMosClient(
-        create_response=FakeHTTPResponse(
-            200,
-            json_body={"cdsBotId": AGENT_ID, "schemaName": SCHEMA},
-        ),
-        kit_root=tmp_path,
-        fetch_error=ExistingDASetupError("component fetch is unavailable"),
-    )
-
-    with pytest.raises(mos.MosStarterSetupError, match="attachment failed"):
-        mos.create_from_starter_package(
-            client,
-            environment_id=ENVIRONMENT_ID,
-            package_id="pkg-1",
-            kit_root=tmp_path,
-        )
-
-    assert (tmp_path / FUSE_RELATIVE).is_file()
-
-
-def test_attachment_failure_annotation_redacts_embedded_credential(
-    tmp_path: Path,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    scheme = "Bear" + "er"
-    client = FakeMosClient(
-        create_response=FakeHTTPResponse(
-            200,
-            json_body={"cdsBotId": AGENT_ID, "schemaName": SCHEMA},
-        ),
-        kit_root=tmp_path,
-        fetch_error=ExistingDASetupError(
-            f"component fetch failed; upstream sent {scheme} abc.def.ghi"
-        ),
-    )
-
-    with pytest.raises(mos.MosStarterSetupError, match="attachment failed"):
-        mos.create_from_starter_package(
-            client,
-            environment_id=ENVIRONMENT_ID,
-            package_id="pkg-1",
-            kit_root=tmp_path,
-        )
-
-    out = capsys.readouterr().out
-    annotations = json.loads(
-        out.split("DA_MOS_STARTER_CREATE_ANNOTATIONS_JSON:", 1)[1].splitlines()[0]
-    )
-    assert annotations["outcome"] == "attachment-failed"
-    assert annotations["agentId"] == AGENT_ID
-    assert mos.REDACTED in annotations["attachmentError"]
-    assert "abc.def.ghi" not in annotations["attachmentError"]
-    assert "abc.def.ghi" not in out
-
-
 def test_emit_annotations_recursively_redacts_before_printing(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     scheme = "Bear" + "er"
     annotations = {
         "targetEnvironmentId": ENVIRONMENT_ID,
-        "outcome": "attachment-failed",
-        "attachmentError": (
+        "outcome": "uncertain-transport",
+        "transportError": (
             f"Upstream rejected with {scheme} abc.def.ghi and "
             "client_secret=topsecret999"
         ),
@@ -664,11 +564,11 @@ def test_emit_annotations_recursively_redacts_before_printing(
         out.split("DA_MOS_STARTER_CREATE_ANNOTATIONS_JSON:", 1)[1].splitlines()[0]
     )
     assert printed["targetEnvironmentId"] == ENVIRONMENT_ID
-    assert printed["outcome"] == "attachment-failed"
-    assert "abc.def.ghi" not in printed["attachmentError"]
-    assert "topsecret999" not in printed["attachmentError"]
-    assert printed["attachmentError"].count(mos.REDACTED) == 2
-    assert "Upstream rejected with" in printed["attachmentError"]
+    assert printed["outcome"] == "uncertain-transport"
+    assert "abc.def.ghi" not in printed["transportError"]
+    assert "topsecret999" not in printed["transportError"]
+    assert printed["transportError"].count(mos.REDACTED) == 2
+    assert "Upstream rejected with" in printed["transportError"]
 
 
 def test_create_fuse_write_failure_closes_removes_and_reraises(
@@ -691,6 +591,30 @@ def test_create_fuse_write_failure_closes_removes_and_reraises(
 
     assert client.create_calls == 0
     assert not (tmp_path / FUSE_RELATIVE).exists()
+
+
+def test_create_fuse_cleanup_failure_is_attached_to_original_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    write_error = OSError("simulated write failure")
+
+    def failing_fsync(_fd: int) -> None:
+        raise write_error
+
+    def failing_unlink(_self: Path, *, missing_ok: bool = False) -> None:
+        raise OSError("simulated cleanup failure")
+
+    monkeypatch.setattr(mos.os, "fsync", failing_fsync)
+    monkeypatch.setattr(Path, "unlink", failing_unlink)
+
+    with pytest.raises(OSError) as raised:
+        mos._create_fuse(tmp_path / FUSE_RELATIVE, "attempt")
+
+    assert raised.value is write_error
+    assert raised.value.__notes__ == [
+        "The partial attempt fuse could not be removed: simulated cleanup failure"
+    ]
 
 
 def test_evidence_annotations_and_response_are_printed_and_redacted(
@@ -729,7 +653,10 @@ def test_evidence_annotations_and_response_are_printed_and_redacted(
     assert annotations["httpStatus"] == 200
     assert annotations["requestId"] == "req-42"
     assert annotations["packageId"] == "pkg-1"
-    assert annotations["fuseDisposition"] == "removed"
+    assert annotations["fuseDisposition"] == "retained"
+    assert annotations["outcome"] == "created"
+    assert annotations["agentId"] == AGENT_ID
+    assert annotations["schemaName"] == SCHEMA
     assert response["diagnostics"]["Authorization"] == mos.REDACTED
     assert response["cdsBotId"] == AGENT_ID
     assert "leak-me-not" not in out
@@ -830,9 +757,22 @@ def test_build_parser_exposes_only_list_and_create_commands() -> None:
         "HYBRID_ISV_OWNING_SKILL",
         "load_mos_starter_state",
         "MOS_STARTER_RECORDS",
+        "attach_existing_dev",
     ],
 )
 def test_module_has_no_resolver_status_or_product_policy_surface(
     attribute: str,
 ) -> None:
     assert not hasattr(mos, attribute)
+
+
+def test_main_does_not_flatten_unexpected_runtime_errors(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_unexpectedly(**_kwargs: Any) -> dict[str, Any]:
+        raise RuntimeError("unexpected implementation failure")
+
+    monkeypatch.setattr(mos, "resolve_da_target", fail_unexpectedly)
+
+    with pytest.raises(RuntimeError, match="unexpected implementation failure"):
+        mos.main(["list", "--environment-id", ENVIRONMENT_ID])
