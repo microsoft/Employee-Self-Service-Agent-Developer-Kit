@@ -95,6 +95,7 @@ def _isolate_external_dependencies(
         "authenticate_selected_tenant",
         reject_auth,
     )
+    monkeypatch.setattr(setup_existing_da, "assembly_paths", lambda: ())
 
 
 def _dialog() -> dict[str, Any]:
@@ -205,6 +206,9 @@ class FakeClient:
             "schemaName": SCHEMA,
             "managedProperties": {"isManaged": True},
         }
+
+    def get_realms(self, _agent_id: str) -> dict[str, Any]:
+        return {"routeRealm": self.realm}
 
     def get_dev_configuration(self, _agent_id: str) -> dict[str, Any]:
         return {
@@ -1892,6 +1896,84 @@ def test_validate_agent_command_is_read_only(
     }
     assert not (tmp_path / ".local").exists()
     assert not (tmp_path / "workspace").exists()
+
+
+@pytest.mark.parametrize(
+    ("route_realm", "expected"),
+    ((0, "dev"), ("Prod", "prod")),
+)
+def test_inspect_agent_command_uses_server_reported_route_realm(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    route_realm: Any,
+    expected: str,
+) -> None:
+    class RouteClient(FakeClient):
+        def get_realms(self, _agent_id: str) -> dict[str, Any]:
+            return {"routeRealm": route_realm}
+
+        def get_dev_configuration(self, _agent_id: str) -> dict[str, Any]:
+            raise AssertionError("Route inspection must not request Dev config.")
+
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_client_from_args",
+        lambda *_args: RouteClient(),
+    )
+
+    result = setup_existing_da.main(
+        [
+            "inspect-agent",
+            "--target-url",
+            "https://copilotstudio.test.microsoft.com/environments/"
+            f"{ENVIRONMENT_ID}/copilots/{AGENT_ID}/details",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    )
+
+    payload = json.loads(
+        capsys.readouterr().out.split("DA_AGENT_ROUTE_JSON:", 1)[1]
+    )
+    assert result == 0
+    assert payload["realm"] == expected
+    assert payload["agentId"] == AGENT_ID
+    assert not (tmp_path / ".local" / "setup").exists()
+
+
+def test_attach_checks_projection_dependencies_before_authentication(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    missing = tmp_path / "missing.dll"
+    monkeypatch.setattr(
+        setup_existing_da,
+        "assembly_paths",
+        lambda: (missing,),
+    )
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_client_from_args",
+        lambda *_args: (_ for _ in ()).throw(
+            AssertionError("Authentication must not start.")
+        ),
+    )
+
+    result = setup_existing_da.main(
+        [
+            "attach",
+            "--target-url",
+            "https://copilotstudio.test.microsoft.com/environments/"
+            f"{ENVIRONMENT_ID}/copilots/{AGENT_ID}/details",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert result == 1
+    assert "dependencies are not installed" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("setup_source", ("alm-import", "prod-to-dev"))

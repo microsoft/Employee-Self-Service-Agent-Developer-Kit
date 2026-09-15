@@ -22,6 +22,7 @@ from urllib.parse import unquote
 
 from agentbuilder import (
     DEFAULT_API_VERSION,
+    REALM_NAMES,
     AgentBuilderClient,
     AgentBuilderError,
     AgentBuilderHTTPError,
@@ -36,6 +37,7 @@ from agentbuilder_object_model import (
     ObjectModelConverterError,
     object_models_to_yaml,
 )
+from agentbuilder_object_model_packages import assembly_paths
 from flightcheck.azure_arm_client import AzureArmClient
 
 
@@ -104,6 +106,53 @@ class ExistingDAAgentNotFound(ExistingDASetupError):
                 "unverifiedAgentCount"
             ],
         }
+
+
+def _require_object_model_dependencies() -> None:
+    """Fail before remote setup when the local projection runtime is absent."""
+    if any(not path.is_file() for path in assembly_paths()):
+        raise ExistingDASetupError(
+            "Microsoft Object Model dependencies are not installed. "
+            "Run `python scripts/install_agentbuilder_object_model.py`."
+        )
+
+
+def inspect_agent_route(
+    client: AgentBuilderClient,
+    *,
+    environment_id: str,
+    agent_id: str,
+) -> dict[str, Any]:
+    """Classify an agent from the server-reported route realm."""
+    normalized_environment_id = _normalize_environment_id(environment_id)
+    normalized_agent_id = _normalize_guid(agent_id, "Agent ID")
+    realms = client.get_realms(normalized_agent_id)
+    route_realm = realms.get("routeRealm")
+    realm_name = next(
+        (
+            name.casefold()
+            for value, name in REALM_NAMES.items()
+            if route_realm == value
+            or (
+                isinstance(route_realm, str)
+                and route_realm.casefold() == name.casefold()
+            )
+        ),
+        None,
+    )
+    if realm_name is None:
+        raise ExistingDASetupError(
+            "Agent realm discovery did not return a recognized route realm."
+        )
+    return {
+        "environmentId": normalized_environment_id,
+        "tenantId": client.tenant_id,
+        "host": client.host,
+        "ring": client.ring,
+        "apiVersion": client.api_version,
+        "agentId": normalized_agent_id,
+        "realm": realm_name,
+    }
 
 
 def _normalize_guid(value: str, label: str) -> str:
@@ -1555,6 +1604,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="List directly discoverable AgentBuilder agents.",
     )
     _add_agentbuilder_target_arguments(list_agents)
+    inspect_agent = commands.add_parser(
+        "inspect-agent",
+        help="Read the server-reported route realm for one exact agent.",
+    )
+    _add_agentbuilder_target_arguments(inspect_agent)
+    inspect_agent.add_argument(
+        "--agent-id",
+        help="Agent ID override when target extraction omits it.",
+    )
     validate_agent = commands.add_parser(
         "validate-agent",
         help="Validate one exact editable Dev agent without writing setup state.",
@@ -1701,9 +1759,12 @@ def main(argv: list[str] | None = None) -> int:
             environment_id=args.environment_id,
             agent_id=getattr(args, "agent_id", None),
             ring=args.ring,
-            require_agent=args.command in {"attach", "validate-agent"},
+            require_agent=args.command
+            in {"attach", "inspect-agent", "validate-agent"},
         )
         environment_id = target["environmentId"]
+        if args.command == "attach":
+            _require_object_model_dependencies()
         client = _client_from_args(args, environment_id, target["ring"])
         if args.command == "list-agents":
             inspection = inspect_dev_agents(client)
@@ -1717,6 +1778,18 @@ def main(argv: list[str] | None = None) -> int:
             }
             print(
                 f"DA_AGENT_LIST_JSON:{json.dumps(result, ensure_ascii=True)}"
+            )
+            return 0
+
+        if args.command == "inspect-agent":
+            result = inspect_agent_route(
+                client,
+                environment_id=environment_id,
+                agent_id=target["agentId"],
+            )
+            print(
+                "DA_AGENT_ROUTE_JSON:"
+                f"{json.dumps(result, ensure_ascii=True)}"
             )
             return 0
 

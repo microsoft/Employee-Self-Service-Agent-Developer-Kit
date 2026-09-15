@@ -218,6 +218,7 @@ def test_create_persists_verified_identity_without_attaching(
         environment_id=ENVIRONMENT_ID,
         package_path=package,
         kit_root=tmp_path,
+        resume_verified_create=True,
     )
 
     assert result == {
@@ -250,7 +251,7 @@ def test_create_persists_verified_identity_without_attaching(
     assert "packagePath" not in json.dumps(record)
 
 
-def test_verified_operation_resumes_without_second_import(
+def test_verified_operation_resumes_after_package_cleanup_without_second_import(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -268,15 +269,52 @@ def test_verified_operation_resumes_without_second_import(
         package_path=package,
         kit_root=tmp_path,
     )
+    package.unlink()
     result = setup_alm_import.import_package_once(
         client,
         environment_id=ENVIRONMENT_ID,
         package_path=package,
         kit_root=tmp_path,
+        resume_verified_create=True,
     )
 
     assert result["kind"] == "success"
     assert result["importStatus"] == "resumed"
+    assert result["agentId"] == AGENT_ID
+    assert len(client.import_calls) == 1
+
+
+def test_missing_package_does_not_resume_without_explicit_flag(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _write_package(tmp_path / "agent.zip")
+    client = FakeClient()
+    monkeypatch.setattr(
+        setup_alm_import,
+        "validate_existing_dev_connection",
+        lambda *_args, **_kwargs: _connection(),
+    )
+
+    setup_alm_import.import_package_once(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        package_path=package,
+        kit_root=tmp_path,
+    )
+    package.unlink()
+
+    with pytest.raises(
+        setup_alm_import.AlmImportSetupError,
+        match="existing .zip file",
+    ):
+        setup_alm_import.import_package_once(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            package_path=package,
+            kit_root=tmp_path,
+        )
+
     assert len(client.import_calls) == 1
 
 

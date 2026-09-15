@@ -1,11 +1,31 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
+
 # Set Up Dev from a Known Prod Agent
 
-Use this experimental path only when the maker supplies a known source Prod
-Copilot Studio agent URL and a target Dev environment URL. It is a same-tenant,
-create-only happy path. Read `src/reference/native-alm-import.md` for the import
-contract and reuse `da-existing-dev.md` for attachment and completion handling.
-Do not generate HTTP code or an end-to-end setup script.
+Use this setup path when server-backed inspection identifies the maker's
+Copilot Studio agent URL as Prod. It is a same-tenant, create-only path. Read
+`src/reference/native-alm-import.md` for the import contract and reuse
+`da-existing-dev.md` for attachment and completion handling. Do not generate
+HTTP code or an end-to-end setup script.
+
+## Resume
+
+If attachment already started, use the persisted identity and resume rules in
+`da-existing-dev.md`; do not inspect, export, or import again.
+
+If an earlier create-only import returned `kind: success` but attachment never
+started, rerun the import command with the same target, tenant, former
+temporary package path, and `--resume-verified-create`. The package may already
+be removed. The verified import receipt must return the cached result with
+`importStatus: resumed` without another export or import request. Do not use
+this flag for a normal import. Immediately run:
+
+```text
+python scripts/setup_alm_export.py cleanup
+```
+
+Then attach the cached verified result through [Attach and complete](#attach-and-complete).
+If no matching verified receipt exists, stop rather than exporting again.
 
 ## Inspect the source
 
@@ -35,13 +55,16 @@ python scripts/setup_existing_da.py validate-agent \
 
 Use the related Dev only when validation succeeds and
 `DA_AGENT_VALIDATION_JSON:` returns the same `almFamilyId` as the Prod
-inspection. Attach it with the same internal context and
-`--setup-source prod-to-dev`, then complete setup through
-`da-existing-dev.md`.
+inspection. Show the validated Dev agent's display name, then continue through
+[Attach and complete](#attach-and-complete) with that identity. Do not offer to
+create a duplicate Dev agent when a related Dev already exists.
 
 ## Export and create Dev
 
-When there is no directly validated related Dev, run:
+Continue here only when no directly validated related Dev exists. Use the same
+Power Platform environment as the supplied Prod agent. If the maker explicitly
+requests another environment, ask for its Copilot Studio environment URL
+instead. Then run:
 
 ```text
 python scripts/setup_alm_export.py export \
@@ -49,24 +72,66 @@ python scripts/setup_alm_export.py export \
   --tenant-id "{SOURCE_TENANT_ID}"
 ```
 
+If the maker cancels after export, run `setup_alm_export.py cleanup`. A later
+fresh inspect or export also removes a recorded package left by an interrupted
+run before continuing.
+
 Parse `DA_ALM_EXPORT_JSON:` and pass its temporary `packagePath` to the durable
 create-only import command:
 
+Immediately before import, ask:
+
+> Create a new editable Dev agent in the same Power Platform environment as
+> the supplied Prod agent?
+
+When the maker explicitly selected another environment, use its friendly
+display name when an earlier command returned one. Otherwise say "the selected
+Power Platform environment" without showing internal IDs or URLs. Run no other
+operation between the maker's confirmation and the create-only import:
+
 ```text
 python scripts/setup_alm_import.py \
-  --target-url "{TARGET_DEV_ENVIRONMENT_URL}" \
+  --target-url "{SOURCE_PROD_AGENT_URL_OR_EXPLICIT_TARGET_ENVIRONMENT_URL}" \
   --tenant-id "{SOURCE_TENANT_ID}" \
   --package "{TEMPORARY_PACKAGE_PATH}"
 ```
 
-Do not pass replacement or retry arguments. Immediately delete the temporary
-ZIP after the import command returns, before handling its result. Parse
-`DA_ALM_IMPORT_JSON:` even when import exits nonzero. For any result other than
-`kind: success`, stop and use the outcome guidance in
-`src/reference/native-alm-import.md`; do not retry, recover a collision, or
-replace an agent.
+Do not pass replacement or retry arguments. Capture `DA_ALM_IMPORT_JSON:` even
+when import exits nonzero. Immediately after the import command returns, before
+handling its result, run:
 
-On success, attach the returned identity:
+```text
+python scripts/setup_alm_export.py cleanup
+```
+
+If cleanup fails, report the local cleanup error and stop; the durable import
+result can be resumed after cleanup succeeds.
+
+When import returns `kind: conflict`, rerun the read-only source inspection to
+refresh `/realms`:
+
+```text
+python scripts/setup_alm_export.py inspect \
+  --source-url "{SOURCE_PROD_AGENT_URL}" \
+  --tenant-id "{SOURCE_TENANT_ID}"
+```
+
+If the refreshed result contains a related Dev, validate that exact agent with
+`setup_existing_da.py validate-agent` as in [Inspect the source](#inspect-the-source).
+Only when validation returns the same `almFamilyId` as the refreshed Prod
+inspection, show the Dev display name and offer to attach it. If the maker
+accepts, continue through [Attach and complete](#attach-and-complete). If no
+related Dev is returned or the family cannot be proven, stop with the safe
+conflict outcome from `src/reference/native-alm-import.md`. Do not recover a
+collision or offer replacement.
+
+For any other result besides `kind: success`, stop and use the outcome guidance
+in `src/reference/native-alm-import.md`; do not retry or replace an agent.
+
+## Attach and complete
+
+On a validated related-Dev path or successful import result, attach the returned
+identity:
 
 ```text
 python scripts/setup_existing_da.py attach \

@@ -129,6 +129,11 @@ verification did not finish. Rerunning resumes verification without replaying
 the import. A `verified` record returns the cached verified result. An
 unresolved record blocks a different mutation until it is reconciled.
 
+For create-only recovery, `--resume-verified-create` can return the sole
+verified create result for the same target after its disposable package has
+already been removed. This explicit recovery does not inspect another package,
+send another import request, or apply to replacement.
+
 ### Recover an imported but unverified agent
 
 If direct verification does not finish after the service returns an identity:

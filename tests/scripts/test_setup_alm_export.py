@@ -172,17 +172,26 @@ def test_export_uses_os_temp_outside_kit_and_returns_handoff(
         capsys.readouterr().out.split("DA_ALM_EXPORT_JSON:", 1)[1]
     )
     package_path = Path(payload["packagePath"])
-    try:
-        assert result == 0
-        assert package_path.parent == os_temp
-        assert kit_root not in package_path.parents
-        assert package_path.read_bytes() == b"PK\x03\x04package"
-        assert payload["tenantId"] == TENANT_ID
-        assert payload["host"] == client.host
-        assert payload["ring"] == client.ring
-        assert payload["apiVersion"] == client.api_version
-    finally:
-        package_path.unlink(missing_ok=True)
+    record = json.loads(
+        (kit_root / setup_alm_export.ACTIVE_EXPORT_RECORD).read_text(
+            encoding="utf-8"
+        )
+    )
+
+    assert result == 0
+    assert package_path.parent == os_temp
+    assert kit_root not in package_path.parents
+    assert package_path.read_bytes() == b"PK\x03\x04package"
+    assert payload["tenantId"] == TENANT_ID
+    assert payload["host"] == client.host
+    assert payload["ring"] == client.ring
+    assert payload["apiVersion"] == client.api_version
+    assert record == {
+        "schemaVersion": 1,
+        "packagePath": str(package_path),
+    }
+
+    setup_alm_export.cleanup_active_export(kit_root)
 
 
 def test_export_failure_removes_partial_package(
@@ -207,3 +216,57 @@ def test_export_failure_removes_partial_package(
     assert result == 1
     assert client.exported_path is not None
     assert not client.exported_path.exists()
+    assert not (kit_root / setup_alm_export.ACTIVE_EXPORT_RECORD).exists()
+
+
+def test_inspect_removes_stale_recorded_export(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    client = FakeClient()
+    kit_root = tmp_path / "kit"
+    kit_root.mkdir()
+    os_temp = tmp_path / "os-temp"
+    os_temp.mkdir()
+    monkeypatch.setattr(setup_alm_export.tempfile, "tempdir", str(os_temp))
+
+    assert _run(client, "export", kit_root, monkeypatch) == 0
+    package_path = client.exported_path
+    assert package_path is not None and package_path.exists()
+
+    assert _run(client, "inspect", kit_root, monkeypatch) == 0
+
+    assert not package_path.exists()
+    assert not (kit_root / setup_alm_export.ACTIVE_EXPORT_RECORD).exists()
+
+
+def test_cleanup_command_removes_active_export_and_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    client = FakeClient()
+    kit_root = tmp_path / "kit"
+    kit_root.mkdir()
+    os_temp = tmp_path / "os-temp"
+    os_temp.mkdir()
+    monkeypatch.setattr(setup_alm_export.tempfile, "tempdir", str(os_temp))
+
+    assert _run(client, "export", kit_root, monkeypatch) == 0
+    package_path = client.exported_path
+    capsys.readouterr()
+
+    result = setup_alm_export.main(
+        ["cleanup", "--kit-root", str(kit_root)]
+    )
+    payload = json.loads(
+        capsys.readouterr().out.split(
+            "DA_ALM_EXPORT_CLEANUP_JSON:",
+            1,
+        )[1]
+    )
+
+    assert result == 0
+    assert payload == {"status": "removed"}
+    assert package_path is not None and not package_path.exists()
+    assert not (kit_root / setup_alm_export.ACTIVE_EXPORT_RECORD).exists()

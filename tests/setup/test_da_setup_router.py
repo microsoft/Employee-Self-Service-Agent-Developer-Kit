@@ -148,6 +148,15 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     assert _DA_ALM_IMPORT.is_file()
     assert _DA_PROD_TO_DEV.is_file()
     assert _NATIVE_ALM_REFERENCE.is_file()
+    assert "setup_existing_da.py inspect-agent" in text
+    assert "DA_AGENT_ROUTE_JSON:" in text
+    assert "Do not infer the realm" in text
+    assert text.index("setup_existing_da.py inspect-agent") < text.index(
+        "da-existing-dev.md"
+    )
+    assert text.index("setup_existing_da.py inspect-agent") < text.index(
+        "da-prod-to-dev.md"
+    )
 
 
 def test_prod_to_dev_reference_composes_durable_boundaries() -> None:
@@ -156,26 +165,52 @@ def test_prod_to_dev_reference_composes_durable_boundaries() -> None:
     text = _DA_PROD_TO_DEV.read_text(encoding="utf-8")
     normalized = " ".join(text.split())
 
-    assert "known Prod Copilot Studio agent URL" in normalized_foundation
-    assert "target Dev environment URL" in normalized_foundation
+    assert "server-backed inspection has identified its route realm" in (
+        normalized_foundation
+    )
+    assert "When `realm` is `prod`" in normalized_foundation
     assert foundation.index("da-prod-to-dev.md") < foundation.index(
         "emit_capability.py setup"
     )
-    assert "does not emit setup telemetry" in foundation
+    assert "does not emit setup telemetry" in normalized_foundation
     assert "src/reference/native-alm-import.md" in text
     assert "da-existing-dev.md" in text
     assert "setup_alm_export.py inspect" in text
     assert "DA_ALM_EXPORT_INSPECTION_JSON:" in text
     assert "setup_existing_da.py validate-agent" in text
+    assert "Do not offer to create a duplicate Dev agent" in normalized
+    assert "same Power Platform environment as the supplied Prod agent" in normalized
+    assert "explicitly requests another environment" in normalized
     assert "setup_alm_export.py export" in text
     assert "DA_ALM_EXPORT_JSON:" in text
     assert "setup_alm_import.py" in text
-    assert "Immediately delete the temporary ZIP" in normalized
+    assert "verified import receipt" in normalized
+    assert "--resume-verified-create" in text
+    assert "importStatus: resumed" in normalized
+    assert "without another export or import request" in normalized
+    assert "setup_alm_export.py cleanup" in text
+    assert "Immediately after the import command returns" in normalized
+    assert "friendly display name" in normalized
+    assert "without showing internal IDs or URLs" in normalized
+    create_flow = text.split("## Export and create Dev", 1)[1]
+    assert create_flow.index("Immediately before import, ask") < create_flow.index(
+        "python scripts/setup_alm_import.py"
+    )
+    assert create_flow.index("python scripts/setup_alm_import.py") < create_flow.index(
+        "python scripts/setup_alm_export.py cleanup"
+    )
+    conflict_flow = create_flow.split("When import returns `kind: conflict`", 1)[1]
+    normalized_conflict = " ".join(conflict_flow.split())
+    assert "setup_alm_export.py inspect" in conflict_flow
+    assert "setup_existing_da.py validate-agent" in conflict_flow
+    assert "same `almFamilyId`" in conflict_flow
+    assert "offer to attach it" in conflict_flow
+    assert "Do not recover a collision or offer replacement" in normalized_conflict
     assert "setup_existing_da.py attach" in text
     assert "--setup-source prod-to-dev" in text
     assert "Do not generate HTTP code or an end-to-end setup script" in normalized
     assert "setup_prod_to_dev.py" not in text
-    assert len(text.splitlines()) < 130
+    assert len(text.splitlines()) < 180
 
 
 def test_foundation_resolves_python_and_announces_authorization_wait() -> None:

@@ -65,10 +65,32 @@ second command, and do not infer that a remote mutation has started.
 
 ## Start
 
-When the maker supplies both a known Prod Copilot Studio agent URL and a target
-Dev environment URL, read
-`src/skills/foundation-setup/da-prod-to-dev.md` and follow it. This experimental
-path does not emit setup telemetry.
+Do not describe a supplied agent as editable, Dev, Test, or Prod until a
+server-backed inspection has identified its route realm.
+
+When the maker supplies a Copilot Studio URL that identifies an agent, run:
+
+```text
+python scripts/setup_existing_da.py inspect-agent \
+  --target-url "{COPILOT_STUDIO_AGENT_URL}"
+```
+
+Parse `DA_AGENT_ROUTE_JSON:`. Do not infer the realm from names, URLs, or
+environment metadata.
+
+- When `realm` is `prod`, read
+  `src/skills/foundation-setup/da-prod-to-dev.md` and follow it, passing the
+  inspection's internal tenant, environment, host, ring, API version, and agent
+  identity where that guidance requests source context. This setup path does
+  not emit setup telemetry.
+- When `realm` is `dev`, continue through
+  `src/skills/foundation-setup/da-existing-dev.md`, using the inspected internal
+  context for validation and attachment.
+- For any other realm, explain that local authoring requires a Dev agent or a
+  Prod agent that can establish Dev, and stop.
+
+Do not display the inspection's internal IDs, API host, service ring, or API
+version.
 
 Record anonymous usage telemetry best-effort:
 
@@ -82,7 +104,7 @@ That skill owns the explicit package handoff and reads the canonical import
 reference. This is an advanced handoff, not a setup option to advertise or
 recommend.
 
-For every other request, read
+For requests that do not identify an agent, read
 `src/skills/foundation-setup/da-existing-dev.md` and follow it. Existing
 editable Dev remains the default setup path.
 
