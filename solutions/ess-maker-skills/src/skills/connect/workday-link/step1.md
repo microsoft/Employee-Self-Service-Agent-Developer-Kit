@@ -43,7 +43,8 @@ Update `.local/connect/workday-link/steps.md` — change step 1 from
 
 Continue to step 2 (`src/skills/connect/workday-link/step2.md`).
 
-**If any report `FAILED`, `NotConfigured`, or `Skipped`:**
+**If any report anything other than `PASSED`** (`FAILED`, `WARNING`,
+`NotConfigured`, or `Skipped`):
 
 **Message:**
 

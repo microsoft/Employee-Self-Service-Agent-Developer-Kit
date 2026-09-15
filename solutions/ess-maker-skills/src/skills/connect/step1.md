@@ -267,7 +267,41 @@ Use the `vscode_askQuestions` tool:
 - If the user picked **set up from scratch**: read
   `src/skills/setup/SKILL.md` and follow it.
 
-**If `FAILED`, `NotConfigured`, or `Skipped`** (no extension found):
+**If `FAILED` or `WARNING`** (Workday connection references exist but don't
+match a known install shape — partial or unrecognized install):
+
+**Message:**
+
+I found some Workday connection references in this environment, but they
+don't match a complete install. Setup may have been started and not
+finished, or the shape is one I don't recognize.
+
+**End message.**
+
+Use the `vscode_askQuestions` tool:
+
+```json
+[
+  {
+    "header": "Workday",
+    "question": "How do you want to proceed?",
+    "options": [
+      { "label": "Try wiring this agent to it anyway", "description": "Runs the same checks again — falls back to full setup if it's not usable", "recommended": true },
+      { "label": "Set up Workday from scratch for this agent", "description": "Provisions a new environment, tenant config, and extension pack" }
+    ],
+    "allowFreeformInput": false
+  }
+]
+```
+
+- If the user picked **try wiring it anyway**: read
+  `src/skills/connect/workday-link/step1.md` and follow it. It re-runs
+  `WD-PKG-001` itself and redirects to full setup if the extension still
+  isn't usable.
+- If the user picked **set up from scratch**: read
+  `src/skills/setup/SKILL.md` and follow it.
+
+**If `NotConfigured` or `Skipped`** (no extension found):
 
 Workday connection is handled by the **setup orchestrator**, which provisions
 the Power Platform environment, installs the ESS base agent, provisions the
