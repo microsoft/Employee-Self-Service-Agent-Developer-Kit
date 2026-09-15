@@ -169,7 +169,7 @@ Explain that this inventory covers only the tenant selected during Power Platfor
 
 The command must explicitly validate the Dev realm and matching agent identity before persisting the connection. A selected agent that resolves to another realm or identity is a hard failure.
 
-Dialog components are converted through the Microsoft Object Model serializer. If one dialog cannot be converted, setup must retain and report that dialog while continuing with every dialog that converted successfully. A converter infrastructure failure or a result with no convertible dialogs is a hard failure.
+Agent metadata, dialog components, and global variables are converted through the Microsoft Object Model serializer. If one dialog cannot be converted, setup must retain and report that dialog while continuing with every dialog that converted successfully. Agent metadata and global variables are required authoring projections; failure to convert either is a hard failure. A converter infrastructure failure or a result with no convertible dialogs is also a hard failure.
 
 Parse `DA_EXISTING_DEV_SETUP_JSON:`. When `connectionStatus` is `workspace-ready`, show:
 
@@ -188,6 +188,12 @@ Do not claim that DA push, publish, server-backed validation, or optional produc
 ## Repair a changed workspace
 
 If attach reports that the Dev snapshot changed, do not overwrite the workspace automatically. Explain that refresh will save a reversible checkpoint and then replace the active agent files with the latest Dev snapshot.
+
+If attach instead reports an older local projection, explain that the workspace
+was created by an earlier ADK projection that did not materialize every
+supported authoring component. Do not describe the remote agent or its content
+as newer. Explain that the same checkpointed refresh will rebuild the local
+workspace with the current projection while leaving the live agent unchanged.
 
 Ask the maker whether to refresh. Continue only with explicit approval, then rerun the attach command with `--refresh`.
 
