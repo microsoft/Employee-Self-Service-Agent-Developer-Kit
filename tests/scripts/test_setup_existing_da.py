@@ -1804,6 +1804,137 @@ def test_list_environments_parser_accepts_ring_source_url() -> None:
     assert args.target_url.endswith(f"/environments/{ENVIRONMENT_ID}/home")
 
 
+def test_attach_command_preserves_alm_import_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    observed: dict[str, Any] = {}
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_client_from_args",
+        lambda *_args: FakeClient(),
+    )
+
+    def attach(_client: FakeClient, **kwargs: Any) -> dict[str, Any]:
+        observed.update(kwargs)
+        return {"status": "created"}
+
+    monkeypatch.setattr(setup_existing_da, "attach_existing_dev", attach)
+
+    result = setup_existing_da.main(
+        [
+            "attach",
+            "--target-url",
+            "https://copilotstudio.test.microsoft.com/environments/"
+            f"{ENVIRONMENT_ID}/copilots/{AGENT_ID}/details",
+            "--kit-root",
+            str(tmp_path),
+            "--setup-source",
+            "alm-import",
+        ]
+    )
+
+    assert result == 0
+    assert observed["selection_source"] == "alm-import-result"
+    assert observed["setup_source"] == "alm-import"
+    assert json.loads(
+        capsys.readouterr().out.split("DA_EXISTING_DEV_SETUP_JSON:", 1)[1]
+    ) == {"status": "created"}
+
+
+def test_validate_agent_command_is_read_only(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_client_from_args",
+        lambda *_args: FakeClient(),
+    )
+
+    result = setup_existing_da.main(
+        [
+            "validate-agent",
+            "--target-url",
+            "https://copilotstudio.test.microsoft.com/environments/"
+            f"{ENVIRONMENT_ID}/copilots/{AGENT_ID}/details",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    )
+
+    payload = json.loads(
+        capsys.readouterr().out.split("DA_AGENT_VALIDATION_JSON:", 1)[1]
+    )
+    assert result == 0
+    assert payload == {
+        "environmentId": ENVIRONMENT_ID,
+        "agentId": AGENT_ID,
+        "agentName": "Employee Self-Service HR",
+        "schemaName": SCHEMA,
+        "realm": "dev",
+        "almFamilyId": FAMILY,
+        "isManaged": True,
+        "selectedBy": "copilot-studio-url",
+    }
+    assert not (tmp_path / ".local").exists()
+    assert not (tmp_path / "workspace").exists()
+
+
+def test_same_agent_upgrade_preserves_alm_import_provenance(
+    tmp_path: Path,
+) -> None:
+    setup_existing_da.attach_existing_dev(
+        FakeClient(),
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+    )
+
+    upgraded = setup_existing_da.attach_existing_dev(
+        FakeClient(),
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+        selection_source="alm-import-result",
+        setup_source="alm-import",
+    )
+    repeated = setup_existing_da.attach_existing_dev(
+        FakeClient(),
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+    )
+
+    assert upgraded["setupSource"] == "alm-import"
+    assert repeated["setupSource"] == "alm-import"
+    connection = json.loads(
+        (
+            tmp_path / ".local" / "setup" / "da-connection.json"
+        ).read_text(encoding="utf-8")
+    )
+    canonical = json.loads(
+        (
+            tmp_path / ".local" / "setup" / "config.json"
+        ).read_text(encoding="utf-8")
+    )
+    metadata = json.loads(
+        (
+            tmp_path
+            / "workspace"
+            / "agents"
+            / "employee-self-service-hr"
+            / ".agentbuilder"
+            / "attach.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert connection["setupSource"] == "alm-import"
+    assert canonical["setup_source"] == "alm-import"
+    assert metadata["setupSource"] == "alm-import"
+
+
 @pytest.mark.parametrize(
     ("state_path", "payload"),
     [

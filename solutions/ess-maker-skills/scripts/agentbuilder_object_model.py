@@ -169,6 +169,11 @@ def _load_object_model() -> _ObjectModelTypes:
     )
 
 
+def validate_object_model_runtime() -> None:
+    """Fail before remote mutation when local projection cannot run."""
+    _load_object_model()
+
+
 def _error_result(key: str, error: Exception) -> dict[str, Any]:
     get_type = getattr(error, "GetType", None)
     error_type = (
