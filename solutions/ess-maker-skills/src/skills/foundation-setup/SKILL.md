@@ -94,6 +94,13 @@ resolved launcher.
 Do not describe a supplied agent as editable, Dev, Test, or Prod until a
 server-backed inspection has identified its route realm.
 
+When canonical setup already identifies a local Dev agent, do not announce an
+agent mismatch, workspace switch, or refresh merely because the supplied URL
+contains another agent ID. A Prod source and its related Dev agent have
+different IDs by design. Classify the supplied agent first, then use the
+server-reported ALM relationship to determine whether the existing workspace
+already targets its related Dev agent.
+
 When the maker supplies a Copilot Studio URL that identifies an agent, run:
 
 ```text

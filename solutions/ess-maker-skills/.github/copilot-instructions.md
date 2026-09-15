@@ -64,6 +64,12 @@ operational workspace configuration, not a setup-completion signal. If it is
 missing or invalid, report the configuration error instead of routing back to
 `/setup`.
 
+If the user invokes `/setup` with a supplied agent URL, do not compare its agent
+ID with the canonical local Dev agent before following the foundation setup
+skill. A Prod source and its related Dev agent have different IDs by design.
+Classify the supplied URL first and use its server-reported ALM relationship
+before announcing a mismatch, workspace switch, or refresh.
+
 ## DA-GA Command Availability
 
 After canonical DA setup is complete:

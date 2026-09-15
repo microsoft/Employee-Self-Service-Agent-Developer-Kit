@@ -40,6 +40,8 @@ def test_public_setup_routes_to_da_foundation_module() -> None:
     prompt = _SETUP_PROMPT.read_text(encoding="utf-8")
 
     assert "src/skills/foundation-setup/SKILL.md" in instructions
+    assert "Classify the supplied URL first" in instructions
+    assert "before announcing a mismatch" in instructions
     assert "src/skills/foundation-setup/SKILL.md" in prompt
     assert "Do not route to Dataverse foundation or onboarding playbooks" in prompt
 
@@ -158,6 +160,8 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     text = _FOUNDATION.read_text(encoding="utf-8")
     import_text = _DA_ALM_IMPORT.read_text(encoding="utf-8")
     normalized = " ".join(text.split())
+    assert "A Prod source and its related Dev agent have different IDs by design" in normalized
+    assert "Classify the supplied agent first" in normalized
 
     assert set(_PATH_RE.findall(text)) == {
         "src/skills/foundation-setup/da-alm-import.md",
