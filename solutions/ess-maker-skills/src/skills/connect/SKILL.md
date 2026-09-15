@@ -19,8 +19,9 @@ pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
 Read `src/skills/connect/step1.md` and follow it.
 
 (Step 1 asks which integration, detects existing state, and dispatches —
-ServiceNow to its own step files and Workday to the hybrid-extension boundary
-in `src/skills/setup/SKILL.md`.)
+ServiceNow to its own step files; Workday to either the lightweight
+already-installed lifecycle or the full setup orchestrator, depending on
+what's already in the environment.)
 
 ---
 
@@ -43,10 +44,24 @@ Workday delegates to the setup orchestrator:
   - Step 3 (Basic): `step3-basic.md` — install extension pack (Basic fields)
   - Step 4: `step4.md` — verify connection
 
-- **Workday**: routes to `src/skills/setup/SKILL.md`, which reports that the
-  separately owned hybrid-extension setup contract is not yet available. It
-  does not execute the retained legacy Workday playbooks or any retired
-  foundation setup operation.
+- **Workday**: two paths, chosen automatically by `step1.md`:
+  - **Extension already installed elsewhere** — a lightweight lifecycle that
+    confirms the extension and its connections, wires this agent's Workday
+    topics, and validates the connection end to end:
+    `src/skills/connect/workday/SKILL.md`, driven by the generic
+    `src/skills/connect/shared/lifecycle-runner.md` against
+    `src/skills/connect/workday/contract.json`. State:
+    `.local/connect/workday/lifecycle.json`. This same runner + contract
+    pattern is what a future integration reuses — a new ISV only needs its
+    own contract file and action fragments, not a new runner.
+  - **Nothing installed yet** — the full **setup orchestrator**
+    (`src/skills/setup/SKILL.md`), which provisions the Power Platform
+    environment, installs the ESS base agent, provisions the Entra app,
+    configures the Workday tenant, installs the extension pack, and verifies
+    the connection. It is resume-aware: if setup was already started it picks
+    up at the first unverified step, and it fast-forwards steps that are
+    already done. State: `setupStatus` in `.local/connect/workday/config.json`
+    + `.local/setup/workday/tasks.md`.
 
 Each integration's steps.md and config.json persist after completion.
 Running `/connect` again lets the user add a different integration
