@@ -14,7 +14,7 @@ import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import msal
 import requests
@@ -66,6 +66,7 @@ class AgentBuilderHTTPError(AgentBuilderError):
         *,
         error_code: str | None = None,
         request_id: str | None = None,
+        response: requests.Response | None = None,
     ) -> None:
         detail = f"{operation} failed with HTTP {status_code}"
         if error_code:
@@ -78,6 +79,11 @@ class AgentBuilderHTTPError(AgentBuilderError):
         self.status_code = status_code
         self.error_code = error_code
         self.request_id = request_id
+        # In-memory only, for a caller that wants to render its own
+        # near-verbatim (and separately redacted) evidence. This exception's
+        # own message and __str__ never include it, so every existing raise
+        # site and caller stays sanitized without any code change.
+        self.response = response
 
 
 def normalize_environment_id(environment_id: str) -> str:
@@ -399,6 +405,7 @@ def _response_error(response: requests.Response, operation: str) -> None:
         response.status_code,
         error_code=error_code,
         request_id=request_id,
+        response=response,
     )
 
 
@@ -481,6 +488,60 @@ class AgentBuilderClient:
         ):
             raise AgentBuilderError("Agent listing returned an invalid shape.")
         return body
+
+    def list_starter_packages(
+        self,
+        *,
+        page_size: int = 200,
+        max_pages: int = 20,
+    ) -> list[dict[str, Any]]:
+        """List AgentBuilder starter packages entitled to this identity.
+
+        Read-only and safe to call before any maker confirmation; it never
+        mutates the target environment. Live-proven GET route. Uses the
+        client's normal idempotent-GET retry policy; this method adds only
+        bounded pagination and strict response-shape validation on top of
+        it.
+        """
+        if page_size <= 0:
+            raise ValueError("Page size must be a positive integer.")
+        if max_pages <= 0:
+            raise ValueError("Max pages must be a positive integer.")
+        packages: list[dict[str, Any]] = []
+        continuation: str | None = None
+        for _page in range(max_pages):
+            params: dict[str, Any] = {"pageSize": page_size}
+            if continuation:
+                params["continuationToken"] = continuation
+            body = self._json(
+                "GET",
+                "/copilotstudio/minimalBots/agentStarterPackages",
+                "Starter package listing",
+                params=params,
+            )
+            if not isinstance(body, dict):
+                raise AgentBuilderError(
+                    "Starter package listing returned an invalid shape."
+                )
+            page_packages = body.get("packages")
+            if not isinstance(page_packages, list) or not all(
+                isinstance(item, dict) for item in page_packages
+            ):
+                raise AgentBuilderError(
+                    "Starter package listing returned an invalid shape."
+                )
+            packages.extend(page_packages)
+            continuation = body.get("continuationToken")
+            if not continuation:
+                return packages
+            if not isinstance(continuation, str):
+                raise AgentBuilderError(
+                    "Starter package listing returned an invalid "
+                    "continuation token."
+                )
+        raise AgentBuilderError(
+            f"Starter package listing exceeded {max_pages} pages."
+        )
 
     def get_agent(self, agent_id: str) -> dict[str, Any]:
         body = self._json(
@@ -634,6 +695,58 @@ class AgentBuilderClient:
         if not 200 <= response.status_code < 300:
             _response_error(response, "Native ALM export")
         destination.write_bytes(response.content)
+
+    def create_agent_from_starter_package(
+        self,
+        package_id: str,
+        *,
+        timeout: int = 300,
+    ) -> requests.Response:
+        """Dispatch one create-only MOS starter package request.
+
+        PENDING LIVE VALIDATION: no environment has exposed an entitled ESS
+        starter package, so this exact path and payload have not been
+        exercised against the live service. The path extends the
+        live-proven ``agentStarterPackages`` listing route with this API's
+        established ``{collection}/{id}/{verb}`` convention (see
+        ``alm/{cdsBotId}/export``, ``alm/{cdsBotId}/deploy``,
+        ``api/{cdsBotId}/publish``). The body is empty JSON because the
+        package ID is already in the route. See
+        ``src/reference/mos-starter-package.md`` for the current evidence
+        table; revisit this method the moment a live create call is
+        exercised.
+
+        Create-only: the caller supplies the exact maker-confirmed package
+        ID and this method never supplies a replacement schema or targets
+        an existing agent. Redirects are disabled and this POST is
+        intentionally excluded from the session's retry policy (mounted for
+        GET/HEAD/OPTIONS only), so a mutation is never replayed
+        automatically by the transport.
+
+        The opaque package ID is percent-encoded (``safe=""``) before it is
+        inserted into the path, so a reserved character in it (``/``, ``?``,
+        ``#``, ``%``, ...) can never be misread as a path separator or
+        query string. The caller's original, unencoded ID is unaffected --
+        this only changes what is placed on the wire.
+
+        Returns the raw response instead of raising on a non-2xx status or
+        parsing its body: the caller owns near-verbatim, redacted evidence
+        rendering and the attempt-fuse disposition, and must not lose
+        response detail to a discarded exception.
+        """
+        if not isinstance(package_id, str) or not package_id.strip():
+            raise ValueError("Starter package ID must be a non-empty string.")
+        encoded_package_id = quote(package_id, safe="")
+        return self.session.request(
+            "POST",
+            f"{self.host}/copilotstudio/minimalBots/agentStarterPackages/"
+            f"{encoded_package_id}/create",
+            params={"api-version": self.api_version},
+            headers=self.headers,
+            json={},
+            timeout=timeout,
+            allow_redirects=False,
+        )
 
 
 def canonical_json(value: Any) -> str:

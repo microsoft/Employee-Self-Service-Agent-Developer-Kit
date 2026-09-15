@@ -1915,6 +1915,7 @@ def test_list_environments_parser_accepts_ring_source_url() -> None:
     (
         ("alm-import", "alm-import-result"),
         ("prod-to-dev", "prod-to-dev-result"),
+        ("mos-starter", "mos-starter-result"),
     ),
 )
 def test_attach_command_preserves_setup_source_provenance(
@@ -2076,7 +2077,7 @@ def test_attach_checks_projection_dependencies_before_authentication(
     assert "dependencies are not installed" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("setup_source", ("alm-import", "prod-to-dev"))
+@pytest.mark.parametrize("setup_source", ("alm-import", "prod-to-dev", "mos-starter"))
 def test_same_agent_upgrade_preserves_strongest_provenance(
     tmp_path: Path,
     setup_source: str,
@@ -2145,6 +2146,24 @@ def test_prod_to_dev_provenance_has_highest_precedence(
     assert (
         setup_existing_da._preferred_setup_source(existing, requested)
         == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("existing", "requested"),
+    (
+        ("alm-import", "mos-starter"),
+        ("prod-to-dev", "mos-starter"),
+        ("mos-starter", "prod-to-dev"),
+    ),
+)
+def test_mos_starter_provenance_outranks_alm_and_prod_to_dev(
+    existing: str,
+    requested: str,
+) -> None:
+    assert (
+        setup_existing_da._preferred_setup_source(existing, requested)
+        == "mos-starter"
     )
 
 
