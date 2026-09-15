@@ -154,7 +154,9 @@ def test_x64_python_prefers_x64_dotnet_on_windows_arm(
 
     roots = converter._dotnet_roots()
 
-    assert roots[0] == Path(r"C:\Program Files\dotnet\x64").resolve()
+    normalized_roots = [str(root).replace("\\", "/") for root in roots]
+    assert normalized_roots[0].endswith("C:/Program Files/dotnet/x64")
+    assert normalized_roots[1].endswith("C:/Program Files/dotnet")
 
 
 def test_arm64_python_uses_native_dotnet_on_windows_arm(
@@ -169,7 +171,9 @@ def test_arm64_python_uses_native_dotnet_on_windows_arm(
 
     roots = converter._dotnet_roots()
 
-    assert roots[0] == Path(r"C:\Program Files\dotnet").resolve()
+    assert str(roots[0]).replace("\\", "/").endswith(
+        "C:/Program Files/dotnet"
+    )
 
 
 class _FakeType:
