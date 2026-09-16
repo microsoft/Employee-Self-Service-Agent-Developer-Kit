@@ -64,6 +64,7 @@ from flightcheck.checks.entra_app import run_entra_app_checks
 from flightcheck.checks.graph_connector_kb import run_graph_connector_kb_checks
 from flightcheck.checks.agent_handoff import run_handoff_topic_checks
 from flightcheck.checks.workday import run_workday_checks
+from flightcheck.checks.workday_da import run_workday_da_checks
 from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
 from flightcheck.checks.topics import run_topic_checks
@@ -94,6 +95,7 @@ SCOPE_MAP = {
         ("Workday", run_workday_checks),
         ("Workday Extension", run_workday_extension_checks),
     ],
+    "workdayda": [("Solution", run_solution_checks), ("Workday DA", run_workday_da_checks)],
     "topics": [("Workday Topics", run_topic_checks)],
     "graphconnector": [
         ("External Systems", run_external_systems_checks),
@@ -120,6 +122,7 @@ FULL_SCOPE = [
     ("Workday Tenant", run_workday_tenant_checks),
     ("External Systems", run_external_systems_checks),
     ("Workday", run_workday_checks),
+    ("Workday DA", run_workday_da_checks),
     ("Workday Extension", run_workday_extension_checks),
     ("Workday Topics", run_topic_checks),
     ("Graph Connector KB", run_graph_connector_kb_checks),
