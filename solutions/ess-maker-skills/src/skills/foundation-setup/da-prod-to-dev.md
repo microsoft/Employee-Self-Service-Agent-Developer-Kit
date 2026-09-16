@@ -13,19 +13,32 @@ HTTP code or an end-to-end setup script.
 If attachment already started, use the persisted identity and resume rules in
 `da-existing-dev.md`; do not inspect, export, or import again.
 
-If an earlier create-only import returned `kind: success` but attachment never
-started, rerun the import command with the same target, tenant, former
-temporary package path, and `--resume-verified-create`. The package may already
-be removed. The verified import receipt must return the cached result with
-`importStatus: resumed` without another export or import request. Do not use
-this flag for a normal import. Immediately run:
+If an earlier create-only import returned `kind: success`, or the service
+accepted the package but direct Dev verification did not finish, use a fresh
+[source inspection](#inspect-the-source) to obtain its current ALM-family
+identity. Rerun the import command with the same target, tenant, and former
+temporary package path:
+
+```text
+python scripts/setup_alm_import.py \
+  --target-url "{TARGET_ENVIRONMENT_URL}" \
+  --tenant-id "{SOURCE_TENANT_ID}" \
+  --package "{FORMER_TEMPORARY_PACKAGE_PATH}" \
+  --resume-create-after-cleanup \
+  --expected-alm-family-id "{SOURCE_ALM_FAMILY_ID}"
+```
+
+The package must already be removed. The matching import receipt for the exact
+target and family must finish direct verification or return its verified result
+with `importStatus: resumed`, without another export or import request. Do not
+use this flag for a normal import. Immediately run:
 
 ```text
 python scripts/setup_alm_export.py cleanup
 ```
 
 Then attach the cached verified result through [Attach and complete](#attach-and-complete).
-If no matching verified receipt exists, stop rather than exporting again.
+If no matching create receipt exists, stop rather than exporting again.
 
 ## Inspect the source
 
@@ -93,7 +106,8 @@ operation between the maker's confirmation and the create-only import:
 python scripts/setup_alm_import.py \
   --target-url "{SOURCE_PROD_AGENT_URL_OR_EXPLICIT_TARGET_ENVIRONMENT_URL}" \
   --tenant-id "{SOURCE_TENANT_ID}" \
-  --package "{TEMPORARY_PACKAGE_PATH}"
+  --package "{TEMPORARY_PACKAGE_PATH}" \
+  --expected-alm-family-id "{SOURCE_ALM_FAMILY_ID}"
 ```
 
 Do not pass replacement or retry arguments. Capture `DA_ALM_IMPORT_JSON:` even
@@ -105,7 +119,8 @@ python scripts/setup_alm_export.py cleanup
 ```
 
 If cleanup fails, report the local cleanup error and stop; the durable import
-result can be resumed after cleanup succeeds.
+result remains the primary operation evidence and can be resumed after cleanup
+succeeds.
 
 When import returns `kind: conflict`, rerun the read-only source inspection to
 refresh `/realms`:
@@ -127,6 +142,11 @@ collision or offer replacement.
 
 For any other result besides `kind: success`, stop and use the outcome guidance
 in `src/reference/native-alm-import.md`; do not retry or replace an agent.
+
+If source inspection or export is unavailable or unauthorized, report the
+observed limitation and stop. A maker who already has the editable Dev agent
+can restart `/setup` with that Dev agent's Copilot Studio URL; do not infer the
+relationship from the failed Prod operation.
 
 ## Attach and complete
 

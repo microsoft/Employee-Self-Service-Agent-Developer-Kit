@@ -133,10 +133,11 @@ unresolved record blocks replay of that same operation. Records are evidence,
 not a global workflow lock; the session interprets unrelated records before
 selecting another operation.
 
-For create-only recovery, `--resume-verified-create` can return the sole
-verified create result for the same target after its disposable package has
-already been removed. This explicit recovery does not inspect another package,
-send another import request, or apply to replacement.
+For create-only recovery, `--resume-create-after-cleanup` with the expected
+ALM-family identity can resume direct verification or return the verified
+result for the sole matching create after its disposable package has already
+been removed. This explicit recovery does not inspect another package, send
+another import request, or apply to replacement.
 
 ### Recover an imported but unverified agent
 
@@ -157,7 +158,9 @@ agent, delete the receipt, or retry the package import.
 
 Recovery is an operator procedure:
 
-1. Stop all import attempts and preserve the receipt and exact package bytes.
+1. Stop all import attempts and preserve the receipt. Keep caller-owned package
+   bytes unchanged. For a transient Prod export, complete local cleanup and
+   preserve the package hash in the receipt rather than retaining the archive.
 2. Record the target environment, operation mode, package schema, and receipt
    timestamp.
 3. Wait for service-side activity to settle, then inspect the exact environment

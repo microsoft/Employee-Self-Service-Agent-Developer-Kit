@@ -30,10 +30,23 @@ class FakeResponse:
     status_code: int = 200
     headers: dict[str, str] = field(default_factory=dict)
     content: bytes = b""
+    closed: bool = False
+    close_error: Exception | None = None
 
     @property
     def ok(self) -> bool:
         return 200 <= self.status_code < 300
+
+    def iter_content(self, chunk_size: int) -> list[bytes]:
+        return [
+            self.content[index : index + chunk_size]
+            for index in range(0, len(self.content), chunk_size)
+        ]
+
+    def close(self) -> None:
+        self.closed = True
+        if self.close_error is not None:
+            raise self.close_error
 
     def json(self) -> Any:
         return self.value
@@ -186,6 +199,7 @@ def test_realm_discovery_configuration_and_export_use_native_alm_requests(
     tmp_path: Path,
 ) -> None:
     package = tmp_path / "agent.zip"
+    export_response = FakeResponse({}, content=b"PK\x03\x04package")
     session = FakeSession(
         [
             FakeResponse(
@@ -201,7 +215,7 @@ def test_realm_discovery_configuration_and_export_use_native_alm_requests(
                     "grsRepositoryId": "family-1",
                 }
             ),
-            FakeResponse({}, content=b"PK\x03\x04package"),
+            export_response,
         ]
     )
     client = agentbuilder.AgentBuilderClient(
@@ -213,7 +227,10 @@ def test_realm_discovery_configuration_and_export_use_native_alm_requests(
     )
 
     realms = client.get_realms(AGENT_ID)
-    configuration = client.get_prod_configuration(AGENT_ID)
+    configuration = client.get_realm_configuration(
+        AGENT_ID,
+        agentbuilder.PROD_REALM,
+    )
     client.export_package(AGENT_ID, package)
 
     assert realms["routeRealm"] == agentbuilder.PROD_REALM
@@ -234,11 +251,41 @@ def test_realm_discovery_configuration_and_export_use_native_alm_requests(
         "api-version": agentbuilder.DEFAULT_API_VERSION
     }
     assert export["allow_redirects"] is False
+    assert export["stream"] is True
     assert "Content-Type" not in export["headers"]
     assert "POST" not in session.mounts[
         "https://"
     ].max_retries.allowed_methods
     assert package.read_bytes() == b"PK\x03\x04package"
+    assert export_response.closed is True
+
+
+def test_export_preserves_request_error_when_response_close_fails(
+    tmp_path: Path,
+) -> None:
+    response = FakeResponse(
+        {"error": {"code": "ExportFailed", "message": "request failed"}},
+        status_code=500,
+        close_error=OSError("close failed"),
+    )
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession([response]),
+    )
+
+    with pytest.raises(
+        agentbuilder.AgentBuilderHTTPError,
+        match="Native ALM export failed",
+    ) as raised:
+        client.export_package(AGENT_ID, tmp_path / "agent.zip")
+
+    assert raised.value.__notes__ == [
+        "Native ALM export response cleanup also failed: "
+        "OSError: close failed"
+    ]
 
 
 def test_import_package_sends_explicit_replacement_schema(

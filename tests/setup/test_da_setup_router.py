@@ -232,8 +232,10 @@ def test_prod_to_dev_reference_composes_durable_boundaries() -> None:
     assert "setup_alm_export.py export" in text
     assert "DA_ALM_EXPORT_JSON:" in text
     assert "setup_alm_import.py" in text
-    assert "verified import receipt" in normalized
-    assert "--resume-verified-create" in text
+    assert "matching import receipt" in normalized
+    assert "--resume-create-after-cleanup" in text
+    assert "--expected-alm-family-id" in text
+    assert "exact target and family" in normalized
     assert "importStatus: resumed" in normalized
     assert "without another export or import request" in normalized
     assert "setup_alm_export.py cleanup" in text
@@ -258,6 +260,15 @@ def test_prod_to_dev_reference_composes_durable_boundaries() -> None:
     assert "--setup-source prod-to-dev" in text
     assert "Do not generate HTTP code or an end-to-end setup script" in normalized
     assert "setup_prod_to_dev.py" not in text
+    assert "`setupStatus`" not in text
+    for historical_text in (
+        "workstream",
+        "experiment",
+        "script-first",
+        "reference-first",
+        "open validation",
+    ):
+        assert historical_text not in text.casefold()
     assert len(text.splitlines()) < 180
 
 

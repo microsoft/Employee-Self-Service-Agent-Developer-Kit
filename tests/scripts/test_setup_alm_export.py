@@ -270,3 +270,74 @@ def test_cleanup_command_removes_active_export_and_record(
     assert payload == {"status": "removed"}
     assert package_path is not None and not package_path.exists()
     assert not (kit_root / setup_alm_export.ACTIVE_EXPORT_RECORD).exists()
+
+
+def test_cleanup_rejects_prefixed_zip_outside_exact_temp_root(
+    tmp_path: Path,
+) -> None:
+    kit_root = tmp_path / "kit"
+    kit_root.mkdir()
+    outside = tmp_path / f"{setup_alm_export.TEMP_PACKAGE_PREFIX}other.zip"
+    outside.write_bytes(b"keep")
+    record_path = kit_root / setup_alm_export.ACTIVE_EXPORT_RECORD
+    record_path.parent.mkdir(parents=True)
+    record_path.write_text(
+        json.dumps(
+            {
+                "schemaVersion": 1,
+                "packagePath": str(outside),
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        setup_alm_export.AlmExportSetupError,
+        match="path is invalid",
+    ):
+        setup_alm_export.cleanup_active_export(kit_root)
+
+    assert outside.read_bytes() == b"keep"
+    assert record_path.exists()
+
+
+def test_export_preserves_primary_error_when_cleanup_also_fails(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FailingClient(FakeClient):
+        def export_package(self, _agent_id: str, path: Path) -> None:
+            self.exported_path = path
+            path.write_bytes(b"partial")
+            raise AgentBuilderError("export failed")
+
+    client = FailingClient()
+    kit_root = tmp_path / "kit"
+    kit_root.mkdir()
+    os_temp = tmp_path / "os-temp"
+    os_temp.mkdir()
+    monkeypatch.setattr(setup_alm_export.tempfile, "tempdir", str(os_temp))
+    original_unlink = Path.unlink
+
+    def fail_package_cleanup(
+        path: Path,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        if path.name.startswith(setup_alm_export.TEMP_PACKAGE_PREFIX):
+            raise OSError("cleanup denied")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_package_cleanup)
+
+    with pytest.raises(AgentBuilderError, match="export failed") as raised:
+        setup_alm_export.export_prod_source(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            agent_id=SOURCE_AGENT_ID,
+            kit_root=kit_root,
+        )
+
+    assert raised.value.__notes__ == [
+        "Temporary export cleanup also failed: OSError: cleanup denied"
+    ]

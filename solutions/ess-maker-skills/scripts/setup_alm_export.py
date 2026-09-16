@@ -63,13 +63,13 @@ def cleanup_active_export(kit_root: Path) -> dict[str, str]:
         raise AlmExportSetupError(
             "The active native ALM export record is invalid."
         )
-    package_path = Path(package_value)
+    package_path = Path(package_value).resolve()
+    temp_root = Path(tempfile.gettempdir()).resolve()
     if (
         not package_path.is_absolute()
         or not package_path.name.startswith(TEMP_PACKAGE_PREFIX)
         or package_path.suffix.casefold() != TEMP_PACKAGE_SUFFIX
-        or package_path == resolved_kit_root
-        or resolved_kit_root in package_path.parents
+        or package_path.parent != temp_root
     ):
         raise AlmExportSetupError(
             "The active native ALM export path is invalid."
@@ -183,7 +183,6 @@ def export_prod_source(
     )
     os.close(handle)
     package_path = Path(temporary).resolve()
-    exported = False
     try:
         resolved_kit_root = kit_root.resolve()
         if (
@@ -205,10 +204,15 @@ def export_prod_source(
                 "packagePath": str(package_path),
             },
         )
-        exported = True
-    finally:
-        if not exported:
+    except BaseException as operation_error:
+        try:
             package_path.unlink(missing_ok=True)
+        except OSError as cleanup_error:
+            operation_error.add_note(
+                "Temporary export cleanup also failed: "
+                f"{type(cleanup_error).__name__}: {cleanup_error}"
+            )
+        raise
     return {
         **source,
         "packagePath": str(package_path),
@@ -279,7 +283,6 @@ def main(argv: list[str] | None = None) -> int:
         AlmExportSetupError,
         ExistingDASetupError,
         OSError,
-        RuntimeError,
         ValueError,
     ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

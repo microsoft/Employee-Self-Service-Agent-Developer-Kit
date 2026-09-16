@@ -70,6 +70,7 @@ def _connection(
             "id": agent_id,
             "name": "Employee Self-Service HR",
             "schemaName": schema_name,
+            "almFamilyId": "family-id",
         },
     }
 
@@ -236,7 +237,7 @@ def test_create_persists_verified_identity_without_attaching(
         environment_id=ENVIRONMENT_ID,
         package_path=package,
         kit_root=tmp_path,
-        resume_verified_create=True,
+        expected_alm_family_id="family-id",
     )
 
     assert result == {
@@ -252,6 +253,7 @@ def test_create_persists_verified_identity_without_attaching(
         "agentId": AGENT_ID,
         "schemaName": SCHEMA,
         "agentName": "Employee Self-Service HR",
+        "almFamilyId": "family-id",
         "setupSource": "alm-import",
     }
     assert client.import_calls[0]["replacementSchemaName"] is None
@@ -266,6 +268,7 @@ def test_create_persists_verified_identity_without_attaching(
     assert not (tmp_path / setup_alm_import.CANONICAL_SETUP_STATE).exists()
     record = json.loads(_records(tmp_path)[0].read_text(encoding="utf-8"))
     assert record["status"] == "verified"
+    assert record["input"]["expectedAlmFamilyId"] == "family-id"
     assert "packagePath" not in json.dumps(record)
 
 
@@ -286,6 +289,7 @@ def test_verified_operation_resumes_after_package_cleanup_without_second_import(
         environment_id=ENVIRONMENT_ID,
         package_path=package,
         kit_root=tmp_path,
+        expected_alm_family_id="family-id",
     )
     package.unlink()
     result = setup_alm_import.import_package_once(
@@ -293,7 +297,8 @@ def test_verified_operation_resumes_after_package_cleanup_without_second_import(
         environment_id=ENVIRONMENT_ID,
         package_path=package,
         kit_root=tmp_path,
-        resume_verified_create=True,
+        resume_create_after_cleanup=True,
+        expected_alm_family_id="family-id",
     )
 
     assert result["kind"] == "success"
@@ -319,6 +324,7 @@ def test_missing_package_does_not_resume_without_explicit_flag(
         environment_id=ENVIRONMENT_ID,
         package_path=package,
         kit_root=tmp_path,
+        expected_alm_family_id="family-id",
     )
     package.unlink()
 
@@ -331,9 +337,66 @@ def test_missing_package_does_not_resume_without_explicit_flag(
             environment_id=ENVIRONMENT_ID,
             package_path=package,
             kit_root=tmp_path,
+            expected_alm_family_id="family-id",
         )
 
     assert len(client.import_calls) == 1
+
+
+def test_verified_create_recovery_requires_matching_alm_family(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _write_package(tmp_path / "agent.zip")
+    client = FakeClient()
+    monkeypatch.setattr(
+        setup_alm_import,
+        "validate_existing_dev_connection",
+        lambda *_args, **_kwargs: _connection(),
+    )
+
+    setup_alm_import.import_package_once(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        package_path=package,
+        kit_root=tmp_path,
+        expected_alm_family_id="family-id",
+    )
+    package.unlink()
+
+    with pytest.raises(
+        setup_alm_import.AlmImportSetupError,
+        match="target and ALM family",
+    ):
+        setup_alm_import.import_package_once(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            package_path=package,
+            kit_root=tmp_path,
+            resume_create_after_cleanup=True,
+            expected_alm_family_id="different-family",
+        )
+
+    assert len(client.import_calls) == 1
+
+
+def test_verified_create_recovery_rejects_existing_package(
+    tmp_path: Path,
+) -> None:
+    package = _write_package(tmp_path / "agent.zip")
+
+    with pytest.raises(
+        setup_alm_import.AlmImportSetupError,
+        match="only after its disposable package was removed",
+    ):
+        setup_alm_import.import_package_once(
+            FakeClient(),
+            environment_id=ENVIRONMENT_ID,
+            package_path=package,
+            kit_root=tmp_path,
+            resume_create_after_cleanup=True,
+            expected_alm_family_id="family-id",
+        )
 
 
 def test_imported_identity_resumes_verification_without_second_import(
@@ -363,19 +426,50 @@ def test_imported_identity_resumes_verification_without_second_import(
             environment_id=ENVIRONMENT_ID,
             package_path=package,
             kit_root=tmp_path,
+            expected_alm_family_id="family-id",
         )
 
     record = json.loads(_records(tmp_path)[0].read_text(encoding="utf-8"))
     assert record["status"] == "imported"
+    package.unlink()
 
     result = setup_alm_import.import_package_once(
         client,
         environment_id=ENVIRONMENT_ID,
         package_path=package,
         kit_root=tmp_path,
+        resume_create_after_cleanup=True,
+        expected_alm_family_id="family-id",
     )
 
     assert result["importStatus"] == "resumed"
+    assert len(client.import_calls) == 1
+
+
+def test_create_rejects_verified_agent_from_different_alm_family(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _write_package(tmp_path / "agent.zip")
+    client = FakeClient()
+    monkeypatch.setattr(
+        setup_alm_import,
+        "validate_existing_dev_connection",
+        lambda *_args, **_kwargs: _connection(),
+    )
+
+    result = setup_alm_import.import_package_once(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        package_path=package,
+        kit_root=tmp_path,
+        expected_alm_family_id="different-family",
+    )
+    record = json.loads(_records(tmp_path)[0].read_text(encoding="utf-8"))
+
+    assert result["kind"] == "invalid-success"
+    assert result["reason"] == "alm-family-mismatch"
+    assert record["status"] == "invalid-success"
     assert len(client.import_calls) == 1
 
 
