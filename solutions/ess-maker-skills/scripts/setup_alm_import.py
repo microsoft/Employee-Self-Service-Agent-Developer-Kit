@@ -30,6 +30,7 @@ from setup_existing_da import (
     ExistingDASetupError,
     _add_agentbuilder_target_arguments,
     _client_from_args,
+    _load_canonical_setup_state,
     _normalize_environment_id,
     _normalize_guid,
     _utc_now,
@@ -291,16 +292,15 @@ def _validate_local_replacement_target(
     environment_id: str,
     agent_id: str,
 ) -> None:
-    path = kit_root / DA_CONNECTION_STATE
-    if not path.exists():
+    state = _load_canonical_setup_state(kit_root)
+    if state is None:
         return
     try:
-        state = json.loads(path.read_text(encoding="utf-8"))
         state_environment = state["environment"]["id"]
         state_agent = state["agent"]["id"]
-    except (KeyError, OSError, TypeError, json.JSONDecodeError) as exc:
+    except (KeyError, TypeError) as exc:
         raise AlmImportSetupError(
-            "The existing DA connection state is unreadable."
+            "The existing DA setup state is unreadable."
         ) from exc
     if (
         str(state_environment).casefold() != environment_id.casefold()

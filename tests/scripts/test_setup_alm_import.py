@@ -73,19 +73,42 @@ def _connection(
     }
 
 
-def _write_connection_state(
+def _write_setup_state(
     root: Path,
     *,
     environment_id: str = ENVIRONMENT_ID,
     agent_id: str = AGENT_ID,
 ) -> None:
-    path = root / setup_alm_import.DA_CONNECTION_STATE
+    path = root / setup_alm_import.CANONICAL_SETUP_STATE
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
             {
-                "environment": {"id": environment_id},
-                "agent": {"id": agent_id},
+                "schema_version": 1,
+                "status": "complete",
+                "setup_source": "existing-dev",
+                "environment": {
+                    "id": environment_id,
+                    "tenant_id": TENANT_ID,
+                    "power_platform_api_endpoint": HOST,
+                    "ring": "test",
+                    "api_version": "2024-10-01",
+                },
+                "agent": {
+                    "id": agent_id,
+                    "name": "Employee Self-Service HR",
+                    "schema_name": SCHEMA,
+                    "realm": "dev",
+                    "alm_family_id": "family-id",
+                    "workspace_slug": "employee-self-service-hr",
+                },
+                "workspace": {
+                    "status": "qualified-complete",
+                    "folder": (
+                        "workspace/agents/employee-self-service-hr"
+                    ),
+                },
+                "completed_at": "2026-09-15T00:00:00+00:00",
             }
         )
         + "\n",
@@ -403,7 +426,7 @@ def test_replacement_allows_matching_managed_workspace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     package = _write_package(tmp_path / "agent.zip")
-    _write_connection_state(tmp_path)
+    _write_setup_state(tmp_path)
     client = FakeClient()
     monkeypatch.setattr(
         setup_alm_import,
@@ -428,7 +451,7 @@ def test_replacement_rejects_different_managed_workspace(
     tmp_path: Path,
 ) -> None:
     package = _write_package(tmp_path / "agent.zip")
-    _write_connection_state(
+    _write_setup_state(
         tmp_path,
         environment_id=OTHER_ENVIRONMENT_ID,
         agent_id=OTHER_AGENT_ID,
@@ -622,7 +645,7 @@ def test_existing_workspace_state_blocks_create_before_mutation(
     tmp_path: Path,
 ) -> None:
     package = _write_package(tmp_path / "agent.zip")
-    _write_connection_state(tmp_path)
+    _write_setup_state(tmp_path)
     client = FakeClient()
 
     with pytest.raises(
