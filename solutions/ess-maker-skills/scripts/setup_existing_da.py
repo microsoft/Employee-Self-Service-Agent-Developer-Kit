@@ -1810,7 +1810,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     attach.add_argument(
         "--setup-source",
-        choices=sorted(SETUP_SOURCES),
+        choices=sorted(SUPPORTED_SETUP_SOURCES),
         default="existing-dev",
         help=argparse.SUPPRESS,
     )

@@ -14,6 +14,7 @@ import requests
 import agentbuilder
 import agentbuilder_object_model
 import setup_alm_import
+import setup_existing_da
 
 
 ENVIRONMENT_ID = "00000000-0000-4000-8000-000000001111"
@@ -79,40 +80,34 @@ def _write_setup_state(
     environment_id: str = ENVIRONMENT_ID,
     agent_id: str = AGENT_ID,
 ) -> None:
-    path = root / setup_alm_import.CANONICAL_SETUP_STATE
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(
-            {
-                "schema_version": 1,
-                "status": "complete",
-                "setup_source": "existing-dev",
-                "environment": {
-                    "id": environment_id,
-                    "tenant_id": TENANT_ID,
-                    "power_platform_api_endpoint": HOST,
-                    "ring": "test",
-                    "api_version": "2024-10-01",
-                },
-                "agent": {
-                    "id": agent_id,
-                    "name": "Employee Self-Service HR",
-                    "schema_name": SCHEMA,
-                    "realm": "dev",
-                    "alm_family_id": "family-id",
-                    "workspace_slug": "employee-self-service-hr",
-                },
-                "workspace": {
-                    "status": "qualified-complete",
-                    "folder": (
-                        "workspace/agents/employee-self-service-hr"
-                    ),
-                },
-                "completed_at": "2026-09-15T00:00:00+00:00",
-            }
-        )
-        + "\n",
-        encoding="utf-8",
+    connection = _connection(
+        environment_id=environment_id,
+        agent_id=agent_id,
+    )
+    connection["setupSource"] = "existing-dev"
+    connection["agent"].update(
+        {
+            "realm": "dev",
+            "almFamilyId": "family-id",
+            "workspaceSlug": "employee-self-service-hr",
+        }
+    )
+    setup_existing_da._record_canonical_setup_progress(
+        root,
+        connection,
+        None,
+    )
+    setup_existing_da._record_canonical_setup_ready(
+        root,
+        connection,
+        {
+            "folder": "workspace/agents/employee-self-service-hr",
+            "agentPath": "agent.mcs.yml",
+            "topicCount": 0,
+            "variableCount": 0,
+            "projectedComponentKinds": [],
+            "unprojectedComponentKinds": {},
+        },
     )
 
 
