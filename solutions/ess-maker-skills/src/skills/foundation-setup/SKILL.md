@@ -134,11 +134,11 @@ python scripts/emit_capability.py setup
 
 When the maker has already supplied a native agent package or explicitly asked to use one, read `src/skills/foundation-setup/da-alm-import.md` and follow it. That skill owns the explicit package handoff and reads the canonical import reference. This is an advanced handoff, not a setup option to advertise or recommend.
 
-When the maker has no existing agent and wants a fresh installation, read
-`src/skills/foundation-setup/da-mos-starter.md` and follow it. That skill
-lists entitled MOS starter packages and creates a new Dev agent from the
-maker's exact confirmed choice; it never replaces the default existing-Dev
-path for a maker who already has an agent.
+When the maker explicitly asks for a fresh installation, read
+`src/skills/foundation-setup/da-mos-starter.md` and follow it, even when the
+current Developer Kit folder already has setup state. That skill owns the
+separate-worktree offer for an occupied folder. Without explicit fresh-agent
+intent, keep the existing-Dev path for a maker who already has an agent.
 
 When the request identifies an environment but not an agent or fresh-agent intent, read `src/skills/foundation-setup/da-existing-dev.md` and follow its environment-candidate selection path.
 

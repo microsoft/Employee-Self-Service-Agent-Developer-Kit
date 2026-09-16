@@ -30,6 +30,7 @@ _NATIVE_ALM_REFERENCE = (
 _MOS_STARTER_REFERENCE = (
     _SOLUTION / "src" / "reference" / "mos-starter-package.md"
 )
+_CREATE_FRESH_WORKSPACE = _SOLUTION / "scripts" / "create_fresh_workspace.py"
 _WORKDAY = _SOLUTION / "src" / "skills" / "setup" / "SKILL.md"
 _CONNECT_STEP1 = _SOLUTION / "src" / "skills" / "connect" / "step1.md"
 _INSTRUCTIONS = _SOLUTION / ".github" / "copilot-instructions.md"
@@ -233,7 +234,7 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     )
     assert _DA_MOS_STARTER.is_file()
     assert _MOS_STARTER_REFERENCE.is_file()
-    assert "no existing agent and wants a fresh installation" in normalized
+    assert "explicitly asks for a fresh installation" in normalized
 
 
 def test_prod_to_dev_reference_composes_durable_boundaries() -> None:
@@ -319,7 +320,6 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     reference = _MOS_STARTER_REFERENCE.read_text(encoding="utf-8")
     existing_dev = _DA_EXISTING_DEV.read_text(encoding="utf-8")
 
-    assert "no existing agent and wants a fresh installation" in normalized_foundation
     assert "src/reference/mos-starter-package.md" in text
     assert "setup_mos_starter.py list" in text
     assert "DA_MOS_STARTER_PACKAGES_JSON:" in text
@@ -347,7 +347,21 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "Create a new ESS agent" in normalized
     assert "**{selected product label}**" in text
     assert "Choose a different product" in text
-    assert "separate copy of the Developer Kit in a new VS Code window" in normalized
+    assert _CREATE_FRESH_WORKSPACE.is_file()
+    assert "Create and open a new workspace" in text
+    assert "Create a new workspace without opening it" in text
+    assert "scripts/create_fresh_workspace.py" in text
+    assert "--open-vscode" in text
+    assert "DA_FRESH_WORKSPACE_JSON:" in text
+    assert "Before listing products" in text
+    assert "do not sign in or load the catalog" in normalized
+    assert "explicitly asks for a fresh installation" in normalized_foundation
+    assert "even when the current Developer Kit folder already has setup state" in (
+        normalized_foundation
+    )
+    assert "detached Git worktree" in normalized
+    assert "must be outside the current Developer Kit repository" in normalized
+    assert "do not rerun creation" in normalized
     assert "Do not offer to clear, replace, or overwrite" in normalized
     assert "Do not preselect **Create agent**" in text
     assert "authorizes exactly one create attempt" in normalized

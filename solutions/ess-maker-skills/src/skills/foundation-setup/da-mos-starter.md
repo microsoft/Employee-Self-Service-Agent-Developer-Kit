@@ -1,13 +1,41 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
 # Set Up Dev from an Entitled MOS Product
 
-Use this path only when the maker has no existing agent and wants a fresh installation. Read `src/reference/mos-starter-package.md` before acting. The reference owns the service facts, safety invariants, fuse disposition matrix, and redaction contract. This skill owns the maker conversation and the handoff into existing-Dev setup.
+Use this path when the maker wants a fresh installation. Read `src/reference/mos-starter-package.md` before acting. The reference owns the service facts, safety invariants, fuse disposition matrix, and redaction contract. This skill owns the maker conversation, the occupied-workspace handoff, and the handoff into existing-Dev setup.
 
 Use only intent supplied in the current request and results observed in this invocation. Do not infer persona, product, target, or progress from conversation history.
 
 ## Identify the target
 
 Ask for a Copilot Studio environment URL when the target is not supplied. Do not ask the maker to classify the product before loading the catalog. When fresh-agent intent and the target environment are known, mark **Choose the starting point and target environment** complete.
+
+## Use a separate workspace when the current folder is occupied
+
+Before listing products, check whether `.local/setup/config.json` or `.local/config.json` exists. If either exists, do not sign in or load the catalog. Show:
+
+> This Developer Kit folder already contains setup for an agent. Nothing was changed. I can create a separate workspace from the current committed version so the existing agent remains untouched.
+
+Offer exactly:
+
+- **Create and open a new workspace**
+- **Create a new workspace without opening it**
+- **Cancel setup**
+
+Do not offer to clear, replace, or overwrite the current folder's setup state. After either create choice, ask for a new absolute sibling-folder path. The destination must not already exist and must be outside the current Developer Kit repository.
+
+For **Create and open a new workspace**, run:
+
+```text
+python scripts/create_fresh_workspace.py \
+  --destination "{NEW_WORKTREE_PATH}" \
+  --open-vscode
+```
+
+For **Create a new workspace without opening it**, omit `--open-vscode`.
+
+Parse `DA_FRESH_WORKSPACE_JSON:`. The operation creates a detached Git worktree from the current committed revision and never copies local setup state, agent content, or authentication cache. Do not continue setup or invoke MOS create from the current workspace.
+
+When `outcome` is `workspace-created` and `vscodeOpened` is `true`, say that the new VS Code window is open at `{kitRoot}` and ask the maker to run `/setup` there. When `vscodeOpened` is `false`, give `{kitRoot}` as the folder to open in a new VS Code window. When `outcome` is `workspace-created-open-failed`, explain that the workspace was created, give `{kitRoot}`, and ask the maker to open it manually; do not rerun creation.
 
 ## List the catalog
 
@@ -67,13 +95,7 @@ python scripts/setup_mos_starter.py create \
   --package-version "{CONFIRMED_PACKAGE_VERSION}"
 ```
 
-The command ends after this one attempt. Do not launch another create from this invocation.
-
-If the command reports existing local setup state, show:
-
-> This Developer Kit folder already contains setup for an agent. Nothing was changed. To create another agent, open a separate copy of the Developer Kit in a new VS Code window and run `/setup` there.
-
-Do not offer to clear, replace, or overwrite the current folder's setup state.
+The command ends after this one attempt. Do not launch another create from this invocation. If the command reports local setup state despite the earlier check, return to [Use a separate workspace when the current folder is occupied](#use-a-separate-workspace-when-the-current-folder-is-occupied); do not rerun create.
 
 ## Interpret the response
 
