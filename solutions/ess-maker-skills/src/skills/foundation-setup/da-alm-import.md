@@ -15,6 +15,11 @@ Ask for a Copilot Studio environment URL if the maker has not supplied one. A
 recognized Copilot Studio URL is preferred because it identifies both the
 environment and service ring. Do not ask the maker to choose a ring or tenant.
 
+When both the package and target environment are known, mark **Choose the
+starting point and target environment** complete. Keep **Verify access and agent
+identity** current until the import operation returns a directly validated Dev
+identity.
+
 Do not inspect, extract, rewrite, or summarize package content yourself. The
 durable import command observes only the bounded metadata needed for safety.
 
@@ -43,7 +48,13 @@ Parse `DA_ALM_IMPORT_JSON:` even when the command exits nonzero.
 
 When `kind` is `success`, use the returned environment, tenant, host, ring, API
 version, and agent identity only as internal command inputs. Do not display
-those identifiers. Run:
+those identifiers. Mark **Verify access and agent identity** and **Establish an
+editable Dev agent** complete, then show:
+
+> Agent package imported and verified as an editable Dev agent. Preparing its
+> local authoring workspace...
+
+Run:
 
 ```text
 python scripts/setup_existing_da.py attach \
@@ -64,29 +75,27 @@ If attachment reports that the managed workspace changed, use the explicit
 checkpoint-and-refresh choice from `da-existing-dev.md`. A refresh never
 repeats the import.
 
-When complete, show:
-
-**{agent display name}** is set up as the editable Dev agent. Its available
-topics are in your local workspace and ready for customization.
-
-If the result reports nonempty `unprojectedComponentKinds`, add:
-
-Some agent content was retained safely in the fetched snapshot but is not
-editable through this ADK version yet.
-
-Do not claim publication, deployment, promotion, or optional integration
-configuration.
+When complete, render the factual completion report from `da-existing-dev.md`
+using **Supplied native agent package** as the starting point. Build every other
+field from `DA_EXISTING_DEV_SETUP_JSON:` and retain its limits on completion
+claims.
 
 ## Handle a collision
 
-When `kind` is `conflict`, explain:
+When `kind` is `conflict`, mark **Establish an editable Dev agent** blocked and
+show:
 
-An editable agent created from this package already exists in the target
-environment. I did not replace it.
+> An editable agent created from this package already exists in the target
+> environment. I did not replace it.
 
-Offer to use the existing agent through `da-existing-dev.md`. Offer replacement
-only when the maker explicitly needs the supplied package to overwrite that
-agent.
+Offer exactly:
+
+- **Use existing agent** — continue through `da-existing-dev.md`.
+- **Replace existing agent with this package** — validate the exact agent and
+  request separate replacement approval.
+- **Cancel setup**
+
+Default to **Use existing agent**. Do not recommend replacement.
 
 Before replacement, directly validate the exact existing Dev agent using its
 Copilot Studio URL or known agent ID without attaching it or writing setup
@@ -99,13 +108,18 @@ python scripts/setup_existing_da.py validate-agent \
 
 Parse `DA_AGENT_VALIDATION_JSON:`. Show its display name, then ask:
 
-Replacing **{agent display name}** will overwrite its current editable content
-with the supplied package. Continue?
+> Replacing **{agent display name}** will overwrite its current editable
+> content with the supplied package. Continue?
 
-When presenting structured choices, default to **Use existing agent** or
-**Cancel setup**. Never preselect or recommend **Continue replacement**.
-Continue only after the maker explicitly selects replacement. Pass the same
-validated internal ID in both confirmation arguments:
+Offer exactly:
+
+- **Continue replacement**
+- **Use existing agent**
+- **Cancel setup**
+
+Never preselect or recommend **Continue replacement**. Continue only after the
+maker explicitly selects it. Pass the same validated internal ID in both
+confirmation arguments:
 
 ```text
 python scripts/setup_alm_import.py \
@@ -122,12 +136,16 @@ checkpointing and refreshing them.
 ## Handle other outcomes
 
 - `pre-dispatch-failure`: no request reached the service. Explain the local,
-  DNS, or connection prerequisite. Do not retry automatically.
+  DNS, or connection prerequisite. State that no remote import was observed. Do
+  not retry automatically.
 - `rejected`: the service returned a normal error response. Explain the
-  actionable error without exposing diagnostics. Do not retry automatically.
+  actionable error and preserve its status, error code, and request ID when
+  available. Do not retry automatically.
 - `invalid-success` or `ambiguous`: the mutation may have completed, but no
-  usable identity is available. Do not retry. Follow the manual reconciliation
-  procedure in `src/reference/native-alm-import.md`.
+  usable identity is available. Show: **The import outcome could not be proven.
+  I stopped to avoid creating or replacing the agent twice.** Do not retry.
+  Follow the manual reconciliation procedure in
+  `src/reference/native-alm-import.md`.
 
 If the command exits during direct verification after recording status
 `imported`, the mutation already returned an identity. Do not start another
@@ -138,6 +156,15 @@ If verification still fails, stop and retain the receipt.
 The command caches every operation outcome. Repeating the same command returns
 the cached result without another POST. After the cause of a recorded
 `pre-dispatch-failure` or `rejected` outcome is resolved, another request
-requires explicit maker approval and `--retry-safe-failure`.
+requires explicit maker approval. Ask:
+
+> The reported prerequisite has been resolved. Start a new import request?
+
+Offer exactly:
+
+- **Retry import**
+- **Stop without retrying**
+
+Use `--retry-safe-failure` only after the maker selects **Retry import**.
 
 Never remove or edit import records merely to permit another mutation.

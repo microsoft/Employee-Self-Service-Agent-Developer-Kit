@@ -241,9 +241,46 @@ def test_foundation_has_one_authorization_wait_contract() -> None:
     normalized = " ".join(text.split())
 
     assert "Microsoft sign-in will open" in text
+    assert text.count("Microsoft sign-in will open") == 1
     assert "**Waiting for authorization**" in text
+    assert text.count("**Waiting for authorization**") == 1
     assert "ask the maker to provide a token" in normalized.casefold()
     assert "Do not describe an authorization wait as service processing" in normalized
+
+
+def test_alm_import_uses_shared_progress_and_completion_handoff() -> None:
+    foundation = _FOUNDATION.read_text(encoding="utf-8")
+    text = _DA_ALM_IMPORT.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "successful package import with direct Dev validation" in foundation
+    assert "Choose the starting point and target environment" in normalized
+    assert "Verify access and agent identity" in normalized
+    assert "Establish an editable Dev agent" in normalized
+    assert "Agent package imported and verified as an editable Dev agent" in normalized
+    assert "factual completion report from `da-existing-dev.md`" in normalized
+    assert "Supplied native agent package" in text
+    assert "another readiness" not in text.casefold()
+
+
+def test_alm_import_collision_and_retry_require_separate_choices() -> None:
+    text = _DA_ALM_IMPORT.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    for choice in (
+        "Use existing agent",
+        "Replace existing agent with this package",
+        "Cancel setup",
+        "Continue replacement",
+        "Retry import",
+        "Stop without retrying",
+    ):
+        assert choice in text
+    assert "Default to **Use existing agent**" in text
+    assert "Never preselect or recommend **Continue replacement**" in text
+    assert "could not be proven" in normalized
+    assert "avoid creating or replacing the agent twice" in normalized
+    assert "only after the maker selects **Retry import**" in normalized
 
 
 def test_existing_da_dev_path_never_routes_through_dataverse() -> None:

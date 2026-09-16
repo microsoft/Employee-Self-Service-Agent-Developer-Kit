@@ -44,6 +44,7 @@ The checklist is a view, not another state model:
 
 - a supplied or selected target completes the first stage;
 - direct service validation of an exact editable Dev completes the second and third stages for the existing-agent path;
+- a successful package import with direct Dev validation completes the second and third stages for the supplied-package path;
 - only `connectionStatus: workspace-ready` with `connectReady: true` completes local workspace materialization;
 - reviewing the factual completion report completes the handoff stage in the conversation and does not write another readiness marker.
 
@@ -87,27 +88,6 @@ the launcher probe. A missing or nonworking candidate is not a setup failure;
 continue to the next candidate. If no launcher works, report the missing Python
 prerequisite and stop. When child guidance shows `python`, substitute the
 resolved launcher.
-
-## Interactive authorization
-
-Before starting a command that can open Microsoft sign-in, tell the maker:
-
-> Microsoft sign-in will open. Select the account you use to access this
-> environment. If the expected account is not shown, choose **Use another
-> account**.
-
-If the terminal returns control while that command is still waiting for the
-browser callback, immediately tell the maker:
-
-> **Waiting for authorization**
->
-> Complete the Microsoft sign-in in your browser. I will continue automatically
-> after authorization finishes.
-
-Do not describe an authorization wait as service processing, do not start a
-second command, and do not infer that a remote mutation has started.
-
----
 
 ## Start
 
