@@ -89,6 +89,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
+# Tracks whether the ESS Maker Profile extension was confirmed installed.
+# Safety net: in standard mode the extension owns the README preview, so if it
+# is NOT installed we open the README directly at launch.
+$script:makerProfileInstalled = $false
+
 function Write-Step  { param([string]$m) Write-Host "`n==> $m" -ForegroundColor Cyan; try { Write-EssInstallStep -Step (Get-EssStepKey $m) } catch {} }
 function Write-Ok    { param([string]$m) Write-Host "    [ok]   $m" -ForegroundColor Green }
 function Write-Warn2 { param([string]$m) Write-Host "    [warn] $m" -ForegroundColor Yellow }
@@ -722,8 +727,9 @@ if ($deferPip) {
 # passes -SkipExtensions (IT-locked-down boxes that block VSIX installs).
 if (-not $FlightCheckOnly -and -not $SkipExtensions) {
     # Install the ESS Maker Profile extension in both modes. In lite mode it
-    # applies the chat-first layout; in standard mode it only handles /setup
-    # injection after the welcome wizard closes (no visual changes).
+    # applies the guided layout (rail + walkthrough + chat); in standard mode
+    # it shows a rendered README preview while the installer opens Copilot Chat
+    # + /setup.
     $modeLabel = if ($SkipMakerProfile) { 'standard' } else { 'lite' }
     Write-Step "Installing ESS Maker Profile ($modeLabel mode)"
 
@@ -766,6 +772,7 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions) {
 
             if ($vsix_exit -eq 0) {
                 Write-Ok "ESS Maker Profile installed ($($vsix.Name)) - $modeLabel mode"
+                $script:makerProfileInstalled = $true
             } else {
                 Write-Warn2 "ess-maker-profile vsix install returned exit $vsix_exit (non-fatal)"
                 ($out | Out-String).TrimEnd() -split "`r?`n" | ForEach-Object { Write-Warn2 "  $_" }
@@ -1181,6 +1188,13 @@ if (-not $SkipLaunch) {
                     Write-Ok "Requested /setup in Copilot Chat at $workspace"
                     Write-Host "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts and /setup will run." -ForegroundColor Yellow
                     Write-Host "If /setup does not start after trust/sign-in, open Copilot Chat manually and run /setup." -ForegroundColor Yellow
+                    # Safety net: in standard mode the ESS Maker Profile extension
+                    # shows the rendered README preview. If it was not installed,
+                    # open the README file directly so the user still lands on it.
+                    $readmePath = Join-Path $workspace 'README.md'
+                    if (-not $script:makerProfileInstalled -and (Test-Path $readmePath)) {
+                        Invoke-Native { & $codePath $readmePath } | Out-Null
+                    }
                 }
             } else {
                 # Lite mode - extension handles /setup after welcome wizard

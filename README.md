@@ -26,6 +26,18 @@ Other setup paths — Lite Mode (chat-first layout), GitHub Codespaces, FlightCh
 
 For more info on the available solutions, samples, repository structure, and telemetry, see [MORE_INFO.md](MORE_INFO.md).
 
+## New to VS Code?
+
+The installer opens VS Code for you. If this is your first time in VS Code, use the guided view for a friendlier way to navigate the kit. In the **activity bar** along the far-left edge of the window, click the **rocket icon**.
+
+![The rocket icon in the VS Code activity bar](docs/images/vscode-rocket-icon.png)
+
+That opens a simple, point-and-click view of the kit — a **Quick start** panel, a **Customization** list of every skill, and a **Help** tab. To begin, open the **Help** tab and click **Tutorial** for a step-by-step walkthrough.
+
+![The guided view with the Help tab and Tutorial highlighted](docs/images/vscode-guided-navigation.png)
+
+Prefer to drive everything from chat? You can ignore the rocket view entirely and just type commands like `/setup` into Copilot Chat.
+
 ## Contributing
 
 This project welcomes contributions and suggestions. Most contributions require you to agree to a Contributor License Agreement (CLA) declaring that you have the right to, and actually do, grant us the rights to use your contribution. For details, visit https://cla.microsoft.com.

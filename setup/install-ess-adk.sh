@@ -22,6 +22,10 @@ BRANCH="${ESS_ADK_BRANCH:-main}"
 INSTALL_ROOT="${ESS_ADK_INSTALL_ROOT:-$HOME/source}"
 FLIGHTCHECK_ONLY="${FLIGHTCHECK_ONLY:-false}"
 SKIP_MAKER_PROFILE="${SKIP_MAKER_PROFILE:-false}"
+# Tracks whether the ESS Maker Profile extension was confirmed installed.
+# Used as a safety net: in standard mode the extension owns the README
+# preview, so if it is NOT installed we open the README directly at launch.
+MAKER_PROFILE_INSTALLED="false"
 REPO_URL="https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit.git"
 REPO_NAME="Employee-Self-Service-Agent-Developer-Kit"
 CODE_CMD=""
@@ -318,9 +322,10 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
         done
 
         # ESS Maker Profile — installs in both modes. In lite mode it
-        # applies the chat-first layout; in standard mode it only handles
-        # /setup injection (no visual changes). The mode is communicated
-        # via essMaker.mode in VS Code's user settings.json.
+        # applies the guided layout (rail + walkthrough + chat); in standard
+        # mode it shows a rendered README preview while the installer opens
+        # Copilot Chat + /setup. The mode is communicated via essMaker.mode
+        # in VS Code's user settings.json.
         if [[ "$SKIP_MAKER_PROFILE" == "true" ]]; then
             MODE_LABEL="standard"
         else
@@ -339,6 +344,7 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
             warn "No ess-maker-profile-*.vsix found under $MAKER_VSIX_DIR. Skipping extension install."
         elif "$CODE_CMD" --install-extension "$MAKER_VSIX" --force 2>/dev/null; then
             ok "ESS Maker Profile ($(basename "$MAKER_VSIX")) — $MODE_LABEL mode"
+            MAKER_PROFILE_INSTALLED="true"
         else
             warn "ESS Maker Profile install failed (non-fatal)"
         fi
@@ -620,6 +626,12 @@ if [[ -n "$CODE_CMD" ]]; then
             ok "Requested /setup in Copilot Chat at $WORKSPACE_PATH"
             echo -e "    ${YELLOW}If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts and /setup will run.${NC}"
             echo -e "    ${YELLOW}If /setup does not start after trust/sign-in, open Copilot Chat manually and run /setup.${NC}"
+            # Safety net: in standard mode the ESS Maker Profile extension shows
+            # the rendered README preview. If it was not installed, open the
+            # README file directly so the user still lands on it.
+            if [[ "$MAKER_PROFILE_INSTALLED" != "true" && -f "$WORKSPACE_PATH/README.md" ]]; then
+                "$CODE_CMD" "$WORKSPACE_PATH/README.md" 2>/dev/null || true
+            fi
         else
             warn "'code chat' failed or is unsupported. Falling back to opening the workspace only."
             warn "If you have an older VS Code (pre-1.102 / June 2025), update VS Code and re-run, or run /setup manually in Copilot Chat."

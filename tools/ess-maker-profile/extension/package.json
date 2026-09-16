@@ -2,7 +2,7 @@
   "name": "ess-maker-profile",
   "displayName": "ESS Maker",
   "description": "Chat-only, big-button experience for customizing your Employee Self-Service agent. POC.",
-  "version": "0.4.25",
+  "version": "0.4.26",
   "publisher": "microsoft-ess",
   "private": true,
   "engines": {
@@ -66,13 +66,39 @@
         "command": "essMaker.startChatOnly",
         "title": "ESS Maker: Start Chat-Only Layout",
         "category": "ESS Maker"
+      },
+      {
+        "command": "essMaker.runUpdate",
+        "title": "Agent Developer Kit: Modify a topic",
+        "category": "Agent Developer Kit"
+      },
+      {
+        "command": "essMaker.openIntroduction",
+        "title": "Agent Developer Kit: Introduction",
+        "category": "Agent Developer Kit"
+      },
+      {
+        "command": "essMaker.showItemInfo",
+        "title": "Agent Developer Kit: About this step",
+        "category": "Agent Developer Kit",
+        "icon": "$(info)"
+      },
+      {
+        "command": "essMaker.openDocs",
+        "title": "Agent Developer Kit: Open documentation",
+        "category": "Agent Developer Kit"
+      },
+      {
+        "command": "essMaker.openGuidedLayout",
+        "title": "Agent Developer Kit: Open guided setup view",
+        "category": "Agent Developer Kit"
       }
     ],
     "viewsContainers": {
       "activitybar": [
         {
           "id": "essMakerActions",
-          "title": "ESS Maker",
+          "title": "Agent Developer Kit",
           "icon": "$(rocket)"
         }
       ]
@@ -82,11 +108,81 @@
         {
           "type": "webview",
           "id": "essMaker.actionsView",
-          "name": "Quick actions",
-          "contextualTitle": "ESS Maker"
+          "name": "Quick start",
+          "contextualTitle": "Agent Developer Kit"
+        },
+        {
+          "id": "essMaker.customizationView",
+          "name": "Customization",
+          "contextualTitle": "Agent Developer Kit"
+        },
+        {
+          "id": "essMaker.helpView",
+          "name": "Help",
+          "contextualTitle": "Agent Developer Kit"
         }
       ]
     },
+    "menus": {
+      "view/item/context": [
+        {
+          "command": "essMaker.showItemInfo",
+          "when": "view == essMaker.customizationView && viewItem =~ /adkInfo/",
+          "group": "inline"
+        }
+      ]
+    },
+    "walkthroughs": [
+      {
+        "id": "essMaker.gettingStarted",
+        "title": "Welcome to the Agent Developer Kit!",
+        "description": "Build, update, and publish your Employee Self-Service agent with plain English. No code required.",
+        "steps": [
+          {
+            "id": "introduction",
+            "title": "Introduction",
+            "description": "**Actions (left):** quick actions, customization, and help — everything you need to drive the build from one rail.\n**Preview (center):** follow the steps in the same workspace as your agent.\n**Copilot chat (right):** describe what you want your ESS agent to do; Copilot turns your intent into set-up steps, topics, and configuration.\n[Open Copilot Chat](command:workbench.action.chat.open)",
+            "media": { "markdown": "walkthrough/introduction.md" },
+            "completionEvents": ["onCommand:workbench.action.chat.open"]
+          },
+          {
+            "id": "setup",
+            "title": "Set up your environment",
+            "description": "Sign in to your Power Platform environment.\n[Start set up](command:essMaker.runSetup)",
+            "media": { "markdown": "walkthrough/connect.md" },
+            "completionEvents": ["onCommand:essMaker.runSetup"]
+          },
+          {
+            "id": "create",
+            "title": "Create a topic",
+            "description": "Describe a new conversation in plain English.\n[Create a topic](command:essMaker.runCreate)",
+            "media": { "markdown": "walkthrough/create-topic.md" },
+            "completionEvents": ["onCommand:essMaker.runCreate"]
+          },
+          {
+            "id": "modify",
+            "title": "Modify a topic",
+            "description": "Change how an existing topic behaves.\n[Modify a topic](command:essMaker.runUpdate)",
+            "media": { "markdown": "walkthrough/modify-topic.md" },
+            "completionEvents": ["onCommand:essMaker.runUpdate"]
+          },
+          {
+            "id": "flightcheck",
+            "title": "Run a flightcheck",
+            "description": "Run 41+ readiness checks before you deploy.\n[Run a flightcheck](command:essMaker.runFlightcheck)",
+            "media": { "markdown": "walkthrough/flightcheck.md" },
+            "completionEvents": ["onCommand:essMaker.runFlightcheck"]
+          },
+          {
+            "id": "push",
+            "title": "Push to Copilot",
+            "description": "Safely deploy your changes to Copilot Studio.\n[Push to Copilot Studio](command:essMaker.runPush)",
+            "media": { "markdown": "walkthrough/push.md" },
+            "completionEvents": ["onCommand:essMaker.runPush"]
+          }
+        ]
+      }
+    ],
     "configuration": {
       "title": "ESS Maker",
       "properties": {
