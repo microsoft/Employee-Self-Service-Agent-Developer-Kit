@@ -350,6 +350,9 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert _PREPARE_FRESH_WORKSPACE.is_file()
     assert "Create and open a new workspace" in text
     assert "Create a new workspace without opening it" in text
+    assert "Use suggested location -- {suggested absolute sibling-folder path}" in text
+    assert "Choose another location" in text
+    assert "Do not ask the maker to type a path unless" in normalized
     assert "scripts/prepare_fresh_workspace.py" in text
     assert "--open-vscode" in text
     assert "DA_PREPARED_WORKSPACE_JSON:" in text
@@ -364,7 +367,10 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "do not rerun creation" in normalized
     assert "Do not offer to clear, replace, or overwrite" in normalized
     assert "Do not preselect **Create agent**" in text
-    assert "authorizes exactly one create attempt" in normalized
+    assert "Run create only after the maker explicitly selects" in normalized
+    assert "exactly one create attempt" not in normalized
+    assert "The command ends after this one attempt" not in normalized
+    assert "Do not invoke create concurrently or automatically" in normalized
     assert "diagnostic evidence only" in normalized
     assert "do not explain those internal version concepts to the maker" in normalized
     assert "Prepare this agent for local editing?" in text

@@ -21,7 +21,13 @@ Offer exactly:
 - **Create a new workspace without opening it**
 - **Cancel setup**
 
-Do not offer to clear, replace, or overwrite the current folder's setup state. After either create choice, ask for a new absolute sibling-folder path. The destination must not already exist and must be outside the current Developer Kit repository.
+Do not offer to clear, replace, or overwrite the current folder's setup state. After either create choice, derive a suggested destination from the current repository folder name by appending `-fresh`. If that sibling folder exists, append the first available numeric suffix (`-fresh-2`, `-fresh-3`, and so on). Use the host's interactive single-selection control and offer exactly:
+
+- **Use suggested location -- {suggested absolute sibling-folder path}**
+- **Choose another location**
+- **Cancel setup**
+
+Do not ask the maker to type a path unless they select **Choose another location**. For that choice, ask for a new absolute sibling-folder path. The destination must not already exist and must be outside the current Developer Kit repository.
 
 For **Create and open a new workspace**, run:
 
@@ -81,7 +87,7 @@ Offer exactly:
 - **Choose a different product**
 - **Cancel setup**
 
-Do not preselect **Create agent**. Each explicit **Create agent** selection authorizes exactly one create attempt with that product and target.
+Do not preselect **Create agent**. Run create only after the maker explicitly selects **Create agent** for the displayed product and target.
 
 ## Create
 
@@ -95,7 +101,7 @@ python scripts/setup_mos_starter.py create \
   --package-version "{CONFIRMED_PACKAGE_VERSION}"
 ```
 
-The command ends after this one attempt. Do not launch another create from this invocation. If the command reports local setup state despite the earlier check, return to [Use a separate workspace when the current folder is occupied](#use-a-separate-workspace-when-the-current-folder-is-occupied); do not rerun create.
+Wait for the command to finish and interpret its returned evidence before taking further action. Do not invoke create concurrently or automatically. If the command reports local setup state despite the earlier check, return to [Use a separate workspace when the current folder is occupied](#use-a-separate-workspace-when-the-current-folder-is-occupied); do not invoke create from the occupied folder.
 
 ## Interpret the response
 
