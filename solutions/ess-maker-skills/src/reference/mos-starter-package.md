@@ -23,7 +23,7 @@ This reference defines the safety and evidence contract for DA `/setup`'s fresh-
 | A created starter agent is not automatically opted into ALM | Live-proven |
 | ALM opt-in uses the full fetched `BotEntity`, adds `configuration.settings["alm.isAlmEnabled"] = true`, and submits an empty `botComponentChanges` list through `PUT /api/{agentId}/components` | Live-proven |
 | ALM opt-in persisted and advanced the BotEntity version on read-back | Live-proven |
-| Existing-Dev validation and attachment surface ALM and published-state prerequisites | Live-proven |
+| Existing-Dev validation and attachment remain separate and expose service-owned prerequisites | Live-proven |
 | Direct native ALM import already creates agents from packages declaring `packageType: "templated"` | Live-proven, using the generic import path, not this surface |
 
 Do not describe a pending-validation claim as supported behavior. In particular, 409 collision semantics, non-TEST behavior, and product-specific package availability remain open runtime evidence.
@@ -54,7 +54,7 @@ Do not describe a pending-validation claim as supported behavior. In particular,
 10. Invoke ALM opt-in only after separate maker confirmation. Fetch the exact agent first, deep-copy and preserve its full `BotEntity`, change only `alm.isAlmEnabled`, and request no component changes.
 11. Verify ALM through a second component fetch. A write response without persisted read-back is not success.
 12. Return control after every operation. The existing `setup_existing_da.py attach` command remains the sole Dev validation, projection, and canonical-completion boundary.
-13. If attachment reports an unpublished or otherwise unavailable service state, report it and stop. This path never publishes or removes components.
+13. If attachment reports a service-owned prerequisite, report it and stop. This path never publishes or removes components.
 
 ## Durable command boundary
 
