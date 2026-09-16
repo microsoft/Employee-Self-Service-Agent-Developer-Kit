@@ -35,7 +35,6 @@ from agentbuilder import (
 )
 from setup_existing_da import (
     CANONICAL_SETUP_STATE,
-    DA_CONNECTION_STATE,
     ExistingDASetupError,
     _add_agentbuilder_target_arguments,
     _client_from_args,
@@ -243,7 +242,6 @@ def redact_text(text: str) -> str:
 def _validate_empty_create_workspace(kit_root: Path) -> None:
     conflicts = (
         CANONICAL_SETUP_STATE,
-        DA_CONNECTION_STATE,
         Path(".local/config.json"),
     )
     if any((kit_root / path).exists() for path in conflicts):
