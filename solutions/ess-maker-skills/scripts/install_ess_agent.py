@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 from pathlib import Path
 import sys
 import time
@@ -696,6 +697,80 @@ def main() -> None:
         "schemaName": schema_name,
     }
     print(f"INSTALLED_ESS_AGENT_JSON:{json.dumps(result)}")
+    _print_analytics_pointer_reminder(result)
+
+
+def _print_analytics_pointer_reminder(result: dict) -> None:
+    """Print the one-time Copilot Studio analytics pointer reminder.
+
+    Two important design notes for this helper:
+
+    1. **Guarded by the analytics pointer feature flag.** The pointer surface
+       is behind ``ADK_ANALYTICS_POINTER`` because the deep-link contract
+       isn't yet confirmed by the Copilot Studio partner team (see
+       ``analytics_pointer.py`` module docstring). When the flag is off we
+       return immediately — no import cost, no state, no output that could
+       confuse downstream tooling parsing the installer's stdout.
+
+    2. **The ESS installer doesn't own the agent id.** ``install_ess_agent``
+       installs the ESS SOLUTION into a Power Platform environment. The
+       Copilot Studio agent (botId) is picked up LATER by ``/setup`` when
+       the maker links their workspace to a specific bot in that env, so
+       ``result`` here only carries ``environmentUrl`` and ``schemaName`` —
+       NOT the ``(maker, env, agent)`` triplet the pointer resolves against.
+       That's why this helper reads ``.local/config.json`` directly via
+       ``analytics_pointer.read_association()``: on a fresh env where
+       /setup hasn't run yet the triplet is absent and we skip the reminder
+       entirely (there's nowhere for the maker to jump to). On a resumed
+       install where /setup DID already link an agent, the triplet is
+       present and the maker gets the pointer.
+
+    Output is printed AFTER the ``INSTALLED_ESS_AGENT_JSON:`` line so the
+    machine-readable marker other scripts grep for stays first on stdout —
+    the reminder is a maker-facing footer, never part of the JSON payload.
+    Any exception here is swallowed: a broken reminder must NEVER fail a
+    successful install.
+    """
+    if os.environ.get("ADK_ANALYTICS_POINTER", "").strip().lower() not in (
+        "on", "1", "true", "yes", "enabled",
+    ):
+        return
+    try:
+        # Ensure scripts/ is on sys.path so this works both when the installer
+        # is invoked as ``python scripts/install_ess_agent.py`` (scripts/ is
+        # already the process cwd's script dir, but not necessarily on
+        # sys.path) and when imported by a wrapper.
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        if script_dir not in sys.path:
+            sys.path.insert(0, script_dir)
+        import analytics_pointer  # type: ignore
+
+        assoc = analytics_pointer.read_association()
+        if assoc is None:
+            # Triplet not yet present — /setup hasn't linked an agent to this
+            # workspace. Silently skip: the maker will get the pointer on the
+            # NEXT install after they run /setup, or via /analytics directly.
+            return
+        maker_aad, env_id, agent_id = assoc
+        store = analytics_pointer.get_reminder_store()
+        if store.is_completed(maker_aad, env_id, agent_id):
+            return
+        url, reason = analytics_pointer.resolve_pointer_url(env_id, agent_id)
+        line = analytics_pointer.render_pointer_line(
+            url, reason, reminder_framing=True,
+        )
+        print()
+        print("--- Analytics ---")
+        print(line)
+        store.mark_completed(maker_aad, env_id, agent_id, "post_deploy_install")
+        analytics_pointer.record_pointer_shown(
+            env_id=env_id,
+            agent_id=agent_id,
+            outcome="resolved" if url else "unresolved",
+            unresolved_reason="" if url else reason,
+        )
+    except Exception:  # noqa: BLE001 — a broken reminder must not fail install
+        pass
 
 
 if __name__ == "__main__":
