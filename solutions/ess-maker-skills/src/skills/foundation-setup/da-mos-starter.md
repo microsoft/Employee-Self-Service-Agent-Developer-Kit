@@ -11,21 +11,7 @@ Ask:
 
 > What kind of ESS agent are you setting up?
 
-Offer exactly **HR** and **IT**. Then ask:
-
-> Do you want the core ESS experience or support for a specific connected system?
-
-This intent only guides the maker's product choice; it is never sent to or matched by a script, and it does not prove that a matching entitled product exists. A product can be selected only when the service returned its underlying package. When the requested product is unavailable, show:
-
-> Requested setup: **{product} -- Unavailable in this environment**
->
-> Available products:
->
-> - **{product name} {version}** -- {description}
->
-> I have not selected a substitute.
-
-Require the maker to explicitly select an available product to change the requested setup. If there are no selectable products, stop.
+Offer exactly **HR** and **IT**. Let the service-returned product list supply the product choices; do not ask the maker to classify the product before listing it.
 
 Ask for a Copilot Studio environment URL when the target is not supplied. When fresh-agent intent and the target environment are known, mark **Choose the starting point and target environment** complete.
 
@@ -50,11 +36,11 @@ If the command instead fails, parse `DA_MOS_STARTER_LIST_ANNOTATIONS_JSON:` and 
 
 ## Confirm the exact product and target
 
-Ask the maker to explicitly choose one product by name, and confirm the target Power Platform environment. Do not preselect a choice or infer one from the maker's stated intent. Once confirmed, keep the product's underlying `packageId`, `name`, and `version` for the next step; these are internal command inputs, not maker-facing text.
+Ask the maker to explicitly choose one product by name, and confirm the target Power Platform environment. Do not preselect a choice. Once confirmed, keep the product's underlying `packageId`, `name`, and `version` for the next step; these are internal command inputs, not maker-facing text.
 
-Show:
+Substitute the maker's selected HR or IT area and show:
 
-> Create a new {HR or IT} ESS agent in **{friendly environment name or Selected Power Platform environment}** from **{product name} {version}**?
+> Create a new **{selected area} ESS agent** in **{friendly environment name or Selected Power Platform environment}** from **{selected product name} {version}**?
 
 Offer exactly:
 
@@ -94,7 +80,7 @@ Ask:
 
 > The agent is created, but the local workspace is not ready yet.
 >
-> Prepare this agent for local editing? This enables application lifecycle management (ALM) while preserving the agent's current content and settings.
+> Prepare this agent for local editing?
 
 Offer exactly:
 
@@ -130,4 +116,4 @@ For every non-created outcome (`pre-dispatch-failure`, `collision`, `rejected`, 
 
 ## Hybrid follow-up
 
-After attachment completes, if product intent supplied in the current invocation was a hybrid ISV (Workday or ServiceNow) rather than the core ESS experience, recommend running `/connect` afterward to wire that product's connection. Never invoke `/connect`, install a connector, or configure Dataverse, publishing, promotion, or telemetry from this skill yourself.
+After attachment completes, if the selected product explicitly identifies a hybrid ISV such as Workday or ServiceNow, recommend running `/connect` afterward to wire that product's connection. Never invoke `/connect`, install a connector, or configure Dataverse, publishing, promotion, or telemetry from this skill yourself.

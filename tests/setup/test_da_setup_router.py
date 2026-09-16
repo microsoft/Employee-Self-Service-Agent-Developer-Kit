@@ -339,20 +339,18 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "`setupStatus`" not in text
     assert "What kind of ESS agent are you setting up?" in text
     assert "Offer exactly **HR** and **IT**" in normalized
-    assert "core ESS experience" in normalized
-    assert "specific connected system" in normalized
-    assert "Requested setup: **{product} -- Unavailable in this environment**" in text
-    assert "I have not selected a substitute." in text
-    assert "explicitly select an available product" in normalized
+    assert "Let the service-returned product list supply the product choices" in normalized
     assert "Collapse rows with identical maker-visible fields" in text
     assert "retain the first returned row as the internal command input" in normalized
-    assert "Create a new {HR or IT} ESS agent" in normalized
+    assert "Create a new **{selected area} ESS agent**" in normalized
+    assert "**{selected product name} {version}**" in text
     assert "Choose a different product" in text
     assert "Do not preselect **Create agent**" in text
     assert "authorizes exactly one create attempt" in normalized
     assert "diagnostic evidence only" in normalized
     assert "do not explain those internal version concepts to the maker" in normalized
     assert "Prepare this agent for local editing?" in text
+    assert "application lifecycle management" not in normalized
     assert "**Prepare for local editing**" in text
     assert "**Not now** performs no ALM operation" in normalized
     assert "outcome: verification-failed" in normalized
