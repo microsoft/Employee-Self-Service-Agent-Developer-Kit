@@ -554,9 +554,21 @@ def test_list_starter_packages_bounds_page_count() -> None:
         client.list_starter_packages(max_pages=3)
 
 
-def test_create_agent_from_starter_package_sends_one_empty_body_post() -> None:
+def test_create_agent_from_starter_package_sends_live_proven_post() -> None:
     session = FakeSession(
-        [FakeResponse({"cdsBotId": AGENT_ID, "schemaName": "gptagent_esshr"})]
+        [
+            FakeResponse(
+                {
+                    "botId": AGENT_ID,
+                    "sourcePackage": {
+                        "packageId": "pkg-1",
+                        "schemaName": "gptagent_esshr",
+                        "version": "1.0.0",
+                    },
+                },
+                status_code=201,
+            )
+        ]
     )
     client = agentbuilder.AgentBuilderClient(
         HOST,
@@ -572,23 +584,27 @@ def test_create_agent_from_starter_package_sends_one_empty_body_post() -> None:
     call = session.calls[0]
     assert call["method"] == "POST"
     assert call["url"].endswith(
-        "/copilotstudio/minimalBots/agentStarterPackages/pkg-1/create"
+        "/copilotstudio/minimalBots/createFromStarterPackage"
     )
-    assert call["json"] == {}
+    assert call["json"] == {"packageId": "pkg-1"}
     assert call["allow_redirects"] is False
     assert "POST" not in session.mounts["https://"].max_retries.allowed_methods
     # The client returns the raw response untouched -- no parsing, no
     # raising on a non-2xx status -- so the wrapper owns evidence
     # rendering and fuse disposition.
     assert response.json() == {
-        "cdsBotId": AGENT_ID,
-        "schemaName": "gptagent_esshr",
+        "botId": AGENT_ID,
+        "sourcePackage": {
+            "packageId": "pkg-1",
+            "schemaName": "gptagent_esshr",
+            "version": "1.0.0",
+        },
     }
 
 
-def test_create_agent_from_starter_package_url_encodes_reserved_characters() -> None:
+def test_create_agent_from_starter_package_keeps_opaque_id_in_json_body() -> None:
     session = FakeSession(
-        [FakeResponse({"cdsBotId": AGENT_ID, "schemaName": "gptagent_esshr"})]
+        [FakeResponse({"botId": AGENT_ID, "sourcePackage": {}})]
     )
     client = agentbuilder.AgentBuilderClient(
         HOST,
@@ -604,15 +620,9 @@ def test_create_agent_from_starter_package_url_encodes_reserved_characters() -> 
     call = session.calls[0]
     assert call["method"] == "POST"
     assert call["url"].endswith(
-        "/copilotstudio/minimalBots/agentStarterPackages/"
-        "pkg%2Fweird%3Fid%231%20two/create"
+        "/copilotstudio/minimalBots/createFromStarterPackage"
     )
-    # Exactly one path segment for the encoded ID: no unescaped "/" split it.
-    encoded_segment = call["url"].rsplit("agentStarterPackages/", 1)[1].split(
-        "/create"
-    )[0]
-    assert "/" not in encoded_segment
-    assert call["json"] == {}
+    assert call["json"] == {"packageId": "pkg/weird?id#1 two"}
     assert call["allow_redirects"] is False
     assert "POST" not in session.mounts["https://"].max_retries.allowed_methods
 
@@ -646,6 +656,40 @@ def test_create_agent_from_starter_package_rejects_blank_package_id() -> None:
 
     with pytest.raises(ValueError, match="non-empty string"):
         client.create_agent_from_starter_package("   ")
+
+
+def test_update_bot_entity_preserves_bot_and_requests_no_component_changes() -> None:
+    response = FakeResponse({"botComponentChanges": []})
+    session = FakeSession([response])
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+    bot = {
+        "$kind": "BotEntity",
+        "cdsBotId": AGENT_ID,
+        "configuration": {
+            "gPTSettings": {"defaultSchemaName": "gptagent_ess"},
+            "settings": {"alm.isAlmEnabled": True},
+        },
+        "unknownFutureField": {"preserve": True},
+    }
+
+    result = client.update_bot_entity(AGENT_ID, bot)
+
+    assert result is response
+    assert len(session.calls) == 1
+    call = session.calls[0]
+    assert call["method"] == "PUT"
+    assert call["url"].endswith(
+        f"/copilotstudio/minimalBots/api/{AGENT_ID}/components"
+    )
+    assert call["json"] == {"bot": bot, "botComponentChanges": []}
+    assert call["allow_redirects"] is False
+    assert "PUT" not in session.mounts["https://"].max_retries.allowed_methods
 
 
 def test_http_403_is_explicit_without_echoing_response_body() -> None:

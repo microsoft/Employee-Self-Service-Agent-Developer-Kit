@@ -1,12 +1,13 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""List entitled MOS starter packages and create a fresh Dev agent from one.
+"""List MOS starters, create a fresh Dev agent, and enable ALM when requested.
 
 This is the DA `/setup` fresh-install path for a maker with no existing
-agent: exactly two normal-path commands (``list``, ``create``), nothing
-else -- no ``resolve``/``status`` command and no persona/ISV/product
-policy, which belongs to the maker and
+agent. It exposes three independently observable operations: read-only
+``list``, guarded ``create``, and replacement-safe ``enable-alm``. It has no
+``resolve``/``status`` command and no persona/ISV/product policy, which belongs
+to the maker and
 ``src/skills/foundation-setup/da-mos-starter.md``, not this script.
 
 ``src/reference/mos-starter-package.md`` is the canonical narrative: the
@@ -18,6 +19,7 @@ not here.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -38,6 +40,7 @@ from setup_existing_da import (
     ExistingDASetupError,
     _add_agentbuilder_target_arguments,
     _client_from_args,
+    _normalize_guid,
     _normalize_environment_id,
     _utc_now,
     resolve_da_target,
@@ -47,6 +50,8 @@ from setup_existing_da import (
 FUSE_PATH = Path(".local/setup/mos-starter/create-attempted")
 _CREATE_MARKER = "DA_MOS_STARTER_CREATE"
 _LIST_MARKER = "DA_MOS_STARTER_LIST"
+_ALM_MARKER = "DA_MOS_STARTER_ALM"
+_ALM_VERIFY_MARKER = "DA_MOS_STARTER_ALM_VERIFY"
 # The fuse-disposition matrix for every status bucket lives in
 # src/reference/mos-starter-package.md; only these definitive rejections
 # clear the fuse (the create never happened), everything else keeps it.
@@ -174,6 +179,7 @@ def list_starter_packages(
     except AgentBuilderHTTPError as exc:
         annotations: dict[str, Any] = {
             "targetEnvironmentId": environment_id,
+            "outcome": "service-rejected",
             "httpStatus": exc.status_code,
             "requestId": exc.request_id,
         }
@@ -182,6 +188,28 @@ def list_starter_packages(
         else:
             body, body_is_json = _parse_response_body(exc.response)
             _print_evidence(annotations, body, body_is_json, marker=_LIST_MARKER)
+        raise
+    except (requests.exceptions.RequestException, OSError) as exc:
+        _emit_annotations(
+            {
+                "targetEnvironmentId": environment_id,
+                "outcome": "transport-failure",
+                "transportErrorType": type(exc).__name__,
+                "transportError": str(exc),
+            },
+            marker=_LIST_MARKER,
+        )
+        raise
+    except AgentBuilderError as exc:
+        _emit_annotations(
+            {
+                "targetEnvironmentId": environment_id,
+                "outcome": "invalid-response",
+                "errorType": type(exc).__name__,
+                "error": str(exc),
+            },
+            marker=_LIST_MARKER,
+        )
         raise
     return {
         "environmentId": environment_id,
@@ -238,7 +266,7 @@ def redact_text(text: str) -> str:
     )
 
 
-# --- create (the sole mutating command) -----------------------------------
+# --- create ---------------------------------------------------------------
 def _validate_empty_create_workspace(kit_root: Path) -> None:
     conflicts = (
         CANONICAL_SETUP_STATE,
@@ -258,7 +286,7 @@ def _fuse_content(context: dict[str, Any]) -> str:
         f"environmentId: {context['targetEnvironmentId']}\n"
         f"packageId: {context['packageId']}\n"
         f"packageName: {context['packageName'] or ''}\n"
-        f"packageVersion: {context['packageVersion'] or ''}\n"
+        f"catalogPackageVersion: {context['catalogPackageVersion'] or ''}\n"
     )
 
 
@@ -283,8 +311,7 @@ def _create_fuse(path: Path, content: str) -> None:
             "persistent transcript for the prior response, then "
             "reconcile by read-only inspecting the target environment "
             "(the existing `list` and `setup_existing_da.py validate-agent` "
-            "commands) before trying again. This command will not start a "
-            "second create."
+            "commands). This command will not start a second create."
         ) from exc
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
@@ -349,23 +376,47 @@ def _parse_response_body(response: requests.Response) -> tuple[Any, bool]:
 
 
 def _extract_identity(body: Any) -> dict[str, str] | None:
-    """Extract a usable {cdsBotId, schemaName} pair when present.
+    """Extract a usable botId and source-package identity when present.
 
     This only checks that both fields are non-empty strings. The existing
     attach command remains the authoritative Dev validation boundary.
     """
     if not isinstance(body, dict):
         return None
-    agent_id = body.get("cdsBotId")
-    schema_name = body.get("schemaName")
+    agent_id = body.get("botId")
+    source_package = body.get("sourcePackage")
+    source_package_id = (
+        source_package.get("packageId")
+        if isinstance(source_package, dict)
+        else None
+    )
+    schema_name = (
+        source_package.get("schemaName")
+        if isinstance(source_package, dict)
+        else None
+    )
+    template_version = (
+        source_package.get("version")
+        if isinstance(source_package, dict)
+        else None
+    )
     if (
         not isinstance(agent_id, str)
         or not agent_id.strip()
+        or not isinstance(source_package_id, str)
+        or not source_package_id.strip()
         or not isinstance(schema_name, str)
         or not schema_name.strip()
+        or not isinstance(template_version, str)
+        or not template_version.strip()
     ):
         return None
-    return {"cdsBotId": agent_id.strip(), "schemaName": schema_name.strip()}
+    return {
+        "botId": agent_id.strip(),
+        "sourcePackageId": source_package_id.strip(),
+        "schemaName": schema_name.strip(),
+        "templateVersion": template_version.strip(),
+    }
 
 
 def _emit_annotations(
@@ -429,7 +480,7 @@ def create_from_starter_package(
         "targetEnvironmentId": normalized_environment_id,
         "packageId": package_id,
         "packageName": package_name,
-        "packageVersion": package_version,
+        "catalogPackageVersion": package_version,
     }
     fuse_path = resolved_kit_root / FUSE_PATH
     _create_fuse(fuse_path, _fuse_content(annotations))
@@ -448,8 +499,7 @@ def create_from_starter_package(
             _emit_annotations(annotations)
             raise MosStarterSetupError(
                 f"The create request did not reach the service ({reason}). "
-                "The attempt fuse was cleared; it is safe to retry after "
-                "resolving the local, DNS, or connection issue."
+                "The attempt fuse was cleared. The operation is complete."
             ) from exc
         annotations["fuseDisposition"] = "retained"
         annotations["outcome"] = "uncertain-transport"
@@ -457,10 +507,7 @@ def create_from_starter_package(
         _emit_annotations(annotations)
         raise MosStarterSetupError(
             "The create request ended without a classified response. The "
-            "attempt fuse was retained; do not retry. Reconcile the target "
-            "environment read-only (the existing `list` and "
-            "`setup_existing_da.py validate-agent` commands) before taking "
-            "further action."
+            "attempt fuse was retained and the outcome is uncertain."
         ) from exc
 
     status = response.status_code
@@ -476,22 +523,31 @@ def create_from_starter_package(
             _print_evidence(annotations, body, body_is_json)
             raise MosStarterSetupError(
                 f"The create response returned HTTP {status} without a "
-                "usable agent identity. The attempt fuse was retained; do "
-                "not retry. Reconcile the target environment read-only "
-                "before taking further action."
+                "usable agent identity. The attempt fuse was retained."
             )
-        annotations["agentId"] = identity["cdsBotId"]
+        if identity["sourcePackageId"] != package_id:
+            annotations["returnedPackageId"] = identity["sourcePackageId"]
+            annotations["fuseDisposition"] = "retained"
+            annotations["outcome"] = "source-package-mismatch"
+            _print_evidence(annotations, body, body_is_json)
+            raise MosStarterSetupError(
+                "The create response identified a different source package "
+                "than the request. The attempt fuse was retained."
+            )
+        annotations["agentId"] = identity["botId"]
         annotations["schemaName"] = identity["schemaName"]
+        annotations["templateVersion"] = identity["templateVersion"]
         annotations["fuseDisposition"] = "retained"
         annotations["outcome"] = "created"
         _print_evidence(annotations, body, body_is_json)
         return {
             "environmentId": normalized_environment_id,
-            "agentId": identity["cdsBotId"],
+            "agentId": identity["botId"],
             "schemaName": identity["schemaName"],
             "starterPackageId": package_id,
             "starterPackageName": package_name,
-            "starterPackageVersion": package_version,
+            "catalogPackageVersion": package_version,
+            "templateVersion": identity["templateVersion"],
         }
 
     if status in DEFINITIVE_REJECTION_STATUSES:
@@ -501,16 +557,12 @@ def create_from_starter_package(
         _print_evidence(annotations, body, body_is_json)
         if status == 409:
             raise MosStarterSetupError(
-                "An agent from this package may already exist in the "
-                "target environment (HTTP 409). The attempt fuse was "
-                "cleared. Inspect the existing Dev agent (the existing "
-                "`list-agents`/`validate-agent` commands) instead of "
-                "retrying create."
+                "The service reported a starter-package collision (HTTP 409). "
+                "The attempt fuse was cleared."
             )
         raise MosStarterSetupError(
             f"The service rejected the create request (HTTP {status}). "
-            "The attempt fuse was cleared; it is safe to retry after "
-            "resolving the reported cause."
+            "The attempt fuse was cleared. The operation is complete."
         )
 
     annotations["fuseDisposition"] = "retained"
@@ -518,9 +570,194 @@ def create_from_starter_package(
     _print_evidence(annotations, body, body_is_json)
     raise MosStarterSetupError(
         f"The create response (HTTP {status}) is not a definitive outcome. "
-        "The attempt fuse was retained; do not retry. Reconcile the target "
-        "environment read-only before taking further action."
+        "The attempt fuse was retained."
     )
+
+
+# --- ALM opt-in -----------------------------------------------------------
+def _fetched_bot_and_alm_value(
+    changeset: dict[str, Any],
+    *,
+    agent_id: str,
+) -> tuple[dict[str, Any], Any]:
+    """Validate and copy one exact fetched BotEntity with its ALM value."""
+    bot = changeset.get("bot")
+    if not isinstance(bot, dict):
+        raise MosStarterSetupError(
+            "Component fetch did not return a BotEntity; ALM was not changed."
+        )
+    fetched_agent_id = bot.get("cdsBotId")
+    if (
+        not isinstance(fetched_agent_id, str)
+        or fetched_agent_id.casefold() != agent_id.casefold()
+    ):
+        raise MosStarterSetupError(
+            "The fetched BotEntity identity does not match the requested "
+            "agent; ALM was not changed."
+        )
+    configuration = bot.get("configuration")
+    if not isinstance(configuration, dict):
+        raise MosStarterSetupError(
+            "The fetched BotEntity has no usable configuration; ALM was not changed."
+        )
+    settings = configuration.get("settings")
+    if settings is not None and not isinstance(settings, dict):
+        raise MosStarterSetupError(
+            "The fetched BotEntity settings are not an object; ALM was not changed."
+        )
+    copied_bot = copy.deepcopy(bot)
+    alm_value = settings.get("alm.isAlmEnabled") if settings is not None else None
+    return copied_bot, alm_value
+
+
+def _fetch_alm_components(
+    client: AgentBuilderClient,
+    *,
+    environment_id: str,
+    agent_id: str,
+    verification: bool,
+) -> dict[str, Any]:
+    """Fetch ALM state while preserving service or transport failure evidence."""
+    marker = _ALM_VERIFY_MARKER if verification else _ALM_MARKER
+    phase = "verification" if verification else "precondition"
+    try:
+        return client.fetch_components(agent_id)
+    except AgentBuilderHTTPError as exc:
+        annotations: dict[str, Any] = {
+            "targetEnvironmentId": environment_id,
+            "agentId": agent_id,
+            "outcome": f"{phase}-rejected",
+            "httpStatus": exc.status_code,
+            "requestId": exc.request_id,
+        }
+        if exc.response is None:
+            _emit_annotations(annotations, marker=marker)
+        else:
+            body, body_is_json = _parse_response_body(exc.response)
+            _print_evidence(annotations, body, body_is_json, marker=marker)
+        raise MosStarterSetupError(
+            f"The ALM {phase} fetch was rejected by the service. "
+            + ("Verification did not complete." if verification else "ALM was not changed.")
+        ) from exc
+    except (requests.exceptions.RequestException, OSError) as exc:
+        annotations = {
+            "targetEnvironmentId": environment_id,
+            "agentId": agent_id,
+            "outcome": f"{phase}-transport-failure",
+            "transportErrorType": type(exc).__name__,
+            "transportError": str(exc),
+        }
+        _emit_annotations(annotations, marker=marker)
+        raise MosStarterSetupError(
+            f"The ALM {phase} fetch ended without a response. "
+            + (
+                "Verification did not complete."
+                if verification
+                else "No update was attempted."
+            )
+        ) from exc
+
+
+def enable_alm(
+    client: AgentBuilderClient,
+    *,
+    environment_id: str,
+    agent_id: str,
+) -> dict[str, Any]:
+    """Enable ALM through a full fetched-BotEntity replacement and verify it."""
+    normalized_environment_id = _normalize_environment_id(environment_id)
+    normalized_agent_id = _normalize_guid(agent_id, "Agent ID")
+    before = _fetch_alm_components(
+        client,
+        environment_id=normalized_environment_id,
+        agent_id=normalized_agent_id,
+        verification=False,
+    )
+    update_bot, previous_value = _fetched_bot_and_alm_value(
+        before,
+        agent_id=normalized_agent_id,
+    )
+    before_version = update_bot.get("version")
+    if previous_value is True:
+        return {
+            "environmentId": normalized_environment_id,
+            "agentId": normalized_agent_id,
+            "outcome": "already-enabled",
+            "beforeBotVersion": before_version,
+            "afterBotVersion": before_version,
+            "previousValue": True,
+            "persistedValue": True,
+        }
+
+    update_settings = update_bot["configuration"].get("settings")
+    if update_settings is None:
+        update_settings = {}
+        update_bot["configuration"]["settings"] = update_settings
+    update_settings["alm.isAlmEnabled"] = True
+
+    annotations: dict[str, Any] = {
+        "targetEnvironmentId": normalized_environment_id,
+        "agentId": normalized_agent_id,
+        "beforeBotVersion": before_version,
+        "previousValue": previous_value,
+    }
+    try:
+        response = client.update_bot_entity(normalized_agent_id, update_bot)
+    except (requests.exceptions.RequestException, OSError) as exc:
+        annotations["outcome"] = "uncertain-transport"
+        annotations["transportErrorType"] = type(exc).__name__
+        annotations["transportError"] = str(exc)
+        _emit_annotations(annotations, marker=_ALM_MARKER)
+        raise MosStarterSetupError(
+            "The ALM update ended without a classified response. The setting "
+            "outcome is uncertain."
+        ) from exc
+
+    status = response.status_code
+    annotations["httpStatus"] = status
+    annotations["requestId"] = _extract_request_id(response)
+    body, body_is_json = _parse_response_body(response)
+    if not 200 <= status < 300:
+        annotations["outcome"] = "rejected"
+        _print_evidence(annotations, body, body_is_json, marker=_ALM_MARKER)
+        raise MosStarterSetupError(
+            f"The service rejected the ALM update (HTTP {status}). No component "
+            "changes were requested."
+        )
+
+    annotations["outcome"] = "update-accepted"
+    _print_evidence(annotations, body, body_is_json, marker=_ALM_MARKER)
+    after = _fetch_alm_components(
+        client,
+        environment_id=normalized_environment_id,
+        agent_id=normalized_agent_id,
+        verification=True,
+    )
+    after_bot, persisted_value = _fetched_bot_and_alm_value(
+        after,
+        agent_id=normalized_agent_id,
+    )
+    after_version = after_bot.get("version")
+    persisted = persisted_value is True
+    result = {
+        "environmentId": normalized_environment_id,
+        "agentId": normalized_agent_id,
+        "outcome": "enabled" if persisted else "verification-failed",
+        "beforeBotVersion": before_version,
+        "afterBotVersion": after_version,
+        "previousValue": previous_value,
+        "persistedValue": persisted,
+    }
+    if not persisted:
+        print(
+            f"{_ALM_VERIFY_MARKER}_JSON:"
+            f"{json.dumps(result, ensure_ascii=True)}"
+        )
+        raise MosStarterSetupError(
+            "The ALM update was accepted, but read-back did not show "
+            "`alm.isAlmEnabled: true`. Do not continue to attachment."
+        )
+    return result
 
 
 # --- CLI --------------------------------------------------------------
@@ -555,6 +792,15 @@ def build_parser() -> argparse.ArgumentParser:
         "--package-version",
         help="Diagnostic-only package version annotation.",
     )
+    enable_alm_command = commands.add_parser(
+        "enable-alm",
+        help="Enable ALM for one exact agent and verify the persisted setting.",
+    )
+    _add_agentbuilder_target_arguments(enable_alm_command)
+    enable_alm_command.add_argument(
+        "--agent-id",
+        help="Exact created Dev agent ID. Optional when present in --target-url.",
+    )
     return parser
 
 
@@ -564,9 +810,9 @@ def main(argv: list[str] | None = None) -> int:
         target = resolve_da_target(
             target_url=args.target_url,
             environment_id=args.environment_id,
-            agent_id=None,
+            agent_id=getattr(args, "agent_id", None),
             ring=args.ring,
-            require_agent=False,
+            require_agent=args.command == "enable-alm",
         )
         client = _client_from_args(args, target["environmentId"], target["ring"])
 
@@ -578,6 +824,15 @@ def main(argv: list[str] | None = None) -> int:
             print(
                 f"DA_MOS_STARTER_PACKAGES_JSON:{json.dumps(result, ensure_ascii=True)}"
             )
+            return 0
+
+        if args.command == "enable-alm":
+            result = enable_alm(
+                client,
+                environment_id=target["environmentId"],
+                agent_id=target["agentId"],
+            )
+            print(f"DA_MOS_STARTER_ALM_JSON:{json.dumps(result, ensure_ascii=True)}")
             return 0
 
         result = create_from_starter_package(
@@ -595,6 +850,7 @@ def main(argv: list[str] | None = None) -> int:
         ExistingDASetupError,
         MosStarterSetupError,
         OSError,
+        requests.exceptions.RequestException,
         ValueError,
     ) as exc:
         details = "\n".join((str(exc), *getattr(exc, "__notes__", ())))

@@ -102,6 +102,67 @@ class FakeCatalogClient:
         return self._packages
 
 
+class FakeAlmClient:
+    """Fakes the bounded fetch, BotEntity update, and verification fetch."""
+
+    def __init__(
+        self,
+        *,
+        fetch_responses: list[Any],
+        update_response: FakeHTTPResponse | None = None,
+        update_exception: BaseException | None = None,
+    ) -> None:
+        self._fetch_responses = fetch_responses
+        self._update_response = update_response
+        self._update_exception = update_exception
+        self.fetch_calls: list[str] = []
+        self.update_calls: list[tuple[str, dict[str, Any]]] = []
+
+    def fetch_components(self, agent_id: str) -> dict[str, Any]:
+        self.fetch_calls.append(agent_id)
+        result = self._fetch_responses.pop(0)
+        if isinstance(result, BaseException):
+            raise result
+        return result
+
+    def update_bot_entity(
+        self,
+        agent_id: str,
+        bot: dict[str, Any],
+    ) -> FakeHTTPResponse:
+        self.update_calls.append((agent_id, bot))
+        if self._update_exception is not None:
+            raise self._update_exception
+        assert self._update_response is not None
+        return self._update_response
+
+
+def _bot_changeset(
+    *,
+    version: int,
+    alm_enabled: Any = _MISSING,
+) -> dict[str, Any]:
+    settings = {"existing": "preserved"}
+    if alm_enabled is not _MISSING:
+        settings["alm.isAlmEnabled"] = alm_enabled
+    return {
+        "bot": {
+            "$kind": "BotEntity",
+            "version": version,
+            "cdsBotId": AGENT_ID,
+            "schemaName": SCHEMA,
+            "configuration": {
+                "$kind": "BotConfiguration",
+                "gPTSettings": {"defaultSchemaName": "gptagent_ess"},
+                "settings": settings,
+            },
+            "unknownFutureField": {"preserve": True},
+        },
+        "botComponentChanges": [{"existingComponent": "must-not-be-resubmitted"}],
+        "changeToken": "read-only-evidence",
+    }
+
+
 def _dns_failure() -> requests.exceptions.ConnectionError:
     try:
         try:
@@ -277,8 +338,15 @@ def test_create_fuse_exists_before_dispatch_and_is_retained_after_create(
 ) -> None:
     client = FakeMosClient(
         create_response=FakeHTTPResponse(
-            200,
-            json_body={"cdsBotId": AGENT_ID, "schemaName": SCHEMA},
+            201,
+            json_body={
+                "botId": AGENT_ID,
+                "sourcePackage": {
+                    "packageId": "pkg-1",
+                    "schemaName": SCHEMA,
+                    "version": "1.0.0",
+                },
+            },
         ),
         kit_root=tmp_path,
     )
@@ -294,12 +362,16 @@ def test_create_fuse_exists_before_dispatch_and_is_retained_after_create(
 
     assert client.fuse_existed_at_dispatch is True
     assert (tmp_path / FUSE_RELATIVE).is_file()
+    assert "catalogPackageVersion: 1.0.0" in (
+        tmp_path / FUSE_RELATIVE
+    ).read_text(encoding="utf-8")
     assert result["environmentId"] == ENVIRONMENT_ID
     assert result["agentId"] == AGENT_ID
     assert result["schemaName"] == SCHEMA
     assert result["starterPackageId"] == "pkg-1"
     assert result["starterPackageName"] == "First Package"
-    assert result["starterPackageVersion"] == "1.0.0"
+    assert result["catalogPackageVersion"] == "1.0.0"
+    assert result["templateVersion"] == "1.0.0"
     assert not (tmp_path / ".local" / "setup" / "config.json").exists()
     assert not (tmp_path / "workspace").exists()
 
@@ -370,6 +442,7 @@ def test_create_enforces_empty_workspace_guard(tmp_path: Path) -> None:
 def test_create_removes_fuse_on_pre_dispatch_failure(
     tmp_path: Path,
     build_exception: Any,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     client = FakeMosClient(create_exception=build_exception(), kit_root=tmp_path)
 
@@ -382,6 +455,13 @@ def test_create_removes_fuse_on_pre_dispatch_failure(
         )
 
     assert not (tmp_path / FUSE_RELATIVE).exists()
+    annotations = json.loads(
+        capsys.readouterr()
+        .out.split("DA_MOS_STARTER_CREATE_ANNOTATIONS_JSON:", 1)[1]
+        .splitlines()[0]
+    )
+    assert annotations["outcome"] == "pre-dispatch-failure"
+    assert annotations["fuseDisposition"] == "removed"
 
 
 @pytest.mark.parametrize(
@@ -398,7 +478,7 @@ def test_create_keeps_fuse_on_uncertain_transport_failure(
 ) -> None:
     client = FakeMosClient(create_exception=build_exception(), kit_root=tmp_path)
 
-    with pytest.raises(mos.MosStarterSetupError, match="do not retry"):
+    with pytest.raises(mos.MosStarterSetupError, match="outcome is uncertain"):
         mos.create_from_starter_package(
             client,
             environment_id=ENVIRONMENT_ID,
@@ -479,6 +559,44 @@ def test_create_keeps_fuse_on_non_json_2xx_body(tmp_path: Path) -> None:
     assert (tmp_path / FUSE_RELATIVE).is_file()
 
 
+def test_create_keeps_fuse_when_service_returns_a_different_package(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    client = FakeMosClient(
+        create_response=FakeHTTPResponse(
+            201,
+            json_body={
+                "botId": AGENT_ID,
+                "sourcePackage": {
+                    "packageId": "different-package",
+                    "schemaName": SCHEMA,
+                    "version": "1.0.0",
+                },
+            },
+        ),
+        kit_root=tmp_path,
+    )
+
+    with pytest.raises(mos.MosStarterSetupError, match="different source package"):
+        mos.create_from_starter_package(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            package_id="pkg-1",
+            kit_root=tmp_path,
+        )
+
+    annotations = json.loads(
+        capsys.readouterr()
+        .out.split("DA_MOS_STARTER_CREATE_ANNOTATIONS_JSON:", 1)[1]
+        .splitlines()[0]
+    )
+    assert annotations["outcome"] == "source-package-mismatch"
+    assert annotations["returnedPackageId"] == "different-package"
+    assert annotations["fuseDisposition"] == "retained"
+    assert (tmp_path / FUSE_RELATIVE).is_file()
+
+
 @pytest.mark.parametrize("status", [300, 302, 405, 408, 425, 429, 500, 502, 503])
 def test_create_keeps_fuse_on_uncertain_status_codes(
     tmp_path: Path,
@@ -504,6 +622,7 @@ def test_create_keeps_fuse_on_uncertain_status_codes(
 def test_create_removes_fuse_on_definitive_rejection(
     tmp_path: Path,
     status: int,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     client = FakeMosClient(
         create_response=FakeHTTPResponse(
@@ -522,9 +641,19 @@ def test_create_removes_fuse_on_definitive_rejection(
         )
 
     assert not (tmp_path / FUSE_RELATIVE).exists()
+    annotations = json.loads(
+        capsys.readouterr()
+        .out.split("DA_MOS_STARTER_CREATE_ANNOTATIONS_JSON:", 1)[1]
+        .splitlines()[0]
+    )
+    assert annotations["outcome"] == "rejected"
+    assert annotations["fuseDisposition"] == "removed"
 
 
-def test_create_removes_fuse_and_reports_collision_on_409(tmp_path: Path) -> None:
+def test_create_removes_fuse_and_reports_collision_on_409(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     client = FakeMosClient(
         create_response=FakeHTTPResponse(
             409,
@@ -533,7 +662,7 @@ def test_create_removes_fuse_and_reports_collision_on_409(tmp_path: Path) -> Non
         kit_root=tmp_path,
     )
 
-    with pytest.raises(mos.MosStarterSetupError, match="already exist"):
+    with pytest.raises(mos.MosStarterSetupError, match="collision"):
         mos.create_from_starter_package(
             client,
             environment_id=ENVIRONMENT_ID,
@@ -542,6 +671,13 @@ def test_create_removes_fuse_and_reports_collision_on_409(tmp_path: Path) -> Non
         )
 
     assert not (tmp_path / FUSE_RELATIVE).exists()
+    annotations = json.loads(
+        capsys.readouterr()
+        .out.split("DA_MOS_STARTER_CREATE_ANNOTATIONS_JSON:", 1)[1]
+        .splitlines()[0]
+    )
+    assert annotations["outcome"] == "collision"
+    assert annotations["fuseDisposition"] == "removed"
 
 
 def test_emit_annotations_recursively_redacts_before_printing(
@@ -623,10 +759,14 @@ def test_evidence_annotations_and_response_are_printed_and_redacted(
 ) -> None:
     client = FakeMosClient(
         create_response=FakeHTTPResponse(
-            200,
+            201,
             json_body={
-                "cdsBotId": AGENT_ID,
-                "schemaName": SCHEMA,
+                "botId": AGENT_ID,
+                "sourcePackage": {
+                    "packageId": "pkg-1",
+                    "schemaName": SCHEMA,
+                    "version": "1.0.0",
+                },
                 "diagnostics": {"Authorization": "leak-me-not"},
             },
             headers={"x-ms-request-id": "req-42"},
@@ -650,15 +790,17 @@ def test_evidence_annotations_and_response_are_printed_and_redacted(
     response = json.loads(
         out.split("DA_MOS_STARTER_CREATE_RESPONSE_JSON:", 1)[1].splitlines()[0]
     )
-    assert annotations["httpStatus"] == 200
+    assert annotations["httpStatus"] == 201
     assert annotations["requestId"] == "req-42"
     assert annotations["packageId"] == "pkg-1"
     assert annotations["fuseDisposition"] == "retained"
     assert annotations["outcome"] == "created"
     assert annotations["agentId"] == AGENT_ID
     assert annotations["schemaName"] == SCHEMA
+    assert annotations["templateVersion"] == "1.0.0"
     assert response["diagnostics"]["Authorization"] == mos.REDACTED
-    assert response["cdsBotId"] == AGENT_ID
+    assert response["botId"] == AGENT_ID
+    assert response["sourcePackage"]["version"] == "1.0.0"
     assert "leak-me-not" not in out
 
 
@@ -732,10 +874,282 @@ def test_list_starter_packages_reraises_without_evidence_when_no_response() -> N
         mos.list_starter_packages(client, environment_id=ENVIRONMENT_ID)
 
 
-# --- normal-path-only surface --------------------------------------------
+def test_list_starter_packages_reports_invalid_response_failure(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    client = FakeCatalogClient(
+        exception=agentbuilder.AgentBuilderError(
+            "Starter package listing returned an invalid shape."
+        )
+    )
+
+    with pytest.raises(agentbuilder.AgentBuilderError):
+        mos.list_starter_packages(client, environment_id=ENVIRONMENT_ID)
+
+    annotations = json.loads(
+        capsys.readouterr()
+        .out.split("DA_MOS_STARTER_LIST_ANNOTATIONS_JSON:", 1)[1]
+        .splitlines()[0]
+    )
+    assert annotations["outcome"] == "invalid-response"
+    assert "invalid shape" in annotations["error"]
 
 
-def test_build_parser_exposes_only_list_and_create_commands() -> None:
+def test_list_starter_packages_reports_transport_failure(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    client = FakeCatalogClient(
+        exception=requests.exceptions.ReadTimeout("catalog read timed out")
+    )
+
+    with pytest.raises(requests.exceptions.ReadTimeout):
+        mos.list_starter_packages(client, environment_id=ENVIRONMENT_ID)
+
+    annotations = json.loads(
+        capsys.readouterr()
+        .out.split("DA_MOS_STARTER_LIST_ANNOTATIONS_JSON:", 1)[1]
+        .splitlines()[0]
+    )
+    assert annotations["outcome"] == "transport-failure"
+    assert annotations["transportErrorType"] == "ReadTimeout"
+
+
+# --- ALM opt-in -----------------------------------------------------------
+
+
+def test_enable_alm_preserves_full_bot_and_verifies_read_back(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    before = _bot_changeset(version=1)
+    after = _bot_changeset(version=2, alm_enabled=True)
+    client = FakeAlmClient(
+        fetch_responses=[before, after],
+        update_response=FakeHTTPResponse(
+            200,
+            json_body={
+                "botComponentChanges": [],
+                "unknownServiceField": "preserved in evidence",
+                "authorization": "leak-me-not",
+            },
+            headers={"x-ms-request-id": "req-alm-42"},
+        ),
+    )
+
+    result = mos.enable_alm(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+    )
+
+    assert client.fetch_calls == [AGENT_ID, AGENT_ID]
+    assert len(client.update_calls) == 1
+    update_agent_id, update_bot = client.update_calls[0]
+    assert update_agent_id == AGENT_ID
+    assert update_bot["configuration"]["settings"] == {
+        "existing": "preserved",
+        "alm.isAlmEnabled": True,
+    }
+    assert update_bot["configuration"]["gPTSettings"] == {
+        "defaultSchemaName": "gptagent_ess"
+    }
+    assert update_bot["unknownFutureField"] == {"preserve": True}
+    assert before["bot"]["configuration"]["settings"] == {"existing": "preserved"}
+    assert result == {
+        "environmentId": ENVIRONMENT_ID,
+        "agentId": AGENT_ID,
+        "outcome": "enabled",
+        "beforeBotVersion": 1,
+        "afterBotVersion": 2,
+        "previousValue": None,
+        "persistedValue": True,
+    }
+
+    out = capsys.readouterr().out
+    annotations = json.loads(
+        out.split("DA_MOS_STARTER_ALM_ANNOTATIONS_JSON:", 1)[1].splitlines()[0]
+    )
+    response = json.loads(
+        out.split("DA_MOS_STARTER_ALM_RESPONSE_JSON:", 1)[1].splitlines()[0]
+    )
+    assert annotations["outcome"] == "update-accepted"
+    assert annotations["requestId"] == "req-alm-42"
+    assert response["unknownServiceField"] == "preserved in evidence"
+    assert response["authorization"] == mos.REDACTED
+    assert "leak-me-not" not in out
+
+
+def test_enable_alm_is_repeatable_without_a_second_write() -> None:
+    client = FakeAlmClient(
+        fetch_responses=[_bot_changeset(version=2, alm_enabled=True)],
+    )
+
+    result = mos.enable_alm(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+    )
+
+    assert result["outcome"] == "already-enabled"
+    assert result["persistedValue"] is True
+    assert client.fetch_calls == [AGENT_ID]
+    assert client.update_calls == []
+
+
+def test_enable_alm_rejects_mismatched_fetched_agent_before_write() -> None:
+    before = _bot_changeset(version=1)
+    before["bot"]["cdsBotId"] = "00000000-0000-4000-8000-000000006666"
+    client = FakeAlmClient(fetch_responses=[before])
+
+    with pytest.raises(mos.MosStarterSetupError, match="does not match"):
+        mos.enable_alm(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            agent_id=AGENT_ID,
+        )
+
+    assert client.update_calls == []
+
+
+def test_enable_alm_fails_when_read_back_does_not_persist(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    client = FakeAlmClient(
+        fetch_responses=[
+            _bot_changeset(version=1),
+            _bot_changeset(version=2, alm_enabled=False),
+        ],
+        update_response=FakeHTTPResponse(200, json_body={"accepted": True}),
+    )
+
+    with pytest.raises(mos.MosStarterSetupError, match="read-back"):
+        mos.enable_alm(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            agent_id=AGENT_ID,
+        )
+
+    assert len(client.update_calls) == 1
+    verify = json.loads(
+        capsys.readouterr()
+        .out.split("DA_MOS_STARTER_ALM_VERIFY_JSON:", 1)[1]
+        .splitlines()[0]
+    )
+    assert verify["outcome"] == "verification-failed"
+    assert verify["persistedValue"] is False
+
+
+def test_enable_alm_preserves_rejection_evidence(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    client = FakeAlmClient(
+        fetch_responses=[_bot_changeset(version=1)],
+        update_response=FakeHTTPResponse(
+            409,
+            json_body={
+                "error": {
+                    "code": "VersionConflict",
+                    "message": "service-owned detail",
+                }
+            },
+            headers={"x-ms-request-id": "req-conflict"},
+        ),
+    )
+
+    with pytest.raises(mos.MosStarterSetupError, match="rejected"):
+        mos.enable_alm(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            agent_id=AGENT_ID,
+        )
+
+    out = capsys.readouterr().out
+    annotations = json.loads(
+        out.split("DA_MOS_STARTER_ALM_ANNOTATIONS_JSON:", 1)[1].splitlines()[0]
+    )
+    response = json.loads(
+        out.split("DA_MOS_STARTER_ALM_RESPONSE_JSON:", 1)[1].splitlines()[0]
+    )
+    assert annotations["outcome"] == "rejected"
+    assert annotations["httpStatus"] == 409
+    assert response["error"]["message"] == "service-owned detail"
+
+
+def test_enable_alm_uncertain_transport_is_safely_reconcilable(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    transport_error = requests.exceptions.ReadTimeout("read timed out")
+    client = FakeAlmClient(
+        fetch_responses=[_bot_changeset(version=1)],
+        update_exception=transport_error,
+    )
+
+    with pytest.raises(mos.MosStarterSetupError, match="setting outcome is uncertain"):
+        mos.enable_alm(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            agent_id=AGENT_ID,
+        )
+
+    annotations = json.loads(
+        capsys.readouterr()
+        .out.split("DA_MOS_STARTER_ALM_ANNOTATIONS_JSON:", 1)[1]
+        .splitlines()[0]
+    )
+    assert annotations["outcome"] == "uncertain-transport"
+    assert annotations["transportErrorType"] == "ReadTimeout"
+
+
+def test_enable_alm_preserves_verification_rejection_evidence(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    verification_response = FakeHTTPResponse(
+        503,
+        json_body={
+            "error": {
+                "code": "Unavailable",
+                "message": "verification detail",
+            }
+        },
+        headers={"x-ms-request-id": "req-verify"},
+    )
+    client = FakeAlmClient(
+        fetch_responses=[
+            _bot_changeset(version=1),
+            agentbuilder.AgentBuilderHTTPError(
+                "Component fetch",
+                503,
+                request_id="req-verify",
+                response=verification_response,
+            ),
+        ],
+        update_response=FakeHTTPResponse(200, json_body={"accepted": True}),
+    )
+
+    with pytest.raises(mos.MosStarterSetupError, match="Verification did not complete"):
+        mos.enable_alm(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            agent_id=AGENT_ID,
+        )
+
+    out = capsys.readouterr().out
+    annotations = json.loads(
+        out.split("DA_MOS_STARTER_ALM_VERIFY_ANNOTATIONS_JSON:", 1)[1]
+        .splitlines()[0]
+    )
+    response = json.loads(
+        out.split("DA_MOS_STARTER_ALM_VERIFY_RESPONSE_JSON:", 1)[1]
+        .splitlines()[0]
+    )
+    assert annotations["outcome"] == "verification-rejected"
+    assert annotations["requestId"] == "req-verify"
+    assert response["error"]["message"] == "verification detail"
+
+
+# --- bounded command surface ---------------------------------------------
+
+
+def test_build_parser_exposes_only_bounded_mos_commands() -> None:
     parser = mos.build_parser()
     subparsers_action = next(
         action
@@ -743,7 +1157,7 @@ def test_build_parser_exposes_only_list_and_create_commands() -> None:
         if isinstance(action, argparse._SubParsersAction)
     )
 
-    assert set(subparsers_action.choices) == {"list", "create"}
+    assert set(subparsers_action.choices) == {"list", "create", "enable-alm"}
 
 
 @pytest.mark.parametrize(

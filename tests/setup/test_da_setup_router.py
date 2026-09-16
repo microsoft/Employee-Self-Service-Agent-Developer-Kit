@@ -325,38 +325,45 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "setup_mos_starter.py create" in text
     assert "DA_MOS_STARTER_CREATE_ANNOTATIONS_JSON:" in text
     assert "DA_MOS_STARTER_CREATE_JSON:" in text
+    assert "setup_mos_starter.py enable-alm" in text
+    assert "DA_MOS_STARTER_ALM_ANNOTATIONS_JSON:" in text
+    assert "DA_MOS_STARTER_ALM_JSON:" in text
+    assert "DA_MOS_STARTER_ALM_VERIFY_ANNOTATIONS_JSON:" in text
+    assert "DA_MOS_STARTER_ALM_VERIFY_JSON:" in text
     assert "setup_existing_da.py attach" in text
     assert "--setup-source mos-starter" in text
     assert "outcome: created" in text
     assert "Never show a package's" in normalized
     assert "internal `packageId` to the maker" in normalized
-    assert "Never infer whether a replay is safe from the response message text" in (
-        normalized
-    )
-    assert "run `create` again for this package" in normalized
     assert "`connectReady: true`" in text
     assert "`setupStatus`" not in text
     assert "What kind of ESS agent are you setting up?" in text
     assert "Offer exactly **HR** and **IT**" in normalized
     assert "core ESS experience" in normalized
     assert "specific connected system" in normalized
+    assert "unavailable stubs" in normalized
+    assert "only a service-returned package can be selected" in normalized
     assert "Create a new {HR or IT} ESS agent" in normalized
     assert "Choose a different package" in text
     assert "Do not preselect **Create agent**" in text
     assert "authorizes exactly one create attempt" in normalized
     assert "Fresh entitled MOS starter package" in text
     assert "factual completion report from `da-existing-dev.md`" in normalized
-    assert "Do not infer persona, product, target, progress, or retry intent" in normalized
-    assert "An uncertain outcome never permits another create attempt" in normalized
+    assert "Do not infer persona, product, target, or progress" in normalized
     assert "Never invoke" in normalized and "/connect" in normalized
+    assert "Do not publish, remove or replace components" in normalized
     assert "setup_setup_mos_starter.py" not in text
     assert "setup_mos_starter.py resolve" not in text
     assert "setup_mos_starter.py status" not in text
+    assert "DA_EXISTING_DEV_DIAGNOSTIC_JSON:" not in text
     assert len(text.splitlines()) < 130
 
-    assert "Pending live validation." in reference
-    assert "create-only" in reference.casefold()
-    assert "Do not describe a pending-validation claim" in reference
+    assert "createFromStarterPackage" in reference
+    assert "Live-proven" in reference
+    assert "catalogPackageVersion" in reference
+    assert "templateVersion" in reference
+    assert "alm.isAlmEnabled" in reference
+    assert "never publishes or removes components" in reference
     assert "Fuse disposition matrix" in reference
     assert "PERSONA" not in reference
     assert "resolve_starter_package" not in reference

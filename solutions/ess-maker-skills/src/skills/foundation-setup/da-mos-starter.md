@@ -3,7 +3,7 @@
 
 Use this path only when the maker has no existing agent and wants a fresh installation. Read `src/reference/mos-starter-package.md` before acting. The reference owns the service facts, safety invariants, fuse disposition matrix, and redaction contract. This skill owns the maker conversation and the handoff into existing-Dev setup.
 
-Use only intent supplied in the current request and results observed in this invocation. Do not infer persona, product, target, progress, or retry intent from conversation history.
+Use only intent supplied in the current request and results observed in this invocation. Do not infer persona, product, target, or progress from conversation history.
 
 ## Ask what the maker needs
 
@@ -11,7 +11,7 @@ Ask:
 
 > What kind of ESS agent are you setting up?
 
-Offer exactly **HR** and **IT**. Then ask whether the maker wants the core ESS experience or support for a specific connected system, using plain maker language. This intent only guides the maker's catalog choice; it is never sent to or matched by a script, and it does not prove that a matching entitled package exists.
+Offer exactly **HR** and **IT**. Then ask whether the maker wants the core ESS experience or support for a specific connected system, using plain maker language. This intent only guides the maker's catalog choice; it is never sent to or matched by a script, and it does not prove that a matching entitled package exists. Keep requested product choices visible as unavailable stubs when the service does not return a corresponding package; only a service-returned package can be selected for creation.
 
 Ask for a Copilot Studio environment URL when the target is not supplied. When fresh-agent intent and the target environment are known, mark **Choose the starting point and target environment** complete.
 
@@ -28,27 +28,17 @@ Parse `DA_MOS_STARTER_PACKAGES_JSON:`. Show only each package's safe service-pro
 
 The successful list proves target access, but not a new agent identity. Keep **Verify access and agent identity** current until create and direct attachment validation succeed.
 
-If the catalog is empty, say that no entitled starter packages are currently available and stop; do not guess a substitute or fall back to another setup path.
+If the catalog is empty, mark the maker's product choices unavailable, say that no entitled starter packages are currently available, and stop; do not guess a substitute or fall back to another setup path.
 
-If `catalogWarnings` is non-empty, tell the maker the catalog listing
-was incomplete -- some entries could not be read -- without repeating
-the warning detail itself. A row reported in `catalogWarnings` is never
-selectable; only offer packages from the `packages` array.
+If `catalogWarnings` is non-empty, tell the maker the catalog listing was incomplete -- some entries could not be read -- without repeating the warning detail itself. A row reported in `catalogWarnings` is never selectable; only offer packages from the `packages` array.
 
-If the command instead fails, parse
-`DA_MOS_STARTER_LIST_ANNOTATIONS_JSON:` and the response body
-(`DA_MOS_STARTER_LIST_RESPONSE_JSON:` or `..._RESPONSE_TEXT:`) the same
-way `create`'s response is interpreted below; a failed listing never
-mutates anything, so it is always safe to retry once the reported cause
-is resolved.
+If two rows have identical maker-visible fields but different package IDs, report that the choices are ambiguous and stop. Do not ask the maker to choose using an internal ID.
+
+If the command instead fails, parse `DA_MOS_STARTER_LIST_ANNOTATIONS_JSON:` and the response body (`DA_MOS_STARTER_LIST_RESPONSE_JSON:` or `..._RESPONSE_TEXT:`) the same way `create`'s response is interpreted below. A failed listing never mutates anything; return the evidence to the maker.
 
 ## Confirm the exact package and target
 
-Ask the maker to explicitly choose one package by name, and confirm the
-target Power Platform environment. Do not preselect a choice or infer one
-from the maker's stated product. Once confirmed, keep that package's
-internal `packageId`, `name`, and `version` for the next step; these are
-internal command inputs, not maker-facing text.
+Ask the maker to explicitly choose one package by name, and confirm the target Power Platform environment. Do not preselect a choice or infer one from the maker's stated product. Once confirmed, keep that package's internal `packageId`, `name`, and `version` for the next step; these are internal command inputs, not maker-facing text.
 
 Show:
 
@@ -74,24 +64,31 @@ python scripts/setup_mos_starter.py create \
   --package-version "{CONFIRMED_PACKAGE_VERSION}"
 ```
 
-Do not pass different package arguments to retry a failed or uncertain attempt.
+The command ends after this one attempt. Do not launch another create from this invocation.
 
 ## Interpret the response
 
-Parse `DA_MOS_STARTER_CREATE_ANNOTATIONS_JSON:`, then the response body
-(`DA_MOS_STARTER_CREATE_RESPONSE_JSON:` or `..._RESPONSE_TEXT:`), then
-`DA_MOS_STARTER_CREATE_JSON:` when the command exits zero. The response
-body is already redacted; never ask the maker to supply a token or a
-response value it might still contain.
+Parse `DA_MOS_STARTER_CREATE_ANNOTATIONS_JSON:`, then the response body (`DA_MOS_STARTER_CREATE_RESPONSE_JSON:` or `..._RESPONSE_TEXT:`), then `DA_MOS_STARTER_CREATE_JSON:` when the command exits zero. The response body is already redacted; never ask the maker to supply a token or a response value it might still contain.
 
-Never infer whether a replay is safe from the response message text. Only
-the fuse and transport facts the command already classified govern that --
-the annotations report `fuseDisposition` and, on a definitive outcome,
-whether it is safe to retry. Never rerun `create` merely because a message
-sounds retryable.
+The response, outcome label, and fuse disposition are operation evidence only. Return control after the classified result.
 
-When the annotations report `outcome: created`, take the internal
-`agentId` from `DA_MOS_STARTER_CREATE_JSON:` and run:
+When the annotations report `outcome: created`, distinguish `catalogPackageVersion` (the listed package revision) from `templateVersion` (the source template used by the service). The new agent exists, but setup is not complete.
+
+## Enable ALM
+
+Explain that the next operation opts this exact agent into ALM by preserving the full service-returned agent entity, changing only `alm.isAlmEnabled`, and requesting no component changes. Ask the maker to confirm this separate mutation. If confirmed, run:
+
+```text
+python scripts/setup_mos_starter.py enable-alm \
+  --target-url "{POWER_PLATFORM_ENVIRONMENT_URL}" \
+  --agent-id "{RETURNED_AGENT_ID}"
+```
+
+Parse `DA_MOS_STARTER_ALM_ANNOTATIONS_JSON:` and its response body when present, then `DA_MOS_STARTER_ALM_JSON:` on success. A failed read-back may instead emit `DA_MOS_STARTER_ALM_VERIFY_ANNOTATIONS_JSON:`, its response body, or `DA_MOS_STARTER_ALM_VERIFY_JSON:`. Continue only for `outcome: enabled` or `outcome: already-enabled` with `persistedValue: true`. If transport or verification becomes uncertain, report the evidence and stop.
+
+## Attach
+
+After ALM read-back succeeds, run:
 
 ```text
 python scripts/setup_existing_da.py attach \
@@ -100,26 +97,11 @@ python scripts/setup_existing_da.py attach \
   --setup-source mos-starter
 ```
 
-Parse `DA_EXISTING_DEV_DIAGNOSTIC_JSON:` before handling an attachment
-error, then parse `DA_EXISTING_DEV_SETUP_JSON:` on success as described in
-`da-existing-dev.md`. Treat setup as complete only when
-`connectionStatus` is `workspace-ready` and `connectReady: true`.
-The create fuse intentionally remains as an audit note; canonical setup
-state independently prevents a second create. If attachment fails, inspect
-and rerun only `setup_existing_da.py attach` with the same logged identity.
-Never run `create` again for this package.
+On failure, preserve the command's specific `ERROR:` text and any canonical `active_step` and `failure_causes` as described in `da-existing-dev.md`. On success, parse `DA_EXISTING_DEV_SETUP_JSON:`. Treat setup as complete only when `connectionStatus` is `workspace-ready` and `connectReady: true`. The create fuse intentionally remains as an audit note; canonical setup state independently prevents a second create. If attachment fails, report the exact service-owned prerequisite and stop. Do not publish, remove or replace components from this path. Further action requires new maker intent.
 
 After direct attachment validation succeeds, mark **Verify access and agent identity** and **Establish an editable Dev agent** complete. Render the factual completion report from `da-existing-dev.md` using **Fresh entitled MOS starter package** as the starting point.
 
-For every non-created outcome (`pre-dispatch-failure`, `collision`,
-`rejected`, `malformed-success`, or an uncertain response or transport
-failure), do not retry automatically. Use the existing read-only `list`
-and `setup_existing_da.py validate-agent`/`list-agents` commands to inspect
-the target environment, following the fuse disposition matrix in
-`src/reference/mos-starter-package.md`, before deciding with the maker how
-to proceed.
-
-Only when the annotations explicitly report that retry is safe, and only after the reported cause is resolved, return to [Confirm the exact package and target](#confirm-the-exact-package-and-target). A new **Create agent** selection authorizes one new attempt. An uncertain outcome never permits another create attempt.
+For every non-created outcome (`pre-dispatch-failure`, `collision`, `rejected`, `malformed-success`, `source-package-mismatch`, or an uncertain response or transport failure), end the create operation. The existing read-only `list` and `setup_existing_da.py validate-agent`/`list-agents` commands remain available for a separately requested inspection.
 
 ## Hybrid follow-up
 

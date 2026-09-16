@@ -14,7 +14,7 @@ import tempfile
 import uuid
 from pathlib import Path
 from typing import Any, Callable
-from urllib.parse import quote, urlparse
+from urllib.parse import urlparse
 
 import msal
 import requests
@@ -594,6 +594,26 @@ class AgentBuilderClient:
             raise AgentBuilderError("Component fetch returned an invalid shape.")
         return body
 
+    def update_bot_entity(
+        self,
+        agent_id: str,
+        bot: dict[str, Any],
+        *,
+        timeout: int = 300,
+    ) -> requests.Response:
+        """Replace one fetched BotEntity without changing bot components."""
+        if not isinstance(bot, dict):
+            raise ValueError("BotEntity must be an object.")
+        return self.session.request(
+            "PUT",
+            f"{self.host}/copilotstudio/minimalBots/api/{agent_id}/components",
+            params={"api-version": self.api_version},
+            headers=self.headers,
+            json={"bot": bot, "botComponentChanges": []},
+            timeout=timeout,
+            allow_redirects=False,
+        )
+
     def import_package(
         self,
         package_path: Path,
@@ -716,17 +736,10 @@ class AgentBuilderClient:
     ) -> requests.Response:
         """Dispatch one create-only MOS starter package request.
 
-        PENDING LIVE VALIDATION: no environment has exposed an entitled ESS
-        starter package, so this exact path and payload have not been
-        exercised against the live service. The path extends the
-        live-proven ``agentStarterPackages`` listing route with this API's
-        established ``{collection}/{id}/{verb}`` convention (see
-        ``alm/{cdsBotId}/export``, ``alm/{cdsBotId}/deploy``,
-        ``api/{cdsBotId}/publish``). The body is empty JSON because the
-        package ID is already in the route. See
-        ``src/reference/mos-starter-package.md`` for the current evidence
-        table; revisit this method the moment a live create call is
-        exercised.
+        The live-proven request is
+        ``POST /minimalBots/createFromStarterPackage`` with the exact package
+        ID in ``{"packageId": ...}``. The service returns HTTP 201 with the
+        new ``botId`` and ``sourcePackage`` identity.
 
         Create-only: the caller supplies the exact maker-confirmed package
         ID and this method never supplies a replacement schema or targets
@@ -735,12 +748,6 @@ class AgentBuilderClient:
         GET/HEAD/OPTIONS only), so a mutation is never replayed
         automatically by the transport.
 
-        The opaque package ID is percent-encoded (``safe=""``) before it is
-        inserted into the path, so a reserved character in it (``/``, ``?``,
-        ``#``, ``%``, ...) can never be misread as a path separator or
-        query string. The caller's original, unencoded ID is unaffected --
-        this only changes what is placed on the wire.
-
         Returns the raw response instead of raising on a non-2xx status or
         parsing its body: the caller owns near-verbatim, redacted evidence
         rendering and the attempt-fuse disposition, and must not lose
@@ -748,14 +755,12 @@ class AgentBuilderClient:
         """
         if not isinstance(package_id, str) or not package_id.strip():
             raise ValueError("Starter package ID must be a non-empty string.")
-        encoded_package_id = quote(package_id, safe="")
         return self.session.request(
             "POST",
-            f"{self.host}/copilotstudio/minimalBots/agentStarterPackages/"
-            f"{encoded_package_id}/create",
+            f"{self.host}/copilotstudio/minimalBots/createFromStarterPackage",
             params={"api-version": self.api_version},
             headers=self.headers,
-            json={},
+            json={"packageId": package_id},
             timeout=timeout,
             allow_redirects=False,
         )
