@@ -69,26 +69,19 @@ Do not describe an authorization wait as service processing, start a second comm
 
 ## Command runtime
 
-The first terminal operation must change to the kit root, which is the directory
-containing `scripts/`. Do not rely on the terminal's inherited working
-directory. Run every setup command from that location; when shell state may not
-persist between commands, prefix the command with an explicit change to
-`{KIT_ROOT}`.
+Establish a working Python invocation before running setup commands.
 
-Before the first Python command, resolve one working launcher and reuse it for
-the rest of setup:
+- From the kit root, check each candidate with
+  `{PYTHON} -c "import sys; print(sys.executable)"`, one terminal command at a
+  time: `py -3`, `python3`, then `python` on Windows; `python3`, then `python`
+  on macOS or Linux.
+- Reuse the first invocation that succeeds throughout setup.
+- If needed, check active virtual environments, common local installation
+  paths, and repository-supported repair commands.
+- When local recovery options appear exhausted, explain the external action
+  needed and offer to perform it.
 
-- on Windows, prefer `py -3`; if it is unavailable, use a working `python3` or
-  `python`;
-- on macOS or Linux, prefer `python3`; if it is unavailable, use a working
-  `python`.
-
-Verify the selected launcher with
-`{PYTHON} -c "import sys; print(sys.executable)"`. Do not use a setup command as
-the launcher probe. A missing or nonworking candidate is not a setup failure;
-continue to the next candidate. If no launcher works, report the missing Python
-prerequisite and stop. When child guidance shows `python`, substitute the
-resolved launcher.
+When child guidance shows `python`, substitute the resolved invocation.
 
 ## Start
 

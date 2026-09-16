@@ -61,18 +61,37 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
     assert prompt.index("Read `src/skills/foundation-setup/SKILL.md` first") < (
         prompt.index("{PYTHON} -m pip install")
     )
-    assert "python -m pip install" not in prompt
-    assert "A failed launcher candidate is discovery evidence" in normalized_prompt
-    assert "stop only if none works" in normalized_prompt
-    assert "return to launcher discovery and try the remaining candidates" in (
-        normalized_prompt
+    object_model_check = (
+        "{PYTHON} -c \"import sys; sys.path.insert(0, 'scripts'); "
+        "import agentbuilder_object_model as m; "
+        'm.validate_object_model_runtime()"'
     )
-    assert "prefer `py -3`" in normalized_foundation
-    assert "use a working `python3` or `python`" in normalized_foundation
-    assert "on macOS or Linux, prefer `python3`" in normalized_foundation
-    assert "A missing or nonworking candidate is not a setup failure" in (
+    assert normalized_prompt.index(
+        "{PYTHON} -m pip install"
+    ) < normalized_prompt.index(
+        object_model_check
+    )
+    assert normalized_prompt.index(object_model_check) < normalized_prompt.index(
+        "{PYTHON} scripts/install_agentbuilder_object_model.py"
+    )
+    assert "If the check fails" in prompt
+    assert "Then rerun the check" in prompt
+    assert "python -m pip install" not in prompt
+    assert "python scripts/mcp_config.py" not in prompt
+    assert "For any command failure" in normalized_prompt
+    assert "stop only if none works" not in normalized_prompt
+    assert "show the exact error and stop" not in normalized_prompt
+    assert "Establish a working Python invocation" in normalized_foundation
+    assert "`py -3`, `python3`, then `python` on Windows" in (
         normalized_foundation
     )
+    assert "`python3`, then `python` on macOS or Linux" in normalized_foundation
+    assert "check each candidate with" in normalized_foundation
+    assert "one terminal command at a time" in normalized_foundation
+    assert "active virtual environments, common local installation paths" in (
+        normalized_foundation
+    )
+    assert "offer to perform it" in normalized_foundation
 
 
 def test_public_setup_does_not_configure_mcp() -> None:
@@ -335,19 +354,14 @@ def test_foundation_resolves_python_and_announces_authorization_wait() -> None:
     text = _FOUNDATION.read_text(encoding="utf-8")
     normalized = " ".join(text.split())
 
-    assert (
-        "The first terminal operation must change to the kit root" in normalized
-    )
-    assert (
-        "Do not rely on the terminal's inherited working directory" in normalized
-    )
-    assert (
-        "prefix the command with an explicit change to `{KIT_ROOT}`"
-        in normalized
-    )
-    assert "prefer `py -3`" in normalized
-    assert "prefer `python3`" in normalized
-    assert "Do not use a setup command as the launcher probe" in normalized
+    assert "From the kit root" in normalized
+    assert "`py -3`, `python3`, then `python` on Windows" in normalized
+    assert "`python3`, then `python` on macOS or Linux" in normalized
+    assert "check each candidate with" in normalized
+    assert "one terminal command at a time" in normalized
+    assert '{PYTHON} -c "import sys; print(sys.executable)"' in normalized
+    assert "repository-supported repair commands" in normalized
+    assert "offer to perform it" in normalized
     assert "**Waiting for authorization**" in text
     assert "Complete the Microsoft sign-in in your browser" in normalized
     assert (

@@ -6,10 +6,8 @@ description: "Type Enter to set up your ESS customization environment"
 # Setup
 
 Read `src/skills/foundation-setup/SKILL.md` first. Follow its **Command runtime**
-instructions to change to the kit root and resolve one working Python launcher
-before running any Python command. A failed launcher candidate is discovery
-evidence, not a setup failure; continue through the documented fallbacks and
-stop only if none works.
+instructions to establish a working Python invocation before running any Python
+command.
 
 Using the resolved launcher in place of `{PYTHON}`, run this command without
 showing it to the user:
@@ -18,9 +16,24 @@ showing it to the user:
 {PYTHON} -m pip install -r scripts/requirements.txt
 ```
 
-If the launcher cannot start Python, return to launcher discovery and try the
-remaining candidates. If the verified interpreter runs but dependency
-installation fails, show the exact error and stop.
+Check the Microsoft Object Model converter dependencies:
+
+```powershell
+{PYTHON} -c "import sys;
+sys.path.insert(0, 'scripts');
+import agentbuilder_object_model as m;
+m.validate_object_model_runtime()"
+```
+
+If the check fails, run:
+
+```powershell
+{PYTHON} scripts/install_agentbuilder_object_model.py
+```
+
+Then rerun the check.
+
+For any command failure, follow the **Command runtime** recovery guidance.
 
 Do not route to Dataverse foundation or onboarding playbooks.
 Foundation setup owns DA-GA environment and editable Dev-agent selection,
