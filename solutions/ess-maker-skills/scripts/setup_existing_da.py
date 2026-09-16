@@ -1808,6 +1808,12 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Checkpoint and replace a changed existing workspace.",
     )
+    attach.add_argument(
+        "--setup-source",
+        choices=sorted(SETUP_SOURCES),
+        default="existing-dev",
+        help=argparse.SUPPRESS,
+    )
     return parser
 
 
@@ -1924,7 +1930,12 @@ def main(argv: list[str] | None = None) -> int:
             agent_id=target["agentId"],
             kit_root=args.kit_root.resolve(),
             refresh=args.refresh,
-            selection_source=target.get("agentSelection"),
+            selection_source=(
+                "alm-import-result"
+                if args.setup_source == "alm-import"
+                else target.get("agentSelection")
+            ),
+            setup_source=args.setup_source,
         )
     except (
         AgentBuilderError,

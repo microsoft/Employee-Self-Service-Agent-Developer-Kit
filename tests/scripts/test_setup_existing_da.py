@@ -982,6 +982,45 @@ def test_main_attach_preflights_serializer_before_authentication(
     assert "serializer unavailable" in error
 
 
+def test_main_attach_forwards_alm_import_provenance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, Any] = {}
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_require_object_model_dependencies",
+        lambda: None,
+    )
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_client_from_args",
+        lambda *_args, **_kwargs: FakeClient(),
+    )
+
+    def attach(_client: FakeClient, **kwargs: Any) -> dict[str, Any]:
+        observed.update(kwargs)
+        return {"status": "created"}
+
+    monkeypatch.setattr(setup_existing_da, "attach_existing_dev", attach)
+
+    result = setup_existing_da.main(
+        [
+            "attach",
+            "--target-url",
+            AGENT_URL,
+            "--kit-root",
+            str(tmp_path),
+            "--setup-source",
+            "alm-import",
+        ]
+    )
+
+    assert result == 0
+    assert observed["selection_source"] == "alm-import-result"
+    assert observed["setup_source"] == "alm-import"
+
+
 def test_parser_exposes_only_composable_setup_operations() -> None:
     parser = setup_existing_da.build_parser()
     subparsers = next(
