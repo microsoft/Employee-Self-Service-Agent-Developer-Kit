@@ -11,10 +11,13 @@ Build a list of connected integrations (if any):
 
 - **ServiceNow** — connected if `.local/connect/servicenow/steps.md` exists and
   all items are checked.
-- **Workday** — connected if either:
+- **Workday** — connected if any of these are true:
   - `.local/connect/workday/config.json` exists and its `setupStatus` shows
-    every setup row (`S1.1` … `S6.2`) in state `done` (the setup orchestrator
-    ran a full install for this agent), or
+    every CEA setup row (`S1.1` … `S6.2`) in state `done` (the CEA setup
+    orchestrator owns this state),
+  - `.local/connect/workday-da/config.json` exists and its `setupStatus`
+    shows every DA row (`DA1.1` … `DA4.1`) in state `done` (the DA Workday
+    connect skill owns this state), or
   - `.local/connect/workday/lifecycle.json` exists and every phase is
     `done` (this agent was wired to an extension already installed
     elsewhere — see 1.3 below).
@@ -216,9 +219,26 @@ below): read `src/skills/connect/workday/SKILL.md` and follow it. It
 re-verifies everything live before reporting "connected" — it never trusts
 the saved state on its own.
 
-**Otherwise**, check whether a Workday extension already exists **anywhere in
-this environment**, independent of whether this particular agent has been
-set up against it yet:
+**Otherwise**, first find out which kind of ESS agent is in this environment.
+Read `.local/setup/config.json` and look at
+`selected_products` (each entry is one of `da.esshr` / `da.essit` / `da.esshub`
+/ `cea.esshr` / `cea.essit` / `cea.esshub`):
+
+- **No `.local/setup/config.json`, or `selected_products` is empty** — no ESS
+  agent has been installed in this environment yet.
+
+  **Message:**
+
+  I don't see an Employee Self-Service agent installed in this environment yet.
+  Run `/setup` first, then come back and run `/connect workday` again.
+
+  **End message.**
+
+  Stop here.
+
+**Once an ESS agent is confirmed**, check whether a Workday extension already
+exists **anywhere in this environment**, independent of whether this
+particular agent has been set up against it yet:
 
 ```
 python scripts/flightcheck/cli.py --checkpoint WD-PKG-001
@@ -230,16 +250,18 @@ install. Read `src/skills/connect/workday/SKILL.md` and follow it; it shows
 the user what it will check before doing anything, and only makes changes
 once they confirm.
 
-**If anything other than `Passed`** (no extension installed yet, or its
-package can't be confirmed): fall back to the full setup path. Workday
-connection is then handled by the **setup orchestrator**, which provisions
-the Power Platform environment, installs the ESS base agent, provisions the
-Entra app, configures the Workday tenant, installs the extension pack, and
-verifies the connection. It is resume-aware: if setup was already started it
-picks up at the first unverified step, and it fast-forwards steps that are
-already done.
+**If anything other than `Passed`**, route by the installed agent architecture:
 
-Read `src/skills/setup/SKILL.md` and follow it.
+- **Any `selected_products` entry starts with `da.`** — read
+  `src/skills/setup/workday-da/SKILL.md` and follow it. This path installs the
+  Workday extension package, provisions the Workday Entra app, configures the
+  Workday tenant, and verifies the connection. It is resume-aware.
+
+- **Otherwise, only `cea.*` entries are present** — read
+  `src/skills/setup/SKILL.md` and follow it. This path provisions the Power
+  Platform environment, installs the ESS base agent, provisions the Entra app,
+  configures the Workday tenant, installs the extension pack, and verifies the
+  connection. It is resume-aware.
 
 ### If the user said something else
 
