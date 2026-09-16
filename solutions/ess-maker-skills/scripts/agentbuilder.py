@@ -25,6 +25,14 @@ from urllib3.util.retry import Retry
 CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
 DEFAULT_API_VERSION = "2024-10-01"
 DEFAULT_TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
+DEV_REALM = 0
+TEST_REALM = 1
+PROD_REALM = 2
+REALM_NAMES = {
+    DEV_REALM: "Dev",
+    TEST_REALM: "Test",
+    PROD_REALM: "Prod",
+}
 RING_CONFIG = {
     "prod": {
         "audience": "https://api.powerplatform.com",
@@ -58,6 +66,7 @@ class AgentBuilderHTTPError(AgentBuilderError):
         *,
         error_code: str | None = None,
         request_id: str | None = None,
+        response: requests.Response | None = None,
     ) -> None:
         detail = f"{operation} failed with HTTP {status_code}"
         if error_code:
@@ -70,6 +79,7 @@ class AgentBuilderHTTPError(AgentBuilderError):
         self.status_code = status_code
         self.error_code = error_code
         self.request_id = request_id
+        self.response = response
 
 
 def normalize_environment_id(environment_id: str) -> str:
@@ -391,6 +401,7 @@ def _response_error(response: requests.Response, operation: str) -> None:
         response.status_code,
         error_code=error_code,
         request_id=request_id,
+        response=response,
     )
 
 
@@ -484,18 +495,38 @@ class AgentBuilderClient:
             raise AgentBuilderError("Direct agent lookup returned an invalid shape.")
         return body
 
-    def get_dev_configuration(self, agent_id: str) -> dict[str, Any]:
+    def get_realms(self, agent_id: str) -> dict[str, Any]:
         body = self._json(
             "GET",
-            f"/copilotstudio/minimalBots/alm/{agent_id}/configure",
-            "Dev realm configuration",
-            params={"realm": 0},
+            f"/copilotstudio/minimalBots/alm/{agent_id}/realms",
+            "Agent realm family",
         )
         if not isinstance(body, dict):
             raise AgentBuilderError(
-                "Dev realm configuration returned an invalid shape."
+                "Agent realm family returned an invalid shape."
             )
         return body
+
+    def get_realm_configuration(
+        self,
+        agent_id: str,
+        realm: int,
+    ) -> dict[str, Any]:
+        if type(realm) is not int or realm not in REALM_NAMES:
+            raise ValueError("Realm must be the numeric Dev, Test, or Prod value.")
+        operation = f"{REALM_NAMES[realm]} realm configuration"
+        body = self._json(
+            "GET",
+            f"/copilotstudio/minimalBots/alm/{agent_id}/configure",
+            operation,
+            params={"realm": realm},
+        )
+        if not isinstance(body, dict):
+            raise AgentBuilderError(f"{operation} returned an invalid shape.")
+        return body
+
+    def get_dev_configuration(self, agent_id: str) -> dict[str, Any]:
+        return self.get_realm_configuration(agent_id, DEV_REALM)
 
     def fetch_components(self, agent_id: str) -> dict[str, Any]:
         body = self._json(

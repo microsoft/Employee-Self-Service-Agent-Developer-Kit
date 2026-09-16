@@ -82,6 +82,7 @@ def test_client_uses_only_configured_environment_host() -> None:
         [
             FakeResponse([]),
             FakeResponse({"botId": AGENT_ID}),
+            FakeResponse({"routeRealm": 0}),
             FakeResponse(
                 {
                     "realm": "Dev",
@@ -108,14 +109,29 @@ def test_client_uses_only_configured_environment_host() -> None:
 
     client.list_agents()
     client.get_agent(AGENT_ID)
+    client.get_realms(AGENT_ID)
     client.get_dev_configuration(AGENT_ID)
     client.fetch_components(AGENT_ID)
 
     assert all(call["url"].startswith(HOST) for call in session.calls)
     assert all("crm.dynamics.com" not in call["url"] for call in session.calls)
-    assert session.calls[2]["params"]["realm"] == 0
-    assert session.calls[3]["method"] == "POST"
-    assert session.calls[3]["json"] == {}
+    assert session.calls[2]["url"].endswith(f"/alm/{AGENT_ID}/realms")
+    assert session.calls[3]["params"]["realm"] == 0
+    assert session.calls[4]["method"] == "POST"
+    assert session.calls[4]["json"] == {}
+
+
+def test_realm_configuration_rejects_unknown_realm() -> None:
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession([]),
+    )
+
+    with pytest.raises(ValueError, match="numeric Dev, Test, or Prod"):
+        client.get_realm_configuration(AGENT_ID, 9)
 
 
 def test_lists_ring_environments_with_agentbuilder_token() -> None:
@@ -228,6 +244,10 @@ def test_http_403_is_explicit_without_echoing_response_body() -> None:
         client.list_agents()
 
     assert "sensitive platform detail" not in str(error.value)
+    assert error.value.response is not None
+    assert error.value.response.json()["error"]["message"] == (
+        "sensitive platform detail"
+    )
 
 
 def test_extracts_guid_from_default_and_regular_environment_names() -> None:

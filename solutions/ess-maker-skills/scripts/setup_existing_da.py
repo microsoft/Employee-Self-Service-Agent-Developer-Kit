@@ -22,6 +22,7 @@ from urllib.parse import unquote
 
 from agentbuilder import (
     DEFAULT_API_VERSION,
+    REALM_NAMES,
     AgentBuilderClient,
     AgentBuilderError,
     AgentBuilderHTTPError,
@@ -29,23 +30,21 @@ from agentbuilder import (
     authenticate_selected_tenant,
     canonical_json,
     derive_environment_host,
-    list_environments as list_agentbuilder_environments,
     validate_environment_host,
 )
 from agentbuilder_object_model import (
     ObjectModelConverterError,
     object_models_to_yaml,
+    validate_object_model_runtime,
 )
-from flightcheck.azure_arm_client import AzureArmClient
 
 
 ATTACH_METADATA = ".agentbuilder/attach.json"
 RAW_CHANGESET = ".agentbuilder/components.json"
 CANONICAL_SETUP_STATE = Path(".local/setup/config.json")
-DA_CONNECTION_STATE = Path(".local/setup/da-connection.json")
-DA_COMPONENT_SNAPSHOT = Path(".local/setup/da-components.json")
 CANONICAL_SETUP_SCHEMA_VERSION = 1
 PROJECTION_ENGINE = "microsoft-agents-objectmodel"
+WORKSPACE_PROJECTION_VERSION = 2
 STUDIO_RING_BY_HOST = {
     "copilotstudio.microsoft.com": "prod",
     "copilotstudio.preprod.microsoft.com": "preprod",
@@ -61,43 +60,52 @@ class ExistingDASetupError(RuntimeError):
     """Raised when existing-Dev setup cannot preserve its invariants."""
 
 
-class ExistingDAAgentNotFound(ExistingDASetupError):
-    """Raised when the environment is accessible but the target is missing."""
+def _require_object_model_dependencies() -> None:
+    """Fail before remote setup when the local projection runtime is absent."""
+    try:
+        validate_object_model_runtime()
+    except ObjectModelConverterError as exc:
+        raise ExistingDASetupError(
+            f"Microsoft Object Model dependencies are unavailable: {exc}"
+        ) from exc
 
-    def __init__(
-        self,
-        *,
-        agent_id: str,
-        tenant_id: str,
-        agent_inspection: dict[str, Any],
-    ) -> None:
-        super().__init__(
-            "The target environment is accessible, but the supplied agent "
-            "was not found."
+
+def inspect_agent_route(
+    client: AgentBuilderClient,
+    *,
+    environment_id: str,
+    agent_id: str,
+) -> dict[str, Any]:
+    """Return the service-owned route realm for one exact agent."""
+    normalized_environment_id = _normalize_environment_id(environment_id)
+    normalized_agent_id = _normalize_guid(agent_id, "Agent ID")
+    realms = client.get_realms(normalized_agent_id)
+    route_realm = realms.get("routeRealm")
+    realm_name = next(
+        (
+            name.casefold()
+            for value, name in REALM_NAMES.items()
+            if route_realm == value
+            or (
+                isinstance(route_realm, str)
+                and route_realm.casefold() == name.casefold()
+            )
+        ),
+        None,
+    )
+    if realm_name is None:
+        raise ExistingDASetupError(
+            "Agent realm discovery did not return a recognized route realm."
         )
-        self.agent_id = agent_id
-        self.tenant_id = tenant_id
-        self.agent_inspection = agent_inspection
-
-    def diagnostic(self) -> dict[str, Any]:
-        """Return structured recovery evidence for the setup skill."""
-        listed_agents = self.agent_inspection["listedAgents"]
-        return {
-            "environmentStatus": "accessible",
-            "agentStatus": "not-found",
-            "tenantId": self.tenant_id,
-            "targetListed": (
-                _find_listed_agent(listed_agents, self.agent_id)
-                is not None
-            ),
-            "agents": summarize_agents(self.agent_inspection["devAgents"]),
-            "excludedNonDevCount": self.agent_inspection[
-                "excludedNonDevCount"
-            ],
-            "unverifiedAgentCount": self.agent_inspection[
-                "unverifiedAgentCount"
-            ],
-        }
+    return {
+        "environmentId": normalized_environment_id,
+        "tenantId": client.tenant_id,
+        "host": client.host,
+        "ring": client.ring,
+        "apiVersion": client.api_version,
+        "agentId": normalized_agent_id,
+        "realm": realm_name,
+    }
 
 
 def _normalize_guid(value: str, label: str) -> str:
@@ -387,7 +395,9 @@ def _record_canonical_setup_complete(
         "workspace": {
             "status": workspace["status"],
             "folder": workspace["folder"],
+            "agent_path": workspace["agentPath"],
             "topic_count": workspace["topicCount"],
+            "variable_count": workspace["variableCount"],
             "projected_component_kinds": workspace[
                 "projectedComponentKinds"
             ],
@@ -404,27 +414,6 @@ def _record_canonical_setup_complete(
     }
     _write_json(kit_root / CANONICAL_SETUP_STATE, state)
     return state
-
-
-def _find_listed_agent(
-    agents: list[dict[str, Any]],
-    agent_id: str,
-) -> dict[str, Any] | None:
-    expected = agent_id.casefold()
-    return next(
-        (
-            agent
-            for agent in agents
-            if str(
-                agent.get("botId")
-                or agent.get("cdsBotId")
-                or agent.get("componentIdUnique")
-                or ""
-            ).casefold()
-            == expected
-        ),
-        None,
-    )
 
 
 def inspect_dev_agents(client: AgentBuilderClient) -> dict[str, Any]:
@@ -518,35 +507,7 @@ def validate_existing_dev_connection(
     """Validate a directly addressable agent as editable Dev identity."""
     normalized_environment_id = _normalize_environment_id(environment_id)
     normalized_agent_id = _normalize_guid(agent_id, "Agent ID")
-    agent_inspection: dict[str, Any] | None = None
-    try:
-        agent_inspection = inspect_dev_agents(client)
-    except AgentBuilderError:
-        # Listing is diagnostic only. Direct lookup remains authoritative
-        # because the service can omit directly addressable agents.
-        pass
-    listed_agent = (
-        _find_listed_agent(
-            agent_inspection["listedAgents"],
-            normalized_agent_id,
-        )
-        if agent_inspection is not None
-        else None
-    )
-    try:
-        agent = client.get_agent(normalized_agent_id)
-    except AgentBuilderHTTPError as exc:
-        error_code = str(exc.error_code or "").casefold()
-        if agent_inspection is not None and (
-            exc.status_code == 404
-            or error_code in {"objectnotfound", "notfound"}
-        ):
-            raise ExistingDAAgentNotFound(
-                agent_id=normalized_agent_id,
-                tenant_id=client.tenant_id,
-                agent_inspection=agent_inspection,
-            ) from exc
-        raise
+    agent = client.get_agent(normalized_agent_id)
     configuration = client.get_dev_configuration(normalized_agent_id)
     schema_name, family_id = _confirm_dev(
         normalized_agent_id,
@@ -588,94 +549,16 @@ def validate_existing_dev_connection(
             "isManaged": is_managed,
             "workspaceSlug": _slugify(agent_name),
         },
-        "selectedBy": selection_source or (
-            "list" if listed_agent is not None else "direct-id-fallback"
-        ),
+        "selectedBy": selection_source or "direct-id",
         "verifiedAt": _utc_now(),
     }
 
 
-def _connection_identity(state: dict[str, Any]) -> tuple[Any, ...]:
-    environment = state.get("environment", {})
-    agent = state.get("agent", {})
-    return (
-        state.get("stateKind"),
-        state.get("releaseLine"),
-        state.get("setupSource"),
-        state.get("transport"),
-        environment.get("id"),
-        environment.get("tenantId"),
-        environment.get("powerPlatformApiEndpoint"),
-        environment.get("ring"),
-        environment.get("apiVersion"),
-        agent.get("id"),
-        agent.get("schemaName"),
-        agent.get("realm"),
-        agent.get("almFamilyId"),
-    )
-
-
-def load_da_connection_state(kit_root: Path) -> dict[str, Any]:
-    """Load and validate temporary DA setup state for deterministic resume."""
-    path = kit_root / DA_CONNECTION_STATE
-    if not path.exists():
-        return {
-            "schemaVersion": 1,
-            "stateKind": "da-existing-dev-connection",
-            "status": "not-started",
-        }
-    state = _load_json(path)
-    if state.get("schemaVersion") != 1:
-        raise ExistingDASetupError(
-            "Temporary DA setup state has an unsupported schema version."
-        )
-    if state.get("stateKind") != "da-existing-dev-connection":
-        raise ExistingDASetupError(
-            "Temporary DA setup state has an unexpected state kind."
-        )
-    status = state.get("status")
-    if status not in {"connected", "acquired", "workspace-ready"}:
-        raise ExistingDASetupError(
-            f"Temporary DA setup state has an invalid status: {status!r}."
-        )
-    if any(value in (None, "") for value in _connection_identity(state)):
-        raise ExistingDASetupError(
-            "Temporary DA setup state is missing connection identity."
-        )
-    if not state.get("agent", {}).get("workspaceSlug"):
-        raise ExistingDASetupError(
-            "Temporary DA setup state is missing its workspace identity."
-        )
-    if status in {"acquired", "workspace-ready"}:
-        acquisition = state.get("acquisition")
-        if (
-            not isinstance(acquisition, dict)
-            or acquisition.get("status") != "acquired"
-            or not acquisition.get("changesetSha256")
-            or not acquisition.get("rawPath")
-        ):
-            raise ExistingDASetupError(
-                "Temporary DA setup state has incomplete acquisition state."
-            )
-    if status == "workspace-ready":
-        workspace = state.get("workspace")
-        if (
-            not isinstance(workspace, dict)
-            or workspace.get("status") != "qualified-complete"
-            or not workspace.get("folder")
-        ):
-            raise ExistingDASetupError(
-                "Temporary DA setup state has incomplete workspace state."
-            )
-    return state
-
-
-def persist_da_connection_state(
+def _validate_setup_target(
     kit_root: Path,
     connection: dict[str, Any],
-) -> dict[str, Any]:
-    """Persist connection identity without regressing later DA setup phases."""
-    path = kit_root / DA_CONNECTION_STATE
+) -> dict[str, Any] | None:
+    """Reject setup over a different platform, environment, or agent."""
     canonical_state = _load_canonical_setup_state(kit_root)
     if (
         canonical_state is not None
@@ -696,60 +579,7 @@ def persist_da_connection_state(
                 "This workspace already has a non-DA local configuration. "
                 "Use a new workspace for DA setup."
             )
-    if not path.exists():
-        _write_json(path, connection)
-        return connection
-    existing = _load_json(path)
-    if _connection_identity(existing) != _connection_identity(connection):
-        raise ExistingDASetupError(
-            "A different DA connection is already recorded. Start a new "
-            "setup run before changing environment or agent identity."
-        )
-    updated = {
-        **connection,
-        "agent": {
-            **connection["agent"],
-            "workspaceSlug": existing["agent"]["workspaceSlug"],
-        },
-        "status": existing.get("status", "connected"),
-    }
-    for field in ("acquisition", "workspace"):
-        if field in existing:
-            updated[field] = existing[field]
-    _write_json(path, updated)
-    return updated
-
-
-def _record_acquisition(
-    kit_root: Path,
-    connection: dict[str, Any],
-    changeset: dict[str, Any],
-) -> dict[str, Any]:
-    changes = _component_changes(changeset)
-    component_counts = Counter(
-        str(component.get("$kind") or "Unknown")
-        for change in changes
-        if isinstance((component := change.get("component")), dict)
-    )
-    content_sha = _changeset_sha256(changeset)
-    _write_json(kit_root / DA_COMPONENT_SNAPSHOT, changeset)
-    updated = {
-        **{
-            key: value
-            for key, value in connection.items()
-            if key != "workspace"
-        },
-        "status": "acquired",
-        "acquisition": {
-            "status": "acquired",
-            "rawPath": DA_COMPONENT_SNAPSHOT.as_posix(),
-            "changesetSha256": content_sha,
-            "componentCounts": dict(sorted(component_counts.items())),
-            "acquiredAt": _utc_now(),
-        },
-    }
-    _write_json(kit_root / DA_CONNECTION_STATE, updated)
-    return updated
+    return canonical_state
 
 
 def _changeset_sha256(changeset: dict[str, Any]) -> str:
@@ -813,38 +643,6 @@ def _expanded_literal_activity(value: Any) -> str | None:
     return segment["value"]
 
 
-def _record_workspace_ready(
-    kit_root: Path,
-    connection: dict[str, Any],
-    *,
-    folder: Path,
-    topic_count: int,
-    component_counts: Counter[str],
-    unprojected_dialogs: list[dict[str, str]],
-) -> dict[str, Any]:
-    projected_kinds = {"DialogComponent"}
-    unprojected = {
-        kind: count
-        for kind, count in sorted(component_counts.items())
-        if kind not in projected_kinds
-    }
-    updated = {
-        **connection,
-        "status": "workspace-ready",
-        "workspace": {
-            "status": "qualified-complete",
-            "folder": folder.relative_to(kit_root).as_posix(),
-            "topicCount": topic_count,
-            "projectedComponentKinds": sorted(projected_kinds),
-            "unprojectedComponentKinds": unprojected,
-            "unprojectedDialogCount": len(unprojected_dialogs),
-            "completedAt": _utc_now(),
-        },
-    }
-    _write_json(kit_root / DA_CONNECTION_STATE, updated)
-    return updated
-
-
 def _component_changes(changeset: dict[str, Any]) -> list[dict[str, Any]]:
     changes = changeset.get("botComponentChanges")
     if not isinstance(changes, list):
@@ -871,47 +669,95 @@ def _validate_changeset_identity(
         )
 
 
-def _materialize_topics(
+def _materialize_workspace(
     changeset: dict[str, Any],
     destination: Path,
 ) -> tuple[
+    list[dict[str, Any]],
     list[dict[str, Any]],
     Counter[str],
     list[dict[str, str]],
 ]:
     topic_entries: list[dict[str, Any]] = []
+    projected_entries: list[dict[str, Any]] = []
     component_counts: Counter[str] = Counter()
     dialog_components: list[dict[str, Any]] = []
+    variable_components: list[dict[str, Any]] = []
+    gpt_components: list[dict[str, Any]] = []
     for change in _component_changes(changeset):
         component = change.get("component")
         if not isinstance(component, dict):
             continue
         component_kind = str(component.get("$kind") or "Unknown")
         component_counts[component_kind] += 1
-        if component_kind != "DialogComponent":
-            continue
-        schema_name = str(component.get("schemaName") or "")
-        dialog = component.get("dialog")
-        if not schema_name or not isinstance(dialog, dict):
-            raise ExistingDASetupError(
-                "Dialog component is missing its schema or dialog body."
-            )
-        dialog_components.append(component)
+        if component_kind == "DialogComponent":
+            schema_name = str(component.get("schemaName") or "")
+            dialog = component.get("dialog")
+            if not schema_name or not isinstance(dialog, dict):
+                raise ExistingDASetupError(
+                    "Dialog component is missing its schema or dialog body."
+                )
+            dialog_components.append(component)
+        elif component_kind == "GlobalVariableComponent":
+            schema_name = str(component.get("schemaName") or "")
+            variable = component.get("variable")
+            if not schema_name or not isinstance(variable, dict):
+                raise ExistingDASetupError(
+                    "Global variable component is missing its schema or "
+                    "variable body."
+                )
+            variable_components.append(component)
+        elif component_kind == "GptComponent":
+            metadata = component.get("metadata")
+            if not isinstance(metadata, dict):
+                raise ExistingDASetupError(
+                    "GPT component is missing its agent metadata."
+                )
+            gpt_components.append(component)
+
+    if len(gpt_components) != 1:
+        raise ExistingDASetupError(
+            "Component fetch must return exactly one GPT component for the "
+            "agent definition."
+        )
 
     try:
-        converted_dialogs = object_models_to_yaml(
+        converted_components = object_models_to_yaml(
             [
                 {
-                    "key": str(index),
+                    "key": f"dialog:{index}",
                     "objectModel": component["dialog"],
                 }
                 for index, component in enumerate(dialog_components)
+            ]
+            + [
+                {
+                    "key": "agent",
+                    "objectModel": {
+                        **gpt_components[0]["metadata"],
+                        "displayName": (
+                            gpt_components[0].get("displayName")
+                            or changeset["bot"].get("displayName")
+                        ),
+                    },
+                }
+            ]
+            + [
+                {
+                    "key": f"variable:{index}",
+                    "objectModel": component["variable"],
+                }
+                for index, component in enumerate(variable_components)
             ]
         )
     except ObjectModelConverterError as exc:
         raise ExistingDASetupError(
             f"Could not run the Microsoft Object Model converter: {exc}"
         ) from exc
+
+    converted_dialogs = converted_components[: len(dialog_components)]
+    converted_agent = converted_components[len(dialog_components)]
+    converted_variables = converted_components[len(dialog_components) + 1 :]
 
     unprojected_dialogs: list[dict[str, str]] = []
     for component, converted in zip(
@@ -964,13 +810,80 @@ def _materialize_topics(
                 "version": component.get("version"),
             }
         )
+    projected_entries.extend(topic_entries)
+    if unprojected_dialogs:
+        failed = ", ".join(
+            entry["schemaName"] for entry in unprojected_dialogs
+        )
+        raise ExistingDASetupError(
+            "The Microsoft Object Model converter could not materialize all "
+            f"authorable dialog components: {failed}."
+        )
     if not topic_entries:
         raise ExistingDASetupError(
             "The Microsoft Object Model converter could not materialize any "
             "authorable dialog components."
         )
+
+    agent_yaml = converted_agent.get("yaml")
+    if (
+        converted_agent.get("success") is not True
+        or not isinstance(agent_yaml, str)
+        or not agent_yaml.strip()
+    ):
+        raise ExistingDASetupError(
+            "The Microsoft Object Model converter could not materialize the "
+            "agent definition."
+        )
+    agent_path = destination / "agent.mcs.yml"
+    agent_path.write_text(agent_yaml, encoding="utf-8", newline="")
+    projected_entries.append(
+        {
+            "path": "agent.mcs.yml",
+            "componentKind": "GptComponent",
+            "componentId": gpt_components[0].get("id"),
+            "schemaName": gpt_components[0].get("schemaName"),
+            "displayName": gpt_components[0].get("displayName"),
+            "version": gpt_components[0].get("version"),
+        }
+    )
+
+    for component, converted in zip(
+        variable_components,
+        converted_variables,
+        strict=True,
+    ):
+        yaml_content = converted.get("yaml")
+        if (
+            converted.get("success") is not True
+            or not isinstance(yaml_content, str)
+            or not yaml_content.strip()
+        ):
+            raise ExistingDASetupError(
+                "The Microsoft Object Model converter could not materialize "
+                f"global variable {component['schemaName']}."
+            )
+        variable_path = (
+            destination
+            / "variables"
+            / f"{_schema_suffix(str(component['schemaName']))}.mcs.yml"
+        )
+        variable_path.parent.mkdir(parents=True, exist_ok=True)
+        variable_path.write_text(yaml_content, encoding="utf-8", newline="")
+        projected_entries.append(
+            {
+                "path": variable_path.relative_to(destination).as_posix(),
+                "componentKind": "GlobalVariableComponent",
+                "componentId": component.get("id"),
+                "schemaName": component.get("schemaName"),
+                "displayName": component.get("displayName"),
+                "version": component.get("version"),
+            }
+        )
+
     return (
         topic_entries,
+        projected_entries,
         component_counts,
         sorted(
             unprojected_dialogs,
@@ -988,6 +901,7 @@ def _write_snapshot(
     agent_name: str,
     schema_name: str,
     topics: list[dict[str, Any]],
+    variable_count: int,
     counts: Counter[str],
     unprojected_dialogs: list[dict[str, str]],
 ) -> None:
@@ -1000,6 +914,11 @@ def _write_snapshot(
         "- Realm: Dev",
         f"- Schema: `{schema_name}`",
         "- Transport: AgentBuilder MinimalBot",
+        "",
+        "## Authorable agent configuration",
+        "",
+        "- `agent.mcs.yml`",
+        f"- `{variable_count}` global variable file(s) under `variables/`",
         "",
         "## Authorable topics",
         "",
@@ -1155,7 +1074,11 @@ def attach_existing_dev(
         agent_id=agent_id,
         selection_source=selection_source,
     )
-    connection = persist_da_connection_state(kit_root, connection)
+    existing_setup = _validate_setup_target(kit_root, connection)
+    if existing_setup is not None:
+        connection["agent"]["workspaceSlug"] = existing_setup["agent"][
+            "workspace_slug"
+        ]
     normalized_environment_id = connection["environment"]["id"]
     normalized_agent_id = connection["agent"]["id"]
     schema_name = connection["agent"]["schemaName"]
@@ -1174,6 +1097,7 @@ def attach_existing_dev(
     )
     unprojected_dialogs: list[dict[str, str]] = []
     topics: list[dict[str, Any]]
+    projected_entries: list[dict[str, Any]] = []
     materialize = not destination.exists()
     if destination.exists():
         if not metadata_path.is_file():
@@ -1195,6 +1119,22 @@ def attach_existing_dev(
                 metadata.get("changesetSha256") == changeset_sha
                 or stored_changeset_sha == changeset_sha
             )
+        )
+        if (
+            unchanged
+            and metadata.get("projectionVersion")
+            != WORKSPACE_PROJECTION_VERSION
+            and not refresh
+        ):
+            raise ExistingDASetupError(
+                "The local DA workspace uses an older projection. Run the "
+                "explicit refresh flow to checkpoint local files and "
+                "materialize the complete agent workspace."
+            )
+        unchanged = (
+            unchanged
+            and metadata.get("projectionVersion")
+            == WORKSPACE_PROJECTION_VERSION
         )
         if unchanged and not refresh:
             stored_unprojected = metadata.get("unprojectedDialogs", [])
@@ -1231,19 +1171,19 @@ def attach_existing_dev(
         else:
             materialize = True
 
-    connection = _record_acquisition(kit_root, connection, changeset)
     if materialize:
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = Path(
             tempfile.mkdtemp(prefix=f".{slug}.", dir=destination.parent)
         )
         try:
+            _write_json(temporary / RAW_CHANGESET, changeset)
             (
                 topics,
+                projected_entries,
                 component_counts,
                 unprojected_dialogs,
-            ) = _materialize_topics(changeset, temporary)
-            _write_json(temporary / RAW_CHANGESET, changeset)
+            ) = _materialize_workspace(changeset, temporary)
             _write_json(
                 temporary / ".component-map.json",
                 {
@@ -1252,14 +1192,20 @@ def attach_existing_dev(
                         for key, value in entry.items()
                         if key != "path"
                     }
-                    for entry in topics
+                    for entry in projected_entries
                 },
+            )
+            variable_paths = sorted(
+                entry["path"]
+                for entry in projected_entries
+                if entry["componentKind"] == "GlobalVariableComponent"
             )
             metadata = {
                 "status": "refreshed" if destination.exists() else "created",
                 "releaseLine": "da",
                 "transport": "agentbuilder",
                 "projectionEngine": PROJECTION_ENGINE,
+                "projectionVersion": WORKSPACE_PROJECTION_VERSION,
                 "environmentId": normalized_environment_id,
                 "host": client.host,
                 "apiVersion": client.api_version,
@@ -1273,6 +1219,9 @@ def attach_existing_dev(
                 "changesetSha256": changeset_sha,
                 "topicCount": len(topics),
                 "topicPaths": sorted(entry["path"] for entry in topics),
+                "agentPath": "agent.mcs.yml",
+                "variableCount": len(variable_paths),
+                "variablePaths": variable_paths,
                 "componentCounts": dict(sorted(component_counts.items())),
                 "unprojectedDialogs": unprojected_dialogs,
             }
@@ -1282,6 +1231,7 @@ def attach_existing_dev(
                 agent_name=agent_name,
                 schema_name=schema_name,
                 topics=topics,
+                variable_count=len(variable_paths),
                 counts=component_counts,
                 unprojected_dialogs=unprojected_dialogs,
             )
@@ -1305,7 +1255,18 @@ def attach_existing_dev(
             else:
                 temporary.rename(destination)
                 result = metadata
-        except Exception:
+        except Exception as exc:
+            _write_json(
+                kit_root / ".local/setup/da-projection-failure.json",
+                {
+                    "environmentId": normalized_environment_id,
+                    "agentId": normalized_agent_id,
+                    "changesetSha256": changeset_sha,
+                    "errorType": type(exc).__name__,
+                    "message": str(exc),
+                    "changeset": changeset,
+                },
+            )
             shutil.rmtree(temporary, ignore_errors=True)
             raise
 
@@ -1340,24 +1301,38 @@ def attach_existing_dev(
         if result["status"] == "created":
             shutil.rmtree(destination, ignore_errors=True)
         raise
-    final_state = _record_workspace_ready(
-        kit_root,
-        connection,
-        folder=destination,
-        topic_count=int(result["topicCount"]),
-        component_counts=component_counts,
-        unprojected_dialogs=unprojected_dialogs,
-    )
+    failure_evidence = kit_root / ".local/setup/da-projection-failure.json"
+    if failure_evidence.exists():
+        failure_evidence.unlink()
+    projected_kinds = {
+        "DialogComponent",
+        "GlobalVariableComponent",
+        "GptComponent",
+    }
+    workspace = {
+        "status": "qualified-complete",
+        "folder": destination.relative_to(kit_root).as_posix(),
+        "agentPath": "agent.mcs.yml",
+        "topicCount": int(result["topicCount"]),
+        "variableCount": int(result["variableCount"]),
+        "projectedComponentKinds": sorted(projected_kinds),
+        "unprojectedComponentKinds": {
+            kind: count
+            for kind, count in sorted(component_counts.items())
+            if kind not in projected_kinds
+        },
+        "unprojectedDialogCount": 0,
+        "completedAt": _utc_now(),
+    }
     canonical_state = _record_canonical_setup_complete(
         kit_root,
-        final_state,
-        final_state["workspace"],
+        connection,
+        workspace,
     )
     return {
         **result,
-        "connectionState": DA_CONNECTION_STATE.as_posix(),
-        "connectionStatus": final_state["status"],
-        "workspace": final_state["workspace"],
+        "connectionStatus": "workspace-ready",
+        "workspace": workspace,
         "setupState": CANONICAL_SETUP_STATE.as_posix(),
         "setupStatus": canonical_state["status"],
     }
@@ -1387,71 +1362,6 @@ def summarize_agents(agents: list[dict[str, Any]]) -> list[dict[str, str]]:
     return sorted(
         choices,
         key=lambda item: (item["name"].casefold(), item["id"]),
-    )
-
-
-def summarize_environments(
-    environments: list[dict[str, Any]],
-) -> list[dict[str, str]]:
-    """Return safe user-choice fields from ring environment records."""
-    choices: dict[str, dict[str, str]] = {}
-    for environment in environments:
-        environment_id = _normalize_environment_id(
-            str(environment.get("id") or "")
-        )
-        name = (
-            str(environment.get("displayName") or "").strip()
-            or environment_id
-        )
-        choices[environment_id.casefold()] = {
-            "id": environment_id,
-            "name": name,
-        }
-    return sorted(
-        choices.values(),
-        key=lambda item: (item["name"].casefold(), item["id"]),
-    )
-
-
-def summarize_organizations(
-    tenants: list[dict[str, Any]],
-) -> list[dict[str, str]]:
-    """Return friendly organization choices with internal tenant identities."""
-    choices: dict[str, dict[str, str]] = {}
-    for tenant in tenants:
-        tenant_id = _normalize_guid(
-            str(tenant.get("tenantId") or ""),
-            "Tenant ID",
-        )
-        domain = str(tenant.get("defaultDomain") or "").strip()
-        if not domain:
-            domains = tenant.get("domains")
-            if isinstance(domains, list):
-                domain = next(
-                    (
-                        str(candidate).strip()
-                        for candidate in domains
-                        if str(candidate).strip()
-                    ),
-                    "",
-                )
-        name = str(tenant.get("displayName") or "").strip() or domain
-        if not name:
-            raise ExistingDASetupError(
-                "Azure organization discovery returned an unnamed tenant."
-            )
-        choices[tenant_id.casefold()] = {
-            "id": tenant_id,
-            "name": name,
-            "domain": domain,
-        }
-    return sorted(
-        choices.values(),
-        key=lambda item: (
-            item["name"].casefold(),
-            item["domain"].casefold(),
-            item["id"],
-        ),
     )
 
 
@@ -1497,30 +1407,29 @@ def _add_agentbuilder_target_arguments(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
-    environments = commands.add_parser(
-        "list-environments",
-        help="List AgentBuilder environments in the selected service ring.",
-    )
-    _add_agentbuilder_target_arguments(environments)
-    organizations = commands.add_parser(
-        "list-organizations",
-        help="List friendly organization choices for cross-tenant recovery.",
-    )
-    organizations.add_argument(
-        "--kit-root",
-        type=Path,
-        default=Path.cwd(),
-    )
-    status = commands.add_parser(
-        "status",
-        help="Show validated temporary DA setup state for resume.",
-    )
-    status.add_argument("--kit-root", type=Path, default=Path.cwd())
     list_agents = commands.add_parser(
         "list-agents",
         help="List directly discoverable AgentBuilder agents.",
     )
     _add_agentbuilder_target_arguments(list_agents)
+    inspect_agent = commands.add_parser(
+        "inspect-agent",
+        help="Read the server-reported route realm for one exact agent.",
+    )
+    _add_agentbuilder_target_arguments(inspect_agent)
+    inspect_agent.add_argument(
+        "--agent-id",
+        help="Agent ID override when target extraction omits it.",
+    )
+    validate_agent = commands.add_parser(
+        "validate-agent",
+        help="Validate one exact editable Dev agent without writing setup state.",
+    )
+    _add_agentbuilder_target_arguments(validate_agent)
+    validate_agent.add_argument(
+        "--agent-id",
+        help="Agent ID override when target extraction omits it.",
+    )
     attach = commands.add_parser(
         "attach",
         help="Validate and attach a known existing Dev agent.",
@@ -1583,78 +1492,17 @@ def _authentication_from_args(
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
-        if args.command == "status":
-            result = load_da_connection_state(args.kit_root.resolve())
-            print(
-                f"DA_EXISTING_DEV_STATUS_JSON:"
-                f"{json.dumps(result, ensure_ascii=True)}"
-            )
-            return 0
-
-        if args.command == "list-environments":
-            if args.target_url or args.environment_id:
-                target = resolve_da_target(
-                    target_url=args.target_url,
-                    environment_id=args.environment_id,
-                    agent_id=None,
-                    ring=args.ring,
-                    require_agent=False,
-                )
-                ring = target["ring"]
-                current_environment_id = target["environmentId"]
-            else:
-                ring = args.ring or "prod"
-                current_environment_id = None
-            token, tenant_id = _authentication_from_args(args, ring)
-            environments = summarize_environments(
-                list_agentbuilder_environments(
-                    token,
-                    ring,
-                    api_version=args.api_version,
-                )
-            )
-            result = {
-                "tenantId": tenant_id,
-                "ring": ring,
-                "currentEnvironmentId": current_environment_id,
-                "environments": environments,
-            }
-            print(
-                "DA_ENVIRONMENT_LIST_JSON:"
-                f"{json.dumps(result, ensure_ascii=True)}"
-            )
-            return 0
-
-        if args.command == "list-organizations":
-            kit_root = args.kit_root.resolve()
-            arm = AzureArmClient(
-                "organizations",
-                cache_path=(
-                    kit_root
-                    / ".local"
-                    / ".organization_token_cache.bin"
-                ),
-            )
-            arm.authenticate(force_account_selection=True)
-            organizations = summarize_organizations(arm.list_tenants())
-            if not organizations:
-                raise ExistingDASetupError(
-                    "No organizations were available to the selected account."
-                )
-            print(
-                "DA_ORGANIZATION_LIST_JSON:"
-                f"{json.dumps({'organizations': organizations}, ensure_ascii=True)}"
-            )
-            return 0
-
         target = resolve_da_target(
             target_url=args.target_url,
             environment_id=args.environment_id,
             agent_id=getattr(args, "agent_id", None),
             ring=args.ring,
-            require_agent=args.command == "attach",
+            require_agent=args.command
+            in {"attach", "inspect-agent", "validate-agent"},
         )
         environment_id = target["environmentId"]
+        if args.command == "attach":
+            _require_object_model_dependencies()
         client = _client_from_args(args, environment_id, target["ring"])
         if args.command == "list-agents":
             inspection = inspect_dev_agents(client)
@@ -1671,6 +1519,41 @@ def main(argv: list[str] | None = None) -> int:
             )
             return 0
 
+        if args.command == "inspect-agent":
+            result = inspect_agent_route(
+                client,
+                environment_id=environment_id,
+                agent_id=target["agentId"],
+            )
+            print(
+                "DA_AGENT_ROUTE_JSON:"
+                f"{json.dumps(result, ensure_ascii=True)}"
+            )
+            return 0
+
+        if args.command == "validate-agent":
+            connection = validate_existing_dev_connection(
+                client,
+                environment_id=environment_id,
+                agent_id=target["agentId"],
+                selection_source=target.get("agentSelection"),
+            )
+            result = {
+                "environmentId": connection["environment"]["id"],
+                "agentId": connection["agent"]["id"],
+                "agentName": connection["agent"]["name"],
+                "schemaName": connection["agent"]["schemaName"],
+                "realm": connection["agent"]["realm"],
+                "almFamilyId": connection["agent"]["almFamilyId"],
+                "isManaged": connection["agent"]["isManaged"],
+                "selectedBy": connection["selectedBy"],
+            }
+            print(
+                "DA_AGENT_VALIDATION_JSON:"
+                f"{json.dumps(result, ensure_ascii=True)}"
+            )
+            return 0
+
         result = attach_existing_dev(
             client,
             environment_id=environment_id,
@@ -1679,18 +1562,10 @@ def main(argv: list[str] | None = None) -> int:
             refresh=args.refresh,
             selection_source=target.get("agentSelection"),
         )
-    except ExistingDAAgentNotFound as exc:
-        print(
-            "DA_EXISTING_DEV_DIAGNOSTIC_JSON:"
-            f"{json.dumps(exc.diagnostic(), ensure_ascii=True)}"
-        )
-        print(f"ERROR: {exc}", file=sys.stderr)
-        return 1
     except (
         AgentBuilderError,
         ExistingDASetupError,
         OSError,
-        RuntimeError,
         ValueError,
     ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

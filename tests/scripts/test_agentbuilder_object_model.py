@@ -206,12 +206,26 @@ class _FakeYamlSerializer:
         return "kind: AdaptiveDialog"
 
 
+def test_validate_object_model_runtime_loads_dependencies(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    loaded: list[bool] = []
+    monkeypatch.setattr(
+        converter,
+        "_load_object_model",
+        lambda: loaded.append(True),
+    )
+
+    converter.validate_object_model_runtime()
+
+    assert loaded == [True]
+
+
 def test_object_models_to_yaml_preserves_result_contract(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     types = converter._ObjectModelTypes(
         bot_element=object,
-        dialog_base=_FakeDialog,
         element_serializer=_FakeElementSerializer,
         json_serializer=_FakeJsonSerializer,
         yaml_serializer=_FakeYamlSerializer,

@@ -130,18 +130,22 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
     text = _DA_EXISTING_DEV.read_text(encoding="utf-8")
 
     for command in (
-        "setup_existing_da.py status",
-        "setup_existing_da.py list-environments",
-        "setup_existing_da.py list-organizations",
         "setup_existing_da.py list-agents",
+        "setup_existing_da.py inspect-agent",
+        "setup_existing_da.py validate-agent",
         "setup_existing_da.py attach",
     ):
         assert command in text
-    assert "Do not run the Dataverse foundation steps" in text
+    for removed_command in (
+        "setup_existing_da.py status",
+        "setup_existing_da.py list-environments",
+        "setup_existing_da.py list-organizations",
+    ):
+        assert removed_command not in text
+    assert "Do not run the Dataverse setup path" in text
     assert "scripts/setup_state.py" not in text
     assert "scripts/discover.py" not in text
-    assert "setupStatus" in text
-    assert "`complete`" in text
+    assert "`setupStatus: complete`" in text
 
 
 def test_foundation_router_paths_resolve() -> None:
