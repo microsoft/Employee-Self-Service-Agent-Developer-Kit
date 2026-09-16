@@ -317,6 +317,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     text = _DA_MOS_STARTER.read_text(encoding="utf-8")
     normalized = " ".join(text.split())
     reference = _MOS_STARTER_REFERENCE.read_text(encoding="utf-8")
+    existing_dev = _DA_EXISTING_DEV.read_text(encoding="utf-8")
 
     assert "no existing agent and wants a fresh installation" in normalized_foundation
     assert "src/reference/mos-starter-package.md" in text
@@ -341,12 +342,25 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "Offer exactly **HR** and **IT**" in normalized
     assert "core ESS experience" in normalized
     assert "specific connected system" in normalized
-    assert "unavailable stubs" in normalized
+    assert "Requested setup: **{product} -- Unavailable in this environment**" in text
+    assert "I have not selected a substitute." in text
+    assert "explicitly select an available package" in normalized
     assert "only a service-returned package can be selected" in normalized
     assert "Create a new {HR or IT} ESS agent" in normalized
     assert "Choose a different package" in text
     assert "Do not preselect **Create agent**" in text
     assert "authorizes exactly one create attempt" in normalized
+    assert "diagnostic evidence only" in normalized
+    assert "do not explain those internal version concepts to the maker" in normalized
+    assert "Prepare this agent for local editing?" in text
+    assert "**Prepare for local editing**" in text
+    assert "**Not now** performs no ALM operation" in normalized
+    assert "outcome: verification-failed" in normalized
+    assert "Setup has stopped without attaching a workspace." in text
+    assert "never show internal step IDs or raw technical output" in normalized
+    assert "no specific failure cause was supplied" in normalized
+    assert "When a specific cause is supplied" in text
+    assert "workspace is not ready to connect" in existing_dev
     assert "Fresh entitled MOS starter package" in text
     assert "factual completion report from `da-existing-dev.md`" in normalized
     assert "Do not infer persona, product, target, or progress" in normalized
@@ -356,7 +370,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "setup_mos_starter.py resolve" not in text
     assert "setup_mos_starter.py status" not in text
     assert "DA_EXISTING_DEV_DIAGNOSTIC_JSON:" not in text
-    assert len(text.splitlines()) < 130
+    assert len(text.splitlines()) < 160
 
     assert "createFromStarterPackage" in reference
     assert "Live-proven" in reference

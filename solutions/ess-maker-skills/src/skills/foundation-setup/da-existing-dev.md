@@ -79,7 +79,13 @@ Treat setup as complete only when `DA_EXISTING_DEV_SETUP_JSON:` reports both `co
 
 Canonical state tracks eight foundation records. Checks outside DA foundation setup are recorded with `mode: "skipped"` and a specific reason. Treat those records as explicit waivers, not evidence that a check ran. Preferred-solution configuration does not apply to the DA-only path. Environment FlightCheck, product installation, binding, and product-readiness evidence belong to their owning product setup capabilities.
 
-If setup stops after canonical progress is written, inspect `active_step`, that step's state, and its `failure_causes`. Preserve those facts in the response and rerun only the bounded operation selected by the maker. Do not edit canonical setup state by hand or claim readiness while `connect_ready` is false.
+If setup stops after canonical progress is written, inspect `active_step`, that step's state, and its `failure_causes`. Preserve those facts as diagnostic evidence, but translate them into maker language: `SETUP-03` maps to **Establish an editable Dev agent** and `SETUP-07` maps to **Materialize the local workspace**. Explain a specific unmet prerequisite plainly without showing an internal step ID or raw technical output. Rerun only the bounded operation selected by the maker. Do not edit canonical setup state by hand or claim readiness while `connect_ready` is false.
+
+If content was projected but the returned result is not workspace-ready and supplies no specific failure cause, keep **Materialize the local workspace** current and show:
+
+> The agent content was projected locally, but the workspace is not ready to connect. Setup is not complete and has stopped.
+
+Do not invent a cause or run another operation without new maker intent.
 
 On success, build this report only from `DA_EXISTING_DEV_SETUP_JSON:`. Use a friendly environment name only when an authoritative operation returned one; otherwise say `Selected Power Platform environment`. Render empty `unprojectedComponentKinds` as `None` and a missing checkpoint as `Not required`.
 
@@ -109,7 +115,7 @@ Not performed by foundation setup:
 
 This report is a factual handoff, not another readiness gate. If the maker disputes a fact, inspect the underlying operation evidence rather than changing canonical state conversationally.
 
-Preserve service status, error code, request ID, and local projection-failure evidence. Do not replace a specific service or conversion failure with a generic setup error.
+Preserve service status, error code, request ID, and local projection-failure evidence for diagnosis. In ordinary maker-facing copy, explain the specific service or conversion failure in plain language without exposing raw technical output. Do not replace it with a generic setup error.
 
 For an identity or authorization failure, rerun the same operation with `--select-account`. Use `--tenant-id` only when the maker supplies the tenant that owns the target and understands that tenant selection does not grant access.
 

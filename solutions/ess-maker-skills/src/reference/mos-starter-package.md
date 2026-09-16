@@ -55,6 +55,7 @@ Do not describe a pending-validation claim as supported behavior. In particular,
 11. Verify ALM through a second component fetch. A write response without persisted read-back is not success.
 12. Return control after every operation. The existing `setup_existing_da.py attach` command remains the sole Dev validation, projection, and canonical-completion boundary.
 13. If attachment reports a service-owned prerequisite, report it and stop. This path never publishes or removes components.
+14. Keep response bodies, internal classifications, step IDs, and request details as diagnostic evidence. Translate supported facts into plain maker language; never render raw technical evidence as ordinary maker-facing copy.
 
 ## Durable command boundary
 
