@@ -5,15 +5,9 @@ Use this path only when the maker has no existing agent and wants a fresh instal
 
 Use only intent supplied in the current request and results observed in this invocation. Do not infer persona, product, target, or progress from conversation history.
 
-## Ask what the maker needs
+## Identify the target
 
-Ask:
-
-> What kind of ESS agent are you setting up?
-
-Offer exactly **HR** and **IT**. Let the service-returned product list supply the product choices; do not ask the maker to classify the product before listing it.
-
-Ask for a Copilot Studio environment URL when the target is not supplied. When fresh-agent intent and the target environment are known, mark **Choose the starting point and target environment** complete.
+Ask for a Copilot Studio environment URL when the target is not supplied. Do not ask the maker to classify the product before loading the catalog. When fresh-agent intent and the target environment are known, mark **Choose the starting point and target environment** complete.
 
 ## List the catalog
 
@@ -26,6 +20,17 @@ python scripts/setup_mos_starter.py list \
 
 Parse `DA_MOS_STARTER_PACKAGES_JSON:`. Present each package's safe service-provided name, version, and description as a product. Never show the internal `packageId` to the maker.
 
+Normalize the picker label from the exact service-provided product name:
+
+| Service product name | Experience |
+| --- | --- |
+| `Employee Self-Service` | Hub/Core |
+| `Employee Self-Service HR` | HR |
+| `Employee Self-Service IT` | IT |
+| Any other name | Other |
+
+Use the host's interactive single-selection control and offer one choice for each returned product. Do not ask the maker to type a product name. Format each choice as **{experience} -- {product name} {version}** and use `shortDescription`, then `description`, as its supporting text. Omit a blank version or description instead of showing an unresolved value.
+
 The successful list proves target access, but not a new agent identity. Keep **Verify access and agent identity** current until create and direct attachment validation succeed.
 
 If the catalog is empty, mark the maker's product choices unavailable, say that no entitled products are currently available, and stop; do not guess a substitute or fall back to another setup path.
@@ -36,11 +41,11 @@ If the command instead fails, parse `DA_MOS_STARTER_LIST_ANNOTATIONS_JSON:` and 
 
 ## Confirm the exact product and target
 
-Ask the maker to explicitly choose one product by name, and confirm the target Power Platform environment. Do not preselect a choice. Once confirmed, keep the product's underlying `packageId`, `name`, and `version` for the next step; these are internal command inputs, not maker-facing text.
+After the maker selects one product from the interactive list, confirm the target Power Platform environment. Do not preselect a choice. Once confirmed, keep the product's underlying `packageId`, `name`, and `version` for the next step; these are internal command inputs, not maker-facing text.
 
-Substitute the maker's selected HR or IT area and show:
+Substitute the selected picker label and show:
 
-> Create a new **{selected area} ESS agent** in **{friendly environment name or Selected Power Platform environment}** from **{selected product name} {version}**?
+> Create a new ESS agent in **{friendly environment name or Selected Power Platform environment}** from **{selected product label}**?
 
 Offer exactly:
 
@@ -63,6 +68,12 @@ python scripts/setup_mos_starter.py create \
 ```
 
 The command ends after this one attempt. Do not launch another create from this invocation.
+
+If the command reports existing local setup state, show:
+
+> This Developer Kit folder already contains setup for an agent. Nothing was changed. To create another agent, open a separate copy of the Developer Kit in a new VS Code window and run `/setup` there.
+
+Do not offer to clear, replace, or overwrite the current folder's setup state.
 
 ## Interpret the response
 

@@ -274,8 +274,9 @@ def _validate_empty_create_workspace(kit_root: Path) -> None:
     )
     if any((kit_root / path).exists() for path in conflicts):
         raise MosStarterSetupError(
-            "This workspace already contains agent setup state. Open a new "
-            "workspace to install a fresh MOS starter package."
+            "This Developer Kit folder already contains agent setup state. "
+            "To install a fresh MOS product, open a separate copy of the "
+            "Developer Kit in a new VS Code window."
         )
 
 

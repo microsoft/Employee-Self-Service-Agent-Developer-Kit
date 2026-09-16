@@ -337,12 +337,18 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "Never show the internal `packageId` to the maker" in normalized
     assert "`connectReady: true`" in text
     assert "`setupStatus`" not in text
-    assert "What kind of ESS agent are you setting up?" in text
-    assert "Offer exactly **HR** and **IT**" in normalized
-    assert "Let the service-returned product list supply the product choices" in normalized
-    assert "Create a new **{selected area} ESS agent**" in normalized
-    assert "**{selected product name} {version}**" in text
+    assert "Do not ask the maker to classify the product before loading the catalog" in normalized
+    assert "| `Employee Self-Service` | Hub/Core |" in text
+    assert "| `Employee Self-Service HR` | HR |" in text
+    assert "| `Employee Self-Service IT` | IT |" in text
+    assert "host's interactive single-selection control" in normalized
+    assert "Do not ask the maker to type a product name" in normalized
+    assert "**{experience} -- {product name} {version}**" in text
+    assert "Create a new ESS agent" in normalized
+    assert "**{selected product label}**" in text
     assert "Choose a different product" in text
+    assert "separate copy of the Developer Kit in a new VS Code window" in normalized
+    assert "Do not offer to clear, replace, or overwrite" in normalized
     assert "Do not preselect **Create agent**" in text
     assert "authorizes exactly one create attempt" in normalized
     assert "diagnostic evidence only" in normalized

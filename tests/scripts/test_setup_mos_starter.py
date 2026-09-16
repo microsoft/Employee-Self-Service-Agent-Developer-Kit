@@ -419,7 +419,10 @@ def test_create_enforces_empty_workspace_guard(tmp_path: Path) -> None:
     (tmp_path / ".local" / "config.json").write_text("{}", encoding="utf-8")
     client = FakeMosClient(kit_root=tmp_path)
 
-    with pytest.raises(mos.MosStarterSetupError, match="already contains"):
+    with pytest.raises(
+        mos.MosStarterSetupError,
+        match="separate copy of the Developer Kit in a new VS Code window",
+    ):
         mos.create_from_starter_package(
             client,
             environment_id=ENVIRONMENT_ID,
