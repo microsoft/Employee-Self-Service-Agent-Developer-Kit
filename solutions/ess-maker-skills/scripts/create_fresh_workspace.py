@@ -109,6 +109,30 @@ def create_worktree(
         repo_root,
         ["rev-parse", "--verify", f"{source_ref}^{{commit}}"],
     ).stdout.strip()
+    local_prefix = f"{KIT_SUBFOLDER.as_posix()}/.local"
+    workspace_prefix = f"{KIT_SUBFOLDER.as_posix()}/workspace"
+    tracked_workspace_state = _run_git(
+        git_executable,
+        repo_root,
+        [
+            "ls-tree",
+            "-r",
+            "--name-only",
+            source_commit,
+            "--",
+            local_prefix,
+            workspace_prefix,
+        ],
+    ).stdout.splitlines()
+    allowed_scaffolding = {f"{local_prefix}/.gitkeep"}
+    unexpected_state = [
+        path for path in tracked_workspace_state if path not in allowed_scaffolding
+    ]
+    if unexpected_state:
+        raise FreshWorkspaceError(
+            "The committed revision tracks local state that must not enter a "
+            f"fresh workspace: {', '.join(unexpected_state)}"
+        )
     _run_git(
         git_executable,
         repo_root,

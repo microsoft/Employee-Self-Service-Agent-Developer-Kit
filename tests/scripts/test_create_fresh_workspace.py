@@ -26,9 +26,16 @@ def _create_repo(path: Path) -> Path:
     _git(path, "init", "--quiet")
     _git(path, "config", "user.email", "workspace-test@example.com")
     _git(path, "config", "user.name", "Workspace Test")
-    (path / ".gitignore").write_text(".local/\nworkspace/\n", encoding="utf-8")
+    (path / ".gitignore").write_text(
+        "solutions/ess-maker-skills/.local/*\n"
+        "!solutions/ess-maker-skills/.local/.gitkeep\n"
+        "solutions/ess-maker-skills/workspace/\n",
+        encoding="utf-8",
+    )
     kit_root = path / workspace.KIT_SUBFOLDER
     kit_root.mkdir(parents=True)
+    (kit_root / ".local").mkdir()
+    (kit_root / ".local" / ".gitkeep").write_text("", encoding="utf-8")
     (kit_root / "README.md").write_text("ESS Maker Skills\n", encoding="utf-8")
     _git(path, "add", ".")
     _git(path, "commit", "--quiet", "-m", "test fixture")
@@ -50,7 +57,11 @@ def test_create_worktree_preserves_current_workspace_state(tmp_path: Path) -> No
     assert result["kitRoot"] == str((destination / workspace.KIT_SUBFOLDER).resolve())
     assert result["sourceCommit"] == _git(repo_root, "rev-parse", "HEAD").stdout.strip()
     assert (destination / workspace.KIT_SUBFOLDER / "README.md").is_file()
-    assert not (destination / workspace.KIT_SUBFOLDER / ".local").exists()
+    assert (destination / workspace.KIT_SUBFOLDER / ".local" / ".gitkeep").is_file()
+    assert not (
+        destination / workspace.KIT_SUBFOLDER / ".local" / "config.json"
+    ).exists()
+    assert not (destination / workspace.KIT_SUBFOLDER / "workspace").exists()
     assert local_state.is_file()
 
 
@@ -63,6 +74,23 @@ def test_create_worktree_rejects_dirty_source_without_creating_destination(
     destination = tmp_path / "fresh"
 
     with pytest.raises(workspace.FreshWorkspaceError, match="uncommitted"):
+        workspace.create_worktree(kit_root, destination)
+
+    assert not destination.exists()
+
+
+def test_create_worktree_rejects_revision_that_tracks_local_state(
+    tmp_path: Path,
+) -> None:
+    repo_root = tmp_path / "source"
+    kit_root = _create_repo(repo_root)
+    tracked_state = kit_root / ".local" / "config.json"
+    tracked_state.write_text('{"agent":"must-not-copy"}\n', encoding="utf-8")
+    _git(repo_root, "add", "--force", str(tracked_state))
+    _git(repo_root, "commit", "--quiet", "-m", "track invalid local state")
+    destination = tmp_path / "fresh"
+
+    with pytest.raises(workspace.FreshWorkspaceError, match="tracks local state"):
         workspace.create_worktree(kit_root, destination)
 
     assert not destination.exists()
