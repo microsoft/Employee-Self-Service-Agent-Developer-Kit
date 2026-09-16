@@ -1768,6 +1768,13 @@ def _add_agentbuilder_target_arguments(
             "Force browser account selection for an identity-recovery retry."
         ),
     )
+    parser.add_argument(
+        "--account",
+        help=(
+            "Optional test tenant account sign-in name. Reuse its cached "
+            "AgentBuilder token when available or prefill Microsoft sign-in."
+        ),
+    )
     parser.add_argument("--host")
     parser.add_argument("--api-version", default=DEFAULT_API_VERSION)
     parser.add_argument("--kit-root", type=Path, default=Path.cwd())
@@ -1846,6 +1853,7 @@ def _authentication_from_args(
     args: argparse.Namespace,
     ring: str,
 ) -> tuple[str, str]:
+    account = getattr(args, "account", None)
     kit_root = args.kit_root.resolve()
     cache_path = kit_root / ".local" / ".agentbuilder_token_cache.bin"
     if args.tenant_id:
@@ -1854,12 +1862,15 @@ def _authentication_from_args(
             ring,
             cache_path=cache_path,
             force_account_selection=args.select_account,
+            account_hint=account,
         )
         tenant_id = args.tenant_id
     else:
         token, tenant_id = authenticate_selected_tenant(
             ring,
             cache_path=cache_path,
+            force_account_selection=args.select_account,
+            account_hint=account,
         )
     return token, tenant_id
 

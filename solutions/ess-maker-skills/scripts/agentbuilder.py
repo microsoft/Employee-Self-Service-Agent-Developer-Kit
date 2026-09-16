@@ -10,6 +10,7 @@ import binascii
 import json
 import os
 import socket
+import sys
 import tempfile
 import uuid
 from pathlib import Path
@@ -279,6 +280,51 @@ def _load_token_cache(path: Path) -> msal.SerializableTokenCache:
     return cache
 
 
+def _account_identifiers(account: Any) -> list[str]:
+    if not isinstance(account, dict):
+        return []
+    return [
+        str(account[key]).strip()
+        for key in ("username", "local_account_id", "home_account_id")
+        if account.get(key) and str(account[key]).strip()
+    ]
+
+
+def _select_cached_account(
+    accounts: list[dict[str, Any]],
+    account_hint: str | None,
+) -> dict[str, Any] | None:
+    """Select an exact hinted account, or one unambiguous cached account."""
+    if account_hint:
+        wanted = account_hint.strip().casefold()
+        matches = [
+            account
+            for account in accounts
+            if any(
+                identifier.casefold() == wanted
+                for identifier in _account_identifiers(account)
+            )
+        ]
+        if len(matches) > 1:
+            return None
+        return matches[0] if matches else None
+    return accounts[0] if len(accounts) == 1 else None
+
+
+def _interactive_token(
+    app: msal.PublicClientApplication,
+    scope: str,
+    account_hint: str | None,
+    force_account_selection: bool,
+) -> dict[str, Any] | None:
+    arguments: dict[str, Any] = {"scopes": [scope]}
+    if account_hint and not force_account_selection:
+        arguments["login_hint"] = account_hint
+    else:
+        arguments["prompt"] = "select_account"
+    return app.acquire_token_interactive(**arguments)
+
+
 def tenant_id_from_access_token(token: str) -> str:
     """Return the issuing tenant ID from an AgentBuilder access token."""
     try:
@@ -299,37 +345,44 @@ def tenant_id_from_access_token(token: str) -> str:
         ) from exc
 
 
-def authenticate(
-    tenant_id: str,
-    ring: str,
+def _acquire_token(
     *,
-    cache_path: Path = DEFAULT_TOKEN_CACHE,
-    force_account_selection: bool = False,
+    authority: str,
+    ring: str,
+    cache_path: Path,
+    force_account_selection: bool,
+    account_hint: str | None,
 ) -> str:
-    """Acquire an ESS ADK delegated token without contacting Dataverse."""
-    try:
-        normalized_tenant = str(uuid.UUID(tenant_id))
-    except ValueError as exc:
-        raise ValueError("Tenant ID must be a GUID.") from exc
-
     cache = _load_token_cache(cache_path)
-
     app = msal.PublicClientApplication(
         CLIENT_ID,
-        authority=f"https://login.microsoftonline.com/{normalized_tenant}",
+        authority=authority,
         token_cache=cache,
     )
     scope = minimal_bot_scope(ring)
-    accounts = app.get_accounts()
+    selected_account = (
+        None
+        if force_account_selection
+        else _select_cached_account(app.get_accounts(), account_hint)
+    )
     result = (
-        app.acquire_token_silent([scope], account=accounts[0])
-        if accounts and not force_account_selection
+        app.acquire_token_silent([scope], account=selected_account)
+        if selected_account is not None
         else None
     )
+    selected_identifiers = _account_identifiers(selected_account)
+    if selected_identifiers:
+        print(
+            "Using cached AgentBuilder account: "
+            f"{selected_identifiers[0]}",
+            file=sys.stderr,
+        )
     if not result or "access_token" not in result:
-        result = app.acquire_token_interactive(
-            scopes=[scope],
-            prompt="select_account",
+        result = _interactive_token(
+            app,
+            scope,
+            account_hint,
+            force_account_selection,
         )
     token = result.get("access_token") if result else None
     if not token:
@@ -342,32 +395,45 @@ def authenticate(
     return token
 
 
+def authenticate(
+    tenant_id: str,
+    ring: str,
+    *,
+    cache_path: Path = DEFAULT_TOKEN_CACHE,
+    force_account_selection: bool = False,
+    account_hint: str | None = None,
+) -> str:
+    """Acquire an ESS ADK delegated token without contacting Dataverse."""
+    try:
+        normalized_tenant = str(uuid.UUID(tenant_id))
+    except ValueError as exc:
+        raise ValueError("Tenant ID must be a GUID.") from exc
+
+    return _acquire_token(
+        authority=f"https://login.microsoftonline.com/{normalized_tenant}",
+        ring=ring,
+        cache_path=cache_path,
+        force_account_selection=force_account_selection,
+        account_hint=account_hint,
+    )
+
+
 def authenticate_selected_tenant(
     ring: str,
     *,
     cache_path: Path = DEFAULT_TOKEN_CACHE,
+    force_account_selection: bool = False,
+    account_hint: str | None = None,
 ) -> tuple[str, str]:
-    """Let the maker select an account and return its token and tenant."""
-    cache = _load_token_cache(cache_path)
-    app = msal.PublicClientApplication(
-        CLIENT_ID,
+    """Reuse or select an account and return its token and tenant."""
+    token = _acquire_token(
         authority="https://login.microsoftonline.com/organizations",
-        token_cache=cache,
+        ring=ring,
+        cache_path=cache_path,
+        force_account_selection=force_account_selection,
+        account_hint=account_hint,
     )
-    result = app.acquire_token_interactive(
-        scopes=[minimal_bot_scope(ring)],
-        prompt="select_account",
-    )
-    token = result.get("access_token") if result else None
-    if not token:
-        error = result.get("error", "unknown_error") if result else "unknown_error"
-        raise AgentBuilderError(
-            f"AgentBuilder authentication failed ({error})."
-        )
-    tenant_id = tenant_id_from_access_token(token)
-    if cache.has_state_changed:
-        _persist_token_cache(cache, cache_path)
-    return token, tenant_id
+    return token, tenant_id_from_access_token(token)
 
 
 def _response_error(response: requests.Response, operation: str) -> None:

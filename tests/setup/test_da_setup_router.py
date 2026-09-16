@@ -356,6 +356,10 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "scripts/prepare_fresh_workspace.py" in text
     assert "--open-vscode" in text
     assert "DA_PREPARED_WORKSPACE_JSON:" in text
+    assert "Do you have a test tenant user?" in text
+    assert '--account "{TEST_TENANT_ACCOUNT}"' in text
+    assert "Never infer a corp account" in normalized
+    assert "when this workspace's cache is ambiguous" in normalized
     assert "Before listing products" in text
     assert "do not sign in or load the catalog" in normalized
     assert "explicitly asks for a fresh installation" in normalized_foundation
@@ -396,7 +400,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "setup_mos_starter.py resolve" not in text
     assert "setup_mos_starter.py status" not in text
     assert "DA_EXISTING_DEV_DIAGNOSTIC_JSON:" not in text
-    assert len(text.splitlines()) < 160
+    assert len(text.splitlines()) < 170
 
     assert "createFromStarterPackage" in reference
     assert "Live-proven" in reference

@@ -1050,3 +1050,62 @@ def test_parser_exposes_only_composable_setup_operations() -> None:
         "list-agents",
         "validate-agent",
     }
+
+    parsed = parser.parse_args(
+        [
+            "inspect-agent",
+            "--target-url",
+            "https://copilotstudio.microsoft.com/environments/"
+            f"{ENVIRONMENT_ID}/agents/{AGENT_ID}",
+            "--account",
+            "test.user@example.test",
+        ]
+    )
+    assert parsed.account == "test.user@example.test"
+
+
+def test_authentication_uses_workspace_cache_and_account_hint(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    observed: dict[str, Any] = {}
+
+    def authenticate_selected(
+        ring: str,
+        *,
+        cache_path: Path,
+        force_account_selection: bool,
+        account_hint: str,
+    ) -> tuple[str, str]:
+        observed.update(
+            {
+                "ring": ring,
+                "cache_path": cache_path,
+                "force_account_selection": force_account_selection,
+                "account_hint": account_hint,
+            }
+        )
+        return "token", TENANT_ID
+
+    monkeypatch.setattr(
+        setup_existing_da,
+        "authenticate_selected_tenant",
+        authenticate_selected,
+    )
+    args = SimpleNamespace(
+        tenant_id=None,
+        select_account=False,
+        account="test.user@example.test",
+        kit_root=tmp_path,
+    )
+
+    assert setup_existing_da._authentication_from_args(args, "test") == (
+        "token",
+        TENANT_ID,
+    )
+    assert observed == {
+        "ring": "test",
+        "cache_path": tmp_path / ".local" / ".agentbuilder_token_cache.bin",
+        "force_account_selection": False,
+        "account_hint": "test.user@example.test",
+    }

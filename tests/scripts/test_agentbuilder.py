@@ -812,6 +812,9 @@ def test_first_run_authentication_returns_selected_token_tenant(
             observed["authority"] = authority
             observed["cache"] = token_cache
 
+        def get_accounts(self):
+            return []
+
         def acquire_token_interactive(self, *, scopes, prompt):
             observed["scopes"] = scopes
             observed["prompt"] = prompt
@@ -835,6 +838,204 @@ def test_first_run_authentication_returns_selected_token_tenant(
         "https://api.powerplatform.com/"
         "CopilotStudio.MinimalBot.ReadWrite"
     ]
+
+
+def test_selected_tenant_authentication_reuses_one_cached_account(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    tenant_id = "00000000-0000-4000-8000-000000009999"
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"tid": tenant_id}).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    token = f"header.{payload}.signature"
+    account = {"username": "maker@example.test"}
+    observed: dict[str, Any] = {}
+
+    class FakeApp:
+        def __init__(self, _client_id, *, authority, token_cache) -> None:
+            observed["authority"] = authority
+            observed["cache"] = token_cache
+
+        def get_accounts(self):
+            return [account]
+
+        def acquire_token_silent(self, scopes, *, account):
+            observed["scopes"] = scopes
+            observed["account"] = account
+            return {"access_token": token}
+
+        def acquire_token_interactive(self, **_kwargs):
+            raise AssertionError("one cached account should be reused")
+
+    monkeypatch.setattr(
+        agentbuilder.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    result = agentbuilder.authenticate_selected_tenant(
+        "prod",
+        cache_path=tmp_path / "token-cache.bin",
+    )
+
+    assert result == (token, tenant_id)
+    assert observed["account"] is account
+
+
+def test_selected_tenant_authentication_prompts_for_multiple_cached_accounts(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    tenant_id = "00000000-0000-4000-8000-000000009999"
+    payload = base64.urlsafe_b64encode(
+        json.dumps({"tid": tenant_id}).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    token = f"header.{payload}.signature"
+    observed: dict[str, Any] = {}
+
+    class FakeApp:
+        def __init__(self, _client_id, *, authority, token_cache) -> None:
+            observed["authority"] = authority
+            observed["cache"] = token_cache
+
+        def get_accounts(self):
+            return [
+                {"username": "corp.user@example.com"},
+                {"username": "test.user@example.test"},
+            ]
+
+        def acquire_token_silent(self, *_args, **_kwargs):
+            raise AssertionError("ambiguous cache must not be reused")
+
+        def acquire_token_interactive(self, **kwargs):
+            observed["interactive"] = kwargs
+            return {"access_token": token}
+
+    monkeypatch.setattr(
+        agentbuilder.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    result = agentbuilder.authenticate_selected_tenant(
+        "prod",
+        cache_path=tmp_path / "token-cache.bin",
+    )
+
+    assert result == (token, tenant_id)
+    assert observed["interactive"]["prompt"] == "select_account"
+
+
+def test_account_hint_selects_matching_cached_test_tenant_user(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    selected = {
+        "username": "test.user@example.test",
+        "local_account_id": "test-user-id",
+    }
+    other = {"username": "corp.user@example.com"}
+    observed: dict[str, Any] = {}
+
+    class FakeApp:
+        def __init__(self, _client_id, *, authority, token_cache) -> None:
+            observed["authority"] = authority
+            observed["cache"] = token_cache
+
+        def get_accounts(self):
+            return [other, selected]
+
+        def acquire_token_silent(self, scopes, *, account):
+            observed["scopes"] = scopes
+            observed["account"] = account
+            return {"access_token": "test-token"}
+
+        def acquire_token_interactive(self, **_kwargs):
+            raise AssertionError("the matching cached account should be reused")
+
+    monkeypatch.setattr(
+        agentbuilder.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    result = agentbuilder.authenticate(
+        "00000000-0000-4000-8000-000000009999",
+        "prod",
+        cache_path=tmp_path / "token-cache.bin",
+        account_hint="test.user@example.test",
+    )
+
+    assert result == "test-token"
+    assert observed["account"] is selected
+
+
+def test_account_hint_prepopulates_interactive_selection(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    observed: dict[str, Any] = {}
+
+    class FakeApp:
+        def __init__(self, _client_id, *, authority, token_cache) -> None:
+            observed["authority"] = authority
+            observed["cache"] = token_cache
+
+        def get_accounts(self):
+            return []
+
+        def acquire_token_interactive(self, **kwargs):
+            observed["interactive"] = kwargs
+            return {"access_token": "test-token"}
+
+    monkeypatch.setattr(
+        agentbuilder.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    result = agentbuilder.authenticate(
+        "00000000-0000-4000-8000-000000009999",
+        "prod",
+        cache_path=tmp_path / "token-cache.bin",
+        account_hint="test.user@example.test",
+    )
+
+    assert result == "test-token"
+    assert observed["interactive"]["login_hint"] == "test.user@example.test"
+    assert "prompt" not in observed["interactive"]
+
+
+def test_account_hint_preserves_interactive_authentication_error(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    class FakeApp:
+        def __init__(self, _client_id, *, authority, token_cache) -> None:
+            pass
+
+        def get_accounts(self):
+            return []
+
+        def acquire_token_interactive(self, **_kwargs):
+            return {
+                "error": "access_denied",
+            }
+
+    monkeypatch.setattr(
+        agentbuilder.msal,
+        "PublicClientApplication",
+        FakeApp,
+    )
+
+    with pytest.raises(agentbuilder.AgentBuilderError, match="access_denied"):
+        agentbuilder.authenticate(
+            "00000000-0000-4000-8000-000000009999",
+            "prod",
+            cache_path=tmp_path / "token-cache.bin",
+            account_hint="test.user@example.test",
+        )
 
 
 def test_targeted_authentication_can_force_account_selection(
