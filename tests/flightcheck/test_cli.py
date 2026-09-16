@@ -204,7 +204,6 @@ class TestAgentBuilderLocalScope:
         (local_dir / "config.json").write_text(
             json.dumps(
                 {
-                    "transport": "agentbuilder",
                     "environmentId": "environment-id",
                     "agents": [],
                 }

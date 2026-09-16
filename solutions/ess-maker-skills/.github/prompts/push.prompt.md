@@ -5,13 +5,13 @@ description: "Type Enter to check DA-GA deployment availability"
 
 # Push
 
-**Setup-state check.** Read `.local/setup/config.json`. If it does not have `schema_version: 1` and `status: "complete"`, show:
+**Setup-state check.** Read `.local/setup/config.json`. If it does not have `schema_version: 3` and `connect_ready: true`, show:
 
 > Welcome to the ESS Maker Kit. Before running `/push`, type `/setup` to set up your environment.
 
 and STOP. Otherwise proceed.
 
-If `.local/config.json` has `transport: "agentbuilder"`, show:
+Show:
 
 > Pushing local changes to a DA-GA agent is not yet available in this release. Your local files have not been changed.
 

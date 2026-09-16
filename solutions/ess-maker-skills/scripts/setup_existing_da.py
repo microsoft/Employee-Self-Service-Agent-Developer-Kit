@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -42,7 +43,63 @@ from agentbuilder_object_model import (
 ATTACH_METADATA = ".agentbuilder/attach.json"
 RAW_CHANGESET = ".agentbuilder/components.json"
 CANONICAL_SETUP_STATE = Path(".local/setup/config.json")
-CANONICAL_SETUP_SCHEMA_VERSION = 1
+CANONICAL_SETUP_SCHEMA_VERSION = 3
+SETUP_INTENT = "DA foundation setup"
+SETUP_STEP_ORDER = (
+    "SETUP-01",
+    "SETUP-02.1",
+    "SETUP-02.2",
+    "SETUP-03",
+    "SETUP-04",
+    "SETUP-05",
+    "SETUP-06",
+    "SETUP-07",
+)
+SETUP_STEP_NOTES = {
+    "SETUP-01": (
+        "Records locked environment identity, endpoint, and DA foundation "
+        "setup intent."
+    ),
+    "SETUP-02.1": (
+        "DA environment FlightCheck is not available in this release."
+    ),
+    "SETUP-02.2": (
+        "DA prerequisite and governance FlightCheck is not available in this "
+        "release."
+    ),
+    "SETUP-03": (
+        "Confirms the environment, native ALM family, and editable Dev agent."
+    ),
+    "SETUP-04": (
+        "Preferred-solution configuration does not apply to the DA-only "
+        "foundation path."
+    ),
+    "SETUP-05": (
+        "DA product installation and binding evidence is deferred to the MOS "
+        "setup workstream."
+    ),
+    "SETUP-06": (
+        "DA baseline agent-readiness evidence is deferred to the MOS setup "
+        "workstream."
+    ),
+    "SETUP-07": (
+        "Confirms workspace materialization and that integration "
+        "configuration can begin safely."
+    ),
+}
+SETUP_TEMPORARILY_SKIPPED_STEPS = {
+    "SETUP-02.1",
+    "SETUP-02.2",
+    "SETUP-05",
+    "SETUP-06",
+}
+SETUP_PERMANENTLY_SKIPPED_STEPS = {"SETUP-04"}
+SUPPORTED_SETUP_SOURCES = {
+    "existing-dev",
+    "alm-import",
+    "prod-to-dev",
+    "mos-starter",
+}
 PROJECTION_ENGINE = "microsoft-agents-objectmodel"
 WORKSPACE_PROJECTION_VERSION = 2
 STUDIO_RING_BY_HOST = {
@@ -66,7 +123,8 @@ def _require_object_model_dependencies() -> None:
         validate_object_model_runtime()
     except ObjectModelConverterError as exc:
         raise ExistingDASetupError(
-            f"Microsoft Object Model dependencies are unavailable: {exc}"
+            "Local Microsoft Object Model prerequisites failed before "
+            f"authentication or remote agent validation: {exc}"
         ) from exc
 
 
@@ -297,11 +355,17 @@ def _load_canonical_setup_state(
     state = _load_json(path)
     required_fields = {
         "schema_version",
-        "status",
+        "intent",
         "setup_source",
         "environment",
         "agent",
         "workspace",
+        "steps",
+        "active_step",
+        "connect_ready",
+        "open_issues",
+        "created_at",
+        "updated_at",
         "completed_at",
     }
     if set(state) != required_fields:
@@ -311,8 +375,8 @@ def _load_canonical_setup_state(
         )
     if (
         state.get("schema_version") != CANONICAL_SETUP_SCHEMA_VERSION
-        or state.get("status") != "complete"
-        or state.get("setup_source") != "existing-dev"
+        or state.get("intent") != SETUP_INTENT
+        or state.get("setup_source") not in SUPPORTED_SETUP_SOURCES
     ):
         raise ExistingDASetupError(
             "This workspace has setup state from an unsupported release. "
@@ -321,15 +385,89 @@ def _load_canonical_setup_state(
     environment = state.get("environment")
     agent = state.get("agent")
     workspace = state.get("workspace")
+    steps = state.get("steps")
     if (
         not isinstance(environment, dict)
         or not isinstance(agent, dict)
         or not isinstance(workspace, dict)
-        or workspace.get("status") != "qualified-complete"
+        or not isinstance(steps, dict)
+        or set(steps) != set(SETUP_STEP_ORDER)
+        or not isinstance(state.get("open_issues"), list)
     ):
         raise ExistingDASetupError(
             "Canonical DA setup state is incomplete or malformed."
         )
+    for step_id, record in steps.items():
+        if not isinstance(record, dict):
+            raise ExistingDASetupError(
+                f"Canonical DA setup step {step_id} is malformed."
+            )
+        if record.get("state") not in {
+            "pending",
+            "in-progress",
+            "blocked",
+            "done",
+        }:
+            raise ExistingDASetupError(
+                f"Canonical DA setup step {step_id} has an invalid state."
+            )
+        if record.get("mode") not in {
+            None,
+            "automated",
+            "manual-attested",
+            "skipped",
+        }:
+            raise ExistingDASetupError(
+                f"Canonical DA setup step {step_id} has an invalid mode."
+            )
+        if record.get("state") == "done" and (
+            not record.get("note")
+            or not record.get("mode")
+            or not record.get("recorded_at")
+        ):
+            raise ExistingDASetupError(
+                f"Canonical DA setup step {step_id} lacks completion evidence."
+            )
+    expected_active = next(
+        (
+            step_id
+            for step_id in SETUP_STEP_ORDER
+            if steps[step_id].get("state") != "done"
+        ),
+        SETUP_STEP_ORDER[-1],
+    )
+    if state.get("active_step") != expected_active:
+        raise ExistingDASetupError(
+            "Canonical DA setup state has an invalid active step."
+        )
+    connect_ready = state.get("connect_ready")
+    all_steps_done = all(
+        steps[step_id].get("state") == "done"
+        for step_id in SETUP_STEP_ORDER
+    )
+    if not isinstance(connect_ready, bool):
+        raise ExistingDASetupError(
+            "Canonical DA setup state has an invalid connect-ready marker."
+        )
+    if connect_ready != all_steps_done:
+        raise ExistingDASetupError(
+            "Canonical DA setup readiness does not match its step results."
+        )
+    if connect_ready:
+        if (
+            not state.get("completed_at")
+            or not workspace.get("folder")
+            or not workspace.get("agent_path")
+        ):
+            raise ExistingDASetupError(
+                "Canonical DA setup state claims readiness without complete "
+                "step and workspace evidence."
+            )
+    else:
+        if state.get("completed_at") is not None:
+            raise ExistingDASetupError(
+                "Incomplete canonical DA setup state has a completion time."
+            )
     return state
 
 
@@ -356,25 +494,99 @@ def _canonical_state_matches_connection(
     )
 
 
-def _record_canonical_setup_complete(
-    kit_root: Path,
-    connection: dict[str, Any],
-    workspace: dict[str, Any],
+def _step_record(
+    state: str = "pending",
+    *,
+    mode: str | None = None,
+    note: str | None = None,
+    recorded_at: str | None = None,
+    failure_causes: list[str] | None = None,
 ) -> dict[str, Any]:
-    """Record the completed agent and the ALM source used to establish it."""
-    existing = _load_canonical_setup_state(kit_root)
-    if existing is not None and not _canonical_state_matches_connection(
-        existing,
-        connection,
+    return {
+        "state": state,
+        "updated_at": recorded_at,
+        "failure_causes": failure_causes or [],
+        "checkpoint": None,
+        "note": note,
+        "mode": mode,
+        "recorded_at": recorded_at,
+    }
+
+
+def _next_setup_step(steps: dict[str, dict[str, Any]]) -> str:
+    return next(
+        (
+            step_id
+            for step_id in SETUP_STEP_ORDER
+            if steps[step_id]["state"] != "done"
+        ),
+        SETUP_STEP_ORDER[-1],
+    )
+
+
+def _remove_directory(path: Path, label: str) -> str | None:
+    if not path.exists():
+        return None
+    try:
+        shutil.rmtree(path)
+    except OSError as exc:
+        return f"{label} cleanup failed ({type(exc).__name__}: {exc})"
+    return None
+
+
+def _setup_steps_in_progress(now: str) -> dict[str, dict[str, Any]]:
+    steps = {
+        step_id: _step_record()
+        for step_id in SETUP_STEP_ORDER
+    }
+    for step_id in ("SETUP-01", "SETUP-03"):
+        steps[step_id] = _step_record(
+            "done",
+            mode="automated",
+            note=SETUP_STEP_NOTES[step_id],
+            recorded_at=now,
+        )
+    for step_id in (
+        *sorted(SETUP_TEMPORARILY_SKIPPED_STEPS),
+        *sorted(SETUP_PERMANENTLY_SKIPPED_STEPS),
     ):
-        raise ExistingDASetupError(
-            "Canonical setup state identifies a different environment or "
-            "agent. Open a new workspace before changing the setup target."
+        steps[step_id] = _step_record(
+            "done",
+            mode="skipped",
+            note=SETUP_STEP_NOTES[step_id],
+            recorded_at=now,
+        )
+    steps["SETUP-07"] = _step_record(
+        "in-progress",
+        recorded_at=now,
+    )
+    return steps
+
+
+def _build_canonical_setup_progress(
+    connection: dict[str, Any],
+    existing: dict[str, Any] | None,
+) -> dict[str, Any]:
+    now = _utc_now()
+    steps = (
+        copy.deepcopy(existing["steps"])
+        if existing
+        else _setup_steps_in_progress(now)
+    )
+    if all(
+        steps[step_id]["state"] == "done"
+        for step_id in SETUP_STEP_ORDER[:-1]
+    ):
+        steps["SETUP-07"] = _step_record(
+            "in-progress",
+            recorded_at=now,
         )
     state = {
         "schema_version": CANONICAL_SETUP_SCHEMA_VERSION,
-        "status": "complete",
-        "setup_source": "existing-dev",
+        "intent": SETUP_INTENT,
+        "setup_source": (
+            existing["setup_source"] if existing else "existing-dev"
+        ),
         "environment": {
             "id": connection["environment"]["id"],
             "tenant_id": connection["environment"]["tenantId"],
@@ -392,26 +604,134 @@ def _record_canonical_setup_complete(
             "alm_family_id": connection["agent"]["almFamilyId"],
             "workspace_slug": connection["agent"]["workspaceSlug"],
         },
-        "workspace": {
-            "status": workspace["status"],
-            "folder": workspace["folder"],
-            "agent_path": workspace["agentPath"],
-            "topic_count": workspace["topicCount"],
-            "variable_count": workspace["variableCount"],
-            "projected_component_kinds": workspace[
-                "projectedComponentKinds"
-            ],
-            "unprojected_component_kinds": workspace[
-                "unprojectedComponentKinds"
-            ],
-            "unprojected_dialog_count": workspace[
-                "unprojectedDialogCount"
-            ],
-        },
-        "completed_at": (
-            existing["completed_at"] if existing is not None else _utc_now()
-        ),
+        "workspace": existing.get("workspace", {}) if existing else {},
+        "steps": steps,
+        "active_step": _next_setup_step(steps),
+        "connect_ready": False,
+        "open_issues": list(existing.get("open_issues", [])) if existing else [],
+        "created_at": existing.get("created_at", now) if existing else now,
+        "updated_at": now,
+        "completed_at": None,
     }
+    return state
+
+
+def _record_canonical_setup_progress(
+    kit_root: Path,
+    connection: dict[str, Any],
+    existing: dict[str, Any] | None,
+) -> dict[str, Any]:
+    state = _build_canonical_setup_progress(connection, existing)
+    _write_json(kit_root / CANONICAL_SETUP_STATE, state)
+    return state
+
+
+def _record_canonical_setup_blocked(
+    kit_root: Path,
+    error: Exception,
+    *,
+    secondary_failures: list[str] | None = None,
+) -> None:
+    state = _load_canonical_setup_state(kit_root)
+    if state is None or state["connect_ready"]:
+        return
+    now = _utc_now()
+    failure_causes = [f"{type(error).__name__}: {error}"]
+    failure_causes.extend(secondary_failures or [])
+    state["steps"]["SETUP-07"] = _step_record(
+        "blocked",
+        failure_causes=failure_causes,
+        recorded_at=now,
+    )
+    state["active_step"] = _next_setup_step(state["steps"])
+    state["connect_ready"] = False
+    state["updated_at"] = now
+    state["completed_at"] = None
+    _write_json(kit_root / CANONICAL_SETUP_STATE, state)
+
+
+def _preserve_secondary_failures(
+    error: Exception,
+    failures: list[str],
+) -> None:
+    for failure in failures:
+        print(f"WARNING: {failure}", file=sys.stderr)
+        error.add_note(f"Secondary failure: {failure}")
+
+
+def _try_record_canonical_setup_blocked(
+    kit_root: Path,
+    error: Exception,
+    *,
+    secondary_failures: list[str] | None = None,
+) -> None:
+    try:
+        _record_canonical_setup_blocked(
+            kit_root,
+            error,
+            secondary_failures=secondary_failures,
+        )
+    except Exception as persistence_error:
+        _preserve_secondary_failures(
+            error,
+            [
+                "Canonical blocked-state persistence failed "
+                f"({type(persistence_error).__name__}: {persistence_error})"
+            ],
+        )
+
+
+def _record_canonical_setup_ready(
+    kit_root: Path,
+    connection: dict[str, Any],
+    workspace: dict[str, Any],
+) -> dict[str, Any]:
+    """Record the completed setup after the workspace is materialized."""
+    existing = _load_canonical_setup_state(kit_root)
+    if existing is not None and not _canonical_state_matches_connection(
+        existing,
+        connection,
+    ):
+        raise ExistingDASetupError(
+            "Canonical setup state identifies a different environment or "
+            "agent. Open a new workspace before changing the setup target."
+        )
+    state = _build_canonical_setup_progress(connection, existing)
+    now = _utc_now()
+    state["workspace"] = {
+        "folder": workspace["folder"],
+        "agent_path": workspace["agentPath"],
+        "topic_count": workspace["topicCount"],
+        "variable_count": workspace["variableCount"],
+        "projected_component_kinds": workspace[
+            "projectedComponentKinds"
+        ],
+        "unprojected_component_kinds": workspace[
+            "unprojectedComponentKinds"
+        ],
+    }
+    state["steps"]["SETUP-07"] = _step_record(
+        "done",
+        mode="automated",
+        note=SETUP_STEP_NOTES["SETUP-07"],
+        recorded_at=now,
+    )
+    state["connect_ready"] = all(
+        state["steps"][step_id]["state"] == "done"
+        for step_id in SETUP_STEP_ORDER
+    )
+    state["active_step"] = _next_setup_step(state["steps"])
+    state["updated_at"] = now
+    if state["connect_ready"]:
+        state["completed_at"] = (
+            existing["completed_at"]
+            if existing is not None
+            and existing["connect_ready"]
+            and existing["completed_at"]
+            else now
+        )
+    else:
+        state["completed_at"] = None
     _write_json(kit_root / CANONICAL_SETUP_STATE, state)
     return state
 
@@ -532,7 +852,6 @@ def validate_existing_dev_connection(
         "status": "connected",
         "releaseLine": "da",
         "setupSource": "existing-dev",
-        "transport": "agentbuilder",
         "environment": {
             "id": normalized_environment_id,
             "tenantId": client.tenant_id,
@@ -558,7 +877,7 @@ def _validate_setup_target(
     kit_root: Path,
     connection: dict[str, Any],
 ) -> dict[str, Any] | None:
-    """Reject setup over a different platform, environment, or agent."""
+    """Reject setup over a different completed environment or agent."""
     canonical_state = _load_canonical_setup_state(kit_root)
     if (
         canonical_state is not None
@@ -571,14 +890,6 @@ def _validate_setup_target(
             "This workspace already has setup state for another environment "
             "or agent. Use a new workspace for DA setup."
         )
-    workspace_config = kit_root / ".local" / "config.json"
-    if workspace_config.exists():
-        existing_workspace = _load_json(workspace_config)
-        if existing_workspace.get("transport") != "agentbuilder":
-            raise ExistingDASetupError(
-                "This workspace already has a non-DA local configuration. "
-                "Use a new workspace for DA setup."
-            )
     return canonical_state
 
 
@@ -676,7 +987,6 @@ def _materialize_workspace(
     list[dict[str, Any]],
     list[dict[str, Any]],
     Counter[str],
-    list[dict[str, str]],
 ]:
     topic_entries: list[dict[str, Any]] = []
     projected_entries: list[dict[str, Any]] = []
@@ -885,13 +1195,6 @@ def _materialize_workspace(
         topic_entries,
         projected_entries,
         component_counts,
-        sorted(
-            unprojected_dialogs,
-            key=lambda item: (
-                item["displayName"].casefold(),
-                item["schemaName"].casefold(),
-            ),
-        ),
     )
 
 
@@ -903,7 +1206,6 @@ def _write_snapshot(
     topics: list[dict[str, Any]],
     variable_count: int,
     counts: Counter[str],
-    unprojected_dialogs: list[dict[str, str]],
 ) -> None:
     lines = [
         f"# {agent_name}",
@@ -913,7 +1215,7 @@ def _write_snapshot(
         "- Release line: DA",
         "- Realm: Dev",
         f"- Schema: `{schema_name}`",
-        "- Transport: AgentBuilder MinimalBot",
+        "- Source: AgentBuilder MinimalBot",
         "",
         "## Authorable agent configuration",
         "",
@@ -946,26 +1248,6 @@ def _write_snapshot(
         f"| {kind} | {count} |"
         for kind, count in sorted(counts.items())
     )
-    if unprojected_dialogs:
-        lines.extend(
-            [
-                "",
-                "## Unavailable dialog components",
-                "",
-                (
-                    "These dialog records remain in the retained changeset "
-                    "but are not available as local editable topics."
-                ),
-                "",
-            ]
-        )
-        lines.extend(
-            (
-                f"- {entry['displayName']} "
-                f"(`{entry['dialogKind']}`)"
-            )
-            for entry in unprojected_dialogs
-        )
     lines.append("")
     (destination / "snapshot.md").write_text(
         "\n".join(lines),
@@ -1002,13 +1284,18 @@ def _write_config(
     component_counts: Counter[str],
 ) -> None:
     existing = _load_config(config_path)
+    existing.pop("transport", None)
     agents = existing.get("agents", [])
     if not isinstance(agents, list):
         raise ExistingDASetupError(
             "Existing local config contains a malformed agents list."
         )
     agents = [
-        item
+        {
+            key: value
+            for key, value in item.items()
+            if key != "transport"
+        }
         for item in agents
         if isinstance(item, dict)
         and item.get("slug") != agent_entry["slug"]
@@ -1022,7 +1309,6 @@ def _write_config(
         "configVersion": 1,
         "setup": "complete",
         "releaseLine": "da",
-        "transport": "agentbuilder",
         "environmentId": environment_id,
         "powerPlatformApiEndpoint": host,
         "agentBuilderApiVersion": api_version,
@@ -1079,13 +1365,29 @@ def attach_existing_dev(
         connection["agent"]["workspaceSlug"] = existing_setup["agent"][
             "workspace_slug"
         ]
+    progress_recorded = (
+        existing_setup is not None
+        and existing_setup["connect_ready"] is False
+    )
+    if existing_setup is None or progress_recorded:
+        _record_canonical_setup_progress(
+            kit_root,
+            connection,
+            existing_setup,
+        )
+        progress_recorded = True
     normalized_environment_id = connection["environment"]["id"]
     normalized_agent_id = connection["agent"]["id"]
     schema_name = connection["agent"]["schemaName"]
     family_id = connection["agent"]["almFamilyId"]
     agent_name = connection["agent"]["name"]
-    changeset = client.fetch_components(normalized_agent_id)
-    _validate_changeset_identity(changeset, normalized_agent_id)
+    try:
+        changeset = client.fetch_components(normalized_agent_id)
+        _validate_changeset_identity(changeset, normalized_agent_id)
+    except Exception as exc:
+        if progress_recorded:
+            _try_record_canonical_setup_blocked(kit_root, exc)
+        raise
     slug = connection["agent"]["workspaceSlug"]
     destination = kit_root / "workspace" / "agents" / slug
     changeset_sha = _changeset_sha256(changeset)
@@ -1095,9 +1397,9 @@ def attach_existing_dev(
         for change in _component_changes(changeset)
         if isinstance((component := change.get("component")), dict)
     )
-    unprojected_dialogs: list[dict[str, str]] = []
     topics: list[dict[str, Any]]
     projected_entries: list[dict[str, Any]] = []
+    cleanup_warnings: list[str] = []
     materialize = not destination.exists()
     if destination.exists():
         if not metadata_path.is_file():
@@ -1137,16 +1439,12 @@ def attach_existing_dev(
             == WORKSPACE_PROJECTION_VERSION
         )
         if unchanged and not refresh:
-            stored_unprojected = metadata.get("unprojectedDialogs", [])
-            if not isinstance(stored_unprojected, list):
-                raise ExistingDASetupError(
-                    "Workspace attach metadata contains malformed "
-                    "unprojected dialogs."
-                )
-            unprojected_dialogs = stored_unprojected
+            had_unprojected_dialogs = "unprojectedDialogs" in metadata
+            metadata.pop("unprojectedDialogs", None)
             if (
                 metadata.get("changesetSha256") != changeset_sha
                 or metadata.get("selectedBy") != connection["selectedBy"]
+                or had_unprojected_dialogs
             ):
                 metadata = {
                     **metadata,
@@ -1172,6 +1470,13 @@ def attach_existing_dev(
             materialize = True
 
     if materialize:
+        if not progress_recorded:
+            _record_canonical_setup_progress(
+                kit_root,
+                connection,
+                existing_setup,
+            )
+            progress_recorded = True
         destination.parent.mkdir(parents=True, exist_ok=True)
         temporary = Path(
             tempfile.mkdtemp(prefix=f".{slug}.", dir=destination.parent)
@@ -1182,7 +1487,6 @@ def attach_existing_dev(
                 topics,
                 projected_entries,
                 component_counts,
-                unprojected_dialogs,
             ) = _materialize_workspace(changeset, temporary)
             _write_json(
                 temporary / ".component-map.json",
@@ -1203,7 +1507,6 @@ def attach_existing_dev(
             metadata = {
                 "status": "refreshed" if destination.exists() else "created",
                 "releaseLine": "da",
-                "transport": "agentbuilder",
                 "projectionEngine": PROJECTION_ENGINE,
                 "projectionVersion": WORKSPACE_PROJECTION_VERSION,
                 "environmentId": normalized_environment_id,
@@ -1223,7 +1526,6 @@ def attach_existing_dev(
                 "variableCount": len(variable_paths),
                 "variablePaths": variable_paths,
                 "componentCounts": dict(sorted(component_counts.items())),
-                "unprojectedDialogs": unprojected_dialogs,
             }
             _write_json(temporary / ATTACH_METADATA, metadata)
             _write_snapshot(
@@ -1233,7 +1535,6 @@ def attach_existing_dev(
                 topics=topics,
                 variable_count=len(variable_paths),
                 counts=component_counts,
-                unprojected_dialogs=unprojected_dialogs,
             )
             _create_baseline(temporary)
             if destination.exists():
@@ -1247,7 +1548,12 @@ def attach_existing_dev(
                 if baseline.exists():
                     shutil.rmtree(baseline)
                 restore_from(str(destination), str(temporary))
-                shutil.rmtree(temporary)
+                cleanup_failure = _remove_directory(
+                    temporary,
+                    "Temporary workspace",
+                )
+                if cleanup_failure:
+                    cleanup_warnings.append(cleanup_failure)
                 result = {
                     **metadata,
                     "checkpoint": checkpoint_number,
@@ -1256,18 +1562,36 @@ def attach_existing_dev(
                 temporary.rename(destination)
                 result = metadata
         except Exception as exc:
-            _write_json(
-                kit_root / ".local/setup/da-projection-failure.json",
-                {
-                    "environmentId": normalized_environment_id,
-                    "agentId": normalized_agent_id,
-                    "changesetSha256": changeset_sha,
-                    "errorType": type(exc).__name__,
-                    "message": str(exc),
-                    "changeset": changeset,
-                },
+            secondary_failures: list[str] = []
+            try:
+                _write_json(
+                    kit_root / ".local/setup/da-projection-failure.json",
+                    {
+                        "environmentId": normalized_environment_id,
+                        "agentId": normalized_agent_id,
+                        "changesetSha256": changeset_sha,
+                        "errorType": type(exc).__name__,
+                        "message": str(exc),
+                        "changeset": changeset,
+                    },
+                )
+            except Exception as evidence_error:
+                secondary_failures.append(
+                    "Projection-failure evidence persistence failed "
+                    f"({type(evidence_error).__name__}: {evidence_error})"
+                )
+            cleanup_failure = _remove_directory(
+                temporary,
+                "Temporary workspace",
             )
-            shutil.rmtree(temporary, ignore_errors=True)
+            if cleanup_failure:
+                secondary_failures.append(cleanup_failure)
+            _preserve_secondary_failures(exc, secondary_failures)
+            _try_record_canonical_setup_blocked(
+                kit_root,
+                exc,
+                secondary_failures=secondary_failures,
+            )
             raise
 
     agent_entry = {
@@ -1278,7 +1602,6 @@ def attach_existing_dev(
         "slug": slug,
         "folder": destination.relative_to(kit_root).as_posix(),
         "releaseLine": "da",
-        "transport": "agentbuilder",
         "environmentId": normalized_environment_id,
         "powerPlatformApiEndpoint": client.host,
         "realm": "dev",
@@ -1297,20 +1620,29 @@ def attach_existing_dev(
             api_version=client.api_version,
             component_counts=component_counts,
         )
-    except Exception:
-        if result["status"] == "created":
-            shutil.rmtree(destination, ignore_errors=True)
+    except Exception as exc:
+        _preserve_secondary_failures(exc, cleanup_warnings)
+        _try_record_canonical_setup_blocked(
+            kit_root,
+            exc,
+            secondary_failures=cleanup_warnings,
+        )
         raise
     failure_evidence = kit_root / ".local/setup/da-projection-failure.json"
     if failure_evidence.exists():
-        failure_evidence.unlink()
+        try:
+            failure_evidence.unlink()
+        except OSError as cleanup_error:
+            cleanup_warnings.append(
+                "Projection-failure evidence cleanup failed "
+                f"({type(cleanup_error).__name__}: {cleanup_error})"
+            )
     projected_kinds = {
         "DialogComponent",
         "GlobalVariableComponent",
         "GptComponent",
     }
     workspace = {
-        "status": "qualified-complete",
         "folder": destination.relative_to(kit_root).as_posix(),
         "agentPath": "agent.mcs.yml",
         "topicCount": int(result["topicCount"]),
@@ -1321,21 +1653,23 @@ def attach_existing_dev(
             for kind, count in sorted(component_counts.items())
             if kind not in projected_kinds
         },
-        "unprojectedDialogCount": 0,
         "completedAt": _utc_now(),
     }
-    canonical_state = _record_canonical_setup_complete(
+    canonical_state = _record_canonical_setup_ready(
         kit_root,
         connection,
         workspace,
     )
-    return {
+    response = {
         **result,
         "connectionStatus": "workspace-ready",
         "workspace": workspace,
         "setupState": CANONICAL_SETUP_STATE.as_posix(),
-        "setupStatus": canonical_state["status"],
+        "connectReady": canonical_state["connect_ready"],
     }
+    if cleanup_warnings:
+        response["cleanupWarnings"] = cleanup_warnings
+    return response
 
 
 def summarize_agents(agents: list[dict[str, Any]]) -> list[dict[str, str]]:

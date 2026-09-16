@@ -4,9 +4,8 @@ This skill guides the user through deleting evaluation test sets or individual
 test cases from their Copilot Studio agent. Deleting means removing files
 locally AND pushing the deletion to the live environment via push.
 
-If `.local/config.json` has `transport: "agentbuilder"`, explain that DA-GA
-evaluation deletion is not yet available in this release and stop before
-changing local files.
+Explain that DA-GA evaluation deletion is not yet available in this release and
+stop before changing local files.
 
 ## CRITICAL — Local Files Are a Working Copy
 

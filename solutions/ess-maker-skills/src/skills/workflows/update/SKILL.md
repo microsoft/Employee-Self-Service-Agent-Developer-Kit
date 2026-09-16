@@ -4,8 +4,8 @@ This skill guides the user through modifying an existing Power Automate cloud
 flow (workflow) in their Copilot Studio agent. Updating means editing the
 local working copy AND pushing the change to the live environment via push.
 
-When `.local/config.json` has `transport: "agentbuilder"`, this skill is
-local-only. Complete the checkpoint, edit, and scan, but skip every push or
+This skill is local-only. Complete the checkpoint, edit, and scan, but skip
+every push or
 deployment-verification instruction. Finish by saying the local workflow is
 ready and DA-GA deployment is not yet available. Do not offer workflow testing
 because it requires remote run-history inspection.

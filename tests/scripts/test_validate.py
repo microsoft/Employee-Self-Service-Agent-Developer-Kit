@@ -71,11 +71,7 @@ def test_da_validation_stops_before_dataverse_configuration(
     monkeypatch,
     capsys,
 ):
-    monkeypatch.setattr(
-        validate,
-        "load_config",
-        lambda: {"agent": {"transport": "agentbuilder"}},
-    )
+    monkeypatch.setattr(validate, "is_connect_ready", lambda: True)
     monkeypatch.setattr("sys.argv", ["validate.py"])
 
     with pytest.raises(SystemExit) as error:

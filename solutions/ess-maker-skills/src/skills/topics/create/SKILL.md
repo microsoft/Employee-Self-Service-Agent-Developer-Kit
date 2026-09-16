@@ -2,9 +2,9 @@
 
 This skill guides the user through creating a new Copilot Studio topic.
 
-When `.local/config.json` has `transport: "agentbuilder"`, this skill is
-local-only. Do not create or modify Dataverse template configurations and skip
-every push, publish, or server-backed validation instruction. Finish by saying
+This skill is local-only. Do not create or modify Dataverse template
+configurations and skip every push, publish, or server-backed validation
+instruction. Finish by saying
 the local topic is ready and DA-GA deployment is not yet available. Do not
 offer to test the new topic because it is not deployed.
 

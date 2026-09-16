@@ -45,7 +45,6 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
         prompt.index("{PYTHON} -m pip install")
     )
     assert "python -m pip install" not in prompt
-    assert "python scripts/mcp_config.py" not in prompt
     assert "A failed launcher candidate is discovery evidence" in normalized_prompt
     assert "stop only if none works" in normalized_prompt
     assert "return to launcher discovery and try the remaining candidates" in (
@@ -59,12 +58,19 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
     )
 
 
+def test_public_setup_does_not_configure_mcp() -> None:
+    prompt = _SETUP_PROMPT.read_text(encoding="utf-8")
+
+    assert "mcp_config.py" not in prompt
+    assert "materialize-defaults" not in prompt
+
+
 def test_global_and_command_gates_require_canonical_da_completion() -> None:
     instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
 
-    assert "`schema_version` equal to `1`" in instructions
-    assert '`status` equal to `"complete"`' in instructions
-    assert "connect_ready" not in instructions
+    assert "`schema_version` equal to `3`" in instructions
+    assert "`connect_ready` equal to `true`" in instructions
+    assert '`status` equal to `"complete"`' not in instructions
 
     gated_prompts = (
         "backup-template-configs.prompt.md",
@@ -86,8 +92,8 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
         path = _PROMPTS / name
         text = path.read_text(encoding="utf-8")
         assert ".local/setup/config.json" in text, path
-        assert "schema_version: 1" in text, path
-        assert 'status: "complete"' in text, path
+        assert "schema_version: 3" in text, path
+        assert "connect_ready: true" in text, path
         normalized = " ".join(text.split())
         assert 'or local config does not have `setup: "complete"`' not in normalized, (
             path
@@ -120,8 +126,8 @@ def test_maker_profile_requires_only_canonical_completion() -> None:
     text = _MAKER_PROFILE.read_text(encoding="utf-8")
 
     assert "if (canonicalComplete) met.add('setup')" in text
-    assert "json.schema_version === 1" in text
-    assert "json.status === 'complete'" in text
+    assert "json.schema_version === 3" in text
+    assert "json.connect_ready === true" in text
     assert "'.local/setup/config.json'" in text
     assert "workspaceComplete" not in text
     assert "json.setup === 'complete'" not in text
@@ -147,6 +153,7 @@ def test_foundation_routes_only_to_existing_dev_da_setup() -> None:
     }
     assert "scripts/setup_state.py" not in text
     assert "Dataverse foundation or onboarding playbooks" in text
+    assert "connector authentication" in text
     assert _DA_EXISTING_DEV.is_file()
 
 
@@ -169,7 +176,10 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
     assert "Do not run the Dataverse setup path" in text
     assert "scripts/setup_state.py" not in text
     assert "scripts/discover.py" not in text
-    assert "`setupStatus: complete`" in text
+    assert "`connectReady: true`" in text
+    assert "visible Dev-realm candidates" in text
+    assert "Validate only the selected candidate" in text
+    assert "before authentication or remote agent validation" in text
 
 
 def test_foundation_router_paths_resolve() -> None:
@@ -208,7 +218,7 @@ def test_da_commands_degrade_by_operation() -> None:
     for name, text in expected_text.items():
         prompt = (_PROMPTS / name).read_text(encoding="utf-8")
         assert text in prompt, name
-        assert 'transport: "agentbuilder"' in prompt, name
+        assert "transport" not in prompt.casefold(), name
 
 
 def test_hybrid_workday_config_commands_remain_available() -> None:
@@ -235,22 +245,22 @@ def test_hybrid_workday_config_commands_remain_available() -> None:
 def test_da_local_capabilities_remain_available() -> None:
     for name in ("create.prompt.md", "update.prompt.md"):
         prompt = (_PROMPTS / name).read_text(encoding="utf-8")
-        normalized = " ".join(prompt.split())
+        normalized = " ".join(prompt.split()).casefold()
         assert "continue with local authoring" in normalized, name
         assert "skip every instruction to push, publish" in normalized, name
 
     evaluate = (_PROMPTS / "evaluate.prompt.md").read_text(encoding="utf-8")
-    normalized_evaluate = " ".join(evaluate.split())
+    normalized_evaluate = " ".join(evaluate.split()).casefold()
     assert (
         "continue generating or editing evaluation files locally" in normalized_evaluate
     )
     assert "skip every instruction to push them" in normalized_evaluate
 
     test_prompt = (_PROMPTS / "test.prompt.md").read_text(encoding="utf-8")
-    normalized_test = " ".join(test_prompt.split())
+    normalized_test = " ".join(test_prompt.split()).casefold()
     assert "retain browser-based topic driving" in normalized_test
     assert "server-side diagnostics are not yet available" in normalized_test
-    assert "DA-GA workflow testing is not yet available" in normalized_test
+    assert "da-ga workflow testing is not yet available" in normalized_test
 
     for name in ("create.prompt.md", "update.prompt.md"):
         prompt = (_PROMPTS / name).read_text(encoding="utf-8")

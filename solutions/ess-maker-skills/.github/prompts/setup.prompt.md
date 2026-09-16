@@ -22,16 +22,6 @@ If the launcher cannot start Python, return to launcher discovery and try the
 remaining candidates. If the verified interpreter runs but dependency
 installation fails, show the exact error and stop.
 
-Using the same resolved launcher, run this command without showing it to the
-user:
-
-```powershell
-{PYTHON} scripts/mcp_config.py materialize-defaults
-```
-
-If default MCP materialization fails, show the exact error and stop. The command
-preserves user-configured servers and locally customized default definitions.
-
 Do not route to the retired Dataverse foundation or onboarding playbooks.
 Foundation setup owns DA-GA environment and editable Dev-agent selection,
 workspace materialization, and canonical setup completion.

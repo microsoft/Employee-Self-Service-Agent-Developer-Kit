@@ -2,10 +2,9 @@
 
 This skill scans a cloned ESS agent for compile errors and walks the user through fixing them.
 
-When `.local/config.json` has `transport: "agentbuilder"`, complete the
-checkpoint, local fixes, and re-scan, but skip every `push.py` instruction.
-Finish by saying the local fixes are ready and DA-GA deployment is not yet
-available in this release.
+Complete the checkpoint, local fixes, and re-scan, but skip every `push.py`
+instruction. Finish by saying the local fixes are ready and DA-GA deployment is
+not yet available in this release.
 
 ## Rules
 

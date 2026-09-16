@@ -37,7 +37,13 @@ except Exception:  # noqa: BLE001 — console reconfig is best-effort
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from auth import authenticate, load_config, query_all, dataverse_get  # noqa: E402
+from auth import (  # noqa: E402
+    authenticate,
+    dataverse_get,
+    is_connect_ready,
+    load_config,
+    query_all,
+)
 from push import (  # noqa: E402
     load_component_map,
     _flow_response_kinds,
@@ -137,13 +143,13 @@ def main():
     strict = "--strict" in flags
     name_filter = args[0].lower() if args else None
 
-    config = load_config()
-    if config.get("agent", {}).get("transport") == "agentbuilder":
+    if is_connect_ready():
         print(
-            "ERROR: Server-backed validation for AgentBuilder DA workspaces "
-            "is not available yet; no Dataverse request was attempted."
+            "ERROR: Server-backed validation for DA workspaces is not "
+            "available yet; no Dataverse request was attempted."
         )
         sys.exit(1)
+    config = load_config()
     env_url = config["dataverseEndpoint"]
     agent_dir = config["agent"]["folder"]
     schema_name = config["agent"]["schemaName"]

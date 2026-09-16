@@ -804,3 +804,23 @@ def load_config():
         )
         sys.exit(1)
     return cfg
+
+
+def is_connect_ready():
+    """Return the canonical DA foundation readiness marker."""
+    state_path = os.path.join(LOCAL_STATE_DIR, "setup", "config.json")
+    if not os.path.exists(state_path):
+        return False
+    try:
+        with open(state_path, "r", encoding="utf-8") as f:
+            state = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(
+            f"ERROR: Could not read canonical setup state at {state_path}: "
+            f"{exc}. Run /setup again."
+        )
+        sys.exit(1)
+    return (
+        state.get("schema_version") == 3
+        and state.get("connect_ready") is True
+    )

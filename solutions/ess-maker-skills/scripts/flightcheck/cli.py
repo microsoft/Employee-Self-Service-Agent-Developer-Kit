@@ -1078,12 +1078,9 @@ def main():
         config = json.load(f)
 
     infra_only_scope = args.scope == "infrastructure"
-    agentbuilder_local_scope = (
-        args.scope == "local"
-        and config.get("transport") == "agentbuilder"
-    )
+    da_local_scope = args.scope == "local"
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
-    if not env_url and not infra_only_scope and not agentbuilder_local_scope:
+    if not env_url and not infra_only_scope and not da_local_scope:
         print("ERROR: No dataverseEndpoint in .local/config.json.")
         sys.exit(1)
 
@@ -1115,7 +1112,7 @@ def main():
     print("=" * 64)
     print()
 
-    if agentbuilder_local_scope:
+    if da_local_scope:
         tenant_id = None
         dv_token = None
         graph = None
@@ -1123,7 +1120,7 @@ def main():
         env_id = config.get("environmentId") or None
         print(
             "Skipping Dataverse and remote-service authentication for "
-            "AgentBuilder local-files scope."
+            "DA local-files scope."
         )
     elif infra_only_scope:
         # Infrastructure scope skips auth to stay fast and read-only. The one
@@ -1254,9 +1251,9 @@ def main():
     # Authenticating unconditionally would prompt for a second interactive login
     # on scopes like --scope prerequisites that don't need it.
     pva = None
-    if agentbuilder_local_scope:
+    if da_local_scope:
         print(
-            "Skipping Copilot Studio auth for AgentBuilder local-files scope."
+            "Skipping Copilot Studio auth for DA local-files scope."
         )
     elif infra_only_scope:
         print("Skipping Copilot Studio auth for infrastructure scope.")

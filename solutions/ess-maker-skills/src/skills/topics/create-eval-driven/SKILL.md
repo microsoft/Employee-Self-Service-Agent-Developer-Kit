@@ -13,8 +13,8 @@ This is the default topic path used by `/create`. It accepts:
 This PR supports only Phase 1 topics with no external-system call:
 informational responses, clarification, routing, and handoff.
 
-When `.local/config.json` has `transport: "agentbuilder"`, complete local
-materialization, validation, and review, but skip every dry-run, push, and
+Complete local materialization, validation, and review, but skip every dry-run,
+push, and
 deployment-verification instruction. Finish by saying the local files are ready
 and DA-GA deployment is not yet available. Do not offer to test the new topic
 because it is not deployed.

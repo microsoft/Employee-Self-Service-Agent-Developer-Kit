@@ -11,7 +11,9 @@ to do based on the result.
 ### If setup is missing or not ready
 
 DA setup is ready only when `.local/setup/config.json` exists with
-`schema_version` equal to `1` and `status` equal to `"complete"`.
+`schema_version` equal to `3` and `connect_ready` equal to `true`. Setup writes
+that marker only after all eight foundation steps have reached `done`, with
+unavailable checks explicitly recorded as `mode: "skipped"`.
 
 **STOP.** Do not read any skill files. Do not load templates. Do not search for
 files. Do not attempt any customization work. Do not answer questions about ESS.
@@ -64,7 +66,7 @@ missing or invalid, report the configuration error instead of routing back to
 
 ## DA-GA Command Availability
 
-When `.local/config.json` has `transport: "agentbuilder"`:
+After canonical DA setup is complete:
 
 - local authoring, review, scan, and browser-based topic driving remain
   available;
@@ -77,7 +79,7 @@ When `.local/config.json` has `transport: "agentbuilder"`:
 - `/flightcheck` may run only its local-files scope.
 
 Do not infer availability from a missing Dataverse endpoint and do not add
-capability fields to setup state. Use the concrete transport recorded by setup.
+capability fields to setup state.
 
 ## Persona Boundary
 

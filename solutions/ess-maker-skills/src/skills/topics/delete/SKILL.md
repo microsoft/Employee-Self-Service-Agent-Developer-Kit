@@ -4,9 +4,8 @@ This skill guides the user through deleting a topic from their Copilot Studio
 agent. Deleting means removing the topic both locally AND from the live
 environment via push.
 
-If `.local/config.json` has `transport: "agentbuilder"`, explain that DA-GA
-component deletion is not yet available in this release and stop before
-changing local files.
+Explain that DA-GA component deletion is not yet available in this release and
+stop before changing local files.
 
 ## CRITICAL — Local Files Are a Working Copy
 

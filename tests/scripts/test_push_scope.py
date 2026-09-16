@@ -68,11 +68,7 @@ def test_da_push_stops_before_dataverse_configuration(
     monkeypatch,
     capsys,
 ):
-    monkeypatch.setattr(
-        push,
-        "load_config",
-        lambda: {"agent": {"transport": "agentbuilder"}},
-    )
+    monkeypatch.setattr(push, "is_connect_ready", lambda: True)
     monkeypatch.setattr("sys.argv", ["push.py"])
 
     with pytest.raises(SystemExit) as error:

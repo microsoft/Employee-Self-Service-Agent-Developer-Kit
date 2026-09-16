@@ -32,22 +32,24 @@ except Exception:  # noqa: BLE001 — console reconfig is best-effort
 # Add scripts/ to path so we can import shared modules
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from auth import authenticate, publish_bot, load_config  # noqa: E402
+from auth import (  # noqa: E402
+    authenticate,
+    is_connect_ready,
+    load_config,
+    publish_bot,
+)
 
 
 def main():
     auto_yes = "--yes" in sys.argv
 
-    config = load_config()
-    if (
-        config.get("transport") == "agentbuilder"
-        or config.get("agent", {}).get("transport") == "agentbuilder"
-    ):
+    if is_connect_ready():
         print(
-            "ERROR: Publishing DA-GA AgentBuilder workspaces is not yet "
-            "available in this release."
+            "ERROR: Publishing DA-GA workspaces is not yet available in "
+            "this release."
         )
         sys.exit(2)
+    config = load_config()
     env_url = config["dataverseEndpoint"]
     agent = config["agent"]
     bot_id = agent["botId"]

@@ -15,11 +15,9 @@ import publish
 import strip_debug
 
 
-def _agentbuilder_config() -> dict:
+def _da_config() -> dict:
     return {
-        "transport": "agentbuilder",
         "agent": {
-            "transport": "agentbuilder",
             "botId": "00000000-0000-4000-8000-000000000001",
         },
     }
@@ -29,7 +27,8 @@ def test_publish_reports_da_ga_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(publish, "load_config", _agentbuilder_config)
+    monkeypatch.setattr(publish, "is_connect_ready", lambda: True)
+    monkeypatch.setattr(publish, "load_config", _da_config)
     monkeypatch.setattr(sys, "argv", ["publish.py", "--yes"])
 
     with pytest.raises(SystemExit, match="2"):
@@ -42,7 +41,8 @@ def test_plant_debug_reports_da_ga_unavailable(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(auth, "load_config", _agentbuilder_config)
+    monkeypatch.setattr(auth, "is_connect_ready", lambda: True)
+    monkeypatch.setattr(auth, "load_config", _da_config)
 
     result = plant_debug.main(
         [
@@ -69,7 +69,8 @@ def test_strip_debug_reports_da_ga_unavailable(
     provenance.write_text("{}", encoding="utf-8")
     monkeypatch.setattr(strip_debug, "PROVENANCE_PATH", provenance)
     monkeypatch.setattr(strip_debug, "load_provenance", object)
-    monkeypatch.setattr(auth, "load_config", _agentbuilder_config)
+    monkeypatch.setattr(auth, "is_connect_ready", lambda: True)
+    monkeypatch.setattr(auth, "load_config", _da_config)
 
     result = strip_debug.main(["--yes"])
 

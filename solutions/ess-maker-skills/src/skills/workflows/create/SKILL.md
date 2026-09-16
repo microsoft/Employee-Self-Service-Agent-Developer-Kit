@@ -2,9 +2,9 @@
 
 This skill guides the user through creating a new Power Automate cloud flow for their Copilot Studio agent.
 
-When `.local/config.json` has `transport: "agentbuilder"`, this skill is
-local-only. Finish by saying the local workflow is ready and DA-GA deployment
-is not yet available. Do not offer workflow testing because it requires remote
+This skill is local-only. Finish by saying the local workflow is ready and
+DA-GA deployment is not yet available. Do not offer workflow testing because
+it requires remote
 run-history inspection.
 
 ## IMPORTANT: When NOT to Create a New Workflow

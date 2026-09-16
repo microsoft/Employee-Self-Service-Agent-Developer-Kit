@@ -129,7 +129,7 @@ async function checkPrerequisites() {
         const stateUri = vscode.Uri.joinPath(root, '.local', 'setup', 'config.json');
         const content = await vscode.workspace.fs.readFile(stateUri);
         const json = JSON.parse(Buffer.from(content).toString('utf8'));
-        canonicalComplete = json.schema_version === 1 && json.status === 'complete';
+        canonicalComplete = json.schema_version === 3 && json.connect_ready === true;
     } catch (_) { /* file doesn't exist or invalid */ }
 
     if (canonicalComplete) met.add('setup');

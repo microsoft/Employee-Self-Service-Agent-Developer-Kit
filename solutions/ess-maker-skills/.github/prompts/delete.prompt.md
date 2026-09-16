@@ -8,13 +8,13 @@ description: "Type Enter to delete a topic, workflow, or evaluation test set fro
 You are helping a customer delete a component from their ESS agent. This
 removes it from the local working copy AND from Copilot Studio.
 
-**Setup-state check.** Read `.local/setup/config.json`. If it does not have `schema_version: 1` and `status: "complete"`, show:
+**Setup-state check.** Read `.local/setup/config.json`. If it does not have `schema_version: 3` and `connect_ready: true`, show:
 
 > Welcome to the ESS Maker Kit. Before running `/delete`, type `/setup` to set up your environment.
 
 and STOP. Otherwise proceed.
 
-If `.local/config.json` has `transport: "agentbuilder"`, show:
+Show:
 
 > Deleting components from a DA-GA agent is not yet available in this release. No local or remote files have been changed.
 

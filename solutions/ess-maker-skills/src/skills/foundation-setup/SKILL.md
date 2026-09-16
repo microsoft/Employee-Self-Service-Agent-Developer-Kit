@@ -17,8 +17,8 @@ This is the DA-GA `/setup` entry point. It owns only:
 - local workspace materialization;
 - resumable setup state and completion reporting.
 
-Workday, ServiceNow, SAP SuccessFactors, authentication, extension packs, and topics
-are explicitly outside this skill.
+Workday, ServiceNow, SAP SuccessFactors, connector authentication, extension
+packs, and topics are explicitly outside this skill.
 
 ---
 

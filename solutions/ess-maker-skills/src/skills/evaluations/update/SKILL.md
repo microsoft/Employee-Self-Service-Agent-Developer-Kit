@@ -7,9 +7,9 @@ the configured agent only after the user confirms the push. After a successful
 push, the temporary workspace-level source is removed so the configured-agent
 copy becomes the single local source of truth.
 
-When `.local/config.json` has `transport: "agentbuilder"`, complete the
-checkpoint, local edit, and validation, but skip every push or
-deployment-verification instruction. Finish by saying the local files are ready
+Complete the checkpoint, local edit, and validation, but skip every push or
+deployment-verification instruction. Finish by saying the local files are
+ready
 and DA-GA evaluation deployment is not yet available.
 
 ## Evaluation locations

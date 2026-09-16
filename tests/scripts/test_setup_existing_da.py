@@ -408,8 +408,9 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
     agent_root = _agent_root(tmp_path)
 
     assert result["status"] == "created"
+    assert "unprojectedDialogs" not in result
     assert result["connectionStatus"] == "workspace-ready"
-    assert result["setupStatus"] == "complete"
+    assert result["connectReady"] is True
     assert result["projectionVersion"] == 2
     assert result["topicCount"] == 1
     assert result["variableCount"] == 1
@@ -419,6 +420,15 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
     assert (agent_root / setup_existing_da.RAW_CHANGESET).is_file()
     assert not (tmp_path / ".local" / "setup" / "da-connection.json").exists()
     assert not (tmp_path / ".local" / "setup" / "da-components.json").exists()
+    metadata = json.loads(
+        (agent_root / setup_existing_da.ATTACH_METADATA).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "unprojectedDialogs" not in metadata
+    assert "Unavailable dialog components" not in (
+        agent_root / "snapshot.md"
+    ).read_text(encoding="utf-8")
 
     component_map = json.loads(
         (agent_root / ".component-map.json").read_text(encoding="utf-8")
@@ -440,7 +450,24 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
             encoding="utf-8"
         )
     )
-    assert setup_state["status"] == "complete"
+    assert setup_state["schema_version"] == 3
+    assert setup_state["connect_ready"] is True
+    assert setup_state["active_step"] == "SETUP-07"
+    assert set(setup_state["steps"]) == set(
+        setup_existing_da.SETUP_STEP_ORDER
+    )
+    assert all(
+        step["state"] == "done"
+        for step in setup_state["steps"].values()
+    )
+    assert setup_state["steps"]["SETUP-01"]["mode"] == "automated"
+    assert setup_state["steps"]["SETUP-03"]["mode"] == "automated"
+    assert setup_state["steps"]["SETUP-07"]["mode"] == "automated"
+    for step_id in ("SETUP-02.1", "SETUP-02.2", "SETUP-05", "SETUP-06"):
+        assert setup_state["steps"][step_id]["mode"] == "skipped"
+        assert setup_state["steps"][step_id]["note"]
+    assert setup_state["steps"]["SETUP-04"]["mode"] == "skipped"
+    assert "does not apply" in setup_state["steps"]["SETUP-04"]["note"]
     assert setup_state["workspace"]["agent_path"] == "agent.mcs.yml"
     assert setup_state["workspace"]["variable_count"] == 1
     assert setup_state["workspace"]["unprojected_component_kinds"] == {
@@ -472,7 +499,237 @@ def test_dialog_conversion_gap_preserves_evidence_without_ready_state(
     assert evidence["changeset"]["bot"]["cdsBotId"] == AGENT_ID
     assert not _agent_root(tmp_path).exists()
     assert not (tmp_path / ".local" / "config.json").exists()
-    assert not (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).exists()
+    setup_state = json.loads(
+        (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert setup_state["connect_ready"] is False
+    assert setup_state["active_step"] == "SETUP-07"
+    assert setup_state["steps"]["SETUP-07"]["state"] == "blocked"
+    assert setup_state["steps"]["SETUP-07"]["failure_causes"]
+
+
+def test_projection_failure_preserves_cleanup_failure_as_secondary_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    original_rmtree = shutil.rmtree
+
+    def fail_temporary_cleanup(path: str | Path, *args: Any, **kwargs: Any) -> None:
+        candidate = Path(path)
+        if candidate.name.startswith(".employee-self-service-hr."):
+            raise OSError("cleanup denied")
+        original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        setup_existing_da.shutil,
+        "rmtree",
+        fail_temporary_cleanup,
+    )
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="could not materialize all",
+    ):
+        _attach(
+            FakeClient(changeset=_changeset(dialog_kind="UnsupportedDialog")),
+            tmp_path,
+        )
+
+    error = capsys.readouterr().err
+    assert "WARNING: Temporary workspace cleanup failed" in error
+    setup_state = json.loads(
+        (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_text(
+            encoding="utf-8"
+        )
+    )
+    failure_causes = setup_state["steps"]["SETUP-07"]["failure_causes"]
+    assert "could not materialize all" in failure_causes[0]
+    assert "Temporary workspace cleanup failed" in failure_causes[1]
+
+
+def test_projection_evidence_failure_does_not_replace_primary_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    original_write_json = setup_existing_da._write_json
+
+    def fail_projection_evidence(path: Path, value: Any) -> None:
+        if path.name == "da-projection-failure.json":
+            raise OSError("evidence write denied")
+        original_write_json(path, value)
+
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_write_json",
+        fail_projection_evidence,
+    )
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="could not materialize all",
+    ):
+        _attach(
+            FakeClient(changeset=_changeset(dialog_kind="UnsupportedDialog")),
+            tmp_path,
+        )
+
+    error = capsys.readouterr().err
+    assert "Projection-failure evidence persistence failed" in error
+    setup_state = json.loads(
+        (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert "evidence write denied" in (
+        setup_state["steps"]["SETUP-07"]["failure_causes"][1]
+    )
+
+
+def test_blocked_state_failure_does_not_replace_primary_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_record_canonical_setup_blocked",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError("state write denied")
+        ),
+    )
+    changeset = _changeset()
+    changeset["bot"]["cdsBotId"] = OTHER_AGENT_ID
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="different agent",
+    ):
+        _attach(FakeClient(changeset=changeset), tmp_path)
+
+    assert "Canonical blocked-state persistence failed" in (
+        capsys.readouterr().err
+    )
+
+
+def test_config_failure_preserves_workspace_for_same_target_recovery(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_config(*_args: Any, **_kwargs: Any) -> None:
+        raise OSError("config write denied")
+
+    monkeypatch.setattr(setup_existing_da, "_write_config", fail_config)
+
+    with pytest.raises(OSError, match="config write denied"):
+        _attach(FakeClient(), tmp_path)
+
+    assert _agent_root(tmp_path).is_dir()
+    setup_state = json.loads(
+        (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert setup_state["connect_ready"] is False
+    assert setup_state["steps"]["SETUP-07"]["state"] == "blocked"
+    assert "config write denied" in (
+        setup_state["steps"]["SETUP-07"]["failure_causes"][0]
+    )
+
+
+def test_stale_failure_evidence_cleanup_is_non_fatal(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    evidence_path = (
+        tmp_path / ".local" / "setup" / "da-projection-failure.json"
+    )
+    evidence_path.parent.mkdir(parents=True)
+    evidence_path.write_text("{}", encoding="utf-8")
+    original_unlink = Path.unlink
+
+    def fail_evidence_cleanup(
+        path: Path,
+        *args: Any,
+        **kwargs: Any,
+    ) -> None:
+        if path == evidence_path:
+            raise OSError("cleanup denied")
+        original_unlink(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", fail_evidence_cleanup)
+
+    result = _attach(FakeClient(), tmp_path)
+
+    assert result["connectReady"] is True
+    assert result["cleanupWarnings"] == [
+        "Projection-failure evidence cleanup failed "
+        "(OSError: cleanup denied)"
+    ]
+    assert evidence_path.is_file()
+    setup_state = json.loads(
+        (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert setup_state["connect_ready"] is True
+
+
+def test_temporarily_skipped_step_can_be_reopened(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["steps"]["SETUP-02.1"] = setup_existing_da._step_record()
+    state["active_step"] = "SETUP-02.1"
+    state["connect_ready"] = False
+    state["completed_at"] = None
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    result = _attach(FakeClient(), tmp_path)
+    loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
+
+    assert loaded is not None
+    assert result["connectReady"] is False
+    assert loaded["steps"]["SETUP-02.1"]["state"] == "pending"
+    assert loaded["steps"]["SETUP-07"]["state"] == "done"
+    assert loaded["active_step"] == "SETUP-02.1"
+    assert loaded["connect_ready"] is False
+    assert loaded["completed_at"] is None
+
+
+def test_connect_ready_rejects_incomplete_steps(tmp_path: Path) -> None:
+    _attach(FakeClient(), tmp_path)
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["steps"]["SETUP-02.1"] = setup_existing_da._step_record()
+    state["active_step"] = "SETUP-02.1"
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="readiness does not match",
+    ):
+        setup_existing_da._load_canonical_setup_state(tmp_path)
+
+
+def test_all_done_steps_require_connect_ready(tmp_path: Path) -> None:
+    _attach(FakeClient(), tmp_path)
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state["connect_ready"] = False
+    state["completed_at"] = None
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="readiness does not match",
+    ):
+        setup_existing_da._load_canonical_setup_state(tmp_path)
 
 
 def test_attach_rejects_changeset_for_another_agent(tmp_path: Path) -> None:
@@ -484,6 +741,17 @@ def test_attach_rejects_changeset_for_another_agent(tmp_path: Path) -> None:
         match="different agent",
     ):
         _attach(FakeClient(changeset=changeset), tmp_path)
+
+    setup_state = json.loads(
+        (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert setup_state["connect_ready"] is False
+    assert setup_state["steps"]["SETUP-07"]["state"] == "blocked"
+    assert "different agent" in (
+        setup_state["steps"]["SETUP-07"]["failure_causes"][0]
+    )
 
 
 def test_identical_rerun_preserves_local_edits(tmp_path: Path) -> None:
@@ -500,6 +768,22 @@ def test_identical_rerun_preserves_local_edits(tmp_path: Path) -> None:
     assert result["workspace"]["folder"].endswith(
         "employee-self-service-hr"
     )
+
+
+def test_identical_rerun_removes_dead_projection_metadata(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    metadata_path = _agent_root(tmp_path) / setup_existing_da.ATTACH_METADATA
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    metadata["unprojectedDialogs"] = []
+    metadata_path.write_text(json.dumps(metadata), encoding="utf-8")
+
+    result = _attach(FakeClient(), tmp_path)
+
+    assert "unprojectedDialogs" not in result
+    persisted = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert "unprojectedDialogs" not in persisted
 
 
 def test_changed_remote_content_requires_explicit_refresh(tmp_path: Path) -> None:
@@ -578,19 +862,36 @@ def test_older_projection_requires_explicit_refresh(tmp_path: Path) -> None:
         _attach(FakeClient(), tmp_path)
 
 
-def test_attach_rejects_another_platform_workspace(tmp_path: Path) -> None:
+def test_attach_does_not_treat_operational_config_as_setup_completion(
+    tmp_path: Path,
+) -> None:
     config_path = tmp_path / ".local" / "config.json"
     config_path.parent.mkdir(parents=True)
     config_path.write_text(
-        json.dumps({"transport": "dataverse"}),
+        json.dumps(
+            {
+                "setup": "complete",
+                "transport": "agentbuilder",
+                "dataverseEndpoint": "https://old",
+                "agents": [
+                    {
+                        "name": "Old Agent",
+                        "botId": OTHER_AGENT_ID,
+                        "slug": "old-agent",
+                        "transport": "agentbuilder",
+                    }
+                ],
+            }
+        ),
         encoding="utf-8",
     )
 
-    with pytest.raises(
-        setup_existing_da.ExistingDASetupError,
-        match="non-DA local configuration",
-    ):
-        _attach(FakeClient(), tmp_path)
+    result = _attach(FakeClient(), tmp_path)
+
+    assert result["connectReady"] is True
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    assert "transport" not in config
+    assert all("transport" not in agent for agent in config["agents"])
 
 
 def test_main_validate_agent_writes_no_setup_state(
@@ -628,7 +929,9 @@ def test_main_attach_preflights_serializer_before_authentication(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     def fail_preflight() -> None:
-        raise setup_existing_da.ExistingDASetupError("serializer unavailable")
+        raise setup_existing_da.ObjectModelConverterError(
+            "serializer unavailable"
+        )
 
     monkeypatch.setattr(
         setup_existing_da,
@@ -652,7 +955,9 @@ def test_main_attach_preflights_serializer_before_authentication(
     )
 
     assert result == 1
-    assert "serializer unavailable" in capsys.readouterr().err
+    error = capsys.readouterr().err
+    assert "before authentication or remote agent validation" in error
+    assert "serializer unavailable" in error
 
 
 def test_parser_exposes_only_composable_setup_operations() -> None:

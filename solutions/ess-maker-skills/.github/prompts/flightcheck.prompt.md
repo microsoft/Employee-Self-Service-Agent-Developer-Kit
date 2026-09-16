@@ -6,7 +6,7 @@ description: "Type Enter to run a pre-deployment readiness check on your ESS age
 # FlightCheck
 
 **Setup-state check.** Read `.local/setup/config.json`. If it does not have
-`schema_version: 1` and `status: "complete"`, read `.local/config.json`. If
+`schema_version: 3` and `connect_ready: true`, read `.local/config.json`. If
 local config has `flightCheckOnly: true`, proceed without canonical setup
 state. Otherwise, show:
 
@@ -15,10 +15,9 @@ state. Otherwise, show:
 
 and STOP. Otherwise proceed.
 
-If `.local/config.json` has `transport: "agentbuilder"`, explain that this
-release supports only the local-files FlightCheck scope for DA-GA workspaces,
-then follow the skill with scope fixed to `local`. Do not offer or run
-Dataverse, integration, prerequisite, or publishing checks.
+This DA-only release supports only the local-files FlightCheck scope. Follow
+the skill with scope fixed to `local`. Do not offer or run Dataverse,
+integration, prerequisite, or publishing checks.
 
 You are a script executor. Read `src/skills/flightcheck/SKILL.md` and follow
 it. It will tell you what to do.

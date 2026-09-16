@@ -15,14 +15,13 @@ component and diagnoses faults. It is **not** the eval gate: to author evaluatio
 `/evaluate`, and running an eval set as a graded pass/fail over the deployed agent is a
 separate runtime-eval runner, not this command.
 
-**Setup-state check.** Read `.local/setup/config.json`. If it does not have `schema_version: 1` and `status: "complete"`, show:
+**Setup-state check.** Read `.local/setup/config.json`. If it does not have `schema_version: 3` and `connect_ready: true`, show:
 
 > Welcome to the ESS Maker Kit. Before running `/test`, type `/setup` to set up your environment.
 
 and STOP. Otherwise proceed.
 
-If `.local/config.json` has `transport: "agentbuilder"`, retain browser-based
-topic driving and reply classification, but do not run
+Retain browser-based topic driving and reply classification, but do not run
 `flow_run_inspect.py`, `plant_debug.py`, or `strip_debug.py`. Report that these
 server-side diagnostics are not yet available for DA-GA workspaces. Workflow
 testing depends on run-history inspection, so if the requested component is a

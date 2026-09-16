@@ -20,7 +20,7 @@ Before the first run, tell the maker to select the identity they use to open the
 
 Recognized Copilot Studio hostnames select `prod`, `preprod`, or `test`. Other target text defaults to `prod`; use an explicit non-production `--ring` only when the supplied target does not identify its ring.
 
-The command validates the exact agent identity and Dev configuration, fetches the authoritative component change set, converts supported authoring components with the Microsoft Object Model serializer, and writes the workspace atomically.
+The command validates the exact agent identity and Dev configuration, fetches the authoritative component change set, converts supported authoring components with the Microsoft Object Model serializer, and materializes the local workspace. It persists canonical setup progress with an atomic file write before materialization and records `connect_ready: true` only after the workspace and operational configuration are complete.
 
 If Object Model dependencies are missing, run:
 
@@ -28,7 +28,7 @@ If Object Model dependencies are missing, run:
 python scripts/install_agentbuilder_object_model.py
 ```
 
-Then rerun the same attach command.
+This prerequisite check runs before authentication or remote agent validation. Report it as a local prerequisite failure, then rerun the same attach command after installation.
 
 ## Inspect without attaching
 
@@ -44,18 +44,22 @@ python scripts/setup_existing_da.py validate-agent \
 
 `inspect-agent` returns the service-owned route realm. `validate-agent` verifies one exact editable Dev agent without writing setup state or workspace files.
 
-If the maker provides an environment URL without an agent ID, list visible editable Dev agents:
+If the maker provides an environment URL without an agent ID, list visible Dev-realm candidates:
 
 ```text
 python scripts/setup_existing_da.py list-agents \
   --target-url "{COPILOT_STUDIO_ENVIRONMENT_URL}"
 ```
 
-Show agent display names and ask the maker to choose one. A missing list entry is not proof that a directly addressable agent is absent; accept a known agent ID and validate it directly.
+Show candidate display names and ask the maker to choose one. Validate only the selected candidate through `validate-agent` or `attach`. A missing list entry is not proof that a directly addressable agent is absent; accept a known agent ID and validate it directly.
 
 ## Interpret results
 
-Treat setup as complete only when `DA_EXISTING_DEV_SETUP_JSON:` reports both `connectionStatus: workspace-ready` and `setupStatus: complete`.
+Treat setup as complete only when `DA_EXISTING_DEV_SETUP_JSON:` reports both `connectionStatus: workspace-ready` and `connectReady: true`.
+
+The canonical state uses the eight foundation step IDs from main. Steps whose DA checks are not implemented yet are recorded as `done` with `mode: "skipped"` and a specific reason. Treat those records as explicit current-release waivers, not evidence that a check ran. `SETUP-04` is permanently skipped because preferred-solution configuration does not apply to the DA-only path; the FlightCheck and MOS-owned skips are temporary and may be reopened by later workstreams.
+
+If setup stops after canonical progress is written, inspect `active_step`, that step's state, and its `failure_causes`. Preserve those facts in the response and rerun only the bounded operation selected by the maker. Do not edit canonical setup state by hand or claim readiness while `connect_ready` is false.
 
 On success, report:
 

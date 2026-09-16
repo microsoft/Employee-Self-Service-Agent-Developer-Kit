@@ -25,7 +25,7 @@ validation. Quality validation requires words such as "validate",
 ## Topic review
 
 **Setup-state check.** Read `.local/setup/config.json`. If it does not have
-`schema_version: 1` and `status: "complete"`, show:
+`schema_version: 3` and `connect_ready: true`, show:
 
 > Welcome to the ESS Maker Kit. Before reviewing topics, type `/setup` to set up your environment.
 

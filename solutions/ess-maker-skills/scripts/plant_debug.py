@@ -232,18 +232,15 @@ def main(argv=None) -> int:
                         help="skip the confirmation prompt")
     args = parser.parse_args(argv)
 
-    from auth import authenticate, load_config
+    from auth import authenticate, is_connect_ready, load_config
 
-    config = load_config()
-    if (
-        config.get("transport") == "agentbuilder"
-        or config.get("agent", {}).get("transport") == "agentbuilder"
-    ):
+    if is_connect_ready():
         print(
             "ERROR: Server-side debug planting is not yet available for "
-            "DA-GA AgentBuilder workspaces."
+            "DA-GA workspaces."
         )
         return 2
+    config = load_config()
     env_url = config["dataverseEndpoint"]
     bot_id = config["agent"]["botId"]
     node_id = args.node_id or f"sendActivity_DBG_{args.after}"
