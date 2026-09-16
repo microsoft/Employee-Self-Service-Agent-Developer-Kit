@@ -24,7 +24,7 @@ python scripts/setup_mos_starter.py list \
   --target-url "{POWER_PLATFORM_ENVIRONMENT_URL}"
 ```
 
-Parse `DA_MOS_STARTER_PACKAGES_JSON:`. Present each package's safe service-provided name, version, and description as a product. Never show the internal `packageId` to the maker. Collapse rows with identical maker-visible fields into one product choice; retain the first returned row as the internal command input and preserve all service rows in diagnostic evidence.
+Parse `DA_MOS_STARTER_PACKAGES_JSON:`. Present each package's safe service-provided name, version, and description as a product. Never show the internal `packageId` to the maker.
 
 The successful list proves target access, but not a new agent identity. Keep **Verify access and agent identity** current until create and direct attachment validation succeed.
 

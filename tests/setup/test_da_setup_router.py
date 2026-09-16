@@ -340,8 +340,6 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "What kind of ESS agent are you setting up?" in text
     assert "Offer exactly **HR** and **IT**" in normalized
     assert "Let the service-returned product list supply the product choices" in normalized
-    assert "Collapse rows with identical maker-visible fields" in text
-    assert "retain the first returned row as the internal command input" in normalized
     assert "Create a new **{selected area} ESS agent**" in normalized
     assert "**{selected product name} {version}**" in text
     assert "Choose a different product" in text
