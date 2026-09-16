@@ -26,14 +26,14 @@ Do not offer to clear, replace, or overwrite the current folder's setup state. A
 For **Create and open a new workspace**, run:
 
 ```text
-python scripts/create_fresh_workspace.py \
+python scripts/prepare_fresh_workspace.py \
   --destination "{NEW_WORKTREE_PATH}" \
   --open-vscode
 ```
 
 For **Create a new workspace without opening it**, omit `--open-vscode`.
 
-Parse `DA_FRESH_WORKSPACE_JSON:`. The operation creates a detached Git worktree from the current committed revision and never copies local setup state, agent content, or authentication cache. Do not continue setup or invoke MOS create from the current workspace.
+Parse `DA_PREPARED_WORKSPACE_JSON:`. The operation creates a detached Git worktree from the current committed revision and never copies local setup state, agent content, or authentication cache. Do not continue setup or invoke MOS create from the current workspace.
 
 When `outcome` is `workspace-created` and `vscodeOpened` is `true`, say that the new VS Code window is open at `{kitRoot}` and ask the maker to run `/setup` there. When `vscodeOpened` is `false`, give `{kitRoot}` as the folder to open in a new VS Code window. When `outcome` is `workspace-created-open-failed`, explain that the workspace was created, give `{kitRoot}`, and ask the maker to open it manually; do not rerun creation.
 

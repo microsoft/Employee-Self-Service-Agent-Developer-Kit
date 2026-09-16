@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-import create_fresh_workspace as workspace
+import prepare_fresh_workspace as workspace
 
 
 def _git(cwd: Path, *args: str) -> subprocess.CompletedProcess[str]:

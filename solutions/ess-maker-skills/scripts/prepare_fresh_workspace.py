@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Create a clean sibling Git worktree for another ESS agent workspace.
+"""Prepare a clean sibling Git worktree for another ESS agent workspace.
 
 The current Developer Kit folder is never modified. The new worktree is
 detached at the selected committed revision so it does not require or create a
@@ -9,8 +9,8 @@ long-lived source branch. Local setup state and agent content are gitignored
 and therefore do not carry into the new worktree.
 
 Usage:
-    python scripts/create_fresh_workspace.py --destination <path>
-    python scripts/create_fresh_workspace.py --destination <path> --open-vscode
+    python scripts/prepare_fresh_workspace.py --destination <path>
+    python scripts/prepare_fresh_workspace.py --destination <path> --open-vscode
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ from typing import Any
 
 
 KIT_SUBFOLDER = Path("solutions") / "ess-maker-skills"
-RESULT_MARKER = "DA_FRESH_WORKSPACE_JSON"
+RESULT_MARKER = "DA_PREPARED_WORKSPACE_JSON"
 
 
 class FreshWorkspaceError(RuntimeError):
