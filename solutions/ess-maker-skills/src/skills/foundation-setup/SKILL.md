@@ -46,6 +46,7 @@ The checklist is a view, not another state model:
 - direct service validation of an exact editable Dev completes the second and third stages for the existing-agent path;
 - a successful package import with direct Dev validation completes the second and third stages for the supplied-package path;
 - service inspection of a Prod source completes access and source-identity verification; a directly validated related Dev or successful create-only import completes the editable-Dev stage;
+- a successful MOS create followed by direct Dev attachment validation completes access, identity, and editable-Dev establishment for the fresh-agent path;
 - only `connectionStatus: workspace-ready` with `connectReady: true` completes local workspace materialization;
 - reviewing the factual completion report completes the handoff stage in the conversation and does not write another readiness marker.
 
@@ -133,13 +134,13 @@ python scripts/emit_capability.py setup
 
 When the maker has already supplied a native agent package or explicitly asked to use one, read `src/skills/foundation-setup/da-alm-import.md` and follow it. That skill owns the explicit package handoff and reads the canonical import reference. This is an advanced handoff, not a setup option to advertise or recommend.
 
-When the request identifies an environment but not an agent, read `src/skills/foundation-setup/da-existing-dev.md` and follow its environment-candidate selection path.
-
 When the maker has no existing agent and wants a fresh installation, read
 `src/skills/foundation-setup/da-mos-starter.md` and follow it. That skill
 lists entitled MOS starter packages and creates a new Dev agent from the
 maker's exact confirmed choice; it never replaces the default existing-Dev
 path for a maker who already has an agent.
+
+When the request identifies an environment but not an agent or fresh-agent intent, read `src/skills/foundation-setup/da-existing-dev.md` and follow its environment-candidate selection path.
 
 When the request does not identify an agent or environment, ask:
 

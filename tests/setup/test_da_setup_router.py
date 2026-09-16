@@ -334,6 +334,20 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
         normalized
     )
     assert "run `create` again for this package" in normalized
+    assert "`connectReady: true`" in text
+    assert "`setupStatus`" not in text
+    assert "What kind of ESS agent are you setting up?" in text
+    assert "Offer exactly **HR** and **IT**" in normalized
+    assert "core ESS experience" in normalized
+    assert "specific connected system" in normalized
+    assert "Create a new {HR or IT} ESS agent" in normalized
+    assert "Choose a different package" in text
+    assert "Do not preselect **Create agent**" in text
+    assert "authorizes exactly one create attempt" in normalized
+    assert "Fresh entitled MOS starter package" in text
+    assert "factual completion report from `da-existing-dev.md`" in normalized
+    assert "Do not infer persona, product, target, progress, or retry intent" in normalized
+    assert "An uncertain outcome never permits another create attempt" in normalized
     assert "Never invoke" in normalized and "/connect" in normalized
     assert "setup_setup_mos_starter.py" not in text
     assert "setup_mos_starter.py resolve" not in text
