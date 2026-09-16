@@ -81,9 +81,9 @@ Canonical state tracks eight foundation records. Checks outside DA foundation se
 
 If setup stops after canonical progress is written, inspect `active_step`, that step's state, and its `failure_causes`. Preserve those facts as diagnostic evidence, but translate them into maker language: `SETUP-03` maps to **Establish an editable Dev agent** and `SETUP-07` maps to **Materialize the local workspace**. Explain a specific unmet prerequisite plainly without showing an internal step ID or raw technical output. Rerun only the bounded operation selected by the maker. Do not edit canonical setup state by hand or claim readiness while `connect_ready` is false.
 
-If content was projected but the returned result is not workspace-ready and supplies no specific failure cause, keep **Materialize the local workspace** current and show:
+If content was synced to the local workspace but the returned result is not workspace-ready and supplies no specific failure cause, keep **Materialize the local workspace** current and show:
 
-> The agent content was projected locally, but the workspace is not ready to connect. Setup is not complete and has stopped.
+> The agent content was synced to your local workspace, but the workspace is not ready to connect. Setup is not complete and has stopped.
 
 Do not invent a cause or run another operation without new maker intent.
 
@@ -99,8 +99,8 @@ Your ESS agent workspace is ready.
 | Starting point             | Existing editable Dev                                                  |
 | Target environment         | **{friendly environment name or Selected Power Platform environment}** |
 | Local workspace            | `{workspace folder}`                                                   |
-| Topics projected           | {topic count}                                                          |
-| Global variables projected | {variable count}                                                       |
+| Topics synced              | {topic count}                                                          |
+| Global variables synced    | {variable count}                                                       |
 | Other retained components  | {unprojected component summary or None}                                |
 | Local checkpoint           | {checkpoint number or Not required}                                    |
 

@@ -1,5 +1,5 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
-# Set Up Dev from an Entitled MOS Starter Package
+# Set Up Dev from an Entitled MOS Product
 
 Use this path only when the maker has no existing agent and wants a fresh installation. Read `src/reference/mos-starter-package.md` before acting. The reference owns the service facts, safety invariants, fuse disposition matrix, and redaction contract. This skill owns the maker conversation and the handoff into existing-Dev setup.
 
@@ -15,17 +15,17 @@ Offer exactly **HR** and **IT**. Then ask:
 
 > Do you want the core ESS experience or support for a specific connected system?
 
-This intent only guides the maker's catalog choice; it is never sent to or matched by a script, and it does not prove that a matching entitled package exists. This means only a service-returned package can be selected for creation. When the requested product has no corresponding package, show:
+This intent only guides the maker's product choice; it is never sent to or matched by a script, and it does not prove that a matching entitled product exists. A product can be selected only when the service returned its underlying package. When the requested product is unavailable, show:
 
 > Requested setup: **{product} -- Unavailable in this environment**
 >
-> Available entitled starter packages:
+> Available products:
 >
-> - **{package name} {version}** -- {description}
+> - **{product name} {version}** -- {description}
 >
 > I have not selected a substitute.
 
-Require the maker to explicitly select an available package to change the requested setup. If there are no selectable packages, stop.
+Require the maker to explicitly select an available product to change the requested setup. If there are no selectable products, stop.
 
 Ask for a Copilot Studio environment URL when the target is not supplied. When fresh-agent intent and the target environment are known, mark **Choose the starting point and target environment** complete.
 
@@ -38,33 +38,31 @@ python scripts/setup_mos_starter.py list \
   --target-url "{POWER_PLATFORM_ENVIRONMENT_URL}"
 ```
 
-Parse `DA_MOS_STARTER_PACKAGES_JSON:`. Show only each package's safe service-provided name, version, and description. Never show a package's internal `packageId` to the maker.
+Parse `DA_MOS_STARTER_PACKAGES_JSON:`. Present each package's safe service-provided name, version, and description as a product. Never show the internal `packageId` to the maker. Collapse rows with identical maker-visible fields into one product choice; retain the first returned row as the internal command input and preserve all service rows in diagnostic evidence.
 
 The successful list proves target access, but not a new agent identity. Keep **Verify access and agent identity** current until create and direct attachment validation succeed.
 
-If the catalog is empty, mark the maker's product choices unavailable, say that no entitled starter packages are currently available, and stop; do not guess a substitute or fall back to another setup path.
+If the catalog is empty, mark the maker's product choices unavailable, say that no entitled products are currently available, and stop; do not guess a substitute or fall back to another setup path.
 
-If `catalogWarnings` is non-empty, tell the maker the catalog listing was incomplete -- some entries could not be read -- without repeating the warning detail itself. A row reported in `catalogWarnings` is never selectable; only offer packages from the `packages` array.
+If `catalogWarnings` is non-empty, tell the maker the product listing was incomplete -- some entries could not be read -- without repeating the warning detail itself. A row reported in `catalogWarnings` is never selectable; only offer products backed by rows from the `packages` array.
 
-If two rows have identical maker-visible fields but different package IDs, report that the choices are ambiguous and stop. Do not ask the maker to choose using an internal ID.
+If the command instead fails, parse `DA_MOS_STARTER_LIST_ANNOTATIONS_JSON:` and the response body (`DA_MOS_STARTER_LIST_RESPONSE_JSON:` or `..._RESPONSE_TEXT:`) the same way `create`'s response is interpreted below. Preserve the detailed evidence internally, but tell the maker only that entitled products could not be loaded, nothing was changed, and setup has stopped.
 
-If the command instead fails, parse `DA_MOS_STARTER_LIST_ANNOTATIONS_JSON:` and the response body (`DA_MOS_STARTER_LIST_RESPONSE_JSON:` or `..._RESPONSE_TEXT:`) the same way `create`'s response is interpreted below. Preserve the detailed evidence internally, but tell the maker only that entitled starter packages could not be loaded, nothing was changed, and setup has stopped.
+## Confirm the exact product and target
 
-## Confirm the exact package and target
-
-Ask the maker to explicitly choose one package by name, and confirm the target Power Platform environment. Do not preselect a choice or infer one from the maker's stated product. Once confirmed, keep that package's internal `packageId`, `name`, and `version` for the next step; these are internal command inputs, not maker-facing text.
+Ask the maker to explicitly choose one product by name, and confirm the target Power Platform environment. Do not preselect a choice or infer one from the maker's stated intent. Once confirmed, keep the product's underlying `packageId`, `name`, and `version` for the next step; these are internal command inputs, not maker-facing text.
 
 Show:
 
-> Create a new {HR or IT} ESS agent in **{friendly environment name or Selected Power Platform environment}** from **{package name} {version}**?
+> Create a new {HR or IT} ESS agent in **{friendly environment name or Selected Power Platform environment}** from **{product name} {version}**?
 
 Offer exactly:
 
 - **Create agent**
-- **Choose a different package**
+- **Choose a different product**
 - **Cancel setup**
 
-Do not preselect **Create agent**. Each explicit **Create agent** selection authorizes exactly one create attempt with that package and target.
+Do not preselect **Create agent**. Each explicit **Create agent** selection authorizes exactly one create attempt with that product and target.
 
 ## Create
 
@@ -124,9 +122,9 @@ python scripts/setup_existing_da.py attach \
   --setup-source mos-starter
 ```
 
-On failure, preserve the command's specific `ERROR:` text and any canonical `active_step` and `failure_causes` as diagnostic evidence. Translate them into the visible setup stage and a plain explanation of the unmet prerequisite as described in `da-existing-dev.md`; never show internal step IDs or raw technical output as ordinary maker copy. On success, parse `DA_EXISTING_DEV_SETUP_JSON:`. Treat setup as complete only when `connectionStatus` is `workspace-ready` and `connectReady: true`. If content was projected, either readiness condition is false, and no specific failure cause was supplied, use the incomplete-state message from `da-existing-dev.md`, keep **Materialize the local workspace** current, and stop without inventing a cause. When a specific cause is supplied, translate it according to `da-existing-dev.md`. The create fuse intentionally remains as an audit note; canonical setup state independently prevents a second create. Do not publish, remove or replace components from this path. Further action requires new maker intent.
+On failure, preserve the command's specific `ERROR:` text and any canonical `active_step` and `failure_causes` as diagnostic evidence. Translate them into the visible setup stage and a plain explanation of the unmet prerequisite as described in `da-existing-dev.md`; never show internal step IDs or raw technical output as ordinary maker copy. On success, parse `DA_EXISTING_DEV_SETUP_JSON:`. Treat setup as complete only when `connectionStatus` is `workspace-ready` and `connectReady: true`. If content was synced to the local workspace, either readiness condition is false, and no specific failure cause was supplied, use the incomplete-state message from `da-existing-dev.md`, keep **Materialize the local workspace** current, and stop without inventing a cause. When a specific cause is supplied, translate it according to `da-existing-dev.md`. The create fuse intentionally remains as an audit note; canonical setup state independently prevents a second create. Do not publish, remove or replace components from this path. Further action requires new maker intent.
 
-After direct attachment validation succeeds, mark **Verify access and agent identity** and **Establish an editable Dev agent** complete. Render the factual completion report from `da-existing-dev.md` using **Fresh entitled MOS starter package** as the starting point.
+After direct attachment validation succeeds, mark **Verify access and agent identity** and **Establish an editable Dev agent** complete. Render the factual completion report from `da-existing-dev.md` using **New entitled MOS product** as the starting point.
 
 For every non-created outcome (`pre-dispatch-failure`, `collision`, `rejected`, `malformed-success`, `source-package-mismatch`, or an uncertain response or transport failure), end the create operation. The existing read-only `list` and `setup_existing_da.py validate-agent`/`list-agents` commands remain available for a separately requested inspection.
 

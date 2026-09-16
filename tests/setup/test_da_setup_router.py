@@ -334,8 +334,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "setup_existing_da.py attach" in text
     assert "--setup-source mos-starter" in text
     assert "outcome: created" in text
-    assert "Never show a package's" in normalized
-    assert "internal `packageId` to the maker" in normalized
+    assert "Never show the internal `packageId` to the maker" in normalized
     assert "`connectReady: true`" in text
     assert "`setupStatus`" not in text
     assert "What kind of ESS agent are you setting up?" in text
@@ -344,10 +343,11 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "specific connected system" in normalized
     assert "Requested setup: **{product} -- Unavailable in this environment**" in text
     assert "I have not selected a substitute." in text
-    assert "explicitly select an available package" in normalized
-    assert "only a service-returned package can be selected" in normalized
+    assert "explicitly select an available product" in normalized
+    assert "Collapse rows with identical maker-visible fields" in text
+    assert "retain the first returned row as the internal command input" in normalized
     assert "Create a new {HR or IT} ESS agent" in normalized
-    assert "Choose a different package" in text
+    assert "Choose a different product" in text
     assert "Do not preselect **Create agent**" in text
     assert "authorizes exactly one create attempt" in normalized
     assert "diagnostic evidence only" in normalized
@@ -361,7 +361,11 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "no specific failure cause was supplied" in normalized
     assert "When a specific cause is supplied" in text
     assert "workspace is not ready to connect" in existing_dev
-    assert "Fresh entitled MOS starter package" in text
+    assert "New entitled MOS product" in text
+    assert "content was synced to the local workspace" in normalized
+    assert "content was synced to your local workspace" in existing_dev
+    assert "Topics synced" in existing_dev
+    assert "Global variables synced" in existing_dev
     assert "factual completion report from `da-existing-dev.md`" in normalized
     assert "Do not infer persona, product, target, or progress" in normalized
     assert "Never invoke" in normalized and "/connect" in normalized
