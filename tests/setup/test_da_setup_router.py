@@ -261,6 +261,16 @@ def test_prod_to_dev_reference_composes_durable_boundaries() -> None:
     assert "Do not generate HTTP code or an end-to-end setup script" in normalized
     assert "setup_prod_to_dev.py" not in text
     assert "`setupStatus`" not in text
+    assert "Do not infer an interrupted step from conversation history" in normalized
+    assert "Prod agent verified. Checking for its related editable Dev agent" in normalized
+    assert "No related editable Dev agent was found" in normalized
+    assert "without changing Prod" in normalized
+    assert "Create editable Dev agent" in text
+    assert "Do not preselect **Create editable Dev agent**" in text
+    assert "Use related Dev agent" in text
+    assert "factual report in `da-existing-dev.md`" in normalized
+    assert "Existing Prod agent; related Dev reused" in normalized
+    assert "Existing Prod agent; new Dev created" in normalized
     for historical_text in (
         "workstream",
         "experiment",
@@ -409,6 +419,10 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     assert "from main" not in text
     assert "workstream" not in text.casefold()
     assert "later workstreams" not in text.casefold()
+    assert "when the parent setup router already inspected the supplied agent" in (
+        normalized
+    )
+    assert "canonical setup state, or conversation history" in normalized
 
 
 def test_foundation_router_paths_resolve() -> None:

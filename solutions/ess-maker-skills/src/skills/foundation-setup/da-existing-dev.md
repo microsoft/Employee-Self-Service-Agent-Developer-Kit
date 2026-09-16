@@ -10,14 +10,20 @@ Use one Power Platform environment and one active platform per ADK workspace. If
 
 Ask for the URL of the agent in Copilot Studio. A complete agent URL is preferred because it identifies the environment and agent without tenant-wide inventory.
 
-Use the shared authorization message from `SKILL.md`, then inspect a supplied agent before attachment:
+Use a current-invocation `DA_AGENT_ROUTE_JSON:` result when the parent setup
+router already inspected the supplied agent. Otherwise, use the shared
+authorization message from `SKILL.md`, then inspect the agent before attachment:
 
 ```text
 python scripts/setup_existing_da.py inspect-agent \
   --target-url "{COPILOT_STUDIO_AGENT_URL}"
 ```
 
-Parse `DA_AGENT_ROUTE_JSON:`. Continue only when the service reports `realm: dev`. Do not infer the realm from the URL, agent name, or environment metadata. If the service reports another realm, explain that this setup path requires an editable Dev agent and stop.
+Parse `DA_AGENT_ROUTE_JSON:`. Continue only when the current invocation has a
+service result reporting `realm: dev`. Do not infer the realm from the URL,
+agent name, environment metadata, canonical setup state, or conversation
+history. If the service reports another realm, explain that this setup path
+requires an editable Dev agent and stop.
 
 After a Dev result, show:
 

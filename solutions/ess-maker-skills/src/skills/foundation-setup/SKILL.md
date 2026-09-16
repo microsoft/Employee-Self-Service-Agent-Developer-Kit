@@ -45,6 +45,7 @@ The checklist is a view, not another state model:
 - a supplied or selected target completes the first stage;
 - direct service validation of an exact editable Dev completes the second and third stages for the existing-agent path;
 - a successful package import with direct Dev validation completes the second and third stages for the supplied-package path;
+- service inspection of a Prod source completes access and source-identity verification; a directly validated related Dev or successful create-only import completes the editable-Dev stage;
 - only `connectionStatus: workspace-ready` with `connectReady: true` completes local workspace materialization;
 - reviewing the factual completion report completes the handoff stage in the conversation and does not write another readiness marker.
 
@@ -91,6 +92,10 @@ resolved launcher.
 
 ## Start
 
+Use context supplied with the current setup request and canonical setup state
+read in this invocation. Do not infer a route or mismatch from conversation
+history.
+
 Do not describe a supplied agent as editable, Dev, Test, or Prod until a
 server-backed inspection has identified its route realm.
 
@@ -101,7 +106,8 @@ different IDs by design. Classify the supplied agent first, then use the
 server-reported ALM relationship to determine whether the existing workspace
 already targets its related Dev agent.
 
-When the maker supplies a Copilot Studio URL that identifies an agent, run:
+When the maker supplies a Copilot Studio URL that identifies an agent and has
+not explicitly selected package import, run:
 
 ```text
 python scripts/setup_existing_da.py inspect-agent \
@@ -115,10 +121,11 @@ environment metadata.
   `src/skills/foundation-setup/da-prod-to-dev.md` and follow it, passing the
   inspection's internal tenant, environment, host, ring, API version, and agent
   identity where that guidance requests source context. This setup path does
-  not emit setup telemetry.
+  not emit setup telemetry. Do not continue routing in this file.
 - When `realm` is `dev`, continue through
   `src/skills/foundation-setup/da-existing-dev.md`, using the inspected internal
-  context for validation and attachment.
+  context for validation and attachment. Do not repeat realm inspection or
+  continue routing in this file.
 - For any other realm, explain that local authoring requires a Dev agent or a
   Prod agent that can establish Dev, and stop.
 
@@ -131,9 +138,9 @@ Record anonymous usage telemetry best-effort:
 python scripts/emit_capability.py setup
 ```
 
-Use context already supplied with the setup request. When it identifies an agent, do not ask whether the agent is Dev or Prod; use service inspection to establish its realm.
-
 When the maker has already supplied a native agent package or explicitly asked to use one, read `src/skills/foundation-setup/da-alm-import.md` and follow it. That skill owns the explicit package handoff and reads the canonical import reference. This is an advanced handoff, not a setup option to advertise or recommend.
+
+When the request identifies an environment but not an agent, read `src/skills/foundation-setup/da-existing-dev.md` and follow its environment-candidate selection path.
 
 When the request does not identify an agent or environment, ask:
 
@@ -144,6 +151,4 @@ Offer exactly:
 - **Yes, I have an agent** — ask for its Copilot Studio URL.
 - **No, I need a fresh agent** — explain that this setup path connects an existing editable Dev agent and stop without suggesting a package import.
 
-Read `src/skills/foundation-setup/da-existing-dev.md` and follow it for a supplied agent or environment. Do not run Dataverse foundation or onboarding playbooks.
-
-Never route from `/setup` into an integration or topic playbook.
+Do not run Dataverse foundation or onboarding playbooks. Never route from `/setup` into an integration or topic playbook.

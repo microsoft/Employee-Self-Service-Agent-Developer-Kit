@@ -8,16 +8,13 @@ Copilot Studio agent URL as Prod. It is a same-tenant, create-only path. Read
 `da-existing-dev.md` for attachment and completion handling. Do not generate
 HTTP code or an end-to-end setup script.
 
-## Resume
+## Resume from durable evidence
 
-If attachment already started, use the persisted identity and resume rules in
-`da-existing-dev.md`; do not inspect, export, or import again.
+Use only canonical setup state and durable operation records read in this invocation. Do not infer an interrupted step from conversation history.
 
-If an earlier create-only import returned `kind: success`, or the service
-accepted the package but direct Dev verification did not finish, use a fresh
-[source inspection](#inspect-the-source) to obtain its current ALM-family
-identity. Rerun the import command with the same target, tenant, and former
-temporary package path:
+When canonical setup state shows that attachment started, use its persisted identity and the resume rules in `da-existing-dev.md`; do not inspect, export, or import again.
+
+When a matching import record reports `kind: success`, or reports that the service accepted the package but direct Dev verification did not finish, use a fresh [source inspection](#inspect-the-source) to obtain its current ALM-family identity. Rerun the import command with the same target, tenant, and recorded temporary package path:
 
 ```text
 python scripts/setup_alm_import.py \
@@ -53,6 +50,10 @@ python scripts/setup_alm_export.py inspect \
 Parse `DA_ALM_EXPORT_INSPECTION_JSON:`. The command must validate native Prod
 realm `2`; do not infer Prod from names, URLs, or environment metadata.
 
+After successful inspection, mark **Verify access and agent identity** complete and show:
+
+> Prod agent verified. Checking for its related editable Dev agent...
+
 If `relatedDevAgentId` is present, validate that exact agent using the returned
 environment, tenant, host, ring, and API version:
 
@@ -66,18 +67,21 @@ python scripts/setup_existing_da.py validate-agent \
   --agent-id "{RELATED_DEV_AGENT_ID}"
 ```
 
-Use the related Dev only when validation succeeds and
-`DA_AGENT_VALIDATION_JSON:` returns the same `almFamilyId` as the Prod
-inspection. Show the validated Dev agent's display name, then continue through
-[Attach and complete](#attach-and-complete) with that identity. Do not offer to
-create a duplicate Dev agent when a related Dev already exists.
+Use the related Dev only when validation succeeds and `DA_AGENT_VALIDATION_JSON:` returns the same `almFamilyId` as the Prod inspection. Mark **Establish an editable Dev agent** complete, then show:
+
+> Found the related editable Dev agent: **{agent display name}**. Preparing its
+> local authoring workspace...
+
+Continue through [Attach and complete](#attach-and-complete) with that identity. Do not offer to create a duplicate Dev agent when a related Dev already exists.
 
 ## Export and create Dev
 
-Continue here only when no directly validated related Dev exists. Use the same
-Power Platform environment as the supplied Prod agent. If the maker explicitly
-requests another environment, ask for its Copilot Studio environment URL
-instead. Then run:
+Continue here only when no directly validated related Dev exists. Keep **Establish an editable Dev agent** current and show:
+
+> No related editable Dev agent was found. Setup can create one from the
+> verified Prod agent without changing Prod.
+
+Use the same Power Platform environment as the supplied Prod agent. If the maker explicitly requests another environment, ask for its Copilot Studio environment URL instead. Then run:
 
 ```text
 python scripts/setup_alm_export.py export \
@@ -97,10 +101,14 @@ Immediately before import, ask:
 > Create a new editable Dev agent in the same Power Platform environment as
 > the supplied Prod agent?
 
-When the maker explicitly selected another environment, use its friendly
-display name when an earlier command returned one. Otherwise say "the selected
-Power Platform environment" without showing internal IDs or URLs. Run no other
-operation between the maker's confirmation and the create-only import:
+Offer exactly:
+
+- **Create editable Dev agent**
+- **Cancel setup**
+
+Do not preselect **Create editable Dev agent**. Continue only after the maker selects it.
+
+When the maker explicitly selected another environment, use its friendly display name when an authoritative operation returned one in this invocation. Otherwise say "the selected Power Platform environment" without showing internal IDs or URLs. Run no other operation between the maker's confirmation and the create-only import:
 
 ```text
 python scripts/setup_alm_import.py \
@@ -134,11 +142,12 @@ python scripts/setup_alm_export.py inspect \
 If the refreshed result contains a related Dev, validate that exact agent with
 `setup_existing_da.py validate-agent` as in [Inspect the source](#inspect-the-source).
 Only when validation returns the same `almFamilyId` as the refreshed Prod
-inspection, show the Dev display name and offer to attach it. If the maker
-accepts, continue through [Attach and complete](#attach-and-complete). If no
-related Dev is returned or the family cannot be proven, stop with the safe
-conflict outcome from `src/reference/native-alm-import.md`. Do not recover a
-collision or offer replacement.
+inspection, show:
+
+> A related editable Dev agent now exists: **{agent display name}**. Use it for
+> this workspace?
+
+Offer exactly **Use related Dev agent** and **Cancel setup**, and offer to attach it through [Attach and complete](#attach-and-complete). Continue only when the maker selects **Use related Dev agent**. If no related Dev is returned or the family cannot be proven, stop with the safe conflict outcome from `src/reference/native-alm-import.md`. Do not recover a collision or offer replacement.
 
 For any other result besides `kind: success`, stop and use the outcome guidance
 in `src/reference/native-alm-import.md`; do not retry or replace an agent.
@@ -164,6 +173,4 @@ python scripts/setup_existing_da.py attach \
   --setup-source prod-to-dev
 ```
 
-Complete setup through `da-existing-dev.md`. Do not claim Prod changed, Dev was
-published, or promotion was configured. Do not add cross-tenant support,
-replacement, collision recovery, export receipts, or telemetry.
+Complete setup through the factual report in `da-existing-dev.md`. Use **Existing Prod agent; related Dev reused** as the starting point for a validated related-Dev path and **Existing Prod agent; new Dev created** after a successful create-only import. Do not claim Prod changed, Dev was published, or promotion was configured. Do not add cross-tenant support, replacement, collision recovery, export receipts, or telemetry.
