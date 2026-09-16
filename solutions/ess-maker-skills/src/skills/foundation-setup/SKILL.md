@@ -24,9 +24,9 @@ packs, and topics are explicitly outside this skill.
 
 ## Maker-facing progress
 
-Show one setup checklist when `/setup` starts and when the maker explicitly resumes it. Do not expose the eight internal setup-step IDs or show skipped internal records as successful checks.
+At setup start, initialize the host's native task list with the five stages below. Keep it current through the final handoff and mark **Review the setup handoff** complete before finishing. Use the inline fallback only when a native task list is unavailable. Do not expose the eight internal setup-step IDs or show skipped internal records as successful checks.
 
-**Message:**
+**Inline fallback message:**
 
 Here's your ESS agent setup:
 
@@ -50,11 +50,29 @@ The checklist is a view, not another state model:
 - only `connectionStatus: workspace-ready` with `connectReady: true` completes local workspace materialization;
 - reviewing the factual completion report completes the handoff stage in the conversation and does not write another readiness marker.
 
-Before canonical setup begins, show the first unresolved stage as current and leave later stages pending. When canonical state is blocked, mark only the corresponding visible stage as blocked and preserve its failure causes in the response. Do not mark a stage complete from a skipped internal setup record.
+Before canonical setup begins, set the first unresolved native task-list stage to in progress and leave later stages pending. When canonical state is blocked, mark only the corresponding visible stage as blocked and preserve its failure causes in the response. Do not mark a stage complete from a skipped internal setup record.
+
+## Choose the sign-in account
+
+After resolving the Python invocation and before the first command that can authenticate, inspect only this workspace's existing AgentBuilder cache:
+
+```text
+python scripts/setup_existing_da.py cached-accounts
+```
+
+Parse `DA_AGENTBUILDER_ACCOUNTS_JSON:`. This is a local read and does not authenticate.
+
+- For one cached sign-in name, ask **Use {account} for setup?** and offer exactly **Continue with this account** and **Use another account**. Do not preselect either choice.
+- For multiple cached sign-in names, ask **Which account should setup use?** and offer each returned sign-in name plus **Use another account**. Do not preselect an account.
+- For no cached sign-in names, or after **Use another account**, ask **Do you have a test tenant user?** Allow the maker to enter that account's sign-in name or skip. When multiple cached accounts exist, require a sign-in name after **Use another account** so subsequent setup commands do not reopen account selection.
+
+Retain a confirmed or supplied sign-in name as `{SETUP_ACCOUNT}` and append `--account "{SETUP_ACCOUNT}"` to every `setup_existing_da.py`, `setup_mos_starter.py`, `setup_alm_export.py`, and `setup_alm_import.py` command in this invocation. Never infer a corp account. When the maker skips with no cached accounts, omit `--account` and let Microsoft sign-in present its account picker.
+
+Present account confirmation once per setup invocation. Do not repeat it before later commands.
 
 ## Shared authorization message
 
-Before a command that can open Microsoft sign-in, show:
+The account question is the confirmation for a selected account. When the maker chose the Microsoft account picker, show:
 
 > Microsoft sign-in will open. Select the account you use to access this environment. If the expected account is not shown, choose **Use another account**.
 
@@ -72,6 +90,7 @@ Do not describe an authorization wait as service processing, start a second comm
 
 Establish a working Python invocation before running setup commands.
 
+- Run setup commands from the current ESS Maker Skills workspace folder.
 - From the kit root, check each candidate with
   `{PYTHON} -c "import sys; print(sys.executable)"`, one terminal command at a
   time: `py -3`, `python3`, then `python` on Windows; `python3`, then `python`
@@ -89,6 +108,35 @@ When child guidance shows `python`, substitute the resolved invocation.
 Use context supplied with the current setup request and canonical setup state
 read in this invocation. Do not infer a route or mismatch from conversation
 history.
+
+When the current request supplies no agent, environment, package, or fresh-agent intent, check for an exact local target before asking for a URL. Prefer canonical setup state; use `.local/config.json` only as a compatibility fallback when canonical state is absent or uses the known older completed format. A usable local target must identify the agent display name, agent ID, environment ID, service ring or validated API endpoint, and local workspace folder. Treat these values only as routing input; they do not prove current access, realm, or readiness.
+
+For a usable local target, ask:
+
+> **{agent display name}** is already connected to this workspace. What would you like to do?
+
+Offer exactly:
+
+- **Continue with this agent**
+- **Set up a different agent in a new workspace**
+- **Cancel setup**
+
+Do not preselect a choice.
+
+For **Continue with this agent**, complete the one-time account selection above, then inspect the recorded target directly:
+
+```text
+python scripts/setup_existing_da.py inspect-agent \
+  --environment-id "{RECORDED_ENVIRONMENT_ID}" \
+  --agent-id "{RECORDED_AGENT_ID}" \
+  --ring "{RECORDED_RING}"
+```
+
+Also pass the recorded validated `--host` and `--api-version` when available. Parse `DA_AGENT_ROUTE_JSON:` and follow the same realm routing used for a supplied URL. Do not ask for the agent or environment URL. When canonical state is incomplete or blocked, label the first choice **Resume setup for this agent** instead, with otherwise identical behavior.
+
+For **Set up a different agent in a new workspace**, follow only [Use a separate workspace when the current folder is occupied](da-mos-starter.md#use-a-separate-workspace-when-the-current-folder-is-occupied). Stop after the workspace handoff; the new workspace owns selection of an existing or fresh agent.
+
+For **Cancel setup**, make no changes and stop.
 
 Do not describe a supplied agent as editable, Dev, Test, or Prod until a
 server-backed inspection has identified its route realm.
@@ -142,7 +190,7 @@ intent, keep the existing-Dev path for a maker who already has an agent.
 
 When the request identifies an environment but not an agent or fresh-agent intent, read `src/skills/foundation-setup/da-existing-dev.md` and follow its environment-candidate selection path.
 
-When the request does not identify an agent or environment, ask:
+When the request does not identify an agent or environment and no usable local target exists, ask:
 
 > Do you already have an ESS agent in Copilot Studio?
 

@@ -29,6 +29,7 @@ from agentbuilder import (
     AgentBuilderHTTPError,
     authenticate,
     authenticate_selected_tenant,
+    cached_account_names,
     canonical_json,
     derive_environment_host,
     validate_environment_host,
@@ -375,6 +376,10 @@ def _load_canonical_setup_state(
     if not path.exists():
         return None
     state = _load_json(path)
+    migrated = _migrate_legacy_completed_setup_state(state)
+    if migrated is not None:
+        _write_json(path, migrated)
+        state = migrated
     required_fields = {
         "schema_version",
         "intent",
@@ -392,8 +397,8 @@ def _load_canonical_setup_state(
     }
     if set(state) != required_fields:
         raise ExistingDASetupError(
-            "This workspace has setup state from an unsupported release. "
-            "Open a new workspace for DA setup."
+            "This workspace contains setup state in an incompatible format. "
+            "Nothing was changed. Use a separate workspace for DA setup."
         )
     if (
         state.get("schema_version") != CANONICAL_SETUP_SCHEMA_VERSION
@@ -401,8 +406,8 @@ def _load_canonical_setup_state(
         or state.get("setup_source") not in SUPPORTED_SETUP_SOURCES
     ):
         raise ExistingDASetupError(
-            "This workspace has setup state from an unsupported release. "
-            "Open a new workspace for DA setup."
+            "This workspace contains setup state in an incompatible format. "
+            "Nothing was changed. Use a separate workspace for DA setup."
         )
     environment = state.get("environment")
     agent = state.get("agent")
@@ -532,6 +537,71 @@ def _step_record(
         "note": note,
         "mode": mode,
         "recorded_at": recorded_at,
+    }
+
+
+def _migrate_legacy_completed_setup_state(
+    state: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Upgrade the known schema-1 completed state to the canonical contract."""
+    legacy_fields = {
+        "schema_version",
+        "status",
+        "setup_source",
+        "environment",
+        "agent",
+        "workspace",
+        "completed_at",
+    }
+    if (
+        set(state) != legacy_fields
+        or state.get("schema_version") != 1
+        or state.get("status") != "complete"
+        or state.get("setup_source") not in SUPPORTED_SETUP_SOURCES
+        or not isinstance(state.get("environment"), dict)
+        or not isinstance(state.get("agent"), dict)
+        or not isinstance(state.get("workspace"), dict)
+        or not state.get("completed_at")
+    ):
+        return None
+
+    workspace = state["workspace"]
+    if not workspace.get("folder") or not workspace.get("agent_path"):
+        return None
+
+    recorded_at = str(state["completed_at"])
+    steps = _setup_steps_in_progress(recorded_at)
+    steps["SETUP-07"] = _step_record(
+        "done",
+        mode="automated",
+        note=SETUP_STEP_NOTES["SETUP-07"],
+        recorded_at=recorded_at,
+    )
+    return {
+        "schema_version": CANONICAL_SETUP_SCHEMA_VERSION,
+        "intent": SETUP_INTENT,
+        "setup_source": state["setup_source"],
+        "environment": state["environment"],
+        "agent": state["agent"],
+        "workspace": {
+            key: workspace[key]
+            for key in (
+                "folder",
+                "agent_path",
+                "topic_count",
+                "variable_count",
+                "projected_component_kinds",
+                "unprojected_component_kinds",
+            )
+            if key in workspace
+        },
+        "steps": steps,
+        "active_step": SETUP_STEP_ORDER[-1],
+        "connect_ready": True,
+        "open_issues": [],
+        "created_at": recorded_at,
+        "updated_at": recorded_at,
+        "completed_at": recorded_at,
     }
 
 
@@ -1783,6 +1853,11 @@ def _add_agentbuilder_target_arguments(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    cached_accounts = commands.add_parser(
+        "cached-accounts",
+        help="List cached AgentBuilder sign-in names without authenticating.",
+    )
+    cached_accounts.add_argument("--kit-root", type=Path, default=Path.cwd())
     list_agents = commands.add_parser(
         "list-agents",
         help="List directly discoverable AgentBuilder agents.",
@@ -1878,6 +1953,18 @@ def _authentication_from_args(
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        if args.command == "cached-accounts":
+            cache_path = (
+                args.kit_root.resolve()
+                / ".local"
+                / ".agentbuilder_token_cache.bin"
+            )
+            result = {"accounts": cached_account_names(cache_path)}
+            print(
+                "DA_AGENTBUILDER_ACCOUNTS_JSON:"
+                f"{json.dumps(result, ensure_ascii=True)}"
+            )
+            return 0
         target = resolve_da_target(
             target_url=args.target_url,
             environment_id=args.environment_id,

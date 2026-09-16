@@ -1046,6 +1046,7 @@ def test_parser_exposes_only_composable_setup_operations() -> None:
 
     assert set(subparsers.choices) == {
         "attach",
+        "cached-accounts",
         "inspect-agent",
         "list-agents",
         "validate-agent",
@@ -1109,3 +1110,101 @@ def test_authentication_uses_workspace_cache_and_account_hint(
         "force_account_selection": False,
         "account_hint": "test.user@example.test",
     }
+
+
+def test_cached_accounts_command_reads_workspace_cache(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    observed: dict[str, Path] = {}
+
+    def account_names(cache_path: Path) -> list[str]:
+        observed["cache_path"] = cache_path
+        return ["test.user@example.test"]
+
+    monkeypatch.setattr(setup_existing_da, "cached_account_names", account_names)
+
+    assert setup_existing_da.main(
+        ["cached-accounts", "--kit-root", str(tmp_path)]
+    ) == 0
+    output = capsys.readouterr().out
+
+    assert observed["cache_path"] == (
+        tmp_path / ".local" / ".agentbuilder_token_cache.bin"
+    )
+    assert json.loads(
+        output.removeprefix("DA_AGENTBUILDER_ACCOUNTS_JSON:")
+    ) == {"accounts": ["test.user@example.test"]}
+
+
+def test_known_schema_one_completed_state_is_upgraded(
+    tmp_path: Path,
+) -> None:
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "complete",
+                "setup_source": "existing-dev",
+                "environment": {
+                    "id": ENVIRONMENT_ID,
+                    "tenant_id": TENANT_ID,
+                    "power_platform_api_endpoint": HOST,
+                    "ring": "test",
+                    "api_version": "2024-10-01",
+                },
+                "agent": {
+                    "id": AGENT_ID,
+                    "name": "Employee Self-Service HR",
+                    "schema_name": SCHEMA_NAME,
+                    "realm": "dev",
+                    "alm_family_id": FAMILY_ID,
+                    "workspace_slug": "employee-self-service-hr",
+                },
+                "workspace": {
+                    "status": "qualified-complete",
+                    "folder": "workspace/agents/employee-self-service-hr",
+                    "agent_path": "agent.mcs.yml",
+                    "topic_count": 1,
+                    "variable_count": 1,
+                    "projected_component_kinds": ["DialogComponent"],
+                    "unprojected_component_kinds": {},
+                    "unprojected_dialog_count": 0,
+                },
+                "completed_at": "2026-09-16T02:07:43+00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+
+    assert loaded == persisted
+    assert loaded is not None
+    assert loaded["schema_version"] == 3
+    assert loaded["connect_ready"] is True
+    assert loaded["intent"] == setup_existing_da.SETUP_INTENT
+    assert all(
+        record["state"] == "done"
+        for record in loaded["steps"].values()
+    )
+    assert "status" not in loaded["workspace"]
+
+
+def test_unknown_setup_state_uses_format_language(tmp_path: Path) -> None:
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps({"schema_version": 99}),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="incompatible format",
+    ):
+        setup_existing_da._load_canonical_setup_state(tmp_path)

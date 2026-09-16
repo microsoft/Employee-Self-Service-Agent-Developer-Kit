@@ -43,13 +43,9 @@ Parse `DA_PREPARED_WORKSPACE_JSON:`. The operation creates a detached Git worktr
 
 When `outcome` is `workspace-created` and `vscodeOpened` is `true`, say that the new VS Code window is open at `{kitRoot}` and ask the maker to run `/setup` there. When `vscodeOpened` is `false`, give `{kitRoot}` as the folder to open in a new VS Code window. When `outcome` is `workspace-created-open-failed`, explain that the workspace was created, give `{kitRoot}`, and ask the maker to open it manually; do not rerun creation.
 
-## Choose the sign-in account
-
-Before the first Microsoft sign-in, ask with an optional text input: **Do you have a test tenant user?** Ask the maker to enter that account's sign-in name or skip. Never infer a corp account. When supplied, retain it as `{TEST_TENANT_ACCOUNT}` and append `--account "{TEST_TENANT_ACCOUNT}"` to every `setup_mos_starter.py` and `setup_existing_da.py` command in this invocation; when skipped, omit the argument and let Microsoft sign-in present the account picker when this workspace's cache is ambiguous.
-
 ## List the catalog
 
-Tell the maker that Microsoft sign-in may open, using the exact authorization message from `SKILL.md`. Run:
+Complete the shared account-selection and authorization steps in `SKILL.md`, then run:
 
 ```text
 python scripts/setup_mos_starter.py list \

@@ -311,6 +311,19 @@ def _select_cached_account(
     return accounts[0] if len(accounts) == 1 else None
 
 
+def cached_account_names(
+    cache_path: Path = DEFAULT_TOKEN_CACHE,
+) -> list[str]:
+    """Return distinct cached sign-in names without acquiring a token."""
+    cache = _load_token_cache(cache_path)
+    names: dict[str, str] = {}
+    for account in cache.find(msal.TokenCache.CredentialType.ACCOUNT):
+        username = str(account.get("username") or "").strip()
+        if username:
+            names.setdefault(username.casefold(), username)
+    return sorted(names.values(), key=str.casefold)
+
+
 def _interactive_token(
     app: msal.PublicClientApplication,
     scope: str,

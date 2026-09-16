@@ -225,6 +225,7 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--source-url", required=True)
     common.add_argument("--tenant-id")
     common.add_argument("--select-account", action="store_true")
+    common.add_argument("--account")
     common.add_argument("--api-version", default=DEFAULT_API_VERSION)
     common.add_argument("--kit-root", type=Path, default=Path.cwd())
     common.set_defaults(host=None)

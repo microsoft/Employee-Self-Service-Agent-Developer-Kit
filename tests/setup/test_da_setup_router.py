@@ -93,6 +93,26 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
         normalized_foundation
     )
     assert "offer to perform it" in normalized_foundation
+    assert prompt.index("immediately initialize the native task list") < prompt.index(
+        "{PYTHON} -m pip install"
+    )
+    for stage in (
+        "Choose the starting point and target environment",
+        "Verify access and agent identity",
+        "Establish an editable Dev agent",
+        "Materialize the local workspace",
+        "Review the setup handoff",
+    ):
+        assert stage in prompt
+    assert "Keep it current through the final handoff" in normalized_prompt
+    assert "inline checklist only when" in normalized_prompt
+    cwd_instruction = (
+        "Run setup commands from the current ESS Maker Skills workspace folder"
+    )
+    assert cwd_instruction in normalized_prompt
+    assert cwd_instruction in normalized_foundation
+    assert "At setup start, initialize the host's native task list" in foundation
+    assert "mark **Review the setup handoff** complete before finishing" in foundation
 
 
 def test_public_setup_does_not_configure_mcp() -> None:
@@ -237,6 +257,36 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     assert "explicitly asks for a fresh installation" in normalized
 
 
+def test_empty_setup_offers_recorded_agent_without_requesting_url() -> None:
+    foundation = _FOUNDATION.read_text(encoding="utf-8")
+    existing = _DA_EXISTING_DEV.read_text(encoding="utf-8")
+    normalized = " ".join(foundation.split())
+
+    local_target = "When the current request supplies no agent"
+    generic_question = "When the request does not identify an agent or environment"
+    assert foundation.index(local_target) < foundation.index(generic_question)
+    assert "Prefer canonical setup state" in normalized
+    assert "`.local/config.json` only as a compatibility fallback" in normalized
+    assert "**{agent display name}** is already connected to this workspace" in (
+        foundation
+    )
+    for choice in (
+        "Continue with this agent",
+        "Set up a different agent in a new workspace",
+        "Cancel setup",
+    ):
+        assert f"**{choice}**" in foundation
+    assert "Do not preselect a choice" in foundation
+    assert '--environment-id "{RECORDED_ENVIRONMENT_ID}"' in foundation
+    assert '--agent-id "{RECORDED_AGENT_ID}"' in foundation
+    assert '--ring "{RECORDED_RING}"' in foundation
+    assert "Do not ask for the agent or environment URL" in normalized
+    assert "**Resume setup for this agent**" in foundation
+    assert "Stop after the workspace handoff" in normalized
+    assert "no usable local target exists" in normalized
+    assert "Never request a URL merely to revalidate" in " ".join(existing.split())
+
+
 def test_prod_to_dev_reference_composes_durable_boundaries() -> None:
     foundation = _FOUNDATION.read_text(encoding="utf-8")
     normalized_foundation = " ".join(foundation.split())
@@ -356,10 +406,13 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "scripts/prepare_fresh_workspace.py" in text
     assert "--open-vscode" in text
     assert "DA_PREPARED_WORKSPACE_JSON:" in text
-    assert "Do you have a test tenant user?" in text
-    assert '--account "{TEST_TENANT_ACCOUNT}"' in text
-    assert "Never infer a corp account" in normalized
-    assert "when this workspace's cache is ambiguous" in normalized
+    assert "Do you have a test tenant user?" in foundation
+    assert "setup_existing_da.py cached-accounts" in foundation
+    assert "DA_AGENTBUILDER_ACCOUNTS_JSON:" in foundation
+    assert "**Continue with this account**" in foundation
+    assert '--account "{SETUP_ACCOUNT}"' in foundation
+    assert "Never infer a corp account" in normalized_foundation
+    assert "Present account confirmation once" in normalized_foundation
     assert "Before listing products" in text
     assert "do not sign in or load the catalog" in normalized
     assert "explicitly asks for a fresh installation" in normalized_foundation
@@ -463,6 +516,8 @@ def test_foundation_has_one_authorization_wait_contract() -> None:
 
     assert "Microsoft sign-in will open" in text
     assert text.count("Microsoft sign-in will open") == 1
+    assert "The account question is the confirmation" in text
+    assert "Setup will use **{SETUP_ACCOUNT}**" not in text
     assert "**Waiting for authorization**" in text
     assert text.count("**Waiting for authorization**") == 1
     assert "ask the maker to provide a token" in normalized.casefold()
@@ -547,7 +602,7 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     assert "from main" not in text
     assert "workstream" not in text.casefold()
     assert "later workstreams" not in text.casefold()
-    assert "when the parent setup router already inspected the supplied agent" in (
+    assert "when the parent setup router already inspected the supplied or recorded agent" in (
         normalized
     )
     assert "canonical setup state, or conversation history" in normalized

@@ -883,6 +883,34 @@ def test_selected_tenant_authentication_reuses_one_cached_account(
     assert observed["account"] is account
 
 
+def test_cached_account_names_are_distinct_and_sorted(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    class FakeCache:
+        def find(self, credential_type):
+            assert credential_type == agentbuilder.msal.TokenCache.CredentialType.ACCOUNT
+            return [
+                {"username": "test.user@example.test"},
+                {"username": "Corp.User@example.com"},
+                {"username": "corp.user@example.com"},
+                {"local_account_id": "identifier-only"},
+            ]
+
+    monkeypatch.setattr(
+        agentbuilder,
+        "_load_token_cache",
+        lambda path: FakeCache(),
+    )
+
+    assert agentbuilder.cached_account_names(
+        tmp_path / "token-cache.bin"
+    ) == [
+        "Corp.User@example.com",
+        "test.user@example.test",
+    ]
+
+
 def test_selected_tenant_authentication_prompts_for_multiple_cached_accounts(
     tmp_path,
     monkeypatch,

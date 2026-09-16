@@ -90,6 +90,20 @@ def _run(
     )
 
 
+def test_parser_accepts_account_hint() -> None:
+    args = setup_alm_export.build_parser().parse_args(
+        [
+            "inspect",
+            "--source-url",
+            SOURCE_URL,
+            "--account",
+            "test.user@example.test",
+        ]
+    )
+
+    assert args.account == "test.user@example.test"
+
+
 def test_inspect_validates_prod_and_returns_related_dev_without_export(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

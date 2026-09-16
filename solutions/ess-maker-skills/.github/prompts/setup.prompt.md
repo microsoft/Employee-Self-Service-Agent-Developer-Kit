@@ -9,6 +9,19 @@ Read `src/skills/foundation-setup/SKILL.md` first. Follow its **Command runtime*
 instructions to establish a working Python invocation before running any Python
 command.
 
+After reading the foundation skill, immediately initialize the native task list:
+
+- Choose the starting point and target environment
+- Verify access and agent identity
+- Establish an editable Dev agent
+- Materialize the local workspace
+- Review the setup handoff
+
+Keep it current through the final handoff. Use the inline checklist only when a
+native task list is unavailable.
+
+Run setup commands from the current ESS Maker Skills workspace folder.
+
 Using the resolved launcher in place of `{PYTHON}`, run this command without
 showing it to the user:
 

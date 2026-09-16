@@ -8,10 +8,10 @@ Use one Power Platform environment and one active platform per ADK workspace. If
 
 ## Connect from the agent URL
 
-Ask for the URL of the agent in Copilot Studio. A complete agent URL is preferred because it identifies the environment and agent without tenant-wide inventory.
+Ask for the URL of the agent in Copilot Studio only when the parent setup router has neither a current-invocation inspection result nor a complete recorded local target. A complete agent URL is preferred for a new target because it identifies the environment and agent without tenant-wide inventory. Never request a URL merely to revalidate the exact agent already recorded for this workspace.
 
 Use a current-invocation `DA_AGENT_ROUTE_JSON:` result when the parent setup
-router already inspected the supplied agent. Otherwise, use the shared
+router already inspected the supplied or recorded agent. Otherwise, use the shared
 authorization message from `SKILL.md`, then inspect the agent before attachment:
 
 ```text
