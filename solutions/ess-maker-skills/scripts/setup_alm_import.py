@@ -42,9 +42,6 @@ from setup_existing_da import (
 
 IMPORT_RECORDS = Path(".local/setup/alm-import")
 MAX_MANIFEST_BYTES = 1024 * 1024
-UNRESOLVED_STATUSES = frozenset(
-    {"prepared", "ambiguous", "invalid-success", "imported"}
-)
 SAFE_RETRY_STATUSES = frozenset({"pre-dispatch-failure", "rejected"})
 
 
@@ -224,54 +221,35 @@ def _write_record(
     _write_json(path, record)
 
 
-def _load_other_records(
-    directory: Path,
-    current_path: Path,
-) -> list[dict[str, Any]]:
-    records: list[dict[str, Any]] = []
-    if not directory.is_dir():
-        return records
-    for path in directory.glob("*.json"):
-        if path == current_path:
-            continue
-        try:
-            record = json.loads(path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise AlmImportSetupError(
-                "A native ALM import record is unreadable."
-            ) from exc
-        if not isinstance(record, dict) or record.get("schemaVersion") != 1:
-            raise AlmImportSetupError(
-                "A native ALM import record has an unsupported shape."
-            )
-        records.append(record)
-    return records
-
-
-def _guard_other_operations(
-    directory: Path,
-    current_path: Path,
+def _persist_dispatched_record(
+    path: Path,
+    identity: dict[str, Any],
     *,
-    mode: str,
+    status: str,
+    outcome: dict[str, Any] | None = None,
+    result: dict[str, str] | None = None,
+    operation_error: BaseException | None = None,
 ) -> None:
-    for record in _load_other_records(directory, current_path):
-        status = record.get("status")
-        if status in UNRESOLVED_STATUSES:
-            raise AlmImportSetupError(
-                "Another native ALM import has an unresolved outcome. "
-                "Reconcile it before starting a new mutation."
+    try:
+        _write_record(
+            path,
+            identity,
+            status=status,
+            outcome=outcome,
+            result=result,
+        )
+    except OSError as persistence_error:
+        error = AlmImportSetupError(
+            f"Native ALM import reached {status!r}, but its operation record "
+            "could not be persisted. Do not retry the mutation; reconcile "
+            "the target first."
+        )
+        if operation_error is not None:
+            error.add_note(
+                "Primary operation evidence: "
+                f"{type(operation_error).__name__}: {operation_error}"
             )
-        other_input = record.get("input")
-        if (
-            mode == "create"
-            and status == "verified"
-            and isinstance(other_input, dict)
-            and other_input.get("mode") == "create"
-        ):
-            raise AlmImportSetupError(
-                "This workspace already contains a successful create import. "
-                "Attach that identity before starting another create."
-            )
+        raise error from persistence_error
 
 
 def _validate_empty_create_workspace(kit_root: Path) -> None:
@@ -371,6 +349,7 @@ def _failure_outcome(
     error_code: str | None = None,
     request_id: str | None = None,
     reason: str | None = None,
+    error: BaseException | None = None,
 ) -> dict[str, Any]:
     outcome: dict[str, Any] = {
         "kind": kind,
@@ -386,6 +365,9 @@ def _failure_outcome(
         outcome["requestId"] = request_id
     if reason:
         outcome["reason"] = reason
+    if error is not None:
+        outcome["errorType"] = type(error).__name__
+        outcome["errorMessage"] = str(error)
     return outcome
 
 
@@ -521,11 +503,6 @@ def import_package_once(
         )
 
     if imported is None:
-        _guard_other_operations(
-            record_path.parent,
-            record_path,
-            mode=identity["mode"],
-        )
         if replacement is None:
             _validate_empty_create_workspace(resolved_kit_root)
         _write_record(record_path, identity, status="prepared")
@@ -546,12 +523,14 @@ def import_package_once(
                 status_code=exc.status_code,
                 error_code=exc.error_code,
                 request_id=exc.request_id,
+                error=exc,
             )
-            _write_record(
+            _persist_dispatched_record(
                 record_path,
                 identity,
                 status=kind,
                 outcome=outcome,
+                operation_error=exc,
             )
             return outcome
         except requests.RequestException as exc:
@@ -561,38 +540,53 @@ def import_package_once(
                 identity,
                 kind=kind,
                 reason=reason or "transport-ended-without-response",
+                error=exc,
             )
-            _write_record(
+            _persist_dispatched_record(
                 record_path,
                 identity,
                 status=kind,
                 outcome=outcome,
+                operation_error=exc,
             )
             return outcome
-        except OSError:
+        except OSError as exc:
+            pre_dispatch = isinstance(
+                exc,
+                (FileNotFoundError, IsADirectoryError, PermissionError),
+            )
+            kind = "pre-dispatch-failure" if pre_dispatch else "ambiguous"
             outcome = _failure_outcome(
                 identity,
-                kind="pre-dispatch-failure",
-                reason="local-io",
+                kind=kind,
+                reason=(
+                    "local-io"
+                    if pre_dispatch
+                    else "request-ended-with-os-error"
+                ),
+                error=exc,
             )
-            _write_record(
+            _persist_dispatched_record(
                 record_path,
                 identity,
-                status="pre-dispatch-failure",
+                status=kind,
                 outcome=outcome,
+                operation_error=exc,
             )
             return outcome
-        except AgentBuilderError:
+        except AgentBuilderError as exc:
             outcome = _failure_outcome(
                 identity,
                 kind="ambiguous",
                 reason="request-ended-without-classified-response",
+                error=exc,
             )
-            _write_record(
+            _persist_dispatched_record(
                 record_path,
                 identity,
                 status="ambiguous",
                 outcome=outcome,
+                operation_error=exc,
             )
             return outcome
 
@@ -603,14 +597,14 @@ def import_package_once(
                 kind="invalid-success",
                 reason=invalid_reason,
             )
-            _write_record(
+            _persist_dispatched_record(
                 record_path,
                 identity,
                 status="invalid-success",
                 outcome=outcome,
             )
             return outcome
-        _write_record(
+        _persist_dispatched_record(
             record_path,
             identity,
             status="imported",
@@ -637,7 +631,7 @@ def import_package_once(
         connection,
         resumed=resumed,
     )
-    _write_record(
+    _persist_dispatched_record(
         record_path,
         identity,
         status="verified",
@@ -696,7 +690,6 @@ def main(argv: list[str] | None = None) -> int:
         AlmImportSetupError,
         ExistingDASetupError,
         ObjectModelConverterError,
-        RuntimeError,
         ValueError,
     ) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

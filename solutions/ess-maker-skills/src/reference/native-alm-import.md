@@ -13,7 +13,7 @@ safe outcome persistence, and direct identity verification. Existing-Dev setup
 owns component acquisition, projection, checkpointing, refresh, and canonical
 workspace completion.
 
-## Current evidence
+## Service evidence
 
 | Claim | Status |
 | --- | --- |
@@ -28,6 +28,8 @@ workspace completion.
 | Replacement is atomic under every service-side failure | Unknown |
 | Direct templated-package import is a supported product policy | Unknown |
 | Interrupted requests can always be reconciled automatically | Unknown |
+| A supported targeted cleanup operation is available | Unknown |
+| Import behavior outside TEST matches the observed contract | Unknown |
 
 Do not describe an unknown claim as supported behavior.
 
@@ -127,7 +129,9 @@ bodies.
 An `imported` record means the service returned a usable identity but direct
 verification did not finish. Rerunning resumes verification without replaying
 the import. A `verified` record returns the cached verified result. An
-unresolved record blocks a different mutation until it is reconciled.
+unresolved record blocks replay of that same operation. Records are evidence,
+not a global workflow lock; the session interprets unrelated records before
+selecting another operation.
 
 ### Recover an imported but unverified agent
 
@@ -146,8 +150,7 @@ agent, delete the receipt, or retry the package import.
 
 ### Reconcile an ambiguous or invalid-success outcome
 
-No transport fault-injection tool is required or expected. Recovery is an
-operator procedure:
+Recovery is an operator procedure:
 
 1. Stop all import attempts and preserve the receipt and exact package bytes.
 2. Record the target environment, operation mode, package schema, and receipt
@@ -162,7 +165,7 @@ operator procedure:
 6. If the outcome cannot be proven, stop and escalate with the receipt. Absence
    from an eventually consistent listing is not proof that the mutation failed.
 
-The current command intentionally provides no override for `ambiguous` or
+The command provides no override for `ambiguous` or
 `invalid-success`. Never edit or remove a receipt to enable another POST.
 
 ## Workspace handoff
@@ -175,18 +178,6 @@ For an existing managed workspace, attachment may require explicit
 checkpoint-and-refresh approval. That refresh is local and read-only with
 respect to the imported agent; it does not repeat the package mutation.
 
-Setup is complete only when existing-Dev attachment reports both
-`connectionStatus: workspace-ready` and `setupStatus: complete`.
-
-## Open validation
-
-Before treating this path as complete, validate:
-
-- fresh create through import, direct identity verification, and first
-  workspace projection;
-- HTTP 400 inaccessible-connection behavior with durable rejection evidence;
-- pre-dispatch DNS classification and explicitly approved safe retry;
-- replacement behavior when the service fails after accepting the package;
-- behavior outside TEST;
-- supported product policy for direct templated-package import;
-- targeted cleanup of a test-created agent.
+Import `kind: success` is not setup completion. Setup is complete only when
+existing-Dev attachment reports both `connectionStatus: workspace-ready` and
+`connectReady: true`.

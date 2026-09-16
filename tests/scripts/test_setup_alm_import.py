@@ -623,6 +623,8 @@ def test_unclassified_transport_failure_is_ambiguous(
     )
 
     assert result["kind"] == "ambiguous"
+    assert result["errorType"] == "ReadTimeout"
+    assert result["errorMessage"] == "lost response"
     with pytest.raises(
         setup_alm_import.AlmImportSetupError,
         match="unresolved outcome",
@@ -634,6 +636,90 @@ def test_unclassified_transport_failure_is_ambiguous(
             kit_root=tmp_path,
         )
     assert len(client.import_calls) == 1
+
+
+def test_record_failure_preserves_primary_operation_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _write_package(tmp_path / "agent.zip")
+    client = FakeClient(error=requests.ReadTimeout("lost response"))
+    original_write_record = setup_alm_import._write_record
+
+    def fail_ambiguous_record(
+        path: Path,
+        identity: dict[str, Any],
+        *,
+        status: str,
+        outcome: dict[str, Any] | None = None,
+        result: dict[str, str] | None = None,
+    ) -> None:
+        if status == "ambiguous":
+            raise OSError("record write denied")
+        original_write_record(
+            path,
+            identity,
+            status=status,
+            outcome=outcome,
+            result=result,
+        )
+
+    monkeypatch.setattr(
+        setup_alm_import,
+        "_write_record",
+        fail_ambiguous_record,
+    )
+
+    with pytest.raises(
+        setup_alm_import.AlmImportSetupError,
+        match="could not be persisted",
+    ) as raised:
+        setup_alm_import.import_package_once(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            package_path=package,
+            kit_root=tmp_path,
+        )
+
+    assert raised.value.__notes__ == [
+        "Primary operation evidence: ReadTimeout: lost response"
+    ]
+    assert len(client.import_calls) == 1
+
+
+def test_unrelated_record_does_not_lock_a_distinct_import(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    first_package = _write_package(tmp_path / "first.zip")
+    second_package = _write_package(
+        tmp_path / "second.zip",
+        package_type="templated",
+    )
+    client = FakeClient(error=requests.ReadTimeout("lost response"))
+    monkeypatch.setattr(
+        setup_alm_import,
+        "validate_existing_dev_connection",
+        lambda *_args, **_kwargs: _connection(),
+    )
+
+    first = setup_alm_import.import_package_once(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        package_path=first_package,
+        kit_root=tmp_path,
+    )
+    client.error = None
+    second = setup_alm_import.import_package_once(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        package_path=second_package,
+        kit_root=tmp_path,
+    )
+
+    assert first["kind"] == "ambiguous"
+    assert second["kind"] == "success"
+    assert len(client.import_calls) == 2
 
 
 def test_existing_workspace_state_blocks_create_before_mutation(

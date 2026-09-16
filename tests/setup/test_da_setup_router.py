@@ -166,8 +166,21 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     assert "setup_existing_da.py validate-agent" in import_text
     assert "DA_AGENT_VALIDATION_JSON:" in import_text
     assert "--setup-source alm-import" in import_text
+    assert "`connectReady: true`" in import_text
+    assert "`setupStatus`" not in import_text
+    assert "`unprojectedDialogCount`" not in import_text
     assert "Never preselect or recommend **Continue replacement**" in import_text
     assert "Never remove or edit import records" in import_text
+    reference = _NATIVE_ALM_REFERENCE.read_text(encoding="utf-8")
+    assert "Import `kind: success` is not setup completion" in reference
+    for historical_text in (
+        "## open validation",
+        "the current command",
+        "transport fault-injection",
+        "workstream",
+        "experiment",
+    ):
+        assert historical_text not in reference.casefold()
     assert "scripts/setup_state.py" not in text
     assert "Dataverse foundation or onboarding playbooks" in text
     assert "connector authentication" in text

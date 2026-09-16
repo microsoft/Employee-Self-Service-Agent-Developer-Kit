@@ -35,7 +35,7 @@ python scripts/setup_alm_import.py \
 
 The first operation must omit both replacement arguments. Never infer
 replacement permission from the package, collision, environment, schema, or a
-prior setup attempt.
+different setup context.
 
 Parse `DA_ALM_IMPORT_JSON:` even when the command exits nonzero.
 
@@ -56,9 +56,9 @@ python scripts/setup_existing_da.py attach \
   --setup-source alm-import
 ```
 
-Parse `DA_EXISTING_DEV_SETUP_JSON:`. Treat setup as complete only when the
-result reports `connectionStatus` as `workspace-ready` and `setupStatus` as
-`complete`.
+Parse `DA_EXISTING_DEV_SETUP_JSON:`. Treat import `kind: success` only as
+permission to begin attachment. Treat setup as complete only when attachment
+reports `connectionStatus` as `workspace-ready` and `connectReady: true`.
 
 If attachment reports that the managed workspace changed, use the explicit
 checkpoint-and-refresh choice from `da-existing-dev.md`. A refresh never
@@ -69,8 +69,7 @@ When complete, show:
 **{agent display name}** is set up as the editable Dev agent. Its available
 topics are in your local workspace and ready for customization.
 
-If the result reports unprojected component kinds or a nonzero
-`unprojectedDialogCount`, add:
+If the result reports nonempty `unprojectedComponentKinds`, add:
 
 Some agent content was retained safely in the fetched snapshot but is not
 editable through this ADK version yet.
