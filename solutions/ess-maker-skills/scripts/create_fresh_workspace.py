@@ -124,7 +124,10 @@ def create_worktree(
             workspace_prefix,
         ],
     ).stdout.splitlines()
-    allowed_scaffolding = {f"{local_prefix}/.gitkeep"}
+    allowed_scaffolding = {
+        f"{local_prefix}/.gitkeep",
+        f"{workspace_prefix}/agents/.gitkeep",
+    }
     unexpected_state = [
         path for path in tracked_workspace_state if path not in allowed_scaffolding
     ]

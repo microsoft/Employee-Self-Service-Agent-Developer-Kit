@@ -29,13 +29,21 @@ def _create_repo(path: Path) -> Path:
     (path / ".gitignore").write_text(
         "solutions/ess-maker-skills/.local/*\n"
         "!solutions/ess-maker-skills/.local/.gitkeep\n"
-        "solutions/ess-maker-skills/workspace/\n",
+        "solutions/ess-maker-skills/workspace/*\n"
+        "!solutions/ess-maker-skills/workspace/agents/\n"
+        "solutions/ess-maker-skills/workspace/agents/*\n"
+        "!solutions/ess-maker-skills/workspace/agents/.gitkeep\n",
         encoding="utf-8",
     )
     kit_root = path / workspace.KIT_SUBFOLDER
     kit_root.mkdir(parents=True)
     (kit_root / ".local").mkdir()
     (kit_root / ".local" / ".gitkeep").write_text("", encoding="utf-8")
+    (kit_root / "workspace" / "agents").mkdir(parents=True)
+    (kit_root / "workspace" / "agents" / ".gitkeep").write_text(
+        "",
+        encoding="utf-8",
+    )
     (kit_root / "README.md").write_text("ESS Maker Skills\n", encoding="utf-8")
     _git(path, "add", ".")
     _git(path, "commit", "--quiet", "-m", "test fixture")
@@ -61,7 +69,13 @@ def test_create_worktree_preserves_current_workspace_state(tmp_path: Path) -> No
     assert not (
         destination / workspace.KIT_SUBFOLDER / ".local" / "config.json"
     ).exists()
-    assert not (destination / workspace.KIT_SUBFOLDER / "workspace").exists()
+    assert (
+        destination
+        / workspace.KIT_SUBFOLDER
+        / "workspace"
+        / "agents"
+        / ".gitkeep"
+    ).is_file()
     assert local_state.is_file()
 
 
