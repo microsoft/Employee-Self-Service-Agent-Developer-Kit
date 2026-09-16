@@ -22,6 +22,49 @@ packs, and topics are explicitly outside this skill.
 
 ---
 
+## Maker-facing progress
+
+Show one setup checklist when `/setup` starts and when the maker explicitly resumes it. Do not expose the eight internal setup-step IDs or show skipped internal records as successful checks.
+
+**Message:**
+
+Here's your ESS agent setup:
+
+- {marker} Choose the starting point and target environment
+- {marker} Verify access and agent identity
+- {marker} Establish an editable Dev agent
+- {marker} Materialize the local workspace
+- {marker} Review the setup handoff
+
+**End message.**
+
+Use ✅ for completed, 🔄 for the current stage, ⛔ for a blocked stage, and ⬜ for pending. Derive markers only from supplied context, results observed in this invocation, and canonical setup state read in this invocation. Never infer progress from conversation history.
+
+The checklist is a view, not another state model:
+
+- a supplied or selected target completes the first stage;
+- direct service validation of an exact editable Dev completes the second and third stages for the existing-agent path;
+- only `connectionStatus: workspace-ready` with `connectReady: true` completes local workspace materialization;
+- reviewing the factual completion report completes the handoff stage in the conversation and does not write another readiness marker.
+
+Before canonical setup begins, show the first unresolved stage as current and leave later stages pending. When canonical state is blocked, mark only the corresponding visible stage as blocked and preserve its failure causes in the response. Do not mark a stage complete from a skipped internal setup record.
+
+## Shared authorization message
+
+Before a command that can open Microsoft sign-in, show:
+
+> Microsoft sign-in will open. Select the account you use to access this environment. If the expected account is not shown, choose **Use another account**.
+
+If the terminal returns control while that command is waiting for the browser callback, show:
+
+> **Waiting for authorization**
+>
+> Complete the Microsoft sign-in in your browser. I will continue automatically after authorization finishes.
+
+Do not describe an authorization wait as service processing, start a second command, or ask the maker to provide a token.
+
+---
+
 ## Command runtime
 
 The first terminal operation must change to the kit root, which is the directory
@@ -53,8 +96,17 @@ Record anonymous usage telemetry best-effort:
 python scripts/emit_capability.py setup
 ```
 
-Read `src/skills/foundation-setup/da-existing-dev.md` and follow it. This is the
-only supported setup path in the current DA-GA implementation. Do not run the
-retired Dataverse foundation or onboarding playbooks.
+Use context already supplied with the setup request. When it identifies an agent, do not ask whether the agent is Dev or Prod; use service inspection to establish its realm.
+
+When the request does not identify an agent or environment, ask:
+
+> Do you already have an ESS agent in Copilot Studio?
+
+Offer exactly:
+
+- **Yes, I have an agent** — ask for its Copilot Studio URL.
+- **No, I need a fresh agent** — explain that this setup path connects an existing editable Dev agent and stop without suggesting a package import.
+
+Read `src/skills/foundation-setup/da-existing-dev.md` and follow it for a supplied agent or environment. Do not run Dataverse foundation or onboarding playbooks.
 
 Never route from `/setup` into an integration or topic playbook.

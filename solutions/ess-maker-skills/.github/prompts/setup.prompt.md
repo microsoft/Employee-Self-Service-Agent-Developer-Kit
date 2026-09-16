@@ -22,6 +22,6 @@ If the launcher cannot start Python, return to launcher discovery and try the
 remaining candidates. If the verified interpreter runs but dependency
 installation fails, show the exact error and stop.
 
-Do not route to the retired Dataverse foundation or onboarding playbooks.
+Do not route to Dataverse foundation or onboarding playbooks.
 Foundation setup owns DA-GA environment and editable Dev-agent selection,
 workspace materialization, and canonical setup completion.

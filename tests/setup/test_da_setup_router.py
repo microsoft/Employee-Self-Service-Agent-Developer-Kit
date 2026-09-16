@@ -32,7 +32,7 @@ def test_public_setup_routes_to_da_foundation_module() -> None:
 
     assert "src/skills/foundation-setup/SKILL.md" in instructions
     assert "src/skills/foundation-setup/SKILL.md" in prompt
-    assert "retired Dataverse foundation or onboarding playbooks" in prompt
+    assert "Do not route to Dataverse foundation or onboarding playbooks" in prompt
 
 
 def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
@@ -157,6 +157,38 @@ def test_foundation_routes_only_to_existing_dev_da_setup() -> None:
     assert _DA_EXISTING_DEV.is_file()
 
 
+def test_foundation_uses_maker_facing_progress_without_duplicate_state() -> None:
+    text = _FOUNDATION.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    for stage in (
+        "Choose the starting point and target environment",
+        "Verify access and agent identity",
+        "Establish an editable Dev agent",
+        "Materialize the local workspace",
+        "Review the setup handoff",
+    ):
+        assert stage in text
+    assert "The checklist is a view, not another state model" in normalized
+    assert "Never infer progress from conversation history" in normalized
+    assert "Do not mark a stage complete from a skipped internal setup record" in (
+        normalized
+    )
+    assert "Do you already have an ESS agent in Copilot Studio?" in text
+    assert "Yes, I have an agent" in text
+    assert "No, I need a fresh agent" in text
+
+
+def test_foundation_has_one_authorization_wait_contract() -> None:
+    text = _FOUNDATION.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "Microsoft sign-in will open" in text
+    assert "**Waiting for authorization**" in text
+    assert "ask the maker to provide a token" in normalized.casefold()
+    assert "Do not describe an authorization wait as service processing" in normalized
+
+
 def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
     text = _DA_EXISTING_DEV.read_text(encoding="utf-8")
 
@@ -180,6 +212,26 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
     assert "visible Dev-realm candidates" in text
     assert "Validate only the selected candidate" in text
     assert "before authentication or remote agent validation" in text
+    assert "Do not run `validate-agent` immediately before `attach`" in text
+    assert "Your ESS agent workspace is ready." in text
+    assert "| Starting point | Existing editable Dev |" in " ".join(text.split())
+    assert "Not performed by foundation setup" in text
+    assert "Checkpoint and refresh" in text
+    assert "Keep local files unchanged" in text
+
+
+def test_existing_dev_completion_remains_evidence_driven() -> None:
+    text = _DA_EXISTING_DEV.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "`connectionStatus: workspace-ready`" in text
+    assert "`connectReady: true`" in text
+    assert "a factual handoff, not another readiness gate" in normalized
+    assert "changing canonical state conversationally" in normalized
+    assert "Do not infer the realm from the URL" in normalized
+    assert "from main" not in text
+    assert "workstream" not in text.casefold()
+    assert "later workstreams" not in text.casefold()
 
 
 def test_foundation_router_paths_resolve() -> None:
