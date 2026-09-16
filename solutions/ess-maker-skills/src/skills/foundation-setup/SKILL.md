@@ -1,4 +1,5 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
+
 # ESS Foundation Setup
 
 Every **Message** block is exact user-facing text. Do not expose internal step IDs,
@@ -20,6 +21,29 @@ Workday, ServiceNow, SAP SuccessFactors, authentication, extension packs, and to
 are explicitly outside this skill.
 
 ---
+
+## Command runtime
+
+The first terminal operation must change to the kit root, which is the directory
+containing `scripts/`. Do not rely on the terminal's inherited working
+directory. Run every setup command from that location; when shell state may not
+persist between commands, prefix the command with an explicit change to
+`{KIT_ROOT}`.
+
+Before the first Python command, resolve one working launcher and reuse it for
+the rest of setup:
+
+- on Windows, prefer `py -3`; if it is unavailable, use a working `python3` or
+  `python`;
+- on macOS or Linux, prefer `python3`; if it is unavailable, use a working
+  `python`.
+
+Verify the selected launcher with
+`{PYTHON} -c "import sys; print(sys.executable)"`. Do not use a setup command as
+the launcher probe. A missing or nonworking candidate is not a setup failure;
+continue to the next candidate. If no launcher works, report the missing Python
+prerequisite and stop. When child guidance shows `python`, substitute the
+resolved launcher.
 
 ## Start
 

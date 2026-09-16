@@ -35,6 +35,30 @@ def test_public_setup_routes_to_da_foundation_module() -> None:
     assert "retired Dataverse foundation or onboarding playbooks" in prompt
 
 
+def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
+    prompt = _SETUP_PROMPT.read_text(encoding="utf-8")
+    foundation = _FOUNDATION.read_text(encoding="utf-8")
+    normalized_prompt = " ".join(prompt.split())
+    normalized_foundation = " ".join(foundation.split())
+
+    assert prompt.index("Read `src/skills/foundation-setup/SKILL.md` first") < (
+        prompt.index("{PYTHON} -m pip install")
+    )
+    assert "python -m pip install" not in prompt
+    assert "python scripts/mcp_config.py" not in prompt
+    assert "A failed launcher candidate is discovery evidence" in normalized_prompt
+    assert "stop only if none works" in normalized_prompt
+    assert "return to launcher discovery and try the remaining candidates" in (
+        normalized_prompt
+    )
+    assert "prefer `py -3`" in normalized_foundation
+    assert "use a working `python3` or `python`" in normalized_foundation
+    assert "on macOS or Linux, prefer `python3`" in normalized_foundation
+    assert "A missing or nonworking candidate is not a setup failure" in (
+        normalized_foundation
+    )
+
+
 def test_global_and_command_gates_require_canonical_da_completion() -> None:
     instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
 
