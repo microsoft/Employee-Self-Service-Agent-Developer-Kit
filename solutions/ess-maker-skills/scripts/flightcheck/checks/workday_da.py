@@ -4,9 +4,9 @@
 """
 ESS FlightCheck — Declarative Agent (DA) Workday Extension Validation.
 
-Verifies that the Workday extension package for the **Declarative Agent**
-(DA) flavor of Employee Self-Service is installed into the target Power
-Platform environment (``setup/workday-da`` skill, step DA1.1). DA and CEA
+Verifies that the Workday extension package for the **Declarative Agent HR**
+flavor of Employee Self-Service is installed into the target Power Platform
+environment (``setup/workday-da`` skill, step DA1.1). DA and CEA
 ship distinct extension packages under distinct schema names (see
 ``src/reference/solution-catalog.md``); this module never reuses or is
 reused by ``checks/workday.py`` / ``checks/workday_extension.py``, which are
@@ -20,31 +20,16 @@ from ..runner import CheckResult, Priority, Role, Status
 from auth import query_all, AuthExpiredError  # scripts/auth.py, on path via cli.py
 
 
-# Parent (base agent) schema names for the two DA verticals that ship a
-# Workday child package. The DA Hub bundle has no Workday child of its own —
-# Workday is installed against the HR or IT vertical (see
-# src/reference/solution-catalog.md, "## Parents" / "## Child packages").
-_DA_PARENT_SCHEMAS = {
-    "hr": "msdyn_copilotforemployeeselfservicedahr",
-    "it": "msdyn_copilotforemployeeselfservicedait",
-}
-
-# The Workday child package schema for each DA vertical (from
-# src/reference/solution-catalog.md, "## Child packages, connection
-# references, and flows").
-_DA_WORKDAY_CHILD_SCHEMAS = {
-    "hr": "msdyn_essdahrworkday",
-    "it": "msdyn_essdaitworkday",
-}
-
-_VERTICAL_LABEL = {"hr": "HR", "it": "IT"}
+_DA_HR_PARENT_SCHEMA = "msdyn_copilotforemployeeselfservicedahr"
+_DA_IT_PARENT_SCHEMA = "msdyn_copilotforemployeeselfservicedait"
+_DA_HR_WORKDAY_CHILD_SCHEMA = "msdyn_essdahrworkday"
 
 _SOLN_SELECT = "solutionid,uniquename,friendlyname,ismanaged,version"
 
-# All four fixed schema names this check ever needs to resolve in one
-# round-trip: the two DA parents plus their two Workday children.
-_ALL_TRACKED_SCHEMAS = tuple(_DA_PARENT_SCHEMAS.values()) + tuple(
-    _DA_WORKDAY_CHILD_SCHEMAS.values()
+_ALL_TRACKED_SCHEMAS = (
+    _DA_HR_PARENT_SCHEMA,
+    _DA_IT_PARENT_SCHEMA,
+    _DA_HR_WORKDAY_CHILD_SCHEMA,
 )
 _SOLN_FILTER = " or ".join(
     f"uniquename eq '{schema}'" for schema in _ALL_TRACKED_SCHEMAS
@@ -54,7 +39,7 @@ _DOC_LINK = (
     "https://learn.microsoft.com/en-us/microsoft-365/copilot/"
     "employee-self-service/install"
 )
-_DESCRIPTION = "Workday extension package installed for the DA ESS agent"
+_DESCRIPTION = "Workday extension package installed for the DA ESS HR agent"
 
 
 def run_workday_da_checks(runner) -> list[CheckResult]:
@@ -115,49 +100,38 @@ def _check_workday_da_package_installed(runner) -> list[CheckResult]:
         s.get("uniquename", "").casefold(): s for s in all_solutions
     }
 
-    installed_verticals = [
-        vertical
-        for vertical, parent_schema in _DA_PARENT_SCHEMAS.items()
-        if parent_schema in installed_names
-    ]
-    installed_labels = ", ".join(
-        _VERTICAL_LABEL[vertical] for vertical in installed_verticals
-    )
+    hr_installed = _DA_HR_PARENT_SCHEMA in installed_names
+    it_installed = _DA_IT_PARENT_SCHEMA in installed_names
 
-    if not installed_verticals:
+    if not hr_installed and it_installed:
         return [_result(
             Status.FAILED.value,
-            "No DA Employee Self-Service base agent (HR or IT) was found in "
-            "this environment.",
+            "An ESS DA IT agent is installed, but no ESS DA HR agent was found.",
             remediation=(
-                "Run /setup to install the DA Employee Self-Service base "
-                "agent first, then run /connect workday again."
+                "Workday integration with the ESS IT Agent is not supported "
+                "in this release. Contact your administrator."
             ),
         )]
 
-    findings = []
-    missing_verticals = []
-    for vertical in installed_verticals:
-        child_schema = _DA_WORKDAY_CHILD_SCHEMAS[vertical]
-        label = _VERTICAL_LABEL[vertical]
-        child = installed_names.get(child_schema)
-        if child:
-            findings.append(f"{label}: {_describe_solution(child)}")
-        else:
-            missing_verticals.append(vertical)
-
-    if missing_verticals:
-        missing_labels = ", ".join(_VERTICAL_LABEL[v] for v in missing_verticals)
-        installed_summary = f" Already installed — {'; '.join(findings)}." if findings else ""
+    if not hr_installed:
         return [_result(
             Status.FAILED.value,
-            f"The Workday extension package is not installed for the "
-            f"{missing_labels} edition of your DA Employee Self-Service "
-            f"agent. Detected DA base agent editions: "
-            f"{installed_labels}.{installed_summary}",
+            "No ESS DA HR agent was found in this environment.",
+            remediation=(
+                "Run /setup to install the ESS DA HR agent first, then run "
+                "/connect workday again."
+            ),
+        )]
+
+    child = installed_names.get(_DA_HR_WORKDAY_CHILD_SCHEMA)
+    if not child:
+        return [_result(
+            Status.FAILED.value,
+            "The Workday extension package is not installed for the ESS DA HR "
+            "agent.",
             remediation=(
                 "Open AppSource (or the Microsoft 365 admin center), find "
-                "the Workday extension for Employee Self-Service, and "
+                "the Workday extension for Employee Self-Service HR, and "
                 "deploy it to this environment — the same place you "
                 "installed the base agent. Wait for the install to finish, "
                 "then re-run this check."
@@ -166,8 +140,8 @@ def _check_workday_da_package_installed(runner) -> list[CheckResult]:
 
     return [_result(
         Status.PASSED.value,
-        f"Detected DA base agent editions: {installed_labels}. "
-        f"DA Workday extension package installed: {'; '.join(findings)}.",
+        "ESS DA HR agent detected. DA Workday extension package installed: "
+        f"{_describe_solution(child)}.",
     )]
 
 

@@ -1,7 +1,7 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
 # Workday Connect (DA) — Checklist (template)
 
-The single, trackable checklist spanning the four Workday connect steps for the
+The single, trackable checklist spanning the five Workday connect steps for the
 **Declarative Agent (DA)** flavor of Employee Self-Service. This file is the
 **canonical row source**: on first run the skill renders it to the working copy
 `.local/setup/workday-da/tasks.md` and then updates **only its own items**
@@ -50,7 +50,7 @@ express; all items start `pending`.
 
 ### 1. Workday extension package
 
-- [ ] **Install the Workday extension package** — Add the Workday extension package to your DA agent so it can talk to Workday. If your DA base agent isn't installed yet, this step sends you to `/setup` first.
+- [ ] **Install the Workday extension package** — Add the Workday extension package to your ESS DA HR agent so it can talk to Workday. If the HR base agent isn't installed yet, this step sends you to `/setup` first.
   <!-- id: DA1.1 | role: Environment Maker | skill: da-1 | automatable: Attempt | checkpoints: WD-DA-PKG-001 | gate: prog, else manual | status: pending -->
 
 ### 2. Workday single sign-on (Entra)
@@ -81,22 +81,34 @@ express; all items start `pending`.
 - [ ] **Match the signing certificate** — Confirm the Workday-side signing certificate matches the one in Entra (validity dates, or an externally-computed SHA-1 — Workday shows no thumbprint).
   <!-- id: DA3.4 | role: Workday Administrator | skill: da-3 | automatable: No (Workday cert field not API-reachable) | checkpoints: WD-CONN-102 | gate: manual/attest (WD-CONN-102 returns MANUAL — operator compares certificate: dates / external SHA-1) | status: pending -->
 
-### 4. Review your Workday configuration
+### 4. Power Platform and agent integration
 
-- [ ] **Review your Workday configuration** — Confirm the extension package, single sign-on, and tenant configuration are all in place, and see which live connection checks remain before your agent can use Workday.
-  <!-- id: DA4.1 | role: Environment Maker | skill: da-4 | automatable: Yes | checkpoints: WD-DA-PKG-001 (reuse) | gate: prog | status: pending -->
+- [ ] **Connect the Workday account** — Create or reconnect the Workday OAuthUser connection with Microsoft Entra ID Integrated sign-in and the captured Workday endpoints.
+  <!-- id: DA4.1 | role: Environment Maker | skill: da-4 | automatable: No | checkpoints: n/a | gate: manual | status: pending -->
+- [ ] **Connect Microsoft Dataverse** — Bind the Workday extension's Dataverse connection reference to an active connection owned by the maker.
+  <!-- id: DA4.2 | role: Environment Maker | skill: da-4 | automatable: No | checkpoints: n/a | gate: manual | status: pending -->
+- [ ] **Share the Workday connection parameters** — Allow the extension to share its connection parameters for on-behalf-of authentication, and repair any stale connection after package or parameter changes.
+  <!-- id: DA4.3 | role: Environment Maker | skill: da-4 | automatable: No | checkpoints: n/a | gate: manual | status: pending -->
+- [ ] **Bind the extension connections** — Confirm the Workday and Dataverse references and required connection parameter configuration point to this environment's connections.
+  <!-- id: DA4.4 | role: Environment Maker | skill: da-4 | automatable: No | checkpoints: n/a | gate: manual | status: pending -->
+- [ ] **Turn on the Workday cloud flows** — Confirm every Workday flow used by the ESS DA HR Agent is enabled.
+  <!-- id: DA4.5 | role: Environment Maker | skill: da-4 | automatable: Attempt | checkpoints: n/a | gate: manual | status: pending -->
+- [ ] **Authorize the agent to use the Workday flows** — Preview and apply the delegated authorization and workflow sharing required by the ESS DA HR Agent.
+  <!-- id: DA4.6 | role: Power Platform Administrator | skill: da-4 | automatable: Yes | checkpoints: authorization script verification | gate: prog | status: pending -->
+- [ ] **Configure employee context and topics** — Use the DA package's V2 signed-in-user context and enable the Workday topics selected for this agent.
+  <!-- id: DA4.7 | role: Environment Maker | skill: da-4 | automatable: Attempt | checkpoints: n/a | gate: manual | status: pending -->
+- [ ] **Allow Workday through the firewall** — Allow the Workday REST and SOAP hosts used by the Power Platform managed connectors.
+  <!-- id: DA4.8 | role: InfoSec/IT | skill: da-4 | automatable: No | checkpoints: n/a | gate: attest | status: pending -->
+
+### 5. Validate Workday readiness
+
+- [ ] **Validate a signed-in Workday scenario** — Run a Workday topic as a signed-in employee and confirm the agent returns real data before marking the environment ready.
+  <!-- id: DA5.1 | role: Environment Maker + Workday test user | skill: da-5 | automatable: No | checkpoints: n/a | gate: manual | status: pending -->
 
 > An item backed by an **attest** or **manual** gate is **never** auto-completed
 > by its checkpoint — it requires an explicit user acknowledgement plus
 > captured evidence (see [`shared/checklist-updater.md`](shared/checklist-updater.md)).
 
-## Deferred to a follow-up
-
-This checklist deliberately stops at "the extension package is installed and
-your Entra/tenant configuration is in place." It does not yet include DA
-checkpoints for binding the Workday connection references (account sign-in,
-Dataverse connection, REST address, cloud flows, firewall allowlisting) the
-way the CEA `setup/workday/tasks.md` skills 5.2–5.8 do — those checks are keyed
-off connection-reference and cloud-flow internals specific to the CEA package
-today, and DA-scoped equivalents don't exist yet. DA-4 tells you this
-explicitly and points you to the full FlightCheck report so nothing is hidden.
+DA-scoped APIs are not available for every Power Platform surface. Those rows
+remain manual or attested rather than being falsely completed by CEA-specific
+checks. The final row requires runtime evidence from a signed-in user.

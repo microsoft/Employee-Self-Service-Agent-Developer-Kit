@@ -70,22 +70,22 @@ def test_not_listed_when_marketplace_catalog_has_no_match(_mock_discover_tenant)
 
 
 @patch("install_workday_da_extension.discover_tenant", return_value="tenant-123")
-def test_skips_install_when_already_installed(_mock_discover_tenant):
+def test_skips_install_when_hr_extension_already_installed(_mock_discover_tenant):
     import install_workday_da_extension as m
 
     powerplatform = FakePowerPlatformClient(
         "tenant-123",
-        packages=[{"uniqueName": "msdyn_essdaitworkday", "state": "Installed"}],
+        packages=[{"uniqueName": "msdyn_essdahrworkday", "state": "Installed"}],
     )
 
     schema = m.install_workday_da_extension(
         "https://org.crm.dynamics.com",
-        "it",
+        "hr",
         pp_admin_client_factory=FakePPAdminClient,
         powerplatform_client_factory=lambda _tenant: powerplatform,
     )
 
-    assert schema == "msdyn_essdaitworkday"
+    assert schema == "msdyn_essdahrworkday"
     assert powerplatform.install_calls == []
 
 
@@ -121,7 +121,7 @@ def test_installs_and_polls_until_installed(_mock_discover_tenant):
 def test_times_out_and_reports_last_status(_mock_discover_tenant):
     import install_workday_da_extension as m
 
-    schema_name = "msdyn_essdaitworkday"
+    schema_name = "msdyn_essdahrworkday"
     powerplatform = FakePowerPlatformClient(
         "tenant-123",
         packages=[
@@ -139,12 +139,27 @@ def test_times_out_and_reports_last_status(_mock_discover_tenant):
     with pytest.raises(m.InstallationTimeoutError, match="10 minutes"):
         m.install_workday_da_extension(
             "https://org.crm.dynamics.com",
-            "it",
+            "hr",
             pp_admin_client_factory=FakePPAdminClient,
             powerplatform_client_factory=lambda _tenant: powerplatform,
             poll_interval_seconds=300,
             sleep=sleep,
             clock=lambda: now[0],
+        )
+
+
+@patch("install_workday_da_extension.discover_tenant", return_value="tenant-123")
+def test_rejects_unsupported_it_vertical(_mock_discover_tenant):
+    import install_workday_da_extension as m
+
+    with pytest.raises(ValueError, match="ESS DA IT Agent is not supported"):
+        m.install_workday_da_extension(
+            "https://org.crm.dynamics.com",
+            "it",
+            pp_admin_client_factory=FakePPAdminClient,
+            powerplatform_client_factory=lambda _tenant: FakePowerPlatformClient(
+                "tenant-123", packages=[]
+            ),
         )
 
 
