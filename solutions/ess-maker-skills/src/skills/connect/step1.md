@@ -8,8 +8,9 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 ## 1.1 — Check what's already connected
 
 Read `.local/config.json` when it exists and resolve `ACTIVE_AGENT_SLUG` from
-`activeAgent`, falling back to `agent.slug`. Use this identity for every
-agent-specific Workday state and validation below.
+`activeAgent`, falling back to `agent.slug`. Resolve the matching active agent
+record and retain its `schemaName` / architecture. Use this identity for every
+agent-specific integration state and validation below.
 
 Build a list of connected integrations (if any):
 
@@ -21,11 +22,10 @@ Build a list of connected integrations (if any):
     orchestrator owns this state), or
   - `.local/connect/workday/agents/{ACTIVE_AGENT_SLUG}/lifecycle.json` exists
     and every phase is `done` (this specific CEA agent was wired to an
-    extension already installed elsewhere — see 1.3 below).
-
-The DA checklist deliberately does not count as "connected" yet. It confirms
-package, Entra, and tenant configuration, but DA-scoped live connection
-binding and agent-path validation are still deferred.
+    extension already installed elsewhere — see 1.3 below), or
+  - the active agent is the ESS DA HR Agent and
+    `.local/connect/workday-da/config.json` has `status: "ready"` with every
+    DA setup row through `DA5.1` in state `done`.
 
 ---
 
@@ -66,6 +66,22 @@ Wait for the user to respond.
 ## 1.3 — Route by selection
 
 ### If the user chose ServiceNow (1 or "servicenow")
+
+Resolve `.local/setup/config.json` `selected_products` and the active agent
+record from `.local/config.json`. If the active agent is a Declarative Agent,
+or the installed inventory contains only `da.*` products, show:
+
+**Message:**
+
+ServiceNow integration with an ESS Declarative Agent isn't supported in this
+release. Please contact your administrator.
+
+**End message.**
+
+Stop immediately. Do not create ServiceNow state or enter the ServiceNow
+lifecycle. If both CEA and DA products exist and no active agent can be
+resolved, ask the maker to select an agent and run `/connect servicenow`
+again; never guess the architecture.
 
 Check if `.local/connect/servicenow/steps.md` exists.
 
@@ -235,20 +251,61 @@ First find out which kind of ESS agent is in this environment. Read
 
   Stop here.
 
-### DA agent
+Resolve the active agent from `.local/config.json` (`activeAgent`, then the
+matching entry in `agents`; fall back to `agent` only for the legacy
+single-agent shape). Route by the resolved active agent's architecture before
+consulting the installed-product inventory:
 
-**If any `selected_products` entry starts with `da.`**, use only the DA path.
-Do not run `WD-PKG-001` or the CEA lifecycle: DA packages share some Workday
-connection-reference names with CEA, so that checkpoint is not an
-architecture discriminator.
+- active `msdyn_copilotforemployeeselfservicedahr` or
+  `msdyn_copilotforemployeeselfservicedait` → use the DA rules below;
+- active CEA agent → skip to **CEA agent** below, even if DA products are also
+  installed.
+
+If no active agent can be resolved, infer the architecture only when every
+selected product belongs to the same architecture. If DA and CEA products are
+both installed, stop and ask the maker to select the intended agent before
+running `/connect workday` again. Never choose an architecture from whichever
+product appears first.
+
+### DA HR agent
+
+Enter this branch only when the active agent is DA or the unresolved inventory
+contains only `da.*` products. Use the active agent's `schemaName` and the
+selected product inventory to determine the DA vertical.
+
+**ESS DA IT is not supported in this release.** If the active agent is
+`msdyn_copilotforemployeeselfservicedait`, or the only selected DA vertical is
+`da.essit`, show:
+
+**Message:**
+
+Workday integration with the ESS IT Agent isn't supported in this release.
+Please contact your administrator.
+
+**End message.**
+
+Stop immediately. Do not create DA Workday state, run a Workday package
+checkpoint, install a package, or enter any DA Workday lifecycle step.
+
+**ESS DA HR is supported.** Continue only when the active agent is
+`msdyn_copilotforemployeeselfservicedahr`, or the selected DA inventory
+unambiguously contains only `da.esshr`. Do not run `WD-PKG-001` or the CEA
+lifecycle: DA packages share some Workday connection-reference names with
+CEA, so that checkpoint is not an architecture discriminator.
+
+If both DA HR and DA IT are installed but the active agent cannot be resolved,
+stop and ask the maker to select the ESS HR Agent before running
+`/connect workday` again. Never guess the vertical.
 
 Read `src/skills/setup/workday-da/SKILL.md` and follow it. That skill runs
-`WD-DA-PKG-001`, installs any missing DA Workday child package, and resumes
-the DA Entra and tenant checklist from live state.
+`WD-DA-PKG-001`, installs or verifies the DA HR Workday child package, and
+resumes the DA HR checklist through Entra, tenant, Power Platform connection,
+bot-to-flow authorization, topic selection, and signed-in runtime validation.
 
 ### CEA agent
 
-**Otherwise, only `cea.*` entries are present.**
+Enter this branch when the resolved active agent is CEA, or when no active
+agent is resolvable and every selected product is `cea.*`.
 
 If `.local/connect/workday/agents/{ACTIVE_AGENT_SLUG}/lifecycle.json` already
 exists, read `src/skills/connect/workday/SKILL.md` and follow it. It

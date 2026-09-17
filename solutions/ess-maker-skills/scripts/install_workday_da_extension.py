@@ -30,7 +30,7 @@ import time
 
 from auth import discover_tenant
 from flightcheck.checks.workday_da import (
-    _DA_WORKDAY_CHILD_SCHEMAS as WORKDAY_DA_CHILD_SCHEMAS,
+    _DA_HR_WORKDAY_CHILD_SCHEMA,
 )
 from flightcheck.powerplatform_client import PowerPlatformClient
 from flightcheck.pp_admin_client import PPAdminClient
@@ -50,7 +50,7 @@ from install_ess_agent import (  # noqa: F401 (re-exported for callers/tests)
     _wait_for_install,
 )
 
-_VERTICAL_LABEL = {"hr": "HR", "it": "IT"}
+WORKDAY_DA_CHILD_SCHEMAS = {"hr": _DA_HR_WORKDAY_CHILD_SCHEMA}
 
 
 class ExtensionNotListedError(RuntimeError):
@@ -91,6 +91,11 @@ def install_workday_da_extension(
     ``RuntimeError`` for other automation problems.
     """
     env_url = env_url.rstrip("/")
+    if vertical != "hr":
+        raise ValueError(
+            "Workday integration with the ESS DA IT Agent is not supported "
+            "in this release."
+        )
     schema_name = WORKDAY_DA_CHILD_SCHEMAS[vertical]
     tenant_id = discover_tenant(env_url)
 
@@ -160,7 +165,7 @@ def main() -> None:
         "--vertical",
         required=True,
         choices=sorted(WORKDAY_DA_CHILD_SCHEMAS),
-        help="DA vertical: hr or it",
+        help="DA vertical (this release supports hr only)",
     )
     args = parser.parse_args()
 

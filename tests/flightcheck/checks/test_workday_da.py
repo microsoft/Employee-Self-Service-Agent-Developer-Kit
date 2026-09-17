@@ -41,8 +41,7 @@ SOLN_SELECT = "solutionid,uniquename,friendlyname,ismanaged,version"
 SOLN_FILTER = (
     "uniquename eq 'msdyn_copilotforemployeeselfservicedahr' or "
     "uniquename eq 'msdyn_copilotforemployeeselfservicedait' or "
-    "uniquename eq 'msdyn_essdahrworkday' or "
-    "uniquename eq 'msdyn_essdaitworkday'"
+    "uniquename eq 'msdyn_essdahrworkday'"
 )
 
 SOLUTION_ID = "22222222-2222-2222-2222-222222222222"
@@ -128,7 +127,7 @@ def test_failed_when_no_da_base_agent(runner: _MinimalRunner) -> None:
     r = results[0]
     assert r.checkpoint_id == "WD-DA-PKG-001"
     assert r.status == "Failed"
-    assert "No DA Employee Self-Service base agent" in r.result
+    assert "No ESS DA HR agent" in r.result
     assert "/setup" in r.remediation
 
 
@@ -147,7 +146,7 @@ def test_failed_when_hr_base_agent_present_but_workday_child_missing(
 
 
 @responses.activate
-def test_failed_when_it_base_agent_present_but_workday_child_missing(
+def test_failed_when_only_it_base_agent_is_present(
     runner: _MinimalRunner,
 ) -> None:
     _register_solutions(solutions=[
@@ -156,7 +155,8 @@ def test_failed_when_it_base_agent_present_but_workday_child_missing(
 
     r = _check_workday_da_package_installed(runner)[0]
     assert r.status == "Failed"
-    assert "IT" in r.result
+    assert "ESS DA IT agent is installed" in r.result
+    assert "not supported" in r.remediation
 
 
 @responses.activate
@@ -175,23 +175,10 @@ def test_passed_when_hr_workday_child_present(runner: _MinimalRunner) -> None:
 
 
 @responses.activate
-def test_passed_when_it_workday_child_present(runner: _MinimalRunner) -> None:
-    _register_solutions(solutions=[
-        _solution_record("msdyn_copilotforemployeeselfservicedait"),
-        _solution_record("msdyn_essdaitworkday"),
-    ])
-
-    r = _check_workday_da_package_installed(runner)[0]
-    assert r.status == "Passed"
-    assert "msdyn_essdaitworkday" in r.result
-    assert "Detected DA base agent editions: IT" in r.result
-
-
-@responses.activate
-def test_failed_lists_already_installed_vertical_when_other_missing(
+def test_it_agent_does_not_block_supported_hr_package(
     runner: _MinimalRunner,
 ) -> None:
-    """Both HR and IT base agents installed; only HR has its Workday child."""
+    """An IT agent in the environment is outside the active HR lifecycle."""
     _register_solutions(solutions=[
         _solution_record("msdyn_copilotforemployeeselfservicedahr"),
         _solution_record("msdyn_copilotforemployeeselfservicedait"),
@@ -199,11 +186,9 @@ def test_failed_lists_already_installed_vertical_when_other_missing(
     ])
 
     r = _check_workday_da_package_installed(runner)[0]
-    assert r.status == "Failed"
-    assert "IT" in r.result
-    assert "Already installed" in r.result
+    assert r.status == "Passed"
+    assert "ESS DA HR agent detected" in r.result
     assert "msdyn_essdahrworkday" in r.result
-    assert "Detected DA base agent editions: HR, IT" in r.result
 
 
 @responses.activate

@@ -60,13 +60,17 @@ Workday routes by architecture before package detection:
     pack, topic) using the master checklist as a resume-aware spine. State:
     `.local/setup/workday/tasks.md` + `setupStatus` in
     `.local/connect/workday/config.json`.
-  - **DA agent** — the **DA Workday connect skill**
-    (`src/skills/setup/workday-da/SKILL.md`). It sequences four steps
-    (extension pack, Entra app, tenant config, configuration review) the same
-    resume-aware way. State: `.local/setup/workday-da/tasks.md` +
-    `setupStatus` in `.local/connect/workday-da/config.json`. This checklist
-    does not claim the DA live connection or agent path is ready; those checks
-    remain deferred until DA-scoped binding and runtime validations exist.
+  - **DA HR agent** — the **DA Workday connect skill**
+    (`src/skills/setup/workday-da/SKILL.md`). It sequences five steps
+    (extension package, Entra app, tenant config, Power Platform/agent
+    integration, and signed-in runtime validation) the same resume-aware way.
+    State: `.local/setup/workday-da/tasks.md` + `setupStatus` in
+    `.local/connect/workday-da/config.json`. DA-scoped settings that cannot be
+    queried reliably remain explicit manual/attestation gates; the provider is
+    not marked ready until a signed-in Workday scenario succeeds.
+  - **DA IT agent** — unsupported for Workday in this release. The router
+    stops before creating state or running any Workday lifecycle step and
+    directs the maker to contact their administrator.
 
   `src/skills/connect/step1.md` reads `.local/setup/config.json`'s
   `selected_products` to choose the correct installation path.

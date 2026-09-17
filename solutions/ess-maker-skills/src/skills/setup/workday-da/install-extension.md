@@ -5,11 +5,11 @@ Every **Message** block is the exact text to show the user. Copy it verbatim. Do
 not rephrase, add commentary, or tell the user what tools you are calling or what
 files you are reading.
 
-This step completes **DA1.1** on the Workday connect checklist. It confirms your
-DA Employee Self-Service base agent is installed, then installs the Workday
+This step completes **DA1.1** on the Workday connect checklist. It confirms the
+DA Employee Self-Service HR base agent is installed, then installs the Workday
 extension package against it — attempting an automated install first and
 falling back to guided manual steps only if this tenant's Marketplace catalog
-doesn't support it.
+doesn't support it. The router must stop DA IT agents before this file is read.
 
 ---
 
@@ -22,23 +22,16 @@ exists, and whether Workday is already installed against it:
 python scripts/flightcheck/cli.py --checkpoint WD-DA-PKG-001
 ```
 
-Read the checkpoint result from `workspace/flightcheck/results.json`. Build
-`TARGET_VERTICALS` from the live `Detected DA base agent editions` value:
+Read the checkpoint result from `workspace/flightcheck/results.json`. The only
+supported target is `hr`. An IT base agent or IT Workday package in the same
+environment is outside this lifecycle and must not affect DA1.1.
 
-- `HR` → `hr`
-- `IT` → `it`
-
-An environment may contain both HR and IT. Treat each target vertical
-independently; DA1.1 completes only when every target has its corresponding
-Workday child package. Do not derive this list from `selected_products`; that
-records setup intent and can differ from the packages currently installed in
-the environment.
-
-- **`PASSED`** → every required Workday extension package is already installed.
-  Show the result, record `verticals` (the `TARGET_VERTICALS` array) into
+- **`PASSED`** → the required HR Workday extension package is already installed.
+  Show the result, record `verticals: ["hr"]` into
   `.local/connect/workday-da/config.json`, and go to **record DA1.1** below.
-- **`FAILED`** with "No DA Employee Self-Service base agent … was found" →
-  your DA base agent isn't installed yet. Stop here — this skill doesn't
+- **`FAILED`** with "No ESS DA HR agent was found in this environment" or
+  "An ESS DA IT agent is installed, but no ESS DA HR agent was found" → the
+  supported HR base agent isn't installed. Stop here — this skill doesn't
   install the base agent.
 
   **Message:**
@@ -52,8 +45,10 @@ the environment.
   Halt this skill entirely — do not proceed to DA-2 or DA-3.
 
 - **`FAILED`** with "The Workday extension package is not installed for the
-  {edition} edition" → the base agent is present but Workday isn't installed
+  ESS DA HR agent" → the HR base agent is present but Workday isn't installed
   yet. Continue to **P1.1**.
+- Any other **`FAILED`** result → show the result and stop. Do not guess
+  whether installation is safe from an unrecognized failure reason.
 - **`WARNING`** (Dataverse call failed, e.g. permissions or a transient error)
   → show the result verbatim and stop; ask the user to resolve the underlying
   issue (commonly a missing Dataverse role) and re-run this step.
@@ -63,18 +58,17 @@ the environment.
 ## P1.1 — Attempt an automated install
 
 ```
-python scripts/install_workday_da_extension.py --url "{ENVIRONMENT_URL}" --vertical "{vertical}"
+python scripts/install_workday_da_extension.py --url "{ENVIRONMENT_URL}" --vertical "hr"
 ```
 
-Run the command once for each target vertical that the checkpoint reported
-missing. `ENVIRONMENT_URL` is the Dataverse endpoint from `.local/config.json`.
+Run the command once. `ENVIRONMENT_URL` is the Dataverse endpoint from
+`.local/config.json`.
 
 Parse the script's JSON marker line:
 
-- **`INSTALLED_WORKDAY_DA_EXTENSION_JSON:`** → that vertical installed (or was
-  already installed and the script confirmed it). Continue with the next
-  missing vertical. After all installs, re-run `--checkpoint WD-DA-PKG-001`;
-  proceed only when it reports `PASSED`.
+- **`INSTALLED_WORKDAY_DA_EXTENSION_JSON:`** → the HR package installed (or was
+  already installed and the script confirmed it). Re-run
+  `--checkpoint WD-DA-PKG-001`; proceed only when it reports `PASSED`.
 - **`WORKDAY_DA_EXTENSION_NOT_LISTED_JSON:`** → this tenant's Marketplace
   catalog doesn't list the Workday extension package for the DA agent, so it
   can't be installed automatically here. This is expected in some tenants —
@@ -108,9 +102,8 @@ installed the base Employee Self-Service agent:
 
 1. Open the [Microsoft 365 admin center](https://admin.microsoft.com) (or
    AppSource, if that's where you installed the base agent).
-2. Find the **Workday extension for Employee Self-Service** package for each
-   missing edition: **{missing editions}**.
-3. Deploy each missing package to this environment.
+2. Find the **Workday extension for Employee Self-Service HR** package.
+3. Deploy the package to this environment.
 4. Wait for the deployment to finish, then tell me it's done and I'll verify
    it.
 
@@ -125,17 +118,15 @@ until it passes. While it is not yet passing, keep DA1.1 `in-progress`.
 
 When `WD-DA-PKG-001` is `PASSED`:
 
-1. Merge `verticals` (array containing every installed target: `hr`, `it`, or
-   both) into `.local/connect/workday-da/config.json` (round-trip merge —
-   never drop other keys). For backward compatibility, also write `vertical`
-   only when exactly one target is present; remove a stale singular
-   `vertical` when both are present.
+1. Merge `verticals: ["hr"]` and `vertical: "hr"` into
+   `.local/connect/workday-da/config.json` (round-trip merge — never drop other
+   keys). Remove any stale `it` entry written by a pre-release version.
 2. Call [`shared/checklist-updater.md`](./shared/checklist-updater.md) with
    `STEP_ID = "DA1.1"`, `CHECKPOINT_RESULT = "PASSED"`, `GATE = "prog"`.
 
 **Message:**
 
-The Workday extension package is installed for **{installed editions}**.
+The Workday extension package is installed for the **ESS HR Agent**.
 
 **End message.**
 

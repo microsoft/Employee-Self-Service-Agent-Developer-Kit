@@ -8,8 +8,9 @@ cite this file so they agree on field names, owners, and types.
 **Canonical data file:** `.local/connect/workday-da/config.json`
 
 Forked from the CEA `setup/shared/config-schema.md`. The field shapes are the
-same; only the file path and the owning steps differ — DA has four steps
-(DA-1 install, DA-2 Entra, DA-3 tenant, DA-4 verify) instead of CEA's six.
+same; only the file path and the owning steps differ — DA has five steps
+(DA-1 install, DA-2 Entra, DA-3 tenant, DA-4 Power Platform integration,
+DA-5 runtime validation).
 
 ---
 
@@ -48,10 +49,11 @@ read by later steps. Unknown/absent fields are treated as `null`.
 | `soapBaseUrl` | string | DA-3 | SOAP base (`https://{services-host}/ccx/service`). |
 | `domainName` | string | DA-3 | Workday domain name, when discovered. |
 | `tenantId` | string | DA-2 | **Entra** tenant ID (GUID) — set during Entra setup. |
-| `installPath` | string | DA-3 | `"simplified"`. |
-| `status` | string | all | `"in-progress"` \| `"configured"`. `"configured"` means the package, Entra, and Workday tenant checklist is complete; it does not claim live DA connection readiness. |
-| `verticals` | array[string] | DA-1 | Every DA base-agent edition with its required Workday child installed: `["hr"]`, `["it"]`, or `["hr", "it"]`. |
-| `vertical` | string | DA-1 | Backward-compatible singular alias, written only when `verticals` has exactly one item. |
+| `installPath` | string | DA-3/DA-4 | `"simplified"`. |
+| `migrationSource` | string | DA-4 | `"legacy-isu-raas"` when upgrading an existing legacy setup; absent for a fresh simplified setup. |
+| `status` | string | all | `"in-progress"` \| `"configured"` \| `"ready"`. `"configured"` means setup values are recorded but runtime is not proven. Only DA-5 sets `"ready"` after a signed-in Workday scenario succeeds. |
+| `verticals` | array[string] | DA-1 | Always `["hr"]` for this release. ESS DA IT is not supported by `/connect workday`. |
+| `vertical` | string | DA-1 | Always `"hr"` for this release. |
 
 ### Entra app + OAuth client (owned by DA-2 / DA-3)
 
@@ -68,7 +70,7 @@ read by later steps. Unknown/absent fields are treated as `null`.
 ### Per-step status fields (owned by each step via the checklist-updater)
 
 Each step records its own checkpoint outcomes under a `setupStatus` object,
-keyed by **Step ID** (`DA1.1` … `DA4.1`) from the DA master checklist. This is
+keyed by **Step ID** (`DA1.1` … `DA5.1`) from the DA master checklist. This is
 the durable record `shared/checklist-updater.md` reads and writes; the
 rendered `.local/setup/workday-da/tasks.md` is the human-readable view of the
 same data.
@@ -94,19 +96,13 @@ same data.
 
 ---
 
-## Deferred (not tracked yet)
+## Power Platform integration state
 
-The DA skill in this iteration does not track the following CEA-equivalent
-fields — they are out of scope until a follow-up extends the connection
-verification beyond installation:
-
-- `soapBaseUrl`/`restBaseUrl` binding verification against the live
-  connection references (CEA's `WD-CONN-AUTH-001`/`WD-REST-001`/`WD-NET-001`
-  equivalents) — DA-4 reports these as guided manual checks, not
-  programmatic ones, until DA-scoped checkpoints exist for the DA extension
-  package's connection references.
-- `ootbTopics` — ready-made Workday topics. Topic installation for DA agents
-  is a separate, later piece of work; this skill does not offer it.
+DA-4 records manual evidence for connection references, parameter sharing,
+binding, flow state, selected topics, and firewall allowlisting until reliable
+DA-scoped APIs are available. It must not reuse CEA checkpoints as proof.
+DA4.6 is the exception: its programmatic evidence comes from the checked-in
+authorization script.
 
 ---
 

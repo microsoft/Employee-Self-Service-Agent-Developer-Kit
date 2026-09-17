@@ -130,7 +130,6 @@ FULL_SCOPE = [
     ("Workday Tenant", run_workday_tenant_checks),
     ("External Systems", run_external_systems_checks),
     ("Workday", run_workday_checks),
-    ("Workday DA", run_workday_da_checks),
     ("Workday Extension", run_workday_extension_checks),
     ("Workday Topics", run_topic_checks),
     ("Graph Connector KB", run_graph_connector_kb_checks),
