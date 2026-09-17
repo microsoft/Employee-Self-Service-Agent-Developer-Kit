@@ -120,6 +120,9 @@ def _check_workday_da_package_installed(runner) -> list[CheckResult]:
         for vertical, parent_schema in _DA_PARENT_SCHEMAS.items()
         if parent_schema in installed_names
     ]
+    installed_labels = ", ".join(
+        _VERTICAL_LABEL[vertical] for vertical in installed_verticals
+    )
 
     if not installed_verticals:
         return [_result(
@@ -150,7 +153,8 @@ def _check_workday_da_package_installed(runner) -> list[CheckResult]:
             Status.FAILED.value,
             f"The Workday extension package is not installed for the "
             f"{missing_labels} edition of your DA Employee Self-Service "
-            f"agent.{installed_summary}",
+            f"agent. Detected DA base agent editions: "
+            f"{installed_labels}.{installed_summary}",
             remediation=(
                 "Open AppSource (or the Microsoft 365 admin center), find "
                 "the Workday extension for Employee Self-Service, and "
@@ -162,6 +166,7 @@ def _check_workday_da_package_installed(runner) -> list[CheckResult]:
 
     return [_result(
         Status.PASSED.value,
+        f"Detected DA base agent editions: {installed_labels}. "
         f"DA Workday extension package installed: {'; '.join(findings)}.",
     )]
 

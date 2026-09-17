@@ -179,7 +179,7 @@ Decide `Status` as follows:
 |--------|-----------|--------------------|
 | `prog` | `CHECKPOINT_RESULT` = `PASSED` | `done` |
 | `prog` | `CHECKPOINT_RESULT` = `FAILED` | `blocked` |
-| `prog` | `CHECKPOINT_RESULT` = `WARNING` / `null` | `in-progress` |
+| `prog` | `CHECKPOINT_RESULT` = `WARNING` / `SKIPPED` / `null` | `in-progress` |
 | `manual` / `attest` | `ACK` = `true` (user acknowledged **and** evidence captured) | `done` |
 | `manual` / `attest` | `ACK` = `false`, regardless of `CHECKPOINT_RESULT` | `in-progress` (or `blocked` if `FAILED`) |
 | `advisory` | the advisory step has been run and its report shown (or attempted and skipped) | `done` |

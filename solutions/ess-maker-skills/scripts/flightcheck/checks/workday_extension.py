@@ -583,10 +583,36 @@ def _check_user_context_redirect(runner) -> list[CheckResult]:
             ),
         )]
 
-    agent_dirs = sorted(
-        d for d in agents_root.iterdir()
-        if d.is_dir() and not d.name.startswith(".")
-    )
+    agent_slug = str(
+        getattr(runner, "agent_slug", "")
+        or config.get("activeAgent")
+        or (config.get("agent") or {}).get("slug")
+        or ""
+    ).strip()
+    if agent_slug:
+        target = agents_root / agent_slug
+        if not target.is_dir():
+            return [CheckResult(roles=_MAKER_ROLES,
+                checkpoint_id="WD-REST-002", category=_CATEGORY,
+                priority=Priority.HIGH.value,
+                status=Status.NOT_CONFIGURED.value,
+                description=_REDIRECT_DESC,
+                result=(
+                    f"No local workspace found for the active agent "
+                    f"'{agent_slug}'."
+                ),
+                remediation=(
+                    "Refresh the active agent with fetch_and_setup, then rerun "
+                    "the checkpoint."
+                ),
+                doc_link=_DOC_SIMPLIFIED,
+            )]
+        agent_dirs = [target]
+    else:
+        agent_dirs = sorted(
+            d for d in agents_root.iterdir()
+            if d.is_dir() and not d.name.startswith(".")
+        )
     topic_files = [
         (d.name, d / "topics" / _USER_CONTEXT_FILE)
         for d in agent_dirs

@@ -206,7 +206,7 @@ in Entra to make sure they match.
 **Verify (WD-CONN-102):**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-CONN-102
+python scripts/flightcheck/cli.py --checkpoint WD-CONN-102 --connect-config ".local/connect/workday-da/config.json"
 ```
 
 `WD-CONN-102` reports the Entra-side certificate health and returns `MANUAL` for
@@ -322,7 +322,7 @@ Now I'll confirm the Workday API client you registered was captured correctly.
 **Verify (WD-API-CLIENT-001):**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-API-CLIENT-001
+python scripts/flightcheck/cli.py --checkpoint WD-API-CLIENT-001 --connect-config ".local/connect/workday-da/config.json"
 ```
 
 This echoes the captured `oauthClientId` / `tokenEndpoint` and restates the
@@ -372,7 +372,7 @@ are in place.
 **Verify (WD-TENANT-001):**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-TENANT-001
+python scripts/flightcheck/cli.py --checkpoint WD-TENANT-001 --connect-config ".local/connect/workday-da/config.json"
 ```
 
 This echoes the captured `tenant` / `restBaseUrl` / `soapBaseUrl` / `appIdUri` and

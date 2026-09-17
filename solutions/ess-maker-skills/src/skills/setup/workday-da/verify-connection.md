@@ -1,11 +1,11 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
-# DA-4 — Verify Your Workday Connection
+# DA-4 — Review Your Workday Configuration
 
 Role: **Environment Maker**. This step reviews everything the earlier steps
 verified, re-confirms the extension package is still installed, and gives an
 honest summary of what this skill does — and does not yet — check about the
-live Workday connection. It owns master-checklist row **DA4.1** (an `advisory`
-row: it completes once shown, regardless of what it finds).
+live Workday connection. It owns master-checklist row **DA4.1** (a
+programmatic row that completes only after the package recheck passes).
 
 Every **Message** block is the exact text to show the user. Copy it verbatim. Do
 not rephrase, add commentary, or tell the user what tools you are calling or what
@@ -13,7 +13,7 @@ files you are reading.
 
 ---
 
-## DA4.1 — Review your Workday connection
+## DA4.1 — Review your Workday configuration
 
 **Re-confirm the extension package.**
 
@@ -23,6 +23,17 @@ python scripts/flightcheck/cli.py --checkpoint WD-DA-PKG-001
 
 Show the result per [`shared/checklist-updater.md`](shared/checklist-updater.md)
 §U.0.
+
+If the current result is not `PASSED`, do not continue from the persisted
+DA1.1 state:
+
+- `FAILED` → update DA1.1 with `GATE="prog"`,
+  `CHECKPOINT_RESULT="FAILED"` so it becomes `blocked`.
+- `WARNING` / `SKIPPED` → update DA1.1 with `GATE="prog"` and that result so
+  it becomes `in-progress`.
+
+Tell the user the package must be restored or reverified, then return to the
+orchestrator. Do not complete DA4.1.
 
 **Summarize the Entra and tenant configuration recorded so far.** Read
 `.local/connect/workday-da/config.json` and render what's known:
@@ -64,19 +75,20 @@ agent can reach Workday:
    under **Connections**.
 2. Try a Workday scenario with your agent (for example, checking a vacation
    balance) and confirm it returns real data.
-3. If it doesn't, run `python scripts/flightcheck/cli.py --scope workdayda` for
-   the full report, or reach out to your Workday administrator to recheck the
-   tenant configuration above.
+3. If it doesn't, run
+   `python scripts/flightcheck/cli.py --scope workdayda --connect-config ".local/connect/workday-da/config.json"`
+   for the DA Workday report, or reach out to your Workday administrator to
+   recheck the tenant configuration above.
 
 **End message.**
 
 Update **DA4.1** via [`shared/checklist-updater.md`](shared/checklist-updater.md)
-with `STEP_ID="DA4.1"`, `GATE="advisory"`, `CHECKPOINT_RESULT` = the
-`WD-DA-PKG-001` result — an advisory row completes once shown, regardless of
-findings.
+with `STEP_ID="DA4.1"`, `GATE="prog"`,
+`CHECKPOINT_RESULT="PASSED"`.
 
 ---
 
 ## Done
 
-Return control to the orchestrator (`SKILL.md`) — every row should now be `done`.
+Return control to the orchestrator (`SKILL.md`) — every configuration row
+should now be `done`.

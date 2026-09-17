@@ -308,7 +308,7 @@ I'll continue automatically once it finishes.
 **End message.**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-CONN-102
+python scripts/flightcheck/cli.py --checkpoint WD-CONN-102 --connect-config ".local/connect/workday-da/config.json"
 ```
 
 `WD-CONN-102` reports the Entra-side signing-certificate health. It returns
@@ -382,7 +382,7 @@ Platform Workday connector is pre-authorized to call it.
 **Verify (WD-ENTRA-SCOPE-001):**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-SCOPE-001
+python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-SCOPE-001 --connect-config ".local/connect/workday-da/config.json"
 ```
 
 - **`PASSED`** → update **DA2.2** via
@@ -429,7 +429,7 @@ permissions.
 **Verify (WD-ENTRA-CONSENT-001):**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-CONSENT-001
+python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-CONSENT-001 --connect-config ".local/connect/workday-da/config.json"
 ```
 
 - **`PASSED`** → update **DA2.3** via
@@ -469,7 +469,7 @@ so, that the right users are assigned.
 **Verify (WD-ASSIGN-001):**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-ASSIGN-001
+python scripts/flightcheck/cli.py --checkpoint WD-ASSIGN-001 --connect-config ".local/connect/workday-da/config.json"
 ```
 
 - **`PASSED`** (assignment satisfied via a group, or not required) → update
@@ -534,7 +534,7 @@ your Workday tenant expects.
 **Verify (WD-ENTRA-NAMEID-001):**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-NAMEID-001
+python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-NAMEID-001 --connect-config ".local/connect/workday-da/config.json"
 ```
 
 - **`PASSED`** (a NameID-overriding policy is assigned) → update **DA2.5** via
@@ -571,7 +571,7 @@ portal, because the kit can't read the setting directly.
 cannot read the setting).
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-SIGNOPT-001
+python scripts/flightcheck/cli.py --checkpoint WD-ENTRA-SIGNOPT-001 --connect-config ".local/connect/workday-da/config.json"
 ```
 
 Present the checkpoint's instructions — its remediation now names the customer's
@@ -617,7 +617,7 @@ linked to the Workday tenant your agent uses.
 **Verify (WD-CONN-010):**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-CONN-010
+python scripts/flightcheck/cli.py --checkpoint WD-CONN-010 --connect-config ".local/connect/workday-da/config.json"
 ```
 
 `WD-CONN-010` summarizes the federated Workday SAML app(s) and their entity IDs.

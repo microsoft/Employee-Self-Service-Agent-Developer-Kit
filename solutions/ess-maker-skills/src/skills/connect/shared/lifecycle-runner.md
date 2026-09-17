@@ -15,10 +15,13 @@ path, or the word "checkpoint"/"contract"/"state file" to the user.
 **Inputs from the calling file:**
 - `PROVIDER` — the provider key (e.g. `"workday"`), matching a contract at
   `src/skills/connect/{PROVIDER}/contract.json`.
+- `AGENT_SLUG` — the active agent's slug from `.local/config.json`
+  (`activeAgent`, falling back to `agent.slug`).
 
 **Files:**
 - **Contract (read-only):** `src/skills/connect/{PROVIDER}/contract.json`
-- **State (read/write):** `.local/connect/{PROVIDER}/lifecycle.json` — shape
+- **State (read/write):**
+  `.local/connect/{PROVIDER}/agents/{AGENT_SLUG}/lifecycle.json` — shape
   defined in `lifecycle-contract-schema.md`.
 
 ---
@@ -28,10 +31,19 @@ path, or the word "checkpoint"/"contract"/"state file" to the user.
 Read `src/skills/connect/{PROVIDER}/contract.json`. If it does not exist,
 **stop and report** — the calling file named a provider with no contract.
 
-Read `.local/connect/{PROVIDER}/lifecycle.json`. If it does not exist, this is
-a first run: initialize it in memory with `attested: false` and every phase
-from the contract at `status: "pending"`, `checkpointResults: {}` — do not
-write it to disk yet (write only after the plan is shown, in L.1).
+If the contract has `connectConfig` and that file exists, add
+`--connect-config "{connectConfig}"` to every FlightCheck command in this
+runner. If it does not exist, omit the argument; do not substitute another
+provider or architecture's state.
+
+If `AGENT_SLUG` is empty, stop and ask the user to run `/setup`; agent-specific
+mutation and validation must never fall back to scanning every local agent.
+
+Read `.local/connect/{PROVIDER}/agents/{AGENT_SLUG}/lifecycle.json`. If it
+does not exist, this is a first run: initialize it in memory with
+`agentSlug: AGENT_SLUG`, `attested: false`, and every phase from the contract
+at `status: "pending"`, `checkpointResults: {}` — do not write it to disk yet
+(write only after the plan is shown, in L.1).
 
 ---
 
@@ -77,9 +89,10 @@ Use the `vscode_askQuestions` tool:
 **If "Not now":** Stop here. Do not write the state file — the next
 invocation should show this same plan again.
 
-**If "Yes, let's go":** Write `.local/connect/{PROVIDER}/lifecycle.json` now
-with `attested: true`, `attestedAt` = current UTC timestamp, and every phase
-at `status: "pending"`. Continue to L.2.
+**If "Yes, let's go":** Write
+`.local/connect/{PROVIDER}/agents/{AGENT_SLUG}/lifecycle.json` now with
+`agentSlug: AGENT_SLUG`, `attested: true`, `attestedAt` = current UTC
+timestamp, and every phase at `status: "pending"`. Continue to L.2.
 
 ---
 
@@ -99,8 +112,8 @@ anything else:
 1. Re-run every checkpoint the phase lists (see L.4's checkpoint-running
    steps — reuse that exact mechanism here, silently, without re-showing the
    up-front plan).
-2. If every checkpoint still resolves to a "counts toward done" outcome (per
-   `lifecycle-contract-schema.md`'s status table), update `lastVerifiedAt` and
+2. If every checkpoint still resolves to a status allowed by that phase's
+   `completionStatuses`, update `lastVerifiedAt` and
    leave the phase `done`. Do **not** re-render the U.0 table for a phase that
    was already `done` and stays `done` on resume — only surface output for
    phases that change state or that are not yet done.
@@ -164,12 +177,18 @@ For each checkpoint ID the current phase lists, run:
 python scripts/flightcheck/cli.py --checkpoint {ID}
 ```
 
+If the contract has `connectConfig` and that file exists, add
+`--connect-config "{connectConfig}"`. For agent-local checkpoints, also add
+`--agent-slug "{AGENT_SLUG}"`. Use the same arguments when re-verifying
+completed phases in L.2.
+
 After each run, render the result using the exact U.0 and U.0a routines from
 `src/skills/setup/shared/checklist-updater.md` (read that file's U.0/U.0a
 sections and apply them verbatim against `workspace/flightcheck/results.json`
 — do not re-implement or paraphrase that rendering logic here).
 
-Aggregate the phase's outcome per the status table in
+Aggregate the phase's outcome using the phase's `completionStatuses`
+(default `["Passed"]`) and the status rules in
 `lifecycle-contract-schema.md`:
 
 - **All checkpoints "count toward done"** (after any needed attestation for
@@ -181,6 +200,22 @@ Aggregate the phase's outcome per the status table in
 - **Any checkpoint `Failed`/`Error`:** set `phases.{id}.status = "blocked"`,
   record `checkpointResults`. Write the state file.
 
+  If this phase has `actionApplied: true`, `rollbackLabel`, and
+  `rollbackPushGlob`, restore and publish the exact pre-action state:
+
+  ```
+  python scripts/checkpoint.py --revert-reason "{rollbackLabel}" --only "{rollbackPushGlob}"
+  python scripts/push.py --only "{rollbackPushGlob}" --dry-run
+  python scripts/push.py --only "{rollbackPushGlob}" --yes
+  ```
+
+  If all three commands succeed, set `actionApplied = false`, keep the phase
+  `in-progress`, record `rolledBackAt` = now, and write the state file. This
+  lets a later invocation re-run the gated action instead of skipping an
+  action that was undone. If any rollback command fails, leave
+  `actionApplied = true`, keep the phase `blocked`, and report that both the
+  phase and rollback need manual attention.
+
   **Message:**
 
   I can't complete this step yet — {plain-language summary of what's
@@ -191,6 +226,10 @@ Aggregate the phase's outcome per the status table in
 
   Stop. Do not attempt later phases.
 
+- **Any status not in `completionStatuses`:** keep the phase
+  `in-progress`, record the result, show its remediation, and stop. Do not
+  describe the provider as connected.
+
 ---
 
 ## L.5 — Completion
@@ -199,7 +238,8 @@ Once every phase is `done`:
 
 **Message:**
 
-{displayName} is connected. Everything I checked is healthy.
+{displayName} is connected to this agent. Every required validation phase in
+the provider plan passed.
 
 **End message.**
 

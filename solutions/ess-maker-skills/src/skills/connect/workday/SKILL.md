@@ -14,10 +14,12 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 ## W.1 — Run the lifecycle
 
 Read `src/skills/connect/shared/lifecycle-runner.md` and follow it with
-`PROVIDER = "workday"`.
+`PROVIDER = "workday"` and `AGENT_SLUG` resolved from `.local/config.json`
+(`activeAgent`, falling back to `agent.slug`).
 
 That file loads `src/skills/connect/workday/contract.json`, resumes any
-in-progress state from `.local/connect/workday/lifecycle.json`, shows the
+in-progress state from
+`.local/connect/workday/agents/{AGENT_SLUG}/lifecycle.json`, shows the
 plan and collects attestation on a first run, live-re-verifies anything
 already recorded done, then runs whichever phase is next — confirming the
 extension and its connections, wiring the agent's Workday topics, and

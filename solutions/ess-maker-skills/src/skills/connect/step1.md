@@ -7,20 +7,25 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 
 ## 1.1 — Check what's already connected
 
+Read `.local/config.json` when it exists and resolve `ACTIVE_AGENT_SLUG` from
+`activeAgent`, falling back to `agent.slug`. Use this identity for every
+agent-specific Workday state and validation below.
+
 Build a list of connected integrations (if any):
 
 - **ServiceNow** — connected if `.local/connect/servicenow/steps.md` exists and
   all items are checked.
-- **Workday** — connected if any of these are true:
+- **Workday** — connected if either:
   - `.local/connect/workday/config.json` exists and its `setupStatus` shows
     every CEA setup row (`S1.1` … `S6.2`) in state `done` (the CEA setup
-    orchestrator owns this state),
-  - `.local/connect/workday-da/config.json` exists and its `setupStatus`
-    shows every DA row (`DA1.1` … `DA4.1`) in state `done` (the DA Workday
-    connect skill owns this state), or
-  - `.local/connect/workday/lifecycle.json` exists and every phase is
-    `done` (this agent was wired to an extension already installed
-    elsewhere — see 1.3 below).
+    orchestrator owns this state), or
+  - `.local/connect/workday/agents/{ACTIVE_AGENT_SLUG}/lifecycle.json` exists
+    and every phase is `done` (this specific CEA agent was wired to an
+    extension already installed elsewhere — see 1.3 below).
+
+The DA checklist deliberately does not count as "connected" yet. It confirms
+package, Entra, and tenant configuration, but DA-scoped live connection
+binding and agent-path validation are still deferred.
 
 ---
 
@@ -213,14 +218,8 @@ Now read `src/skills/connect/servicenow/step1.md` and follow it.
 
 ### If the user chose Workday (2 or "workday")
 
-**If `.local/connect/workday/lifecycle.json` already exists** (this agent was
-previously wired to an already-installed extension via 1.3's second path
-below): read `src/skills/connect/workday/SKILL.md` and follow it. It
-re-verifies everything live before reporting "connected" — it never trusts
-the saved state on its own.
-
-**Otherwise**, first find out which kind of ESS agent is in this environment.
-Read `.local/setup/config.json` and look at
+First find out which kind of ESS agent is in this environment. Read
+`.local/setup/config.json` and look at
 `selected_products` (each entry is one of `da.esshr` / `da.essit` / `da.esshub`
 / `cea.esshr` / `cea.essit` / `cea.esshub`):
 
@@ -236,9 +235,27 @@ Read `.local/setup/config.json` and look at
 
   Stop here.
 
-**Once an ESS agent is confirmed**, check whether a Workday extension already
-exists **anywhere in this environment**, independent of whether this
-particular agent has been set up against it yet:
+### DA agent
+
+**If any `selected_products` entry starts with `da.`**, use only the DA path.
+Do not run `WD-PKG-001` or the CEA lifecycle: DA packages share some Workday
+connection-reference names with CEA, so that checkpoint is not an
+architecture discriminator.
+
+Read `src/skills/setup/workday-da/SKILL.md` and follow it. That skill runs
+`WD-DA-PKG-001`, installs any missing DA Workday child package, and resumes
+the DA Entra and tenant checklist from live state.
+
+### CEA agent
+
+**Otherwise, only `cea.*` entries are present.**
+
+If `.local/connect/workday/agents/{ACTIVE_AGENT_SLUG}/lifecycle.json` already
+exists, read `src/skills/connect/workday/SKILL.md` and follow it. It
+re-verifies the active agent live before reporting "connected."
+
+Otherwise, check whether a CEA Workday extension already exists in this
+environment:
 
 ```
 python scripts/flightcheck/cli.py --checkpoint WD-PKG-001
@@ -250,18 +267,10 @@ install. Read `src/skills/connect/workday/SKILL.md` and follow it; it shows
 the user what it will check before doing anything, and only makes changes
 once they confirm.
 
-**If anything other than `Passed`**, route by the installed agent architecture:
-
-- **Any `selected_products` entry starts with `da.`** — read
-  `src/skills/setup/workday-da/SKILL.md` and follow it. This path installs the
-  Workday extension package, provisions the Workday Entra app, configures the
-  Workday tenant, and verifies the connection. It is resume-aware.
-
-- **Otherwise, only `cea.*` entries are present** — read
-  `src/skills/setup/SKILL.md` and follow it. This path provisions the Power
-  Platform environment, installs the ESS base agent, provisions the Entra app,
-  configures the Workday tenant, installs the extension pack, and verifies the
-  connection. It is resume-aware.
+**If anything other than `Passed`**, read `src/skills/setup/SKILL.md` and
+follow it. This path provisions the Power Platform environment, installs the
+ESS base agent, provisions the Entra app, configures the Workday tenant,
+installs the extension pack, and verifies the connection. It is resume-aware.
 
 ### If the user said something else
 

@@ -81,10 +81,10 @@ express; all items start `pending`.
 - [ ] **Match the signing certificate** — Confirm the Workday-side signing certificate matches the one in Entra (validity dates, or an externally-computed SHA-1 — Workday shows no thumbprint).
   <!-- id: DA3.4 | role: Workday Administrator | skill: da-3 | automatable: No (Workday cert field not API-reachable) | checkpoints: WD-CONN-102 | gate: manual/attest (WD-CONN-102 returns MANUAL — operator compares certificate: dates / external SHA-1) | status: pending -->
 
-### 4. Verify your Workday connection
+### 4. Review your Workday configuration
 
-- [ ] **Review your Workday connection** — Confirm the extension package, single sign-on, and tenant configuration are all in place, and see what's left before your agent can use Workday.
-  <!-- id: DA4.1 | role: Environment Maker | skill: da-4 | automatable: Yes | checkpoints: WD-DA-PKG-001 (reuse) | gate: advisory | status: pending -->
+- [ ] **Review your Workday configuration** — Confirm the extension package, single sign-on, and tenant configuration are all in place, and see which live connection checks remain before your agent can use Workday.
+  <!-- id: DA4.1 | role: Environment Maker | skill: da-4 | automatable: Yes | checkpoints: WD-DA-PKG-001 (reuse) | gate: prog | status: pending -->
 
 > An item backed by an **attest** or **manual** gate is **never** auto-completed
 > by its checkpoint — it requires an explicit user acknowledgement plus

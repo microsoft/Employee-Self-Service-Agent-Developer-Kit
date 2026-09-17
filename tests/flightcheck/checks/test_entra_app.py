@@ -390,6 +390,21 @@ class TestWorkdayHints:
         # entraAppId from runner.config; entraAppObjectId filled from connect.
         assert _workday_hints({"entraAppId": "app-r"}) == ("app-r", "obj-x")
 
+    def test_explicit_overlay_does_not_fall_back_to_cea_config(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        from flightcheck.checks.entra_app import _workday_hints
+
+        self._write_connect_config(
+            tmp_path, {"entraAppId": "cea-app", "entraAppObjectId": "cea-obj"}
+        )
+        monkeypatch.chdir(tmp_path)
+
+        assert _workday_hints({
+            "_connectConfigPath": ".local/connect/workday-da/config.json",
+            "entraAppId": "da-app",
+        }) == ("da-app", "")
+
     def test_missing_connect_config_returns_empty(
         self, tmp_path, monkeypatch
     ) -> None:

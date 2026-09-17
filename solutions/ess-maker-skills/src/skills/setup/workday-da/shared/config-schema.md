@@ -49,8 +49,9 @@ read by later steps. Unknown/absent fields are treated as `null`.
 | `domainName` | string | DA-3 | Workday domain name, when discovered. |
 | `tenantId` | string | DA-2 | **Entra** tenant ID (GUID) — set during Entra setup. |
 | `installPath` | string | DA-3 | `"simplified"`. |
-| `status` | string | all | `"in-progress"` \| `"connected"`. |
-| `vertical` | string | DA-1 | `"hr"` \| `"it"` — which DA base agent edition the Workday extension was installed against (from `WD-DA-PKG-001`). |
+| `status` | string | all | `"in-progress"` \| `"configured"`. `"configured"` means the package, Entra, and Workday tenant checklist is complete; it does not claim live DA connection readiness. |
+| `verticals` | array[string] | DA-1 | Every DA base-agent edition with its required Workday child installed: `["hr"]`, `["it"]`, or `["hr", "it"]`. |
+| `vertical` | string | DA-1 | Backward-compatible singular alias, written only when `verticals` has exactly one item. |
 
 ### Entra app + OAuth client (owned by DA-2 / DA-3)
 
@@ -122,6 +123,7 @@ verification beyond installation:
   "soapBaseUrl": "https://wd2-impl-services1.workday.com/ccx/service",
   "tenantId": "00000000-0000-0000-0000-000000000000",
   "installPath": "simplified",
+  "verticals": ["hr"],
   "vertical": "hr",
   "entraSSO": true,
   "entraAppId": "11111111-1111-1111-1111-111111111111",
