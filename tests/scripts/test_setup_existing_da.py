@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import sys
+from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -283,6 +285,57 @@ def _agent_root(root: Path) -> Path:
     return root / "workspace" / "agents" / "employee-self-service-hr"
 
 
+def _write_flightcheck_results(
+    root: Path,
+    checkpoint: str,
+    *statuses: str,
+) -> Path:
+    path = root / f"{checkpoint.replace('*', 'family')}.json"
+    prefix = checkpoint[:-1] if checkpoint.endswith("*") else checkpoint
+    rows = [
+        {
+            "checkpoint_id": (
+                f"{prefix}{index:03d}"
+                if checkpoint.endswith("*")
+                else checkpoint
+            ),
+            "status": status,
+            "result": f"{checkpoint} returned {status}",
+        }
+        for index, status in enumerate(statuses, start=1)
+    ]
+    path.write_text(
+        json.dumps(
+            {
+                "scope": f"checkpoint:{checkpoint}",
+                "failed": sum(status == "Failed" for status in statuses),
+                "errors": sum(status == "Error" for status in statuses),
+                "results": rows,
+            }
+        ),
+        encoding="utf-8",
+    )
+    return path
+
+
+def _complete_setup_flightchecks(root: Path) -> None:
+    for checkpoint, statuses in (
+        ("DA-AGENT-001", ("Passed",)),
+        ("ENV-CAPACITY-001", ("Passed",)),
+        ("DA-CONN-*", ("Passed", "Warning")),
+        ("DA-CONTENT-001", ("Passed",)),
+    ):
+        setup_existing_da.maintain_setup_flightcheck(
+            root,
+            checkpoint=checkpoint,
+            results_path=_write_flightcheck_results(
+                root,
+                checkpoint,
+                *statuses,
+            ),
+        )
+
+
 def test_target_url_resolves_ids_and_ring() -> None:
     target = setup_existing_da.resolve_da_target(
         target_url=AGENT_URL,
@@ -410,7 +463,7 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
     assert result["status"] == "created"
     assert "unprojectedDialogs" not in result
     assert result["connectionStatus"] == "workspace-ready"
-    assert result["connectReady"] is True
+    assert result["connectReady"] is False
     assert result["projectionVersion"] == 2
     assert result["topicCount"] == 1
     assert result["variableCount"] == 1
@@ -451,21 +504,17 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
         )
     )
     assert setup_state["schema_version"] == 3
-    assert setup_state["connect_ready"] is True
-    assert setup_state["active_step"] == "SETUP-07"
+    assert setup_state["connect_ready"] is False
+    assert setup_state["active_step"] == "SETUP-02.1"
     assert set(setup_state["steps"]) == set(
         setup_existing_da.SETUP_STEP_ORDER
-    )
-    assert all(
-        step["state"] == "done"
-        for step in setup_state["steps"].values()
     )
     assert setup_state["steps"]["SETUP-01"]["mode"] == "automated"
     assert setup_state["steps"]["SETUP-03"]["mode"] == "automated"
     assert setup_state["steps"]["SETUP-07"]["mode"] == "automated"
     for step_id in ("SETUP-02.1", "SETUP-02.2", "SETUP-05", "SETUP-06"):
-        assert setup_state["steps"][step_id]["mode"] == "skipped"
-        assert setup_state["steps"][step_id]["note"]
+        assert setup_state["steps"][step_id]["state"] == "pending"
+        assert setup_state["steps"][step_id]["mode"] is None
     assert setup_state["steps"]["SETUP-04"]["mode"] == "skipped"
     assert "does not apply" in setup_state["steps"]["SETUP-04"]["note"]
     assert setup_state["workspace"]["agent_path"] == "agent.mcs.yml"
@@ -664,7 +713,7 @@ def test_stale_failure_evidence_cleanup_is_non_fatal(
 
     result = _attach(FakeClient(), tmp_path)
 
-    assert result["connectReady"] is True
+    assert result["connectReady"] is False
     assert result["cleanupWarnings"] == [
         "Projection-failure evidence cleanup failed "
         "(OSError: cleanup denied)"
@@ -675,19 +724,25 @@ def test_stale_failure_evidence_cleanup_is_non_fatal(
             encoding="utf-8"
         )
     )
-    assert setup_state["connect_ready"] is True
+    assert setup_state["connect_ready"] is False
 
 
-def test_temporarily_skipped_step_can_be_reopened(
+def test_legacy_skipped_flightcheck_steps_reopen_on_attach(
     tmp_path: Path,
 ) -> None:
     _attach(FakeClient(), tmp_path)
     state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
     state = json.loads(state_path.read_text(encoding="utf-8"))
-    state["steps"]["SETUP-02.1"] = setup_existing_da._step_record()
-    state["active_step"] = "SETUP-02.1"
-    state["connect_ready"] = False
-    state["completed_at"] = None
+    for step_id in setup_existing_da.SETUP_FLIGHTCHECK_STEPS.values():
+        state["steps"][step_id] = setup_existing_da._step_record(
+            "done",
+            mode="skipped",
+            note="Legacy waiver",
+            recorded_at=state["created_at"],
+        )
+    state["active_step"] = "SETUP-07"
+    state["connect_ready"] = True
+    state["completed_at"] = state["created_at"]
     state_path.write_text(json.dumps(state), encoding="utf-8")
 
     result = _attach(FakeClient(), tmp_path)
@@ -695,15 +750,92 @@ def test_temporarily_skipped_step_can_be_reopened(
 
     assert loaded is not None
     assert result["connectReady"] is False
-    assert loaded["steps"]["SETUP-02.1"]["state"] == "pending"
+    for step_id in setup_existing_da.SETUP_FLIGHTCHECK_STEPS.values():
+        assert loaded["steps"][step_id]["state"] == "pending"
     assert loaded["steps"]["SETUP-07"]["state"] == "done"
     assert loaded["active_step"] == "SETUP-02.1"
     assert loaded["connect_ready"] is False
     assert loaded["completed_at"] is None
 
 
+def test_flightcheck_maintenance_completes_setup(tmp_path: Path) -> None:
+    _attach(FakeClient(), tmp_path)
+
+    _complete_setup_flightchecks(tmp_path)
+
+    loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
+    assert loaded is not None
+    assert loaded["connect_ready"] is True
+    assert loaded["completed_at"]
+    assert loaded["steps"]["SETUP-02.1"]["checkpoint"] == "DA-AGENT-001"
+    assert (
+        loaded["steps"]["SETUP-02.2"]["checkpoint"]
+        == "ENV-CAPACITY-001"
+    )
+    assert loaded["steps"]["SETUP-05"]["checkpoint"] == "DA-CONN-*"
+    assert loaded["steps"]["SETUP-06"]["checkpoint"] == "DA-CONTENT-001"
+
+
+def test_setup_rerun_requires_fresh_flightcheck_evidence(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    _complete_setup_flightchecks(tmp_path)
+    stale_results = _write_flightcheck_results(
+        tmp_path,
+        "DA-AGENT-001",
+        "Passed",
+    )
+
+    rerun = _attach(FakeClient(), tmp_path)
+
+    assert rerun["connectReady"] is False
+    loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
+    assert loaded is not None
+    for step_id in setup_existing_da.SETUP_FLIGHTCHECK_STEPS.values():
+        assert loaded["steps"][step_id]["state"] == "pending"
+    stale_time = (
+        datetime.fromisoformat(
+            loaded["steps"]["SETUP-02.1"]["updated_at"]
+        ).timestamp()
+        - 1
+    )
+    os.utime(stale_results, (stale_time, stale_time))
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="predate the current setup maintenance run",
+    ):
+        setup_existing_da.maintain_setup_flightcheck(
+            tmp_path,
+            checkpoint="DA-AGENT-001",
+            results_path=stale_results,
+        )
+
+
+def test_not_configured_connection_blocks_setup(tmp_path: Path) -> None:
+    _attach(FakeClient(), tmp_path)
+
+    result = setup_existing_da.maintain_setup_flightcheck(
+        tmp_path,
+        checkpoint="DA-CONN-*",
+        results_path=_write_flightcheck_results(
+            tmp_path,
+            "DA-CONN-*",
+            "NotConfigured",
+        ),
+    )
+
+    assert result["state"] == "blocked"
+    assert result["connectReady"] is False
+    loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
+    assert loaded is not None
+    assert loaded["steps"]["SETUP-05"]["failure_causes"]
+
+
 def test_connect_ready_rejects_incomplete_steps(tmp_path: Path) -> None:
     _attach(FakeClient(), tmp_path)
+    _complete_setup_flightchecks(tmp_path)
     state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state["steps"]["SETUP-02.1"] = setup_existing_da._step_record()
@@ -719,6 +851,7 @@ def test_connect_ready_rejects_incomplete_steps(tmp_path: Path) -> None:
 
 def test_all_done_steps_require_connect_ready(tmp_path: Path) -> None:
     _attach(FakeClient(), tmp_path)
+    _complete_setup_flightchecks(tmp_path)
     state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
     state = json.loads(state_path.read_text(encoding="utf-8"))
     state["connect_ready"] = False
@@ -915,7 +1048,7 @@ def test_attach_does_not_treat_operational_config_as_setup_completion(
 
     result = _attach(FakeClient(), tmp_path)
 
-    assert result["connectReady"] is True
+    assert result["connectReady"] is False
     config = json.loads(config_path.read_text(encoding="utf-8"))
     assert "transport" not in config
     assert all("transport" not in agent for agent in config["agents"])
@@ -1049,6 +1182,7 @@ def test_parser_exposes_only_composable_setup_operations() -> None:
         "cached-accounts",
         "inspect-agent",
         "list-agents",
+        "maintain-flightcheck",
         "validate-agent",
     }
 
@@ -1063,6 +1197,35 @@ def test_parser_exposes_only_composable_setup_operations() -> None:
         ]
     )
     assert parsed.account == "test.user@example.test"
+
+
+def test_maintain_flightcheck_command_updates_local_state(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        "DA-AGENT-001",
+        "Passed",
+    )
+
+    exit_code = setup_existing_da.main(
+        [
+            "maintain-flightcheck",
+            "--checkpoint",
+            "DA-AGENT-001",
+            "--results",
+            str(results_path),
+            "--kit-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "DA_SETUP_FLIGHTCHECK_JSON:" in output
+    assert '"state": "done"' in output
 
 
 def test_authentication_uses_workspace_cache_and_account_hint(

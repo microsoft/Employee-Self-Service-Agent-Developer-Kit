@@ -186,6 +186,7 @@ For an existing managed workspace, attachment may require explicit
 checkpoint-and-refresh approval. That refresh is local and read-only with
 respect to the imported agent; it does not repeat the package mutation.
 
-Import `kind: success` is not setup completion. Setup is complete only when
-existing-Dev attachment reports both `connectionStatus: workspace-ready` and
-`connectReady: true`.
+Import `kind: success` is not setup completion. After existing-Dev attachment
+reports `connectionStatus: workspace-ready`, setup must refresh the native
+FlightCheck step evidence. Setup is complete only when the final maintained
+FlightCheck result reports `connectReady: true`.

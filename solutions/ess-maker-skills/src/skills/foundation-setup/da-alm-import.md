@@ -68,8 +68,10 @@ python scripts/setup_existing_da.py attach \
 ```
 
 Parse `DA_EXISTING_DEV_SETUP_JSON:`. Treat import `kind: success` only as
-permission to begin attachment. Treat setup as complete only when attachment
-reports `connectionStatus` as `workspace-ready` and `connectReady: true`.
+permission to begin attachment. When attachment reports `connectionStatus` as
+`workspace-ready`, run the native FlightCheck maintenance sequence in
+`da-existing-dev.md`. Treat setup as complete only when its final
+`DA_SETUP_FLIGHTCHECK_JSON:` reports `connectReady: true`.
 
 If attachment reports that the managed workspace changed, use the explicit
 checkpoint-and-refresh choice from `da-existing-dev.md`. A refresh never

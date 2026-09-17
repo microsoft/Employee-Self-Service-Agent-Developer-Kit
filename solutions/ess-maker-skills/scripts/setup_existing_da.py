@@ -62,11 +62,12 @@ SETUP_STEP_NOTES = {
         "setup intent."
     ),
     "SETUP-02.1": (
-        "DA environment FlightCheck is not available in this release."
+        "Native environment and exact editable-agent access verified by "
+        "DA-AGENT-001."
     ),
     "SETUP-02.2": (
-        "DA prerequisite and governance FlightCheck is not available in this "
-        "release."
+        "Copilot Studio message capacity verified by ENV-CAPACITY-001. "
+        "Non-queryable governance prerequisites remain maker-owned."
     ),
     "SETUP-03": (
         "Confirms the environment, native ALM family, and editable Dev agent."
@@ -76,23 +77,22 @@ SETUP_STEP_NOTES = {
         "foundation path."
     ),
     "SETUP-05": (
-        "DA product installation and binding evidence is deferred to the MOS "
-        "setup workstream."
+        "Native logical connection references checked against environment "
+        "connections by DA-CONN-*."
     ),
     "SETUP-06": (
-        "DA baseline agent-readiness evidence is deferred to the MOS setup "
-        "workstream."
+        "Exact native agent content footprint verified by DA-CONTENT-001."
     ),
     "SETUP-07": (
         "Confirms workspace materialization and that integration "
         "configuration can begin safely."
     ),
 }
-SETUP_TEMPORARILY_SKIPPED_STEPS = {
-    "SETUP-02.1",
-    "SETUP-02.2",
-    "SETUP-05",
-    "SETUP-06",
+SETUP_FLIGHTCHECK_STEPS = {
+    "DA-AGENT-001": "SETUP-02.1",
+    "ENV-CAPACITY-001": "SETUP-02.2",
+    "DA-CONN-*": "SETUP-05",
+    "DA-CONTENT-001": "SETUP-06",
 }
 SETUP_PERMANENTLY_SKIPPED_STEPS = {"SETUP-04"}
 SUPPORTED_SETUP_SOURCES = {
@@ -528,12 +528,13 @@ def _step_record(
     note: str | None = None,
     recorded_at: str | None = None,
     failure_causes: list[str] | None = None,
+    checkpoint: str | None = None,
 ) -> dict[str, Any]:
     return {
         "state": state,
         "updated_at": recorded_at,
         "failure_causes": failure_causes or [],
-        "checkpoint": None,
+        "checkpoint": checkpoint,
         "note": note,
         "mode": mode,
         "recorded_at": recorded_at,
@@ -571,6 +572,16 @@ def _migrate_legacy_completed_setup_state(
 
     recorded_at = str(state["completed_at"])
     steps = _setup_steps_in_progress(recorded_at)
+    for step_id in SETUP_FLIGHTCHECK_STEPS.values():
+        steps[step_id] = _step_record(
+            "done",
+            mode="skipped",
+            note=(
+                "Native FlightCheck evidence was not captured by this legacy "
+                "setup. The next setup rerun will refresh it."
+            ),
+            recorded_at=recorded_at,
+        )
     steps["SETUP-07"] = _step_record(
         "done",
         mode="automated",
@@ -638,10 +649,17 @@ def _setup_steps_in_progress(now: str) -> dict[str, dict[str, Any]]:
             note=SETUP_STEP_NOTES[step_id],
             recorded_at=now,
         )
-    for step_id in (
-        *sorted(SETUP_TEMPORARILY_SKIPPED_STEPS),
-        *sorted(SETUP_PERMANENTLY_SKIPPED_STEPS),
-    ):
+    for step_id in SETUP_FLIGHTCHECK_STEPS.values():
+        steps[step_id] = _step_record(
+            "done",
+            mode="skipped",
+            note=(
+                "Native FlightCheck maintenance starts after workspace "
+                "materialization."
+            ),
+            recorded_at=now,
+        )
+    for step_id in sorted(SETUP_PERMANENTLY_SKIPPED_STEPS):
         steps[step_id] = _step_record(
             "done",
             mode="skipped",
@@ -655,9 +673,20 @@ def _setup_steps_in_progress(now: str) -> dict[str, dict[str, Any]]:
     return steps
 
 
+def _begin_flightcheck_maintenance(
+    steps: dict[str, dict[str, Any]],
+    now: str,
+) -> None:
+    """Require fresh setup-owned FlightCheck evidence after every attachment."""
+    for step_id in SETUP_FLIGHTCHECK_STEPS.values():
+        steps[step_id] = _step_record(recorded_at=now)
+
+
 def _build_canonical_setup_progress(
     connection: dict[str, Any],
     existing: dict[str, Any] | None,
+    *,
+    reopen_flightchecks: bool,
 ) -> dict[str, Any]:
     now = _utc_now()
     steps = (
@@ -665,6 +694,8 @@ def _build_canonical_setup_progress(
         if existing
         else _setup_steps_in_progress(now)
     )
+    if reopen_flightchecks:
+        _begin_flightcheck_maintenance(steps, now)
     if all(
         steps[step_id]["state"] == "done"
         for step_id in SETUP_STEP_ORDER[:-1]
@@ -710,12 +741,150 @@ def _build_canonical_setup_progress(
     return state
 
 
+def _matching_flightcheck_rows(
+    checkpoint: str,
+    results: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    if checkpoint.endswith("*"):
+        prefix = checkpoint[:-1]
+        return [
+            row
+            for row in results
+            if str(row.get("checkpoint_id") or "").startswith(prefix)
+        ]
+    return [
+        row
+        for row in results
+        if row.get("checkpoint_id") == checkpoint
+    ]
+
+
+def maintain_setup_flightcheck(
+    kit_root: Path,
+    *,
+    checkpoint: str,
+    results_path: Path,
+) -> dict[str, Any]:
+    """Persist one supported FlightCheck result into canonical setup state."""
+    step_id = SETUP_FLIGHTCHECK_STEPS.get(checkpoint)
+    if step_id is None:
+        raise ExistingDASetupError(
+            f"Unsupported setup FlightCheck checkpoint: {checkpoint}"
+        )
+    state = _load_canonical_setup_state(kit_root)
+    if state is None:
+        raise ExistingDASetupError(
+            "Canonical DA setup state is unavailable. Attach the agent first."
+        )
+    try:
+        payload = _load_json(results_path)
+    except (OSError, ValueError) as exc:
+        raise ExistingDASetupError(
+            "FlightCheck results could not be read."
+        ) from exc
+    if not isinstance(payload, dict):
+        raise ExistingDASetupError(
+            "FlightCheck results have an invalid document shape."
+        )
+    if payload.get("scope") != f"checkpoint:{checkpoint}":
+        raise ExistingDASetupError(
+            f"FlightCheck results do not belong to {checkpoint}."
+        )
+    step_updated_at = state["steps"][step_id].get("updated_at")
+    if not isinstance(step_updated_at, str):
+        raise ExistingDASetupError(
+            f"Setup step {step_id} is not ready for FlightCheck maintenance."
+        )
+    try:
+        step_started = datetime.fromisoformat(step_updated_at).timestamp()
+        results_modified = results_path.stat().st_mtime
+    except (OSError, ValueError) as exc:
+        raise ExistingDASetupError(
+            "FlightCheck result freshness could not be verified."
+        ) from exc
+    if results_modified < step_started:
+        raise ExistingDASetupError(
+            "FlightCheck results predate the current setup maintenance run."
+        )
+    rows = payload.get("results")
+    if not isinstance(rows, list) or not all(
+        isinstance(row, dict) for row in rows
+    ):
+        raise ExistingDASetupError(
+            "FlightCheck results have an invalid result-row shape."
+        )
+    matching = _matching_flightcheck_rows(checkpoint, rows)
+    if not matching:
+        raise ExistingDASetupError(
+            f"FlightCheck results contain no rows for {checkpoint}."
+        )
+
+    statuses = {
+        str(row.get("status") or "")
+        for row in matching
+    }
+    run_blocked = (
+        payload.get("failed") != 0
+        or payload.get("errors") != 0
+    )
+    if checkpoint == "DA-CONN-*":
+        complete = (
+            not run_blocked
+            and bool(statuses)
+            and statuses <= {"Passed", "Warning", "Skipped"}
+        )
+    else:
+        complete = not run_blocked and statuses == {"Passed"}
+
+    now = _utc_now()
+    if complete:
+        state["steps"][step_id] = _step_record(
+            "done",
+            mode="automated",
+            note=SETUP_STEP_NOTES[step_id],
+            recorded_at=now,
+            checkpoint=checkpoint,
+        )
+    else:
+        causes = [
+            str(row.get("result") or row.get("status") or "FlightCheck failed")
+            for row in matching
+            if str(row.get("status") or "") != "Passed"
+        ]
+        state["steps"][step_id] = _step_record(
+            "blocked",
+            recorded_at=now,
+            failure_causes=causes,
+            checkpoint=checkpoint,
+        )
+
+    state["active_step"] = _next_setup_step(state["steps"])
+    state["connect_ready"] = all(
+        state["steps"][candidate]["state"] == "done"
+        for candidate in SETUP_STEP_ORDER
+    )
+    state["updated_at"] = now
+    state["completed_at"] = now if state["connect_ready"] else None
+    _write_json(kit_root / CANONICAL_SETUP_STATE, state)
+    return {
+        "checkpoint": checkpoint,
+        "step": step_id,
+        "state": state["steps"][step_id]["state"],
+        "connectReady": state["connect_ready"],
+        "activeStep": state["active_step"],
+    }
+
+
 def _record_canonical_setup_progress(
     kit_root: Path,
     connection: dict[str, Any],
     existing: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    state = _build_canonical_setup_progress(connection, existing)
+    state = _build_canonical_setup_progress(
+        connection,
+        existing,
+        reopen_flightchecks=False,
+    )
     _write_json(kit_root / CANONICAL_SETUP_STATE, state)
     return state
 
@@ -790,7 +959,11 @@ def _record_canonical_setup_ready(
             "Canonical setup state identifies a different environment or "
             "agent. Open a new workspace before changing the setup target."
         )
-    state = _build_canonical_setup_progress(connection, existing)
+    state = _build_canonical_setup_progress(
+        connection,
+        existing,
+        reopen_flightchecks=True,
+    )
     now = _utc_now()
     state["workspace"] = {
         "folder": workspace["folder"],
@@ -1858,6 +2031,26 @@ def build_parser() -> argparse.ArgumentParser:
         help="List cached AgentBuilder sign-in names without authenticating.",
     )
     cached_accounts.add_argument("--kit-root", type=Path, default=Path.cwd())
+    maintain_flightcheck = commands.add_parser(
+        "maintain-flightcheck",
+        help="Apply one native FlightCheck result to canonical setup state.",
+    )
+    maintain_flightcheck.add_argument(
+        "--checkpoint",
+        choices=tuple(SETUP_FLIGHTCHECK_STEPS),
+        required=True,
+    )
+    maintain_flightcheck.add_argument(
+        "--results",
+        type=Path,
+        required=True,
+        help="Path to the FlightCheck results.json file.",
+    )
+    maintain_flightcheck.add_argument(
+        "--kit-root",
+        type=Path,
+        default=Path.cwd(),
+    )
     list_agents = commands.add_parser(
         "list-agents",
         help="List directly discoverable AgentBuilder agents.",
@@ -1965,6 +2158,21 @@ def main(argv: list[str] | None = None) -> int:
                 f"{json.dumps(result, ensure_ascii=True)}"
             )
             return 0
+        if args.command == "maintain-flightcheck":
+            kit_root = args.kit_root.resolve()
+            results_path = args.results
+            if not results_path.is_absolute():
+                results_path = kit_root / results_path
+            result = maintain_setup_flightcheck(
+                kit_root,
+                checkpoint=args.checkpoint,
+                results_path=results_path,
+            )
+            print(
+                "DA_SETUP_FLIGHTCHECK_JSON:"
+                f"{json.dumps(result, ensure_ascii=True)}"
+            )
+            return 0 if result["state"] == "done" else 1
         target = resolve_da_target(
             target_url=args.target_url,
             environment_id=args.environment_id,

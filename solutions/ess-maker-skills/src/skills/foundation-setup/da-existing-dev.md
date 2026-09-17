@@ -40,7 +40,7 @@ The access token supplies the tenant identity; do not infer it from the environm
 
 Recognized Copilot Studio hostnames select `prod`, `preprod`, or `test`. Other target text defaults to `prod`; use an explicit non-production `--ring` only when the supplied target does not identify its ring.
 
-The command validates the exact agent identity and Dev configuration, fetches the authoritative component change set, converts supported authoring components with the Microsoft Object Model serializer, and materializes the local workspace. It persists canonical setup progress with an atomic file write before materialization and records `connect_ready: true` only after the workspace and operational configuration are complete.
+The command validates the exact agent identity and Dev configuration, fetches the authoritative component change set, converts supported authoring components with the Microsoft Object Model serializer, and materializes the local workspace. It persists canonical setup progress with an atomic file write before materialization. Complete the native FlightCheck maintenance below before treating `connect_ready: true` as current.
 
 If Object Model dependencies are missing, run:
 
@@ -73,11 +73,37 @@ python scripts/setup_existing_da.py list-agents \
 
 Show candidate display names and ask the maker to choose one. Validate only the selected candidate through `validate-agent` or `attach`. A missing list entry is not proof that a directly addressable agent is absent; accept a known agent ID and validate it directly.
 
+## Maintain native FlightCheck evidence
+
+After every successful `attach` or unchanged existing-workspace resume, run all four setup-owned FlightChecks. This includes workspaces whose canonical state was completed previously: the first rerun replaces the former skipped records with current evidence.
+
+Run each checkpoint into its dedicated local evidence folder:
+
+```text
+python scripts/flightcheck/cli.py --checkpoint DA-AGENT-001 --quiet-auth --no-open --output .local/setup/flightcheck/DA-AGENT-001
+python scripts/flightcheck/cli.py --checkpoint ENV-CAPACITY-001 --quiet-auth --no-open --output .local/setup/flightcheck/ENV-CAPACITY-001
+python scripts/flightcheck/cli.py --checkpoint "DA-CONN-*" --quiet-auth --no-open --output .local/setup/flightcheck/DA-CONN
+python scripts/flightcheck/cli.py --checkpoint DA-CONTENT-001 --quiet-auth --no-open --output .local/setup/flightcheck/DA-CONTENT-001
+```
+
+After each run, even when that FlightCheck exits nonzero, apply its result to canonical setup state:
+
+```text
+python scripts/setup_existing_da.py maintain-flightcheck --checkpoint DA-AGENT-001 --results .local/setup/flightcheck/DA-AGENT-001/results.json
+python scripts/setup_existing_da.py maintain-flightcheck --checkpoint ENV-CAPACITY-001 --results .local/setup/flightcheck/ENV-CAPACITY-001/results.json
+python scripts/setup_existing_da.py maintain-flightcheck --checkpoint "DA-CONN-*" --results .local/setup/flightcheck/DA-CONN/results.json
+python scripts/setup_existing_da.py maintain-flightcheck --checkpoint DA-CONTENT-001 --results .local/setup/flightcheck/DA-CONTENT-001/results.json
+```
+
+Parse every `DA_SETUP_FLIGHTCHECK_JSON:` result. A blocked result keeps setup incomplete. Show the corresponding FlightCheck result and remediation in maker language; do not edit canonical state or convert the result to an attestation. `DA-CONN-*` warnings are recorded as complete with their disclaimer, including an unavailable exact logical-to-physical mapping. `NotConfigured`, `Failed`, and `Error` connection results block the binding step. A skipped `DA-CONN-*` result is complete only when the agent declares no native logical connection references.
+
+`ENV-CAPACITY-001` remains a programmatic gate. Non-queryable governance prerequisites are outside this read-only check; disclose that limitation without treating it as a setup policy or a downstream `/connect` deferral.
+
 ## Interpret results
 
-Treat setup as complete only when `DA_EXISTING_DEV_SETUP_JSON:` reports both `connectionStatus: workspace-ready` and `connectReady: true`.
+Treat setup as complete only when attachment reports `connectionStatus: workspace-ready` and the final `DA_SETUP_FLIGHTCHECK_JSON:` reports `connectReady: true`.
 
-Canonical state tracks eight foundation records. Checks outside DA foundation setup are recorded with `mode: "skipped"` and a specific reason. Treat those records as explicit waivers, not evidence that a check ran. Preferred-solution configuration does not apply to the DA-only path. Environment FlightCheck, product installation, binding, and product-readiness evidence belong to their owning product setup capabilities.
+Canonical state records native environment access, capacity, binding readiness, and baseline content readiness as automated FlightCheck evidence. Only preferred-solution configuration remains skipped because it does not apply to the DA-only path.
 
 If setup stops after canonical progress is written, inspect `active_step`, that step's state, and its `failure_causes`. Preserve those facts as diagnostic evidence, but translate them into maker language: `SETUP-03` maps to **Establish an editable Dev agent** and `SETUP-07` maps to **Materialize the local workspace**. Explain a specific unmet prerequisite plainly without showing an internal step ID or raw technical output. Rerun only the bounded operation selected by the maker. Do not edit canonical setup state by hand or claim readiness while `connect_ready` is false.
 
