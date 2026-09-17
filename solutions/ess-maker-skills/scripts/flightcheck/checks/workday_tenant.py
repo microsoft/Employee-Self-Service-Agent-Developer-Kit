@@ -24,9 +24,9 @@ Design invariants (per ``scripts/flightcheck/AGENTS.md``):
     reach, and standing up a Workday connection to self-verify would be
     circular (it needs the same Entra-app + tenant config the ESS agent
     itself needs). So both checkpoints emit MANUAL attestations — they echo
-    whatever the operator captured into ``.local/connect/workday/config.json``
-    and name the exact Workday admin screen to verify. A MANUAL row never
-    fails readiness and never auto-completes an attest row.
+    whatever the operator captured into the provider config explicitly merged
+    into ``runner.config`` and name the exact Workday admin screen to verify.
+    A MANUAL row never fails readiness and never auto-completes an attest row.
   * **Never raise** — the dispatcher wraps every emitter so an unexpected
     failure degrades to a WARNING for that checkpoint instead of aborting
     the whole run.
@@ -125,7 +125,7 @@ def _check_api_client(config) -> list[CheckResult]:
     else:
         result = (
             "Workday admin task — no Workday API client has been captured yet "
-            "(oauthClientId is empty in .local/connect/workday/config.json). "
+            "(oauthClientId is empty in the active Workday connect config). "
             "Register the API client and capture its Client ID and Token "
             "Endpoint from the 'View API Client' screen before this row can "
             "be attested."

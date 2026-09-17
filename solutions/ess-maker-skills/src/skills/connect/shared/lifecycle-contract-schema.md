@@ -11,7 +11,8 @@ agent. The runner itself contains no integration-specific logic — it only
 reads a contract, runs the checkpoints it names, and renders results.
 
 **Canonical contract file:** `src/skills/connect/{provider}/contract.json`
-**Canonical state file (per agent):** `.local/connect/{provider}/lifecycle.json`
+**Canonical state file (per agent):**
+`.local/connect/{provider}/agents/{agentSlug}/lifecycle.json`
 
 ---
 
@@ -44,9 +45,11 @@ reads a contract, runs the checkpoints it names, and renders results.
 
 | Field | Type | Required | Notes |
 |-------|------|----------|-------|
+| `connectConfig` | string | no | Provider-specific config JSON to pass to FlightCheck as `--connect-config`. Use this when provider state intentionally lives outside `.local/config.json`; the explicit file prevents architecture-specific state from being guessed or merged. |
 | `id` | string | yes | Stable, internal only — never shown to the user. |
 | `label` | string | yes | Plain-language description shown in the up-front plan and the resume checklist (e.g. `"Confirm the Workday extension and its connections are healthy"`). No internal IDs, checkpoint names, or file paths. |
-| `checkpoints` | array of strings | yes | One or more FlightCheck checkpoint IDs (or family wildcards, e.g. `"WD-FLOW-*"`) that gate this phase. The phase is `done` only when every listed checkpoint reports `Passed`, `Manual` (after attestation), `NotConfigured`, or `Skipped` — see "Phase status rules" below. |
+| `checkpoints` | array of strings | yes | One or more FlightCheck checkpoint IDs (or family wildcards, e.g. `"WD-FLOW-*"`) that gate this phase. The phase is `done` only when every listed checkpoint returns a status allowed by `completionStatuses`. |
+| `completionStatuses` | array of strings | no | Statuses allowed to complete this phase. Defaults to `["Passed"]`. Add `Manual`, `Warning`, `NotConfigured`, or `Skipped` only when that outcome is genuinely sufficient for this specific phase; acknowledgement alone must not turn missing evidence into a healthy result. |
 | `mutates` | boolean | no (default `false`) | `true` if completing this phase changes the live agent (edits a file, pushes a change). Drives the role gate below. |
 | `requiredRole` | string | required when `mutates` is `true` | Human-readable role name passed to `permission-gate.md` as `REQUIRED_ROLE` before the phase's action runs. |
 | `gateMode` | string | no (default `"attested"`) | `"programmatic"` or `"attested"` — passed to `permission-gate.md` as `GATE_MODE`. Use `"programmatic"` only when `roleQuery` names a real, working query. |
@@ -54,6 +57,7 @@ reads a contract, runs the checkpoints it names, and renders results.
 | `roleQueryPassNames` | array of strings | required when `gateMode` is `"programmatic"` | Role names in the query's result that count as holding `requiredRole` (include the role itself and any role that supersedes it, e.g. `System Administrator`). |
 | `actionDoc` | string (path) | required when `mutates` is `true` | Path to a provider-owned markdown fragment containing the bespoke steps needed to make the phase's checkpoint(s) pass (e.g. editing a topic file and pushing it). The runner reads and follows this file; it contains its own Message blocks and is written by the provider, not the runner. |
 | `rollbackLabel` | string | no | Passed to `scripts/checkpoint.py` before a mutating action runs, so the operator has a named restore point. |
+| `rollbackPushGlob` | string | no | Required with `rollbackLabel` when the action pushes a local file. The runner restores only this path from the named checkpoint and uses the same exact `push.py --only` glob when publishing the rollback. |
 
 ### Evolving a phase's checkpoint list
 
@@ -78,14 +82,15 @@ this schema does not invent a parallel status vocabulary:
 | Checkpoint status | Phase effect |
 |---|---|
 | `Passed` | Counts toward `done`. |
-| `Manual` | Counts toward `done` only after the user explicitly attests (same rule as `checklist-updater.md`'s U.2 — a `Manual` result is never auto-completed). |
-| `NotConfigured` / `Skipped` | Counts toward `done` — nothing to fix, does not block. |
-| `Warning` | Counts toward `done` only after the user is shown the warning and chooses to continue (never silently ignored). |
+| `Manual` | Counts toward `done` only when listed in `completionStatuses` and the user explicitly attests. |
+| `NotConfigured` / `Skipped` | Counts toward `done` only when explicitly listed in `completionStatuses`. |
+| `Warning` | Counts toward `done` only when explicitly listed in `completionStatuses` and the user chooses to continue. |
 | `Failed` / `Error` | Blocks the phase. The runner shows the remediation and stops advancing; the user retries after fixing it, or exits and resumes later. |
 
-A phase is `done` only when **every** checkpoint it lists resolves to one of
-the "counts toward done" outcomes above. Partial results leave the phase
-`in-progress`.
+A phase is `done` only when **every** checkpoint's current status appears in
+that phase's `completionStatuses` (default `Passed`) and any required
+acknowledgement is complete. Partial or unavailable evidence leaves the phase
+`in-progress`; `Failed`/`Error` blocks it.
 
 ---
 
@@ -94,6 +99,7 @@ the "counts toward done" outcomes above. Partial results leave the phase
 ```json
 {
   "provider": "workday",
+  "agentSlug": "employee-self-service-hr",
   "attested": true,
   "attestedAt": "2026-09-15T14:02:00Z",
   "currentPhase": "agent-wiring",
@@ -123,6 +129,10 @@ the "counts toward done" outcomes above. Partial results leave the phase
 - `phases.{id}.actionApplied` — mutating phases only; `true` once the
   action doc has been followed at least once (so a resume doesn't re-apply an
   idempotent-unsafe action; it re-verifies instead).
+
+The `agentSlug` and state-file path are mandatory isolation boundaries. A
+provider may be connected to multiple agents in one workspace; no agent may
+reuse another agent's progress or checkpoint results.
 
 ---
 

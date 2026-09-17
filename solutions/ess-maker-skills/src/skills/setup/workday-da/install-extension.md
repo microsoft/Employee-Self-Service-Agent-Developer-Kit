@@ -22,8 +22,20 @@ exists, and whether Workday is already installed against it:
 python scripts/flightcheck/cli.py --checkpoint WD-DA-PKG-001
 ```
 
-- **`PASSED`** → the Workday extension package is already installed. Show the
-  result, record `vertical` (`hr`/`it`, from the check's finding) into
+Read the checkpoint result from `workspace/flightcheck/results.json`. Build
+`TARGET_VERTICALS` from the live `Detected DA base agent editions` value:
+
+- `HR` → `hr`
+- `IT` → `it`
+
+An environment may contain both HR and IT. Treat each target vertical
+independently; DA1.1 completes only when every target has its corresponding
+Workday child package. Do not derive this list from `selected_products`; that
+records setup intent and can differ from the packages currently installed in
+the environment.
+
+- **`PASSED`** → every required Workday extension package is already installed.
+  Show the result, record `verticals` (the `TARGET_VERTICALS` array) into
   `.local/connect/workday-da/config.json`, and go to **record DA1.1** below.
 - **`FAILED`** with "No DA Employee Self-Service base agent … was found" →
   your DA base agent isn't installed yet. Stop here — this skill doesn't
@@ -51,19 +63,18 @@ python scripts/flightcheck/cli.py --checkpoint WD-DA-PKG-001
 ## P1.1 — Attempt an automated install
 
 ```
-python scripts/install_workday_da_extension.py --url "{ENVIRONMENT_URL}" --vertical "{hr|it}"
+python scripts/install_workday_da_extension.py --url "{ENVIRONMENT_URL}" --vertical "{vertical}"
 ```
 
-Use the `vertical` the check just reported (whichever DA base agent edition —
-HR or IT — is installed). `ENVIRONMENT_URL` is the Dataverse endpoint from
-`.local/config.json`.
+Run the command once for each target vertical that the checkpoint reported
+missing. `ENVIRONMENT_URL` is the Dataverse endpoint from `.local/config.json`.
 
 Parse the script's JSON marker line:
 
-- **`INSTALLED_WORKDAY_DA_EXTENSION_JSON:`** → the extension installed (or was
-  already installed and the script confirmed it). Re-run
-  `--checkpoint WD-DA-PKG-001` to confirm it now reports `PASSED`, then go to
-  **record DA1.1**.
+- **`INSTALLED_WORKDAY_DA_EXTENSION_JSON:`** → that vertical installed (or was
+  already installed and the script confirmed it). Continue with the next
+  missing vertical. After all installs, re-run `--checkpoint WD-DA-PKG-001`;
+  proceed only when it reports `PASSED`.
 - **`WORKDAY_DA_EXTENSION_NOT_LISTED_JSON:`** → this tenant's Marketplace
   catalog doesn't list the Workday extension package for the DA agent, so it
   can't be installed automatically here. This is expected in some tenants —
@@ -97,9 +108,9 @@ installed the base Employee Self-Service agent:
 
 1. Open the [Microsoft 365 admin center](https://admin.microsoft.com) (or
    AppSource, if that's where you installed the base agent).
-2. Find the **Workday extension for Employee Self-Service** package for the
-   **{edition}** edition of your agent.
-3. Deploy it to this environment.
+2. Find the **Workday extension for Employee Self-Service** package for each
+   missing edition: **{missing editions}**.
+3. Deploy each missing package to this environment.
 4. Wait for the deployment to finish, then tell me it's done and I'll verify
    it.
 
@@ -114,15 +125,17 @@ until it passes. While it is not yet passing, keep DA1.1 `in-progress`.
 
 When `WD-DA-PKG-001` is `PASSED`:
 
-1. Merge `vertical` (`hr`/`it`) into `.local/connect/workday-da/config.json`
-   (round-trip merge — never drop other keys).
+1. Merge `verticals` (array containing every installed target: `hr`, `it`, or
+   both) into `.local/connect/workday-da/config.json` (round-trip merge —
+   never drop other keys). For backward compatibility, also write `vertical`
+   only when exactly one target is present; remove a stale singular
+   `vertical` when both are present.
 2. Call [`shared/checklist-updater.md`](./shared/checklist-updater.md) with
    `STEP_ID = "DA1.1"`, `CHECKPOINT_RESULT = "PASSED"`, `GATE = "prog"`.
 
 **Message:**
 
-The Workday extension package is installed for the **{edition}** edition of
-your agent.
+The Workday extension package is installed for **{installed editions}**.
 
 **End message.**
 

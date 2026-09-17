@@ -184,6 +184,7 @@ def test_passed_when_it_workday_child_present(runner: _MinimalRunner) -> None:
     r = _check_workday_da_package_installed(runner)[0]
     assert r.status == "Passed"
     assert "msdyn_essdaitworkday" in r.result
+    assert "Detected DA base agent editions: IT" in r.result
 
 
 @responses.activate
@@ -202,6 +203,7 @@ def test_failed_lists_already_installed_vertical_when_other_missing(
     assert "IT" in r.result
     assert "Already installed" in r.result
     assert "msdyn_essdahrworkday" in r.result
+    assert "Detected DA base agent editions: HR, IT" in r.result
 
 
 @responses.activate

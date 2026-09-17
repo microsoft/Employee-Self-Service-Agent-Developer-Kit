@@ -84,8 +84,8 @@ ID, App ID URI) are safe to capture in chat — see
    - {m} Activate the Workday authentication policy
    - {m} Match the signing certificate
 
-   **4. Verify your Workday connection**
-   - {m} Review your Workday connection
+   **4. Review your Workday configuration**
+   - {m} Review your Workday configuration
 
    Picking up at: {title of the first item whose state is not `done`}.
 
@@ -157,7 +157,7 @@ incomplete row.
 
 When it returns, go back to **Start** to resume at the next unverified row.
 
-### DA4.1 — Verify your Workday connection (DA-4)
+### DA4.1 — Review your Workday configuration (DA-4)
 
 Read `src/skills/setup/workday-da/verify-connection.md` and follow it. That
 playbook re-runs `WD-DA-PKG-001` to reconfirm the extension package, summarizes
@@ -166,8 +166,8 @@ the Entra and tenant configuration recorded in
 does — and does not yet — verify about the live connection (see the "Deferred
 to a follow-up" note in `tasks.md`), pointing to a full FlightCheck run for
 anything beyond that. It updates row **DA4.1** through the shared
-checklist-updater (`advisory` gate — completes once shown, regardless of
-findings).
+checklist-updater (`prog` gate — completes only when the live package recheck
+passes).
 
 When it returns, go back to **Start** — every row should now be `done`.
 
@@ -175,7 +175,8 @@ When it returns, go back to **Start** — every row should now be `done`.
 
 **Message:**
 
-Your Workday connection checklist is complete. Type `/menu` to see what you can
-do next.
+Your Workday installation and configuration checklist is complete. The final
+review explains the remaining live connection and agent-path checks. Type
+`/menu` to see what you can do next.
 
 **End message.**

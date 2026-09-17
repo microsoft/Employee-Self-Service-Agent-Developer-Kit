@@ -25,7 +25,7 @@ _ROUTER = _SOLUTION / "src" / "skills" / "setup" / "SKILL.md"
 _CONNECT_STEP1 = _SOLUTION / "src" / "skills" / "connect" / "step1.md"
 _CONNECT_SKILL = _SOLUTION / "src" / "skills" / "connect" / "SKILL.md"
 _OLD_PROMPT = _SOLUTION / ".github" / "prompts" / "setup-workday.prompt.md"
-_MONOLITH_DIR = _SOLUTION / "src" / "skills" / "connect" / "workday"
+_WORKDAY_PROVIDER_DIR = _SOLUTION / "src" / "skills" / "connect" / "workday"
 _TEMPLATE = _SOLUTION / "src" / "skills" / "setup" / "workday" / "tasks.md"
 _SKILL1 = (
     _SOLUTION / "src" / "skills" / "setup" / "workday"
@@ -63,13 +63,19 @@ class TestSetupRouter:
     def test_router_exists(self):
         assert _ROUTER.is_file(), f"missing setup router: {_ROUTER}"
 
-    def test_connect_workday_branch_routes_to_orchestrator(self):
-        # /connect workday no longer runs a connect/workday/ monolith — its
-        # Workday branch delegates to the setup orchestrator (SKILL.md).
+    def test_connect_workday_branch_routes_by_architecture_and_install_state(self):
+        # DA routes to setup; an installed CEA extension routes to the
+        # provider lifecycle; a fresh CEA setup still routes to setup.
         text = _CONNECT_STEP1.read_text(encoding="utf-8")
         assert "src/skills/setup/SKILL.md" in text, (
             "connect/step1.md Workday branch must route to the setup orchestrator"
         )
+        assert "src/skills/connect/workday/SKILL.md" in text, (
+            "connect/step1.md must route an installed CEA extension to the "
+            "provider lifecycle"
+        )
+        assert "WD-DA-PKG-001" in text
+        assert "WD-PKG-001" in text
         assert "connect/workday/step" not in text, (
             "connect/step1.md must not reference the retired connect/workday monolith"
         )
@@ -81,9 +87,11 @@ class TestSetupRouter:
             "the /setup-workday prompt must be removed (retired command)"
         )
 
-    def test_connect_workday_monolith_removed(self):
-        assert not _MONOLITH_DIR.exists(), (
-            "the connect/workday/ monolith must be deleted"
+    def test_connect_workday_provider_uses_contract_not_step_monolith(self):
+        assert (_WORKDAY_PROVIDER_DIR / "contract.json").is_file()
+        assert (_WORKDAY_PROVIDER_DIR / "SKILL.md").is_file()
+        assert not list(_WORKDAY_PROVIDER_DIR.glob("step*.md")), (
+            "the provider lifecycle must not restore the retired step-file monolith"
         )
         skill = _CONNECT_SKILL.read_text(encoding="utf-8")
         assert "connect/workday/step" not in skill, (
