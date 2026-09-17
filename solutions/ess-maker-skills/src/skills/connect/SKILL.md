@@ -19,15 +19,16 @@ pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
 Read `src/skills/connect/step1.md` and follow it.
 
 (Step 1 asks which integration, detects existing state, and dispatches —
-ServiceNow to its own step files, Workday to the setup orchestrator
-`src/skills/setup/SKILL.md`.)
+ServiceNow to its own step files; Workday first by agent architecture, then
+DA to its package/Entra/tenant checklist or CEA to either the lightweight
+already-installed lifecycle or the full setup orchestrator.)
 
 ---
 
 ## Routing
 
 Each integration routes differently — ServiceNow has its own step files;
-Workday delegates to the setup orchestrator:
+Workday routes by architecture before package detection:
 
 - **ServiceNow**: `src/skills/connect/servicenow/`
   - Steps template: `src/skills/connect/servicenow/steps.md`
@@ -43,13 +44,36 @@ Workday delegates to the setup orchestrator:
   - Step 3 (Basic): `step3-basic.md` — install extension pack (Basic fields)
   - Step 4: `step4.md` — verify connection
 
-- **Workday**: handled by the **setup orchestrator**
-  (`src/skills/setup/SKILL.md`), not a `connect/workday/` step sequence.
-  `src/skills/connect/step1.md` routes the Workday branch straight there. The
-  orchestrator sequences the six Workday setup skills (environment, ESS install,
-  Entra app, tenant config, extension pack, topic) using the master checklist as
-  a resume-aware spine, and persists state under `.local/setup/workday/tasks.md`
-  + `setupStatus` in `.local/connect/workday/config.json`.
+- **Workday**:
+  - **CEA extension already installed elsewhere** — a lightweight lifecycle that
+    confirms the extension and its connections, wires this agent's Workday
+    topics, and validates the connection end to end:
+    `src/skills/connect/workday/SKILL.md`, driven by the generic
+    `src/skills/connect/shared/lifecycle-runner.md` against
+    `src/skills/connect/workday/contract.json`. State:
+    `.local/connect/workday/agents/{agent-slug}/lifecycle.json`. This same runner + contract
+    pattern is what a future integration reuses — a new ISV only needs its
+    own contract file and action fragments, not a new runner.
+  - **CEA, nothing installed yet** — the full **setup orchestrator**
+    (`src/skills/setup/SKILL.md`). It sequences the six CEA Workday setup
+    skills (environment, ESS install, Entra app, tenant config, extension
+    pack, topic) using the master checklist as a resume-aware spine. State:
+    `.local/setup/workday/tasks.md` + `setupStatus` in
+    `.local/connect/workday/config.json`.
+  - **DA HR agent** — the **DA Workday connect skill**
+    (`src/skills/setup/workday-da/SKILL.md`). It sequences five steps
+    (extension package, Entra app, tenant config, Power Platform/agent
+    integration, and signed-in runtime validation) the same resume-aware way.
+    State: `.local/setup/workday-da/tasks.md` + `setupStatus` in
+    `.local/connect/workday-da/config.json`. DA-scoped settings that cannot be
+    queried reliably remain explicit manual/attestation gates; the provider is
+    not marked ready until a signed-in Workday scenario succeeds.
+  - **DA IT agent** — unsupported for Workday in this release. The router
+    stops before creating state or running any Workday lifecycle step and
+    directs the maker to contact their administrator.
+
+  `src/skills/connect/step1.md` reads `.local/setup/config.json`'s
+  `selected_products` to choose the correct installation path.
 
 Each integration's steps.md and config.json persist after completion.
 Running `/connect` again lets the user add a different integration

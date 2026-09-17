@@ -69,6 +69,7 @@ class _Runner:
     dv_token: str | None = None
     pp_admin: Any = None
     env_id: str | None = None
+    agent_slug: str = ""
     _workday_connection_refs: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -429,6 +430,42 @@ class TestUserContextRedirect:
         assert r.status == Status.FAILED.value
         assert "broken" in r.result
         assert "wired" not in r.result.split("missing for:")[1]
+
+    def test_active_agent_scope_ignores_unrelated_unwired_agent(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write_topic(
+            tmp_path,
+            "active",
+            "  - kind: BeginDialog\n    dialog: WorkdaySystemGetUserContextV2\n",
+        )
+        _write_topic(tmp_path, "unrelated", "kind: AdaptiveDialog\n")
+
+        runner = _Runner(config={}, agent_slug="active")
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
+
+        assert r.status == Status.PASSED.value
+        assert "active" in r.result
+        assert "unrelated" not in r.result
+
+    def test_active_agent_scope_does_not_pass_from_other_agent(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.chdir(tmp_path)
+        _write_topic(
+            tmp_path,
+            "other",
+            "  - kind: BeginDialog\n    dialog: WorkdaySystemGetUserContextV2\n",
+        )
+        _write_topic(tmp_path, "active", "kind: AdaptiveDialog\n")
+
+        runner = _Runner(config={}, agent_slug="active")
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-002"]
+
+        assert r.status == Status.FAILED.value
+        assert "active" in r.result
+        assert "other" not in r.result
 
 
 # ─────────────────────────────────────────────────────────────────────

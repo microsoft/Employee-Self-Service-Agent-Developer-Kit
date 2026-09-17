@@ -25,7 +25,7 @@ _ROUTER = _SOLUTION / "src" / "skills" / "setup" / "SKILL.md"
 _CONNECT_STEP1 = _SOLUTION / "src" / "skills" / "connect" / "step1.md"
 _CONNECT_SKILL = _SOLUTION / "src" / "skills" / "connect" / "SKILL.md"
 _OLD_PROMPT = _SOLUTION / ".github" / "prompts" / "setup-workday.prompt.md"
-_MONOLITH_DIR = _SOLUTION / "src" / "skills" / "connect" / "workday"
+_WORKDAY_PROVIDER_DIR = _SOLUTION / "src" / "skills" / "connect" / "workday"
 _TEMPLATE = _SOLUTION / "src" / "skills" / "setup" / "workday" / "tasks.md"
 _SKILL1 = (
     _SOLUTION / "src" / "skills" / "setup" / "workday"
@@ -63,16 +63,84 @@ class TestSetupRouter:
     def test_router_exists(self):
         assert _ROUTER.is_file(), f"missing setup router: {_ROUTER}"
 
-    def test_connect_workday_branch_routes_to_orchestrator(self):
-        # /connect workday no longer runs a connect/workday/ monolith — its
-        # Workday branch delegates to the setup orchestrator (SKILL.md).
+    def test_connect_workday_branch_routes_by_architecture_and_install_state(self):
+        # DA routes to setup; an installed CEA extension routes to the
+        # provider lifecycle; a fresh CEA setup still routes to setup.
         text = _CONNECT_STEP1.read_text(encoding="utf-8")
         assert "src/skills/setup/SKILL.md" in text, (
             "connect/step1.md Workday branch must route to the setup orchestrator"
         )
+        assert "src/skills/connect/workday/SKILL.md" in text, (
+            "connect/step1.md must route an installed CEA extension to the "
+            "provider lifecycle"
+        )
+        assert "WD-DA-PKG-001" in text
+        assert "WD-PKG-001" in text
+        assert "ESS IT Agent isn't supported" in text
+        assert "Stop immediately" in text
+        assert 'status: "ready"' in text
+        assert "DA setup row through `DA5.1`" in text
+        assert (
+            "ServiceNow integration with an ESS Declarative Agent isn't supported"
+            in text
+        )
+        assert "Do not create ServiceNow state" in text
+        assert "Route by the resolved active agent's architecture" in text
+        assert "active CEA agent" in text
+        assert "DA and CEA products are" in text
+        da_skill = (
+            _SOLUTION / "src" / "skills" / "setup" / "workday-da" / "SKILL.md"
+        ).read_text(encoding="utf-8")
+        assert "ESS IT Agent isn't supported" in da_skill
+        assert "without creating or updating any Workday state" in da_skill
+        assert "src/skills/setup/workday-da/configure-power-platform.md" in da_skill
+        assert "DA4.1 through DA4.8" in da_skill
+        assert "DA5.1" in da_skill
+        assert "Show the readiness briefing" in da_skill
+        assert "Entra Application Administrator" in da_skill
+        assert "Workday Administrator" in da_skill
+        assert "Dataverse System Administrator" in da_skill
+        assert "InfoSec or network administrator" in da_skill
+        assert "Workday test employee" in da_skill
+        da_power_platform = (
+            _SOLUTION
+            / "src"
+            / "skills"
+            / "setup"
+            / "workday-da"
+            / "configure-power-platform.md"
+        )
+        assert da_power_platform.is_file()
+        da_power_platform_text = da_power_platform.read_text(encoding="utf-8")
+        assert "new_sharedworkdaysoap_ff0df" in da_power_platform_text
+        assert "msviess_sharedcommondataserviceforapps_92b66" in da_power_platform_text
+        assert "Allow permission to share parameters" in da_power_platform_text
+        assert "Enable-CosmosDAFlowAuthorization.ps1" in da_power_platform_text
+        assert "Do not translate, regenerate, or replace" in da_power_platform_text
+        assert "with Python" in da_power_platform_text
+        assert "brand-new environment" in da_power_platform_text
+        assert "would create" in da_power_platform_text
+        assert 'STEP_ID="DA4.6"' in da_power_platform_text
+        assert 'CHECKPOINT_RESULT="PASSED"' in da_power_platform_text
+        assert "connectionparametersetconfig" in da_power_platform_text
+        assert "signed-in-user context" in da_power_platform_text
         assert "connect/workday/step" not in text, (
             "connect/step1.md must not reference the retired connect/workday monolith"
         )
+        da_install = (
+            _SOLUTION
+            / "src"
+            / "skills"
+            / "setup"
+            / "workday-da"
+            / "install-extension.md"
+        ).read_text(encoding="utf-8")
+        assert "No ESS DA HR agent was found in this environment" in da_install
+        assert (
+            "The Workday extension package is not installed for the"
+            in da_install
+        )
+        assert "Any other **`FAILED`** result" in da_install
 
     def test_setup_workday_command_removed(self):
         # The /setup-workday command was retired; /connect workday is the sole
@@ -81,9 +149,11 @@ class TestSetupRouter:
             "the /setup-workday prompt must be removed (retired command)"
         )
 
-    def test_connect_workday_monolith_removed(self):
-        assert not _MONOLITH_DIR.exists(), (
-            "the connect/workday/ monolith must be deleted"
+    def test_connect_workday_provider_uses_contract_not_step_monolith(self):
+        assert (_WORKDAY_PROVIDER_DIR / "contract.json").is_file()
+        assert (_WORKDAY_PROVIDER_DIR / "SKILL.md").is_file()
+        assert not list(_WORKDAY_PROVIDER_DIR.glob("step*.md")), (
+            "the provider lifecycle must not restore the retired step-file monolith"
         )
         skill = _CONNECT_SKILL.read_text(encoding="utf-8")
         assert "connect/workday/step" not in skill, (

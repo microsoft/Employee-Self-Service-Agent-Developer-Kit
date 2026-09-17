@@ -1,0 +1,91 @@
+<!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
+# DA-5 — Validate Workday Readiness
+
+Role: **Environment Maker** with a signed-in Workday test user. This step
+re-confirms the extension package, reviews every setup area, and requires a
+real Workday scenario before the environment is marked ready. It owns
+master-checklist row **DA5.1**.
+
+Every **Message** block is the exact text to show the user. Copy it verbatim. Do
+not rephrase, add commentary, or tell the user what tools you are calling or what
+files you are reading.
+
+---
+
+## DA5.1 — Validate a signed-in Workday scenario
+
+**Re-confirm the extension package.**
+
+```
+python scripts/flightcheck/cli.py --checkpoint WD-DA-PKG-001
+```
+
+Show the result per [`shared/checklist-updater.md`](shared/checklist-updater.md)
+§U.0.
+
+If the current result is not `PASSED`, do not continue from the persisted
+DA1.1 state:
+
+- `FAILED` → update DA1.1 with `GATE="prog"`,
+  `CHECKPOINT_RESULT="FAILED"` so it becomes `blocked`.
+- `WARNING` / `SKIPPED` → update DA1.1 with `GATE="prog"` and that result so
+  it becomes `in-progress`.
+
+Tell the user the package must be restored or reverified, then return to the
+orchestrator. Do not complete DA5.1.
+
+**Summarize the Entra and tenant configuration recorded so far.** Read
+`.local/connect/workday-da/config.json` and render what's known:
+
+**Message:**
+
+Here's where your Workday connection stands:
+
+| Area | Status |
+| --- | --- |
+| Workday extension package | {✅/❌ from WD-DA-PKG-001} |
+| Workday single sign-on (Entra) | {✅ if DA2.1–DA2.7 are all `done`, else "in progress"} |
+| Workday tenant configuration | {✅ if DA3.1–DA3.4 are all `done`, else "in progress"} |
+| Power Platform and agent integration | {✅ if DA4.1–DA4.8 are all `done`, else "in progress"} |
+
+**End message.**
+
+If any of DA1.1, DA2.1–DA2.7, DA3.1–DA3.4, or DA4.1–DA4.8 is not `done`,
+tell the user which step to finish and stop here — do not present the
+connection as ready.
+
+**Message:**
+
+The configuration checklist is complete. Now validate the actual employee
+path:
+
+1. Publish the ESS DA HR Agent.
+2. Use a test employee who is assigned to the Workday Entra application and
+   has valid Workday access.
+3. Start a new conversation so stale user-flow state is not reused.
+4. Run one enabled Workday scenario, such as checking a vacation balance.
+5. Confirm the agent identifies the signed-in employee and returns real
+   Workday data without asking for an unexpected generic or ISU sign-in.
+
+Did the scenario complete successfully?
+
+**End message.**
+
+On success, record the scenario, test user category (never credentials), time,
+and result as evidence. Update **DA5.1** with `GATE="manual"`, `ACK=true`, set
+the provider `status` to `"ready"`, and return to the orchestrator.
+
+On failure, leave DA5.1 `in-progress`. Run
+`python scripts/flightcheck/cli.py --scope workdayda --connect-config ".local/connect/workday-da/config.json"`
+to recheck the environment and DA package. That scope does not prove the live
+connection, flow authorization, employee-context wiring, or topic execution,
+so also revisit the DA4 connection, flow, authorization, topic, and firewall
+evidence. If connection parameters recently changed, reconnect the Workday
+connection and retry with a fresh conversation or test user.
+
+---
+
+## Done
+
+Return control to the orchestrator (`SKILL.md`) — every configuration row
+should now be `done`.

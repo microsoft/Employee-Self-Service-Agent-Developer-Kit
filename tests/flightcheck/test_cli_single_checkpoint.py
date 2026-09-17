@@ -37,6 +37,8 @@ def _args(
     checkpoint: str,
     tmp_path: Path,
     environment_url: str | None = None,
+    connect_config: str | None = None,
+    agent_slug: str | None = None,
     no_telemetry: bool = True,
     invocation_source: str | None = None,
     quiet_auth: bool = False,
@@ -45,6 +47,8 @@ def _args(
         checkpoint=checkpoint,
         environment_url=environment_url,
         environment_id=None,
+        connect_config=connect_config,
+        agent_slug=agent_slug,
         output=str(tmp_path / "out"),
         no_telemetry=no_telemetry,
         invocation_source=invocation_source,
@@ -73,6 +77,56 @@ def _silence_output(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 class TestGates:
+    def test_connect_config_overlay_preserves_foundation_identity(
+        self, tmp_path: Path
+    ) -> None:
+        overlay = tmp_path / "workday-da.json"
+        overlay.write_text(
+            '{"entraAppId":"app-123","tenant":"acme","status":"in-progress"}',
+            encoding="utf-8",
+        )
+
+        merged = cli._merge_connect_config(
+            {
+                "dataverseEndpoint": "https://example.crm.dynamics.com",
+                "agent": {"slug": "ess-hr"},
+                "status": "complete",
+            },
+            str(overlay),
+        )
+
+        assert merged["dataverseEndpoint"] == "https://example.crm.dynamics.com"
+        assert merged["agent"] == {"slug": "ess-hr"}
+        assert merged["entraAppId"] == "app-123"
+        assert merged["tenant"] == "acme"
+        assert merged["status"] == "complete"
+        assert merged["_connectConfigPath"] == str(overlay)
+
+    def test_connect_config_overlay_preserves_foundation_connections(
+        self, tmp_path: Path
+    ) -> None:
+        overlay = tmp_path / "workday-da.json"
+        overlay.write_text(
+            '{"connections":{"Workday":{"tenant":"wrong"}}}',
+            encoding="utf-8",
+        )
+
+        merged = cli._merge_connect_config(
+            {"connections": {"Workday": {"tenant": "foundation"}}},
+            str(overlay),
+        )
+
+        assert merged["connections"]["Workday"]["tenant"] == "foundation"
+
+    def test_connect_config_overlay_rejects_non_object(
+        self, tmp_path: Path
+    ) -> None:
+        overlay = tmp_path / "invalid.json"
+        overlay.write_text('["not", "an", "object"]', encoding="utf-8")
+
+        with pytest.raises(ValueError, match="must contain a JSON object"):
+            cli._merge_connect_config({}, str(overlay))
+
     def test_environment_checkpoints_accept_explicit_foundation_context(
         self,
     ) -> None:
@@ -167,6 +221,55 @@ class TestHermeticRun:
         with pytest.raises(SystemExit) as exc:
             cli._run_single_checkpoint(_args("FAKE-001", tmp_path))
         assert exc.value.code == 0
+
+    def test_assigns_explicit_agent_slug_and_connect_config(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        overlay = tmp_path / "provider.json"
+        overlay.write_text('{"tenant":"acme"}', encoding="utf-8")
+        captured = {}
+
+        class _Spec:
+            category_label = "Fake"
+            is_family = False
+
+        class _Plan:
+            clients = frozenset()
+            requires_config = False
+            requires_dataverse_endpoint = False
+
+            def __init__(self) -> None:
+                self.ordered_fns = [("Fake", self._fn)]
+
+            @staticmethod
+            def _fn(runner):
+                captured["agent_slug"] = runner.agent_slug
+                captured["config"] = runner.config
+                return [_row("FAKE-001", Status.PASSED.value)]
+
+        monkeypatch.setattr(registry, "resolve", lambda target: _Spec())
+        monkeypatch.setattr(
+            registry, "transitive_requirements", lambda target: _Plan()
+        )
+        monkeypatch.chdir(tmp_path)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(
+                _args(
+                    "FAKE-001",
+                    tmp_path,
+                    connect_config=str(overlay),
+                    agent_slug="active-agent",
+                )
+            )
+
+        assert exc.value.code == 0
+        assert captured["agent_slug"] == "active-agent"
+        assert captured["config"]["tenant"] == "acme"
+        assert captured["config"]["_connectConfigPath"] == str(overlay)
 
     def test_failed_row_exits_1(
         self,

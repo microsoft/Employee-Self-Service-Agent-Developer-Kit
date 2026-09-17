@@ -64,6 +64,7 @@ from flightcheck.checks.entra_app import run_entra_app_checks
 from flightcheck.checks.graph_connector_kb import run_graph_connector_kb_checks
 from flightcheck.checks.agent_handoff import run_handoff_topic_checks
 from flightcheck.checks.workday import run_workday_checks
+from flightcheck.checks.workday_da import run_workday_da_checks
 from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
 from flightcheck.checks.topics import run_topic_checks
@@ -94,6 +95,7 @@ SCOPE_MAP = {
         ("Workday", run_workday_checks),
         ("Workday Extension", run_workday_extension_checks),
     ],
+    "workdayda": [("Solution", run_solution_checks), ("Workday DA", run_workday_da_checks)],
     "topics": [("Workday Topics", run_topic_checks)],
     "graphconnector": [
         ("External Systems", run_external_systems_checks),
@@ -659,6 +661,41 @@ def _resolve_target_selection(args, runner):
         _resolve_servicenow_connection(args, runner)
 
 
+def _merge_connect_config(config: dict, connect_config_path: str | None) -> dict:
+    """Overlay provider-owned validation fields onto foundation config.
+
+    Provider connect state intentionally lives outside ``.local/config.json``.
+    An explicit path keeps CEA and DA Workday state from being guessed or
+    merged together when both exist in the same workspace.
+    """
+    merged = dict(config or {})
+    if not connect_config_path:
+        return merged
+
+    with open(connect_config_path, "r", encoding="utf-8") as f:
+        overlay = json.load(f)
+    if not isinstance(overlay, dict):
+        raise ValueError(f"{connect_config_path} must contain a JSON object")
+
+    foundation_keys = {
+        "_connectConfigPath",
+        "activeAgent",
+        "agent",
+        "agents",
+        "connections",
+        "dataverseEndpoint",
+        "environmentId",
+        "selected_products",
+        "setup",
+        "status",
+    }
+    for key, value in overlay.items():
+        if key not in foundation_keys:
+            merged[key] = value
+    merged["_connectConfigPath"] = connect_config_path
+    return merged
+
+
 def _run_single_checkpoint(args):
     """Run exactly one checkpoint (or family) by ID and report only its result.
 
@@ -690,6 +727,12 @@ def _run_single_checkpoint(args):
             config = json.load(f)
     elif plan.requires_config:
         print("ERROR: .local/config.json not found. Run /setup first.")
+        sys.exit(1)
+
+    try:
+        config = _merge_connect_config(config, getattr(args, "connect_config", None))
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        print(f"ERROR: Unable to load --connect-config: {e}")
         sys.exit(1)
 
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
@@ -807,6 +850,12 @@ def _run_single_checkpoint(args):
         target_matcher=lambda cid: registry.matches(target, cid),
     )
     runner.config = config
+    runner.agent_slug = (
+        getattr(args, "agent_slug", None)
+        or config.get("activeAgent")
+        or (config.get("agent") or {}).get("slug")
+        or ""
+    )
     runner.env_url = env_url
     runner.dv_token = dv_token
     runner.env_id = env_id
@@ -973,6 +1022,24 @@ def main():
              "exclusive with --scope.",
     )
     parser.add_argument(
+        "--connect-config",
+        default=None,
+        help=(
+            "Merge a provider-specific connect config JSON object into "
+            ".local/config.json for this run. Connect/setup skills use this "
+            "when their validation state intentionally lives outside the "
+            "foundation config."
+        ),
+    )
+    parser.add_argument(
+        "--agent-slug",
+        default=None,
+        help=(
+            "Scope agent-local checks to one workspace/agents/<slug> folder. "
+            "Defaults to activeAgent (or agent.slug) from .local/config.json."
+        ),
+    )
+    parser.add_argument(
         "--list-checkpoints", action="store_true",
         help="List the registered setup checkpoint IDs and families (no broad "
              "run), then exit.",
@@ -1076,6 +1143,12 @@ def main():
 
     with open(config_path, "r", encoding="utf-8") as f:
         config = json.load(f)
+
+    try:
+        config = _merge_connect_config(config, args.connect_config)
+    except (OSError, ValueError, json.JSONDecodeError) as e:
+        print(f"ERROR: Unable to load --connect-config: {e}")
+        sys.exit(1)
 
     infra_only_scope = args.scope == "infrastructure"
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
@@ -1286,6 +1359,12 @@ def main():
     # --- Build runner ---
     runner = FlightCheckRunner(scope=args.scope)
     runner.config = config
+    runner.agent_slug = (
+        getattr(args, "agent_slug", None)
+        or config.get("activeAgent")
+        or (config.get("agent") or {}).get("slug")
+        or ""
+    )
     runner.env_url = env_url
     runner.dv_token = dv_token
     runner.env_id = env_id

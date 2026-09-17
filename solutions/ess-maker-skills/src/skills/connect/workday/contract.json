@@ -1,0 +1,42 @@
+{
+  "provider": "workday",
+  "displayName": "Workday",
+  "connectConfig": ".local/connect/workday/config.json",
+  "detect": {
+    "checkpoint": "WD-PKG-001",
+    "meansInstalled": "Passed"
+  },
+  "phases": [
+    {
+      "id": "discovery",
+      "label": "Confirm the Workday extension is installed and its connections are healthy",
+      "checkpoints": ["WD-PKG-001", "DV-CONN-001", "WD-CONN-012"],
+      "completionStatuses": ["Passed"],
+      "mutates": false
+    },
+    {
+      "id": "agent-wiring",
+      "label": "Wire this agent's Workday topics so they can run",
+      "checkpoints": ["WD-REST-002"],
+      "completionStatuses": ["Passed"],
+      "mutates": true,
+      "requiredRole": "Environment Maker",
+      "gateMode": "programmatic",
+      "roleQuery": [
+        "az rest --method GET --resource \"{ENV_URL}\" --url \"{ENV_URL}/api/data/v9.2/WhoAmI\" --query \"UserId\" -o tsv",
+        "az rest --method GET --resource \"{ENV_URL}\" --url \"{ENV_URL}/api/data/v9.2/systemusers%28{USER_ID}%29/systemuserroles_association?%24select=name\" --query \"value[].name\" -o json"
+      ],
+      "roleQueryPassNames": ["Environment Maker", "System Customizer", "System Administrator"],
+      "actionDoc": "src/skills/connect/workday/actions/wire-user-context-redirect.md",
+      "rollbackLabel": "Add User Context redirect to Workday",
+      "rollbackPushGlob": "topics/user-context-setup.mcs.yml"
+    },
+    {
+      "id": "validation",
+      "label": "Confirm the end-to-end connection is healthy",
+      "checkpoints": ["WD-RUN-001"],
+      "completionStatuses": ["Passed"],
+      "mutates": false
+    }
+  ]
+}

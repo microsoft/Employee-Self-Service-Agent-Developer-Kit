@@ -51,6 +51,7 @@ from flightcheck.checks.environment import (
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
 from flightcheck.checks.workday import run_workday_checks
+from flightcheck.checks.workday_da import run_workday_da_checks
 from flightcheck.checks.workday_tenant import run_workday_tenant_checks
 from flightcheck.checks.workday_extension import run_workday_extension_checks
 from flightcheck.checks.topics import run_topic_checks
@@ -88,6 +89,7 @@ CATEGORY_ORDER = [
     "Workday Tenant",
     "External Systems",
     "Workday",
+    "Workday DA",
     "Workday Extension",
     "Workday Topics",
     "Graph Connector KB",
@@ -209,6 +211,23 @@ _SPECS: list[CheckpointSpec] = [
         key="ESS-SOLN-001",
         category_fn=run_solution_checks,
         category_label="Solution",
+        clients=frozenset({DATAVERSE}),
+        requires_config=True,
+        requires_dataverse_endpoint=True,
+        prereqs=("ENV-002",),
+        priority=Priority.CRITICAL.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    # ---- Workday DA: WD-DA-PKG-001 (setup/workday-da skill, step DA1.1) ----
+    # WD-DA-PKG-001: the Workday extension package for the Declarative Agent
+    # (DA) flavor of ESS is installed in the target env. Queries the
+    # Dataverse `solutions` table for the DA parent (HR/IT) plus its Workday
+    # child package. Fully independent of ESS-SOLN-001 / WD-PKG-001, which
+    # only recognize the CEA solution family.
+    CheckpointSpec(
+        key="WD-DA-PKG-001",
+        category_fn=run_workday_da_checks,
+        category_label="Workday DA",
         clients=frozenset({DATAVERSE}),
         requires_config=True,
         requires_dataverse_endpoint=True,
@@ -582,6 +601,7 @@ OWNED_PREFIXES: tuple = (
     "ENV-CAPACITY",
     "ESS-SOLN",
     "WD-PKG",
+    "WD-DA-PKG",
     "WD-CONN",
     "WD-RUN",
     "WD-FLOW",
