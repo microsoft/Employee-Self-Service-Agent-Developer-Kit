@@ -170,6 +170,54 @@ class TestConnectionAuth:
         assert "could not be read" in r.result
         assert "Microsoft Entra ID Integrated" in r.remediation
 
+    def test_runtime_reference_is_used_for_auth_echo(self):
+        conn = pp.connection(
+            name="wd-runtime-conn",
+            api_name="shared_workdaysoap",
+            extra_properties={
+                "connectionParametersSet": {"name": "entraIntegrated"},
+                "accountName": "maker@contoso.com",
+            },
+        )
+        runner = _Runner(
+            pp_admin=_FakePPAdmin([conn]),
+            env_id="env-1",
+            _workday_connection_refs=[
+                dv.workday_connection_refs_runtime()[0]
+                | {"connectionid": "wd-runtime-conn"}
+            ],
+        )
+
+        r = _by_id(
+            wx.run_workday_extension_checks(runner)
+        )["WD-CONN-AUTH-001"]
+
+        assert r.status == Status.MANUAL.value
+        assert "entraIntegrated" in r.result
+        assert "maker@contoso.com" in r.result
+
+    def test_mixed_runtime_and_legacy_auth_refs_do_not_select_by_order(self):
+        runner = _Runner(
+            _workday_connection_refs=[
+                dv.connection_ref(
+                    logical_name="new_sharedworkdaysoap_ff0df",
+                    display_name="OAuthUser",
+                    connector_id=dv.WORKDAY_SOAP_CONNECTOR_ID,
+                    connection_id="legacy-conn",
+                ),
+                dv.workday_connection_refs_runtime()[0]
+                | {"connectionid": "runtime-conn"},
+            ],
+        )
+
+        r = _by_id(
+            wx.run_workday_extension_checks(runner)
+        )["WD-CONN-AUTH-001"]
+
+        assert r.status == Status.MANUAL.value
+        assert "multiple Workday connection references" in r.result
+        assert "cannot determine which connection is active" in r.result
+
     def test_no_cached_ref_still_manual(self):
         runner = _Runner(_workday_connection_refs=[])
         r = _by_id(wx.run_workday_extension_checks(runner))["WD-CONN-AUTH-001"]
@@ -250,6 +298,47 @@ class TestDataverseConnection:
         assert r.status == Status.PASSED.value
         assert "owner could not be read" in r.result
         assert "your own account" in r.result
+
+    @responses.activate
+    def test_runtime_dataverse_reference_passes(
+        self, fake_dataverse_url, fake_token
+    ):
+        runtime_ref = dv.workday_connection_refs_runtime()[1]
+        _register_refs(fake_dataverse_url, [runtime_ref])
+        runner = _Runner(
+            env_url=fake_dataverse_url,
+            dv_token=fake_token,
+        )
+
+        r = _by_id(
+            wx.run_workday_extension_checks(runner)
+        )["DV-CONN-001"]
+
+        assert r.status == Status.PASSED.value
+        assert (
+            "msdyn_sharedcommondataserviceforapps_workdayruntime"
+            in r.result
+        )
+
+    @responses.activate
+    def test_mixed_runtime_and_legacy_dataverse_refs_warn(
+        self, fake_dataverse_url, fake_token
+    ):
+        runtime_ref = dv.workday_connection_refs_runtime()[1]
+        _register_refs(
+            fake_dataverse_url,
+            [_dv_ref(connection_id="legacy-dv"), runtime_ref],
+        )
+        runner = _Runner(
+            env_url=fake_dataverse_url,
+            dv_token=fake_token,
+        )
+
+        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
+
+        assert r.status == Status.WARNING.value
+        assert "Multiple ESS Dataverse connection references" in r.result
+        assert "Remove obsolete Workday package references" in r.remediation
 
     @responses.activate
     def test_unbound_fails(self, fake_dataverse_url, fake_token):

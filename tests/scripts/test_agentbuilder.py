@@ -11,9 +11,15 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+import responses
 
 import agentbuilder
 import list_environments
+from tests.conftest import require_validated_mock
+from tests.mocks import agentbuilder_connectivity as native
+
+
+require_validated_mock(native)
 
 
 ENVIRONMENT_ID = "00000000-0000-4000-8000-000000001111"
@@ -22,6 +28,121 @@ HOST = (
     "https://0000000000004000800000000000111."
     "1.environment.api.test.powerplatform.com"
 )
+
+
+def test_flightcheck_scopes_are_read_only_and_ring_specific() -> None:
+    assert agentbuilder.flightcheck_read_scopes("preprod") == (
+        "https://api.preprod.powerplatform.com/CopilotStudio.MinimalBot.Read",
+        "https://api.preprod.powerplatform.com/Connectivity.Connections.Read",
+    )
+    assert all(
+        "ReadWrite" not in scope
+        for scope in agentbuilder.flightcheck_read_scopes("preprod")
+    )
+
+
+@responses.activate
+def test_native_readiness_clients_follow_validated_contract() -> None:
+    responses.add(**native.get_agent())
+    responses.add(**native.get_configuration())
+    responses.add(**native.get_components())
+    responses.add(**native.list_connections())
+    agent_client = agentbuilder.AgentBuilderClient(
+        native.MOCK_AGENTBUILDER_BASE,
+        "token",
+        ring="test",
+        tenant_id="00000000-0000-0000-0000-000000004444",
+    )
+    connectivity_client = agentbuilder.ConnectivityClient("token", ring="test")
+
+    assert agent_client.get_agent(native.MOCK_AGENT_ID)["realm"] == "dev"
+    assert (
+        agent_client.get_dev_configuration(native.MOCK_AGENT_ID)["schemaName"]
+        == "gptagent_mockemployeeselfservice"
+    )
+    assert (
+        agent_client.fetch_components(native.MOCK_AGENT_ID)[
+            "connectionReferenceChanges"
+        ][0]["connectionReference"]["connectionId"]
+        == native.MOCK_CONNECTION_ID
+    )
+    assert (
+        connectivity_client.list_connections(native.MOCK_ENV_ID)[0]["name"]
+        == native.MOCK_CONNECTION_ID
+    )
+
+
+@pytest.mark.parametrize(
+    ("host", "ring"),
+    [
+        (
+            "https://0000000000004000800000000000111."
+            "1.environment.api.test.powerplatform.com",
+            "test",
+        ),
+        (
+            "https://0000000000004000800000000000111."
+            "1.environment.api.preprod.powerplatform.com",
+            "preprod",
+        ),
+        (
+            "https://0000000000004000800000000000111."
+            "1.environment.api.powerplatform.com",
+            "prod",
+        ),
+    ],
+)
+def test_ring_from_environment_host(host: str, ring: str) -> None:
+    assert agentbuilder.ring_from_environment_host(host) == ring
+
+
+def test_connectivity_client_lists_environment_connections() -> None:
+    expected = {
+        "name": "connection-one",
+        "properties": {
+            "apiId": "/providers/Microsoft.PowerApps/apis/shared_service-now",
+            "displayName": "ServiceNow",
+            "statuses": [{"status": "Connected"}],
+        },
+    }
+    session = FakeSession([FakeResponse({"value": [expected]})])
+    client = agentbuilder.ConnectivityClient(
+        "fake-token",
+        ring="test",
+        session=session,
+    )
+
+    assert client.list_connections(ENVIRONMENT_ID) == [expected]
+    assert session.calls == [
+        {
+            "method": "GET",
+            "url": (
+                "https://api.test.powerplatform.com/connectivity/environments/"
+                f"{ENVIRONMENT_ID}/connections"
+            ),
+            "params": {"api-version": "2024-10-01"},
+            "headers": {
+                "Authorization": "Bearer fake-token",
+                "Accept": "application/json",
+                "x-ms-client-name": "EssAdk",
+            },
+            "timeout": 120,
+        }
+    ]
+
+
+def test_connectivity_client_rejects_invalid_collection_shape() -> None:
+    client = agentbuilder.ConnectivityClient(
+        "fake-token",
+        ring="test",
+        session=FakeSession([FakeResponse({"connections": []})]),
+    )
+
+    with pytest.raises(
+        agentbuilder.AgentBuilderError,
+        match="Connection listing returned an invalid shape",
+    ):
+        client.list_connections(ENVIRONMENT_ID)
 
 
 @dataclass

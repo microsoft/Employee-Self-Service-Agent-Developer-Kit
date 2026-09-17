@@ -152,11 +152,60 @@ def minimal_bot_scope(ring: str) -> str:
     )
 
 
+def minimal_bot_read_scope(ring: str) -> str:
+    """Return the read-only delegated AgentBuilder scope for a supported ring."""
+    config = RING_CONFIG.get(ring)
+    if config is None:
+        raise ValueError(f"Unsupported Power Platform ring: {ring!r}")
+    return f"{config['audience']}/CopilotStudio.MinimalBot.Read"
+
+
+def connectivity_read_scopes(ring: str) -> tuple[str]:
+    """Return the delegated scope for read-only connection inventory."""
+    config = RING_CONFIG.get(ring)
+    if config is None:
+        raise ValueError(f"Unsupported Power Platform ring: {ring!r}")
+    audience = config["audience"]
+    return (f"{audience}/Connectivity.Connections.Read",)
+
+
+def flightcheck_read_scopes(ring: str) -> tuple[str, ...]:
+    """Return the read-only scopes used by native-agent FlightCheck."""
+    return (minimal_bot_read_scope(ring), *connectivity_read_scopes(ring))
+
+
 def _ring_api_host(ring: str) -> str:
     config = RING_CONFIG.get(ring)
     if config is None:
         raise ValueError(f"Unsupported Power Platform ring: {ring!r}")
     return str(config["audience"])
+
+
+def ring_from_environment_host(host: str) -> str:
+    """Return the supported ring identified by an environment API host."""
+    parsed = urlparse(host)
+    hostname = (parsed.hostname or "").casefold()
+    matches = [
+        ring
+        for ring, config in RING_CONFIG.items()
+        if hostname.endswith(f".{str(config['host_suffix']).casefold()}")
+    ]
+    if (
+        parsed.scheme != "https"
+        or parsed.username
+        or parsed.password
+        or parsed.port not in (None, 443)
+        or parsed.path not in ("", "/")
+        or parsed.params
+        or parsed.query
+        or parsed.fragment
+        or len(matches) != 1
+    ):
+        raise ValueError(
+            "Power Platform API endpoint must be a supported HTTPS "
+            "environment host."
+        )
+    return matches[0]
 
 
 def _validate_environment_continuation(url: str, ring: str) -> str:
@@ -326,11 +375,11 @@ def cached_account_names(
 
 def _interactive_token(
     app: msal.PublicClientApplication,
-    scope: str,
+    scopes: list[str],
     account_hint: str | None,
     force_account_selection: bool,
 ) -> dict[str, Any] | None:
-    arguments: dict[str, Any] = {"scopes": [scope]}
+    arguments: dict[str, Any] = {"scopes": scopes}
     if account_hint and not force_account_selection:
         arguments["login_hint"] = account_hint
     else:
@@ -365,6 +414,7 @@ def _acquire_token(
     cache_path: Path,
     force_account_selection: bool,
     account_hint: str | None,
+    scopes: tuple[str, ...] | None = None,
 ) -> str:
     cache = _load_token_cache(cache_path)
     app = msal.PublicClientApplication(
@@ -372,14 +422,14 @@ def _acquire_token(
         authority=authority,
         token_cache=cache,
     )
-    scope = minimal_bot_scope(ring)
+    requested_scopes = list(scopes or (minimal_bot_scope(ring),))
     selected_account = (
         None
         if force_account_selection
         else _select_cached_account(app.get_accounts(), account_hint)
     )
     result = (
-        app.acquire_token_silent([scope], account=selected_account)
+        app.acquire_token_silent(requested_scopes, account=selected_account)
         if selected_account is not None
         else None
     )
@@ -393,7 +443,7 @@ def _acquire_token(
     if not result or "access_token" not in result:
         result = _interactive_token(
             app,
-            scope,
+            requested_scopes,
             account_hint,
             force_account_selection,
         )
@@ -449,6 +499,31 @@ def authenticate_selected_tenant(
     return token, tenant_id_from_access_token(token)
 
 
+def authenticate_flightcheck(
+    ring: str,
+    *,
+    cache_path: Path = DEFAULT_TOKEN_CACHE,
+    force_account_selection: bool = False,
+    account_hint: str | None = None,
+    include_connectivity: bool = True,
+) -> tuple[str, str]:
+    """Acquire one read-only token for native AgentBuilder FlightCheck reads."""
+    scopes = (
+        flightcheck_read_scopes(ring)
+        if include_connectivity
+        else (minimal_bot_read_scope(ring),)
+    )
+    token = _acquire_token(
+        authority="https://login.microsoftonline.com/organizations",
+        ring=ring,
+        cache_path=cache_path,
+        force_account_selection=force_account_selection,
+        account_hint=account_hint,
+        scopes=scopes,
+    )
+    return token, tenant_id_from_access_token(token)
+
+
 def _response_error(response: requests.Response, operation: str) -> None:
     error_code = None
     try:
@@ -482,6 +557,66 @@ def _response_error(response: requests.Response, operation: str) -> None:
         request_id=request_id,
         response=response,
     )
+
+
+class ConnectivityClient:
+    """Thin client for ring-native Power Platform connection inventory."""
+
+    def __init__(
+        self,
+        token: str,
+        *,
+        ring: str,
+        api_version: str = DEFAULT_API_VERSION,
+        session: requests.Session | None = None,
+    ) -> None:
+        self.host = _ring_api_host(ring)
+        self.ring = ring
+        self.api_version = api_version
+        self.session = session or requests.Session()
+        retry = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=(429, 500, 502, 503, 504),
+            allowed_methods=frozenset({"GET", "HEAD", "OPTIONS"}),
+            respect_retry_after_header=True,
+        )
+        self.session.mount("https://", HTTPAdapter(max_retries=retry))
+        self.headers = {
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "x-ms-client-name": "EssAdk",
+        }
+
+    def list_connections(self, environment_id: str) -> list[dict[str, Any]]:
+        """List physical connections visible to the signed-in maker."""
+        normalized_environment_id = str(uuid.UUID(environment_id))
+        response = self.session.request(
+            "GET",
+            (
+                f"{self.host}/connectivity/environments/"
+                f"{normalized_environment_id}/connections"
+            ),
+            params={"api-version": self.api_version},
+            headers=self.headers,
+            timeout=120,
+        )
+        if not response.ok:
+            _response_error(response, "Connection listing")
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise AgentBuilderError(
+                "Connection listing returned a non-JSON response."
+            ) from exc
+        values = body.get("value") if isinstance(body, dict) else None
+        if not isinstance(values, list) or not all(
+            isinstance(value, dict) for value in values
+        ):
+            raise AgentBuilderError(
+                "Connection listing returned an invalid shape."
+            )
+        return values
 
 
 class AgentBuilderClient:

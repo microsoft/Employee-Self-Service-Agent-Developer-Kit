@@ -156,8 +156,9 @@ on the federation app that ESS's user-context SOAP/REST calls depend on.
 
 On a **full / legacy install** (3 connection refs), the ISU SOAP calls keep
 working when this cert expires, but the OAuthUser/`ff0df` path is at risk.
-On a **simplified install** (1 connection ref, OAuthUser only — see WD-PKG-001),
-`ff0df` is the entire Workday surface, so cert expiry combined with a
+On a **simplified install** (1 connection ref, OAuthUser only — `ff0df` or the
+`msdyn_sharedworkdaysoap_workdayruntime` reference; see WD-PKG-001), that
+reference is the entire Workday surface, so cert expiry combined with a
 JWT-validating Workday API Client takes user-facing Workday topics offline.
 
 **Root cause:** The X.509 signing certificate on the federated Workday SAML

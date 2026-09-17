@@ -88,9 +88,15 @@ _NOT_CAPTURED = "\u2014 not captured yet"
 # ---- Microsoft-shipped simplified extension-pack fingerprints ----
 # The Workday OAuthUser (SOAP) connection reference the simplified pack ships.
 _WORKDAY_AUTH_REF_SUFFIX = "ff0df"
+_WORKDAY_RUNTIME_REF_LOGICAL_NAME = (
+    "msdyn_sharedworkdaysoap_workdayruntime"
+)
 # The Dataverse connection reference the simplified pack ships.
 _DATAVERSE_CONNECTOR_SUFFIX = "/apis/shared_commondataserviceforapps"
 _DATAVERSE_REF_SUFFIX = "92b66"
+_DATAVERSE_RUNTIME_REF_LOGICAL_NAME = (
+    "msdyn_sharedcommondataserviceforapps_workdayruntime"
+)
 _REF_SUFFIX_RE = re.compile(r"_([0-9a-f]{5})$")
 
 # ---- Local user-context topic (WD-REST-002) ----
@@ -139,6 +145,22 @@ def _ref_suffix(logical_name) -> str | None:
         return None
     match = _REF_SUFFIX_RE.search(str(logical_name))
     return match.group(1) if match else None
+
+
+def _is_workday_auth_ref(logical_name) -> bool:
+    normalized = str(logical_name or "").casefold()
+    return (
+        _ref_suffix(logical_name) == _WORKDAY_AUTH_REF_SUFFIX
+        or normalized == _WORKDAY_RUNTIME_REF_LOGICAL_NAME.casefold()
+    )
+
+
+def _is_dataverse_runtime_ref(logical_name) -> bool:
+    normalized = str(logical_name or "").casefold()
+    return (
+        _ref_suffix(logical_name) == _DATAVERSE_REF_SUFFIX
+        or normalized == _DATAVERSE_RUNTIME_REF_LOGICAL_NAME.casefold()
+    )
 
 
 def _host_of(url: str) -> str:
@@ -266,15 +288,18 @@ def run_workday_extension_checks(runner) -> list[CheckResult]:
 
 def _check_connection_auth(runner) -> list[CheckResult]:
     refs = getattr(runner, "_workday_connection_refs", None) or []
-    auth_ref = next(
-        (
-            r for r in refs
-            if _ref_suffix(r.get("connectionreferencelogicalname"))
-            == _WORKDAY_AUTH_REF_SUFFIX
-        ),
-        None,
-    )
+    auth_refs = [
+        r
+        for r in refs
+        if _is_workday_auth_ref(r.get("connectionreferencelogicalname"))
+    ]
+    auth_ref = auth_refs[0] if len(auth_refs) == 1 else None
     connection_id = auth_ref.get("connectionid") if auth_ref else None
+    auth_ref_name = (
+        str(auth_ref.get("connectionreferencelogicalname"))
+        if auth_ref
+        else f"\u2026_{_WORKDAY_AUTH_REF_SUFFIX}"
+    )
 
     observed_auth = None
     owner = None
@@ -286,7 +311,15 @@ def _check_connection_auth(runner) -> list[CheckResult]:
             observed_auth = param_set.get("name")
             owner = _resolve_owner(props)
 
-    if observed_auth:
+    if len(auth_refs) > 1:
+        result = (
+            "Confirm in the portal — multiple Workday connection references "
+            "match the runtime and legacy package fingerprints, so FlightCheck "
+            "cannot determine which connection is active. Remove the obsolete "
+            "package references, then verify the remaining connection uses "
+            "'Microsoft Entra ID Integrated'."
+        )
+    elif observed_auth:
         result = (
             "Confirm in the portal — verify the Workday connection's "
             "authentication type. Observed connection auth parameter set: "
@@ -302,14 +335,15 @@ def _check_connection_auth(runner) -> list[CheckResult]:
         )
         result = (
             "Confirm in the portal — the Workday connection reference "
-            f"(\u2026_{_WORKDAY_AUTH_REF_SUFFIX}) is present, but its auth type "
+            f"({auth_ref_name}) is present, but its auth type "
             f"could not be read from the Power Platform admin API{detail}. "
             "Verify the connection uses 'Microsoft Entra ID Integrated'."
         )
     else:
         result = (
             "Confirm in the portal — the Workday connection reference "
-            f"(\u2026_{_WORKDAY_AUTH_REF_SUFFIX}) was not found in the cached "
+            f"(\u2026_{_WORKDAY_AUTH_REF_SUFFIX} or "
+            f"{_WORKDAY_RUNTIME_REF_LOGICAL_NAME}) was not found in the cached "
             "Dataverse connection references, so the auth type could not be "
             "read. Verify the Workday connection uses 'Microsoft Entra ID "
             "Integrated'."
@@ -349,17 +383,39 @@ def _check_dv_connection(runner) -> list[CheckResult]:
             ),
         )]
 
-    dv_ref = next(
-        (
-            r for r in refs
-            if str(r.get("connectorid") or "").lower().endswith(
-                _DATAVERSE_CONNECTOR_SUFFIX
+    dv_refs = [
+        r
+        for r in refs
+        if str(r.get("connectorid") or "").lower().endswith(
+            _DATAVERSE_CONNECTOR_SUFFIX
+        )
+        and _is_dataverse_runtime_ref(
+            r.get("connectionreferencelogicalname")
+        )
+    ]
+    if len(dv_refs) > 1:
+        names = ", ".join(
+            sorted(
+                str(ref.get("connectionreferencelogicalname") or "(unnamed)")
+                for ref in dv_refs
             )
-            and _ref_suffix(r.get("connectionreferencelogicalname"))
-            == _DATAVERSE_REF_SUFFIX
-        ),
-        None,
-    )
+        )
+        return [CheckResult(roles=_MAKER_ROLES,
+            checkpoint_id="DV-CONN-001", category=_CATEGORY,
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
+            description=_DV_CONN_DESC,
+            result=(
+                "Multiple ESS Dataverse connection references match the "
+                f"runtime and legacy package fingerprints: {names}. "
+                "FlightCheck cannot determine which reference is active."
+            ),
+            remediation=(
+                "Remove obsolete Workday package references, then rerun "
+                "FlightCheck against the remaining Dataverse binding."
+            ),
+            doc_link=_DOC_SIMPLIFIED,
+        )]
+    dv_ref = dv_refs[0] if dv_refs else None
 
     if dv_ref is None:
         return [CheckResult(roles=_MAKER_ROLES,
@@ -380,6 +436,7 @@ def _check_dv_connection(runner) -> list[CheckResult]:
             doc_link=_DOC_SIMPLIFIED,
         )]
 
+    dv_ref_name = str(dv_ref.get("connectionreferencelogicalname"))
     connection_id = dv_ref.get("connectionid")
     statuscode = dv_ref.get("statuscode")
 
@@ -390,7 +447,7 @@ def _check_dv_connection(runner) -> list[CheckResult]:
             description=_DV_CONN_DESC,
             result=(
                 "The ESS Dataverse connection reference "
-                f"(\u2026_{_DATAVERSE_REF_SUFFIX}) is unbound "
+                f"({dv_ref_name}) is unbound "
                 "(connectionid=null)."
             ),
             remediation=(
@@ -408,7 +465,7 @@ def _check_dv_connection(runner) -> list[CheckResult]:
             description=_DV_CONN_DESC,
             result=(
                 "The ESS Dataverse connection reference "
-                f"(\u2026_{_DATAVERSE_REF_SUFFIX}) is bound but inactive "
+                f"({dv_ref_name}) is bound but inactive "
                 f"(statuscode={statuscode})."
             ),
             remediation=(
@@ -434,7 +491,7 @@ def _check_dv_connection(runner) -> list[CheckResult]:
         description=_DV_CONN_DESC,
         result=(
             "The ESS Dataverse connection reference "
-            f"(\u2026_{_DATAVERSE_REF_SUFFIX}) is bound to an active "
+            f"({dv_ref_name}) is bound to an active "
             "connection." + owner_note
         ),
         doc_link=_DOC_SIMPLIFIED,

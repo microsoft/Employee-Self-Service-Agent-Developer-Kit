@@ -180,14 +180,32 @@ class TestTransitiveRequirements:
         spec = registry.resolve("ENV-CAPACITY-001")
         assert spec is not None and spec.key == "ENV-CAPACITY-001"
         assert spec.category_label == "Environment"
-        # Needs BOTH the BAP admin client (env id) and the licensing client.
-        assert spec.clients == frozenset({registry.PP_ADMIN, registry.POWERPLATFORM})
+        assert spec.clients == frozenset({registry.POWERPLATFORM})
         plan = registry.transitive_requirements("ENV-CAPACITY-001")
-        assert registry.PP_ADMIN in plan.clients
+        assert registry.PP_ADMIN not in plan.clients
         assert registry.POWERPLATFORM in plan.clients
-        assert plan.requires_dataverse_endpoint is True
-        # Shares run_environment_checks with its ENV-001 prereq -> one fn.
+        assert plan.requires_dataverse_endpoint is False
+        assert plan.requires_config is False
         assert len(plan.ordered_fns) == 1
+
+    def test_native_agent_checkpoints_use_only_native_read_clients(self):
+        access = registry.transitive_requirements("DA-AGENT-001")
+        assert access.clients == frozenset({registry.AGENTBUILDER})
+        assert access.requires_config is True
+        assert access.requires_dataverse_endpoint is False
+
+        content = registry.transitive_requirements("DA-CONTENT-001")
+        assert content.clients == frozenset({registry.AGENTBUILDER})
+        assert [label for label, _ in content.ordered_fns] == ["Native Agent"]
+
+        connections = registry.transitive_requirements("DA-CONN-001")
+        assert connections.clients == frozenset(
+            {registry.AGENTBUILDER, registry.CONNECTIVITY}
+        )
+        assert connections.requires_dataverse_endpoint is False
+        assert [label for label, _ in connections.ordered_fns] == [
+            "Native Agent"
+        ]
 
     def test_env009_is_individually_targetable_with_dataverse_only(self):
         spec = registry.resolve("ENV-009")
