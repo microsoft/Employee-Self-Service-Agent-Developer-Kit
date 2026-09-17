@@ -415,8 +415,8 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
     assert result["topicCount"] == 1
     assert result["variableCount"] == 1
     assert (agent_root / "agent.mcs.yml").is_file()
-    assert (agent_root / "topics" / "greeting.mcs.yml").is_file()
-    assert (agent_root / "variables" / "locale.mcs.yml").is_file()
+    assert (agent_root / "topics" / "Greeting.mcs.yml").is_file()
+    assert (agent_root / "variables" / "Locale.mcs.yml").is_file()
     assert (agent_root / setup_existing_da.RAW_CHANGESET).is_file()
     assert not (tmp_path / ".local" / "setup" / "da-connection.json").exists()
     assert not (tmp_path / ".local" / "setup" / "da-components.json").exists()
@@ -756,7 +756,7 @@ def test_attach_rejects_changeset_for_another_agent(tmp_path: Path) -> None:
 
 def test_identical_rerun_preserves_local_edits(tmp_path: Path) -> None:
     _attach(FakeClient(), tmp_path)
-    topic = _agent_root(tmp_path) / "topics" / "greeting.mcs.yml"
+    topic = _agent_root(tmp_path) / "topics" / "Greeting.mcs.yml"
     topic.write_text("kind: AdaptiveDialog\nlocal: true\n", encoding="utf-8")
 
     result = _attach(FakeClient(agent_name="Renamed Agent"), tmp_path)
@@ -815,7 +815,7 @@ def test_explicit_refresh_checkpoints_then_replaces_workspace(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _attach(FakeClient(), tmp_path)
-    topic = _agent_root(tmp_path) / "topics" / "greeting.mcs.yml"
+    topic = _agent_root(tmp_path) / "topics" / "Greeting.mcs.yml"
     topic.write_text("kind: AdaptiveDialog\nlocal: true\n", encoding="utf-8")
     checkpointed: list[str] = []
 
