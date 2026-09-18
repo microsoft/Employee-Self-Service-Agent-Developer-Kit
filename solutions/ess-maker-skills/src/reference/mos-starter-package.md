@@ -5,7 +5,7 @@
 
 This reference defines the safety and evidence contract for DA `/setup`'s fresh-install path: installing a new Dev agent from an entitled MOS ("AgentSchemaTemplates") starter package when the maker has no existing agent to connect. It separates read-only discovery, one guarded create, and one explicit ALM opt-in. It never publishes, promotes, removes components, or calls Dataverse.
 
-`scripts/setup_mos_starter.py` owns discovery, one guarded create dispatch, a separately invoked ALM opt-in, and redacted response evidence. It has no persona/ISV matching, no `resolve` or `status` command, and no product-specific policy -- that judgment belongs to the maker and `src/skills/foundation-setup/da-mos-starter.md`. `setup_existing_da.py attach` (via `attach_existing_dev`) still owns component acquisition, projection, and canonical workspace completion. The executing session composes these operations; the script does not wrap them into a transaction.
+`scripts/setup_mos_starter.py` owns discovery, one guarded create dispatch, a separately invoked ALM opt-in, and response evidence. It has no persona/ISV matching, no `resolve` or `status` command, and no product-specific policy -- that judgment belongs to the maker and `src/skills/foundation-setup/da-mos-starter.md`. `setup_existing_da.py attach` (via `attach_existing_dev`) still owns component acquisition, projection, and canonical workspace completion. The executing session composes these operations; the script does not wrap them into a transaction.
 
 ## Current evidence
 
@@ -43,13 +43,8 @@ Do not describe a pending-validation claim as supported behavior. In particular,
    automatically.
 6. Write the attempt fuse atomically and durably before the POST is ever
    dispatched.
-7. `create_agent_from_starter_package` returns the raw response instead of
-   raising or parsing it, so the wrapper can render near-verbatim,
-   redacted evidence rather than losing response detail to a discarded
-   exception.
-8. Redact only secret-bearing fields and headers (recursively,
-   case-insensitively); preserve every other field, message, and unknown
-   detail as closely to verbatim as possible.
+7. `create_agent_from_starter_package` returns the response so the wrapper can emit the response body as script output.
+8. Emit a JSON response as JSON and any other response as text.
 9. End create after emitting a usable returned identity. Preserve catalog revision as `catalogPackageVersion` and the service-returned source template version as `templateVersion`; never conflate them.
 10. Invoke ALM opt-in only after separate maker confirmation. Fetch the exact agent first, deep-copy and preserve its full `BotEntity`, change only `alm.isAlmEnabled`, and request no component changes.
 11. Verify ALM through a second component fetch. A write response without persisted read-back is not success.
@@ -66,7 +61,7 @@ Do not describe a pending-validation claim as supported behavior. In particular,
 - an empty-workspace guard;
 - the single attempt fuse;
 - one non-retried, non-redirected create request (`create`);
-- redacted, near-verbatim response evidence;
+- response evidence;
 - extraction of a usable `{botId, sourcePackage.schemaName}` identity and optional source-template version;
 - a deterministic fuse disposition based only on transport and response
   facts;
@@ -95,7 +90,7 @@ it emits `DA_MOS_STARTER_CREATE_ANNOTATIONS_JSON:` followed by either
 `DA_MOS_STARTER_CREATE_RESPONSE_JSON:` or
 `DA_MOS_STARTER_CREATE_RESPONSE_TEXT:`, and finally
 `DA_MOS_STARTER_CREATE_JSON:` on success. `enable-alm` emits
-`DA_MOS_STARTER_ALM_ANNOTATIONS_JSON:` and the redacted update response when
+`DA_MOS_STARTER_ALM_ANNOTATIONS_JSON:` and the update response when
 it writes, then `DA_MOS_STARTER_ALM_JSON:` only after successful read-back.
 An already-enabled agent emits only the final result and performs no write.
 A failed verification emits `DA_MOS_STARTER_ALM_VERIFY_ANNOTATIONS_JSON:`
@@ -138,26 +133,9 @@ become a completion record.
 
 A connect timeout is treated as pre-dispatch only because `requests` proves the connection never completed. Every other timeout is conservatively kept as uncertain, because the service may already have received and acted on the request. Fuse disposition is evidence and a duplicate-mutation guard.
 
-## Redaction contract
+## Response evidence
 
-The printed response preserves field names, nesting, messages, details, and
-unknown fields as closely to verbatim as possible. Matching is an exact,
-normalized comparison (casefolded, separators stripped) against a fixed
-list of secret-bearing names -- authorization, cookie/set-cookie,
-access_token, refresh_token, id_token, password, secret/client_secret,
-assertion, and API key variants including `x-api-key` -- never a
-substring test, so a benign lookalike such as `secretaryName`,
-`cookiePolicy`, or `authorizationStatus` is left untouched. A matching
-field's entire value is replaced with `<redacted>`, recursively and
-case-insensitively, by value only (never by key).
-
-Every other string value -- including inside a JSON body, not only a
-non-JSON one -- is still passed through the same small, fixed set of
-token/credential patterns (a bearer-style scheme token, or a
-secret-bearing `key: value`/`key=value` pair), so a credential embedded
-in a benign field such as `message` cannot leak merely because its key
-is not itself secret-named. Everything else in the text is preserved.
-Request headers and tokens are never printed at all.
+Response markers contain the service response body. Valid JSON bodies are emitted as JSON; other bodies are emitted as text. Request headers are not part of the response-body output.
 
 ## Provenance
 

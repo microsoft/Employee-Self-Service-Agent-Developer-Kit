@@ -5,12 +5,18 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
 
 import setup_alm_export
-from agentbuilder import DEV_REALM, PROD_REALM, AgentBuilderError
+from agentbuilder import (
+    DEV_REALM,
+    PROD_REALM,
+    AgentBuilderError,
+    AgentBuilderHTTPError,
+)
 
 
 ENVIRONMENT_ID = "00000000-0000-4000-8000-000000001111"
@@ -82,8 +88,12 @@ def _run(
     return setup_alm_export.main(
         [
             command,
-            "--source-url",
-            SOURCE_URL,
+            "--environment-id",
+            ENVIRONMENT_ID,
+            "--agent-id",
+            SOURCE_AGENT_ID,
+            "--ring",
+            "test",
             "--kit-root",
             str(kit_root),
         ]
@@ -94,14 +104,44 @@ def test_parser_accepts_account_hint() -> None:
     args = setup_alm_export.build_parser().parse_args(
         [
             "inspect",
-            "--source-url",
-            SOURCE_URL,
+            "--environment-id",
+            ENVIRONMENT_ID,
+            "--agent-id",
+            SOURCE_AGENT_ID,
+            "--ring",
+            "test",
             "--account",
             "test.user@example.test",
         ]
     )
 
     assert args.account == "test.user@example.test"
+
+
+def test_source_url_remains_compatible(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    client = FakeClient()
+    monkeypatch.setattr(
+        setup_alm_export,
+        "_client_from_args",
+        lambda *_args: client,
+    )
+
+    result = setup_alm_export.main(
+        [
+            "inspect",
+            "--source-url",
+            SOURCE_URL,
+            "--kit-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert result == 0
+    assert "DA_ALM_EXPORT_INSPECTION_JSON:" in capsys.readouterr().out
 
 
 def test_inspect_validates_prod_and_returns_related_dev_without_export(
@@ -231,6 +271,50 @@ def test_export_failure_removes_partial_package(
     assert client.exported_path is not None
     assert not client.exported_path.exists()
     assert not (kit_root / setup_alm_export.ACTIVE_EXPORT_RECORD).exists()
+
+
+def test_export_http_failure_emits_response_body(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class FailingClient(FakeClient):
+        def export_package(self, _agent_id: str, path: Path) -> None:
+            response = SimpleNamespace(
+                text='{"error":{"message":"export unavailable"}}',
+                json=lambda: {"error": {"message": "export unavailable"}},
+            )
+            raise AgentBuilderHTTPError(
+                "Native ALM export",
+                503,
+                error_code="Unavailable",
+                request_id="request-503",
+                response=response,
+            )
+
+    client = FailingClient()
+    kit_root = tmp_path / "kit"
+    kit_root.mkdir()
+    os_temp = tmp_path / "os-temp"
+    os_temp.mkdir()
+    monkeypatch.setattr(setup_alm_export.tempfile, "tempdir", str(os_temp))
+
+    result = _run(client, "export", kit_root, monkeypatch)
+    captured = capsys.readouterr()
+
+    assert result == 1
+    response = json.loads(
+        captured.out.split(
+            "DA_ALM_EXPORT_ERROR_RESPONSE_JSON:",
+            1,
+        )[1]
+    )
+    assert response == {"error": {"message": "export unavailable"}}
+    assert (
+        "ERROR: AgentBuilderHTTPError: "
+        "Native ALM export failed with HTTP 503 (Unavailable) "
+        "[request request-503]"
+    ) in captured.err
 
 
 def test_inspect_removes_stale_recorded_export(

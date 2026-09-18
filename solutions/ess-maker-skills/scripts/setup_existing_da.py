@@ -124,6 +124,42 @@ class ExistingDASetupError(RuntimeError):
     """Raised when existing-Dev setup cannot preserve its invariants."""
 
 
+def _print_exception(error: BaseException) -> None:
+    print(f"ERROR: {type(error).__name__}: {error}", file=sys.stderr)
+    for note in getattr(error, "__notes__", ()):
+        print(f"NOTE: {note}", file=sys.stderr)
+
+
+def _print_http_error_response(
+    error: BaseException,
+    *,
+    marker: str,
+) -> None:
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while (
+        current is not None
+        and id(current) not in seen
+        and not isinstance(current, AgentBuilderHTTPError)
+    ):
+        seen.add(id(current))
+        current = current.__cause__ or current.__context__
+    if (
+        not isinstance(current, AgentBuilderHTTPError)
+        or current.response is None
+    ):
+        return
+    try:
+        body = current.response.json()
+    except ValueError:
+        print(f"{marker}_RESPONSE_TEXT:{current.response.text}")
+    else:
+        print(
+            f"{marker}_RESPONSE_JSON:"
+            f"{json.dumps(body, ensure_ascii=True)}"
+        )
+
+
 def _require_object_model_dependencies() -> None:
     """Fail before remote setup when the local projection runtime is absent."""
     try:
@@ -1022,7 +1058,12 @@ def inspect_dev_agents(client: AgentBuilderClient) -> dict[str, Any]:
         )
         try:
             normalized_agent_id = _normalize_guid(agent_id, "Agent ID")
-        except ExistingDASetupError:
+        except ExistingDASetupError as exc:
+            print(
+                f"WARNING: Listed agent ID {agent_id!r}: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
             unverified += 1
             continue
         try:
@@ -1030,6 +1071,15 @@ def inspect_dev_agents(client: AgentBuilderClient) -> dict[str, Any]:
         except AgentBuilderHTTPError as exc:
             if exc.status_code not in (403, 404):
                 raise
+            print(
+                f"WARNING: Agent {normalized_agent_id}: "
+                f"{type(exc).__name__}: {exc}",
+                file=sys.stderr,
+            )
+            _print_http_error_response(
+                exc,
+                marker="DA_AGENT_LIST_WARNING",
+            )
             unverified += 1
             continue
         realm = metadata.get("realm")
@@ -2363,7 +2413,11 @@ def main(argv: list[str] | None = None) -> int:
         OSError,
         ValueError,
     ) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        _print_http_error_response(
+            exc,
+            marker="DA_EXISTING_DEV_ERROR",
+        )
+        _print_exception(exc)
         return 1
     print(f"DA_EXISTING_DEV_SETUP_JSON:{json.dumps(result, ensure_ascii=True)}")
     return 0

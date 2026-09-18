@@ -8,7 +8,6 @@ import argparse
 import hashlib
 import json
 import socket
-import sys
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
@@ -33,6 +32,8 @@ from setup_existing_da import (
     _load_canonical_setup_state,
     _normalize_environment_id,
     _normalize_guid,
+    _print_exception,
+    _print_http_error_response,
     _utc_now,
     _write_json,
     resolve_da_target,
@@ -409,6 +410,14 @@ def _persist_dispatched_record(
                 "Primary operation evidence: "
                 f"{type(operation_error).__name__}: {operation_error}"
             )
+            if (
+                isinstance(operation_error, AgentBuilderHTTPError)
+                and operation_error.response is not None
+            ):
+                error.add_note(
+                    "Primary operation response body: "
+                    f"{operation_error.response.text}"
+                )
         raise error from persistence_error
 
 
@@ -528,6 +537,11 @@ def _failure_outcome(
     if error is not None:
         outcome["errorType"] = type(error).__name__
         outcome["errorMessage"] = str(error)
+        if (
+            isinstance(error, AgentBuilderHTTPError)
+            and error.response is not None
+        ):
+            outcome["responseBody"] = error.response.text
     return outcome
 
 
@@ -972,7 +986,11 @@ def main(argv: list[str] | None = None) -> int:
         ObjectModelConverterError,
         ValueError,
     ) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        _print_http_error_response(
+            exc,
+            marker="DA_ALM_IMPORT_ERROR",
+        )
+        _print_exception(exc)
         return 1
     print(f"DA_ALM_IMPORT_JSON:{json.dumps(result, ensure_ascii=True)}")
     return 0 if result["kind"] == "success" else 2

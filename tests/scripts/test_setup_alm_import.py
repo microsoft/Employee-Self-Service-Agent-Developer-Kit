@@ -562,11 +562,16 @@ def test_conflict_is_cached_and_replacement_is_a_distinct_operation(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     package = _write_package(tmp_path / "agent.zip")
+    response = requests.Response()
+    response.status_code = 409
+    response._content = b'{"error":{"message":"duplicate agent"}}'
+    response.encoding = "utf-8"
     conflict = agentbuilder.AgentBuilderHTTPError(
         "Native ALM import",
         409,
         error_code="DuplicateItemError",
         request_id="request-1",
+        response=response,
     )
     client = FakeClient(error=conflict)
     monkeypatch.setattr(
@@ -591,7 +596,11 @@ def test_conflict_is_cached_and_replacement_is_a_distinct_operation(
     assert first["kind"] == "conflict"
     assert first["statusCode"] == 409
     assert first["requestId"] == "request-1"
+    assert first["responseBody"] == (
+        '{"error":{"message":"duplicate agent"}}'
+    )
     assert second["importStatus"] == "cached"
+    assert second["responseBody"] == first["responseBody"]
     assert len(client.import_calls) == 1
 
     client.error = None

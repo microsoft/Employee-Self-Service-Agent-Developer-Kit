@@ -239,95 +239,23 @@ def test_catalog_warnings_is_empty_when_every_row_is_valid() -> None:
     assert mos.catalog_warnings(packages) == []
 
 
-# --- redaction ---------------------------------------------------------
-
-
-def test_redact_json_masks_nested_case_varied_secret_fields() -> None:
-    body = {
-        "AUTHORIZATION": "should-be-hidden",
-        "nested": {
-            "Cookie": "session=abc",
-            "Client_Secret": "topsecret",
-            "deeper": [{"Access_Token": "tok"}, {"refreshToken": "rtok"}],
-        },
-        "packageId": "pkg-1",
-        "message": "Unfamiliar detail the platform sent back",
-        "unknownField": "keep me exactly",
-    }
-
-    redacted = mos.redact_json(body)
-
-    assert redacted["AUTHORIZATION"] == mos.REDACTED
-    assert redacted["nested"]["Cookie"] == mos.REDACTED
-    assert redacted["nested"]["Client_Secret"] == mos.REDACTED
-    assert redacted["nested"]["deeper"][0]["Access_Token"] == mos.REDACTED
-    assert redacted["nested"]["deeper"][1]["refreshToken"] == mos.REDACTED
-    assert redacted["packageId"] == "pkg-1"
-    assert redacted["message"] == "Unfamiliar detail the platform sent back"
-    assert redacted["unknownField"] == "keep me exactly"
-
-
-def test_redact_text_masks_bounded_credential_patterns_preserves_rest() -> None:
-    text = (
-        "HTTP/1.1 401 Unauthorized\n"
-        "Authorization: " + "Bear" + "er abc.def.ghi\n"
-        "Set-Cookie: session=xyz; Path=/\n"
-        'body: {"password": "hunter2", "message": "unexpected input"}'
-    )
-
-    redacted = mos.redact_text(text)
-
-    assert "abc.def.ghi" not in redacted
-    assert "hunter2" not in redacted
-    assert "session=xyz" not in redacted
-    assert "unexpected input" in redacted
-    assert "401 Unauthorized" in redacted
-
-
-def test_redact_text_preserves_json_key_quoting_around_secret_value() -> None:
-    text = 'prefix {"password": "hunter2"} suffix'
-
-    redacted = mos.redact_text(text)
-
-    assert redacted == 'prefix {"password": "' + mos.REDACTED + '"} suffix'
-
-
-def test_redact_json_preserves_benign_lookalike_field_names() -> None:
-    body = {
-        "secretaryName": "Jordan Pat",
-        "cookiePolicy": "https://example.com/cookies",
-        "authorizationStatus": "approved",
-        "developerName": "Contoso",
-    }
-
-    redacted = mos.redact_json(body)
-
-    assert redacted == body
-
-
-def test_redact_json_recursively_redacts_credential_shapes_in_benign_keyed_strings() -> (
-    None
-):
+def test_response_evidence_is_not_transformed(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
     scheme = "Bear" + "er"
     body = {
         "message": f"Retry with {scheme} abc.def.ghi and password=hunter2",
         "unrelatedNote": "Nothing sensitive to see here",
     }
 
-    redacted = mos.redact_json(body)
+    mos._print_evidence({}, body, True)
 
-    assert "abc.def.ghi" not in redacted["message"]
-    assert "hunter2" not in redacted["message"]
-    assert mos.REDACTED in redacted["message"]
-    assert "Retry with" in redacted["message"]
-    assert redacted["unrelatedNote"] == "Nothing sensitive to see here"
-
-
-def test_redact_text_bearer_substitution_uses_the_redacted_marker() -> None:
-    scheme = "Bear" + "er"
-    redacted = mos.redact_text(f"{scheme} abc.def.ghi")
-
-    assert redacted == mos.REDACTED
+    printed = json.loads(
+        capsys.readouterr()
+        .out.split("DA_MOS_STARTER_CREATE_RESPONSE_JSON:", 1)[1]
+        .splitlines()[0]
+    )
+    assert printed == body
 
 
 # --- fuse lifecycle ------------------------------------------------------
@@ -492,7 +420,7 @@ def test_create_keeps_fuse_on_uncertain_transport_failure(
     assert (tmp_path / FUSE_RELATIVE).is_file()
 
 
-def test_uncertain_transport_preserves_redacted_runtime_context(
+def test_uncertain_transport_preserves_runtime_context(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -519,9 +447,7 @@ def test_uncertain_transport_preserves_redacted_runtime_context(
     )
     assert raised.value.__cause__ is transport_error
     assert annotations["transportErrorType"] == "ConnectionError"
-    assert annotations["transportError"] == (
-        "connection reset after Authorization: <redacted>"
-    )
+    assert annotations["transportError"] == str(transport_error)
     assert annotations["outcome"] == "uncertain-transport"
     assert annotations["fuseDisposition"] == "retained"
 
@@ -683,17 +609,13 @@ def test_create_removes_fuse_and_reports_collision_on_409(
     assert annotations["fuseDisposition"] == "removed"
 
 
-def test_emit_annotations_recursively_redacts_before_printing(
+def test_emit_annotations_preserves_values(
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    scheme = "Bear" + "er"
     annotations = {
         "targetEnvironmentId": ENVIRONMENT_ID,
         "outcome": "uncertain-transport",
-        "transportError": (
-            f"Upstream rejected with {scheme} abc.def.ghi and "
-            "client_secret=topsecret999"
-        ),
+        "transportError": "Unfamiliar upstream detail",
     }
 
     mos._emit_annotations(annotations)
@@ -704,10 +626,7 @@ def test_emit_annotations_recursively_redacts_before_printing(
     )
     assert printed["targetEnvironmentId"] == ENVIRONMENT_ID
     assert printed["outcome"] == "uncertain-transport"
-    assert "abc.def.ghi" not in printed["transportError"]
-    assert "topsecret999" not in printed["transportError"]
-    assert printed["transportError"].count(mos.REDACTED) == 2
-    assert "Upstream rejected with" in printed["transportError"]
+    assert printed["transportError"] == "Unfamiliar upstream detail"
 
 
 def test_create_fuse_write_failure_closes_removes_and_reraises(
@@ -756,7 +675,7 @@ def test_create_fuse_cleanup_failure_is_attached_to_original_error(
     ]
 
 
-def test_evidence_annotations_and_response_are_printed_and_redacted(
+def test_evidence_annotations_and_response_are_printed(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
@@ -770,7 +689,7 @@ def test_evidence_annotations_and_response_are_printed_and_redacted(
                     "schemaName": SCHEMA,
                     "version": "1.0.0",
                 },
-                "diagnostics": {"Authorization": "leak-me-not"},
+                "diagnostics": {"detail": "unfamiliar service evidence"},
             },
             headers={"x-ms-request-id": "req-42"},
         ),
@@ -801,10 +720,9 @@ def test_evidence_annotations_and_response_are_printed_and_redacted(
     assert annotations["agentId"] == AGENT_ID
     assert annotations["schemaName"] == SCHEMA
     assert annotations["templateVersion"] == "1.0.0"
-    assert response["diagnostics"]["Authorization"] == mos.REDACTED
+    assert response["diagnostics"]["detail"] == "unfamiliar service evidence"
     assert response["botId"] == AGENT_ID
     assert response["sourcePackage"]["version"] == "1.0.0"
-    assert "leak-me-not" not in out
 
 
 # --- list_starter_packages wrapper ---------------------------------------
@@ -837,7 +755,7 @@ def test_list_starter_packages_prints_evidence_and_reraises_on_http_error(
             "error": {
                 "code": "InternalError",
                 "message": "Unfamiliar upstream detail",
-                "authorization": "leak-me-not",
+                "detail": "unfamiliar service evidence",
             }
         },
         headers={"x-ms-request-id": "req-99"},
@@ -863,9 +781,8 @@ def test_list_starter_packages_prints_evidence_and_reraises_on_http_error(
     )
     assert annotations["httpStatus"] == 500
     assert annotations["requestId"] == "req-99"
-    assert response["error"]["authorization"] == mos.REDACTED
+    assert response["error"]["detail"] == "unfamiliar service evidence"
     assert response["error"]["message"] == "Unfamiliar upstream detail"
-    assert "leak-me-not" not in out
 
 
 def test_list_starter_packages_reraises_without_evidence_when_no_response() -> None:
@@ -977,8 +894,7 @@ def test_enable_alm_preserves_full_bot_and_verifies_read_back(
     assert annotations["outcome"] == "update-accepted"
     assert annotations["requestId"] == "req-alm-42"
     assert response["unknownServiceField"] == "preserved in evidence"
-    assert response["authorization"] == mos.REDACTED
-    assert "leak-me-not" not in out
+    assert response["authorization"] == "leak-me-not"
 
 
 def test_enable_alm_is_repeatable_without_a_second_write() -> None:

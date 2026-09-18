@@ -12,7 +12,7 @@ to the maker and
 
 ``src/reference/mos-starter-package.md`` is the canonical narrative: the
 service-evidence table, every safety invariant, the fuse disposition
-matrix, the redaction contract, and open validation gaps all live there,
+matrix, the response-evidence contract, and open validation gaps all live there,
 not here.
 """
 
@@ -22,9 +22,7 @@ import argparse
 import copy
 import json
 import os
-import re
 import socket
-import sys
 from pathlib import Path
 from typing import Any
 
@@ -42,6 +40,7 @@ from setup_existing_da import (
     _client_from_args,
     _normalize_guid,
     _normalize_environment_id,
+    _print_exception,
     _utc_now,
     resolve_da_target,
 )
@@ -65,41 +64,6 @@ _SAFE_PACKAGE_FIELDS = (
     "version",
     "manifestVersion",
 )
-REDACTED = "<redacted>"
-# An exact, normalized (casefolded, separators stripped) match only -- not a
-# substring test -- so a benign lookalike field such as ``secretaryName``,
-# ``cookiePolicy``, or ``authorizationStatus`` is never redacted merely for
-# containing a marker word.
-_SECRET_FIELD_NAMES = frozenset(
-    {
-        "authorization",
-        "cookie",
-        "setcookie",
-        "accesstoken",
-        "refreshtoken",
-        "idtoken",
-        "password",
-        "secret",
-        "clientsecret",
-        "assertion",
-        "apikey",
-        "xapikey",
-    }
-)
-_NON_FIELD_CHARACTERS = re.compile(r"[^a-z0-9]")
-_BEARER_TOKEN_PATTERN = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]+")
-# Group 2 is the key's own closing quote (for a JSON-style ``"password":``),
-# captured -- not merely consumed -- so the substitution can reproduce it
-# and change only the value. Group 4 is the value's opening quote; \4
-# requires the same character to close it.
-_SECRET_KEY_VALUE_PATTERN = re.compile(
-    r"(?i)\b(authorization|cookie|set-cookie|access[_-]?token|"
-    r"refresh[_-]?token|id[_-]?token|password|client[_-]?secret|secret|"
-    r"assertion|api[_-]?key)"
-    r"(\"?)(\s*[:=]\s*)(\"?)[^\"&\r\n,}]*\4"
-)
-
-
 class MosStarterSetupError(RuntimeError):
     """Raised when MOS-starter listing or create cannot preserve invariants."""
 
@@ -171,7 +135,7 @@ def list_starter_packages(
 
     Selectable packages and a separate ``catalogWarnings`` collection for
     every excluded row are both returned. A failed listing prints the same
-    light-annotation, redacted-evidence contract ``create`` uses, then
+    light-annotation and response-evidence contract ``create`` uses, then
     re-raises so the CLI still fails without anything being discarded.
     """
     try:
@@ -216,54 +180,6 @@ def list_starter_packages(
         "packages": summarize_starter_packages(packages),
         "catalogWarnings": catalog_warnings(packages),
     }
-
-
-# --- redaction -----------------------------------------------------------
-def _is_secret_field(name: str) -> bool:
-    return _NON_FIELD_CHARACTERS.sub("", name.casefold()) in _SECRET_FIELD_NAMES
-
-
-def redact_json(value: Any) -> Any:
-    """Recursively redact only secret-bearing fields, case-insensitively.
-
-    A non-secret string value still passes through the same bounded
-    credential-pattern text redactor used for a non-JSON body, so a
-    benign key such as ``message`` cannot leak a credential embedded in
-    its own text. Unknown, unfamiliar, and error-detail fields and
-    messages are otherwise preserved verbatim.
-    """
-    if isinstance(value, dict):
-        return {
-            key: (
-                REDACTED
-                if isinstance(key, str) and _is_secret_field(key)
-                else redact_json(child)
-            )
-            for key, child in value.items()
-        }
-    if isinstance(value, list):
-        return [redact_json(item) for item in value]
-    if isinstance(value, str):
-        return redact_text(value)
-    return value
-
-
-def redact_text(text: str) -> str:
-    """Apply a bounded set of token/credential patterns to non-JSON text.
-
-    A small, fixed pass over recognizable credential shapes -- not an
-    open-ended scan -- so the rest of the body stays near-verbatim. The
-    key's own quoting/punctuation (for example ``"password":``) is
-    reproduced unchanged; only the value between the quotes is replaced.
-    """
-    redacted = _BEARER_TOKEN_PATTERN.sub(REDACTED, text)
-    return _SECRET_KEY_VALUE_PATTERN.sub(
-        lambda match: (
-            f"{match.group(1)}{match.group(2)}{match.group(3)}"
-            f"{match.group(4)}{REDACTED}{match.group(4)}"
-        ),
-        redacted,
-    )
 
 
 # --- create ---------------------------------------------------------------
@@ -325,7 +241,7 @@ def _create_fuse(path: Path, content: str) -> None:
         except OSError as cleanup_error:
             exc.add_note(
                 "The partial attempt fuse could not be removed: "
-                f"{redact_text(str(cleanup_error))}"
+                f"{cleanup_error}"
             )
         raise
 
@@ -425,13 +341,9 @@ def _emit_annotations(
     *,
     marker: str = _CREATE_MARKER,
 ) -> None:
-    # Redacted like the response body: a transport/local exception message
-    # (for example ``transportError``) is caller-supplied text, not a
-    # trusted, pre-vetted value, so a credential pattern inside it must not
-    # leak through annotations either.
     print(
         f"{marker}_ANNOTATIONS_JSON:"
-        f"{json.dumps(redact_json(annotations), ensure_ascii=True)}"
+        f"{json.dumps(annotations, ensure_ascii=True)}"
     )
 
 
@@ -442,14 +354,12 @@ def _print_evidence(
     *,
     marker: str = _CREATE_MARKER,
 ) -> None:
-    """Print light annotations, then the response body, redacted -- shared
-    by ``list``'s failure evidence and every ``create`` disposition branch.
-    """
+    """Print annotations followed by the response body."""
     _emit_annotations(annotations, marker=marker)
     if body_is_json:
-        print(f"{marker}_RESPONSE_JSON:{json.dumps(redact_json(body), ensure_ascii=True)}")
+        print(f"{marker}_RESPONSE_JSON:{json.dumps(body, ensure_ascii=True)}")
     else:
-        print(f"{marker}_RESPONSE_TEXT:{redact_text(body)}")
+        print(f"{marker}_RESPONSE_TEXT:{body}")
 
 
 def create_from_starter_package(
@@ -854,8 +764,7 @@ def main(argv: list[str] | None = None) -> int:
         requests.exceptions.RequestException,
         ValueError,
     ) as exc:
-        details = "\n".join((str(exc), *getattr(exc, "__notes__", ())))
-        print(f"ERROR: {redact_text(details)}", file=sys.stderr)
+        _print_exception(exc)
         return 1
 
 

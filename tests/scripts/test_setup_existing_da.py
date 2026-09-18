@@ -464,6 +464,53 @@ def test_list_agents_returns_only_verified_dev_agents() -> None:
     assert result["unverifiedAgentCount"] == 0
 
 
+def test_list_agents_emits_unverified_http_response(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    class UnverifiedClient(FakeClient):
+        def get_agent(self, agent_id: str) -> dict[str, Any]:
+            if agent_id == AGENT_ID:
+                response = SimpleNamespace(
+                    text='{"error":{"message":"not visible"}}',
+                    json=lambda: {"error": {"message": "not visible"}},
+                )
+                raise setup_existing_da.AgentBuilderHTTPError(
+                    "Agent inspection",
+                    403,
+                    error_code="Forbidden",
+                    request_id="request-403",
+                    response=response,
+                )
+            return super().get_agent(agent_id)
+
+    result = setup_existing_da.inspect_dev_agents(UnverifiedClient())
+    captured = capsys.readouterr()
+
+    assert result["unverifiedAgentCount"] == 1
+    assert "AgentBuilderHTTPError" in captured.err
+    response = json.loads(
+        captured.out.split(
+            "DA_AGENT_LIST_WARNING_RESPONSE_JSON:",
+            1,
+        )[1]
+    )
+    assert response == {"error": {"message": "not visible"}}
+
+
+def test_print_exception_includes_type_and_notes(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    error = setup_existing_da.ExistingDASetupError("primary failure")
+    error.add_note("secondary failure")
+
+    setup_existing_da._print_exception(error)
+
+    assert capsys.readouterr().err.splitlines() == [
+        "ERROR: ExistingDASetupError: primary failure",
+        "NOTE: secondary failure",
+    ]
+
+
 def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
     result = _attach(FakeClient(), tmp_path)
     agent_root = _agent_root(tmp_path)

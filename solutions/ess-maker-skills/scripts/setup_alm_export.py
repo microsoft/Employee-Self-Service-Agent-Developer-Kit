@@ -8,7 +8,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import sys
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -26,6 +25,8 @@ from setup_existing_da import (
     _client_from_args,
     _normalize_environment_id,
     _normalize_guid,
+    _print_exception,
+    _print_http_error_response,
     _write_json,
     resolve_da_target,
 )
@@ -222,13 +223,19 @@ def export_prod_source(
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--source-url", required=True)
+    common.add_argument("--source-url")
+    common.add_argument("--environment-id")
+    common.add_argument("--agent-id")
+    common.add_argument(
+        "--ring",
+        choices=("prod", "preprod", "test"),
+    )
     common.add_argument("--tenant-id")
     common.add_argument("--select-account", action="store_true")
     common.add_argument("--account")
+    common.add_argument("--host")
     common.add_argument("--api-version", default=DEFAULT_API_VERSION)
     common.add_argument("--kit-root", type=Path, default=Path.cwd())
-    common.set_defaults(host=None)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("inspect", parents=[common])
     commands.add_parser("export", parents=[common])
@@ -250,12 +257,15 @@ def main(argv: list[str] | None = None) -> int:
         cleanup_active_export(args.kit_root)
         source = resolve_da_target(
             target_url=args.source_url,
-            environment_id=None,
-            agent_id=None,
-            ring=None,
+            environment_id=args.environment_id,
+            agent_id=args.agent_id,
+            ring=args.ring,
             require_agent=True,
         )
-        if source.get("source") != "copilot-studio-url":
+        if (
+            args.source_url
+            and source.get("source") != "copilot-studio-url"
+        ):
             raise AlmExportSetupError(
                 "The source must be a recognized Copilot Studio agent URL."
             )
@@ -286,7 +296,11 @@ def main(argv: list[str] | None = None) -> int:
         OSError,
         ValueError,
     ) as exc:
-        print(f"ERROR: {exc}", file=sys.stderr)
+        _print_http_error_response(
+            exc,
+            marker="DA_ALM_EXPORT_ERROR",
+        )
+        _print_exception(exc)
         return 1
     print(f"{marker}{json.dumps(result, ensure_ascii=True)}")
     return 0
