@@ -393,6 +393,34 @@ def test_opener_metadata_exposes_only_normal_create_and_edit_modes():
     assert "Manager takes no editor arguments" in opener.description
 
 
+def test_opener_tools_list_explains_priority_labels():
+    tools = asyncio.run(org_server.mcp.list_tools())
+    opener = next(tool for tool in tools if tool.name == "open_org_announcements")
+    priority = opener.inputSchema["$defs"]["SuggestedBulletinDraft"]["properties"]["priority"]
+
+    assert "0 = Important" in priority["description"]
+    assert "1 = Informational" in priority["description"]
+    assert "defaults to Informational (1)" in priority["description"]
+
+
+@pytest.mark.parametrize("priority", [0, 1], ids=["important", "informational"])
+def test_pre_hydrated_priority_survives_the_mcp_boundary(fake_clients, priority):
+    client, _ = fake_clients()
+    payload = _structured(
+        _call(
+            "open_org_announcements",
+            {
+                "view": "editor",
+                "mode": "create",
+                "suggestedDraft": {"type": "standard", "priority": priority},
+            },
+        )
+    )
+
+    assert payload["draft"]["standardPriority"] == priority
+    assert client.saves == []
+
+
 # --------------------------------------------------------------------------
 # Opener behavior
 # --------------------------------------------------------------------------
@@ -445,6 +473,45 @@ def test_empty_create_returns_the_editor_defaults_without_writing(
     assert payload["draft"]["type"] == "standard"
     assert payload["draft"]["standardPriority"] == 1
     assert payload["draft"]["audience"] == []
+    assert client.saves == []
+    assert client.transitions == []
+
+
+def test_empty_audience_search_allows_review_only_create_without_audience(fake_clients) -> None:
+    client, _ = fake_clients(graph=_FakeGraphClient(search_groups_result=[]))
+    search = _structured(_call("search_audience_groups", {"query": "No matching group"}))
+
+    assert search["status"] == "success"
+    assert search["groups"] == []
+    assert search["exhausted"] is True
+
+    payload = _structured(
+        _call(
+            "open_org_announcements",
+            {
+                "view": "editor",
+                "mode": "create",
+                "suggestedDraft": {
+                    "type": "standard",
+                    "priority": 1,
+                    "title": "Review with unresolved audience",
+                    "description": "Test announcement only.",
+                    "startDate": "2026-09-17",
+                    "endDate": "2026-09-24",
+                },
+            },
+        )
+    )
+
+    assert payload["view"] == "editor"
+    assert payload["config"] is None
+    assert payload["draft"]["title"] == "Review with unresolved audience"
+    assert payload["draft"]["description"] == "Test announcement only."
+    assert payload["draft"]["standardPriority"] == 1
+    assert payload["draft"]["startDate"] == "2026-09-17T00:00:00.000Z"
+    assert payload["draft"]["endDate"] == "2026-09-24T23:59:59.999Z"
+    assert payload["draft"]["audience"] == []
+    assert payload["draft"].get("id") is None
     assert client.saves == []
     assert client.transitions == []
 
@@ -503,6 +570,122 @@ def test_pre_hydrated_create_overlays_the_suggestion_and_writes_nothing(
     assert draft["endDate"] == ""
     assert draft["primaryAction"] is None
     assert client.saves == []
+
+
+@pytest.mark.parametrize(
+    "suggestion",
+    [
+        {},
+        {"type": "standard", "title": "", "description": "", "audience": []},
+        {"type": "standard", "startDate": "", "endDate": "", "primaryAction": None},
+    ],
+)
+def test_incomplete_working_copy_opens_without_publication_requirements(
+    fake_clients, suggestion
+) -> None:
+    client, graph = fake_clients()
+
+    payload = _structured(_call("open_org_announcements", {
+        "view": "editor", "mode": "create", "suggestedDraft": suggestion,
+    }))
+
+    assert payload["mode"] == "create"
+    assert payload["view"] == "editor"
+    assert payload["config"] is None
+    assert "id" not in payload["draft"]
+    assert payload["draft"]["title"] == payload["draft"]["description"] == ""
+    assert payload["draft"]["startDate"] == payload["draft"]["endDate"] == ""
+    assert payload["draft"]["audience"] == []
+    assert payload["draft"]["primaryAction"] is None
+    assert (payload["tenantId"], payload["titleId"]) == (TENANT_ID, TITLE_ID)
+    assert graph.tenant_ids == [TENANT_ID]
+    assert graph.object_ids == [OBJECT_ID]
+    assert graph.resolve_calls == []
+    assert client.gets == client.saves == client.transitions == []
+    assert client.lists == 0
+
+
+@pytest.mark.parametrize(
+    ("announcement_type", "action"),
+    [
+        ("alert", {"actionType": "copilotChat", "label": "Ask Copilot", "prompt": "Explain the announcement."}),
+        ("alert", {"actionType": "copilotChat", "label": "Ask Copilot"}),
+        ("alert", {"actionType": "externalLink", "label": "Open", "url": None}),
+        ("standard", {"actionType": "externalLink", "label": "Open"}),
+        ("standard", {"actionType": "copilotChat", "label": "", "prompt": ""}),
+    ],
+)
+def test_frontend_copy_projection_opens_repairable_actions_with_audience_hydration(
+    fake_clients, announcement_type, action
+) -> None:
+    """Vorpal openRowEditor projects copy content, not a persisted source ID."""
+    client, graph = fake_clients()
+    suggestion = {
+        "type": announcement_type,
+        "title": "Kopie der Ankuendigung",
+        "description": "Editable working content",
+        "primaryAction": action,
+        "startDate": "2026-09-10T00:00:00.000Z",
+        "endDate": "2026-10-10T23:59:59.999Z",
+        "audience": ["g1"],
+    }
+    original = copy.deepcopy(suggestion)
+
+    payload = _structured(_call("open_org_announcements", {
+        "view": "editor", "mode": "create", "suggestedDraft": suggestion,
+    }))
+
+    assert (payload["view"], payload["mode"], payload["config"]) == ("editor", "create", None)
+    assert (payload["tenantId"], payload["titleId"]) == (TENANT_ID, TITLE_ID)
+    draft = payload["draft"]
+    assert "id" not in draft
+    for field in ("type", "title", "description", "startDate", "endDate"):
+        assert draft[field] == suggestion[field]
+    assert draft["primaryAction"] == {"url": None, "prompt": None, **action}
+    assert draft["standardPriority"] == 1
+    assert draft["standardSecondaryAction"] is None
+    assert draft["audience"] == [graph.resolved["g1"]]
+    assert graph.resolve_calls == [["g1"]]
+    assert graph.tenant_ids == [TENANT_ID]
+    assert graph.object_ids == [OBJECT_ID]
+    assert client.gets == client.saves == client.transitions == []
+    assert client.lists == 0
+    assert suggestion == original
+
+
+def test_repairable_copy_directory_failure_is_an_honest_read_only_open_error(fake_clients) -> None:
+    client, graph = fake_clients(graph=_FakeGraphClient(
+        error=GraphDirectoryError("Synthetic directory outage", code="SearchUnavailable", retryable=True)
+    ))
+    original = {
+        "type": "alert",
+        "title": "Copy of Repairable announcement",
+        "primaryAction": {"actionType": "copilotChat", "label": "Ask Copilot"},
+        "audience": ["g1"],
+    }
+
+    result = asyncio.run(org_server.open_org_announcements(
+        titleId=TITLE_ID,
+        view="editor",
+        mode="create",
+        suggestedDraft=org_server.SuggestedBulletinDraft.model_validate(original),
+    ))
+
+    assert result.isError is True
+    payload = result.structuredContent
+    assert set(payload) == {"tenantId", "titleId", "view", "request", "code", "message", "retryable"}
+    assert payload["view"] == "error"
+    assert payload["code"] == "AudienceMetadataUnavailable"
+    assert payload["retryable"] is True
+    assert payload["request"] == {
+        "titleId": TITLE_ID, "view": "editor", "mode": "create", "suggestedDraft": original,
+    }
+    assert (payload["tenantId"], payload["titleId"]) == (TENANT_ID, TITLE_ID)
+    assert "Synthetic directory outage" in payload["message"]
+    assert result.content[0].text == payload["message"]
+    assert graph.resolve_calls == [["g1"]]
+    assert client.gets == client.saves == client.transitions == []
+    assert client.lists == 0
 
 
 def test_a_suggested_draft_carrying_canonical_metadata_is_rejected(
@@ -1031,6 +1214,63 @@ def test_http_200_validation_errors_are_reported_individually(fake_clients) -> N
     assert all(error["retryable"] is False for error in payload["errors"])
 
 
+@pytest.mark.parametrize("status", ["draft", "published"])
+@pytest.mark.parametrize(
+    ("announcement_type", "action", "code"),
+    [
+        ("alert", {"actionType": "copilotChat", "label": "Ask", "prompt": "Explain"}, "AlertActionInvalid"),
+        ("standard", {"actionType": "externalLink", "label": "Open"}, "ActionTargetMissing"),
+        ("standard", {"actionType": "externalLink", "label": "Open", "url": "not-a-url"}, "ActionUrlNotHttps"),
+    ],
+)
+def test_opening_repairable_content_does_not_bypass_backend_action_validation(
+    fake_clients, status, announcement_type, action, code
+) -> None:
+    """WeveNova b6fc27a: EmployeeAgentBulletinAccessor.Validation.cs,
+    ValidateBulletin -> ValidateActions validates present actions for both statuses.
+    The error codes/field are source-derived; the message and response are synthetic.
+    """
+    backend_error = {
+        "code": code,
+        "field": "primaryAction",
+        "message": "Synthetic action validation failure.",
+    }
+    client, graph = fake_clients(_FakeClient(
+        save_error=org_client.BulletinValidationError([backend_error])
+    ))
+    bulletin = {
+        "type": announcement_type,
+        "title": "Copy for repair",
+        "description": "Editable working content",
+        "primaryAction": action,
+    }
+    opened = _structured(_call("open_org_announcements", {
+        "view": "editor", "mode": "create", "suggestedDraft": bulletin,
+    }))
+    assert opened["view"] == "editor"
+    assert opened["config"] is None
+    assert "id" not in opened["draft"]
+    assert client.saves == []
+
+    result = asyncio.run(org_server.save_bulletin(
+        titleId=TITLE_ID, bulletin=bulletin, audience=[], status=status,
+    ))
+
+    assert result.isError is True
+    assert result.structuredContent == {
+        "tenantId": TENANT_ID,
+        "titleId": TITLE_ID,
+        "status": "failure",
+        "errors": [{**backend_error, "retryable": False}],
+    }
+    assert len(client.saves) == 1
+    assert client.saves[0]["bulletin"] == bulletin
+    assert client.saves[0]["status"] == status
+    assert client.gets == client.transitions == []
+    assert client.lists == 0
+    assert graph.resolve_calls == []
+
+
 def test_a_server_failure_is_not_reported_as_a_validation_error(
     fake_clients,
 ) -> None:
@@ -1150,6 +1390,59 @@ def test_a_graph_failure_after_a_committed_save_is_not_retryable(
     assert payload["errors"][0]["code"] == "CommittedRefreshFailed"
     assert payload["errors"][0]["retryable"] is False
     assert len(client.saves) == 1
+
+
+@pytest.mark.parametrize("saved_audience", [[], ["g1"]], ids=["manager-hydration", "saved-item-hydration"])
+@pytest.mark.parametrize("identifier", [None, "existing-1"], ids=["create", "update"])
+def test_committed_save_graph_failure_preserves_full_envelope_and_never_replays(
+    fake_clients, saved_audience, identifier
+) -> None:
+    class EchoSavedClient(_FakeClient):
+        async def save_bulletin(self, title_id, payload):
+            saved = await super().save_bulletin(title_id, payload)
+            saved["audience"] = list(payload["audience"])
+            return saved
+
+    client, graph = fake_clients(
+        EchoSavedClient(items=[_config("another-announcement", audience=["g1"])]),
+        graph=_FakeGraphClient(
+            error=GraphDirectoryError("Synthetic directory outage", code="SearchUnavailable", retryable=True)
+        ),
+    )
+    arguments = _save_arguments(audience=saved_audience)
+    if identifier is not None:
+        arguments["id"] = identifier
+
+    result = asyncio.run(org_server.save_bulletin(titleId=TITLE_ID, **arguments))
+
+    assert result.isError is True
+    payload = result.structuredContent
+    assert set(payload) == {"tenantId", "titleId", "status", "errors"}
+    assert (payload["tenantId"], payload["titleId"]) == (TENANT_ID, TITLE_ID)
+    assert payload["status"] == "failure"
+    summary, cause = payload["errors"]
+    assert summary == {
+        "code": "CommittedRefreshFailed",
+        "field": None,
+        "message": result.content[0].text,
+        "retryable": False,
+    }
+    assert "saved" in summary["message"]
+    assert "do not repeat the action" in summary["message"]
+    assert cause == {
+        "code": "AudienceMetadataUnavailable",
+        "field": None,
+        "message": "Audience group names could not be loaded. Synthetic directory outage",
+        "retryable": False,
+    }
+    assert len(client.saves) == 1
+    assert client.saves[0].get("id") == identifier
+    assert client.saves[0]["audience"] == saved_audience
+    assert client.lists == (0 if saved_audience else 1)
+    assert graph.resolve_calls == [["g1"]]
+    assert graph.tenant_ids == [TENANT_ID]
+    assert graph.object_ids == [OBJECT_ID]
+    assert client.gets == client.transitions == []
 
 
 def test_a_refresh_failure_after_a_committed_duplicate_is_not_retryable(

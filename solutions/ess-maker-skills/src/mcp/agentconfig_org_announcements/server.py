@@ -759,7 +759,9 @@ async def open_org_announcements(
     calls it at most once per maker turn; the widget uses it for navigation
     within the same tenant-and-agent scope. Manager takes no editor arguments.
     Editor requires mode=create without bulletinId, or mode=edit with bulletinId.
-    suggestedDraft is supported only for create.
+    suggestedDraft is supported only for create, including editable copies
+    whose actions need repair. Opening preserves working content; it does not
+    establish that the content is valid to save or publish.
     """
     # The flat tool signature stays compatible with MCP callers. Validate the
     # combination before entering the recoverable widget-error path: an invalid
