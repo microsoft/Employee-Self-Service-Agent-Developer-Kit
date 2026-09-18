@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import binascii
 import http.server
 import json
 import logging
@@ -39,9 +38,11 @@ import threading
 import urllib.parse
 import uuid
 import webbrowser
+from enum import Enum
 from typing import Any, Optional
 
 import httpx
+from portalocker.exceptions import LockException
 
 from _tenant_context import configured_tenant_id
 from _token_cache import create_token_cache
@@ -68,6 +69,41 @@ class AgentConfigApiError(RuntimeError):
         self.http_status = http_status
 
 
+class _CredentialFailure(Enum):
+    FILE_MISSING = (
+        "AGENTCONFIG_ACCESS_TOKEN_FILE does not exist. Restore the configured "
+        "token file for the original account and retry."
+    )
+    FILE_UNREADABLE = (
+        "AGENTCONFIG_ACCESS_TOKEN_FILE could not be read. "
+        "Check token-file access and retry."
+    )
+    FILE_EMPTY = (
+        "AGENTCONFIG_ACCESS_TOKEN_FILE is empty. "
+        "Provide a valid token for the original account and retry."
+    )
+    INVALID_TOKEN = (
+        "The replacement access token is malformed or has no valid tenant id. "
+        "Provide a valid token for the original account and retry."
+    )
+    TENANT_MISMATCH = (
+        "The replacement access token does not match the original tenant. "
+        "Provide a token for the original account and tenant and retry."
+    )
+    ACCOUNT_MISMATCH = (
+        "The replacement access token does not identify the original account. "
+        "Provide a matching token and retry."
+    )
+
+
+class _LocalCredentialError(ValueError):
+    """Local validation failure with an allowlisted renewal diagnostic."""
+
+    def __init__(self, message: str, reason: _CredentialFailure):
+        super().__init__(message)
+        self.reason = reason
+
+
 def _resolve_token() -> str:
     """Resolve a token without writing it to logs or MCP configuration."""
     expected_tenant_id = configured_tenant_id()
@@ -85,14 +121,19 @@ def _resolve_token() -> str:
 
 def _read_token_file(token_file: str) -> str:
     if not os.path.isfile(token_file):
-        raise ValueError(
-            f"AGENTCONFIG_ACCESS_TOKEN_FILE={token_file!r} does not exist"
+        raise _LocalCredentialError(
+            "AGENTCONFIG_ACCESS_TOKEN_FILE does not exist", _CredentialFailure.FILE_MISSING
         )
-    with open(token_file, "r", encoding="utf-8") as handle:
-        token = handle.read().strip()
+    try:
+        with open(token_file, "r", encoding="utf-8") as handle:
+            token = handle.read().strip()
+    except (OSError, UnicodeError) as error:
+        raise _LocalCredentialError(
+            "AGENTCONFIG_ACCESS_TOKEN_FILE could not be read", _CredentialFailure.FILE_UNREADABLE
+        ) from error
     if not token:
-        raise ValueError(
-            f"AGENTCONFIG_ACCESS_TOKEN_FILE={token_file!r} is empty"
+        raise _LocalCredentialError(
+            "AGENTCONFIG_ACCESS_TOKEN_FILE is empty", _CredentialFailure.FILE_EMPTY
         )
     return token
 
@@ -102,9 +143,10 @@ def _validate_token_tenant(token: str, expected_tenant_id: str | None) -> str:
         expected_tenant_id is not None
         and _decode_tenant_id_from_jwt(token) != expected_tenant_id
     ):
-        raise ValueError(
+        raise _LocalCredentialError(
             "The AgentConfiguration token tenant does not match the configured "
-            "Dataverse environment. Sign in to that tenant or provide a matching token."
+            "Dataverse environment. Sign in to that tenant or provide a matching token.",
+            _CredentialFailure.TENANT_MISMATCH,
         )
     return token
 
@@ -157,18 +199,19 @@ def acquire_token_msal_interactive(expected_tenant_id: str | None = None) -> str
         result = _acquire_token_interactive_form_post(app)
 
     if "access_token" not in result:
-        error = result.get("error", "unknown_error")
-        description = result.get("error_description", "")
-        raise ValueError(f"MSAL sign-in failed ({error}): {description}")
+        raise ValueError("AgentConfiguration sign-in failed. Sign in again and retry.")
     return result["access_token"]
 
 
-def _refresh_msal_token(tenant_id: str, object_id: str) -> str:
+def account_for_identity(app: Any, tenant_id: str, object_id: str) -> Any | None:
+    """Find one MSAL home account through its tenant-local profile.
+
+    get_accounts() groups tenant profiles by home account. Its exposed local id
+    may belong to another tenant (notably for guests), so match the original
+    tenant profile in the shared cache before selecting a grouped account.
+    """
     import msal
 
-    app = _create_msal_app(tenant_id)
-    # get_accounts() groups profiles by home account and can expose another
-    # tenant's local id. Resolve the original tenant profile through the cache.
     home_account_ids = {
         account["home_account_id"]
         for account in app.token_cache.search(msal.TokenCache.CredentialType.ACCOUNT)
@@ -182,13 +225,19 @@ def _refresh_msal_token(tenant_id: str, object_id: str) -> str:
         account for account in app.get_accounts()
         if account.get("home_account_id") in home_account_ids
     ]
-    if len(accounts) != 1:
+    return accounts[0] if len(accounts) == 1 else None
+
+
+def _refresh_msal_token(tenant_id: str, object_id: str) -> str:
+    app = _create_msal_app(tenant_id)
+    account = account_for_identity(app, tenant_id, object_id)
+    if account is None:
         raise AgentConfigApiError(
             "The original account is unavailable for token refresh. "
             "Sign in again as that account and retry.",
             http_status=401,
         )
-    result = app.acquire_token_silent(_SCOPE, account=accounts[0], force_refresh=True)
+    result = app.acquire_token_silent(_SCOPE, account=account, force_refresh=True)
     if not result or not result.get("access_token"):
         raise AgentConfigApiError(
             "Could not refresh the access token for the original account. "
@@ -223,10 +272,10 @@ def _acquire_token_interactive_form_post(app: Any) -> dict[str, Any]:
     server.server_close()
 
     if not _FormPostCaptureHandler.captured:
-        return {
-            "error": "timeout",
-            "error_description": "No sign-in callback received within 300 seconds.",
-        }
+        raise ValueError(
+            "AgentConfiguration sign-in timed out waiting for the browser callback. "
+            "Sign in again and retry."
+        )
 
     return app.acquire_token_by_auth_code_flow(
         flow,
@@ -243,30 +292,39 @@ def _decode_jwt_payload(token: str) -> dict[str, Any]:
     """
     parts = token.split(".")
     if len(parts) != 3:
-        raise ValueError(
+        raise _LocalCredentialError(
             "AGENTCONFIG_ACCESS_TOKEN does not look like a JWT "
-            "(expected three dot-separated segments)"
+            "(expected three dot-separated segments)",
+            _CredentialFailure.INVALID_TOKEN,
         )
     payload_segment = parts[1]
     padded = payload_segment + "=" * (-len(payload_segment) % 4)
     try:
-        return json.loads(base64.urlsafe_b64decode(padded))
-    except (binascii.Error, json.JSONDecodeError, UnicodeDecodeError) as error:
-        raise ValueError(
-            f"Could not decode AGENTCONFIG_ACCESS_TOKEN payload: {error}"
+        payload = json.loads(base64.urlsafe_b64decode(padded))
+    except ValueError as error:
+        raise _LocalCredentialError(
+            "Could not decode AGENTCONFIG_ACCESS_TOKEN payload",
+            _CredentialFailure.INVALID_TOKEN,
         ) from error
+    if not isinstance(payload, dict):
+        raise _LocalCredentialError(
+            "AGENTCONFIG_ACCESS_TOKEN payload must be an object", _CredentialFailure.INVALID_TOKEN
+        )
+    return payload
 
 
 def _decode_tenant_id_from_jwt(token: str) -> str:
     """Decode and validate the tenant ID (``tid``) used to address the route."""
     tenant_id = _decode_jwt_payload(token).get("tid")
     if not isinstance(tenant_id, str) or not tenant_id:
-        raise ValueError("AGENTCONFIG_ACCESS_TOKEN payload has no 'tid' claim")
+        raise _LocalCredentialError(
+            "AGENTCONFIG_ACCESS_TOKEN payload has no 'tid' claim", _CredentialFailure.INVALID_TOKEN
+        )
     try:
         return str(uuid.UUID(tenant_id))
     except ValueError as error:
-        raise ValueError(
-            "AGENTCONFIG_ACCESS_TOKEN payload has an invalid 'tid' claim"
+        raise _LocalCredentialError(
+            "AGENTCONFIG_ACCESS_TOKEN payload has an invalid 'tid' claim", _CredentialFailure.INVALID_TOKEN
         ) from error
 
 
@@ -285,6 +343,19 @@ def _decode_object_id_from_jwt(token: str) -> Optional[str]:
     if isinstance(object_id, str) and object_id:
         return object_id
     return None
+
+
+def validate_token_identity(token: str, tenant_id: str, object_id: str | None) -> str:
+    """Check resource-token context; services still validate and authorize tokens."""
+    _validate_token_tenant(token, tenant_id)
+    if not object_id:
+        raise ValueError("The authoring account cannot be identified without an oid claim")
+    actual = _decode_object_id_from_jwt(token)
+    if actual is None or actual.casefold() != object_id.casefold():
+        raise _LocalCredentialError(
+            "The token does not identify the intended authoring account", _CredentialFailure.ACCOUNT_MISMATCH
+        )
+    return token
 
 
 class AgentConfigBaseClient:
@@ -326,6 +397,11 @@ class AgentConfigBaseClient:
             f"tenant_id={self.tenant_id!r}>"
         )
 
+    @property
+    def object_id(self) -> str | None:
+        """Captured tenant-local principal context, never a tool argument."""
+        return self._object_id
+
     def _transform_response(self, payload: Any) -> Any:
         """Surface-specific response key transform; identity in the neutral core.
 
@@ -360,7 +436,7 @@ class AgentConfigBaseClient:
         self._client = None
 
     def _acquire_replacement_token(self) -> str:
-        if self._object_id is None:
+        if self.object_id is None:
             raise AgentConfigApiError(
                 "The original account cannot be identified for token refresh. "
                 "Provide a token with an object id and recreate the client.",
@@ -377,23 +453,33 @@ class AgentConfigBaseClient:
                     http_status=401,
                 )
         else:
-            token = _refresh_msal_token(self.tenant_id, self._object_id)
-
-        _validate_token_tenant(token, self.tenant_id)
-        object_id = _decode_object_id_from_jwt(token)
-        if object_id is None or object_id.casefold() != self._object_id.casefold():
-            raise AgentConfigApiError(
-                "The replacement token does not identify the original account. "
-                "Provide a matching token and retry.",
-                http_status=401,
-            )
-        return token
+            token = _refresh_msal_token(self.tenant_id, self.object_id)
+        return validate_token_identity(token, self.tenant_id, self.object_id)
 
     async def _refresh_token(self, rejected_token: str) -> None:
         async with self._token_lock:
             if self._token != rejected_token:
                 return
-            token = await asyncio.to_thread(self._acquire_replacement_token)
+            try:
+                token = await asyncio.to_thread(self._acquire_replacement_token)
+            except (ValueError, LockException, OSError) as error:
+                message = (
+                    "Could not renew credentials for the original account. "
+                    "Provide matching credentials and retry."
+                )
+                if isinstance(error, _LocalCredentialError):
+                    message = error.reason.value
+                elif isinstance(error, LockException):
+                    message = (
+                        "The credential cache could not be locked. Retry shortly; "
+                        "if this persists, check local cache access."
+                    )
+                elif isinstance(error, (PermissionError, FileNotFoundError)):
+                    message = (
+                        "Local credential access failed. Check credential-file and "
+                        "cache availability and permissions, then retry."
+                    )
+                raise AgentConfigApiError(message, http_status=401) from error
             if token == rejected_token:
                 raise AgentConfigApiError(
                     "No replacement access token is available. "
