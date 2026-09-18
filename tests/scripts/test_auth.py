@@ -25,7 +25,7 @@ from tests.mocks import dataverse as dv
 require_validated_mock(dv)
 
 
-def test_da_setup_completion_uses_canonical_marker(
+def test_da_setup_completion_uses_active_agents_canonical_marker(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -34,12 +34,61 @@ def test_da_setup_completion_uses_canonical_marker(
     state_path = tmp_path / ".local" / "setup" / "config.json"
     state_path.parent.mkdir(parents=True)
     state_path.write_text(
-        json.dumps({"schema_version": 3, "connect_ready": True}),
+        json.dumps(
+            {
+                "schema_version": 4,
+                "agents": {
+                    "agent-1": {
+                        "agent": {"workspace_slug": "employee-self-service"},
+                        "connect_ready": True,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / ".local" / "config.json").write_text(
+        json.dumps({"activeAgent": "employee-self-service"}),
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path)
 
     assert auth.is_connect_ready()
+
+
+def test_da_setup_completion_is_scoped_to_active_agent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import auth
+
+    state_path = tmp_path / ".local" / "setup" / "config.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 4,
+                "agents": {
+                    "ready": {
+                        "agent": {"workspace_slug": "ready-agent"},
+                        "connect_ready": True,
+                    },
+                    "active": {
+                        "agent": {"workspace_slug": "active-agent"},
+                        "connect_ready": False,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / ".local" / "config.json").write_text(
+        json.dumps({"activeAgent": "active-agent"}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert not auth.is_connect_ready()
 
 
 def test_da_setup_completion_ignores_operational_config(

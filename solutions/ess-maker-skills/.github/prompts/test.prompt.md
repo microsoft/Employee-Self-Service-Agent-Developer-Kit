@@ -15,7 +15,7 @@ component and diagnoses faults. It is **not** the eval gate: to author evaluatio
 `/evaluate`, and running an eval set as a graded pass/fail over the deployed agent is a
 separate runtime-eval runner, not this command.
 
-**Setup-state check.** Read `.local/setup/config.json`. If it does not have `schema_version: 3` and `connect_ready: true`, show:
+**Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`. If canonical state does not have `schema_version: 4` and an `agents` entry matching the active workspace slug with `connect_ready: true`, show:
 
 > Welcome to the ESS Maker Kit. Before running `/test`, type `/setup` to set up your environment.
 

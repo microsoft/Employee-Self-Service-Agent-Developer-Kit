@@ -48,8 +48,9 @@ When `/update` includes additional text, explicit component intent always wins:
 2. Wait for the user to answer.
 3. Route based on their answer:
    - **topic**
-     -> Read `.local/setup/config.json`. If it does not have
-     `schema_version: 3` and `connect_ready: true`, show the setup message below
+     -> Read `.local/setup/config.json` and `.local/config.json`. If canonical
+     state does not have `schema_version: 4` and an `agents` entry matching the
+     active workspace slug with `connect_ready: true`, show the setup message below
      and STOP. Otherwise read
      `src/skills/topics/update-eval-driven/SKILL.md` and follow its
      instructions. It handles simple topics with evals and delegates

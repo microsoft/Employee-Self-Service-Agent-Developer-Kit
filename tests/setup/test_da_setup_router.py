@@ -94,25 +94,39 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
         normalized_foundation
     )
     assert "offer to perform it" in normalized_foundation
-    assert prompt.index("immediately initialize the native task list") < prompt.index(
-        "{PYTHON} -m pip install"
+    assert prompt.index(
+        "After reading the foundation skill, write the complete maker-facing "
+        "progress"
+    ) < prompt.index("{PYTHON} -m pip install")
+    checklist = "\n".join(
+        (
+            "- {marker} Choose the starting point and target environment",
+            "- {marker} Verify access and agent identity",
+            "- {marker} Establish an editable Dev agent",
+            "- {marker} Materialize the local workspace",
+            "- {marker} Review the setup handoff",
+        )
     )
-    for stage in (
-        "Choose the starting point and target environment",
-        "Verify access and agent identity",
-        "Establish an editable Dev agent",
-        "Materialize the local workspace",
-        "Review the setup handoff",
-    ):
-        assert stage in prompt
-    assert "Keep it current through the final handoff" in normalized_prompt
-    assert "inline checklist only when" in normalized_prompt
+    assert checklist in prompt
+    assert checklist in foundation
+    assert "Before every maker-facing response, including the final handoff" in (
+        normalized_prompt
+    )
+    assert "one single-level bullet and one leading status emoji per stage" in (
+        normalized_prompt
+    )
+    assert "native task list" not in normalized_prompt
     cwd_instruction = (
         "Run setup commands from the current ESS Maker Skills workspace folder"
     )
     assert cwd_instruction in normalized_prompt
     assert cwd_instruction in normalized_foundation
-    assert "At setup start, initialize the host's native task list" in foundation
+    assert (
+        "At setup start and at the beginning of every subsequent setup turn"
+        in foundation
+    )
+    assert "same ordinary Markdown shape" in foundation
+    assert "native task list" not in foundation
     assert "mark **Review the setup handoff** complete before finishing" in foundation
 
 
@@ -126,7 +140,9 @@ def test_public_setup_does_not_configure_mcp() -> None:
 def test_global_and_command_gates_require_canonical_da_completion() -> None:
     instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
 
-    assert "`schema_version` equal to `3`" in instructions
+    assert "`schema_version`" in instructions
+    assert "equal to `4`" in instructions
+    assert "`agents` entry matching `.local/config.json`" in instructions
     assert "`connect_ready` equal to `true`" in instructions
     assert '`status` equal to `"complete"`' not in instructions
 
@@ -150,8 +166,9 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
         path = _PROMPTS / name
         text = path.read_text(encoding="utf-8")
         assert ".local/setup/config.json" in text, path
-        assert "schema_version: 3" in text, path
+        assert "schema_version: 4" in text, path
         assert "connect_ready: true" in text, path
+        assert ".local/config.json" in text, path
         normalized = " ".join(text.split())
         assert 'or local config does not have `setup: "complete"`' not in normalized, (
             path
@@ -161,14 +178,7 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
             not in normalized
         ), path
 
-    assert (
-        "read `.local/setup/config.json` and `.local/config.json`"
-        not in instructions.casefold()
-    )
-    assert (
-        "If `.local/config.json` does not exist or its `setup` value"
-        not in instructions
-    )
+    assert "`.local/config.json`'s" in instructions
 
 
 def test_global_gate_preserves_flightcheck_only_mode() -> None:
@@ -184,8 +194,10 @@ def test_maker_profile_requires_only_canonical_completion() -> None:
     text = _MAKER_PROFILE.read_text(encoding="utf-8")
 
     assert "if (canonicalComplete) met.add('setup')" in text
-    assert "json.schema_version === 3" in text
-    assert "json.connect_ready === true" in text
+    assert "json.schema_version === 4" in text
+    assert "Object.values(json.agents || {}).some" in text
+    assert "agentState.connect_ready === true" in text
+    assert "agentState?.agent?.workspace_slug === config.activeAgent" in text
     assert "'.local/setup/config.json'" in text
     assert "workspaceComplete" not in text
     assert "json.setup === 'complete'" not in text
@@ -310,14 +322,16 @@ def test_empty_setup_offers_recorded_agent_without_requesting_url() -> None:
     local_target = "When the current request supplies no agent"
     generic_question = "When the request does not identify an agent or environment"
     assert foundation.index(local_target) < foundation.index(generic_question)
-    assert "Prefer canonical setup state" in normalized
-    assert "`.local/config.json` only as a compatibility fallback" in normalized
-    assert "**{agent display name}** is already connected to this workspace" in (
+    assert "read canonical setup state and `.local/config.json`" in normalized
+    assert "**{agent display name}** is the active agent in this workspace" in (
         foundation
     )
     for choice in (
         "Continue with this agent",
-        "Set up a different agent in a new workspace",
+        "Switch to another configured agent",
+        "Install another product in this environment",
+        "Reset and use this workspace",
+        "Create and open a new workspace",
         "Cancel setup",
     ):
         assert f"**{choice}**" in foundation
@@ -327,7 +341,8 @@ def test_empty_setup_offers_recorded_agent_without_requesting_url() -> None:
     assert '--ring "{RECORDED_RING}"' in foundation
     assert "Do not ask for the agent or environment URL" in normalized
     assert "**Resume setup for this agent**" in foundation
-    assert "Stop after the workspace handoff" in normalized
+    assert "select-agent" in foundation
+    assert "changes only local active-agent selection" in normalized
     assert "no usable local target exists" in normalized
     assert "Never request a URL merely to revalidate" in " ".join(existing.split())
 
@@ -399,7 +414,7 @@ def test_prod_to_dev_reference_composes_durable_boundaries() -> None:
     assert "Create editable Dev agent" in text
     assert "Do not preselect **Create editable Dev agent**" in text
     assert "Use related Dev agent" in text
-    assert "factual report in `da-existing-dev.md`" in normalized
+    assert "use the factual report there" in normalized
     assert "Existing Prod agent; related Dev reused" in normalized
     assert "Existing Prod agent; new Dev created" in normalized
     for historical_text in (
@@ -452,14 +467,14 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "**{selected product label}**" in text
     assert "Choose a different product" in text
     assert _PREPARE_FRESH_WORKSPACE.is_file()
-    assert "Create and open a new workspace" in text
-    assert "Create a new workspace without opening it" in text
-    assert "Use suggested location -- {suggested absolute sibling-folder path}" in text
-    assert "Choose another location" in text
-    assert "Do not ask the maker to type a path unless" in normalized
-    assert "scripts/prepare_fresh_workspace.py" in text
-    assert "--open-vscode" in text
-    assert "DA_PREPARED_WORKSPACE_JSON:" in text
+    assert "Create and open a new workspace" in foundation
+    assert "Create a new workspace without opening it" not in foundation
+    assert "Use suggested location -- {suggested absolute sibling-folder path}" in foundation
+    assert "Choose another location" in foundation
+    assert "Do not ask the maker to type a path unless" in normalized_foundation
+    assert "scripts/prepare_fresh_workspace.py" in foundation
+    assert "--open-vscode" in foundation
+    assert "DA_PREPARED_WORKSPACE_JSON:" in foundation
     assert "Do you have a test tenant user?" in foundation
     assert "setup_existing_da.py cached-accounts" in foundation
     assert "DA_AGENTBUILDER_ACCOUNTS_JSON:" in foundation
@@ -467,15 +482,13 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert '--account "{SETUP_ACCOUNT}"' in foundation
     assert "Never infer a corp account" in normalized_foundation
     assert "Present account confirmation once" in normalized_foundation
-    assert "Before listing products" in text
-    assert "do not sign in or load the catalog" in normalized
+    assert "Continue in an occupied workspace" in normalized
+    assert "recorded environment is the selected target" in normalized
     assert "explicitly asks for a fresh installation" in normalized_foundation
     assert "even when the current Developer Kit folder already has setup state" in (
         normalized_foundation
     )
-    assert "detached Git worktree" in normalized
-    assert "must be outside the current Developer Kit repository" in normalized
-    assert "do not rerun creation" in normalized
+    assert "new absolute sibling-folder path" in normalized_foundation
     assert "Do not preselect **Create agent**" in text
     assert "Run create only after the maker explicitly selects" in normalized
     assert "exactly one create attempt" not in normalized
@@ -483,30 +496,32 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "Do not invoke create concurrently or automatically" in normalized
     assert "diagnostic evidence only" in normalized
     assert "do not explain those internal version concepts to the maker" in normalized
-    assert "Prepare this agent for local editing?" in text
+    assert "The agent was created. Preparing its local authoring workspace" in normalized
     assert "application lifecycle management" not in normalized
-    assert "**Prepare for local editing**" in text
-    assert "**Not now** performs no ALM operation" in normalized
+    assert "**Prepare for local editing**" not in text
+    assert "**Not now**" not in text
     assert "outcome: verification-failed" in normalized
     assert "Setup has stopped without attaching a workspace." in text
     assert "never show internal step IDs or raw technical output" in normalized
-    assert "no specific failure cause was supplied" in normalized
-    assert "When a specific cause is supplied" in text
     assert "workspace is not ready to connect" in existing_dev
     assert "New entitled MOS product" in text
-    assert "content was synced to the local workspace" in normalized
     assert "content was synced to your local workspace" in existing_dev
     assert "Topics synced" in existing_dev
     assert "Global variables synced" in existing_dev
     assert "factual completion report from `da-existing-dev.md`" in normalized
     assert "Do not infer persona, product, target, or progress" in normalized
     assert "Never invoke" in normalized and "/connect" in normalized
-    assert "Do not publish, remove or replace components" in normalized
+    assert "Do not publish, remove, or replace components" in normalized
     assert "setup_setup_mos_starter.py" not in text
     assert "setup_mos_starter.py resolve" not in text
     assert "setup_mos_starter.py status" not in text
     assert "DA_EXISTING_DEV_DIAGNOSTIC_JSON:" not in text
     assert len(text.splitlines()) < 200
+    assert "--client-request-id" in text
+    assert "one picker option per exact ID" in normalized
+    assert "Do not describe products as remaining, uninstalled, or eligible" in normalized
+    assert "Choose an existing agent in this environment" in text
+    assert "does not identify the corresponding agent" in reference
 
     assert "createFromStarterPackage" in reference
     assert "Live-proven" in reference
@@ -515,27 +530,50 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "alm.isAlmEnabled" in reference
     assert "never publishes or removes components" in reference
     assert "Fuse disposition matrix" in reference
+    assert "Request-scoped create evidence" in reference
     assert "PERSONA" not in reference
     assert "resolve_starter_package" not in reference
     assert "setup_mos_starter.py resolve" not in reference
     assert "setup_mos_starter.py status" not in reference
 
 
-def test_mos_starter_offers_local_workspace_reset() -> None:
-    text = _DA_MOS_STARTER.read_text(encoding="utf-8")
+def test_foundation_offers_local_workspace_reset() -> None:
+    text = _FOUNDATION.read_text(encoding="utf-8")
     normalized = " ".join(text.split())
 
     assert _RESET_LOCAL_WORKSPACE.is_file()
-    assert "## Handle an occupied workspace" in text
+    assert "## Shared workspace choices" in text
     assert "Reset and use this workspace" in text
     assert "Reset workspace" in text
     assert "Go back" in text
     assert "scripts/reset_local_workspace.py --confirm-reset" in text
     assert "DA_RESET_WORKSPACE_JSON:" in text
-    assert "previous local setup was archived to `{backupRoot}`" in normalized
+    assert "local setup was archived to `{backupRoot}`" in normalized
     assert "report its `ERROR:` and `NOTE:` output" in normalized
-    assert "will not change or delete the agent in Copilot Studio" in normalized
+    assert "will not change or delete any agent in Copilot Studio" in normalized
     assert "archive its current local agent files" in normalized
+
+
+def test_foundation_exposes_multi_agent_entry_and_completion_choices() -> None:
+    text = _FOUNDATION.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    for choice in (
+        "Continue with this agent",
+        "Switch to another configured agent",
+        "Install another product in this environment",
+        "Reset and use this workspace",
+        "Create and open a new workspace",
+        "Cancel setup",
+        "Continue customizing this agent",
+        "Finish for now",
+    ):
+        assert f"**{choice}**" in text
+    assert "Create a new workspace without opening it" not in text
+    assert "setup_existing_da.py select-agent" in text
+    assert "one Power Platform environment" in normalized
+    assert "multiple ESS Dev agents" in normalized
+    assert "one active agent" in normalized
 
 
 def test_foundation_resolves_python_and_announces_authorization_wait() -> None:
@@ -614,15 +652,16 @@ def test_alm_import_collision_and_retry_require_separate_choices() -> None:
     normalized = " ".join(text.split())
 
     for choice in (
-        "Use existing agent",
-        "Replace existing agent with this package",
+        "Choose an existing agent in this environment",
+        "Replace an existing agent with this package",
         "Cancel setup",
         "Continue replacement",
         "Retry import",
         "Stop without retrying",
     ):
         assert choice in text
-    assert "Default to **Use existing agent**" in text
+    assert "Do not preselect a choice or recommend replacement" in normalized
+    assert "setup_existing_da.py list-agents" in text
     assert "Never preselect or recommend **Continue replacement**" in text
     assert "could not be proven" in normalized
     assert "avoid creating or replacing the agent twice" in normalized
@@ -666,6 +705,9 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
 
     assert "`connectionStatus: workspace-ready`" in text
     assert "`connectReady: true`" in text
+    assert "Canonical setup state is authoritative for each agent's setup progress and completion" in normalized
+    assert "`state`, `connectReady`, `activeStep`, and `failureCauses` are the setup verdict" in normalized
+    assert "Present **Connection required**" in normalized
     assert "a factual handoff, not another readiness gate" in normalized
     assert "changing canonical state conversationally" in normalized
     assert "Do not infer the realm from the URL" in normalized

@@ -444,17 +444,33 @@ def _validate_local_replacement_target(
         return
     try:
         state_environment = state["environment"]["id"]
-        state_agent = state["agent"]["id"]
+        agents = state["agents"]
     except (KeyError, TypeError) as exc:
         raise AlmImportSetupError(
             "The existing DA setup state is unreadable."
         ) from exc
-    if (
-        str(state_environment).casefold() != environment_id.casefold()
-        or str(state_agent).casefold() != agent_id.casefold()
-    ):
+    if not isinstance(agents, dict):
+        raise AlmImportSetupError(
+            "The existing DA setup state is unreadable."
+        )
+    state_agent = agents.get(agent_id)
+    if str(state_environment).casefold() != environment_id.casefold():
         raise AlmImportSetupError(
             "This workspace is connected to a different editable Dev agent."
+        )
+    if not isinstance(state_agent, dict):
+        raise AlmImportSetupError(
+            "The replacement agent is not configured in this workspace."
+        )
+    try:
+        state_agent_id = state_agent["agent"]["id"]
+    except (KeyError, TypeError) as exc:
+        raise AlmImportSetupError(
+            "The existing DA setup state is unreadable."
+        ) from exc
+    if str(state_agent_id).casefold() != agent_id.casefold():
+        raise AlmImportSetupError(
+            "The existing DA setup state is unreadable."
         )
 
 

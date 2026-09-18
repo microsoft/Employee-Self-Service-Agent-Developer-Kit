@@ -11,8 +11,9 @@ their runtime behaviour**. Evaluation test sets may instead be generated as
 local starter artifacts, depending on the source the maker chooses.
 
 **Setup-state note.** Creating a **topic** or **workflow** requires completed
-canonical setup. Read `.local/setup/config.json`; if it does not have
-`schema_version: 3` and `connect_ready: true`, show the message below and STOP
+canonical setup. Read `.local/setup/config.json` and `.local/config.json`; if
+canonical state does not have `schema_version: 4` and an `agents` entry matching
+the active workspace slug with `connect_ready: true`, show the message below and STOP
 **for those two choices**. Creating an **evaluation** test set does NOT require
 setup — a catalogue-grounded starter set can be generated with no agent
 configured.

@@ -36,8 +36,9 @@ and DA-GA evaluation deployment is not yet available in this release.
      the 10-15-minute wait notice is mandatory.
    - **view results** / **show run IDs** -> read
      `src/skills/evaluations/run/SKILL.md` and follow **Flow B**.
-   - **delete** -> read `.local/setup/config.json`. If it does not have
-     `schema_version: 3` and `connect_ready: true`, show the message below and
+   - **delete** -> read `.local/setup/config.json` and `.local/config.json`. If
+     canonical state does not have `schema_version: 4` and an `agents` entry
+     matching the active workspace slug with `connect_ready: true`, show the message below and
      STOP; otherwise read `src/skills/evaluations/delete/SKILL.md` and follow
      it.
 4. If the answer is ambiguous, ask once more before routing.

@@ -19,12 +19,18 @@ import setup_mos_starter as mos
 ENVIRONMENT_ID = "00000000-0000-4000-8000-000000001111"
 AGENT_ID = "00000000-0000-4000-8000-000000002222"
 TENANT_ID = "00000000-0000-4000-8000-000000009999"
+CLIENT_REQUEST_ID = "00000000-0000-4000-8000-000000007777"
 HOST = (
     "https://0000000000004000800000000000111."
     "1.environment.api.test.powerplatform.com"
 )
 SCHEMA = "gptagent_freshstarter"
-FUSE_RELATIVE = ".local/setup/mos-starter/create-attempted"
+FUSE_RELATIVE = mos._create_attempt_path(
+    Path(),
+    environment_id=ENVIRONMENT_ID,
+    package_id="pkg-1",
+    client_request_id=CLIENT_REQUEST_ID,
+)
 _MISSING = object()
 
 
@@ -283,6 +289,7 @@ def test_create_fuse_exists_before_dispatch_and_is_retained_after_create(
         client,
         environment_id=ENVIRONMENT_ID,
         package_id="pkg-1",
+        client_request_id=CLIENT_REQUEST_ID,
         kit_root=tmp_path,
         package_name="First Package",
         package_version="1.0.0",
@@ -320,11 +327,60 @@ def test_existing_fuse_blocks_a_second_create_without_dispatching(
             client,
             environment_id=ENVIRONMENT_ID,
             package_id="pkg-1",
+            client_request_id=CLIENT_REQUEST_ID,
             kit_root=tmp_path,
         )
 
     assert client.create_calls == 0
     assert fuse_path.read_text(encoding="utf-8") == "startedAt: earlier attempt\n"
+
+
+def test_new_confirmed_request_uses_independent_create_evidence(
+    tmp_path: Path,
+) -> None:
+    second_request_id = "00000000-0000-4000-8000-000000006666"
+    response = FakeHTTPResponse(
+        201,
+        json_body={
+            "botId": AGENT_ID,
+            "sourcePackage": {
+                "packageId": "pkg-1",
+                "schemaName": SCHEMA,
+                "version": "1.0.0",
+            },
+        },
+    )
+
+    mos.create_from_starter_package(
+        FakeMosClient(create_response=response),
+        environment_id=ENVIRONMENT_ID,
+        package_id="pkg-1",
+        client_request_id=CLIENT_REQUEST_ID,
+        kit_root=tmp_path,
+    )
+    mos.create_from_starter_package(
+        FakeMosClient(create_response=response),
+        environment_id=ENVIRONMENT_ID,
+        package_id="pkg-1",
+        client_request_id=second_request_id,
+        kit_root=tmp_path,
+    )
+
+    first = mos._create_attempt_path(
+        tmp_path,
+        environment_id=ENVIRONMENT_ID,
+        package_id="pkg-1",
+        client_request_id=CLIENT_REQUEST_ID,
+    )
+    second = mos._create_attempt_path(
+        tmp_path,
+        environment_id=ENVIRONMENT_ID,
+        package_id="pkg-1",
+        client_request_id=second_request_id,
+    )
+    assert first.is_file()
+    assert second.is_file()
+    assert first != second
 
 
 def test_create_rejects_blank_package_id(tmp_path: Path) -> None:
@@ -335,6 +391,7 @@ def test_create_rejects_blank_package_id(tmp_path: Path) -> None:
             client,
             environment_id=ENVIRONMENT_ID,
             package_id="   ",
+            client_request_id=CLIENT_REQUEST_ID,
             kit_root=tmp_path,
         )
 
@@ -342,19 +399,60 @@ def test_create_rejects_blank_package_id(tmp_path: Path) -> None:
     assert not (tmp_path / FUSE_RELATIVE).exists()
 
 
-def test_create_enforces_empty_workspace_guard(tmp_path: Path) -> None:
+def test_create_accepts_an_existing_same_environment_workspace(
+    tmp_path: Path,
+) -> None:
     (tmp_path / ".local").mkdir()
-    (tmp_path / ".local" / "config.json").write_text("{}", encoding="utf-8")
+    (tmp_path / ".local" / "config.json").write_text(
+        json.dumps({"environmentId": ENVIRONMENT_ID}),
+        encoding="utf-8",
+    )
+    client = FakeMosClient(
+        kit_root=tmp_path,
+        create_response=FakeHTTPResponse(
+            201,
+            json_body={
+                "botId": AGENT_ID,
+                "sourcePackage": {
+                    "packageId": "pkg-1",
+                    "schemaName": SCHEMA,
+                    "version": "1.0.0",
+                },
+            },
+        ),
+    )
+
+    result = mos.create_from_starter_package(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        package_id="pkg-1",
+        client_request_id=CLIENT_REQUEST_ID,
+        kit_root=tmp_path,
+    )
+
+    assert result["agentId"] == AGENT_ID
+    assert client.create_calls == 1
+
+
+def test_create_rejects_a_different_environment_workspace(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".local").mkdir()
+    (tmp_path / ".local" / "config.json").write_text(
+        json.dumps({"environmentId": "00000000-0000-4000-8000-000000008888"}),
+        encoding="utf-8",
+    )
     client = FakeMosClient(kit_root=tmp_path)
 
     with pytest.raises(
         mos.MosStarterSetupError,
-        match="separate copy of the Developer Kit in a new VS Code window",
+        match="another Power Platform environment",
     ):
         mos.create_from_starter_package(
             client,
             environment_id=ENVIRONMENT_ID,
             package_id="pkg-1",
+            client_request_id=CLIENT_REQUEST_ID,
             kit_root=tmp_path,
         )
 
@@ -382,6 +480,7 @@ def test_create_removes_fuse_on_pre_dispatch_failure(
             client,
             environment_id=ENVIRONMENT_ID,
             package_id="pkg-1",
+            client_request_id=CLIENT_REQUEST_ID,
             kit_root=tmp_path,
         )
 
@@ -414,6 +513,7 @@ def test_create_keeps_fuse_on_uncertain_transport_failure(
             client,
             environment_id=ENVIRONMENT_ID,
             package_id="pkg-1",
+            client_request_id=CLIENT_REQUEST_ID,
             kit_root=tmp_path,
         )
 
@@ -437,6 +537,7 @@ def test_uncertain_transport_preserves_runtime_context(
             client,
             environment_id=ENVIRONMENT_ID,
             package_id="pkg-1",
+            client_request_id=CLIENT_REQUEST_ID,
             kit_root=tmp_path,
         )
 
@@ -465,6 +566,7 @@ def test_create_keeps_fuse_on_malformed_2xx_missing_identity(
             client,
             environment_id=ENVIRONMENT_ID,
             package_id="pkg-1",
+            client_request_id=CLIENT_REQUEST_ID,
             kit_root=tmp_path,
         )
 
@@ -482,6 +584,7 @@ def test_create_keeps_fuse_on_non_json_2xx_body(tmp_path: Path) -> None:
             client,
             environment_id=ENVIRONMENT_ID,
             package_id="pkg-1",
+            client_request_id=CLIENT_REQUEST_ID,
             kit_root=tmp_path,
         )
 
@@ -512,6 +615,7 @@ def test_create_keeps_fuse_when_service_returns_a_different_package(
             client,
             environment_id=ENVIRONMENT_ID,
             package_id="pkg-1",
+            client_request_id=CLIENT_REQUEST_ID,
             kit_root=tmp_path,
         )
 
@@ -541,6 +645,7 @@ def test_create_keeps_fuse_on_uncertain_status_codes(
             client,
             environment_id=ENVIRONMENT_ID,
             package_id="pkg-1",
+            client_request_id=CLIENT_REQUEST_ID,
             kit_root=tmp_path,
         )
 
@@ -566,6 +671,7 @@ def test_create_removes_fuse_on_definitive_rejection(
             client,
             environment_id=ENVIRONMENT_ID,
             package_id="pkg-1",
+            client_request_id=CLIENT_REQUEST_ID,
             kit_root=tmp_path,
         )
 
@@ -596,6 +702,7 @@ def test_create_removes_fuse_and_reports_collision_on_409(
             client,
             environment_id=ENVIRONMENT_ID,
             package_id="pkg-1",
+            client_request_id=CLIENT_REQUEST_ID,
             kit_root=tmp_path,
         )
 
@@ -644,6 +751,7 @@ def test_create_fuse_write_failure_closes_removes_and_reraises(
             client,
             environment_id=ENVIRONMENT_ID,
             package_id="pkg-1",
+            client_request_id=CLIENT_REQUEST_ID,
             kit_root=tmp_path,
         )
 
@@ -700,6 +808,7 @@ def test_evidence_annotations_and_response_are_printed(
         client,
         environment_id=ENVIRONMENT_ID,
         package_id="pkg-1",
+        client_request_id=CLIENT_REQUEST_ID,
         kit_root=tmp_path,
         package_name="First Package",
         package_version="1.0.0",

@@ -19,6 +19,7 @@ import strip_debug
 def _da_config() -> dict:
     return {
         "releaseLine": "da",
+        "activeAgent": "mock-native-agent",
         "agent": {
             "botId": "00000000-0000-4000-8000-000000000001",
             "releaseLine": "da",
@@ -55,9 +56,21 @@ def test_publish_routes_da_ga_to_native_client(
                 "ring": "test",
                 "api_version": "2024-10-01",
             },
-            "agent": {
-                "id": "00000000-0000-4000-8000-000000000001",
-                "name": "Mock native agent",
+            "agents": {
+                "00000000-0000-4000-8000-000000000099": {
+                    "agent": {
+                        "id": "00000000-0000-4000-8000-000000000099",
+                        "name": "Inactive native agent",
+                        "workspace_slug": "inactive-native-agent",
+                    },
+                },
+                "00000000-0000-4000-8000-000000000001": {
+                    "agent": {
+                        "id": "00000000-0000-4000-8000-000000000001",
+                        "name": "Mock native agent",
+                        "workspace_slug": "mock-native-agent",
+                    },
+                },
             },
         },
     )

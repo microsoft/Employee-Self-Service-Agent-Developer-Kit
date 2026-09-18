@@ -44,6 +44,23 @@ known environment as `ESS combined`, for example, rather than "the target
 environment." Never show unresolved placeholders such as
 `{ENVIRONMENT_NAME}` to the maker.
 
+## Progress checklists
+
+Render a maker-facing progress snapshot as an ordinary, single-level Markdown
+bullet list. Every item begins with exactly one status emoji in the same
+position so completed, current, blocked, and pending stages retain one
+consistent visual shape:
+
+```text
+- ✅ Completed stage
+- 🔄 Current stage
+- ⛔ Blocked stage
+- ⬜ Pending stage
+```
+
+Keep the full ordered list in every snapshot. The Markdown list is the
+maker-facing progress surface.
+
 ## Authoring pattern
 
 Compose UI guidance from the runtime context rather than copying a stored

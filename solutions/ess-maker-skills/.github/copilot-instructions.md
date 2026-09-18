@@ -10,10 +10,11 @@ to do based on the result.
 
 ### If setup is missing or not ready
 
-DA setup is ready only when `.local/setup/config.json` exists with
-`schema_version` equal to `3` and `connect_ready` equal to `true`. Setup writes
-that marker only after all eight foundation steps have reached `done`, with
-unavailable checks explicitly recorded as `mode: "skipped"`.
+DA setup is ready only when `.local/setup/config.json` has `schema_version`
+equal to `4` and its `agents` entry matching `.local/config.json`'s
+`activeAgent` workspace slug has `connect_ready` equal to `true`. Setup writes
+that per-agent marker only after all eight foundation steps for that agent have
+reached `done`.
 
 **STOP.** Do not read any skill files. Do not load templates. Do not search for
 files. Do not attempt any customization work. Do not answer questions about ESS.

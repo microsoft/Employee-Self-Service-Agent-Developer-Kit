@@ -24,9 +24,9 @@ packs, and topics are explicitly outside this skill.
 
 ## Maker-facing progress
 
-At setup start and at the beginning of every subsequent setup turn, write the host's native task list as a complete snapshot of the five stages below. Every task-list update contains all five stages in this order. Use the latest canonical setup state read in this invocation and results observed in this invocation to set their statuses. After each setup action that changes progress, write the complete snapshot again. Preserve completed stages, keep pending stages present, and represent subordinate checks through the status of their owning stage. Before every maker-facing response, including the final handoff, synchronize the complete snapshot once more and mark **Review the setup handoff** complete before finishing. Use the inline fallback only when a native task list is unavailable. Do not expose the eight internal setup-step IDs or show skipped internal records as successful checks.
+At setup start and at the beginning of every subsequent setup turn, write the exact maker-facing progress checklist below as a complete snapshot. Every update contains all five stages in this order and uses the same ordinary Markdown shape: one single-level bullet and one leading status emoji per stage. Use the latest canonical setup state read in this invocation and results observed in this invocation to set their statuses. After each setup action that changes progress, write the complete snapshot again. Preserve completed stages, keep pending stages present, and represent subordinate checks through the status of their owning stage. Before every maker-facing response, including the final handoff, synchronize the complete snapshot once more and mark **Review the setup handoff** complete before finishing. Do not expose the eight internal setup-step IDs or show skipped internal records as successful checks.
 
-**Inline fallback message:**
+**Message:**
 
 Here's your ESS agent setup:
 
@@ -50,7 +50,7 @@ The checklist is a view, not another state model:
 - only `connectionStatus: workspace-ready` with `connectReady: true` completes local workspace materialization;
 - reviewing the factual completion report completes the handoff stage in the conversation and does not write another readiness marker.
 
-Before canonical setup begins, set the first unresolved native task-list stage to in progress and leave later stages pending. When canonical state is blocked, mark only the corresponding visible stage as blocked and preserve its failure causes in the response. Do not mark a stage complete from a skipped internal setup record.
+Before canonical setup begins, mark the first unresolved checklist stage with 🔄 and leave later stages marked ⬜. When canonical state is blocked, mark only the corresponding visible stage with ⛔ and preserve its failure causes in the response. Do not mark a stage complete from a skipped internal setup record.
 
 ## Choose the sign-in account
 
@@ -103,27 +103,86 @@ Establish a working Python invocation before running setup commands.
 
 When child guidance shows `python`, substitute the resolved invocation.
 
-## Start
+## Shared workspace choices
 
-Use context supplied with the current setup request and canonical setup state
-read in this invocation. Do not infer a route or mismatch from conversation
-history.
+One workspace targets one Power Platform environment, can contain multiple ESS Dev agents from that environment, and has one active agent at a time. `.local/config.json` owns the active agent through `activeAgent` and the matching `agent` entry. Canonical setup state records readiness independently for every configured agent.
 
-When the current request supplies no agent, environment, package, or fresh-agent intent, check for an exact local target before asking for a URL. Prefer canonical setup state; use `.local/config.json` only as a compatibility fallback when canonical state is absent or uses the known older completed format. A usable local target must identify the agent display name, agent ID, environment ID, service ring or validated API endpoint, and local workspace folder. Treat these values only as routing input; they do not prove current access, realm, or readiness.
+When an occupied workspace needs a new environment, offer **Create and open a new workspace**. Derive a suggested destination from the current repository folder name by appending `-fresh`. If that sibling exists, append the first available numeric suffix (`-fresh-2`, `-fresh-3`, and so on). Use the host's interactive single-selection control and offer exactly:
 
-For a usable local target, ask:
+- **Use suggested location -- {suggested absolute sibling-folder path}**
+- **Choose another location**
+- **Cancel setup**
 
-> **{agent display name}** is already connected to this workspace. What would you like to do?
+Do not ask the maker to type a path unless they select **Choose another location**. The destination must be a new absolute sibling-folder path outside the current Developer Kit repository. Then run:
+
+```text
+python scripts/prepare_fresh_workspace.py \
+  --destination "{NEW_WORKTREE_PATH}" \
+  --open-vscode
+```
+
+Parse `DA_PREPARED_WORKSPACE_JSON:`. When `outcome` is `workspace-created` and `vscodeOpened` is `true`, say that the new VS Code window is open at `{kitRoot}` and ask the maker to run `/setup` there. For `workspace-created-open-failed`, explain that the workspace was created, give `{kitRoot}`, and ask the maker to open it manually. Stop this invocation after the workspace handoff.
+
+For **Reset and use this workspace**, show:
+
+> Resetting this workspace will archive its current local agent files, setup records, and FlightCheck results. It will not change or delete any agent in Copilot Studio. Continue?
 
 Offer exactly:
 
-- **Continue with this agent**
-- **Set up a different agent in a new workspace**
+- **Reset workspace**
+- **Go back**
 - **Cancel setup**
 
-Do not preselect a choice.
+Do not preselect **Reset workspace**. Continue only when the maker selects it, then run:
 
-For **Continue with this agent**, complete the one-time account selection above, then run:
+```text
+python scripts/reset_local_workspace.py --confirm-reset
+```
+
+Parse `DA_RESET_WORKSPACE_JSON:`. When `outcome` is `workspace-reset`, say that the local setup was archived to `{backupRoot}`, then continue from the unoccupied-workspace route. When `outcome` is `nothing-to-reset`, continue without a backup message. For any error, report its `ERROR:` and `NOTE:` output and stop; each note identifies a path that could not be restored.
+
+For **Switch to another configured agent**, show the locally configured agents other than the active one. After the maker selects an exact agent, run:
+
+```text
+python scripts/setup_existing_da.py select-agent \
+  --agent-id "{SELECTED_AGENT_ID}"
+```
+
+Parse `DA_ACTIVE_AGENT_JSON:`. Continue setup for that agent when its `connectReady` value is not `true`; otherwise present the completion choices below. This operation changes only local active-agent selection.
+
+After a successful setup handoff, offer exactly these context-appropriate choices:
+
+- **Continue customizing this agent**
+- **Switch to another configured agent** -- only when another configured agent exists.
+- **Install another product in this environment**
+- **Reset and use this workspace**
+- **Create and open a new workspace**
+- **Finish for now**
+
+Do not preselect a choice. **Install another product in this environment** follows `da-mos-starter.md` with the recorded environment and ring. **Finish for now** ends without another operation.
+
+## Start
+
+Use context supplied with the current setup request and canonical setup state read in this invocation. Do not infer a route or mismatch from conversation history.
+
+When the current request supplies no agent, environment, package, or fresh-agent intent, read canonical setup state and `.local/config.json`. A usable active local target must identify the agent display name, agent ID, environment ID, service ring or validated API endpoint, and local workspace folder. Treat these values only as routing input; they do not prove current access, realm, or readiness.
+
+For a usable local target, ask:
+
+> **{agent display name}** is the active agent in this workspace. What would you like to do?
+
+Offer exactly these context-appropriate choices:
+
+- **Continue with this agent**, or **Resume setup for this agent** when its canonical agent record is incomplete or blocked.
+- **Switch to another configured agent** -- only when another configured agent exists.
+- **Install another product in this environment**
+- **Reset and use this workspace**
+- **Create and open a new workspace**
+- **Cancel setup**
+
+Do not preselect a choice. Follow the corresponding shared workspace choice above.
+
+For **Continue with this agent** or **Resume setup for this agent**, complete the one-time account selection above, then run:
 
 ```text
 python scripts/setup_existing_da.py inspect-agent \
@@ -132,9 +191,7 @@ python scripts/setup_existing_da.py inspect-agent \
   --ring "{RECORDED_RING}"
 ```
 
-Also pass the recorded validated `--host` and `--api-version` when available. Parse `DA_AGENT_ROUTE_JSON:` and follow the same realm routing used for a supplied URL. Do not ask for the agent or environment URL. When canonical state is incomplete or blocked, label the first choice **Resume setup for this agent** instead, with otherwise identical behavior.
-
-For **Set up a different agent in a new workspace**, follow only [Handle an occupied workspace](da-mos-starter.md#handle-an-occupied-workspace). Stop after the workspace handoff; the new workspace owns selection of an existing or fresh agent.
+Also pass the recorded validated `--host` and `--api-version` when available. Parse `DA_AGENT_ROUTE_JSON:` and follow the same realm routing used for a supplied URL. Do not ask for the agent or environment URL.
 
 For **Cancel setup**, make no changes and stop.
 
@@ -190,9 +247,10 @@ When the maker has already supplied a native agent package or explicitly asked t
 
 When the maker explicitly asks for a fresh installation, read
 `src/skills/foundation-setup/da-mos-starter.md` and follow it, even when the
-current Developer Kit folder already has setup state. That skill owns the
-separate-worktree offer for an occupied folder. Without explicit fresh-agent
-intent, keep the existing-Dev path for a maker who already has an agent.
+current Developer Kit folder already has setup state. A same-environment
+installation stays in this workspace. A different environment uses **Create and
+open a new workspace**. Without explicit fresh-agent intent, keep the
+existing-Dev path for a maker who already has an agent.
 
 When the request identifies an environment but not an agent or fresh-agent intent, read `src/skills/foundation-setup/da-existing-dev.md` and follow its environment-candidate selection path.
 

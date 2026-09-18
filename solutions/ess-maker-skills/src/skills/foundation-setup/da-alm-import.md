@@ -108,18 +108,13 @@ show:
 
 Offer exactly:
 
-- **Use existing agent** — continue through `da-existing-dev.md`.
-- **Replace existing agent with this package** — validate the exact agent and
-  request separate replacement approval.
+- **Choose an existing agent in this environment**
+- **Replace an existing agent with this package**
 - **Cancel setup**
 
-Default to **Use existing agent**. Do not recommend replacement.
+Do not preselect a choice or recommend replacement. For either existing-agent choice, run `setup_existing_da.py list-agents` for the target environment, show the visible Dev agent names, and let the maker choose one exact agent. For **Choose an existing agent in this environment**, validate the selected agent and continue through `da-existing-dev.md`.
 
-Before replacement, resolve the exact existing Dev agent ID. When the maker
-supplies its Copilot Studio URL, infer the environment ID, agent ID, and service
-ring. The URL should have a segment denoting the ring, such as `test` or
-`preprod`; when neither segment is present, confirm the `prod` ring with the
-user. Ask only when the environment ID or agent ID is unclear. Then run:
+Before replacement, validate the exact selected Dev agent:
 
 ```text
 python scripts/setup_existing_da.py validate-agent \
@@ -136,7 +131,7 @@ Parse `DA_AGENT_VALIDATION_JSON:`. Show its display name, then ask:
 Offer exactly:
 
 - **Continue replacement**
-- **Use existing agent**
+- **Choose the existing agent without replacement**
 - **Cancel setup**
 
 Never preselect or recommend **Continue replacement**. Continue only after the

@@ -807,20 +807,33 @@ def load_config():
 
 
 def is_connect_ready():
-    """Return the canonical DA foundation readiness marker."""
+    """Return readiness for the active locally configured DA agent."""
     state_path = os.path.join(LOCAL_STATE_DIR, "setup", "config.json")
-    if not os.path.exists(state_path):
+    config_path = os.path.join(LOCAL_STATE_DIR, "config.json")
+    if not os.path.exists(state_path) or not os.path.exists(config_path):
         return False
     try:
         with open(state_path, "r", encoding="utf-8") as f:
             state = json.load(f)
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
     except (OSError, json.JSONDecodeError) as exc:
         print(
-            f"ERROR: Could not read canonical setup state at {state_path}: "
+            "ERROR: Could not read DA workspace state at "
+            f"{state_path} and {config_path}: "
             f"{exc}. Run /setup again."
         )
         sys.exit(1)
-    return (
-        state.get("schema_version") == 3
-        and state.get("connect_ready") is True
+    if state.get("schema_version") != 4:
+        return False
+    agents = state.get("agents")
+    active_slug = config.get("activeAgent")
+    if not isinstance(agents, dict) or not isinstance(active_slug, str):
+        return False
+    return any(
+        isinstance(agent_state, dict)
+        and isinstance(agent_state.get("agent"), dict)
+        and agent_state["agent"].get("workspace_slug") == active_slug
+        and agent_state.get("connect_ready") is True
+        for agent_state in agents.values()
     )

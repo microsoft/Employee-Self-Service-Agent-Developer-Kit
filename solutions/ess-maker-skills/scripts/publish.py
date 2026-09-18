@@ -98,12 +98,36 @@ def _load_native_setup_state() -> dict[str, Any]:
     return state
 
 
-def _native_context(state: dict[str, Any]) -> dict[str, str]:
+def _native_context(
+    state: dict[str, Any],
+    config: dict[str, Any],
+) -> dict[str, str]:
     environment = state.get("environment")
-    agent = state.get("agent")
-    if not isinstance(environment, dict) or not isinstance(agent, dict):
+    agents = state.get("agents")
+    active_slug = config.get("activeAgent")
+    if (
+        not isinstance(environment, dict)
+        or not isinstance(agents, dict)
+        or not isinstance(active_slug, str)
+        or not active_slug.strip()
+    ):
         raise AgentBuilderError(
             "Native setup state is incomplete. Run /setup again."
+        )
+    agent = next(
+        (
+            candidate.get("agent")
+            for candidate in agents.values()
+            if isinstance(candidate, dict)
+            and isinstance(candidate.get("agent"), dict)
+            and candidate["agent"].get("workspace_slug") == active_slug
+        ),
+        None,
+    )
+    if not isinstance(agent, dict):
+        raise AgentBuilderError(
+            "The active agent is missing from native setup state. Run /setup "
+            "again."
         )
     values = {
         "environment_id": environment.get("id"),
@@ -252,9 +276,12 @@ def _confirm(agent_name: str, environment: str, auto_yes: bool) -> bool:
     return False
 
 
-def _publish_native(args: argparse.Namespace) -> int:
+def _publish_native(
+    args: argparse.Namespace,
+    config: dict[str, Any],
+) -> int:
     try:
-        context = _native_context(_load_native_setup_state())
+        context = _native_context(_load_native_setup_state(), config)
     except AgentBuilderError as error:
         print(f"ERROR: {error}")
         return 2
@@ -345,7 +372,7 @@ def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     config = load_config()
     if _is_native_config(config):
-        return _publish_native(args)
+        return _publish_native(args, config)
     return _publish_classic(config, args.yes)
 
 

@@ -3,9 +3,9 @@
 
 ## Scope
 
-This reference defines the safety and evidence contract for DA `/setup`'s fresh-install path: installing a new Dev agent from an entitled MOS ("AgentSchemaTemplates") starter package when the maker has no existing agent to connect. It separates read-only discovery, one guarded create, and one explicit ALM opt-in. It never publishes, promotes, removes components, or calls Dataverse.
+This reference defines the safety and evidence contract for installing a new Dev agent from an entitled MOS ("AgentSchemaTemplates") starter package. A workspace may install multiple products into its one recorded Power Platform environment. The path separates read-only discovery, a guarded create request, and ALM enablement. It never publishes, promotes, removes components, or calls Dataverse.
 
-`scripts/setup_mos_starter.py` owns discovery, one guarded create dispatch, a separately invoked ALM opt-in, and response evidence. It has no persona/ISV matching, no `resolve` or `status` command, and no product-specific policy -- that judgment belongs to the maker and `src/skills/foundation-setup/da-mos-starter.md`. `setup_existing_da.py attach` (via `attach_existing_dev`) still owns component acquisition, projection, and canonical workspace completion. The executing session composes these operations; the script does not wrap them into a transaction.
+`scripts/setup_mos_starter.py` owns discovery, one guarded create dispatch per explicit request identity, separately invoked ALM enablement, and response evidence. It has no persona/ISV matching, no `resolve` or `status` command, and no product-specific policy -- that judgment belongs to the maker and `src/skills/foundation-setup/da-mos-starter.md`. `setup_existing_da.py attach` (via `attach_existing_dev`) owns component acquisition, projection, and per-agent canonical workspace completion. The executing session composes these operations; the script does not wrap them into a transaction.
 
 ## Current evidence
 
@@ -16,6 +16,7 @@ This reference defines the safety and evidence contract for DA `/setup`'s fresh-
 | The listing surface returns only public- and tenant-scoped `AgentSchemaTemplates` entries, not general agent inventory | Documented by the platform team; consistent with observed shape |
 | An entitled Employee Self-Service package can be listed in a flighted TEST environment | Live-proven |
 | The catalog can return the same package entry more than once | Live-observed; preserve service rows rather than silently deduplicating |
+| Existing-agent inventory and exact-agent responses expose no stable source-package identity to join against the catalog | Live-proven |
 | `POST /copilotstudio/minimalBots/createFromStarterPackage` with `{"packageId":"..."}` creates from the exact selected package | Live-proven |
 | Successful create returns HTTP 201 with `{botId, sourcePackage:{packageId,schemaName,version}}` | Live-proven |
 | Catalog package revision and `sourcePackage.version` are distinct concepts and can differ | Live-proven (`1.0.6` catalog revision versus `1.0.0` source template in the observed run) |
@@ -26,7 +27,9 @@ This reference defines the safety and evidence contract for DA `/setup`'s fresh-
 | Existing-Dev validation and attachment remain separate and expose service-owned prerequisites | Live-proven |
 | Direct native ALM import already creates agents from packages declaring `packageType: "templated"` | Live-proven, using the generic import path, not this surface |
 
-Do not describe a pending-validation claim as supported behavior. In particular, 409 collision semantics, non-TEST behavior, and product-specific package availability remain open runtime evidence.
+Do not describe a pending-validation claim as supported behavior. In particular, non-TEST behavior and product-specific package availability remain open runtime evidence.
+
+**Load-bearing assumption:** HTTP 409 means the selected package collides somewhere in the target environment, but it does not identify the corresponding agent. The UX therefore asks the maker to choose an existing visible Dev agent and does not infer a package-to-agent association.
 
 ## Safety invariants
 
@@ -41,12 +44,13 @@ Do not describe a pending-validation claim as supported behavior. In particular,
    targets an existing agent.
 5. Disable redirects for the mutating POST. It is never retried
    automatically.
-6. Write the attempt fuse atomically and durably before the POST is ever
-   dispatched.
+6. Write request-scoped attempt evidence durably before the POST is ever
+   dispatched. Environment ID, exact package ID, and a maker-confirmed client
+   request UUID identify that attempted mutation.
 7. `create_agent_from_starter_package` returns the response so the wrapper can emit the response body as script output.
 8. Emit a JSON response as JSON and any other response as text.
 9. End create after emitting a usable returned identity. Preserve catalog revision as `catalogPackageVersion` and the service-returned source template version as `templateVersion`; never conflate them.
-10. Invoke ALM opt-in only after separate maker confirmation. Fetch the exact agent first, deep-copy and preserve its full `BotEntity`, change only `alm.isAlmEnabled`, and request no component changes.
+10. Invoke ALM enablement only after a successful create response in the confirmed setup flow. Fetch the exact agent first, deep-copy and preserve its full `BotEntity`, change only `alm.isAlmEnabled`, and request no component changes.
 11. Verify ALM through a second component fetch. A write response without persisted read-back is not success.
 12. Return control after every operation. The existing `setup_existing_da.py attach` command remains the sole Dev validation, projection, and canonical-completion boundary.
 13. If attachment reports a service-owned prerequisite, report it and stop. This path never publishes or removes components.
@@ -58,8 +62,8 @@ Do not describe a pending-validation claim as supported behavior. In particular,
 
 - target and ring resolution through the existing AgentBuilder helpers;
 - read-only, paged starter-package discovery (`list`);
-- an empty-workspace guard;
-- the single attempt fuse;
+- same-environment workspace validation;
+- request-scoped create-attempt evidence;
 - one non-retried, non-redirected create request (`create`);
 - response evidence;
 - extraction of a usable `{botId, sourcePackage.schemaName}` identity and optional source-template version;
@@ -71,8 +75,7 @@ It does not:
 
 - match text, persona, or ISV to a package;
 - offer a `resolve` or `status` command;
-- persist a receipt, a hash-keyed operation record, or a formal status
-  taxonomy;
+- persist a service receipt or formal workflow status taxonomy;
 - validate or attach the returned Dev agent;
 - fetch or project components itself;
 - write canonical setup completion itself;
@@ -102,22 +105,18 @@ Create annotations report observed operation and fuse facts only. Listing failur
 `DA_MOS_STARTER_LIST_ANNOTATIONS_JSON:` for HTTP, transport, and invalid-shape
 failures; raw response evidence follows when the service returned one.
 
-## The attempt fuse
+## Request-scoped create evidence
 
-`create` writes a single plain-text file,
-`.local/setup/mos-starter/create-attempted`, atomically (`O_CREAT|O_EXCL`)
-and durably (fsynced) before it ever dispatches the POST. The file records
-a UTC start time, the target environment ID, and the package ID/name/
-version as an audit note; it is never parsed back for resume. If it
-already exists, `create` refuses a second create outright -- it never
-inspects the prior response itself. The maker's session is directed to
-inspect its own persistent transcript for that response, then to reconcile
-by read-only inspecting the target environment (the existing `list` and
-`setup_existing_da.py validate-agent`/`list-agents` commands). The fuse
-remains after an accepted create response. Once attachment
-writes canonical setup state, the empty-workspace guard independently
-prevents another create; the fuse remains a plain audit note and does not
-become a completion record.
+`create` writes a plain-text file at
+`.local/setup/mos-starter/create-attempts/{environmentId}/{packageKey}/{clientRequestId}.txt`
+atomically (`O_CREAT|O_EXCL`) and durably (fsynced) before it dispatches the
+POST. The file records a UTC start time, target environment ID, client request
+ID, and package ID/name/version as an audit note; it is never parsed back for
+resume. If that exact request file exists, `create` refuses another dispatch.
+The maker's session uses its persistent transcript and read-only environment
+inspection to reconcile uncertainty. A separately confirmed create uses a new
+client request UUID and independent evidence. Attachment and FlightChecks do
+not remove prior create evidence.
 
 ### Fuse disposition matrix
 
@@ -131,7 +130,7 @@ become a completion record.
 | 408, 425, 429, 5xx, or any other uncertain response | Retained |
 | Generic timeout, reset, or other ambiguous transport failure | Retained |
 
-A connect timeout is treated as pre-dispatch only because `requests` proves the connection never completed. Every other timeout is conservatively kept as uncertain, because the service may already have received and acted on the request. Fuse disposition is evidence and a duplicate-mutation guard.
+A connect timeout is treated as pre-dispatch only because `requests` proves the connection never completed. Every other timeout is conservatively kept as uncertain, because the service may already have received and acted on the request. Request-evidence disposition is a duplicate-mutation guard for that exact request identity.
 
 ## Response evidence
 
@@ -152,8 +151,8 @@ were used. Durable, machine-readable package/version persistence and read-back v
 
 Remaining runtime coverage:
 
-- HTTP 409 collision behavior for a package that already has a created
-  agent in the target environment;
+- the exact service meaning and response shape of HTTP 409 for a selected
+  package collision;
 - explicit authentication rejection and ambiguous update transport behavior;
 - pre-dispatch DNS/connect-refused classification against a live failure;
 - behavior outside the TEST ring;

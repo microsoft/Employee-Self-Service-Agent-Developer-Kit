@@ -2,7 +2,7 @@
 
 # Set Up Dev from an Entitled MOS Product
 
-Use this path when the maker wants a fresh installation. Read `src/reference/mos-starter-package.md` before acting. The reference owns the service facts, safety invariants, fuse disposition matrix, and response-evidence contract. This skill owns the maker conversation, the occupied-workspace handoff, and the handoff into existing-Dev setup.
+Use this path when the maker wants to install an entitled product. Read `src/reference/mos-starter-package.md` before acting. The reference owns the service facts, safety invariants, request-evidence disposition matrix, and response-evidence contract. This skill owns the maker conversation and the handoff into existing-Dev setup.
 
 Use only intent supplied in the current request and results observed in this invocation. Do not infer persona, product, target, or progress from conversation history.
 
@@ -17,58 +17,9 @@ invocation. Do not ask the maker to classify the product before loading the
 catalog. When fresh-agent intent and the target environment are known, mark
 **Choose the starting point and target environment** complete.
 
-## Handle an occupied workspace
+## Use the workspace environment
 
-Before listing products, check whether `.local/setup/config.json` or `.local/config.json` exists. If either exists, do not sign in or load the catalog. Show:
-
-> This Developer Kit folder already contains setup for an agent. You can reset and reuse this workspace or create a separate workspace.
-
-Offer exactly:
-
-- **Reset and use this workspace**
-- **Create and open a new workspace**
-- **Create a new workspace without opening it**
-- **Cancel setup**
-
-Do not preselect a choice. For **Reset and use this workspace**, show:
-
-> Resetting this workspace will archive its current local agent files, setup records, and FlightCheck results. It will not change or delete the agent in Copilot Studio. Continue?
-
-Offer exactly:
-
-- **Reset workspace**
-- **Go back**
-- **Cancel setup**
-
-Do not preselect **Reset workspace**. Continue only when the maker selects it, then run:
-
-```text
-python scripts/reset_local_workspace.py --confirm-reset
-```
-
-Parse `DA_RESET_WORKSPACE_JSON:`. When `outcome` is `workspace-reset`, say that the previous local setup was archived to `{backupRoot}`, then continue this setup invocation with account selection and catalog loading. When `outcome` is `nothing-to-reset`, continue setup without a backup message. For any error, report its `ERROR:` and `NOTE:` output and stop; each note identifies a path that could not be restored.
-
-After either create choice, derive a suggested destination from the current repository folder name by appending `-fresh`. If that sibling folder exists, append the first available numeric suffix (`-fresh-2`, `-fresh-3`, and so on). Use the host's interactive single-selection control and offer exactly:
-
-- **Use suggested location -- {suggested absolute sibling-folder path}**
-- **Choose another location**
-- **Cancel setup**
-
-Do not ask the maker to type a path unless they select **Choose another location**. For that choice, ask for a new absolute sibling-folder path. The destination must not already exist and must be outside the current Developer Kit repository.
-
-For **Create and open a new workspace**, run:
-
-```text
-python scripts/prepare_fresh_workspace.py \
-  --destination "{NEW_WORKTREE_PATH}" \
-  --open-vscode
-```
-
-For **Create a new workspace without opening it**, omit `--open-vscode`.
-
-Parse `DA_PREPARED_WORKSPACE_JSON:`. The operation creates a detached Git worktree from the current committed revision and never copies local setup state, agent content, or authentication caches into it. Do not continue setup or invoke MOS create from the current workspace.
-
-When `outcome` is `workspace-created` and `vscodeOpened` is `true`, say that the new VS Code window is open at `{kitRoot}` and ask the maker to run `/setup` there. When `vscodeOpened` is `false`, give `{kitRoot}` as the folder to open in a new VS Code window. When `outcome` is `workspace-created-open-failed`, explain that the workspace was created, give `{kitRoot}`, and ask the maker to open it manually; do not rerun creation.
+Read canonical setup state and `.local/config.json` when present. Continue in an occupied workspace when its recorded environment is the selected target. If it records a different environment, follow **Create and open a new workspace** in `SKILL.md` and stop this invocation after that handoff. Do not reset a same-environment workspace merely to install another product.
 
 ## List the catalog
 
@@ -80,7 +31,7 @@ python scripts/setup_mos_starter.py list \
   --ring "{RING}"
 ```
 
-Parse `DA_MOS_STARTER_PACKAGES_JSON:`. Present each package's safe service-provided name, version, and description as a product. Never show the internal `packageId` to the maker.
+Parse `DA_MOS_STARTER_PACKAGES_JSON:`. Preserve every service row as operation evidence. Group rows by exact `packageId` and present one picker option per exact ID, using the service-provided name, version, and description. Never show the internal `packageId` to the maker. Do not describe products as remaining, uninstalled, or eligible; the create response is the service-owned decision for the selected package.
 
 Normalize the picker label from the exact service-provided product name:
 
@@ -91,7 +42,7 @@ Normalize the picker label from the exact service-provided product name:
 | `Employee Self-Service IT` | IT         |
 | Any other name             | Other      |
 
-Use the host's interactive single-selection control and offer one choice for each returned product. Do not ask the maker to type a product name. Format each choice as **{experience} -- {product name} {version}** and use `shortDescription`, then `description`, as its supporting text. Omit a blank version or description instead of showing an unresolved value.
+Use the host's interactive single-selection control and offer one choice for each exact `packageId`. Do not ask the maker to type a product name. Format each choice as **{experience} -- {product name} {version}** and use `shortDescription`, then `description`, as its supporting text. Omit a blank version or description instead of showing an unresolved value.
 
 The successful list proves target access, but not a new agent identity. Keep **Verify access and agent identity** current until create and direct attachment validation succeed.
 
@@ -127,10 +78,11 @@ python scripts/setup_mos_starter.py create \
   --ring "{RING}" \
   --package-id "{CONFIRMED_PACKAGE_ID}" \
   --package-name "{CONFIRMED_PACKAGE_NAME}" \
-  --package-version "{CONFIRMED_PACKAGE_VERSION}"
+  --package-version "{CONFIRMED_PACKAGE_VERSION}" \
+  --client-request-id "{NEW_CLIENT_REQUEST_UUID}"
 ```
 
-Wait for the command to finish and interpret its returned evidence before taking further action. Do not invoke create concurrently or automatically. If the command reports local setup state despite the earlier check, return to [Handle an occupied workspace](#handle-an-occupied-workspace); do not invoke create from the occupied folder.
+Generate a new UUID only after this confirmation and retain it as the identity of this create request. Wait for the command to finish and interpret its returned evidence before taking further action. Do not invoke create concurrently or automatically. Reusing the same request UUID means the same mutation and must not dispatch another POST.
 
 ## Interpret the response
 
@@ -142,20 +94,22 @@ The response, outcome label, fuse disposition, HTTP status, and request details 
 
 When the annotations report `outcome: created`, keep the distinction between `catalogPackageVersion` and `templateVersion` in diagnostic evidence; do not explain those internal version concepts to the maker. Say that the new agent was created and setup is not complete.
 
+When the annotations report `outcome: collision`, do not infer which visible agent corresponds to the package. List visible Dev agents in the same environment through `setup_existing_da.py list-agents`, then offer exactly:
+
+- **Choose an existing agent in this environment**
+- **Choose a different catalog product**
+- **Go back**
+- **Cancel setup**
+
+Do not preselect a choice. For **Choose an existing agent in this environment**, show the returned names, let the maker select one exact agent, and continue through `da-existing-dev.md`. The selected agent is maker-supplied intent, not proof of package identity. This path does not replace an agent.
+
 ## Enable ALM
 
-Ask:
+After a successful create, say:
 
-> The agent is created, but the local workspace is not ready yet.
->
-> Prepare this agent for local editing?
+> The agent was created. Preparing its local authoring workspace...
 
-Offer exactly:
-
-- **Prepare for local editing**
-- **Not now**
-
-Do not preselect **Prepare for local editing**. **Not now** performs no ALM operation, does not attach a workspace, and ends this setup invocation without claiming completion. If the maker selects **Prepare for local editing**, run:
+Then run:
 
 ```text
 python scripts/setup_mos_starter.py enable-alm \
@@ -178,7 +132,7 @@ python scripts/setup_existing_da.py attach \
   --setup-source mos-starter
 ```
 
-On failure, preserve the command's specific `ERROR:` text and any canonical `active_step` and `failure_causes` as diagnostic evidence. Translate them into the visible setup stage and a plain explanation of the unmet prerequisite as described in `da-existing-dev.md`; never show internal step IDs or raw technical output as ordinary maker copy. On success, parse `DA_EXISTING_DEV_SETUP_JSON:`. When attachment reports `connectionStatus: workspace-ready`, run the native FlightCheck maintenance sequence in `da-existing-dev.md`. Treat setup as complete only when its final `DA_SETUP_FLIGHTCHECK_JSON:` reports `connectReady: true`. If a FlightCheck blocks setup, translate its evidence according to `da-existing-dev.md`. The create fuse intentionally remains as an audit note; canonical setup state independently prevents a second create. Do not publish, remove or replace components from this path. Further action requires new maker intent.
+On failure, preserve the command's specific `ERROR:` text and any canonical `active_step` and `failure_causes` as diagnostic evidence. Translate them into the visible setup stage and a plain explanation of the unmet prerequisite as described in `da-existing-dev.md`; never show internal step IDs or raw technical output as ordinary maker copy. On success, parse `DA_EXISTING_DEV_SETUP_JSON:`. When attachment reports `connectionStatus: workspace-ready`, run the agent-scoped native FlightCheck maintenance sequence in `da-existing-dev.md`. Treat setup as complete only when its final `DA_SETUP_FLIGHTCHECK_JSON:` reports `connectReady: true`. If a FlightCheck blocks setup, translate its evidence according to `da-existing-dev.md`. The request-scoped create evidence intentionally remains as an audit note. Do not publish, remove, or replace components from this path.
 
 After direct attachment validation succeeds, mark **Verify access and agent identity** and **Establish an editable Dev agent** complete. Render the factual completion report from `da-existing-dev.md` using **New entitled MOS product** as the starting point.
 

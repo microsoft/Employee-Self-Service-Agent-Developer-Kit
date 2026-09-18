@@ -9,24 +9,26 @@ Read `src/skills/foundation-setup/SKILL.md` first. Follow its **Command runtime*
 instructions to establish a working Python invocation before running any Python
 command.
 
-After reading the foundation skill, write the complete native task list below.
-At the beginning of every subsequent setup turn, write the same complete list
-again using the latest canonical setup state and results observed in that
-invocation:
+After reading the foundation skill, write the complete maker-facing progress
+checklist below. At the beginning of every subsequent setup turn, write the
+same complete checklist again using the latest canonical setup state and
+results observed in that invocation. Use the exact ordinary Markdown shape
+defined in the foundation skill: one single-level bullet and one leading
+status emoji per stage.
 
-- Choose the starting point and target environment
-- Verify access and agent identity
-- Establish an editable Dev agent
-- Materialize the local workspace
-- Review the setup handoff
+- {marker} Choose the starting point and target environment
+- {marker} Verify access and agent identity
+- {marker} Establish an editable Dev agent
+- {marker} Materialize the local workspace
+- {marker} Review the setup handoff
 
-Every native task-list update is a full snapshot containing all five stages in
-this order. After each setup action that changes progress, write the complete
+Use ✅ for completed, 🔄 for the current stage, ⛔ for a blocked stage, and ⬜
+for pending. Every update is a full snapshot containing all five stages in this
+order. After each setup action that changes progress, write the complete
 snapshot with the updated statuses. Preserve completed stages, keep pending
 stages present, and represent subordinate checks through the status of their
 owning stage. Before every maker-facing response, including the final handoff,
-synchronize the complete snapshot once more. Use the inline checklist only when
-a native task list is unavailable.
+synchronize the complete snapshot once more.
 
 Run setup commands from the current ESS Maker Skills workspace folder.
 

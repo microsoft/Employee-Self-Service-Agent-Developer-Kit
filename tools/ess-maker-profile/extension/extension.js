@@ -129,7 +129,14 @@ async function checkPrerequisites() {
         const stateUri = vscode.Uri.joinPath(root, '.local', 'setup', 'config.json');
         const content = await vscode.workspace.fs.readFile(stateUri);
         const json = JSON.parse(Buffer.from(content).toString('utf8'));
-        canonicalComplete = json.schema_version === 3 && json.connect_ready === true;
+        const configUri = vscode.Uri.joinPath(root, '.local', 'config.json');
+        const configContent = await vscode.workspace.fs.readFile(configUri);
+        const config = JSON.parse(Buffer.from(configContent).toString('utf8'));
+        canonicalComplete = json.schema_version === 4
+            && Object.values(json.agents || {}).some(agentState =>
+                agentState?.agent?.workspace_slug === config.activeAgent
+                && agentState.connect_ready === true
+            );
     } catch (_) { /* file doesn't exist or invalid */ }
 
     if (canonicalComplete) met.add('setup');

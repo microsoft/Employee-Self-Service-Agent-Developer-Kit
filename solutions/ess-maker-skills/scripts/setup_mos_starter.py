@@ -1,11 +1,11 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""List MOS starters, create a fresh Dev agent, and enable ALM when requested.
+"""List MOS starters, create a Dev agent, and enable ALM when requested.
 
-This is the DA `/setup` fresh-install path for a maker with no existing
-agent. It exposes three independently observable operations: read-only
-``list``, guarded ``create``, and replacement-safe ``enable-alm``. It has no
+This is the DA `/setup` entitled-product installation path. It exposes three
+independently observable operations: read-only ``list``, request-guarded
+``create``, and replacement-safe ``enable-alm``. It has no
 ``resolve``/``status`` command and no persona/ISV/product policy, which belongs
 to the maker and
 ``src/skills/foundation-setup/da-mos-starter.md``, not this script.
@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import copy
+import hashlib
 import json
 import os
 import socket
@@ -34,10 +35,11 @@ from agentbuilder import (
     AgentBuilderHTTPError,
 )
 from setup_existing_da import (
-    CANONICAL_SETUP_STATE,
     ExistingDASetupError,
     _add_agentbuilder_target_arguments,
     _client_from_args,
+    _load_canonical_setup_state,
+    _load_config,
     _normalize_guid,
     _normalize_environment_id,
     _print_exception,
@@ -46,7 +48,7 @@ from setup_existing_da import (
 )
 
 
-FUSE_PATH = Path(".local/setup/mos-starter/create-attempted")
+FUSE_ROOT = Path(".local/setup/mos-starter/create-attempts")
 _CREATE_MARKER = "DA_MOS_STARTER_CREATE"
 _LIST_MARKER = "DA_MOS_STARTER_LIST"
 _ALM_MARKER = "DA_MOS_STARTER_ALM"
@@ -183,23 +185,54 @@ def list_starter_packages(
 
 
 # --- create ---------------------------------------------------------------
-def _validate_empty_create_workspace(kit_root: Path) -> None:
-    conflicts = (
-        CANONICAL_SETUP_STATE,
-        Path(".local/config.json"),
-    )
-    if any((kit_root / path).exists() for path in conflicts):
+def _validate_create_workspace(
+    kit_root: Path,
+    environment_id: str,
+) -> None:
+    canonical = _load_canonical_setup_state(kit_root)
+    if (
+        canonical is not None
+        and str(canonical["environment"].get("id") or "").casefold()
+        != environment_id.casefold()
+    ):
         raise MosStarterSetupError(
-            "This Developer Kit folder already contains agent setup state. "
-            "To install a fresh MOS product, open a separate copy of the "
-            "Developer Kit in a new VS Code window."
+            "This workspace targets another Power Platform environment. "
+            "Create and open a new workspace before creating an agent there."
         )
+    config = _load_config(kit_root / ".local" / "config.json")
+    configured_environment = str(config.get("environmentId") or "")
+    if (
+        configured_environment
+        and configured_environment.casefold() != environment_id.casefold()
+    ):
+        raise MosStarterSetupError(
+            "This workspace targets another Power Platform environment. "
+            "Create and open a new workspace before creating an agent there."
+        )
+
+
+def _create_attempt_path(
+    kit_root: Path,
+    *,
+    environment_id: str,
+    package_id: str,
+    client_request_id: str,
+) -> Path:
+    package_key = hashlib.sha256(package_id.encode("utf-8")).hexdigest()[:16]
+    return (
+        kit_root
+        / FUSE_ROOT
+        / environment_id
+        / package_key
+        / f"{client_request_id}.txt"
+    )
 
 
 def _fuse_content(context: dict[str, Any]) -> str:
     """Render plain-text fuse content -- an audit note, never parsed back."""
     return (
         f"startedAt: {_utc_now()}\n"
+        f"clientRequestId: {context['clientRequestId']}\n"
         f"environmentId: {context['targetEnvironmentId']}\n"
         f"packageId: {context['packageId']}\n"
         f"packageName: {context['packageName'] or ''}\n"
@@ -208,7 +241,7 @@ def _fuse_content(context: dict[str, Any]) -> str:
 
 
 def _create_fuse(path: Path, content: str) -> None:
-    """Create the single attempt fuse atomically, refusing a second create.
+    """Create one request's attempt fuse, refusing a repeated dispatch.
 
     ``O_CREAT | O_EXCL`` makes existence-check-and-create one atomic
     operation, not a check-then-write race, and the write is fsynced
@@ -223,8 +256,8 @@ def _create_fuse(path: Path, content: str) -> None:
         descriptor = os.open(str(path), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError as exc:
         raise MosStarterSetupError(
-            "A MOS starter create was already attempted for this "
-            f"workspace ({path.as_posix()}). Inspect this session's "
+            "This MOS starter create request was already attempted "
+            f"({path.as_posix()}). Inspect this session's "
             "persistent transcript for the prior response, then "
             "reconcile by read-only inspecting the target environment "
             "(the existing `list` and `setup_existing_da.py validate-agent` "
@@ -367,6 +400,7 @@ def create_from_starter_package(
     *,
     environment_id: str,
     package_id: str,
+    client_request_id: str,
     kit_root: Path,
     package_name: str | None = None,
     package_version: str | None = None,
@@ -384,16 +418,29 @@ def create_from_starter_package(
             "The exact maker-confirmed starter package ID is required."
         )
     normalized_environment_id = _normalize_environment_id(environment_id)
+    normalized_request_id = _normalize_guid(
+        client_request_id,
+        "Client request ID",
+    )
     resolved_kit_root = kit_root.resolve()
-    _validate_empty_create_workspace(resolved_kit_root)
+    _validate_create_workspace(
+        resolved_kit_root,
+        normalized_environment_id,
+    )
 
     annotations: dict[str, Any] = {
         "targetEnvironmentId": normalized_environment_id,
+        "clientRequestId": normalized_request_id,
         "packageId": package_id,
         "packageName": package_name,
         "catalogPackageVersion": package_version,
     }
-    fuse_path = resolved_kit_root / FUSE_PATH
+    fuse_path = _create_attempt_path(
+        resolved_kit_root,
+        environment_id=normalized_environment_id,
+        package_id=package_id,
+        client_request_id=normalized_request_id,
+    )
     _create_fuse(fuse_path, _fuse_content(annotations))
 
     try:
@@ -703,6 +750,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--package-version",
         help="Diagnostic-only package version annotation.",
     )
+    create_command.add_argument(
+        "--client-request-id",
+        required=True,
+        help=(
+            "New UUID for this maker-confirmed create request. Reuse identifies "
+            "the same attempted mutation."
+        ),
+    )
     enable_alm_command = commands.add_parser(
         "enable-alm",
         help="Enable ALM for one exact agent and verify the persisted setting.",
@@ -750,6 +805,7 @@ def main(argv: list[str] | None = None) -> int:
             client,
             environment_id=target["environmentId"],
             package_id=args.package_id,
+            client_request_id=args.client_request_id,
             kit_root=args.kit_root.resolve(),
             package_name=args.package_name,
             package_version=args.package_version,

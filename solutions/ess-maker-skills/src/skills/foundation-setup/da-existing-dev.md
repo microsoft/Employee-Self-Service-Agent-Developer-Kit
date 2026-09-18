@@ -4,7 +4,7 @@
 
 Connect this ADK workspace to an existing editable DA Dev agent. Do not run the Dataverse setup path, request a Dataverse URL, create a preferred solution, or start Dataverse MCP.
 
-Use one Power Platform environment and one active platform per ADK workspace. If setup already identifies another platform, environment, or agent, direct the maker to a separate workspace.
+Use one Power Platform environment per ADK workspace. The workspace can contain multiple Dev agents from that environment and has one active agent. A target in another environment uses **Create and open a new workspace** from the parent skill.
 
 ## Connect from the agent URL
 
@@ -50,7 +50,7 @@ python scripts/setup_existing_da.py attach \
 
 The access token supplies the tenant identity during initial inspection; do not infer it from the environment ID.
 
-The command validates the exact agent identity and Dev configuration, fetches the authoritative component change set, converts supported authoring components with the Microsoft Object Model serializer, and materializes the local workspace. It persists canonical setup progress with an atomic file write before materialization. Complete the native FlightCheck maintenance below before treating `connect_ready: true` as current.
+The command validates the exact agent identity and Dev configuration, fetches the authoritative component change set, converts supported authoring components with the Microsoft Object Model serializer, and materializes the local workspace. It persists canonical setup progress for that agent before materialization. Complete the native FlightCheck maintenance below before treating the agent's `connect_ready: true` as current.
 
 If Object Model dependencies are missing, run:
 
@@ -90,37 +90,45 @@ Show candidate display names and ask the maker to choose one. Validate only the 
 
 ## Maintain native FlightCheck evidence
 
-After every successful `attach` or unchanged existing-workspace resume, run all four setup-owned FlightChecks. This includes workspaces whose canonical state was completed previously: the first rerun replaces the former skipped records with current evidence.
+After every successful `attach` or unchanged existing-workspace resume, run all four setup-owned FlightChecks for the exact agent.
 
 Run each checkpoint into its dedicated local evidence folder:
 
 ```text
-python scripts/flightcheck/cli.py --checkpoint DA-AGENT-001 --quiet-auth --no-open --output .local/setup/flightcheck/DA-AGENT-001
-python scripts/flightcheck/cli.py --checkpoint ENV-CAPACITY-001 --quiet-auth --no-open --output .local/setup/flightcheck/ENV-CAPACITY-001
-python scripts/flightcheck/cli.py --checkpoint "DA-CONN-*" --quiet-auth --no-open --output .local/setup/flightcheck/DA-CONN
-python scripts/flightcheck/cli.py --checkpoint DA-CONTENT-001 --quiet-auth --no-open --output .local/setup/flightcheck/DA-CONTENT-001
+python scripts/flightcheck/cli.py --checkpoint DA-AGENT-001 --quiet-auth --no-open --output .local/setup/agents/{AGENT_ID}/flightcheck/DA-AGENT-001
+python scripts/flightcheck/cli.py --checkpoint ENV-CAPACITY-001 --quiet-auth --no-open --output .local/setup/agents/{AGENT_ID}/flightcheck/ENV-CAPACITY-001
+python scripts/flightcheck/cli.py --checkpoint "DA-CONN-*" --quiet-auth --no-open --output .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONN
+python scripts/flightcheck/cli.py --checkpoint DA-CONTENT-001 --quiet-auth --no-open --output .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONTENT-001
 ```
 
 After each run, even when that FlightCheck exits nonzero, apply its result to canonical setup state:
 
 ```text
-python scripts/setup_existing_da.py maintain-flightcheck --checkpoint DA-AGENT-001 --results .local/setup/flightcheck/DA-AGENT-001/results.json
-python scripts/setup_existing_da.py maintain-flightcheck --checkpoint ENV-CAPACITY-001 --results .local/setup/flightcheck/ENV-CAPACITY-001/results.json
-python scripts/setup_existing_da.py maintain-flightcheck --checkpoint "DA-CONN-*" --results .local/setup/flightcheck/DA-CONN/results.json
-python scripts/setup_existing_da.py maintain-flightcheck --checkpoint DA-CONTENT-001 --results .local/setup/flightcheck/DA-CONTENT-001/results.json
+python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint DA-AGENT-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/DA-AGENT-001/results.json
+python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint ENV-CAPACITY-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/ENV-CAPACITY-001/results.json
+python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint "DA-CONN-*" --results .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONN/results.json
+python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint DA-CONTENT-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONTENT-001/results.json
 ```
 
-Parse every `DA_SETUP_FLIGHTCHECK_JSON:` result. A blocked result keeps setup incomplete. Show the corresponding FlightCheck result and remediation in maker language; do not edit canonical state or convert the result to an attestation. `DA-CONN-*` warnings are recorded as complete with their disclaimer, including an unavailable exact logical-to-physical mapping. `NotConfigured`, `Failed`, and `Error` connection results block the binding step. A skipped `DA-CONN-*` result is complete only when the agent declares no native logical connection references.
+Parse every `DA_SETUP_FLIGHTCHECK_JSON:` result. Its `state`, `connectReady`, `activeStep`, and `failureCauses` are the setup verdict. Render the owning setup stage from that verdict and use the matching FlightCheck rows for maker-facing evidence and remediation.
+
+For `DA-CONN-*`, setup applies these outcomes:
+
+- `Passed` and `Warning` evidence completes connection readiness. Include the warning disclaimer when exact logical-to-physical mapping is unavailable.
+- `Skipped` completes connection readiness when the agent declares no native logical connection references.
+- `NotConfigured` keeps connection readiness blocked. Present **Connection required** and the action needed to create or expose a matching physical connection.
+- `Failed` keeps connection readiness blocked. Present **Connection needs attention** and the observed unhealthy connection state.
+- `Error` keeps connection readiness blocked. Present **Connection check unavailable** and the authentication, permission, or service remediation.
 
 `ENV-CAPACITY-001` remains a programmatic gate. Non-queryable governance prerequisites are outside this read-only check; disclose that limitation without treating it as a setup policy or a downstream `/connect` deferral.
 
 ## Interpret results
 
-Treat setup as complete only when attachment reports `connectionStatus: workspace-ready` and the final `DA_SETUP_FLIGHTCHECK_JSON:` reports `connectReady: true`.
+Canonical setup state is authoritative for each agent's setup progress and completion. Setup for the active agent is complete when attachment reports `connectionStatus: workspace-ready`, every step in that agent's canonical record is `done`, and the final `DA_SETUP_FLIGHTCHECK_JSON:` reports `connectReady: true`.
 
 Canonical state records native environment access, capacity, binding readiness, and baseline content readiness as automated FlightCheck evidence. Only preferred-solution configuration remains skipped because it does not apply to the DA-only path.
 
-If setup stops after canonical progress is written, inspect `active_step`, that step's state, and its `failure_causes`. Preserve those facts as diagnostic evidence, but translate them into maker language: `SETUP-03` maps to **Establish an editable Dev agent** and `SETUP-07` maps to **Materialize the local workspace**. Explain a specific unmet prerequisite plainly without showing an internal step ID or raw technical output. Rerun only the bounded operation selected by the maker. Do not edit canonical setup state by hand or claim readiness while `connect_ready` is false.
+When canonical setup state is incomplete, render the stage identified by `active_step` with its state and `failure_causes`. Translate `SETUP-03` to **Establish an editable Dev agent** and `SETUP-07` to **Materialize the local workspace**. Explain the unmet prerequisite in maker language and offer the bounded remediation for that evidence.
 
 If content was synced to the local workspace but the returned result is not workspace-ready and supplies no specific failure cause, keep **Materialize the local workspace** current and show:
 
@@ -154,7 +162,7 @@ Not performed by foundation setup:
 
 **End message.**
 
-This report is a factual handoff, not another readiness gate. If the maker disputes a fact, inspect the underlying operation evidence rather than changing canonical state conversationally.
+This report is a factual handoff, not another readiness gate. If the maker disputes a fact, inspect the underlying operation evidence rather than changing canonical state conversationally. Then present the shared completion choices from `SKILL.md`.
 
 Preserve service status, error code, request ID, and local projection-failure evidence for diagnosis. In ordinary maker-facing copy, explain the specific service or conversion failure in plain language without exposing raw technical output. Do not replace it with a generic setup error.
 

@@ -97,6 +97,7 @@ def _write_setup_state(
         root,
         connection,
         None,
+        None,
     )
     setup_existing_da._record_canonical_setup_ready(
         root,
@@ -681,6 +682,29 @@ def test_replacement_rejects_different_managed_workspace(
     with pytest.raises(
         setup_alm_import.AlmImportSetupError,
         match="connected to a different",
+    ):
+        setup_alm_import.import_package_once(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            package_path=package,
+            kit_root=tmp_path,
+            replacement_agent_id=AGENT_ID,
+            confirmed_replacement_agent_id=AGENT_ID,
+        )
+
+    assert client.import_calls == []
+
+
+def test_replacement_rejects_agent_not_configured_in_managed_workspace(
+    tmp_path: Path,
+) -> None:
+    package = _write_package(tmp_path / "agent.zip")
+    _write_setup_state(tmp_path, agent_id=OTHER_AGENT_ID)
+    client = FakeClient()
+
+    with pytest.raises(
+        setup_alm_import.AlmImportSetupError,
+        match="not configured in this workspace",
     ):
         setup_alm_import.import_package_once(
             client,
