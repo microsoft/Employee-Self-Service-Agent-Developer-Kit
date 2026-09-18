@@ -4,16 +4,16 @@
 # pip ecosystem grouping in .github/dependabot.yml.
 
 # Auth + HTTP
-msal>=1.31.0,<2.0
-requests>=2.32.0,<3.0
-urllib3>=2.2.0,<3.0
-httpx>=0.27.0,<1.0
+msal>=1.38.0,<2.0
+requests>=2.34.2,<3.0
+urllib3>=2.8.0,<3.0
+httpx>=0.28.1,<1.0
 
 # Local AgentConfiguration MCP server
-mcp>=1.29.0,<2.0.0
+mcp>=2.2.0,<3.0.0
 
 # YAML parse for pre-push schema validation
-PyYAML>=6.0.2,<7.0
+PyYAML>=6.0.3,<7.0
 
 # Safe XML parsing for Workday SOAP responses (XXE / billion-laughs hardened).
 defusedxml>=0.7.1,<0.8
@@ -30,7 +30,7 @@ pythonnet>=3.1.0,<4.0
 # msal pulls cryptography transitively; this constraint only narrows the
 # acceptable range on win_arm64 so resolution lands on a wheel-having
 # version. Other platforms keep msal's own (wider) cryptography bound.
-cryptography>=46.0.0; sys_platform == "win32" and platform_machine == "ARM64"
+cryptography>=50.0.1; sys_platform == "win32" and platform_machine == "ARM64"
 
 # Shared AgentConfiguration authentication and cache persistence
 -r ../src/mcp/agentconfig_core/requirements.txt
