@@ -301,6 +301,11 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
             environment_id=environment_id,
             agent_id=agent_id,
             selection_source="flightcheck",
+            require_alm_family=False,
+            expected_schema_name=str(
+                runner.config.get("agent", {}).get("schemaName") or ""
+            )
+            or None,
         )
     except AgentBuilderHTTPError as exc:
         status = (
@@ -334,8 +339,7 @@ def run_native_agent_checks(runner) -> list[CheckResult]:
             "DA-AGENT-001",
             Status.PASSED.value,
             "Native Dev agent access",
-            f"Exact Dev agent '{connection['agent']['name']}' is accessible "
-            "and belongs to an editable ALM family.",
+            f"Exact Dev agent '{connection['agent']['name']}' is accessible.",
         )
     ]
 

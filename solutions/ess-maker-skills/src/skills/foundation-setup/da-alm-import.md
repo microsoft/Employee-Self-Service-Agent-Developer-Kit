@@ -64,18 +64,30 @@ python scripts/setup_existing_da.py attach \
   --ring "{RING}" \
   --api-version "{API_VERSION}" \
   --agent-id "{RETURNED_AGENT_ID}" \
+  --expected-schema-name "{RETURNED_SCHEMA_NAME}" \
   --setup-source alm-import
 ```
 
 Parse `DA_EXISTING_DEV_SETUP_JSON:`. Treat import `kind: success` only as
 permission to begin attachment. When attachment reports `connectionStatus` as
-`workspace-ready`, run the native FlightCheck maintenance sequence in
-`da-existing-dev.md`. Treat setup as complete only when its final
+`workspace-ready`, show:
+
+> The imported Dev agent is now available in the local authoring workspace. I
+> materialized {TOPIC_COUNT} topics and {VARIABLE_COUNT} variables. Publishing
+> was not required to prepare the workspace. Next I'll validate its setup.
+
+Run the native FlightCheck maintenance sequence in `da-existing-dev.md`. Treat
+setup as complete only when its final
 `DA_SETUP_FLIGHTCHECK_JSON:` reports `connectReady: true`.
 
 If attachment reports that the managed workspace changed, use the explicit
 checkpoint-and-refresh choice from `da-existing-dev.md`. A refresh never
 repeats the import.
+
+If attachment fails after import `kind: success`, state:
+**The agent package was imported and verified in Dev, but its local workspace
+was not prepared. No new import is needed.** Show the attachment error and
+rerun only the attach command after resolving it.
 
 When complete, render the factual completion report from `da-existing-dev.md`
 using **Supplied native agent package** as the starting point. Build every other
@@ -138,11 +150,14 @@ checkpointing and refreshing them.
 ## Handle other outcomes
 
 - `imported-unverified`: the import request completed and returned the persisted
-  agent identity, while direct Dev verification did not finish. State clearly:
-  **The agent package was imported, but verification is not available yet.**
+  agent identity, while direct agent or Dev-realm verification did not finish.
+  State clearly:
+  **The agent package was imported, but verification is not available yet, so
+  I have not prepared its local workspace.**
   Preserve the reported verification status, error code, and request ID when
-  available. Resolve the verification prerequisite, then rerun the identical
-  command; receipt replay resumes verification without another import POST.
+  available. Do not infer that publication is required. Resolve the reported
+  access or service prerequisite, then rerun the identical command; receipt
+  replay resumes verification without another import POST.
 - `pre-dispatch-failure`: no request reached the service. Explain the local,
   DNS, or connection prerequisite. State that no remote import was observed. Do
   not retry automatically.
@@ -156,10 +171,10 @@ checkpointing and refreshing them.
   `src/reference/native-alm-import.md`.
 
 If an older command exits during direct verification after recording status
-`imported`, treat it as the same completed-import state. Resolve the reported
-verification prerequisite, then rerun the identical command. Receipt replay
-resumes verification without another POST. If verification still fails, stop
-and retain the receipt.
+`imported`, treat it as the same completed-import state. Rerun the identical
+command with the updated tooling. Receipt replay verifies the direct agent and
+Dev route without another POST. If verification still fails, stop and retain
+the receipt.
 
 The command caches every operation outcome. Repeating the same command returns
 the cached result without another POST. After the cause of a recorded

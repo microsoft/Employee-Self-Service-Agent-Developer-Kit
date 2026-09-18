@@ -545,12 +545,8 @@ def _verified_outcome(
         raise AlmImportSetupError(
             "The imported agent schema does not match direct Dev validation."
         )
-    family_id = str(agent["almFamilyId"]).strip()
-    if not family_id:
-        raise AlmImportSetupError(
-            "Direct Dev validation did not return an ALM-family identity."
-        )
-    return {
+    family_id = str(agent.get("almFamilyId") or "").strip() or None
+    outcome = {
         "kind": "success",
         "importStatus": "resumed" if resumed else "imported",
         "importMode": identity["mode"],
@@ -563,9 +559,11 @@ def _verified_outcome(
         "agentId": result["cdsBotId"],
         "schemaName": result["schemaName"],
         "agentName": agent["name"],
-        "almFamilyId": family_id,
         "setupSource": "alm-import",
     }
+    if family_id:
+        outcome["almFamilyId"] = family_id
+    return outcome
 
 
 def _verification_unavailable_outcome(
@@ -852,6 +850,8 @@ def import_package_once(
             agent_id=imported["cdsBotId"],
             selection_source="alm-import-result",
             setup_source="alm-import",
+            require_alm_family=expected_family is not None,
+            expected_schema_name=imported["schemaName"],
         )
     except (
         AgentBuilderError,
@@ -881,7 +881,11 @@ def import_package_once(
     )
     if (
         expected_family is not None
-        and outcome["almFamilyId"].casefold() != expected_family.casefold()
+        and (
+            not isinstance(outcome.get("almFamilyId"), str)
+            or outcome["almFamilyId"].casefold()
+            != expected_family.casefold()
+        )
     ):
         outcome = _failure_outcome(
             identity,

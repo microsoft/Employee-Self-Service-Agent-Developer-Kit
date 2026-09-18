@@ -70,7 +70,7 @@ SETUP_STEP_NOTES = {
         "Non-queryable governance prerequisites remain maker-owned."
     ),
     "SETUP-03": (
-        "Confirms the environment, native ALM family, and editable Dev agent."
+        "Confirms the environment and exact editable Dev agent."
     ),
     "SETUP-04": (
         "Preferred-solution configuration does not apply to the DA-only "
@@ -516,8 +516,12 @@ def _canonical_state_matches_connection(
         and agent.get("id") == connection["agent"]["id"]
         and agent.get("schema_name") == connection["agent"]["schemaName"]
         and agent.get("realm") == connection["agent"]["realm"]
-        and agent.get("alm_family_id")
-        == connection["agent"]["almFamilyId"]
+        and (
+            not agent.get("alm_family_id")
+            or not connection["agent"].get("almFamilyId")
+            or agent.get("alm_family_id")
+            == connection["agent"].get("almFamilyId")
+        )
     )
 
 
@@ -726,7 +730,7 @@ def _build_canonical_setup_progress(
             "name": connection["agent"]["name"],
             "schema_name": connection["agent"]["schemaName"],
             "realm": connection["agent"]["realm"],
-            "alm_family_id": connection["agent"]["almFamilyId"],
+            "alm_family_id": connection["agent"].get("almFamilyId"),
             "workspace_slug": connection["agent"]["workspaceSlug"],
         },
         "workspace": existing.get("workspace", {}) if existing else {},
@@ -1084,6 +1088,52 @@ def _confirm_dev(
     return schema_name, family_id
 
 
+def _confirm_dev_route(
+    agent_id: str,
+    agent: dict[str, Any],
+    realms: dict[str, Any],
+    *,
+    expected_schema_name: str | None,
+) -> str:
+    route_realm = realms.get("routeRealm")
+    if route_realm not in (0, "dev", "Dev"):
+        raise ExistingDASetupError(
+            f"Agent realm discovery returned realm {route_realm!r}."
+        )
+    returned_id = _normalize_guid(
+        str(
+            agent.get("botId")
+            or agent.get("cdsBotId")
+            or agent.get("componentIdUnique")
+            or ""
+        ),
+        "Direct agent ID",
+    )
+    if returned_id.casefold() != agent_id.casefold():
+        raise ExistingDASetupError(
+            "Direct agent lookup returned a different agent identity."
+        )
+    card_realm = agent.get("realm")
+    if card_realm not in (None, 0, "dev", "Dev"):
+        raise ExistingDASetupError(
+            f"Direct agent lookup identified a non-Dev realm: {card_realm!r}."
+        )
+    expected_schema = str(expected_schema_name or "").strip()
+    schema_name = str(agent.get("schemaName") or expected_schema).strip()
+    if not schema_name:
+        raise ExistingDASetupError(
+            "Direct agent lookup did not return a schema name."
+        )
+    if (
+        expected_schema
+        and schema_name.casefold() != expected_schema.casefold()
+    ):
+        raise ExistingDASetupError(
+            "Direct agent lookup returned a different schema name."
+        )
+    return schema_name
+
+
 def validate_existing_dev_connection(
     client: AgentBuilderClient,
     *,
@@ -1091,18 +1141,38 @@ def validate_existing_dev_connection(
     agent_id: str,
     selection_source: str | None = None,
     setup_source: str = "existing-dev",
+    require_alm_family: bool = True,
+    expected_schema_name: str | None = None,
 ) -> dict[str, Any]:
     """Validate a directly addressable agent as editable Dev identity."""
     normalized_setup_source = _validate_setup_source(setup_source)
     normalized_environment_id = _normalize_environment_id(environment_id)
     normalized_agent_id = _normalize_guid(agent_id, "Agent ID")
     agent = client.get_agent(normalized_agent_id)
-    configuration = client.get_dev_configuration(normalized_agent_id)
-    schema_name, family_id = _confirm_dev(
-        normalized_agent_id,
-        agent,
-        configuration,
-    )
+    if require_alm_family:
+        configuration = client.get_dev_configuration(normalized_agent_id)
+        schema_name, family_id = _confirm_dev(
+            normalized_agent_id,
+            agent,
+            configuration,
+        )
+        expected_schema = str(expected_schema_name or "").strip()
+        if (
+            expected_schema
+            and schema_name.casefold() != expected_schema.casefold()
+        ):
+            raise ExistingDASetupError(
+                "Explicit Dev configuration returned a different schema name."
+            )
+    else:
+        realms = client.get_realms(normalized_agent_id)
+        schema_name = _confirm_dev_route(
+            normalized_agent_id,
+            agent,
+            realms,
+            expected_schema_name=expected_schema_name,
+        )
+        family_id = None
     agent_name = str(
         agent.get("fullBotName")
         or agent.get("displayName")
@@ -1235,6 +1305,8 @@ def _component_changes(changeset: dict[str, Any]) -> list[dict[str, Any]]:
 def _validate_changeset_identity(
     changeset: dict[str, Any],
     agent_id: str,
+    *,
+    expected_schema_name: str | None = None,
 ) -> None:
     bot = changeset.get("bot")
     if not isinstance(bot, dict):
@@ -1247,6 +1319,17 @@ def _validate_changeset_identity(
         raise ExistingDASetupError(
             "Component fetch returned content for a different agent."
         )
+    expected_schema = str(expected_schema_name or "").strip()
+    if expected_schema:
+        fetched_schema = str(bot.get("schemaName") or "").strip()
+        if not fetched_schema:
+            raise ExistingDASetupError(
+                "Component fetch did not return the imported schema name."
+            )
+        if fetched_schema.casefold() != expected_schema.casefold():
+            raise ExistingDASetupError(
+                "Component fetch returned content for a different schema."
+            )
 
 
 def _materialize_workspace(
@@ -1622,6 +1705,7 @@ def attach_existing_dev(
     refresh: bool = False,
     selection_source: str | None = None,
     setup_source: str = "existing-dev",
+    expected_schema_name: str | None = None,
 ) -> dict[str, Any]:
     """Resolve an existing Dev agent and materialize its local DA workspace."""
     connection = validate_existing_dev_connection(
@@ -1630,6 +1714,8 @@ def attach_existing_dev(
         agent_id=agent_id,
         selection_source=selection_source,
         setup_source=setup_source,
+        require_alm_family=setup_source != "alm-import",
+        expected_schema_name=expected_schema_name,
     )
     existing_setup = _validate_setup_target(kit_root, connection)
     if existing_setup is not None:
@@ -1640,6 +1726,13 @@ def attach_existing_dev(
         connection["agent"]["workspaceSlug"] = existing_setup["agent"][
             "workspace_slug"
         ]
+        if (
+            not connection["agent"].get("almFamilyId")
+            and existing_setup["agent"].get("alm_family_id")
+        ):
+            connection["agent"]["almFamilyId"] = existing_setup["agent"][
+                "alm_family_id"
+            ]
     progress_recorded = (
         existing_setup is not None
         and existing_setup["connect_ready"] is False
@@ -1654,11 +1747,17 @@ def attach_existing_dev(
     normalized_environment_id = connection["environment"]["id"]
     normalized_agent_id = connection["agent"]["id"]
     schema_name = connection["agent"]["schemaName"]
-    family_id = connection["agent"]["almFamilyId"]
+    family_id = connection["agent"].get("almFamilyId")
     agent_name = connection["agent"]["name"]
     try:
         changeset = client.fetch_components(normalized_agent_id)
-        _validate_changeset_identity(changeset, normalized_agent_id)
+        _validate_changeset_identity(
+            changeset,
+            normalized_agent_id,
+            expected_schema_name=(
+                schema_name if setup_source == "alm-import" else None
+            ),
+        )
     except Exception as exc:
         if progress_recorded:
             _try_record_canonical_setup_blocked(kit_root, exc)
@@ -2094,6 +2193,7 @@ def build_parser() -> argparse.ArgumentParser:
         default="existing-dev",
         help=argparse.SUPPRESS,
     )
+    attach.add_argument("--expected-schema-name", help=argparse.SUPPRESS)
     return parser
 
 
@@ -2255,6 +2355,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
             ),
             setup_source=args.setup_source,
+            expected_schema_name=args.expected_schema_name,
         )
     except (
         AgentBuilderError,

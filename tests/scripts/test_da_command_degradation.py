@@ -18,8 +18,10 @@ import strip_debug
 
 def _da_config() -> dict:
     return {
+        "releaseLine": "da",
         "agent": {
             "botId": "00000000-0000-4000-8000-000000000001",
+            "releaseLine": "da",
         },
     }
 
@@ -38,7 +40,7 @@ def test_publish_routes_da_ga_to_native_client(
             calls.append(("publish", agent_id))
             return {"validationPending": False}
 
-    monkeypatch.setattr(publish, "is_connect_ready", lambda: True)
+    monkeypatch.setattr(publish, "load_config", _da_config)
     monkeypatch.setattr(
         publish,
         "_load_native_setup_state",
@@ -101,7 +103,6 @@ def test_publish_preserves_classic_dataverse_route(
         },
     }
     calls: list[tuple[str, object]] = []
-    monkeypatch.setattr(publish, "is_connect_ready", lambda: False)
     monkeypatch.setattr(publish, "load_config", lambda: config)
     monkeypatch.setattr(
         publish,

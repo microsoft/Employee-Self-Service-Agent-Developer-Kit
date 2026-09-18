@@ -263,6 +263,8 @@ def test_create_persists_verified_identity_without_attaching(
             "agent_id": AGENT_ID,
             "selection_source": "alm-import-result",
             "setup_source": "alm-import",
+            "require_alm_family": True,
+            "expected_schema_name": SCHEMA,
         }
     ]
     assert not (tmp_path / setup_alm_import.CANONICAL_SETUP_STATE).exists()
@@ -270,6 +272,47 @@ def test_create_persists_verified_identity_without_attaching(
     assert record["status"] == "verified"
     assert record["input"]["expectedAlmFamilyId"] == "family-id"
     assert "packagePath" not in json.dumps(record)
+
+
+def test_supplied_package_uses_dev_route_without_alm_family(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _write_package(tmp_path / "agent.zip")
+    client = FakeClient()
+    validations: list[dict[str, Any]] = []
+    connection = _connection()
+    connection["agent"]["almFamilyId"] = None
+
+    def validate(_client: FakeClient, **kwargs: Any) -> dict[str, Any]:
+        validations.append(kwargs)
+        return connection
+
+    monkeypatch.setattr(
+        setup_alm_import,
+        "validate_existing_dev_connection",
+        validate,
+    )
+
+    result = setup_alm_import.import_package_once(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        package_path=package,
+        kit_root=tmp_path,
+    )
+
+    assert result["kind"] == "success"
+    assert "almFamilyId" not in result
+    assert validations == [
+        {
+            "environment_id": ENVIRONMENT_ID,
+            "agent_id": AGENT_ID,
+            "selection_source": "alm-import-result",
+            "setup_source": "alm-import",
+            "require_alm_family": False,
+            "expected_schema_name": SCHEMA,
+        }
+    ]
 
 
 def test_verified_operation_resumes_after_package_cleanup_without_second_import(

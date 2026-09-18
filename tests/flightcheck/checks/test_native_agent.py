@@ -71,18 +71,21 @@ class _AgentBuilder:
         }
 
     def get_dev_configuration(self, agent_id: str) -> dict[str, Any]:
+        raise AssertionError(
+            f"FlightCheck must not require published config for {agent_id}"
+        )
+
+    def get_realms(self, agent_id: str) -> dict[str, Any]:
         assert agent_id == AGENT_ID
-        return {
-            "realm": "Dev",
-            "cdsBotId": AGENT_ID,
-            "schemaName": "gptagent_ess",
-            "grsRepositoryId": FAMILY_ID,
-        }
+        return {"routeRealm": "Dev"}
 
     def fetch_components(self, agent_id: str) -> dict[str, Any]:
         assert agent_id == AGENT_ID
         return {
-            "bot": {"cdsBotId": AGENT_ID},
+            "bot": {
+                "cdsBotId": AGENT_ID,
+                "schemaName": "gptagent_ess",
+            },
             "botComponentChanges": [
                 {"component": {"$kind": "DialogComponent"}}
             ],
@@ -111,6 +114,7 @@ class _Runner:
             "agent": {
                 "botId": AGENT_ID,
                 "name": "Employee Self-Service",
+                "schemaName": "gptagent_ess",
                 "slug": "employee-self-service",
             },
             "activeAgent": "employee-self-service",

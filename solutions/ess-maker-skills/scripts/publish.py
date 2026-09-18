@@ -39,7 +39,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from auth import (  # noqa: E402
     authenticate,
-    is_connect_ready,
     load_config,
     publish_bot,
 )
@@ -72,6 +71,13 @@ def _parser() -> argparse.ArgumentParser:
         help="Always show the AgentBuilder account picker.",
     )
     return parser
+
+
+def _is_native_config(config: dict[str, Any]) -> bool:
+    agent = config.get("agent")
+    return config.get("releaseLine") == "da" or (
+        isinstance(agent, dict) and agent.get("releaseLine") == "da"
+    )
 
 
 def _load_native_setup_state() -> dict[str, Any]:
@@ -337,9 +343,10 @@ def _emit_telemetry() -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    if is_connect_ready():
+    config = load_config()
+    if _is_native_config(config):
         return _publish_native(args)
-    return _publish_classic(load_config(), args.yes)
+    return _publish_classic(config, args.yes)
 
 
 if __name__ == "__main__":

@@ -221,6 +221,7 @@ class FakeClient:
         configuration_realm: str = "Dev",
         configured_agent_id: str = AGENT_ID,
         route_realm: int | str = 0,
+        include_agent_schema: bool = True,
         changeset: dict[str, Any] | None = None,
     ) -> None:
         self.agent_name = agent_name
@@ -228,9 +229,12 @@ class FakeClient:
         self.configuration_realm = configuration_realm
         self.configured_agent_id = configured_agent_id
         self.route_realm = route_realm
+        self.include_agent_schema = include_agent_schema
         self.changeset = changeset or _changeset()
         self.list_calls = 0
         self.fetch_calls = 0
+        self.realm_calls = 0
+        self.configuration_calls = 0
 
     def list_agents(self) -> list[dict[str, Any]]:
         self.list_calls += 1
@@ -246,18 +250,22 @@ class FakeClient:
                 "fullBotName": "Production Agent",
                 "realm": "prod",
             }
-        return {
+        agent = {
             "botId": AGENT_ID,
             "fullBotName": self.agent_name,
             "realm": self.agent_realm,
-            "schemaName": SCHEMA_NAME,
             "managedProperties": {"isManaged": True},
         }
+        if self.include_agent_schema:
+            agent["schemaName"] = SCHEMA_NAME
+        return agent
 
     def get_realms(self, _agent_id: str) -> dict[str, Any]:
+        self.realm_calls += 1
         return {"routeRealm": self.route_realm}
 
     def get_dev_configuration(self, _agent_id: str) -> dict[str, Any]:
+        self.configuration_calls += 1
         return {
             "realm": self.configuration_realm,
             "cdsBotId": self.configured_agent_id,
@@ -522,6 +530,125 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
     assert setup_state["workspace"]["unprojected_component_kinds"] == {
         "CloudFlowDefinitionComponent": 1
     }
+
+
+def test_alm_import_attach_materializes_without_published_config(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient(include_agent_schema=False)
+
+    result = setup_existing_da.attach_existing_dev(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+        setup_source="alm-import",
+        selection_source="alm-import-result",
+        expected_schema_name=SCHEMA_NAME,
+    )
+
+    assert result["connectionStatus"] == "workspace-ready"
+    assert client.realm_calls == 1
+    assert client.configuration_calls == 0
+    assert client.fetch_calls == 1
+    metadata = json.loads(
+        (
+            _agent_root(tmp_path)
+            / setup_existing_da.ATTACH_METADATA
+        ).read_text(encoding="utf-8")
+    )
+    assert metadata["realm"] == "dev"
+    assert metadata["almFamilyId"] is None
+
+
+def test_alm_import_attach_rejects_component_schema_mismatch(
+    tmp_path: Path,
+) -> None:
+    changeset = _changeset()
+    changeset["bot"]["schemaName"] = "gptagent_different"
+    client = FakeClient(include_agent_schema=False, changeset=changeset)
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="different schema",
+    ):
+        setup_existing_da.attach_existing_dev(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            agent_id=AGENT_ID,
+            kit_root=tmp_path,
+            setup_source="alm-import",
+            selection_source="alm-import-result",
+            expected_schema_name=SCHEMA_NAME,
+        )
+
+    assert client.realm_calls == 1
+    assert client.configuration_calls == 0
+    assert client.fetch_calls == 1
+    assert not (tmp_path / "workspace").exists()
+
+
+def test_alm_import_attach_rejects_non_dev_route(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient(
+        route_realm="Prod",
+        include_agent_schema=False,
+    )
+
+    with pytest.raises(
+        setup_existing_da.ExistingDASetupError,
+        match="realm discovery returned realm",
+    ):
+        setup_existing_da.attach_existing_dev(
+            client,
+            environment_id=ENVIRONMENT_ID,
+            agent_id=AGENT_ID,
+            kit_root=tmp_path,
+            setup_source="alm-import",
+            selection_source="alm-import-result",
+            expected_schema_name=SCHEMA_NAME,
+        )
+
+    assert client.realm_calls == 1
+    assert client.configuration_calls == 0
+    assert client.fetch_calls == 0
+    assert not (tmp_path / "workspace").exists()
+
+
+def test_later_family_discovery_enriches_and_remains_in_setup_state(
+    tmp_path: Path,
+) -> None:
+    setup_existing_da.attach_existing_dev(
+        FakeClient(include_agent_schema=False),
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+        setup_source="alm-import",
+        expected_schema_name=SCHEMA_NAME,
+    )
+
+    setup_existing_da.attach_existing_dev(
+        FakeClient(),
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+    )
+    setup_existing_da.attach_existing_dev(
+        FakeClient(include_agent_schema=False),
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+        setup_source="alm-import",
+        expected_schema_name=SCHEMA_NAME,
+    )
+
+    state = json.loads(
+        (tmp_path / setup_existing_da.CANONICAL_SETUP_STATE).read_text(
+            encoding="utf-8"
+        )
+    )
+    assert state["agent"]["alm_family_id"] == FAMILY_ID
 
 
 def test_dialog_conversion_gap_preserves_evidence_without_ready_state(
@@ -1162,11 +1289,19 @@ def test_main_attach_forwards_setup_provenance(
             "--setup-source",
             setup_source,
         ]
+        + (
+            ["--expected-schema-name", SCHEMA_NAME]
+            if setup_source == "alm-import"
+            else []
+        )
     )
 
     assert result == 0
     assert observed["selection_source"] == selection_source
     assert observed["setup_source"] == setup_source
+    assert observed["expected_schema_name"] == (
+        SCHEMA_NAME if setup_source == "alm-import" else None
+    )
 
 
 def test_parser_exposes_only_composable_setup_operations() -> None:

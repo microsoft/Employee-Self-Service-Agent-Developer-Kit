@@ -78,7 +78,7 @@ preserves the hybrid/legacy route instead.
 
 | ID | Check | Priority | Method | Doc Link |
 |----|-------|----------|--------|----------|
-| DA-AGENT-001 | Saved active agent is directly accessible as the exact editable Dev agent and has an ALM-family identity | Critical | AgentBuilder Minimal Bot API | — |
+| DA-AGENT-001 | Saved active agent is directly accessible as the exact editable Dev agent | Critical | AgentBuilder Minimal Bot API | — |
 | DA-CONTENT-001 | Exact agent returns an authored component footprint | High | AgentBuilder Minimal Bot API | — |
 | DA-CONN-001 | Summary of native logical-to-physical connection readiness | High | AgentBuilder component snapshot + Power Platform Connectivity API | — |
 | DA-CONN-002+ | One detail row per logical connector reference. Exact ID matches are verified; a sole connected candidate passes with an explicit unverified-binding disclaimer; ambiguous candidates warn without guessing; missing or disconnected candidates do not pass. | High | AgentBuilder component snapshot + Power Platform Connectivity API | — |
