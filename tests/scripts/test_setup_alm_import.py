@@ -420,17 +420,21 @@ def test_imported_identity_resumes_verification_without_second_import(
         validate,
     )
 
-    with pytest.raises(agentbuilder.AgentBuilderError, match="read failed"):
-        setup_alm_import.import_package_once(
-            client,
-            environment_id=ENVIRONMENT_ID,
-            package_path=package,
-            kit_root=tmp_path,
-            expected_alm_family_id="family-id",
-        )
+    first = setup_alm_import.import_package_once(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        package_path=package,
+        kit_root=tmp_path,
+        expected_alm_family_id="family-id",
+    )
 
+    assert first["kind"] == "imported-unverified"
+    assert first["importStatus"] == "imported"
+    assert first["reason"] == "direct-verification-did-not-finish"
+    assert first["errorMessage"] == "read failed"
     record = json.loads(_records(tmp_path)[0].read_text(encoding="utf-8"))
     assert record["status"] == "imported"
+    assert record["outcome"] == first
     package.unlink()
 
     result = setup_alm_import.import_package_once(
@@ -443,6 +447,43 @@ def test_imported_identity_resumes_verification_without_second_import(
     )
 
     assert result["importStatus"] == "resumed"
+    assert len(client.import_calls) == 1
+
+
+def test_imported_identity_reports_verification_http_evidence(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    package = _write_package(tmp_path / "agent.zip")
+    client = FakeClient()
+    response = requests.Response()
+    response.status_code = 404
+    response.headers["x-ms-request-id"] = "request-404"
+    error = agentbuilder.AgentBuilderHTTPError(
+        "Dev realm configuration",
+        404,
+        error_code="ObjectNotFound",
+        request_id="request-404",
+        response=response,
+    )
+    monkeypatch.setattr(
+        setup_alm_import,
+        "validate_existing_dev_connection",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(error),
+    )
+
+    result = setup_alm_import.import_package_once(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        package_path=package,
+        kit_root=tmp_path,
+        expected_alm_family_id="family-id",
+    )
+
+    assert result["kind"] == "imported-unverified"
+    assert result["statusCode"] == 404
+    assert result["errorCode"] == "ObjectNotFound"
+    assert result["requestId"] == "request-404"
     assert len(client.import_calls) == 1
 
 

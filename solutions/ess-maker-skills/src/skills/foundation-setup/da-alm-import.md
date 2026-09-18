@@ -137,6 +137,12 @@ checkpointing and refreshing them.
 
 ## Handle other outcomes
 
+- `imported-unverified`: the import request completed and returned the persisted
+  agent identity, while direct Dev verification did not finish. State clearly:
+  **The agent package was imported, but verification is not available yet.**
+  Preserve the reported verification status, error code, and request ID when
+  available. Resolve the verification prerequisite, then rerun the identical
+  command; receipt replay resumes verification without another import POST.
 - `pre-dispatch-failure`: no request reached the service. Explain the local,
   DNS, or connection prerequisite. State that no remote import was observed. Do
   not retry automatically.
@@ -149,11 +155,11 @@ checkpointing and refreshing them.
   Follow the manual reconciliation procedure in
   `src/reference/native-alm-import.md`.
 
-If the command exits during direct verification after recording status
-`imported`, the mutation already returned an identity. Do not start another
-import. Resolve the reported verification prerequisite, then rerun the
-identical command. Receipt replay resumes verification without another POST.
-If verification still fails, stop and retain the receipt.
+If an older command exits during direct verification after recording status
+`imported`, treat it as the same completed-import state. Resolve the reported
+verification prerequisite, then rerun the identical command. Receipt replay
+resumes verification without another POST. If verification still fails, stop
+and retain the receipt.
 
 The command caches every operation outcome. Repeating the same command returns
 the cached result without another POST. After the cause of a recorded

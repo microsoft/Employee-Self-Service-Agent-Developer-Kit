@@ -88,6 +88,7 @@ internal command inputs and are not maker-facing output.
 | `kind` | Meaning | Safe next action |
 | --- | --- | --- |
 | `success` | The service returned an identity and direct Dev validation agreed | Continue through existing-Dev attachment |
+| `imported-unverified` | The import returned and persisted a usable identity, but direct Dev verification did not finish | Resolve the reported verification prerequisite, then rerun the identical command to resume verification without another POST |
 | `conflict` | Create-only protection found an existing agent | Use the existing agent or separately approve exact replacement |
 | `rejected` | The service returned a normal non-409 error | Resolve the reported prerequisite; do not retry automatically |
 | `pre-dispatch-failure` | The request did not reach the service | Resolve the local, DNS, or connection failure |

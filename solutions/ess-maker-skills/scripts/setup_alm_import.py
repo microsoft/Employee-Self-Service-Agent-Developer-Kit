@@ -568,6 +568,44 @@ def _verified_outcome(
     }
 
 
+def _verification_unavailable_outcome(
+    identity: dict[str, Any],
+    result: dict[str, str],
+    error: BaseException,
+    *,
+    resumed: bool,
+) -> dict[str, Any]:
+    outcome = _failure_outcome(
+        identity,
+        kind="imported-unverified",
+        status_code=(
+            error.status_code
+            if isinstance(error, AgentBuilderHTTPError)
+            else None
+        ),
+        error_code=(
+            error.error_code
+            if isinstance(error, AgentBuilderHTTPError)
+            else None
+        ),
+        request_id=(
+            error.request_id
+            if isinstance(error, AgentBuilderHTTPError)
+            else None
+        ),
+        reason="direct-verification-did-not-finish",
+        error=error,
+    )
+    outcome.update(
+        {
+            "importStatus": "resumed" if resumed else "imported",
+            "agentId": result["cdsBotId"],
+            "schemaName": result["schemaName"],
+        }
+    )
+    return outcome
+
+
 def import_package_once(
     client: AgentBuilderClient,
     *,
@@ -807,13 +845,34 @@ def import_package_once(
 
     if replacement:
         _validate_replacement_result(imported, replacement)
-    connection = validate_existing_dev_connection(
-        client,
-        environment_id=normalized_environment_id,
-        agent_id=imported["cdsBotId"],
-        selection_source="alm-import-result",
-        setup_source="alm-import",
-    )
+    try:
+        connection = validate_existing_dev_connection(
+            client,
+            environment_id=normalized_environment_id,
+            agent_id=imported["cdsBotId"],
+            selection_source="alm-import-result",
+            setup_source="alm-import",
+        )
+    except (
+        AgentBuilderError,
+        ExistingDASetupError,
+        ValueError,
+    ) as exc:
+        outcome = _verification_unavailable_outcome(
+            identity,
+            imported,
+            exc,
+            resumed=resumed,
+        )
+        _persist_dispatched_record(
+            record_path,
+            identity,
+            status="imported",
+            outcome=outcome,
+            result=imported,
+            operation_error=exc,
+        )
+        return outcome
     outcome = _verified_outcome(
         identity,
         imported,
