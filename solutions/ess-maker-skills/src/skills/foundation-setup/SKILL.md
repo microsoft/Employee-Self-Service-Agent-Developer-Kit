@@ -24,7 +24,7 @@ packs, and topics are explicitly outside this skill.
 
 ## Maker-facing progress
 
-At setup start, initialize the host's native task list with the five stages below. Keep it current through the final handoff and mark **Review the setup handoff** complete before finishing. Use the inline fallback only when a native task list is unavailable. Do not expose the eight internal setup-step IDs or show skipped internal records as successful checks.
+At setup start and at the beginning of every subsequent setup turn, write the host's native task list as a complete snapshot of the five stages below. Every task-list update contains all five stages in this order. Use the latest canonical setup state read in this invocation and results observed in this invocation to set their statuses. After each setup action that changes progress, write the complete snapshot again. Preserve completed stages, keep pending stages present, and represent subordinate checks through the status of their owning stage. Before every maker-facing response, including the final handoff, synchronize the complete snapshot once more and mark **Review the setup handoff** complete before finishing. Use the inline fallback only when a native task list is unavailable. Do not expose the eight internal setup-step IDs or show skipped internal records as successful checks.
 
 **Inline fallback message:**
 

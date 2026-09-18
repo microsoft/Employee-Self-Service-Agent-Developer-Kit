@@ -9,7 +9,10 @@ Read `src/skills/foundation-setup/SKILL.md` first. Follow its **Command runtime*
 instructions to establish a working Python invocation before running any Python
 command.
 
-After reading the foundation skill, immediately initialize the native task list:
+After reading the foundation skill, write the complete native task list below.
+At the beginning of every subsequent setup turn, write the same complete list
+again using the latest canonical setup state and results observed in that
+invocation:
 
 - Choose the starting point and target environment
 - Verify access and agent identity
@@ -17,8 +20,13 @@ After reading the foundation skill, immediately initialize the native task list:
 - Materialize the local workspace
 - Review the setup handoff
 
-Keep it current through the final handoff. Use the inline checklist only when a
-native task list is unavailable.
+Every native task-list update is a full snapshot containing all five stages in
+this order. After each setup action that changes progress, write the complete
+snapshot with the updated statuses. Preserve completed stages, keep pending
+stages present, and represent subordinate checks through the status of their
+owning stage. Before every maker-facing response, including the final handoff,
+synchronize the complete snapshot once more. Use the inline checklist only when
+a native task list is unavailable.
 
 Run setup commands from the current ESS Maker Skills workspace folder.
 
