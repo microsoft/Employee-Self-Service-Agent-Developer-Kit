@@ -10,8 +10,9 @@ Two families live here:
     ``suggestedBulletinDraftSchema`` exactly and is deliberately narrower than
     the canonical record: it cannot carry a bulletin ID, a persisted lifecycle
     status, creator/modifier identity, audit timestamps, or any backend version
-    or storage field. A suggestion is unpublished client state, never an
-    authorization to write.
+    or storage field. It carries both proposed content and editable copies,
+    including actions that need repair. Opening that unpublished client state
+    is never an authorization to write or proof of save/publish validity.
 
 ``AnnouncementEditorDraft`` and the ``open_org_announcements`` payloads
     The *output* contract consumed by the widget. ``build_create_draft``
@@ -34,6 +35,7 @@ from typing import Any, Literal, Optional
 from pydantic import (
     BaseModel,
     ConfigDict,
+    Field,
     ModelWrapValidatorHandler,
     PrivateAttr,
     model_validator,
@@ -144,11 +146,11 @@ class BulletinAction(StrictModel):
     payload carrying the *wrong* target for its type is malformed at the
     contract level, so it is rejected here rather than forwarded.
 
-    A *missing or blank* target is deliberately still accepted. A Draft is
-    allowed to be incomplete — the maker can add the URL later — and WeveNova
-    owns publish-time completeness validation, so rejecting it here would make
-    ``save_bulletin`` refuse drafts the backend accepts and would replace the
-    backend's field-level error code with a generic contract error.
+    A *missing or blank* target is structurally representable so read-only
+    editors can retain content for repair. Mutation input also uses this model,
+    but WeveNova validates every present action on both Draft save and Publish.
+    Parsing a request here does not establish backend acceptance; service-owned
+    validation failures retain their field-level error codes.
     """
 
     actionType: BulletinActionType
@@ -167,42 +169,33 @@ class BulletinAction(StrictModel):
 
 
 class SuggestedBulletinAction(BulletinAction):
-    """An action inside a *pre-hydrated* create suggestion.
+    """A structurally typed action in read-only proposed or copied content.
 
-    Stricter than :class:`BulletinAction` on purpose. A stored Draft may hold a
-    half-finished action the maker is still editing, but a suggestion is
-    content the model proposed and the maker has not typed: hydrating the
-    editor with an ``externalLink`` that has no URL, or a ``copilotChat`` with
-    no prompt, presents an action that cannot work as if it were reviewed
-    state. The suggestion is rejected so the maker gets an explicit opener
-    error instead of a silently broken button.
+    A missing own target remains available for explicit repair in the editor.
+    Discriminators, field types, unknown fields and mismatched target members
+    still use :class:`BulletinAction` validation. Action readiness belongs to
+    save/publish validation, not to opening an unsaved working copy.
     """
-
-    @model_validator(mode="after")
-    def require_actionable_target(self) -> "SuggestedBulletinAction":
-        if self.actionType == "externalLink":
-            if not (self.url or "").strip():
-                raise ValueError(
-                    "a suggested externalLink action requires a non-blank url"
-                )
-        elif not (self.prompt or "").strip():
-            raise ValueError(
-                "a suggested copilotChat action requires a non-blank prompt"
-            )
-        return self
 
 
 class SuggestedBulletinDraft(StrictModel):
-    """A partial, reviewable proposal for a new announcement.
+    """Partial proposed or copied content for an unsaved create editor.
 
     Every field is optional; omitted fields fall back to the editor defaults in
     :func:`build_create_draft`. An explicit empty string is a real draft value
     and is preserved so the widget surfaces its normal validation instead of
-    silently substituting a default.
+    silently substituting a default. Primary actions are retained for repair
+    even when incompatible with the selected announcement type.
     """
 
     type: Optional[AnnouncementType] = None
-    priority: Optional[AnnouncementPriority] = None
+    priority: Optional[AnnouncementPriority] = Field(
+        default=None,
+        description=(
+            "Standard announcement priority: 0 = Important; 1 = Informational. "
+            "Omitting priority defaults to Informational (1). Omit for Alert announcements."
+        ),
+    )
     title: Optional[str] = None
     description: Optional[str] = None
     primaryAction: Optional[SuggestedBulletinAction] = None
@@ -249,12 +242,13 @@ class SuggestedBulletinDraft(StrictModel):
         return self
 
     @model_validator(mode="after")
-    def reject_alert_incompatible_fields(self) -> "SuggestedBulletinDraft":
-        """An Alert has no priority control and no secondary action.
+    def reject_alert_standard_only_fields(self) -> "SuggestedBulletinDraft":
+        """Keep the frontend's type-aware projection of Standard-only fields.
 
         Only an *explicit* incompatible value is rejected. Omitted Standard
         fields still receive their required editor defaults, because the widget
-        keeps them in the draft even while they are hidden.
+        keeps them in the draft even while they are hidden. A primary action,
+        unlike these Standard-only fields, stays visible for explicit repair.
         """
         if self.type != "alert":
             return self
@@ -264,11 +258,6 @@ class SuggestedBulletinDraft(StrictModel):
             raise ValueError(
                 "alert announcements do not support a secondary action"
             )
-        if (
-            self.primaryAction is not None
-            and self.primaryAction.actionType != "externalLink"
-        ):
-            raise ValueError("alert actions must be externalLink actions")
         return self
 
     @model_validator(mode="after")

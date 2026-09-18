@@ -67,6 +67,7 @@ EMPTY_EDITOR_DRAFT = {
         {"version": 3},
         {"etag": 'W/"3"'},
         {"titleId": "title-1"},
+        {"tenantId": "tenant-1"},
         {"standardPriority": 0},
         {"standardSecondaryAction": None},
     ],
@@ -107,10 +108,21 @@ def test_every_omitted_field_keeps_its_editor_default() -> None:
     assert result == {**EMPTY_EDITOR_DRAFT, "title": "Only a title"}
 
 
-def test_priority_maps_to_standard_priority() -> None:
-    suggestion = drafts.SuggestedBulletinDraft(priority=0)
+@pytest.mark.parametrize("priority", [0, 1], ids=["important", "informational"])
+def test_priority_maps_to_standard_priority(priority: int) -> None:
+    suggestion = drafts.SuggestedBulletinDraft(priority=priority)
 
-    assert drafts.build_create_draft(suggestion).standardPriority == 0
+    assert drafts.build_create_draft(suggestion).standardPriority == priority
+
+
+def test_suggestion_schema_explains_priority_labels_and_default() -> None:
+    priority = drafts.SuggestedBulletinDraft.model_json_schema()["properties"]["priority"]
+
+    assert "0 = Important" in priority["description"]
+    assert "1 = Informational" in priority["description"]
+    assert "defaults to Informational (1)" in priority["description"]
+    assert priority["default"] is None
+    assert next(variant["enum"] for variant in priority["anyOf"] if "enum" in variant) == [0, 1]
 
 
 def test_secondary_action_maps_to_standard_secondary_action() -> None:
@@ -187,18 +199,23 @@ def test_alert_with_explicit_secondary_action_is_rejected() -> None:
         )
 
 
-def test_alert_with_a_copilot_chat_action_is_rejected() -> None:
-    with pytest.raises(ValidationError):
-        drafts.SuggestedBulletinDraft.model_validate(
-            {
-                "type": "alert",
-                "primaryAction": {
-                    "actionType": "copilotChat",
-                    "label": "Ask",
-                    "prompt": "Explain",
-                },
-            }
-        )
+def test_alert_with_a_copilot_chat_action_opens_for_repair() -> None:
+    action = {
+        "actionType": "copilotChat",
+        "label": "Ask",
+        "prompt": "https://contoso.example/not-a-website-action",
+    }
+    suggestion = drafts.SuggestedBulletinDraft.model_validate(
+        {"type": "alert", "primaryAction": action}
+    )
+
+    result = drafts.build_create_draft(suggestion)
+
+    assert result.type == "alert"
+    assert result.id is None
+    assert result.primaryAction.model_dump(exclude_unset=True) == action
+    assert result.primaryAction.url is None
+    assert suggestion.retry_payload() == {"type": "alert", "primaryAction": action}
 
 
 def test_alert_still_receives_the_hidden_standard_defaults() -> None:
@@ -566,29 +583,55 @@ def test_stored_schedules_are_not_re_normalized() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_a_suggested_external_link_requires_a_non_blank_url() -> None:
-    """A suggestion is unreviewed model output, not a half-typed draft."""
-    for url in (None, "", "   "):
-        with pytest.raises(ValidationError):
-            drafts.SuggestedBulletinDraft(
-                primaryAction={
-                    "actionType": "externalLink",
-                    "label": "Open",
-                    **({} if url is None else {"url": url}),
-                }
-            )
+@pytest.mark.parametrize(
+    ("action_type", "target"),
+    [("externalLink", "url"), ("copilotChat", "prompt")],
+)
+@pytest.mark.parametrize("target_values", [{}, {"value": None}, {"value": ""}, {"value": "   "}])
+@pytest.mark.parametrize(
+    ("announcement_type", "field", "editor_field"),
+    [
+        ("standard", "primaryAction", "primaryAction"),
+        ("standard", "secondaryAction", "standardSecondaryAction"),
+        ("alert", "primaryAction", "primaryAction"),
+    ],
+)
+def test_read_only_suggestions_preserve_incomplete_actions_for_repair(
+    action_type, target, target_values, announcement_type, field, editor_field
+) -> None:
+    action = {
+        "actionType": action_type,
+        "label": "",
+        **({target: target_values["value"]} if target_values else {}),
+    }
+    original = {"type": announcement_type, field: action}
+    suggestion = drafts.SuggestedBulletinDraft.model_validate(original)
+
+    result = drafts.build_create_draft(suggestion)
+
+    assert result.id is None
+    assert getattr(result, editor_field).model_dump(exclude_unset=True) == action
+    assert suggestion.retry_payload() == original
 
 
-def test_a_suggested_copilot_chat_requires_a_non_blank_prompt() -> None:
-    for prompt in (None, "", "   "):
-        with pytest.raises(ValidationError):
-            drafts.SuggestedBulletinDraft(
-                secondaryAction={
-                    "actionType": "copilotChat",
-                    "label": "Ask",
-                    **({} if prompt is None else {"prompt": prompt}),
-                }
-            )
+@pytest.mark.parametrize(
+    "action",
+    [
+        {"actionType": "unknown", "label": "Ask"},
+        {"label": "Ask", "prompt": "Explain"},
+        {"actionType": "copilotChat"},
+        {"actionType": "copilotChat", "label": None},
+        {"actionType": "copilotChat", "label": 123},
+        {"actionType": "copilotChat", "label": "Ask", "prompt": []},
+        {"actionType": "copilotChat", "label": "Ask", "url": "https://contoso.example"},
+        {"actionType": "externalLink", "label": "Open", "prompt": "Explain"},
+        {"actionType": "externalLink", "label": "Open", "url": {"value": "invalid"}},
+        {"actionType": "externalLink", "label": "Open", "id": "action-1"},
+    ],
+)
+def test_repairable_suggestions_still_reject_structurally_invalid_actions(action) -> None:
+    with pytest.raises(ValidationError):
+        drafts.SuggestedBulletinDraft(primaryAction=action)
 
 
 def test_complete_suggested_actions_are_accepted() -> None:
@@ -620,12 +663,12 @@ def test_complete_suggested_actions_are_accepted() -> None:
         {"actionType": "copilotChat", "label": "Ask", "prompt": "   "},
     ],
 )
-def test_ordinary_saves_still_accept_incomplete_draft_actions(action) -> None:
-    """A Draft may be unfinished; WeveNova owns publish-time completeness.
+def test_save_request_parsing_delegates_present_action_validity_to_backend(action) -> None:
+    """Pydantic acceptance is not backend acceptance.
 
-    Rejecting these here would make ``save_bulletin`` refuse drafts the backend
-    accepts and would replace the backend's field-level code with a generic
-    contract error the widget cannot bind to an input.
+    WeveNova validates every present action, even on a Draft. The request model
+    leaves that validation to the backend so its field-level errors reach the
+    widget instead of being replaced by a generic contract error.
     """
     request = drafts.SaveBulletinRequest.model_validate(
         {
@@ -665,7 +708,7 @@ def test_a_stored_incomplete_action_still_projects_into_the_editor() -> None:
 
 def test_mismatched_action_targets_are_still_rejected_everywhere() -> None:
     """Wrong-target actions are malformed at the contract level, not merely
-    incomplete, so both the strict and the permissive model reject them."""
+    incomplete, so read-only and mutation models both reject them."""
     with pytest.raises(ValidationError):
         drafts.SaveBulletinRequest.model_validate(
             {
