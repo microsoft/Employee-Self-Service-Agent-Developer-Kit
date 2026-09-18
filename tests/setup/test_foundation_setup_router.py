@@ -472,6 +472,35 @@ def test_org_announcements_skill_permits_one_opener_and_no_model_write() -> None
     assert "Never claim an announcement was created, saved, published" in skill
 
 
+def test_org_announcements_skill_maps_priority_labels() -> None:
+    skill = " ".join(_ORG_ANNOUNCEMENTS_SKILL.read_text(encoding="utf-8").split())
+
+    assert "`0 = Important`; `1 = Informational`" in skill
+    assert 'send `"priority": 1`; for Important, send `"priority": 0`' in skill
+
+
+def test_org_announcements_skill_continues_review_after_unresolved_audience() -> None:
+    skill = " ".join(_ORG_ANNOUNCEMENTS_SKILL.read_text(encoding="utf-8").split())
+
+    assert "When a successful search returns nothing" in skill
+    assert "An unresolved audience does not block opening a requested review-only create editor." in skill
+    assert 'Continue to `open_org_announcements` once with `view: "editor"` and `mode: "create"`' in skill
+    assert "preserving the maker's supplied content and schedule" in skill
+    assert "omit `suggestedDraft.audience`" in skill
+    assert "Do not guess or substitute a group from an earlier request" in skill
+    assert "A lookup failure is not a successful empty result" in skill
+    assert "`exhausted: false`" in skill
+
+
+def test_org_announcements_skill_distinguishes_editable_copies_from_action_save_validity() -> None:
+    skill = " ".join(_ORG_ANNOUNCEMENTS_SKILL.read_text(encoding="utf-8").split())
+
+    assert "The read-only opener also carries editable copies" in skill
+    assert "preserves missing action targets and incompatible primary actions for explicit repair" in skill
+    assert "the backend validates every present action even on Draft save" in skill
+    assert "interpreting a chat prompt as a URL" in skill
+
+
 def test_org_announcements_resolves_title_without_initializing_landing_config() -> None:
     skill = " ".join(_ORG_ANNOUNCEMENTS_SKILL.read_text(encoding="utf-8").split())
 
