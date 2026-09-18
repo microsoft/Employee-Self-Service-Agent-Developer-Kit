@@ -11,9 +11,14 @@ This skill owns the maker interaction and the handoff into existing-Dev setup.
 
 ## Identify the target
 
-Ask for a Copilot Studio environment URL if the maker has not supplied one. A
-recognized Copilot Studio URL is preferred because it identifies both the
-environment and service ring. Do not ask the maker to choose a ring or tenant.
+Accept an environment URL and infer its environment ID. The URL should have a
+segment denoting the service ring, such as `test` or `preprod`; if that segment
+is absent, use `prod`. Infer the ring from the URL and ask the maker only when
+the environment ID or ring is unclear.
+
+Pass the resolved environment ID and ring to the import command. Do not pass
+the URL itself or ask the maker to choose a ring or tenant when the supplied
+URL already provides enough context.
 
 When both the package and target environment are known, mark **Choose the
 starting point and target environment** complete. Keep **Verify access and agent
@@ -34,7 +39,8 @@ message from the parent skill. Run:
 
 ```text
 python scripts/setup_alm_import.py \
-  --target-url "{POWER_PLATFORM_ENVIRONMENT_URL}" \
+  --environment-id "{ENVIRONMENT_ID}" \
+  --ring "{RING}" \
   --package "{NATIVE_AGENT_PACKAGE_PATH}"
 ```
 
@@ -137,7 +143,8 @@ confirmation arguments:
 
 ```text
 python scripts/setup_alm_import.py \
-  --target-url "{POWER_PLATFORM_ENVIRONMENT_URL}" \
+  --environment-id "{ENVIRONMENT_ID}" \
+  --ring "{RING}" \
   --package "{NATIVE_AGENT_PACKAGE_PATH}" \
   --replace-agent-id "{INTERNAL_AGENT_ID}" \
   --confirm-replace-agent-id "{INTERNAL_AGENT_ID}"

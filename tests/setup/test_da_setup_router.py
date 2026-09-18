@@ -206,6 +206,7 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     text = _FOUNDATION.read_text(encoding="utf-8")
     import_text = _DA_ALM_IMPORT.read_text(encoding="utf-8")
     normalized = " ".join(text.split())
+    normalized_import = " ".join(import_text.split()).casefold()
     assert "A Prod source and its related Dev agent have different IDs by design" in normalized
     assert "Classify the supplied agent first" in normalized
 
@@ -221,6 +222,16 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     assert "setup_existing_da.py validate-agent" in import_text
     assert "DA_AGENT_VALIDATION_JSON:" in import_text
     assert "--setup-source alm-import" in import_text
+    assert '--environment-id "{ENVIRONMENT_ID}"' in import_text
+    assert '--ring "{RING}"' in import_text
+    assert '--target-url "{POWER_PLATFORM_ENVIRONMENT_URL}"' not in import_text
+    assert "do not pass the url itself" in normalized_import
+    assert "accept an environment url and infer its environment id" in (
+        normalized_import
+    )
+    assert "segment denoting the service ring" in normalized_import
+    assert "if that segment is absent, use `prod`" in normalized_import
+    assert "ask the maker only when" in normalized_import
     assert "`connectReady: true`" in import_text
     assert "`setupStatus`" not in import_text
     assert "`unprojectedDialogCount`" not in import_text

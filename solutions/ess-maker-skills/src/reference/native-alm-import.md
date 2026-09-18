@@ -35,8 +35,10 @@ Do not describe an unknown claim as supported behavior.
 
 ## Safety invariants
 
-1. Resolve the environment and ring from a recognized Copilot Studio URL when
-   available.
+1. For the session-facing supplied-package path, require the caller to supply
+   an explicitly resolved environment ID and service ring. Infer `test` or
+   `preprod` from the environment URL; when neither segment is present, use
+   `prod`. Ask when the target remains unclear.
 2. Validate the exact environment-specific API host before sending a token.
 3. Validate local projection dependencies before remote mutation.
 4. Observe package type, schema, and SHA-256 without extracting or rewriting
@@ -62,7 +64,7 @@ Do not describe an unknown claim as supported behavior.
 
 `scripts/setup_alm_import.py` owns:
 
-- target and ring resolution through existing AgentBuilder helpers;
+- target and ring validation through existing AgentBuilder helpers;
 - local projection-runtime preflight;
 - bounded package inspection;
 - replacement confirmation and direct Dev validation;
