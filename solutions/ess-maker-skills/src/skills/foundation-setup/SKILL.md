@@ -123,7 +123,7 @@ Offer exactly:
 
 Do not preselect a choice.
 
-For **Continue with this agent**, complete the one-time account selection above, then inspect the recorded target directly:
+For **Continue with this agent**, complete the one-time account selection above, then run:
 
 ```text
 python scripts/setup_existing_da.py inspect-agent \
@@ -134,7 +134,7 @@ python scripts/setup_existing_da.py inspect-agent \
 
 Also pass the recorded validated `--host` and `--api-version` when available. Parse `DA_AGENT_ROUTE_JSON:` and follow the same realm routing used for a supplied URL. Do not ask for the agent or environment URL. When canonical state is incomplete or blocked, label the first choice **Resume setup for this agent** instead, with otherwise identical behavior.
 
-For **Set up a different agent in a new workspace**, follow only [Use a separate workspace when the current folder is occupied](da-mos-starter.md#use-a-separate-workspace-when-the-current-folder-is-occupied). Stop after the workspace handoff; the new workspace owns selection of an existing or fresh agent.
+For **Set up a different agent in a new workspace**, follow only [Handle an occupied workspace](da-mos-starter.md#handle-an-occupied-workspace). Stop after the workspace handoff; the new workspace owns selection of an existing or fresh agent.
 
 For **Cancel setup**, make no changes and stop.
 
@@ -149,11 +149,17 @@ server-reported ALM relationship to determine whether the existing workspace
 already targets its related Dev agent.
 
 When the maker supplies a Copilot Studio URL that identifies an agent and has
-not explicitly selected package import, run:
+not explicitly selected package import, infer its environment ID, agent ID,
+and service ring. The URL should have a segment denoting the ring, such as
+`test` or `preprod`; when neither segment is present, confirm the `prod` ring
+with the user. Ask only when the environment ID or agent ID is unclear. Then
+run:
 
 ```text
 python scripts/setup_existing_da.py inspect-agent \
-  --target-url "{COPILOT_STUDIO_AGENT_URL}"
+  --environment-id "{ENVIRONMENT_ID}" \
+  --agent-id "{AGENT_ID}" \
+  --ring "{RING}"
 ```
 
 Parse `DA_AGENT_ROUTE_JSON:`. Do not infer the realm from names, URLs, or

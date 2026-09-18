@@ -1,27 +1,54 @@
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
+
 # Set Up Dev from an Entitled MOS Product
 
-Use this path when the maker wants a fresh installation. Read `src/reference/mos-starter-package.md` before acting. The reference owns the service facts, safety invariants, fuse disposition matrix, and redaction contract. This skill owns the maker conversation, the occupied-workspace handoff, and the handoff into existing-Dev setup.
+Use this path when the maker wants a fresh installation. Read `src/reference/mos-starter-package.md` before acting. The reference owns the service facts, safety invariants, fuse disposition matrix, and response-evidence contract. This skill owns the maker conversation, the occupied-workspace handoff, and the handoff into existing-Dev setup.
 
 Use only intent supplied in the current request and results observed in this invocation. Do not infer persona, product, target, or progress from conversation history.
 
 ## Identify the target
 
-Ask for a Copilot Studio environment URL when the target is not supplied. Do not ask the maker to classify the product before loading the catalog. When fresh-agent intent and the target environment are known, mark **Choose the starting point and target environment** complete.
+Ask for an environment URL when the target is not supplied. Infer its
+environment ID and service ring. The URL should have a segment denoting the
+ring, such as `test` or `preprod`; when neither segment is present, confirm the
+`prod` ring with the user. Ask only when the environment ID is unclear. Retain
+the resolved environment ID and ring for every operation in this setup
+invocation. Do not ask the maker to classify the product before loading the
+catalog. When fresh-agent intent and the target environment are known, mark
+**Choose the starting point and target environment** complete.
 
-## Use a separate workspace when the current folder is occupied
+## Handle an occupied workspace
 
 Before listing products, check whether `.local/setup/config.json` or `.local/config.json` exists. If either exists, do not sign in or load the catalog. Show:
 
-> This Developer Kit folder already contains setup for an agent. Nothing was changed. I can create a separate workspace from the current committed version so the existing agent remains untouched.
+> This Developer Kit folder already contains setup for an agent. You can reset and reuse this workspace or create a separate workspace.
 
 Offer exactly:
 
+- **Reset and use this workspace**
 - **Create and open a new workspace**
 - **Create a new workspace without opening it**
 - **Cancel setup**
 
-Do not offer to clear, replace, or overwrite the current folder's setup state. After either create choice, derive a suggested destination from the current repository folder name by appending `-fresh`. If that sibling folder exists, append the first available numeric suffix (`-fresh-2`, `-fresh-3`, and so on). Use the host's interactive single-selection control and offer exactly:
+Do not preselect a choice. For **Reset and use this workspace**, show:
+
+> Resetting this workspace will archive its current local agent files, setup records, and FlightCheck results. It will not change or delete the agent in Copilot Studio. Continue?
+
+Offer exactly:
+
+- **Reset workspace**
+- **Go back**
+- **Cancel setup**
+
+Do not preselect **Reset workspace**. Continue only when the maker selects it, then run:
+
+```text
+python scripts/reset_local_workspace.py --confirm-reset
+```
+
+Parse `DA_RESET_WORKSPACE_JSON:`. When `outcome` is `workspace-reset`, say that the previous local setup was archived to `{backupRoot}`, then continue this setup invocation with account selection and catalog loading. When `outcome` is `nothing-to-reset`, continue setup without a backup message. For any error, report its `ERROR:` and `NOTE:` output and stop; each note identifies a path that could not be restored.
+
+After either create choice, derive a suggested destination from the current repository folder name by appending `-fresh`. If that sibling folder exists, append the first available numeric suffix (`-fresh-2`, `-fresh-3`, and so on). Use the host's interactive single-selection control and offer exactly:
 
 - **Use suggested location -- {suggested absolute sibling-folder path}**
 - **Choose another location**
@@ -49,19 +76,20 @@ Complete the shared account-selection and authorization steps in `SKILL.md`, the
 
 ```text
 python scripts/setup_mos_starter.py list \
-  --target-url "{POWER_PLATFORM_ENVIRONMENT_URL}"
+  --environment-id "{ENVIRONMENT_ID}" \
+  --ring "{RING}"
 ```
 
 Parse `DA_MOS_STARTER_PACKAGES_JSON:`. Present each package's safe service-provided name, version, and description as a product. Never show the internal `packageId` to the maker.
 
 Normalize the picker label from the exact service-provided product name:
 
-| Service product name | Experience |
-| --- | --- |
-| `Employee Self-Service` | Hub/Core |
-| `Employee Self-Service HR` | HR |
-| `Employee Self-Service IT` | IT |
-| Any other name | Other |
+| Service product name       | Experience |
+| -------------------------- | ---------- |
+| `Employee Self-Service`    | Hub/Core   |
+| `Employee Self-Service HR` | HR         |
+| `Employee Self-Service IT` | IT         |
+| Any other name             | Other      |
 
 Use the host's interactive single-selection control and offer one choice for each returned product. Do not ask the maker to type a product name. Format each choice as **{experience} -- {product name} {version}** and use `shortDescription`, then `description`, as its supporting text. Omit a blank version or description instead of showing an unresolved value.
 
@@ -95,17 +123,18 @@ Only after the maker selects **Create agent**, run:
 
 ```text
 python scripts/setup_mos_starter.py create \
-  --target-url "{POWER_PLATFORM_ENVIRONMENT_URL}" \
+  --environment-id "{ENVIRONMENT_ID}" \
+  --ring "{RING}" \
   --package-id "{CONFIRMED_PACKAGE_ID}" \
   --package-name "{CONFIRMED_PACKAGE_NAME}" \
   --package-version "{CONFIRMED_PACKAGE_VERSION}"
 ```
 
-Wait for the command to finish and interpret its returned evidence before taking further action. Do not invoke create concurrently or automatically. If the command reports local setup state despite the earlier check, return to [Use a separate workspace when the current folder is occupied](#use-a-separate-workspace-when-the-current-folder-is-occupied); do not invoke create from the occupied folder.
+Wait for the command to finish and interpret its returned evidence before taking further action. Do not invoke create concurrently or automatically. If the command reports local setup state despite the earlier check, return to [Handle an occupied workspace](#handle-an-occupied-workspace); do not invoke create from the occupied folder.
 
 ## Interpret the response
 
-Parse `DA_MOS_STARTER_CREATE_ANNOTATIONS_JSON:`, then the response body (`DA_MOS_STARTER_CREATE_RESPONSE_JSON:` or `..._RESPONSE_TEXT:`), then `DA_MOS_STARTER_CREATE_JSON:` when the command exits zero. The response body is already redacted; never ask the maker to supply a token or a response value it might still contain.
+Parse `DA_MOS_STARTER_CREATE_ANNOTATIONS_JSON:`, then the response body (`DA_MOS_STARTER_CREATE_RESPONSE_JSON:` or `..._RESPONSE_TEXT:`), then `DA_MOS_STARTER_CREATE_JSON:` when the command exits zero. Keep the response body as diagnostic evidence.
 
 The response, outcome label, fuse disposition, HTTP status, and request details are diagnostic evidence only. Do not render them as ordinary maker-facing copy. For a definitive non-success, give a plain-language reason only when the service evidence supports it; otherwise say that the service did not create a new agent and setup has stopped. For an uncertain result, say:
 
@@ -130,7 +159,8 @@ Do not preselect **Prepare for local editing**. **Not now** performs no ALM oper
 
 ```text
 python scripts/setup_mos_starter.py enable-alm \
-  --target-url "{POWER_PLATFORM_ENVIRONMENT_URL}" \
+  --environment-id "{ENVIRONMENT_ID}" \
+  --ring "{RING}" \
   --agent-id "{RETURNED_AGENT_ID}"
 ```
 
@@ -142,7 +172,8 @@ After ALM read-back succeeds, run:
 
 ```text
 python scripts/setup_existing_da.py attach \
-  --target-url "{POWER_PLATFORM_ENVIRONMENT_URL}" \
+  --environment-id "{ENVIRONMENT_ID}" \
+  --ring "{RING}" \
   --agent-id "{RETURNED_AGENT_ID}" \
   --setup-source mos-starter
 ```

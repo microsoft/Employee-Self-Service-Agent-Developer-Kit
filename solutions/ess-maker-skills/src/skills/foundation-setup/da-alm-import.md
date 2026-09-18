@@ -12,13 +12,11 @@ This skill owns the maker interaction and the handoff into existing-Dev setup.
 ## Identify the target
 
 Accept an environment URL and infer its environment ID. The URL should have a
-segment denoting the service ring, such as `test` or `preprod`; if that segment
-is absent, use `prod`. Infer the ring from the URL and ask the maker only when
-the environment ID or ring is unclear.
+segment denoting the service ring, such as `test` or `preprod`; when neither
+segment is present, confirm the `prod` ring with the user. Ask the maker only
+when the environment ID is unclear.
 
-Pass the resolved environment ID and ring to the import command. Do not pass
-the URL itself or ask the maker to choose a ring or tenant when the supplied
-URL already provides enough context.
+Pass the resolved environment ID and ring to the import command.
 
 When both the package and target environment are known, mark **Choose the
 starting point and target environment** complete. Keep **Verify access and agent
@@ -117,13 +115,17 @@ Offer exactly:
 
 Default to **Use existing agent**. Do not recommend replacement.
 
-Before replacement, directly validate the exact existing Dev agent using its
-Copilot Studio URL or known agent ID without attaching it or writing setup
-state:
+Before replacement, resolve the exact existing Dev agent ID. When the maker
+supplies its Copilot Studio URL, infer the environment ID, agent ID, and service
+ring. The URL should have a segment denoting the ring, such as `test` or
+`preprod`; when neither segment is present, confirm the `prod` ring with the
+user. Ask only when the environment ID or agent ID is unclear. Then run:
 
 ```text
 python scripts/setup_existing_da.py validate-agent \
-  --target-url "{COPILOT_STUDIO_AGENT_URL}"
+  --environment-id "{ENVIRONMENT_ID}" \
+  --agent-id "{INTERNAL_AGENT_ID}" \
+  --ring "{RING}"
 ```
 
 Parse `DA_AGENT_VALIDATION_JSON:`. Show its display name, then ask:

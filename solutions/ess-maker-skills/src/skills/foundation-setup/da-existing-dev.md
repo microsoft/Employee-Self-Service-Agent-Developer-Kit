@@ -10,13 +10,20 @@ Use one Power Platform environment and one active platform per ADK workspace. If
 
 Ask for the URL of the agent in Copilot Studio only when the parent setup router has neither a current-invocation inspection result nor a complete recorded local target. A complete agent URL is preferred for a new target because it identifies the environment and agent without tenant-wide inventory. Never request a URL merely to revalidate the exact agent already recorded for this workspace.
 
+Infer the environment ID, agent ID, and service ring from the URL. The URL
+should have a segment denoting the ring, such as `test` or `preprod`; when
+neither segment is present, confirm the `prod` ring with the user. Ask only
+when the environment ID or agent ID is unclear.
+
 Use a current-invocation `DA_AGENT_ROUTE_JSON:` result when the parent setup
-router already inspected the supplied or recorded agent. Otherwise, use the shared
-authorization message from `SKILL.md`, then inspect the agent before attachment:
+router already inspected the supplied or recorded agent. Otherwise, use the
+shared authorization message from `SKILL.md`, then run:
 
 ```text
 python scripts/setup_existing_da.py inspect-agent \
-  --target-url "{COPILOT_STUDIO_AGENT_URL}"
+  --environment-id "{ENVIRONMENT_ID}" \
+  --agent-id "{AGENT_ID}" \
+  --ring "{RING}"
 ```
 
 Parse `DA_AGENT_ROUTE_JSON:`. Continue only when the current invocation has a
@@ -33,12 +40,15 @@ Run:
 
 ```text
 python scripts/setup_existing_da.py attach \
-  --target-url "{COPILOT_STUDIO_AGENT_URL}"
+  --environment-id "{ENVIRONMENT_ID}" \
+  --tenant-id "{TENANT_ID}" \
+  --host "{VALIDATED_HOST}" \
+  --ring "{RING}" \
+  --api-version "{API_VERSION}" \
+  --agent-id "{AGENT_ID}"
 ```
 
-The access token supplies the tenant identity; do not infer it from the environment ID.
-
-Recognized Copilot Studio hostnames select `prod`, `preprod`, or `test`. Other target text defaults to `prod`; use an explicit non-production `--ring` only when the supplied target does not identify its ring.
+The access token supplies the tenant identity during initial inspection; do not infer it from the environment ID.
 
 The command validates the exact agent identity and Dev configuration, fetches the authoritative component change set, converts supported authoring components with the Microsoft Object Model serializer, and materializes the local workspace. It persists canonical setup progress with an atomic file write before materialization. Complete the native FlightCheck maintenance below before treating `connect_ready: true` as current.
 
@@ -56,10 +66,14 @@ Use these independent read-only operations when setup needs to classify, select,
 
 ```text
 python scripts/setup_existing_da.py inspect-agent \
-  --target-url "{COPILOT_STUDIO_AGENT_URL}"
+  --environment-id "{ENVIRONMENT_ID}" \
+  --agent-id "{AGENT_ID}" \
+  --ring "{RING}"
 
 python scripts/setup_existing_da.py validate-agent \
-  --target-url "{COPILOT_STUDIO_AGENT_URL}"
+  --environment-id "{ENVIRONMENT_ID}" \
+  --agent-id "{AGENT_ID}" \
+  --ring "{RING}"
 ```
 
 `inspect-agent` returns the service-owned route realm. `validate-agent` verifies one exact editable Dev agent without writing setup state or workspace files. Do not run `validate-agent` immediately before `attach` merely to create another visible step; `attach` performs its own exact validation.
@@ -68,7 +82,8 @@ If the maker provides an environment URL without an agent ID, list visible Dev-r
 
 ```text
 python scripts/setup_existing_da.py list-agents \
-  --target-url "{COPILOT_STUDIO_ENVIRONMENT_URL}"
+  --environment-id "{ENVIRONMENT_ID}" \
+  --ring "{RING}"
 ```
 
 Show candidate display names and ask the maker to choose one. Validate only the selected candidate through `validate-agent` or `attach`. A missing list entry is not proof that a directly addressable agent is absent; accept a known agent ID and validate it directly.
@@ -162,7 +177,12 @@ Continue only after the maker explicitly selects **Checkpoint and refresh**:
 
 ```text
 python scripts/setup_existing_da.py attach \
-  --target-url "{COPILOT_STUDIO_AGENT_URL}" \
+  --environment-id "{ENVIRONMENT_ID}" \
+  --tenant-id "{TENANT_ID}" \
+  --host "{VALIDATED_HOST}" \
+  --ring "{RING}" \
+  --api-version "{API_VERSION}" \
+  --agent-id "{AGENT_ID}" \
   --refresh
 ```
 
