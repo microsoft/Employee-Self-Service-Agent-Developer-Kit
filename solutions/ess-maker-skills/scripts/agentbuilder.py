@@ -763,6 +763,40 @@ class AgentBuilderClient:
             raise AgentBuilderError("Direct agent lookup returned an invalid shape.")
         return body
 
+    def publish_agent(
+        self,
+        agent_id: str,
+        *,
+        timeout: int = 300,
+    ) -> dict[str, Any]:
+        """Publish one native agent through the MinimalBot API."""
+        response = self.session.request(
+            "POST",
+            f"{self.host}/copilotstudio/minimalBots/api/{agent_id}/publish",
+            params={"api-version": self.api_version},
+            headers=self.headers,
+            json={},
+            timeout=timeout,
+            allow_redirects=False,
+        )
+        if not response.ok:
+            _response_error(response, "Native agent publish")
+        try:
+            body = response.json()
+        except ValueError:
+            if response.content:
+                raise AgentBuilderError(
+                    "Native agent publish returned a non-JSON response."
+                )
+            return {}
+        if body is None:
+            return {}
+        if not isinstance(body, dict):
+            raise AgentBuilderError(
+                "Native agent publish returned an invalid shape."
+            )
+        return body
+
     def get_realms(self, agent_id: str) -> dict[str, Any]:
         body = self._json(
             "GET",

@@ -813,6 +813,56 @@ def test_update_bot_entity_preserves_bot_and_requests_no_component_changes() -> 
     assert "PUT" not in session.mounts["https://"].max_retries.allowed_methods
 
 
+def test_publish_agent_uses_minimalbot_route_and_empty_json_body() -> None:
+    session = FakeSession([FakeResponse({"validationPending": False})])
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=session,
+    )
+
+    result = client.publish_agent(AGENT_ID)
+
+    assert result == {"validationPending": False}
+    assert len(session.calls) == 1
+    call = session.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith(
+        f"/copilotstudio/minimalBots/api/{AGENT_ID}/publish"
+    )
+    assert call["params"] == {"api-version": "2024-10-01"}
+    assert call["json"] == {}
+    assert call["allow_redirects"] is False
+    assert "POST" not in session.mounts["https://"].max_retries.allowed_methods
+
+
+def test_publish_agent_preserves_validation_response_on_http_error() -> None:
+    raw_response = FakeResponse(
+        {
+            "Error": {
+                "Code": "PublishValidationFailure",
+                "Message": "Validation for the bot failed",
+            }
+        },
+        status_code=400,
+    )
+    client = agentbuilder.AgentBuilderClient(
+        HOST,
+        "fake-token",
+        ring="test",
+        tenant_id="00000000-0000-4000-8000-000000009999",
+        session=FakeSession([raw_response]),
+    )
+
+    with pytest.raises(agentbuilder.AgentBuilderHTTPError) as error:
+        client.publish_agent(AGENT_ID)
+
+    assert error.value.response is raw_response
+    assert error.value.error_code == "PublishValidationFailure"
+
+
 def test_http_403_is_explicit_without_echoing_response_body() -> None:
     session = FakeSession(
         [
