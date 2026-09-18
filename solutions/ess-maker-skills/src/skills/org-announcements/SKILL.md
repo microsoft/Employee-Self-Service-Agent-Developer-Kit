@@ -241,9 +241,12 @@ Use this when the maker's message already carries real announcement content.
 - `priority` becomes the editor's `standardPriority`; `secondaryAction` becomes
   its `standardSecondaryAction`. Send the suggestion field names, not the editor
   field names.
+- **Priority labels:** map the maker's Standard priority exactly:
+  `0 = Important`; `1 = Informational`. For an explicit Informational request,
+  send `"priority": 1`; for Important, send `"priority": 0`.
 - Omit a field to accept its default: `type` `standard`, empty title and
-  description, empty dates, no primary action, empty audience, priority `1`, and
-  no secondary action.
+  description, empty dates, no primary action, empty audience, Informational
+  priority `1`, and no secondary action.
 - An explicit empty string is a real value. Send `""` only when the maker
   actually asked to clear something.
 - **Dates.** Send one of exactly three things, and nothing else:
@@ -260,16 +263,18 @@ Use this when the maker's message already carries real announcement content.
   give: resolve it with them first, or omit the field and let them pick in the
   editor.
 - An **Alert** has no priority control and no secondary action. Never send
-  `priority` or `secondaryAction` with `"type": "alert"`, and give an Alert only
-  an `externalLink` primary action. The draft is rejected otherwise.
+  `priority` or `secondaryAction` with `"type": "alert"`. For newly authored
+  Alerts, use an `externalLink` primary action; the current backend rejects
+  other action kinds on Draft save as well as Publish.
 - An `externalLink` action carries `url`; a `copilotChat` action carries
-  `prompt`. Never mix them, and never send an action without its target: a
-  suggested `externalLink` needs a non-blank `url` and a suggested
-  `copilotChat` needs a non-blank `prompt`. A suggestion is content the maker
-  has not reviewed, so an action that cannot work is rejected rather than
-  hydrated into the editor as if it were finished. (An existing Draft *may*
-  hold an unfinished action — that is the maker's own work in progress, and the
-  editor keeps it.)
+  `prompt`. Never mix them or invent a missing target. When proposing an
+  action, use the maker's supplied target or ask them to complete it.
+- The read-only opener also carries editable copies. It preserves missing
+  action targets and incompatible primary actions for explicit repair, without
+  dropping the action or interpreting a chat prompt as a URL. Opening a copy
+  does not establish save or publish validity: the backend validates every
+  present action even on Draft save. A Draft may omit an action entirely and
+  leave publication-required content incomplete.
 
 #### Resolve suggested audiences
 
@@ -280,10 +285,23 @@ For each audience the maker named:
    may need bounded paging, not separate name and email requests.
 2. Preselect the result **only** when exactly one eligible group matches
    unambiguously. Put its `id` in `suggestedDraft.audience`.
-3. When the search returns nothing, or more than one plausible match, leave the
-   audience out of the draft and tell the maker to pick it in the editor. Do not
-   guess.
+3. When a successful search returns nothing, or more than one plausible match,
+   leave the unresolved audience out of the draft. **An unresolved audience does
+   not block opening a requested review-only create editor.** Continue to
+   `open_org_announcements` once with `view: "editor"` and `mode: "create"`,
+   preserving the maker's supplied content and schedule. If no audience was
+   resolved, omit `suggestedDraft.audience` so the editor opens with an empty
+   audience. Tell the maker to select a valid audience in the editor before
+   publishing. Do not guess or substitute a group from an earlier request.
 4. Never invent a group ID and never send a group name where an ID belongs.
+
+For example, after a successful empty lookup, explain: "I couldn't resolve that
+audience. I'll open your draft with the audience unset so you can select it in
+the editor. Nothing has been saved or published." Then open the review editor;
+do not end the turn with only the no-match explanation.
+
+A lookup failure is not a successful empty result. Report an authentication or
+directory-service error as such; do not claim the group does not exist.
 
 An empty result does **not** always mean the group does not exist. The response
 carries `exhausted` and `pagesExamined`:
@@ -293,7 +311,8 @@ carries `exhausted` and `pagesExamined`:
 - `exhausted: false` — the search stopped at the page budget
   (`pagesExamined` pages). More matches may exist. Say the search was
   incomplete and ask for a more specific name; never tell the maker the group
-  does not exist.
+  does not exist. For a requested review-only create, still open the draft with
+  unresolved audiences omitted so the maker can refine the search in the editor.
 
 Search returns security groups, mail-enabled security groups, and classic
 distribution groups. Microsoft 365 groups and dynamic-membership groups are not
