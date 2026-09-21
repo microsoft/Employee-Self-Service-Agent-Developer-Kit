@@ -710,6 +710,7 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
     assert "before authentication or remote agent validation" in text
     assert "Do not run `validate-agent` immediately before `attach`" in text
     assert "Your local workspace is ready for authoring." in text
+    assert "The remote agent is available at" in text
     assert "[{USER_FRIENDLY_PRODUCT_NAME}]({ACTUAL_AGENT_URL})" in text
     assert "| Item" not in text
     assert "| Starting point" not in text

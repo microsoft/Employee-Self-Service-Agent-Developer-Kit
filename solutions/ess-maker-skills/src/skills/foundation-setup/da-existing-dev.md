@@ -144,7 +144,7 @@ Build the exact agent URL as `{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_
 
 **Message:**
 
-Your local workspace is ready for authoring. Open [{USER_FRIENDLY_PRODUCT_NAME}]({ACTUAL_AGENT_URL}) in Microsoft Copilot Studio.
+Your local workspace is ready for authoring. The remote agent is available at [{USER_FRIENDLY_PRODUCT_NAME}]({ACTUAL_AGENT_URL}) in Microsoft Copilot Studio.
 
 ### Runtime readiness
 
