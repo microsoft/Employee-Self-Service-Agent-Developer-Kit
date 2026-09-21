@@ -40,6 +40,8 @@ def test_connect_workday_routes_by_architecture_and_install_state() -> None:
     assert "do not treat it as a fresh environment" in text
     assert "retired `selected_products` field" in text
     assert "Fresh CEA Workday\n  installation is not available" in text
+    assert "Do not consult the retired\n`selected_products` field" in text
+    assert "Continue below only for a concrete active CEA agent" in text
     assert "connect/workday/step" not in text
 
 
@@ -114,6 +116,8 @@ def test_connect_workday_provider_contract_and_review_guards() -> None:
     assert "sidecarDataverseEndpoint" in install
     assert "create it as an empty JSON object" in install
     assert '--connect-config ".local/connect/workday-da/config.json"' in install
+    assert "**`WARNING` / `SKIPPED`**" in install
+    assert "Never attempt package\n  installation from an inconclusive result" in install
 
     verify = (
         _SOLUTION

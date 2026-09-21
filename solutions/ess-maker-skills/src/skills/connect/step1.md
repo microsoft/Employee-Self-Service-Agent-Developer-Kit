@@ -67,9 +67,22 @@ Wait for the user to respond.
 
 ### If the user chose ServiceNow (1 or "servicenow")
 
-Resolve `.local/setup/config.json` `selected_products` and the active agent
-record from `.local/config.json`. If the active agent is a Declarative Agent,
-or the installed inventory contains only `da.*` products, show:
+Resolve `activeAgent` against `.local/config.json` `agents`, falling back to
+the legacy `agent` object only when needed. Do not consult the retired
+`selected_products` field.
+
+If no concrete active agent with architecture identity can be resolved, show:
+
+**Message:**
+
+Select the Employee Self-Service agent you want to connect, then run
+`/connect servicenow` again.
+
+**End message.**
+
+Stop immediately without creating or updating ServiceNow state.
+
+If the active agent is a Declarative Agent, show:
 
 **Message:**
 
@@ -79,9 +92,7 @@ release. Please contact your administrator.
 **End message.**
 
 Stop immediately. Do not create ServiceNow state or enter the ServiceNow
-lifecycle. If both CEA and DA products exist and no active agent can be
-resolved, ask the maker to select an agent and run `/connect servicenow`
-again; never guess the architecture.
+lifecycle. Continue below only for a concrete active CEA agent.
 
 Check if `.local/connect/servicenow/steps.md` exists.
 

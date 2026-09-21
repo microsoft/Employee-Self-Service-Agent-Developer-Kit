@@ -68,9 +68,11 @@ environment is outside this lifecycle and must not affect DA1.1.
   yet. Continue to **P1.1**.
 - Any other **`FAILED`** result → show the result and stop. Do not guess
   whether installation is safe from an unrecognized failure reason.
-- **`WARNING`** (Dataverse call failed, e.g. permissions or a transient error)
-  → show the result verbatim and stop; ask the user to resolve the underlying
-  issue (commonly a missing Dataverse role) and re-run this step.
+- **`WARNING` / `SKIPPED`** (Dataverse verification could not run, e.g.
+  authentication, permissions, endpoint initialization, or a transient error)
+  → show the result verbatim, keep DA1.1 `in-progress`, and stop; ask the user
+  to resolve the underlying issue and re-run this step. Never attempt package
+  installation from an inconclusive result.
 
 ---
 
