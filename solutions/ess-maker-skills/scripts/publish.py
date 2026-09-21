@@ -317,7 +317,11 @@ def _publish_native(
         print(f"  ❌ Publish failed: {error}")
         return 1
 
-    if result.get("validationPending") is True:
+    validation_pending = result.get(
+        "ValidationPending",
+        result.get("validationPending"),
+    )
+    if validation_pending is True:
         print(
             "  ✅ Publish request accepted. Copilot Studio validation is "
             "still running."

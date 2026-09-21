@@ -25,6 +25,8 @@ from urllib3.util.retry import Retry
 
 CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
 DEFAULT_API_VERSION = "2024-10-01"
+NATIVE_ALM_API_VERSION = "2022-03-01-preview"
+COPILOT_STUDIO_CLIENT_NAME = "CopilotStudio"
 DEFAULT_TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
 DEV_REALM = 0
 TEST_REALM = 1
@@ -248,7 +250,7 @@ def list_environments(
     headers = {
         "Authorization": f"Bearer {token}",
         "Accept": "application/json",
-        "x-ms-client-name": "EssAdk",
+        "x-ms-client-name": COPILOT_STUDIO_CLIENT_NAME,
     }
     url = f"{host}/environmentmanagement/environments"
     params: dict[str, str] | None = {"api-version": api_version}
@@ -585,7 +587,7 @@ class ConnectivityClient:
         self.headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
-            "x-ms-client-name": "EssAdk",
+            "x-ms-client-name": COPILOT_STUDIO_CLIENT_NAME,
         }
 
     def list_connections(self, environment_id: str) -> list[dict[str, Any]]:
@@ -651,8 +653,7 @@ class AgentBuilderClient:
         self.headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
-            "Content-Type": "application/json",
-            "x-ms-client-name": "EssAdk",
+            "x-ms-client-name": COPILOT_STUDIO_CLIENT_NAME,
         }
 
     def _json(
@@ -668,11 +669,14 @@ class AgentBuilderClient:
         request_params = {"api-version": self.api_version}
         if params:
             request_params.update(params)
+        request_headers = dict(self.headers)
+        if body is not None:
+            request_headers["Content-Type"] = "application/json"
         response = self.session.request(
             method,
             f"{self.host}{path}",
             params=request_params,
-            headers=self.headers,
+            headers=request_headers,
             json=body,
             timeout=timeout,
         )
@@ -773,8 +777,8 @@ class AgentBuilderClient:
         response = self.session.request(
             "POST",
             f"{self.host}/copilotstudio/minimalBots/api/{agent_id}/publish",
-            params={"api-version": self.api_version},
-            headers=self.headers,
+            params={"api-version": NATIVE_ALM_API_VERSION},
+            headers={**self.headers, "Content-Type": "application/json"},
             json={},
             timeout=timeout,
             allow_redirects=False,
@@ -835,6 +839,7 @@ class AgentBuilderClient:
             "POST",
             f"/copilotstudio/minimalBots/api/{agent_id}/components",
             "Component fetch",
+            params={"api-version": NATIVE_ALM_API_VERSION},
             body={},
             timeout=180,
         )
@@ -855,8 +860,8 @@ class AgentBuilderClient:
         return self.session.request(
             "PUT",
             f"{self.host}/copilotstudio/minimalBots/api/{agent_id}/components",
-            params={"api-version": self.api_version},
-            headers=self.headers,
+            params={"api-version": NATIVE_ALM_API_VERSION},
+            headers={**self.headers, "Content-Type": "application/json"},
             json={"bot": bot, "botComponentChanges": []},
             timeout=timeout,
             allow_redirects=False,
@@ -871,9 +876,8 @@ class AgentBuilderClient:
     ) -> dict[str, Any]:
         """Import one package without replaying or exposing its response body."""
         request_headers = {
-            name: value
-            for name, value in self.headers.items()
-            if name.casefold() != "content-type"
+            "Authorization": self.headers["Authorization"],
+            "x-ms-client-name": COPILOT_STUDIO_CLIENT_NAME,
         }
         form = (
             {"schemaName": replacement_schema_name}
@@ -884,11 +888,11 @@ class AgentBuilderClient:
             response = self.session.request(
                 "POST",
                 f"{self.host}/copilotstudio/minimalBots/alm/import",
-                params={"api-version": self.api_version},
+                params={"api-version": NATIVE_ALM_API_VERSION},
                 headers=request_headers,
                 files={
                     "package": (
-                        package_path.name,
+                        "package.zip",
                         package,
                         "application/zip",
                     )
@@ -941,14 +945,13 @@ class AgentBuilderClient:
     ) -> None:
         """Export one native package to a caller-owned path."""
         request_headers = {
-            name: value
-            for name, value in self.headers.items()
-            if name.casefold() != "content-type"
+            "Authorization": self.headers["Authorization"],
+            "x-ms-client-name": COPILOT_STUDIO_CLIENT_NAME,
         }
         response = self.session.request(
             "POST",
             f"{self.host}/copilotstudio/minimalBots/alm/{agent_id}/export",
-            params={"api-version": self.api_version},
+            params={"api-version": NATIVE_ALM_API_VERSION},
             headers=request_headers,
             timeout=timeout,
             allow_redirects=False,
@@ -1007,7 +1010,7 @@ class AgentBuilderClient:
             "POST",
             f"{self.host}/copilotstudio/minimalBots/createFromStarterPackage",
             params={"api-version": self.api_version},
-            headers=self.headers,
+            headers={**self.headers, "Content-Type": "application/json"},
             json={"packageId": package_id},
             timeout=timeout,
             allow_redirects=False,

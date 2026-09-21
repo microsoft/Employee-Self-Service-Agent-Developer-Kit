@@ -132,7 +132,7 @@ def get_components(
         "method": responses.POST,
         "url": (
             f"{MOCK_AGENTBUILDER_BASE}/copilotstudio/minimalBots/api/"
-            f"{MOCK_AGENT_ID}/components?api-version=2024-10-01"
+            f"{MOCK_AGENT_ID}/components?api-version=2022-03-01-preview"
         ),
         "json": payload or components(),
         "status": 200,

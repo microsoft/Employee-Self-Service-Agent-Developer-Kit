@@ -18,6 +18,7 @@ workspace completion.
 | Claim | Status |
 | --- | --- |
 | Import uses `POST /copilotstudio/minimalBots/alm/import` | Live-proven in TEST |
+| Import uses `api-version=2022-03-01-preview` and `x-ms-client-name: CopilotStudio` | Confirmed by the platform ALM reference |
 | The request uses multipart form data with one binary `package` part | Live-proven in TEST |
 | Omitting `schemaName` requests create-only behavior | Live-proven through successful create and HTTP 409 collision |
 | Supplying a directly validated Dev schema requests replacement | Live-proven in TEST |

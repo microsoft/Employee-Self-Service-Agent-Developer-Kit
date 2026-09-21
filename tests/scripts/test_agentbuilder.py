@@ -124,7 +124,7 @@ def test_connectivity_client_lists_environment_connections() -> None:
             "headers": {
                 "Authorization": "Bearer fake-token",
                 "Accept": "application/json",
-                "x-ms-client-name": "EssAdk",
+                "x-ms-client-name": "CopilotStudio",
             },
             "timeout": 120,
         }
@@ -185,6 +185,12 @@ class FakeSession:
     def request(self, method: str, url: str, **kwargs: Any) -> FakeResponse:
         self.calls.append({"method": method, "url": url, **kwargs})
         return self.responses.pop(0)
+
+
+def _non_auth_headers(call: dict[str, Any]) -> dict[str, str]:
+    headers = dict(call["headers"])
+    assert headers.pop("Authorization")
+    return headers
 
 
 def test_host_derivation_probes_primary_split_first() -> None:
@@ -256,6 +262,14 @@ def test_client_uses_only_configured_environment_host() -> None:
     assert session.calls[3]["params"]["realm"] == 0
     assert session.calls[4]["method"] == "POST"
     assert session.calls[4]["json"] == {}
+    assert session.calls[4]["params"] == {
+        "api-version": agentbuilder.NATIVE_ALM_API_VERSION
+    }
+    assert _non_auth_headers(session.calls[4]) == {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "x-ms-client-name": "CopilotStudio",
+    }
 
 
 def test_realm_configuration_rejects_unknown_realm() -> None:
@@ -305,11 +319,15 @@ def test_import_package_sends_multipart_create_without_json_content_type(
     }
     call = session.calls[0]
     assert call["method"] == "POST"
-    assert call["params"] == {"api-version": "2024-10-01"}
-    assert "Content-Type" not in call["headers"]
+    assert call["params"] == {
+        "api-version": agentbuilder.NATIVE_ALM_API_VERSION
+    }
+    assert _non_auth_headers(call) == {
+        "x-ms-client-name": "CopilotStudio",
+    }
     assert call["data"] == {}
     filename, stream, content_type = call["files"]["package"]
-    assert filename == "agent.zip"
+    assert filename == "package.zip"
     assert stream.closed
     assert content_type == "application/zip"
     assert "json" not in call
@@ -369,11 +387,13 @@ def test_realm_discovery_configuration_and_export_use_native_alm_requests(
         f"/copilotstudio/minimalBots/alm/{AGENT_ID}/export"
     )
     assert export["params"] == {
-        "api-version": agentbuilder.DEFAULT_API_VERSION
+        "api-version": agentbuilder.NATIVE_ALM_API_VERSION
     }
     assert export["allow_redirects"] is False
     assert export["stream"] is True
-    assert "Content-Type" not in export["headers"]
+    assert _non_auth_headers(export) == {
+        "x-ms-client-name": "CopilotStudio",
+    }
     assert "POST" not in session.mounts[
         "https://"
     ].max_retries.allowed_methods
@@ -558,6 +578,14 @@ def test_lists_ring_environments_with_agentbuilder_token() -> None:
         call["headers"]["Authorization"] == "Bearer fake-token"
         for call in session.calls
     )
+    assert all(
+        _non_auth_headers(call)
+        == {
+            "Accept": "application/json",
+            "x-ms-client-name": "CopilotStudio",
+        }
+        for call in session.calls
+    )
 
 
 def test_ring_environment_listing_rejects_unsafe_next_link() -> None:
@@ -707,6 +735,14 @@ def test_create_agent_from_starter_package_sends_live_proven_post() -> None:
     assert call["url"].endswith(
         "/copilotstudio/minimalBots/createFromStarterPackage"
     )
+    assert call["params"] == {
+        "api-version": agentbuilder.DEFAULT_API_VERSION
+    }
+    assert _non_auth_headers(call) == {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "x-ms-client-name": "CopilotStudio",
+    }
     assert call["json"] == {"packageId": "pkg-1"}
     assert call["allow_redirects"] is False
     assert "POST" not in session.mounts["https://"].max_retries.allowed_methods
@@ -809,6 +845,14 @@ def test_update_bot_entity_preserves_bot_and_requests_no_component_changes() -> 
         f"/copilotstudio/minimalBots/api/{AGENT_ID}/components"
     )
     assert call["json"] == {"bot": bot, "botComponentChanges": []}
+    assert call["params"] == {
+        "api-version": agentbuilder.NATIVE_ALM_API_VERSION
+    }
+    assert _non_auth_headers(call) == {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "x-ms-client-name": "CopilotStudio",
+    }
     assert call["allow_redirects"] is False
     assert "PUT" not in session.mounts["https://"].max_retries.allowed_methods
 
@@ -832,7 +876,14 @@ def test_publish_agent_uses_minimalbot_route_and_empty_json_body() -> None:
     assert call["url"].endswith(
         f"/copilotstudio/minimalBots/api/{AGENT_ID}/publish"
     )
-    assert call["params"] == {"api-version": "2024-10-01"}
+    assert call["params"] == {
+        "api-version": agentbuilder.NATIVE_ALM_API_VERSION
+    }
+    assert _non_auth_headers(call) == {
+        "Accept": "application/json",
+        "Content-Type": "application/json",
+        "x-ms-client-name": "CopilotStudio",
+    }
     assert call["json"] == {}
     assert call["allow_redirects"] is False
     assert "POST" not in session.mounts["https://"].max_retries.allowed_methods

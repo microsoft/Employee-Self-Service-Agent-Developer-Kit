@@ -39,7 +39,7 @@ def test_publish_routes_da_ga_to_native_client(
 
         def publish_agent(self, agent_id):
             calls.append(("publish", agent_id))
-            return {"validationPending": False}
+            return {"ValidationPending": True}
 
     monkeypatch.setattr(publish, "load_config", _da_config)
     monkeypatch.setattr(
@@ -101,7 +101,7 @@ def test_publish_routes_da_ga_to_native_client(
         "publish",
         "00000000-0000-4000-8000-000000000001",
     )
-    assert "Published" in capsys.readouterr().out
+    assert "validation is still running" in capsys.readouterr().out
 
 
 def test_publish_preserves_classic_dataverse_route(
