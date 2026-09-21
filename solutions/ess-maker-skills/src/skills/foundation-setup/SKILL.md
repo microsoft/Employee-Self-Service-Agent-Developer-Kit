@@ -9,6 +9,12 @@ Follow `src/reference/ui-formatting-guidelines.md` for every user-facing
 instruction in this flow. Resolve its examples with the actual environment,
 agent, product, and connector names before displaying them.
 
+Maker-visible setup text consists of the defined **Message** blocks and
+questions, their choices, an observed blocker with its supported recovery, and
+the final handoff. Operational sequencing and response-policy prose are
+instruction-only. Successful internal operations continue directly to the next
+defined maker interaction.
+
 This is the DA-GA `/setup` entry point. It owns only:
 
 - maker authentication;
@@ -101,9 +107,9 @@ Establish a working Python invocation before running setup commands.
 - When local recovery options appear exhausted, explain the external action
   needed and offer to perform it.
 
-  Successful runtime and dependency validation proceeds directly to the next
-  setup render point. Present prerequisite status when maker action is required,
-  using the observed failure and its single recovery action.
+  After successful runtime and dependency validation, run the next setup
+  operation. When validation requires maker action, state the observed failure
+  and its single recovery action.
 
   When child guidance shows `python`, substitute the resolved invocation.
 

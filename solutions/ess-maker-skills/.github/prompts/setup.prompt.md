@@ -55,10 +55,9 @@ If the check fails, run:
 
 Then rerun the check.
 
-Successful runtime, dependency, and converter checks continue directly to the
-applicable setup surface without a maker-facing success message. Render a
-prerequisite message when maker action is required, using the failure and its
-single recovery action.
+After successful runtime, dependency, and converter checks, run the next setup
+operation. When a check requires maker action, state the observed failure and
+its single recovery action.
 
 For any command failure, follow the **Command runtime** recovery guidance.
 

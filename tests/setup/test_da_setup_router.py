@@ -30,6 +30,7 @@ _NATIVE_ALM_REFERENCE = (
 _MOS_STARTER_REFERENCE = (
     _SOLUTION / "src" / "reference" / "mos-starter-package.md"
 )
+_UI_FORMATTING = _SOLUTION / "src" / "reference" / "ui-formatting-guidelines.md"
 _PREPARE_FRESH_WORKSPACE = _SOLUTION / "scripts" / "prepare_fresh_workspace.py"
 _RESET_LOCAL_WORKSPACE = _SOLUTION / "scripts" / "reset_local_workspace.py"
 _WORKDAY = _SOLUTION / "src" / "skills" / "setup" / "SKILL.md"
@@ -122,7 +123,7 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
     assert "retains the same markers continues to its next render point" in (
         normalized_prompt
     )
-    assert "Successful runtime, dependency, and converter checks continue directly" in (
+    assert "After successful runtime, dependency, and converter checks" in (
         normalized_prompt
     )
     assert "one single-level bullet and one leading status emoji per stage" in (
@@ -534,9 +535,12 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
         normalized
     )
     assert "begin the create operation immediately" in normalized
-    assert "Successful ALM response parsing is internal evidence" in normalized
+    assert "An enabled or already-enabled result proceeds directly to attachment" in (
+        normalized
+    )
     assert "single presentation unit defined in `da-existing-dev.md`" in normalized
-    assert "next maker-facing success surface" in normalized
+    assert "Complete every check whose prerequisites remain available" in normalized
+    assert "state the observed blocker and supported recovery" in normalized
     assert "application lifecycle management" not in normalized
     assert "**Prepare for local editing**" not in text
     assert "**Not now**" not in text
@@ -661,7 +665,14 @@ def test_foundation_uses_maker_facing_progress_without_duplicate_state() -> None
     assert "first decision surface rather than rendering another completion summary" in (
         normalized
     )
-    assert "Successful runtime and dependency validation proceeds directly" in normalized
+    assert "After successful runtime and dependency validation" in normalized
+    assert "Maker-visible setup text consists of the defined **Message** blocks" in (
+        normalized
+    )
+    assert "Operational sequencing and response-policy prose are instruction-only" in (
+        normalized
+    )
+    assert "Successful internal operations continue directly" in normalized
     assert "Never infer progress from conversation history" in normalized
     assert "Do not mark a stage complete from a skipped internal setup record" in (
         normalized
@@ -785,7 +796,7 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     assert "Canonical setup state is authoritative for each agent's setup progress and readiness" in normalized
     assert "`state`, `connectReady`, `activeStep`, and `failureCauses` are the runtime-readiness verdict" in normalized
     assert "treat all four setup-owned FlightChecks and their maintenance calls as one presentation unit" in normalized
-    assert "next maker-facing success surface is the final runtime-readiness table" in normalized
+    assert "attempt every available check before producing the final runtime-readiness table" in normalized
     assert "Render both even when `connectReady` is false" in normalized
     for readiness_status in (
         "**✅ Ready**",
@@ -809,6 +820,30 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
         normalized
     )
     assert "canonical setup state, or conversation history" in normalized
+
+
+def test_ui_guidance_keeps_ux_meta_intentions_out_of_maker_copy() -> None:
+    text = _UI_FORMATTING.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert "No historicity means maker-facing text describes only" in normalized
+    assert "a current observed fact" in normalized
+    assert "a decision the maker must make" in normalized
+    assert "an action the maker must take" in normalized
+    assert "a supported outcome" in normalized
+    assert "Authoring rationale and UX meta-intentions remain instruction-only" in (
+        normalized
+    )
+    assert "successful internal work continues to the next defined maker interaction" in (
+        normalized
+    )
+    assert "a blocked operation states the observed blocker and one supported recovery" in (
+        normalized
+    )
+    assert '"chatter," "noise," "narration," "render point," "surface,"' in text
+    assert "Authoring rationale or UX-policy language presented as setup progress" in (
+        normalized
+    )
 
 
 def test_foundation_router_paths_resolve() -> None:

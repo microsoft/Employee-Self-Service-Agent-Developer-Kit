@@ -110,7 +110,7 @@ python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}"
 python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint DA-CONTENT-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONTENT-001/results.json
 ```
 
-Parse every `DA_SETUP_FLIGHTCHECK_JSON:` result. Its `state`, `connectReady`, `activeStep`, and `failureCauses` are the runtime-readiness verdict. Use the matching FlightCheck rows for maker-facing evidence and remediation. After attachment, the next maker-facing success surface is the final runtime-readiness table after all four checks have been attempted. Render an earlier surface when maker action is required or an operation prevents later checks from running. Do not use a FlightCheck result to roll back a completed maker-facing checklist stage.
+Parse every `DA_SETUP_FLIGHTCHECK_JSON:` result. Its `state`, `connectReady`, `activeStep`, and `failureCauses` are the runtime-readiness verdict. Use the matching FlightCheck rows for maker-facing evidence and remediation. After attachment, attempt every available check before producing the final runtime-readiness table. When maker action is required or an operation prevents later checks from running, state the observed blocker and supported recovery. Do not use a FlightCheck result to roll back a completed maker-facing checklist stage.
 
 For `DA-CONN-*`, setup applies these outcomes:
 
