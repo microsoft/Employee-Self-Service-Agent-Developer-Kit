@@ -55,6 +55,20 @@ def test_public_setup_routes_to_da_foundation_module() -> None:
     assert "Do not route to Dataverse foundation or onboarding playbooks" in prompt
 
 
+def test_foundation_defines_setup_state_sources() -> None:
+    foundation = _FOUNDATION.read_text(encoding="utf-8")
+    normalized = " ".join(foundation.split())
+
+    assert "**Current setup state:** `.local/setup/config.json`" in foundation
+    assert "**Active agent and workspace:** `.local/config.json`" in foundation
+    assert "**Setup evidence:** `.local/setup/agents/{AGENT_ID}/`" in foundation
+    assert (
+        "Use the active agent's entry in `.local/setup/config.json` when "
+        "determining its setup progress and readiness."
+    ) in normalized
+    assert "they are not a separate setup record" in normalized
+
+
 def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
     prompt = _SETUP_PROMPT.read_text(encoding="utf-8")
     foundation = _FOUNDATION.read_text(encoding="utf-8")

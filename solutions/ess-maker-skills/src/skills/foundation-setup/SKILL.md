@@ -9,6 +9,16 @@ Follow `src/reference/ui-formatting-guidelines.md` for every user-facing
 instruction in this flow. Resolve its examples with the actual environment,
 agent, product, and connector names before displaying them.
 
+## Setup state sources
+
+- **Current setup state:** `.local/setup/config.json`
+- **Active agent and workspace:** `.local/config.json`
+- **Setup evidence:** `.local/setup/agents/{AGENT_ID}/`
+
+Use the active agent's entry in `.local/setup/config.json` when determining its
+setup progress and readiness. Evidence files support that state; they are not a
+separate setup record.
+
 Maker-visible setup text consists of the defined **Message** blocks and
 questions, their choices, an observed blocker with its supported recovery, and
 the final handoff. Operational sequencing and response-policy prose are
