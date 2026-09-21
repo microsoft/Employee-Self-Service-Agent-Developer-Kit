@@ -568,6 +568,13 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "one picker option per exact ID" in normalized
     assert "Do not describe products as remaining, uninstalled, or eligible" in normalized
     assert "Choose an existing agent in this environment" in text
+    assert "Choose a different catalog product" in text
+    assert "present the valid rows from the latest successful catalog result" in normalized
+    assert "Continue through **Confirm the exact product and target**" in text
+    assert "uses a new client request UUID" in normalized
+    collision_choices = text[text.index("When the annotations report `outcome: collision`") :]
+    collision_choices = collision_choices[: collision_choices.index("## Enable ALM")]
+    assert "**Go back**" not in collision_choices
     assert "does not identify the corresponding agent" in reference
 
     assert "createFromStarterPackage" in reference

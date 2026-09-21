@@ -111,10 +111,11 @@ When the annotations report `outcome: collision`, do not infer which visible age
 
 - **Choose an existing agent in this environment**
 - **Choose a different catalog product**
-- **Go back**
 - **Cancel setup**
 
 Do not preselect a choice. For **Choose an existing agent in this environment**, show the returned names, let the maker select one exact agent, and continue through `da-existing-dev.md`. The selected agent is maker-supplied intent, not proof of package identity. This path does not replace an agent.
+
+For **Choose a different catalog product**, present the valid rows from the latest successful catalog result and let the maker select another exact product. Continue through **Confirm the exact product and target** for that selection. A new create request becomes available only after the maker confirms the new product and uses a new client request UUID.
 
 ## Enable ALM
 
