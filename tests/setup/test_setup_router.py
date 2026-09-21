@@ -40,6 +40,8 @@ def test_connect_workday_routes_by_architecture_and_install_state() -> None:
     assert "do not treat it as a fresh environment" in text
     assert "retired `selected_products` field" in text
     assert "Fresh CEA Workday\n  installation is not available" in text
+    assert 'steps.SETUP-07.state: "done"' in text
+    assert "do not require\n`connect_ready: true`" in text
     assert "Do not consult the retired\n`selected_products` field" in text
     assert "Continue below only for a concrete active CEA agent" in text
     assert "connect/workday/step" not in text
@@ -69,6 +71,10 @@ def test_connect_workday_provider_contract_and_review_guards() -> None:
     ).read_text(encoding="utf-8")
     assert "canonical\n`.local/setup/config.json` `agents` record" in da_skill
     assert "stable slug,\n`botId`" in da_skill
+    assert 'steps.SETUP-07.state: "done"' in da_skill
+    assert "Do not\nrequire `connect_ready: true`" in da_skill
+    assert "Run `/setup` once to refresh the" in da_skill
+    assert "shows any unrelated prerequisite" in da_skill
     assert 'provider `status` to be `"ready"`' in da_skill
 
     updater = (

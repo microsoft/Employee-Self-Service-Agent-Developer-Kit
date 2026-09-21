@@ -248,11 +248,13 @@ Now read `src/skills/connect/servicenow/step1.md` and follow it.
 First find out which ESS agent is active. Read `.local/config.json`, resolve
 `activeAgent` against `agents`, and fall back to the legacy `agent` object only
 when needed. For a DA agent, also read the canonical
-`.local/setup/config.json` `agents` record keyed by the active `botId` and
-require `connect_ready: true`.
+`.local/setup/config.json` `agents` record keyed by the active `botId`. Require
+canonical workspace evidence and `steps.SETUP-07.state: "done"`; do not require
+`connect_ready: true`, because Workday connection configuration may be the
+remaining readiness blocker.
 
 - **No concrete active agent, missing schema/architecture identity, or a DA
-  agent whose canonical setup is not connect-ready** — setup is incomplete.
+  agent whose local workspace is not materialized** — setup is incomplete.
 
   **Message:**
 

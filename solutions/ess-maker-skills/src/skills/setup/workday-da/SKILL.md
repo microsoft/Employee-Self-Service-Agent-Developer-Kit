@@ -22,9 +22,11 @@ the working checklist or reading provider state, resolve `activeAgent` from
 `.local/config.json` and require an ESS DA HR agent entry with a stable slug,
 `botId`, and HR schema name. Then read the canonical
 `.local/setup/config.json` `agents` record keyed by that `botId` and require
-`connect_ready: true`. Do not use the retired `selected_products` field or
-choose the first agent in a multi-agent workspace. If the target is IT, Hub,
-CEA, ambiguous, incomplete, or unresolved, show:
+canonical workspace evidence plus `steps.SETUP-07.state: "done"`. Do not
+require `connect_ready: true`; configuring Workday may resolve the remaining
+runtime connection blocker. Do not use the retired `selected_products` field
+or choose the first agent in a multi-agent workspace. If the target is IT,
+Hub, CEA, ambiguous, incomplete, or unresolved, show:
 
 **Message:**
 
@@ -245,7 +247,8 @@ When it returns, go back to **Start** — every row should now be `done`.
 **Message:**
 
 Your ESS DA HR Agent is connected to Workday and the signed-in employee path
-has been validated in this environment. Type `/menu` to see what you can do
-next.
+has been validated in this environment. Run `/setup` once to refresh the
+environment's runtime-readiness checks. This keeps the completed Workday
+connection and shows any unrelated prerequisite that still needs attention.
 
 **End message.**
