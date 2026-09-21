@@ -23,6 +23,14 @@ from auth import query_all, AuthExpiredError  # scripts/auth.py, on path via cli
 _DA_HR_PARENT_SCHEMA = "msdyn_copilotforemployeeselfservicedahr"
 _DA_IT_PARENT_SCHEMA = "msdyn_copilotforemployeeselfservicedait"
 _DA_HR_WORKDAY_CHILD_SCHEMA = "msdyn_essdahrworkday"
+_DA_HR_AGENT_SCHEMAS = {
+    _DA_HR_PARENT_SCHEMA,
+    "gptagent_copilotforemployeeselfservicehr",
+}
+_DA_IT_AGENT_SCHEMAS = {
+    _DA_IT_PARENT_SCHEMA,
+    "gptagent_copilotforemployeeselfserviceit",
+}
 
 _SOLN_SELECT = "solutionid,uniquename,friendlyname,ismanaged,version"
 
@@ -120,7 +128,7 @@ def _check_workday_da_package_installed(runner) -> list[CheckResult]:
         or ""
     ).casefold()
 
-    if active_schema == _DA_IT_PARENT_SCHEMA:
+    if active_schema in _DA_IT_AGENT_SCHEMAS:
         return [_result(
             Status.FAILED.value,
             "The active agent is the ESS DA IT agent.",
@@ -131,11 +139,11 @@ def _check_workday_da_package_installed(runner) -> list[CheckResult]:
         )]
 
     hr_installed = (
-        active_schema == _DA_HR_PARENT_SCHEMA
+        active_schema in _DA_HR_AGENT_SCHEMAS
         or _DA_HR_PARENT_SCHEMA in installed_names
     )
     it_installed = (
-        active_schema == _DA_IT_PARENT_SCHEMA
+        active_schema in _DA_IT_AGENT_SCHEMAS
         or _DA_IT_PARENT_SCHEMA in installed_names
     )
 

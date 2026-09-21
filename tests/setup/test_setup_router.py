@@ -34,6 +34,8 @@ def test_connect_workday_routes_by_architecture_and_install_state() -> None:
     assert "src/skills/connect/workday/SKILL.md" in text
     assert "WD-DA-PKG-001" in text
     assert "WD-PKG-001" in text
+    assert "gptagent_copilotforemployeeselfservicehr" in text
+    assert "gptagent_copilotforemployeeselfserviceit" in text
     assert "ESS DA Hub is not supported" in text
     assert "Passed` + simplified-install result" in text
     assert "Passed` + full / legacy result" in text
@@ -44,6 +46,10 @@ def test_connect_workday_routes_by_architecture_and_install_state() -> None:
     assert "do not require\n`connect_ready: true`" in text
     assert "Do not consult the retired\n`selected_products` field" in text
     assert "Continue below only for a concrete active CEA agent" in text
+
+    connect_skill = _CONNECT_SKILL.read_text(encoding="utf-8")
+    assert "unsupported from\n    the current hybrid boundary" in connect_skill
+    assert "never routes from retired product inventory" in connect_skill
     assert "connect/workday/step" not in text
 
 

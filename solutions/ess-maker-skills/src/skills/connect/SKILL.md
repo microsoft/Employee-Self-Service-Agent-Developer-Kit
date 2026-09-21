@@ -54,12 +54,9 @@ Workday routes by architecture before package detection:
     `.local/connect/workday/agents/{agent-slug}/lifecycle.json`. This same runner + contract
     pattern is what a future integration reuses — a new ISV only needs its
     own contract file and action fragments, not a new runner.
-  - **CEA, nothing installed yet** — the full **setup orchestrator**
-    (`src/skills/setup/SKILL.md`). It sequences the six CEA Workday setup
-    skills (environment, ESS install, Entra app, tenant config, extension
-    pack, topic) using the master checklist as a resume-aware spine. State:
-    `.local/setup/workday/tasks.md` + `setupStatus` in
-    `.local/connect/workday/config.json`.
+  - **CEA full/legacy package or nothing installed yet** — unsupported from
+    the current hybrid boundary. The router explains the limitation and stops
+    without reading `src/skills/setup/SKILL.md` or changing state.
   - **DA HR agent** — the **DA Workday connect skill**
     (`src/skills/setup/workday-da/SKILL.md`). It sequences five steps
     (extension package, Entra app, tenant config, Power Platform/agent
@@ -72,8 +69,9 @@ Workday routes by architecture before package detection:
     stops before creating state or running any Workday lifecycle step and
     directs the maker to contact their administrator.
 
-  `src/skills/connect/step1.md` reads `.local/setup/config.json`'s
-  `selected_products` to choose the correct installation path.
+  `src/skills/connect/step1.md` resolves the active agent from
+  `.local/config.json` and its canonical materialization record from
+  `.local/setup/config.json`; it never routes from retired product inventory.
 
 Each integration's steps.md and config.json persist after completion.
 Running `/connect` again lets the user add a different integration

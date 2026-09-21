@@ -269,8 +269,10 @@ remaining readiness blocker.
 Route from the active agent's `releaseLine` and schema name
 (`schemaName`/`schema_name`):
 
-- active `msdyn_copilotforemployeeselfservicedahr` or
-  `msdyn_copilotforemployeeselfservicedait` → use the DA rules below;
+- active `gptagent_copilotforemployeeselfservicehr` (current MOS HR),
+  `gptagent_copilotforemployeeselfserviceit` (current MOS IT), or the legacy
+  `msdyn_copilotforemployeeselfservicedahr` /
+  `msdyn_copilotforemployeeselfservicedait` aliases → use the DA rules below;
 - another agent with `releaseLine: "da"` → use the DA unsupported-target
   rules below;
 - active CEA agent → skip to **CEA agent** below.
@@ -284,6 +286,7 @@ Enter this branch only when the active agent is DA. Use its schema name to
 determine the vertical.
 
 **ESS DA IT is not supported in this release.** If the active agent is
+`gptagent_copilotforemployeeselfserviceit` or
 `msdyn_copilotforemployeeselfservicedait`, show:
 
 **Message:**
@@ -309,9 +312,10 @@ Please select the ESS HR Agent or contact your administrator.
 Stop immediately without creating or updating Workday state.
 
 **ESS DA HR is supported.** Continue only when the active agent is
-`msdyn_copilotforemployeeselfservicedahr`. Do not run `WD-PKG-001` or the CEA
-lifecycle: DA packages share some Workday connection-reference names with CEA,
-so that checkpoint is not an architecture discriminator.
+`gptagent_copilotforemployeeselfservicehr` or the legacy
+`msdyn_copilotforemployeeselfservicedahr` alias. Do not run `WD-PKG-001` or the
+CEA lifecycle: DA packages share some Workday connection-reference names with
+CEA, so that checkpoint is not an architecture discriminator.
 
 Read `src/skills/setup/workday-da/SKILL.md` and follow it. That skill runs
 `WD-DA-PKG-001`, installs or verifies the DA HR Workday child package, and

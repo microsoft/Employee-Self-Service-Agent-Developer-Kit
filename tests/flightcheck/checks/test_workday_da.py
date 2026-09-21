@@ -156,7 +156,7 @@ def test_native_hr_agent_only_requires_child_in_sidecar(
         "agents": [
             {
                 "slug": "ess-hr",
-                "schemaName": "msdyn_copilotforemployeeselfservicedahr",
+                "schemaName": "gptagent_copilotforemployeeselfservicehr",
             }
         ],
     }
@@ -181,7 +181,7 @@ def test_native_it_active_agent_is_rejected(
         "agents": [
             {
                 "slug": "ess-it",
-                "schemaName": "msdyn_copilotforemployeeselfservicedait",
+                "schemaName": "gptagent_copilotforemployeeselfserviceit",
             }
         ],
     }
