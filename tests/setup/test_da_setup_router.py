@@ -790,6 +790,15 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
     assert readiness_table in text
     assert "Checkpoint and refresh" in text
     assert "Keep local files unchanged" in text
+    assert "preserve the managed local files and canonical setup state" in normalized
+    assert (
+        "Your local files were left unchanged. Setup stopped without refreshing them."
+        in text
+    )
+    assert "ends the current setup attempt at the refresh decision" in normalized
+    assert "resume after a later unchanged attachment or successful refresh" in (
+        normalized
+    )
     assert "does not require published Dev configuration" in normalized
     assert "publishing is outside foundation setup" in normalized
 

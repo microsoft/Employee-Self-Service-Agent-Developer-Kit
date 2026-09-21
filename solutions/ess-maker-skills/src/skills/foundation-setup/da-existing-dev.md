@@ -188,6 +188,12 @@ Offer exactly:
 - **Checkpoint and refresh**
 - **Keep local files unchanged**
 
+For **Keep local files unchanged**, preserve the managed local files and canonical setup state, then say:
+
+> Your local files were left unchanged. Setup stopped without refreshing them.
+
+This choice ends the current setup attempt at the refresh decision. FlightChecks and the final handoff resume after a later unchanged attachment or successful refresh.
+
 Continue only after the maker explicitly selects **Checkpoint and refresh**:
 
 ```text
