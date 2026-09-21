@@ -27,9 +27,18 @@ def _da_config() -> dict:
     }
 
 
+@pytest.mark.parametrize(
+    ("publish_result", "expected_message"),
+    (
+        ({"ValidationPending": True}, "validation is still running"),
+        ({"validationPending": False}, "Published"),
+    ),
+)
 def test_publish_routes_da_ga_to_native_client(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
+    publish_result: dict[str, bool],
+    expected_message: str,
 ) -> None:
     calls: list[tuple[str, object]] = []
 
@@ -39,7 +48,7 @@ def test_publish_routes_da_ga_to_native_client(
 
         def publish_agent(self, agent_id):
             calls.append(("publish", agent_id))
-            return {"ValidationPending": True}
+            return publish_result
 
     monkeypatch.setattr(publish, "load_config", _da_config)
     monkeypatch.setattr(
@@ -101,7 +110,7 @@ def test_publish_routes_da_ga_to_native_client(
         "publish",
         "00000000-0000-4000-8000-000000000001",
     )
-    assert "validation is still running" in capsys.readouterr().out
+    assert expected_message in capsys.readouterr().out
 
 
 def test_publish_preserves_classic_dataverse_route(
