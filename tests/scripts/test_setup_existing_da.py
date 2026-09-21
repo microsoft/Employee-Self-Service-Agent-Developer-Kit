@@ -342,6 +342,7 @@ def _write_flightcheck_results(
     root: Path,
     checkpoint: str,
     *statuses: str,
+    agent_id: str = AGENT_ID,
 ) -> Path:
     path = root / f"{checkpoint.replace('*', 'family')}.json"
     prefix = checkpoint[:-1] if checkpoint.endswith("*") else checkpoint
@@ -368,6 +369,14 @@ def _write_flightcheck_results(
         ),
         encoding="utf-8",
     )
+    step_id = setup_existing_da.SETUP_FLIGHTCHECK_STEPS[checkpoint]
+    step_updated_at = _setup_state(root)["agents"][agent_id]["steps"][step_id][
+        "updated_at"
+    ]
+    step_started = datetime.fromisoformat(step_updated_at).timestamp()
+    # Do not let host filesystem timestamp precision decide fixture freshness.
+    fresh_time = max(path.stat().st_mtime, step_started + 1)
+    os.utime(path, (fresh_time, fresh_time))
     return path
 
 
