@@ -4,13 +4,12 @@
 """Attempt an automated install of the DA Workday extension package.
 
 Used by ``src/skills/setup/workday-da/install-extension.md`` (step DA1.1).
-Unlike ``install_ess_agent.py`` (the base ESS agent), the DA Workday
-extension package has no entry in
+The DA Workday extension package has no entry in
 ``src/reference/ess-agent-installation/config.json`` — there is no confirmed
 Marketplace catalog record for it. This script therefore does not assume the
 package is installable through the Marketplace application API; it only
-*tries*, using the same mechanism ``install_ess_agent.py`` uses for the base
-agent (``PowerPlatformClient.list_environment_application_packages`` /
+*tries* through
+``PowerPlatformClient.list_environment_application_packages`` /
 ``install_application_package``), and reports a distinct, honest outcome —
 ``not-listed`` — when the tenant's Marketplace catalog does not return the
 package at all. The calling skill step must treat ``not-listed`` as "hand off
@@ -35,22 +34,118 @@ from flightcheck.checks.workday_da import (
 from flightcheck.powerplatform_client import PowerPlatformClient
 from flightcheck.pp_admin_client import PPAdminClient
 
-# Reuse the base-agent installer's polling vocabulary and helpers rather than
-# redefining them, so both scripts observe the Marketplace application API
-# identically.
-from install_ess_agent import (  # noqa: F401 (re-exported for callers/tests)
-    DEFAULT_TIMEOUT_SECONDS,
-    FAILED_STATES,
-    INSTALLED_STATES,
-    IN_PROGRESS_STATES,
-    InstallationTimeoutError,
-    _error_message,
-    _find_package,
-    _list_packages,
-    _wait_for_install,
-)
-
 WORKDAY_DA_CHILD_SCHEMAS = {"hr": _DA_HR_WORKDAY_CHILD_SCHEMA}
+INSTALLED_STATES = {"Installed", "TemplateInstalled"}
+IN_PROGRESS_STATES = {
+    "InstallRequested",
+    "Installing",
+    "InstallScheduled",
+    "InstallRetrying",
+}
+FAILED_STATES = {"InstallFailed"}
+DEFAULT_TIMEOUT_SECONDS = 10 * 60
+
+
+class InstallationTimeoutError(RuntimeError):
+    """Raised when Power Platform does not finish installation in time."""
+
+    def __init__(self, unique_name: str, timeout_seconds: int):
+        self.unique_name = unique_name
+        self.timeout_seconds = timeout_seconds
+        super().__init__(
+            "Application installation did not finish within "
+            f"{timeout_seconds // 60} minutes."
+        )
+
+
+def _find_package(packages: list[dict], schema_name: str) -> dict | None:
+    """Find the entitled application whose unique name matches the schema."""
+    target = schema_name.casefold()
+    for package in packages:
+        names = (package.get("uniqueName"), package.get("applicationName"))
+        if any(
+            isinstance(name, str) and name.casefold() == target
+            for name in names
+        ):
+            return package
+    return None
+
+
+def _error_message(response: dict, default: str) -> str:
+    """Return a concise API error without dumping the full response."""
+    error = (
+        response.get("error")
+        or response.get("errorDetails")
+        or response.get("lastError")
+        or {}
+    )
+    if isinstance(error, dict):
+        message = error.get("message") or error.get("errorName")
+        if message:
+            return str(message)
+    message = response.get("statusMessage")
+    return str(message) if message else default
+
+
+def _list_packages(
+    client: PowerPlatformClient, environment_id: str
+) -> list[dict]:
+    packages = client.list_environment_application_packages(environment_id)
+    if isinstance(packages, dict) and packages.get("_error"):
+        raise RuntimeError(
+            "Your account cannot read Marketplace applications for this "
+            "environment. Use a Power Platform or Dynamics 365 administrator "
+            "account."
+        )
+    return packages
+
+
+def _wait_for_install(
+    client: PowerPlatformClient,
+    environment_id: str,
+    unique_name: str,
+    *,
+    timeout_seconds: int,
+    poll_interval_seconds: int,
+    sleep,
+    clock,
+    status_callback,
+) -> None:
+    """Poll the application-package collection until installation completes."""
+    started_at = clock()
+    deadline = started_at + timeout_seconds
+    poll_number = 0
+
+    while True:
+        now = clock()
+        if now >= deadline:
+            break
+        poll_number += 1
+        observed_status = "Unknown"
+        package = _find_package(
+            _list_packages(client, environment_id),
+            unique_name,
+        )
+        if package:
+            state = package.get("state")
+            observed_status = state or "Unknown"
+            if state in INSTALLED_STATES:
+                return
+            if state in FAILED_STATES:
+                raise RuntimeError(
+                    _error_message(
+                        package,
+                        f"Application installation ended with state {state}.",
+                    )
+                )
+        status_callback(
+            "Installation status "
+            f"(poll {poll_number}, {int(now - started_at)}s elapsed): "
+            f"{observed_status}"
+        )
+        sleep(poll_interval_seconds)
+
+    raise InstallationTimeoutError(unique_name, timeout_seconds)
 
 
 class ExtensionNotListedError(RuntimeError):
