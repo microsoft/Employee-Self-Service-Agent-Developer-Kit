@@ -30,7 +30,9 @@ Resolve the Dataverse environment that hosts the Workday extension:
 
 Call the resolved value `WORKDAY_DATAVERSE_URL`. Never copy it into
 `.local/config.json`; that file's native `powerPlatformApiEndpoint` remains the
-agent identity boundary.
+agent identity boundary. If `.local/connect/workday-da/config.json` does not
+yet exist, create it as an empty JSON object before the first checkpoint; if it
+exists, preserve all current fields.
 
 Run the checkpoint that reports both facts at once — whether a DA base agent
 exists, and whether Workday is already installed against it:

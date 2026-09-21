@@ -112,6 +112,7 @@ def test_connect_workday_provider_contract_and_review_guards() -> None:
         / "install-extension.md"
     ).read_text(encoding="utf-8")
     assert "sidecarDataverseEndpoint" in install
+    assert "create it as an empty JSON object" in install
     assert '--connect-config ".local/connect/workday-da/config.json"' in install
 
     verify = (
