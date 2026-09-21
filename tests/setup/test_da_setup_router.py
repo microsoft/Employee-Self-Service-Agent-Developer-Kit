@@ -109,6 +109,12 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
     )
     assert checklist in prompt
     assert checklist in foundation
+    assert "not the runtime-readiness verdict" in normalized_foundation
+    assert "does not roll back a completed" in normalized_foundation
+    assert (
+        "`SETUP-07` in state `done` completes local workspace materialization"
+        in normalized_foundation
+    )
     assert "Before every maker-facing response, including the final handoff" in (
         normalized_prompt
     )
@@ -245,6 +251,7 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     assert "confirm the `prod` ring with the user" in normalized_import
     assert "ask the maker only when" in normalized_import
     assert "`connectReady: true`" in import_text
+    assert "including when `connectReady` is false" in import_text
     assert "`setupStatus`" not in import_text
     assert "`unprojectedDialogCount`" not in import_text
     assert "Never preselect or recommend **Continue replacement**" in import_text
@@ -400,6 +407,7 @@ def test_prod_to_dev_reference_composes_durable_boundaries() -> None:
     assert "--setup-source prod-to-dev" in text
     assert '--expected-schema-name "{RETURNED_SCHEMA_NAME}"' in text
     assert "without requiring published Dev configuration" in normalized
+    assert "including when `connectReady` is false" in normalized
     assert "--source-url" not in text
     assert "--target-url" not in text
     assert '--environment-id "{SOURCE_ENVIRONMENT_ID}"' in text
@@ -416,7 +424,7 @@ def test_prod_to_dev_reference_composes_durable_boundaries() -> None:
     assert "Create editable Dev agent" in text
     assert "Do not preselect **Create editable Dev agent**" in text
     assert "Use related Dev agent" in text
-    assert "use the factual report there" in normalized
+    assert "render the factual workspace and runtime-readiness report there" in normalized
     assert "Existing Prod agent; related Dev reused" in normalized
     assert "Existing Prod agent; new Dev created" in normalized
     for historical_text in (
@@ -511,11 +519,12 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "content was synced to your local workspace" in existing_dev
     assert "Topics synced" in existing_dev
     assert "Global variables synced" in existing_dev
-    assert "factual completion report from `da-existing-dev.md`" in normalized
+    assert "factual workspace and runtime-readiness report from `da-existing-dev.md`" in normalized
     assert "Do not infer persona, product, target, or progress" in normalized
     assert "Never invoke" in normalized and "/connect" in normalized
     assert "Do not publish, remove, or replace components" in normalized
     assert "Publishing is outside foundation setup and is not remediation" in normalized
+    assert "including when `connectReady` is false" in normalized
     assert "setup_setup_mos_starter.py" not in text
     assert "setup_mos_starter.py resolve" not in text
     assert "setup_mos_starter.py status" not in text
@@ -646,7 +655,7 @@ def test_alm_import_uses_shared_progress_and_completion_handoff() -> None:
     assert "Verify access and agent identity" in normalized
     assert "Establish an editable Dev agent" in normalized
     assert "Agent package imported and verified as an editable Dev agent" in normalized
-    assert "factual completion report from `da-existing-dev.md`" in normalized
+    assert "factual workspace and runtime-readiness report from `da-existing-dev.md`" in normalized
     assert "Supplied native agent package" in text
     assert "another readiness" not in text.casefold()
 
@@ -697,8 +706,21 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
     assert "Validate only the selected candidate" in text
     assert "before authentication or remote agent validation" in text
     assert "Do not run `validate-agent` immediately before `attach`" in text
-    assert "Your ESS agent workspace is ready." in text
+    assert "Your ESS agent workspace is ready for local authoring." in text
     assert "| Starting point | Existing editable Dev |" in " ".join(text.split())
+    assert "### Runtime readiness" in text
+    readiness_table = "\n".join(
+        (
+            "| Check                | Status                          | Details                                  |",
+            "| -------------------- | ------------------------------- | ---------------------------------------- |",
+            "| Agent access         | {agent access status}           | {agent access evidence summary}          |",
+            "| Environment capacity | {environment capacity status}   | {environment capacity evidence summary}  |",
+            "| Connections          | {connections status}            | {connections evidence summary}           |",
+            "| Agent content        | {agent content status}          | {agent content evidence summary}         |",
+            "| **Overall**          | **{overall readiness status}**  | **{maker-facing readiness summary}**     |",
+        )
+    )
+    assert readiness_table in text
     assert "Not performed by foundation setup" in text
     assert "Checkpoint and refresh" in text
     assert "Keep local files unchanged" in text
@@ -712,8 +734,20 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
 
     assert "`connectionStatus: workspace-ready`" in text
     assert "`connectReady: true`" in text
-    assert "Canonical setup state is authoritative for each agent's setup progress and completion" in normalized
-    assert "`state`, `connectReady`, `activeStep`, and `failureCauses` are the setup verdict" in normalized
+    assert "Canonical setup state is authoritative for each agent's setup progress and readiness" in normalized
+    assert "`state`, `connectReady`, `activeStep`, and `failureCauses` are the runtime-readiness verdict" in normalized
+    assert "Render both tables even when `connectReady` is false" in normalized
+    for readiness_status in (
+        "**✅ Ready**",
+        "**⚠️ Ready with limitation**",
+        "**➖ Not required**",
+        "**⛔ Action required**",
+        "**⚠️ Check unavailable**",
+        "**⬜ Not checked**",
+    ):
+        assert readiness_status in text
+    assert "When `connectReady` is false after materialization" in normalized
+    assert "local authoring is ready while the reported runtime prerequisites remain" in normalized
     assert "Present **Connection required**" in normalized
     assert "a factual handoff, not another readiness gate" in normalized
     assert "changing canonical state conversationally" in normalized

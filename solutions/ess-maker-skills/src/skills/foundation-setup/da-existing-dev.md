@@ -110,7 +110,7 @@ python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}"
 python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint DA-CONTENT-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONTENT-001/results.json
 ```
 
-Parse every `DA_SETUP_FLIGHTCHECK_JSON:` result. Its `state`, `connectReady`, `activeStep`, and `failureCauses` are the setup verdict. Render the owning setup stage from that verdict and use the matching FlightCheck rows for maker-facing evidence and remediation.
+Parse every `DA_SETUP_FLIGHTCHECK_JSON:` result. Its `state`, `connectReady`, `activeStep`, and `failureCauses` are the runtime-readiness verdict. Use the matching FlightCheck rows for maker-facing evidence and remediation. Do not use a FlightCheck result to roll back a completed maker-facing checklist stage.
 
 For `DA-CONN-*`, setup applies these outcomes:
 
@@ -124,11 +124,11 @@ For `DA-CONN-*`, setup applies these outcomes:
 
 ## Interpret results
 
-Canonical setup state is authoritative for each agent's setup progress and completion. Setup for the active agent is complete when attachment reports `connectionStatus: workspace-ready`, every step in that agent's canonical record is `done`, and the final `DA_SETUP_FLIGHTCHECK_JSON:` reports `connectReady: true`.
+Canonical setup state is authoritative for each agent's setup progress and readiness. Local workspace materialization is complete when attachment reports `connectionStatus: workspace-ready`, canonical workspace evidence is present, and `SETUP-07` is `done`. Runtime readiness is complete only when every step in that agent's canonical record is `done` and the final `DA_SETUP_FLIGHTCHECK_JSON:` reports `connectReady: true`.
 
 Canonical state records native environment access, capacity, binding readiness, and baseline content readiness as automated FlightCheck evidence. Only preferred-solution configuration remains skipped because it does not apply to the DA-only path.
 
-When canonical setup state is incomplete, render the stage identified by `active_step` with its state and `failure_causes`. Translate `SETUP-03` to **Establish an editable Dev agent** and `SETUP-07` to **Materialize the local workspace**. Explain the unmet prerequisite in maker language and offer the bounded remediation for that evidence.
+Before materialization completes, render an incomplete `SETUP-03` as **Establish an editable Dev agent** and an incomplete `SETUP-07` as **Materialize the local workspace**. After materialization completes, render any blocked capacity, connection, or content step only in the runtime-readiness table. Explain each unmet prerequisite in maker language and offer the bounded remediation supported by that evidence.
 
 If content was synced to the local workspace but the returned result is not workspace-ready and supplies no specific failure cause, keep **Materialize the local workspace** current and show:
 
@@ -136,11 +136,11 @@ If content was synced to the local workspace but the returned result is not work
 
 Do not invent a cause or run another operation without new maker intent.
 
-On success, build this report only from `DA_EXISTING_DEV_SETUP_JSON:`. Use a friendly environment name only when an authoritative operation returned one; otherwise say `Selected Power Platform environment`. Render empty `unprojectedComponentKinds` as `None` and a missing checkpoint as `Not required`.
+After successful materialization and after all four setup-owned FlightChecks have been attempted, build the workspace table only from `DA_EXISTING_DEV_SETUP_JSON:` and build the runtime-readiness table from the applied FlightCheck results and canonical state. Render both tables even when `connectReady` is false. Use a friendly environment name only when an authoritative operation returned one; otherwise say `Selected Power Platform environment`. Render empty `unprojectedComponentKinds` as `None` and a missing checkpoint as `Not required`.
 
 **Message:**
 
-Your ESS agent workspace is ready.
+Your ESS agent workspace is ready for local authoring.
 
 | Item                       | Result                                                                 |
 | -------------------------- | ---------------------------------------------------------------------- |
@@ -153,6 +153,16 @@ Your ESS agent workspace is ready.
 | Other retained components  | {unprojected component summary or None}                                |
 | Local checkpoint           | {checkpoint number or Not required}                                    |
 
+### Runtime readiness
+
+| Check                | Status                          | Details                                  |
+| -------------------- | ------------------------------- | ---------------------------------------- |
+| Agent access         | {agent access status}           | {agent access evidence summary}          |
+| Environment capacity | {environment capacity status}   | {environment capacity evidence summary}  |
+| Connections          | {connections status}            | {connections evidence summary}           |
+| Agent content        | {agent content status}          | {agent content evidence summary}         |
+| **Overall**          | **{overall readiness status}**  | **{maker-facing readiness summary}**     |
+
 Not performed by foundation setup:
 
 - publishing or promotion;
@@ -161,6 +171,17 @@ Not performed by foundation setup:
 - server-backed validation of unpublished local changes.
 
 **End message.**
+
+Use the same five rows and order in every runtime-readiness table:
+
+- `Passed` is **✅ Ready**.
+- An accepted `DA-CONN-*` `Warning` is **⚠️ Ready with limitation** and retains its warning disclaimer.
+- `DA-CONN-*` `Skipped` because the agent declares no logical connection references is **➖ Not required**.
+- `NotConfigured` or `Failed` is **⛔ Action required**.
+- `Error` or an unavailable check is **⚠️ Check unavailable**.
+- A check without current evidence is **⬜ Not checked**.
+
+Use the most consequential current evidence when a checkpoint has multiple rows: **Action required**, then **Check unavailable**, then **Ready with limitation**, then **Not required**, then **Ready**. When `connectReady` is true and no accepted warning remains, render Overall as **✅ Ready**. When `connectReady` is true with an accepted warning, render it as **⚠️ Ready with limitations**. When `connectReady` is false after materialization, render it as **⚠️ Needs attention** and state that local authoring is ready while the reported runtime prerequisites remain. Do not add inferred warnings or place publishing, connector installation, promotion, product-extension configuration, or non-queryable governance requirements in this table.
 
 This report is a factual handoff, not another readiness gate. If the maker disputes a fact, inspect the underlying operation evidence rather than changing canonical state conversationally. Then present the shared completion choices from `SKILL.md`.
 

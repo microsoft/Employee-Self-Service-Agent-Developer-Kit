@@ -24,7 +24,7 @@ packs, and topics are explicitly outside this skill.
 
 ## Maker-facing progress
 
-At setup start and at the beginning of every subsequent setup turn, write the exact maker-facing progress checklist below as a complete snapshot. Every update contains all five stages in this order and uses the same ordinary Markdown shape: one single-level bullet and one leading status emoji per stage. Use the latest canonical setup state read in this invocation and results observed in this invocation to set their statuses. After each setup action that changes progress, write the complete snapshot again. Preserve completed stages, keep pending stages present, and represent subordinate checks through the status of their owning stage. Before every maker-facing response, including the final handoff, synchronize the complete snapshot once more and mark **Review the setup handoff** complete before finishing. Do not expose the eight internal setup-step IDs or show skipped internal records as successful checks.
+At setup start and at the beginning of every subsequent setup turn, write the exact maker-facing progress checklist below as a complete snapshot. Every update contains all five stages in this order and uses the same ordinary Markdown shape: one single-level bullet and one leading status emoji per stage. Use the latest canonical setup state read in this invocation and results observed in this invocation to set their statuses. After each setup action that changes progress, write the complete snapshot again. Preserve completed stages and keep pending stages present. Report setup-owned FlightChecks in the separate runtime-readiness table defined by the shared existing-agent completion path; a FlightCheck result does not roll back a completed access, identity, agent-establishment, or materialization stage. Before every maker-facing response, including the final handoff, synchronize the complete snapshot once more and mark **Review the setup handoff** complete before finishing. Do not expose the eight internal setup-step IDs or show skipped internal records as successful checks.
 
 **Message:**
 
@@ -40,17 +40,17 @@ Here's your ESS agent setup:
 
 Use ✅ for completed, 🔄 for the current stage, ⛔ for a blocked stage, and ⬜ for pending. Derive markers only from supplied context, results observed in this invocation, and canonical setup state read in this invocation. Never infer progress from conversation history.
 
-The checklist is a view, not another state model:
+The checklist is a view, not another state model. It tracks local workspace setup actions, not the runtime-readiness verdict:
 
 - a supplied or selected target completes the first stage;
 - direct service validation of an exact editable Dev completes the second and third stages for the existing-agent path;
 - a successful package import with direct Dev validation completes the second and third stages for the supplied-package path;
 - service inspection of a Prod source completes access and source-identity verification; a directly validated related Dev or successful create-only import completes the editable-Dev stage;
 - a successful MOS create followed by direct Dev attachment validation completes access, identity, and editable-Dev establishment for the fresh-agent path;
-- only `connectionStatus: workspace-ready` with `connectReady: true` completes local workspace materialization;
+- `connectionStatus: workspace-ready` with canonical workspace evidence and `SETUP-07` in state `done` completes local workspace materialization, independently of `connectReady`;
 - reviewing the factual completion report completes the handoff stage in the conversation and does not write another readiness marker.
 
-Before canonical setup begins, mark the first unresolved checklist stage with 🔄 and leave later stages marked ⬜. When canonical state is blocked, mark only the corresponding visible stage with ⛔ and preserve its failure causes in the response. Do not mark a stage complete from a skipped internal setup record.
+Before canonical setup begins, mark the first unresolved checklist stage with 🔄 and leave later stages marked ⬜. Mark a checklist stage ⛔ only when the operation named by that stage is itself blocked, and preserve its failure causes in the response. A blocked capacity, connection, or content FlightCheck belongs in the runtime-readiness table and does not change an already completed checklist marker. Do not mark a stage complete from a skipped internal setup record.
 
 ## Choose the sign-in account
 
