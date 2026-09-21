@@ -30,16 +30,20 @@ reads a contract, runs the checkpoints it names, and renders results.
 ```json
 "detect": {
   "checkpoint": "WD-PKG-001",
-  "meansInstalled": "Passed"
+  "meansInstalled": "Passed",
+  "meansNotInstalled": "NotConfigured"
 }
 ```
 
 - `checkpoint` — a FlightCheck checkpoint ID whose result tells the caller
   whether the external package/extension already exists in the environment.
 - `meansInstalled` — the `status` value (from `flightcheck/runner.Status`)
-  that counts as "installed." Any other status (including `Failed` or
-  `NotConfigured`) means "not installed" — the caller should not invoke this
-  lifecycle and should fall back to its own from-scratch setup flow.
+  that permits installed-package routing. Providers with multiple installed
+  flavors must also inspect the checkpoint result and select only a compatible
+  lifecycle.
+- `meansNotInstalled` — the sole status that permits a from-scratch setup
+  route. `Failed`, `Warning`, `Skipped`, `Error`, and unknown statuses are
+  remediation/stop outcomes, not evidence that the package is absent.
 
 ### Phase fields
 
@@ -107,7 +111,8 @@ acknowledgement is complete. Partial or unavailable evidence leaves the phase
     "discovery": {
       "status": "done",
       "lastVerifiedAt": "2026-09-15T14:03:10Z",
-      "checkpointResults": { "WD-PKG-001": "Passed", "DV-CONN-001": "Passed", "WD-CONN-012": "Passed" }
+      "checkpointResults": { "WD-PKG-001": "Passed", "DV-CONN-001": "Passed", "WD-CONN-012": "Passed" },
+      "checkpointAcknowledgements": {}
     },
     "agent-wiring": {
       "status": "pending",
@@ -129,6 +134,10 @@ acknowledgement is complete. Partial or unavailable evidence leaves the phase
 - `phases.{id}.actionApplied` — mutating phases only; `true` once the
   action doc has been followed at least once (so a resume doesn't re-apply an
   idempotent-unsafe action; it re-verifies instead).
+- `phases.{id}.checkpointAcknowledgements` — map keyed by checkpoint ID for
+  accepted `Manual`/`Warning` results. Each value records the acknowledged
+  status and UTC `acknowledgedAt`. A resume may reuse the acknowledgement only
+  when the live status still matches; a changed status requires a new decision.
 
 The `agentSlug` and state-file path are mandatory isolation boundaries. A
 provider may be connected to multiple agents in one workspace; no agent may

@@ -113,17 +113,23 @@ anything else:
    steps — reuse that exact mechanism here, silently, without re-showing the
    up-front plan).
 2. If every checkpoint still resolves to a status allowed by that phase's
-   `completionStatuses`, update `lastVerifiedAt` and
-   leave the phase `done`. Do **not** re-render the U.0 table for a phase that
-   was already `done` and stays `done` on resume — only surface output for
-   phases that change state or that are not yet done.
-3. If any checkpoint now resolves to `Failed`/`Error`, set that phase back to
-   `blocked`, and **every phase after it** back to `pending` (later phases may
-   have depended on this one still holding). Render the failure using L.4b's
-   rendering + blocked-message steps and stop — do not re-run L.4a's mutating
-   action just because a live re-check regressed (that would re-apply a
-   change without a fresh gate/rollback); a regression always needs a human
-   look, not an automatic retry.
+   `completionStatuses`, and every `Manual`/`Warning` result has a matching
+   persisted `checkpointAcknowledgements` entry for that checkpoint and
+   status, update `lastVerifiedAt` and leave the phase `done`. Do **not**
+   re-render the U.0 table for a phase that was already `done` and stays
+   `done` on resume — only surface output for phases that change state or that
+   are not yet done.
+3. If any checkpoint resolves to a status **outside** that phase's
+   `completionStatuses`, **or** an allowed `Manual`/`Warning` result lacks a
+   persisted acknowledgement matching the checkpoint and current status, the
+   cached completion has regressed. This includes `Warning`, `Skipped`,
+   `NotConfigured`, and unacknowledged `Manual`/`Warning` results — not only
+   `Failed`/`Error`. Set the phase to `blocked` for `Failed`/`Error`, otherwise
+   set it to `in-progress`, and set **every phase after it** back to `pending`
+   (later phases may have depended on this one still holding). Persist the
+   current checkpoint results, render the result using L.4b, and stop. Do not
+   re-run L.4a's mutating action merely because a live re-check regressed;
+   mutation requires a fresh gate and rollback checkpoint.
 
 Once every previously-`done` phase is confirmed (or the loop stopped early on
 a regression), continue to L.3.
@@ -195,8 +201,11 @@ Aggregate the phase's outcome using the phase's `completionStatuses`
   `Manual`/`Warning` results — ask the same style of yes/no confirmation
   `checklist-updater.md`'s U.2 uses when a result needs acknowledgement):
   set `phases.{id}.status = "done"`, `lastVerifiedAt` = now, record each
-  checkpoint's status in `checkpointResults`. Write the state file. Return to
-  L.3 to advance to the next phase.
+  checkpoint's status in `checkpointResults`. For each acknowledged
+  `Manual`/`Warning` result, also record
+  `checkpointAcknowledgements.{checkpointId} = {status, acknowledgedAt}`.
+  Remove an old acknowledgement when that checkpoint now returns a different
+  status. Write the state file. Return to L.3 to advance to the next phase.
 - **Any checkpoint `Failed`/`Error`:** set `phases.{id}.status = "blocked"`,
   record `checkpointResults`. Write the state file.
 

@@ -26,6 +26,12 @@ not narrate tool calls.
   `config-schema.md`).
 - `ACK` — *(manual/attest rows only)* `true` once the user has explicitly
   acknowledged the step and any evidence has been captured; otherwise `false`.
+- `RESULT_SOURCE` — `"flightcheck"` (default) when `CHECKPOINT_RESULT` came
+  from the current FlightCheck results file, or `"external"` when a
+  programmatic operation produced its own structured evidence.
+- `EXTERNAL_EVIDENCE` — required when `RESULT_SOURCE="external"`; a safe
+  summary proving the operation's target, outcome, and verification. Never
+  include credentials, tokens, or raw sensitive output.
 
 **Outputs:**
 - The matching checklist item in `.local/setup/workday-da/tasks.md` is updated
@@ -77,9 +83,10 @@ convention), do not repeat it — proceed to U.1. The U.1–U.3 status update be
 runs afterwards (once any attestation is answered) and does **not** re-display the
 result.
 
-- Skip this step when `CHECKPOINT_RESULT` is `null` (the checkpoint was not run
-  this pass — e.g. the row is only being moved to `in-progress`), or when
-  `workspace/flightcheck/results.json` does not exist.
+- Skip this step when `RESULT_SOURCE="external"`; show `EXTERNAL_EVIDENCE`
+  using the calling playbook's operation-specific result instead. Also skip
+  when `CHECKPOINT_RESULT` is `null` (the checkpoint was not run this pass),
+  or when `workspace/flightcheck/results.json` does not exist.
 
 Read `workspace/flightcheck/results.json` — the run that led here wrote it. It has:
 
@@ -117,8 +124,9 @@ Do this right after the U.0 table, before touching any state. A
 report** — for `MANUAL` checks the verification steps must appear **in chat**, not
 in a browser popup. This routine is what puts them there.
 
-- Skip this step when `CHECKPOINT_RESULT` is `null`, or when
-  `workspace/flightcheck/results.json` does not exist.
+- Skip this step when `RESULT_SOURCE="external"`; the calling playbook has
+  already shown `EXTERNAL_EVIDENCE`. Also skip when `CHECKPOINT_RESULT` is
+  `null`, or when `workspace/flightcheck/results.json` does not exist.
 
 Each entry in `results.json` carries the full text of what the operator must do —
 not just `description`/`status` but also the finding and the how-to:
@@ -196,6 +204,9 @@ Notes:
 - For `prog` rows, `NEW_STATE` from the caller must be consistent with
   `CHECKPOINT_RESULT`; if they conflict, the checkpoint result wins (it's the
   objective signal).
+- For a `prog` row with `RESULT_SOURCE="external"`, `PASSED` is valid only when
+  non-empty `EXTERNAL_EVIDENCE` is supplied. Otherwise treat the result as
+  `null` and leave the row `in-progress`.
 
 If the row is `manual`/`attest` and `ACK` is `false`, before leaving the row
 `in-progress` confirm the user actually saw the manual step. (Precondition: the

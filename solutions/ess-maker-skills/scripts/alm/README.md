@@ -9,7 +9,7 @@ do not modify its implementation.
 
 ## PowerShell is the supported implementation
 
-Run the checked-in `.ps1` directly. Do not port or replace the partner
+Run the checked-in `.ps1` directly. Do not port or replace the authorization
 implementation with Python. ADK orchestration may resolve parameters, preview
 the operation, and invoke the script, but the authorization implementation
 remains in the unchanged PowerShell file. The repository already uses
@@ -21,6 +21,25 @@ the same process environment. A normal Git clone does not require changing the
 machine execution policy. If organizational policy prevents local scripts from
 running, use the customer-approved signed-script or pipeline process rather
 than weakening the machine-wide execution policy.
+
+## Current source-version limitation
+
+Keep the checked-in script unchanged. This source version can safely verify and
+reuse an existing delegated authorization and single linked Access team, and
+can add missing workflow shares. Do not use it to create a missing delegated
+authorization or team:
+
+- Dataverse create requests return `204 No Content` unless the request asks for
+  a representation, while this source version reads the new IDs from the
+  response body.
+- If multiple linked teams exist, this source version prints `[FAIL]` but may
+  still return exit code `0`.
+
+Before execution, confirm exactly one MCSBot delegated authorization and one
+linked Access team already exist for the target bot. If either is missing, or
+more than one team is returned, stop the deployment and obtain the corrected
+Microsoft-owned script version. Do not work around this by modifying the
+checked-in file or converting it to another language.
 
 This release supports the **ESS DA HR Agent** only. Do not run this procedure
 for the ESS DA IT Agent.
@@ -132,18 +151,19 @@ Review that the output targets:
 ### New-environment `-WhatIf` behavior
 
 The authorization script performs its final live verification after the
-preview. In a new environment where the delegated authorization, access team,
-or workflow shares do not exist yet, `-WhatIf` intentionally does not create
-them. The final verification therefore prints `[FAIL]` for those not-yet-created
-records and exits with code `1`.
+preview. If workflow shares do not exist yet, `-WhatIf` intentionally does not
+create them. The final verification therefore prints `[FAIL]` for those
+not-yet-created shares and exits with code `1`.
 
 For the preview only, this is expected when all of the following are true:
 
-- each intended create/share operation is shown as `would create` or
-  `would share`;
+- each intended share operation is shown as `would share`;
 - the target organization, bot, team type, and workflows are correct;
 - the only `[FAIL]` lines describe records that the preview intentionally did
   not create.
+
+If the preview says it would create the delegated authorization or team, stop:
+that is the unsupported source-version case described above.
 
 Any authentication, lookup, permission, wrong-target, missing-workflow,
 unexpected existing-record, or Dataverse request error is a real preview

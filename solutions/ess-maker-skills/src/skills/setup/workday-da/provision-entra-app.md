@@ -128,6 +128,16 @@ Otherwise ask for the Workday URL with the `vscode_askQuestions` tool:
   If the host matches no known pattern, keep `WD_TENANT` / `WD_BASE_URL` and leave
   `WD_TOKEN_HOST` for DA-3 to resolve from the API-client token endpoint.
 
+Before persisting or interpolating the tenant, require:
+
+- an `https` URL;
+- a non-empty first path segment;
+- `WD_TENANT` matches
+  `^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`.
+
+If any condition fails, reject the value and ask again. Never persist or place
+an unvalidated path segment into an `az` command.
+
 **Persist** to `.local/connect/workday-da/config.json` (merge — keep other keys,
 per [`shared/config-schema.md`](shared/config-schema.md)): `tenant` =
 `WD_TENANT`, `baseUrl` = `WD_BASE_URL`, and `tokenHost` = `WD_TOKEN_HOST` when
@@ -222,14 +232,15 @@ az ad sp list --display-name "Workday" --query "[].{name:displayName, appId:appI
     ]
     ```
 
-    Emit one option object per returned SAML app: set `label` to the app's
-    `displayName` and `description` to its SSO mode plus its first reply URL (a
-    human-meaningful disambiguator — do **not** put the full app/object GUID in
-    the description; append only the last 6 characters of the `appId` if two apps
-    are otherwise indistinguishable). Mark the app named exactly **`Workday (ESS
-    Copilot)`** as `recommended` when present — that is the app this kit
-    provisions. Then:
-    - **User picks an existing app** → map the chosen label back to that app and
+    Emit one option object per returned SAML app. Build a label-to-app mapping
+    before asking. If a display name is unique, use it as the label. If two or
+    more apps share a display name, make each **label itself** unique by
+    appending `· {last 6 characters of appId}`. Set `description` to its SSO
+    mode plus first reply URL; never include a full app/object GUID. Mark the
+    option for the kit-provisioned **`Workday (ESS Copilot)`** app as
+    `recommended` when unambiguous. Then:
+    - **User picks an existing app** → use the retained label-to-app mapping
+      (never a display-name search) to map the unique chosen label to that app and
       save its `appId` → `WD_ENTRA_APP_ID` and its `id` (the service-principal
       id) → `WD_ENTRA_SP_ID`, then resolve its **application** object id — the
       `az ad sp list` results carry the *service-principal* id, **not** the app

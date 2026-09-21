@@ -4,7 +4,8 @@
   "connectConfig": ".local/connect/workday/config.json",
   "detect": {
     "checkpoint": "WD-PKG-001",
-    "meansInstalled": "Passed"
+    "meansInstalled": "Passed",
+    "meansNotInstalled": "NotConfigured"
   },
   "phases": [
     {

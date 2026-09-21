@@ -157,32 +157,50 @@ Resolve parameters instead of asking the maker to paste GUIDs:
 If the bot or workflow set cannot be resolved unambiguously, stop and explain
 which value is missing. Never guess or run the script with a partial flow set.
 
+Before invoking the checked-in version, perform the same read-only
+delegated-authorization and team lookups documented by the script:
+
+- exactly one MCSBot delegated authorization and one linked Access team already
+  exist for the bot → the script may verify/reuse them and add missing workflow
+  shares;
+- no authorization or team exists → stop before apply. The checked-in source
+  version requires a Microsoft-owned update that requests Dataverse POST
+  representations before it can safely create and bind those records;
+- more than one linked team exists → stop and require administrator
+  remediation. Do not rely on the script's exit code because this source
+  version can print `[FAIL]` for multiple teams without returning failure.
+
 First run the script with `-WhatIf`, show the target organization, agent, and
 flow display names, and obtain explicit approval. Then run the same command
 without `-WhatIf`.
 
-On a brand-new environment, the unchanged script's `-WhatIf` run may exit `1`
-after showing the correct `would create` / `would share` plan. This happens
-because its final verification checks for records that `-WhatIf` intentionally
-did not write. Treat that preview as acceptable only when the target values are
-correct and every `[FAIL]` is solely an expected absence corresponding to a
-listed preview operation. Authentication, permission, lookup, missing-flow,
-wrong-target, or unexpected-existing-record errors remain blocking. Do not
-apply based on an ambiguous preview.
+When the authorization and team already exist but workflow shares are missing,
+the unchanged script's `-WhatIf` run may exit `1` after showing the correct
+`would share` plan. This happens because its final verification checks for
+shares that `-WhatIf` intentionally did not write. Treat that preview as
+acceptable only when the target values are correct and every `[FAIL]` is solely
+an expected missing share corresponding to a listed preview operation. A
+`would create` authorization/team operation, authentication, permission,
+lookup, missing-flow, wrong-target, or unexpected-existing-record error remains
+blocking. Do not apply based on an ambiguous preview.
 
-DA4.6 passes only when the script exits with code `0`, ends with
+DA4.6 passes only when the preflight found exactly one linked Access team, the
+script exits with code `0`, ends with
 `Dataverse authorization is in place.`, returns one access team for the target
-bot, and confirms `WriteAccess` for every supplied workflow. On any failure,
+bot, contains no `[FAIL]` line, and confirms `WriteAccess` for every supplied
+workflow. On any failure,
 leave the row blocked and show the script error. Do not replace this with an
 attestation.
 
 After successful apply verification, update DA4.6 through
 [`shared/checklist-updater.md`](shared/checklist-updater.md) with
 `STEP_ID="DA4.6"`, `GATE="prog"`, and
-`CHECKPOINT_RESULT="PASSED"`. Record the target environment, bot, workflow
-display names, script exit code, and verification summary as evidence. On an
-apply or verification failure, update it with `CHECKPOINT_RESULT="FAILED"` so
-the row becomes blocked.
+`CHECKPOINT_RESULT="PASSED"`, `RESULT_SOURCE="external"`, and
+`EXTERNAL_EVIDENCE` containing the target environment, bot, workflow display
+names, script exit code, and verification summary. Render that summary instead
+of reading `workspace/flightcheck/results.json`. On an apply or verification
+failure, use `CHECKPOINT_RESULT="FAILED"`, `RESULT_SOURCE="external"`, and the
+safe failure summary so the row becomes blocked.
 
 ## DA4.7 — Configure employee context and selected topics
 

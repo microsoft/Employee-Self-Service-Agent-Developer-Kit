@@ -72,8 +72,10 @@ Did the scenario complete successfully?
 **End message.**
 
 On success, record the scenario, test user category (never credentials), time,
-and result as evidence. Update **DA5.1** with `GATE="manual"`, `ACK=true`, set
-the provider `status` to `"ready"`, and return to the orchestrator.
+and result as evidence. First merge provider `status: "ready"` into the
+provider config, then update **DA5.1** with `GATE="manual"`, `ACK=true`. This
+write order ensures an interruption cannot leave a completed row while the
+public readiness signal is missing. Return to the orchestrator.
 
 On failure, leave DA5.1 `in-progress`. Run
 `python scripts/flightcheck/cli.py --scope workdayda --connect-config ".local/connect/workday-da/config.json"`

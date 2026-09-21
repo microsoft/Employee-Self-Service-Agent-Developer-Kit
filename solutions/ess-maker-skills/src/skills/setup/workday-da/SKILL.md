@@ -19,12 +19,19 @@ sends you to `/setup` first if it isn't there yet.
 
 This release does not support Workday for the ESS DA IT Agent. Before creating
 the working checklist or reading provider state, resolve the active agent from
-`.local/config.json`. If it is not the ESS DA HR Agent, show:
+`.local/config.json` and read `.local/setup/config.json` `selected_products`.
+Continue when the active agent resolves to an ESS DA HR agent instance with a
+stable agent slug and `botId`. If no active agent is set, continue only when the
+installed-agent inventory resolves exactly one ESS DA HR agent instance with
+those fields; select that instance for this run before creating state.
+`selected_products = ["da.esshr"]` alone is not enough because it identifies a
+product, not a deployed agent. If the target is IT, Hub, CEA, mixed, ambiguous,
+incomplete, or unresolved, show:
 
 **Message:**
 
-Workday integration with the ESS IT Agent isn't supported in this release.
-Please contact your administrator.
+This Workday setup supports the ESS DA HR Agent only. Select the ESS HR Agent,
+or contact your administrator if it isn't available.
 
 **End message.**
 
@@ -151,7 +158,10 @@ ID, App ID URI) are safe to capture in chat — see
    rehydrate in-memory state — follow the playbook's stated build order rather
    than jumping straight into it.
 
-5. If **every** item is `done`, show the **All done** message and stop.
+5. If **every** item is `done`, also require provider `status` to be `"ready"`
+   before showing **All done**. If every row is done but status is not ready,
+   treat DA5.1 as `in-progress` and dispatch to DA-5 to reconcile readiness;
+   never claim success from checklist state alone.
 
 ---
 
@@ -215,7 +225,7 @@ When it returns, go back to **Start** to resume at the next unverified row.
 Read `src/skills/setup/workday-da/configure-power-platform.md` and follow it.
 That playbook configures or guides the Workday OAuthUser and Dataverse
 connections, parameter sharing, stale-connection recovery, connection binding,
-cloud-flow state, partner-script authorization, DA V2 employee context, topic
+cloud-flow state, checked-in script authorization, DA V2 employee context, topic
 selection, and firewall allowlisting. It updates rows **DA4.1**–**DA4.8**
 through the shared checklist-updater. Manual and attestation rows require
 explicit evidence; DA4.6 is programmatic and passes only when the checked-in

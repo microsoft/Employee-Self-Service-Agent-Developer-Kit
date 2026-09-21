@@ -15,6 +15,7 @@ wiring so that drift is caught at CI time instead.
 
 from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 
@@ -88,10 +89,15 @@ class TestSetupRouter:
         assert "Route by the resolved active agent's architecture" in text
         assert "active CEA agent" in text
         assert "DA and CEA products are" in text
+        assert "ESS DA Hub is not supported" in text
+        assert "Passed` + simplified-install result" in text
+        assert "Passed` + full / legacy result" in text
+        assert "NotConfigured" in text
+        assert "do not treat it as a fresh environment" in text
         da_skill = (
             _SOLUTION / "src" / "skills" / "setup" / "workday-da" / "SKILL.md"
         ).read_text(encoding="utf-8")
-        assert "ESS IT Agent isn't supported" in da_skill
+        assert "supports the ESS DA HR Agent only" in da_skill
         assert "without creating or updating any Workday state" in da_skill
         assert "src/skills/setup/workday-da/configure-power-platform.md" in da_skill
         assert "DA4.1 through DA4.8" in da_skill
@@ -102,6 +108,10 @@ class TestSetupRouter:
         assert "Dataverse System Administrator" in da_skill
         assert "InfoSec or network administrator" in da_skill
         assert "Workday test employee" in da_skill
+        assert 'provider `status` to be `"ready"`' in da_skill
+        assert "installed-agent inventory resolves exactly one" in da_skill
+        assert "stable agent slug and `botId`" in da_skill
+        assert '`selected_products = ["da.esshr"]` alone is' in da_skill
         da_power_platform = (
             _SOLUTION
             / "src"
@@ -118,10 +128,12 @@ class TestSetupRouter:
         assert "Enable-CosmosDAFlowAuthorization.ps1" in da_power_platform_text
         assert "Do not translate, regenerate, or replace" in da_power_platform_text
         assert "with Python" in da_power_platform_text
-        assert "brand-new environment" in da_power_platform_text
+        assert "workflow shares are missing" in da_power_platform_text
         assert "would create" in da_power_platform_text
         assert 'STEP_ID="DA4.6"' in da_power_platform_text
         assert 'CHECKPOINT_RESULT="PASSED"' in da_power_platform_text
+        assert 'RESULT_SOURCE="external"' in da_power_platform_text
+        assert "EXTERNAL_EVIDENCE" in da_power_platform_text
         assert "connectionparametersetconfig" in da_power_platform_text
         assert "signed-in-user context" in da_power_platform_text
         assert "connect/workday/step" not in text, (
@@ -150,7 +162,11 @@ class TestSetupRouter:
         )
 
     def test_connect_workday_provider_uses_contract_not_step_monolith(self):
-        assert (_WORKDAY_PROVIDER_DIR / "contract.json").is_file()
+        contract_path = _WORKDAY_PROVIDER_DIR / "contract.json"
+        assert contract_path.is_file()
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        assert contract["detect"]["meansInstalled"] == "Passed"
+        assert contract["detect"]["meansNotInstalled"] == "NotConfigured"
         assert (_WORKDAY_PROVIDER_DIR / "SKILL.md").is_file()
         assert not list(_WORKDAY_PROVIDER_DIR.glob("step*.md")), (
             "the provider lifecycle must not restore the retired step-file monolith"
@@ -163,6 +179,74 @@ class TestSetupRouter:
         assert "src/skills/connect/servicenow/" in skill, (
             "connect/SKILL.md must still route ServiceNow"
         )
+
+        runner = (
+            _SOLUTION
+            / "src"
+            / "skills"
+            / "connect"
+            / "shared"
+            / "lifecycle-runner.md"
+        ).read_text(encoding="utf-8")
+        assert "status **outside** that phase's" in runner
+        assert "set it to `in-progress`" in runner
+        assert "checkpointAcknowledgements" in runner
+        assert "persisted `checkpointAcknowledgements`" in runner
+        assert "allowed `Manual`/`Warning` result lacks" in runner
+
+        lifecycle_schema = (
+            _SOLUTION
+            / "src"
+            / "skills"
+            / "connect"
+            / "shared"
+            / "lifecycle-contract-schema.md"
+        ).read_text(encoding="utf-8")
+        assert "checkpointAcknowledgements" in lifecycle_schema
+        assert "live status still matches" in lifecycle_schema
+
+        updater = (
+            _SOLUTION
+            / "src"
+            / "skills"
+            / "setup"
+            / "workday-da"
+            / "shared"
+            / "checklist-updater.md"
+        ).read_text(encoding="utf-8")
+        assert 'RESULT_SOURCE` — `"flightcheck"`' in updater
+        assert 'RESULT_SOURCE="external"' in updater
+        assert "calling playbook has\n  already shown `EXTERNAL_EVIDENCE`" in updater
+
+        entra = (
+            _SOLUTION
+            / "src"
+            / "skills"
+            / "setup"
+            / "workday-da"
+            / "provision-entra-app.md"
+        ).read_text(encoding="utf-8")
+        assert "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$" in entra
+        assert "label-to-app mapping" in entra
+
+        power_platform = (
+            _SOLUTION
+            / "src"
+            / "skills"
+            / "setup"
+            / "workday-da"
+            / "configure-power-platform.md"
+        ).read_text(encoding="utf-8")
+        assert "exactly one MCSBot delegated authorization" in power_platform
+        assert "contains no `[FAIL]` line" in power_platform
+        assert "`would create` authorization/team operation" in power_platform
+
+        authorization_readme = (
+            _SOLUTION / "scripts" / "alm" / "README.md"
+        ).read_text(encoding="utf-8")
+        assert "Current source-version limitation" in authorization_readme
+        assert "exactly one MCSBot delegated authorization" in authorization_readme
+        assert "more than one team is returned" in authorization_readme
 
     def test_router_dispatches_to_skill1_playbook(self):
         text = _ROUTER.read_text(encoding="utf-8")

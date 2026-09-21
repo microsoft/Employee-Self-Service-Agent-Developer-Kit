@@ -287,6 +287,18 @@ Please contact your administrator.
 Stop immediately. Do not create DA Workday state, run a Workday package
 checkpoint, install a package, or enter any DA Workday lifecycle step.
 
+**ESS DA Hub is not supported in this release.** If the active agent is the
+ESS DA Hub, or the only selected DA product is `da.esshub`, show:
+
+**Message:**
+
+Workday integration with the ESS Hub Agent isn't supported in this release.
+Please select the ESS HR Agent or contact your administrator.
+
+**End message.**
+
+Stop immediately without creating or updating Workday state.
+
 **ESS DA HR is supported.** Continue only when the active agent is
 `msdyn_copilotforemployeeselfservicedahr`, or the selected DA inventory
 unambiguously contains only `da.esshr`. Do not run `WD-PKG-001` or the CEA
@@ -307,27 +319,32 @@ bot-to-flow authorization, topic selection, and signed-in runtime validation.
 Enter this branch when the resolved active agent is CEA, or when no active
 agent is resolvable and every selected product is `cea.*`.
 
-If `.local/connect/workday/agents/{ACTIVE_AGENT_SLUG}/lifecycle.json` already
-exists, read `src/skills/connect/workday/SKILL.md` and follow it. It
-re-verifies the active agent live before reporting "connected."
-
-Otherwise, check whether a CEA Workday extension already exists in this
-environment:
+Check the current CEA Workday extension before honoring any existing lifecycle
+state:
 
 ```
 python scripts/flightcheck/cli.py --checkpoint WD-PKG-001
 ```
 
-**If `Passed`:** a Workday extension is already installed in this
-environment — this agent likely just needs to be wired to it, not a full
-install. Read `src/skills/connect/workday/SKILL.md` and follow it; it shows
-the user what it will check before doing anything, and only makes changes
-once they confirm.
+Read the `WD-PKG-001` row from `workspace/flightcheck/results.json` and route
+by both its status and detected flavor:
 
-**If anything other than `Passed`**, read `src/skills/setup/SKILL.md` and
-follow it. This path provisions the Power Platform environment, installs the
-ESS base agent, provisions the Entra app, configures the Workday tenant,
-installs the extension pack, and verifies the connection. It is resume-aware.
+- **`Passed` + simplified-install result** — the installed extension can use
+  the lightweight per-agent lifecycle. Whether or not
+  `.local/connect/workday/agents/{ACTIVE_AGENT_SLUG}/lifecycle.json` already
+  exists, read
+  `src/skills/connect/workday/SKILL.md` and follow it.
+- **`Passed` + full / legacy result** — do not run the simplified V2 wiring
+  lifecycle. Read `src/skills/setup/SKILL.md` and resume the full/legacy
+  Workday setup path, which handles legacy user context explicitly.
+- **`NotConfigured`** — no Workday package is installed. Read
+  `src/skills/setup/SKILL.md` and start the resume-aware setup path.
+- **`Failed`** — a partial or broken install was detected. Show the checkpoint
+  remediation and stop; do not treat it as a fresh environment.
+- **`Warning` / `Skipped` / `Error`**, or a `Passed` result whose flavor cannot
+  be determined — package detection is inconclusive. Show the result and stop
+  so the maker can remediate or retry. Never start setup from an inconclusive
+  package check.
 
 ### If the user said something else
 
