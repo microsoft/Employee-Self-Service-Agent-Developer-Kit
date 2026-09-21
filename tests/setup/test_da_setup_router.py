@@ -732,7 +732,6 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
         )
     )
     assert readiness_table in text
-    assert "Not performed by foundation setup" in text
     assert "Checkpoint and refresh" in text
     assert "Keep local files unchanged" in text
     assert "does not require published Dev configuration" in normalized

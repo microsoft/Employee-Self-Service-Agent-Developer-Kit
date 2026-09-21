@@ -156,13 +156,6 @@ Your local workspace is ready for authoring. Open [{USER_FRIENDLY_PRODUCT_NAME}]
 | Agent content        | {agent content status}          | {agent content evidence summary}         |
 | **Overall**          | **{overall readiness status}**  | **{maker-facing readiness summary}**     |
 
-Not performed by foundation setup:
-
-- publishing or promotion;
-- connector installation and authentication;
-- product-extension configuration;
-- server-backed validation of unpublished local changes.
-
 **End message.**
 
 Use the same five rows and order in every runtime-readiness table:
