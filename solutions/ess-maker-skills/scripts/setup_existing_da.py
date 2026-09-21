@@ -1171,7 +1171,8 @@ def _confirm_dev_route(
     realms: dict[str, Any],
     *,
     expected_schema_name: str | None,
-) -> str:
+    allow_missing_schema: bool = False,
+) -> str | None:
     route_realm = realms.get("routeRealm")
     if route_realm not in (0, "dev", "Dev"):
         raise ExistingDASetupError(
@@ -1198,6 +1199,8 @@ def _confirm_dev_route(
     expected_schema = str(expected_schema_name or "").strip()
     schema_name = str(agent.get("schemaName") or expected_schema).strip()
     if not schema_name:
+        if allow_missing_schema:
+            return None
         raise ExistingDASetupError(
             "Direct agent lookup did not return a schema name."
         )
@@ -1220,6 +1223,7 @@ def validate_existing_dev_connection(
     setup_source: str = "existing-dev",
     require_alm_family: bool = True,
     expected_schema_name: str | None = None,
+    allow_missing_schema: bool = False,
 ) -> dict[str, Any]:
     """Validate a directly addressable agent as editable Dev identity."""
     normalized_setup_source = _validate_setup_source(setup_source)
@@ -1248,6 +1252,7 @@ def validate_existing_dev_connection(
             agent,
             realms,
             expected_schema_name=expected_schema_name,
+            allow_missing_schema=allow_missing_schema,
         )
         family_id = None
     agent_name = str(
@@ -1255,6 +1260,7 @@ def validate_existing_dev_connection(
         or agent.get("displayName")
         or agent.get("shortBotName")
         or schema_name
+        or normalized_agent_id
     )
     managed_properties = agent.get("managedProperties")
     is_managed = (
@@ -1404,7 +1410,7 @@ def _validate_changeset_identity(
     agent_id: str,
     *,
     expected_schema_name: str | None = None,
-) -> None:
+) -> str:
     bot = changeset.get("bot")
     if not isinstance(bot, dict):
         raise ExistingDASetupError("Component fetch did not return bot identity.")
@@ -1416,17 +1422,20 @@ def _validate_changeset_identity(
         raise ExistingDASetupError(
             "Component fetch returned content for a different agent."
         )
+    fetched_schema = str(bot.get("schemaName") or "").strip()
+    if not fetched_schema:
+        raise ExistingDASetupError(
+            "Component fetch did not return a schema name."
+        )
     expected_schema = str(expected_schema_name or "").strip()
-    if expected_schema:
-        fetched_schema = str(bot.get("schemaName") or "").strip()
-        if not fetched_schema:
-            raise ExistingDASetupError(
-                "Component fetch did not return the imported schema name."
-            )
-        if fetched_schema.casefold() != expected_schema.casefold():
-            raise ExistingDASetupError(
-                "Component fetch returned content for a different schema."
-            )
+    if (
+        expected_schema
+        and fetched_schema.casefold() != expected_schema.casefold()
+    ):
+        raise ExistingDASetupError(
+            "Component fetch returned content for a different schema."
+        )
+    return fetched_schema
 
 
 def _materialize_workspace(
@@ -1922,9 +1931,19 @@ def attach_existing_dev(
         agent_id=agent_id,
         selection_source=selection_source,
         setup_source=setup_source,
-        require_alm_family=setup_source not in {"alm-import", "mos-starter"},
+        require_alm_family=False,
         expected_schema_name=expected_schema_name,
+        allow_missing_schema=True,
     )
+    normalized_environment_id = connection["environment"]["id"]
+    normalized_agent_id = connection["agent"]["id"]
+    prefetched_changeset: dict[str, Any] | None = None
+    if not connection["agent"]["schemaName"]:
+        prefetched_changeset = client.fetch_components(normalized_agent_id)
+        connection["agent"]["schemaName"] = _validate_changeset_identity(
+            prefetched_changeset,
+            normalized_agent_id,
+        )
     canonical_state, existing_setup = _validate_setup_target(
         kit_root,
         connection,
@@ -1962,17 +1981,19 @@ def attach_existing_dev(
             existing_setup,
         )
         progress_recorded = True
-    normalized_environment_id = connection["environment"]["id"]
-    normalized_agent_id = connection["agent"]["id"]
     schema_name = connection["agent"]["schemaName"]
     family_id = connection["agent"].get("almFamilyId")
     agent_name = connection["agent"]["name"]
     try:
-        changeset = client.fetch_components(normalized_agent_id)
+        changeset = (
+            prefetched_changeset
+            if prefetched_changeset is not None
+            else client.fetch_components(normalized_agent_id)
+        )
         _validate_changeset_identity(
             changeset,
             normalized_agent_id,
-            expected_schema_name=expected_schema_name,
+            expected_schema_name=expected_schema_name or schema_name,
         )
     except Exception as exc:
         if progress_recorded:

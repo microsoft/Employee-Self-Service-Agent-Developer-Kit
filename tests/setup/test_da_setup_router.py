@@ -398,6 +398,8 @@ def test_prod_to_dev_reference_composes_durable_boundaries() -> None:
     assert "Do not recover a collision or offer replacement" in normalized_conflict
     assert "setup_existing_da.py attach" in text
     assert "--setup-source prod-to-dev" in text
+    assert '--expected-schema-name "{RETURNED_SCHEMA_NAME}"' in text
+    assert "without requiring published Dev configuration" in normalized
     assert "--source-url" not in text
     assert "--target-url" not in text
     assert '--environment-id "{SOURCE_ENVIRONMENT_ID}"' in text
@@ -672,6 +674,7 @@ def test_alm_import_collision_and_retry_require_separate_choices() -> None:
 
 def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
     text = _DA_EXISTING_DEV.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
 
     for command in (
         "setup_existing_da.py list-agents",
@@ -699,6 +702,8 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
     assert "Not performed by foundation setup" in text
     assert "Checkpoint and refresh" in text
     assert "Keep local files unchanged" in text
+    assert "does not require published Dev configuration" in normalized
+    assert "publishing is outside foundation setup" in normalized
 
 
 def test_existing_dev_completion_remains_evidence_driven() -> None:

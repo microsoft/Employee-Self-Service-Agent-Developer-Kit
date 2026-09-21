@@ -227,6 +227,7 @@ class FakeClient:
         configured_agent_id: str | None = None,
         route_realm: int | str = 0,
         include_agent_schema: bool = True,
+        published_config_available: bool = True,
         changeset: dict[str, Any] | None = None,
     ) -> None:
         self.agent_name = agent_name
@@ -237,6 +238,7 @@ class FakeClient:
         self.configured_agent_id = configured_agent_id or agent_id
         self.route_realm = route_realm
         self.include_agent_schema = include_agent_schema
+        self.published_config_available = published_config_available
         self.changeset = changeset or _changeset(
             agent_id=agent_id,
             schema_name=schema_name,
@@ -276,6 +278,10 @@ class FakeClient:
 
     def get_dev_configuration(self, _agent_id: str) -> dict[str, Any]:
         self.configuration_calls += 1
+        if not self.published_config_available:
+            raise setup_existing_da.ExistingDASetupError(
+                "The agent has no published Dev config. Publish the agent first."
+            )
         return {
             "realm": self.configuration_realm,
             "cdsBotId": self.configured_agent_id,
@@ -728,19 +734,35 @@ def test_attach_rejects_workspace_environment_mismatch(
     assert set(_setup_state(tmp_path)["agents"]) == {AGENT_ID}
 
 
-def test_alm_import_attach_materializes_without_published_config(
+@pytest.mark.parametrize(
+    ("setup_source", "selection_source"),
+    (
+        ("existing-dev", "direct-id"),
+        ("alm-import", "alm-import-result"),
+        ("prod-to-dev", "prod-to-dev-result"),
+        ("mos-starter", "mos-starter-result"),
+    ),
+)
+def test_attach_materializes_without_published_config(
     tmp_path: Path,
+    setup_source: str,
+    selection_source: str,
 ) -> None:
-    client = FakeClient(include_agent_schema=False)
+    client = FakeClient(
+        include_agent_schema=False,
+        published_config_available=False,
+    )
 
     result = setup_existing_da.attach_existing_dev(
         client,
         environment_id=ENVIRONMENT_ID,
         agent_id=AGENT_ID,
         kit_root=tmp_path,
-        setup_source="alm-import",
-        selection_source="alm-import-result",
-        expected_schema_name=SCHEMA_NAME,
+        setup_source=setup_source,
+        selection_source=selection_source,
+        expected_schema_name=(
+            None if setup_source == "existing-dev" else SCHEMA_NAME
+        ),
     )
 
     assert result["connectionStatus"] == "workspace-ready"
@@ -755,9 +777,10 @@ def test_alm_import_attach_materializes_without_published_config(
     )
     assert metadata["realm"] == "dev"
     assert metadata["almFamilyId"] is None
+    assert metadata["setupSource"] == setup_source
 
 
-def test_mos_starter_attach_materializes_without_published_config(
+def test_existing_dev_attach_derives_schema_from_components(
     tmp_path: Path,
 ) -> None:
     client = FakeClient(include_agent_schema=False)
@@ -767,34 +790,24 @@ def test_mos_starter_attach_materializes_without_published_config(
         environment_id=ENVIRONMENT_ID,
         agent_id=AGENT_ID,
         kit_root=tmp_path,
-        setup_source="mos-starter",
-        selection_source="mos-starter-result",
-        expected_schema_name=SCHEMA_NAME,
     )
 
     assert result["connectionStatus"] == "workspace-ready"
+    assert result["schemaName"] == SCHEMA_NAME
     assert client.realm_calls == 1
     assert client.configuration_calls == 0
     assert client.fetch_calls == 1
-    metadata = json.loads(
-        (
-            _agent_root(tmp_path)
-            / setup_existing_da.ATTACH_METADATA
-        ).read_text(encoding="utf-8")
-    )
-    assert metadata["realm"] == "dev"
-    assert metadata["almFamilyId"] is None
-    assert metadata["setupSource"] == "mos-starter"
 
 
 @pytest.mark.parametrize(
     ("setup_source", "selection_source"),
     (
         ("alm-import", "alm-import-result"),
+        ("prod-to-dev", "prod-to-dev-result"),
         ("mos-starter", "mos-starter-result"),
     ),
 )
-def test_package_attach_rejects_component_schema_mismatch(
+def test_receipt_backed_attach_rejects_component_schema_mismatch(
     tmp_path: Path,
     setup_source: str,
     selection_source: str,
@@ -851,26 +864,13 @@ def test_alm_import_attach_rejects_non_dev_route(
     assert not (tmp_path / "workspace").exists()
 
 
-def test_later_family_discovery_enriches_and_remains_in_setup_state(
+def test_publish_independent_attachment_does_not_invent_family_identity(
     tmp_path: Path,
 ) -> None:
-    setup_existing_da.attach_existing_dev(
-        FakeClient(include_agent_schema=False),
-        environment_id=ENVIRONMENT_ID,
-        agent_id=AGENT_ID,
-        kit_root=tmp_path,
-        setup_source="alm-import",
-        expected_schema_name=SCHEMA_NAME,
-    )
+    client = FakeClient(include_agent_schema=False)
 
     setup_existing_da.attach_existing_dev(
-        FakeClient(),
-        environment_id=ENVIRONMENT_ID,
-        agent_id=AGENT_ID,
-        kit_root=tmp_path,
-    )
-    setup_existing_da.attach_existing_dev(
-        FakeClient(include_agent_schema=False),
+        client,
         environment_id=ENVIRONMENT_ID,
         agent_id=AGENT_ID,
         kit_root=tmp_path,
@@ -879,7 +879,8 @@ def test_later_family_discovery_enriches_and_remains_in_setup_state(
     )
 
     state = _agent_setup_state(tmp_path)
-    assert state["agent"]["alm_family_id"] == FAMILY_ID
+    assert state["agent"]["alm_family_id"] is None
+    assert client.configuration_calls == 0
 
 
 def test_dialog_conversion_gap_preserves_evidence_without_ready_state(
@@ -1162,6 +1163,11 @@ def test_not_configured_connection_blocks_setup(tmp_path: Path) -> None:
     payload = json.loads(results_path.read_text(encoding="utf-8"))
     payload["overall"] = "READY"
     results_path.write_text(json.dumps(payload), encoding="utf-8")
+    step_started = datetime.fromisoformat(
+        _agent_setup_state(tmp_path)["steps"]["SETUP-05"]["updated_at"]
+    ).timestamp()
+    fresh_time = max(results_path.stat().st_mtime, step_started + 1)
+    os.utime(results_path, (fresh_time, fresh_time))
 
     result = setup_existing_da.maintain_setup_flightcheck(
         tmp_path,
@@ -1505,7 +1511,7 @@ def test_main_attach_forwards_setup_provenance(
         ]
         + (
             ["--expected-schema-name", SCHEMA_NAME]
-            if setup_source in {"alm-import", "mos-starter"}
+            if setup_source in {"alm-import", "prod-to-dev", "mos-starter"}
             else []
         )
     )
@@ -1515,7 +1521,7 @@ def test_main_attach_forwards_setup_provenance(
     assert observed["setup_source"] == setup_source
     assert observed["expected_schema_name"] == (
         SCHEMA_NAME
-        if setup_source in {"alm-import", "mos-starter"}
+        if setup_source in {"alm-import", "prod-to-dev", "mos-starter"}
         else None
     )
 

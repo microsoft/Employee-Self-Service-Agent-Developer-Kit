@@ -50,7 +50,7 @@ python scripts/setup_existing_da.py attach \
 
 The access token supplies the tenant identity during initial inspection; do not infer it from the environment ID.
 
-The command validates the exact agent identity and Dev configuration, fetches the authoritative component change set, converts supported authoring components with the Microsoft Object Model serializer, and materializes the local workspace. It persists canonical setup progress for that agent before materialization. Complete the native FlightCheck maintenance below before treating the agent's `connect_ready: true` as current.
+The command validates the exact agent identity and direct Dev route, fetches the authoritative component change set, confirms its component identity and schema, converts supported authoring components with the Microsoft Object Model serializer, and materializes the local workspace. It does not require published Dev configuration; publishing is outside foundation setup and is not attachment remediation. It persists canonical setup progress for that agent before materialization when identity is complete. Complete the native FlightCheck maintenance below before treating the agent's `connect_ready: true` as current.
 
 If Object Model dependencies are missing, run:
 

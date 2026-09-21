@@ -169,7 +169,8 @@ python scripts/setup_existing_da.py attach \
   --ring "{RING}" \
   --api-version "{API_VERSION}" \
   --agent-id "{RETURNED_AGENT_ID}" \
-  --setup-source prod-to-dev
+  --setup-source prod-to-dev \
+  --expected-schema-name "{RETURNED_SCHEMA_NAME}"
 ```
 
-When attachment reports `connectionStatus: workspace-ready`, run the native FlightCheck maintenance sequence in `da-existing-dev.md`. Complete setup only after its final `DA_SETUP_FLIGHTCHECK_JSON:` reports `connectReady: true`, then use the factual report there. Use **Existing Prod agent; related Dev reused** as the starting point for a validated related-Dev path and **Existing Prod agent; new Dev created** after a successful create-only import. Do not claim Prod changed, Dev was published, or promotion was configured. Do not add cross-tenant support, replacement, collision recovery, export receipts, or telemetry.
+The earlier source inspection and import or related-Dev validation own ALM-family proof. Attachment validates the returned Dev route and component schema without requiring published Dev configuration. When attachment reports `connectionStatus: workspace-ready`, run the native FlightCheck maintenance sequence in `da-existing-dev.md`. Complete setup only after its final `DA_SETUP_FLIGHTCHECK_JSON:` reports `connectReady: true`, then use the factual report there. Use **Existing Prod agent; related Dev reused** as the starting point for a validated related-Dev path and **Existing Prod agent; new Dev created** after a successful create-only import. Do not claim Prod changed, Dev was published, or promotion was configured. Do not add cross-tenant support, replacement, collision recovery, export receipts, or telemetry.
