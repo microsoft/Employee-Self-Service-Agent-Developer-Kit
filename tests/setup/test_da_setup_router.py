@@ -468,12 +468,14 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "`connectReady: true`" in text
     assert "`setupStatus`" not in text
     assert "Do not ask the maker to classify the product before loading the catalog" in normalized
-    assert "| `Employee Self-Service`    | Hub/Core   |" in text
-    assert "| `Employee Self-Service HR` | HR         |" in text
-    assert "| `Employee Self-Service IT` | IT         |" in text
+    assert "infer a concise user-friendly product name" in normalized
+    assert "render `Employee Self-Service IT` as `Employee Self-Service (IT)`" in normalized
+    assert "render `Employee Self-Service HR` as `Employee Self-Service (HR)`" in normalized
+    assert "use the exact service-provided product name unchanged" in normalized
+    assert "must not change the underlying `packageId`" in normalized
     assert "host's interactive single-selection control" in normalized
     assert "Do not ask the maker to type a product name" in normalized
-    assert "**{experience} -- {product name} {version}**" in text
+    assert "**{friendly product name} {version}**" in text
     assert "Create a new ESS agent" in normalized
     assert "**{selected product label}**" in text
     assert "Choose a different product" in text
@@ -517,8 +519,9 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "workspace is not ready to connect" in existing_dev
     assert "New entitled MOS product" in text
     assert "content was synced to your local workspace" in existing_dev
-    assert "Topics synced" in existing_dev
-    assert "Global variables synced" in existing_dev
+    assert "Your local workspace is ready for authoring" in existing_dev
+    assert "[{USER_FRIENDLY_PRODUCT_NAME}]({ACTUAL_AGENT_URL})" in existing_dev
+    assert "### Runtime readiness" in existing_dev
     assert "factual workspace and runtime-readiness report from `da-existing-dev.md`" in normalized
     assert "Do not infer persona, product, target, or progress" in normalized
     assert "Never invoke" in normalized and "/connect" in normalized
@@ -706,8 +709,16 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
     assert "Validate only the selected candidate" in text
     assert "before authentication or remote agent validation" in text
     assert "Do not run `validate-agent` immediately before `attach`" in text
-    assert "Your ESS agent workspace is ready for local authoring." in text
-    assert "| Starting point | Existing editable Dev |" in " ".join(text.split())
+    assert "Your local workspace is ready for authoring." in text
+    assert "[{USER_FRIENDLY_PRODUCT_NAME}]({ACTUAL_AGENT_URL})" in text
+    assert "| Item" not in text
+    assert "| Starting point" not in text
+    assert (
+        "{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_ID}/bots/"
+        "{AGENT_ID}/overview"
+    ) in text
+    assert "Never link to the environment's agent-list page" in text
+    assert "use the authoritative backend display name unchanged" in normalized
     assert "### Runtime readiness" in text
     readiness_table = "\n".join(
         (
@@ -736,7 +747,7 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     assert "`connectReady: true`" in text
     assert "Canonical setup state is authoritative for each agent's setup progress and readiness" in normalized
     assert "`state`, `connectReady`, `activeStep`, and `failureCauses` are the runtime-readiness verdict" in normalized
-    assert "Render both tables even when `connectReady` is false" in normalized
+    assert "Render both even when `connectReady` is false" in normalized
     for readiness_status in (
         "**✅ Ready**",
         "**⚠️ Ready with limitation**",

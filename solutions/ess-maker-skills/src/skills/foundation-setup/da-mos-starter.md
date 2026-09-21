@@ -31,18 +31,11 @@ python scripts/setup_mos_starter.py list \
   --ring "{RING}"
 ```
 
-Parse `DA_MOS_STARTER_PACKAGES_JSON:`. Preserve every service row as operation evidence. Group rows by exact `packageId` and present one picker option per exact ID, using the service-provided name, version, and description. Never show the internal `packageId` to the maker. Do not describe products as remaining, uninstalled, or eligible; the create response is the service-owned decision for the selected package.
+Parse `DA_MOS_STARTER_PACKAGES_JSON:`. Preserve every service row as operation evidence. Group rows by exact `packageId` and present one picker option per exact ID, using the service-provided name, version, and description as authoritative inputs. Never show the internal `packageId` to the maker. Do not describe products as remaining, uninstalled, or eligible; the create response is the service-owned decision for the selected package.
 
-Normalize the picker label from the exact service-provided product name:
+For each picker row, infer a concise user-friendly product name only when the service-provided name or description makes the meaning unambiguous. For example, render `Employee Self-Service IT` as `Employee Self-Service (IT)` and render `Employee Self-Service HR` as `Employee Self-Service (HR)`. If a friendly form is not clear, use the exact service-provided product name unchanged. This display-only inference must not change the underlying `packageId`, backend name, or create request.
 
-| Service product name       | Experience |
-| -------------------------- | ---------- |
-| `Employee Self-Service`    | Hub/Core   |
-| `Employee Self-Service HR` | HR         |
-| `Employee Self-Service IT` | IT         |
-| Any other name             | Other      |
-
-Use the host's interactive single-selection control and offer one choice for each exact `packageId`. Do not ask the maker to type a product name. Format each choice as **{experience} -- {product name} {version}** and use `shortDescription`, then `description`, as its supporting text. Omit a blank version or description instead of showing an unresolved value.
+Use the host's interactive single-selection control and offer one choice for each exact `packageId`. Do not ask the maker to type a product name. Format each choice as **{friendly product name} {version}** and use `shortDescription`, then `description`, as its supporting text. Omit a blank version or description instead of showing an unresolved value. Retain the selected friendly product name for the final exact-agent link.
 
 The successful list proves target access, but not a new agent identity. Keep **Verify access and agent identity** current until create and direct attachment validation succeed.
 

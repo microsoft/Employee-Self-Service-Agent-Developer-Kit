@@ -136,22 +136,15 @@ If content was synced to the local workspace but the returned result is not work
 
 Do not invent a cause or run another operation without new maker intent.
 
-After successful materialization and after all four setup-owned FlightChecks have been attempted, build the workspace table only from `DA_EXISTING_DEV_SETUP_JSON:` and build the runtime-readiness table from the applied FlightCheck results and canonical state. Render both tables even when `connectReady` is false. Use a friendly environment name only when an authoritative operation returned one; otherwise say `Selected Power Platform environment`. Render empty `unprojectedComponentKinds` as `None` and a missing checkpoint as `Not required`.
+After successful materialization and after all four setup-owned FlightChecks have been attempted, build the agent link from `DA_EXISTING_DEV_SETUP_JSON:` and build the runtime-readiness table from the applied FlightCheck results and canonical state. Render both even when `connectReady` is false.
+
+Infer a concise user-friendly product name from the authoritative product or agent display name when its meaning is unambiguous. For example, render `Employee Self-Service IT` as `Employee Self-Service (IT)` and `Employee Self-Service HR` as `Employee Self-Service (HR)`. If a friendly form is not clear, use the authoritative backend display name unchanged. Never use a schema name or agent ID as link text.
+
+Build the exact agent URL as `{COPILOT_STUDIO_ORIGIN}/environments/{ENVIRONMENT_ID}/bots/{AGENT_ID}/overview`, using the validated Copilot Studio origin for the selected service ring and the exact environment and agent IDs from setup evidence. Never link to the environment's agent-list page.
 
 **Message:**
 
-Your ESS agent workspace is ready for local authoring.
-
-| Item                       | Result                                                                 |
-| -------------------------- | ---------------------------------------------------------------------- |
-| Editable Dev agent         | **{agent display name}**                                               |
-| Starting point             | Existing editable Dev                                                  |
-| Target environment         | **{friendly environment name or Selected Power Platform environment}** |
-| Local workspace            | `{workspace folder}`                                                   |
-| Topics synced              | {topic count}                                                          |
-| Global variables synced    | {variable count}                                                       |
-| Other retained components  | {unprojected component summary or None}                                |
-| Local checkpoint           | {checkpoint number or Not required}                                    |
+Your local workspace is ready for authoring. Open [{USER_FRIENDLY_PRODUCT_NAME}]({ACTUAL_AGENT_URL}) in Microsoft Copilot Studio.
 
 ### Runtime readiness
 
