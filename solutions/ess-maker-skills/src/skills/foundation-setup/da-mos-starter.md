@@ -21,6 +21,22 @@ catalog. When fresh-agent intent and the target environment are known, mark
 
 Read canonical setup state and `.local/config.json` when present. Continue in an occupied workspace when its recorded environment is the selected target. If it records a different environment, follow **Create and open a new workspace** in `SKILL.md` and stop this invocation after that handoff. Do not reset a same-environment workspace merely to install another product.
 
+Once the target environment is resolved, use this fixed opening as the first product-installation surface:
+
+**Message:**
+
+Here's your ESS agent setup:
+
+- ✅ Choose the starting point and target environment
+- 🔄 Verify access and agent identity
+- ⬜ Establish an editable Dev agent
+- ⬜ Materialize the local workspace
+- ⬜ Review the setup handoff
+
+Loading entitled products for **{environment name}**...
+
+**End message.**
+
 ## List the catalog
 
 Complete the shared account-selection and authorization steps in `SKILL.md`, then run:
@@ -34,6 +50,10 @@ python scripts/setup_mos_starter.py list \
 Parse `DA_MOS_STARTER_PACKAGES_JSON:`. Preserve every service row as operation evidence. Group rows by exact `packageId` and present one picker option per exact ID, using the service-provided name, version, and description as authoritative inputs. Never show the internal `packageId` to the maker. Do not describe products as remaining, uninstalled, or eligible; the create response is the service-owned decision for the selected package.
 
 For each picker row, infer a concise user-friendly product name only when the service-provided name or description makes the meaning unambiguous. For example, render `Employee Self-Service IT` as `Employee Self-Service (IT)` and render `Employee Self-Service HR` as `Employee Self-Service (HR)`. If a friendly form is not clear, use the exact service-provided product name unchanged. This display-only inference must not change the underlying `packageId`, backend name, or create request.
+
+When listing succeeds, continue the catalog surface with:
+
+> {PRODUCT_COUNT} entitled products are available. Select the product to create.
 
 Use the host's interactive single-selection control and offer one choice for each exact `packageId`. Do not ask the maker to type a product name. Format each choice as **{friendly product name} {version}** and use `shortDescription`, then `description`, as its supporting text. Omit a blank version or description instead of showing an unresolved value. Retain the selected friendly product name for the final exact-agent link.
 
@@ -59,7 +79,7 @@ Offer exactly:
 - **Choose a different product**
 - **Cancel setup**
 
-Do not preselect **Create agent**. Run create only after the maker explicitly selects **Create agent** for the displayed product and target.
+Do not preselect **Create agent**. After the maker explicitly selects **Create agent** for the displayed product and target, begin the create operation immediately; the confirmation surface already communicates the selected product and environment.
 
 ## Create
 
@@ -113,6 +133,8 @@ python scripts/setup_mos_starter.py enable-alm \
 
 Parse `DA_MOS_STARTER_ALM_ANNOTATIONS_JSON:` and its response body when present, then `DA_MOS_STARTER_ALM_JSON:` on success. A failed read-back may instead emit `DA_MOS_STARTER_ALM_VERIFY_ANNOTATIONS_JSON:`, its response body, or `DA_MOS_STARTER_ALM_VERIFY_JSON:`. Continue only for `outcome: enabled` or `outcome: already-enabled` with `persistedValue: true`. If read-back definitively reports `outcome: verification-failed` and `persistedValue: false`, say, "The follow-up check showed that the agent was not prepared for local editing. Setup has stopped without attaching a workspace." If transport or read-back becomes uncertain, preserve the evidence internally, say that the agent could not be confirmed ready for local editing, and stop.
 
+An enabled or already-enabled result proceeds directly to attachment. Successful ALM response parsing is internal evidence and does not add another maker-facing transition message.
+
 ## Attach
 
 After ALM read-back succeeds, run:
@@ -126,9 +148,9 @@ python scripts/setup_existing_da.py attach \
   --expected-schema-name "{RETURNED_SCHEMA_NAME}"
 ```
 
-This attachment validates the returned agent through its direct Dev route and component identity; it does not require published Dev configuration. On failure, preserve the command's specific `ERROR:` text and any canonical `active_step` and `failure_causes` as diagnostic evidence. Translate them into the visible setup stage and a plain explanation of the unmet prerequisite as described in `da-existing-dev.md`; never show internal step IDs or raw technical output as ordinary maker copy. Publishing is outside foundation setup and is not remediation for an attachment failure. On success, parse `DA_EXISTING_DEV_SETUP_JSON:`. When attachment reports `connectionStatus: workspace-ready`, run the agent-scoped native FlightCheck maintenance sequence in `da-existing-dev.md`. Treat setup as complete only when its final `DA_SETUP_FLIGHTCHECK_JSON:` reports `connectReady: true`. If a FlightCheck blocks setup, translate its evidence according to `da-existing-dev.md`. The request-scoped create evidence intentionally remains as an audit note. Do not publish, remove, or replace components from this path.
+This attachment validates the returned agent through its direct Dev route and component identity; it does not require published Dev configuration. On failure, preserve the command's specific `ERROR:` text and any canonical `active_step` and `failure_causes` as diagnostic evidence. Translate them into the visible setup stage and a plain explanation of the unmet prerequisite as described in `da-existing-dev.md`; never show internal step IDs or raw technical output as ordinary maker copy. Publishing is outside foundation setup and is not remediation for an attachment failure. On success, parse `DA_EXISTING_DEV_SETUP_JSON:`. When attachment reports `connectionStatus: workspace-ready`, mark the access, identity, editable-agent, and materialization stages complete, then run the four setup-owned FlightChecks as the single presentation unit defined in `da-existing-dev.md`. The next maker-facing success surface is the factual workspace and runtime-readiness handoff after all four checks have been attempted. If an operation requires maker action or prevents later checks from running, render that supported interruption instead. The request-scoped create evidence intentionally remains as an audit note. Do not publish, remove, or replace components from this path.
 
-After direct attachment validation succeeds, mark **Verify access and agent identity** and **Establish an editable Dev agent** complete. After all four FlightChecks have been attempted, render the factual workspace and runtime-readiness report from `da-existing-dev.md` using **New entitled MOS product** as the starting point, including when `connectReady` is false.
+After all four FlightChecks have been attempted, render the factual workspace and runtime-readiness report from `da-existing-dev.md` using **New entitled MOS product** as the starting point, including when `connectReady` is false.
 
 For every non-created outcome (`pre-dispatch-failure`, `collision`, `rejected`, `malformed-success`, `source-package-mismatch`, or an uncertain response or transport failure), end the create operation. The existing read-only `list` and `setup_existing_da.py validate-agent`/`list-agents` commands remain available for a separately requested inspection.
 

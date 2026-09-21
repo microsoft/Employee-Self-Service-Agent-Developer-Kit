@@ -95,8 +95,8 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
     )
     assert "offer to perform it" in normalized_foundation
     assert prompt.index(
-        "After reading the foundation skill, write the complete maker-facing "
-        "progress"
+        "After reading the foundation skill, use its explicit progress render "
+        "points"
     ) < prompt.index("{PYTHON} -m pip install")
     checklist = "\n".join(
         (
@@ -115,7 +115,14 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
         "`SETUP-07` in state `done` completes local workspace materialization"
         in normalized_foundation
     )
-    assert "Before every maker-facing response, including the final handoff" in (
+    assert "At the first interactive setup surface in a turn" in normalized_prompt
+    assert "when a marker changes" in normalized_prompt
+    assert "when a blocked state requires maker action" in normalized_prompt
+    assert "in the final handoff" in normalized_prompt
+    assert "retains the same markers continues to its next render point" in (
+        normalized_prompt
+    )
+    assert "Successful runtime, dependency, and converter checks continue directly" in (
         normalized_prompt
     )
     assert "one single-level bullet and one leading status emoji per stage" in (
@@ -127,13 +134,10 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
     )
     assert cwd_instruction in normalized_prompt
     assert cwd_instruction in normalized_foundation
-    assert (
-        "At setup start and at the beginning of every subsequent setup turn"
-        in foundation
-    )
+    assert "at these render points" in foundation
     assert "same ordinary Markdown shape" in foundation
     assert "native task list" not in foundation
-    assert "mark **Review the setup handoff** complete before finishing" in foundation
+    assert "Mark **Review the setup handoff** complete in the final snapshot" in foundation
 
 
 def test_public_setup_does_not_configure_mcp() -> None:
@@ -289,7 +293,7 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     )
     assert _DA_MOS_STARTER.is_file()
     assert _MOS_STARTER_REFERENCE.is_file()
-    assert "explicitly asks for a fresh installation" in normalized
+    assert "explicit fresh-install intent" in normalized
 
 
 def test_native_setup_skills_pass_resolved_target_fields() -> None:
@@ -465,7 +469,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert '--ring "{RING}"' in text
     assert "outcome: created" in text
     assert "Never show the internal `packageId` to the maker" in normalized
-    assert "`connectReady: true`" in text
+    assert "`connectReady: true`" in existing_dev
     assert "`setupStatus`" not in text
     assert "Do not ask the maker to classify the product before loading the catalog" in normalized
     assert "infer a concise user-friendly product name" in normalized
@@ -497,19 +501,42 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "Present account confirmation once" in normalized_foundation
     assert "Continue in an occupied workspace" in normalized
     assert "recorded environment is the selected target" in normalized
-    assert "explicitly asks for a fresh installation" in normalized_foundation
-    assert "even when the current Developer Kit folder already has setup state" in (
+    assert "create a new agent, install another product, or start with a fresh agent" in (
         normalized_foundation
+    )
+    assert "Resolve that intent before active-agent resume handling" in (
+        normalized_foundation
+    )
+    assert "retain every configured agent and continue directly" in (
+        normalized_foundation
+    )
+    assert "existing-agent readiness remains unchanged" in normalized_foundation
+    assert normalized_foundation.index(
+        "Resolve that intent before active-agent resume handling"
+    ) < normalized_foundation.index(
+        "When the current request supplies no agent, environment, package, or fresh-agent intent"
     )
     assert "new absolute sibling-folder path" in normalized_foundation
     assert "Do not preselect **Create agent**" in text
-    assert "Run create only after the maker explicitly selects" in normalized
+    assert "After the maker explicitly selects **Create agent**" in normalized
     assert "exactly one create attempt" not in normalized
     assert "The command ends after this one attempt" not in normalized
     assert "Do not invoke create concurrently or automatically" in normalized
     assert "diagnostic evidence only" in normalized
     assert "do not explain those internal version concepts to the maker" in normalized
     assert "The agent was created. Preparing its local authoring workspace" in normalized
+    assert "{PRODUCT_COUNT} entitled products are available" in text
+    assert "Loading entitled products for **{environment name}**..." in text
+    assert text.index("Loading entitled products for **{environment name}**...") < (
+        text.index("{PRODUCT_COUNT} entitled products are available")
+    )
+    assert "use this fixed opening as the first product-installation surface" in (
+        normalized
+    )
+    assert "begin the create operation immediately" in normalized
+    assert "Successful ALM response parsing is internal evidence" in normalized
+    assert "single presentation unit defined in `da-existing-dev.md`" in normalized
+    assert "next maker-facing success surface" in normalized
     assert "application lifecycle management" not in normalized
     assert "**Prepare for local editing**" not in text
     assert "**Not now**" not in text
@@ -625,6 +652,16 @@ def test_foundation_uses_maker_facing_progress_without_duplicate_state() -> None
     ):
         assert stage in text
     assert "The checklist is a view, not another state model" in normalized
+    assert "first interactive setup surface in a turn" in normalized
+    assert "a change to any of its five markers" in normalized
+    assert "a blocked state that requires maker action" in normalized
+    assert "A sequence of setup operations that retains the same markers" in normalized
+    assert "The final handoff is the sole completion summary" in normalized
+    assert "**Finish for now** ends immediately" in normalized
+    assert "first decision surface rather than rendering another completion summary" in (
+        normalized
+    )
+    assert "Successful runtime and dependency validation proceeds directly" in normalized
     assert "Never infer progress from conversation history" in normalized
     assert "Do not mark a stage complete from a skipped internal setup record" in (
         normalized
@@ -747,6 +784,8 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     assert "`connectReady: true`" in text
     assert "Canonical setup state is authoritative for each agent's setup progress and readiness" in normalized
     assert "`state`, `connectReady`, `activeStep`, and `failureCauses` are the runtime-readiness verdict" in normalized
+    assert "treat all four setup-owned FlightChecks and their maintenance calls as one presentation unit" in normalized
+    assert "next maker-facing success surface is the final runtime-readiness table" in normalized
     assert "Render both even when `connectReady` is false" in normalized
     for readiness_status in (
         "**✅ Ready**",

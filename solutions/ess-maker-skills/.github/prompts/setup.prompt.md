@@ -9,10 +9,10 @@ Read `src/skills/foundation-setup/SKILL.md` first. Follow its **Command runtime*
 instructions to establish a working Python invocation before running any Python
 command.
 
-After reading the foundation skill, write the complete maker-facing progress
-checklist below. At the beginning of every subsequent setup turn, write the
-same complete checklist again using the latest canonical setup state and
-results observed in that invocation. Use the exact ordinary Markdown shape
+After reading the foundation skill, use its explicit progress render points.
+At the first interactive setup surface in a turn, write the complete
+maker-facing progress checklist below using the latest canonical setup state
+and results observed in that invocation. Use the exact ordinary Markdown shape
 defined in the foundation skill: one single-level bullet and one leading
 status emoji per stage.
 
@@ -23,12 +23,11 @@ status emoji per stage.
 - {marker} Review the setup handoff
 
 Use ✅ for completed, 🔄 for the current stage, ⛔ for a blocked stage, and ⬜
-for pending. Every update is a full snapshot containing all five stages in this
-order. After each setup action that changes progress, write the complete
-snapshot with the updated statuses. Preserve completed stages, keep pending
-stages present, and represent subordinate checks through the status of their
-owning stage. Before every maker-facing response, including the final handoff,
-synchronize the complete snapshot once more.
+for pending. Every rendered update is a full snapshot containing all five
+stages in this order. Render it at the first interactive surface in a turn,
+when a marker changes, when a blocked state requires maker action, and in the
+final handoff. A sequence of setup operations that retains the same markers
+continues to its next render point without another progress snapshot.
 
 Run setup commands from the current ESS Maker Skills workspace folder.
 
@@ -55,6 +54,11 @@ If the check fails, run:
 ```
 
 Then rerun the check.
+
+Successful runtime, dependency, and converter checks continue directly to the
+applicable setup surface without a maker-facing success message. Render a
+prerequisite message when maker action is required, using the failure and its
+single recovery action.
 
 For any command failure, follow the **Command runtime** recovery guidance.
 
