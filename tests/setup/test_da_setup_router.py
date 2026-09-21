@@ -449,6 +449,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "DA_MOS_STARTER_ALM_VERIFY_JSON:" in text
     assert "setup_existing_da.py attach" in text
     assert "--setup-source mos-starter" in text
+    assert '--expected-schema-name "{RETURNED_SCHEMA_NAME}"' in text
     assert "--target-url" not in text
     assert '--environment-id "{ENVIRONMENT_ID}"' in text
     assert '--ring "{RING}"' in text
@@ -512,6 +513,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "Do not infer persona, product, target, or progress" in normalized
     assert "Never invoke" in normalized and "/connect" in normalized
     assert "Do not publish, remove, or replace components" in normalized
+    assert "Publishing is outside foundation setup and is not remediation" in normalized
     assert "setup_setup_mos_starter.py" not in text
     assert "setup_mos_starter.py resolve" not in text
     assert "setup_mos_starter.py status" not in text

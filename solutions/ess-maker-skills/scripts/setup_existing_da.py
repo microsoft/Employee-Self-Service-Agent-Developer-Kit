@@ -1922,7 +1922,7 @@ def attach_existing_dev(
         agent_id=agent_id,
         selection_source=selection_source,
         setup_source=setup_source,
-        require_alm_family=setup_source != "alm-import",
+        require_alm_family=setup_source not in {"alm-import", "mos-starter"},
         expected_schema_name=expected_schema_name,
     )
     canonical_state, existing_setup = _validate_setup_target(
@@ -1972,9 +1972,7 @@ def attach_existing_dev(
         _validate_changeset_identity(
             changeset,
             normalized_agent_id,
-            expected_schema_name=(
-                schema_name if setup_source == "alm-import" else None
-            ),
+            expected_schema_name=expected_schema_name,
         )
     except Exception as exc:
         if progress_recorded:

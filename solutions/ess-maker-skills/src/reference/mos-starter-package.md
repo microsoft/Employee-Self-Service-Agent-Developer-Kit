@@ -24,6 +24,7 @@ This reference defines the safety and evidence contract for installing a new Dev
 | A created starter agent is not automatically opted into ALM | Live-proven |
 | ALM opt-in uses the full fetched `BotEntity`, adds `configuration.settings["alm.isAlmEnabled"] = true`, and submits an empty `botComponentChanges` list through `PUT /api/{agentId}/components` | Live-proven |
 | ALM opt-in persisted and advanced the BotEntity version on read-back | Live-proven |
+| Direct Dev-route and component validation can materialize a newly created starter agent while published Dev configuration is absent | Live-proven in TEST |
 | Existing-Dev validation and attachment remain separate and expose service-owned prerequisites | Live-proven |
 | Direct native ALM import already creates agents from packages declaring `packageType: "templated"` | Live-proven, using the generic import path, not this surface |
 
@@ -52,8 +53,8 @@ Do not describe a pending-validation claim as supported behavior. In particular,
 9. End create after emitting a usable returned identity. Preserve catalog revision as `catalogPackageVersion` and the service-returned source template version as `templateVersion`; never conflate them.
 10. Invoke ALM enablement only after a successful create response in the confirmed setup flow. Fetch the exact agent first, deep-copy and preserve its full `BotEntity`, change only `alm.isAlmEnabled`, and request no component changes.
 11. Verify ALM through a second component fetch. A write response without persisted read-back is not success.
-12. Return control after every operation. The existing `setup_existing_da.py attach` command remains the sole Dev validation, projection, and canonical-completion boundary.
-13. If attachment reports a service-owned prerequisite, report it and stop. This path never publishes or removes components.
+12. Return control after every operation. The existing `setup_existing_da.py attach` command remains the sole Dev validation, projection, and canonical-completion boundary. For a newly created starter agent, pass the create response's schema name and validate the direct Dev route plus fetched component identity without requiring published Dev configuration.
+13. If attachment reports a service-owned prerequisite, report it and stop. Publishing is not attachment remediation for this path; foundation setup never publishes or removes components.
 14. Keep response bodies, internal classifications, step IDs, and request details as diagnostic evidence. Translate supported facts into plain maker language; never render raw technical evidence as ordinary maker-facing copy.
 
 ## Durable command boundary

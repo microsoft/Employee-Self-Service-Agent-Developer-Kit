@@ -129,10 +129,11 @@ python scripts/setup_existing_da.py attach \
   --environment-id "{ENVIRONMENT_ID}" \
   --ring "{RING}" \
   --agent-id "{RETURNED_AGENT_ID}" \
-  --setup-source mos-starter
+  --setup-source mos-starter \
+  --expected-schema-name "{RETURNED_SCHEMA_NAME}"
 ```
 
-On failure, preserve the command's specific `ERROR:` text and any canonical `active_step` and `failure_causes` as diagnostic evidence. Translate them into the visible setup stage and a plain explanation of the unmet prerequisite as described in `da-existing-dev.md`; never show internal step IDs or raw technical output as ordinary maker copy. On success, parse `DA_EXISTING_DEV_SETUP_JSON:`. When attachment reports `connectionStatus: workspace-ready`, run the agent-scoped native FlightCheck maintenance sequence in `da-existing-dev.md`. Treat setup as complete only when its final `DA_SETUP_FLIGHTCHECK_JSON:` reports `connectReady: true`. If a FlightCheck blocks setup, translate its evidence according to `da-existing-dev.md`. The request-scoped create evidence intentionally remains as an audit note. Do not publish, remove, or replace components from this path.
+This attachment validates the returned agent through its direct Dev route and component identity; it does not require published Dev configuration. On failure, preserve the command's specific `ERROR:` text and any canonical `active_step` and `failure_causes` as diagnostic evidence. Translate them into the visible setup stage and a plain explanation of the unmet prerequisite as described in `da-existing-dev.md`; never show internal step IDs or raw technical output as ordinary maker copy. Publishing is outside foundation setup and is not remediation for an attachment failure. On success, parse `DA_EXISTING_DEV_SETUP_JSON:`. When attachment reports `connectionStatus: workspace-ready`, run the agent-scoped native FlightCheck maintenance sequence in `da-existing-dev.md`. Treat setup as complete only when its final `DA_SETUP_FLIGHTCHECK_JSON:` reports `connectReady: true`. If a FlightCheck blocks setup, translate its evidence according to `da-existing-dev.md`. The request-scoped create evidence intentionally remains as an audit note. Do not publish, remove, or replace components from this path.
 
 After direct attachment validation succeeds, mark **Verify access and agent identity** and **Establish an editable Dev agent** complete. Render the factual completion report from `da-existing-dev.md` using **New entitled MOS product** as the starting point.
 

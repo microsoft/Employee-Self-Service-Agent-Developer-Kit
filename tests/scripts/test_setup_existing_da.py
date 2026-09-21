@@ -757,8 +757,47 @@ def test_alm_import_attach_materializes_without_published_config(
     assert metadata["almFamilyId"] is None
 
 
-def test_alm_import_attach_rejects_component_schema_mismatch(
+def test_mos_starter_attach_materializes_without_published_config(
     tmp_path: Path,
+) -> None:
+    client = FakeClient(include_agent_schema=False)
+
+    result = setup_existing_da.attach_existing_dev(
+        client,
+        environment_id=ENVIRONMENT_ID,
+        agent_id=AGENT_ID,
+        kit_root=tmp_path,
+        setup_source="mos-starter",
+        selection_source="mos-starter-result",
+        expected_schema_name=SCHEMA_NAME,
+    )
+
+    assert result["connectionStatus"] == "workspace-ready"
+    assert client.realm_calls == 1
+    assert client.configuration_calls == 0
+    assert client.fetch_calls == 1
+    metadata = json.loads(
+        (
+            _agent_root(tmp_path)
+            / setup_existing_da.ATTACH_METADATA
+        ).read_text(encoding="utf-8")
+    )
+    assert metadata["realm"] == "dev"
+    assert metadata["almFamilyId"] is None
+    assert metadata["setupSource"] == "mos-starter"
+
+
+@pytest.mark.parametrize(
+    ("setup_source", "selection_source"),
+    (
+        ("alm-import", "alm-import-result"),
+        ("mos-starter", "mos-starter-result"),
+    ),
+)
+def test_package_attach_rejects_component_schema_mismatch(
+    tmp_path: Path,
+    setup_source: str,
+    selection_source: str,
 ) -> None:
     changeset = _changeset()
     changeset["bot"]["schemaName"] = "gptagent_different"
@@ -773,8 +812,8 @@ def test_alm_import_attach_rejects_component_schema_mismatch(
             environment_id=ENVIRONMENT_ID,
             agent_id=AGENT_ID,
             kit_root=tmp_path,
-            setup_source="alm-import",
-            selection_source="alm-import-result",
+            setup_source=setup_source,
+            selection_source=selection_source,
             expected_schema_name=SCHEMA_NAME,
         )
 
@@ -1466,7 +1505,7 @@ def test_main_attach_forwards_setup_provenance(
         ]
         + (
             ["--expected-schema-name", SCHEMA_NAME]
-            if setup_source == "alm-import"
+            if setup_source in {"alm-import", "mos-starter"}
             else []
         )
     )
@@ -1475,7 +1514,9 @@ def test_main_attach_forwards_setup_provenance(
     assert observed["selection_source"] == selection_source
     assert observed["setup_source"] == setup_source
     assert observed["expected_schema_name"] == (
-        SCHEMA_NAME if setup_source == "alm-import" else None
+        SCHEMA_NAME
+        if setup_source in {"alm-import", "mos-starter"}
+        else None
     )
 
 
