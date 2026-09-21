@@ -233,7 +233,8 @@ def test_workday_routing_remains_separate() -> None:
     step1 = _CONNECT_STEP1.read_text(encoding="utf-8")
     workday = _WORKDAY.read_text(encoding="utf-8")
 
-    assert "src/skills/setup/SKILL.md" in step1
+    assert "src/skills/setup/workday-da/SKILL.md" in step1
+    assert "Fresh CEA Workday" in step1
     assert "src/skills/foundation-setup/SKILL.md" not in step1
     assert _WORKDAY.is_file()
     assert "Hybrid Workday extension setup is not available" in workday

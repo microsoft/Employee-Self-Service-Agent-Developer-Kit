@@ -120,6 +120,50 @@ class TestGates:
 
         assert merged["connections"]["Workday"]["tenant"] == "foundation"
 
+    def test_connect_config_supplies_native_sidecar_dataverse(
+        self, tmp_path: Path
+    ) -> None:
+        overlay = tmp_path / "workday-da.json"
+        overlay.write_text(
+            '{"sidecarDataverseEndpoint":'
+            '"https://sidecar.crm.dynamics.com"}',
+            encoding="utf-8",
+        )
+
+        merged = cli._merge_connect_config(
+            {"powerPlatformApiEndpoint": "https://api.powerplatform.com"},
+            str(overlay),
+        )
+
+        assert (
+            merged["dataverseEndpoint"]
+            == "https://sidecar.crm.dynamics.com"
+        )
+        assert (
+            merged["powerPlatformApiEndpoint"]
+            == "https://api.powerplatform.com"
+        )
+
+    def test_foundation_dataverse_wins_over_sidecar(
+        self, tmp_path: Path
+    ) -> None:
+        overlay = tmp_path / "workday-da.json"
+        overlay.write_text(
+            '{"sidecarDataverseEndpoint":'
+            '"https://sidecar.crm.dynamics.com"}',
+            encoding="utf-8",
+        )
+
+        merged = cli._merge_connect_config(
+            {"dataverseEndpoint": "https://foundation.crm.dynamics.com"},
+            str(overlay),
+        )
+
+        assert (
+            merged["dataverseEndpoint"]
+            == "https://foundation.crm.dynamics.com"
+        )
+
     def test_connect_config_overlay_rejects_non_object(
         self, tmp_path: Path
     ) -> None:

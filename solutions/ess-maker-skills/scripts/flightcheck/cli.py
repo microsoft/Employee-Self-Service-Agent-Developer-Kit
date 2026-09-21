@@ -103,7 +103,7 @@ SCOPE_MAP = {
         ("Workday", run_workday_checks),
         ("Workday Extension", run_workday_extension_checks),
     ],
-    "workdayda": [("Solution", run_solution_checks), ("Workday DA", run_workday_da_checks)],
+    "workdayda": [("Workday DA", run_workday_da_checks)],
     "topics": [("Workday Topics", run_topic_checks)],
     "graphconnector": [
         ("External Systems", run_external_systems_checks),
@@ -740,6 +740,10 @@ def _merge_connect_config(config: dict, connect_config_path: str | None) -> dict
     for key, value in overlay.items():
         if key not in foundation_keys:
             merged[key] = value
+    if not merged.get("dataverseEndpoint"):
+        sidecar_endpoint = overlay.get("sidecarDataverseEndpoint")
+        if isinstance(sidecar_endpoint, str) and sidecar_endpoint.strip():
+            merged["dataverseEndpoint"] = sidecar_endpoint.strip()
     merged["_connectConfigPath"] = connect_config_path
     return merged
 

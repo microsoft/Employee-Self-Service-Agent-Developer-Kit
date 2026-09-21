@@ -32,13 +32,14 @@ def test_connect_workday_routes_by_architecture_and_install_state() -> None:
 
     assert "src/skills/setup/workday-da/SKILL.md" in text
     assert "src/skills/connect/workday/SKILL.md" in text
-    assert "src/skills/setup/SKILL.md" in text
     assert "WD-DA-PKG-001" in text
     assert "WD-PKG-001" in text
     assert "ESS DA Hub is not supported" in text
     assert "Passed` + simplified-install result" in text
     assert "Passed` + full / legacy result" in text
     assert "do not treat it as a fresh environment" in text
+    assert "retired `selected_products` field" in text
+    assert "Fresh CEA Workday\n  installation is not available" in text
     assert "connect/workday/step" not in text
 
 
@@ -64,8 +65,8 @@ def test_connect_workday_provider_contract_and_review_guards() -> None:
     da_skill = (
         _SOLUTION / "src" / "skills" / "setup" / "workday-da" / "SKILL.md"
     ).read_text(encoding="utf-8")
-    assert "installed-agent inventory resolves exactly one" in da_skill
-    assert "stable agent slug and `botId`" in da_skill
+    assert "canonical\n`.local/setup/config.json` `agents` record" in da_skill
+    assert "stable slug,\n`botId`" in da_skill
     assert 'provider `status` to be `"ready"`' in da_skill
 
     updater = (
@@ -101,6 +102,28 @@ def test_connect_workday_provider_contract_and_review_guards() -> None:
     ).read_text(encoding="utf-8")
     assert "exactly one MCSBot delegated authorization" in power_platform
     assert "contains no `[FAIL]` line" in power_platform
+
+    install = (
+        _SOLUTION
+        / "src"
+        / "skills"
+        / "setup"
+        / "workday-da"
+        / "install-extension.md"
+    ).read_text(encoding="utf-8")
+    assert "sidecarDataverseEndpoint" in install
+    assert '--connect-config ".local/connect/workday-da/config.json"' in install
+
+    verify = (
+        _SOLUTION
+        / "src"
+        / "skills"
+        / "setup"
+        / "workday-da"
+        / "verify-connection.md"
+    ).read_text(encoding="utf-8")
+    assert '--connect-config ".local/connect/workday-da/config.json"' in verify
+    assert "sidecarDataverseEndpoint" in power_platform
 
 
 def test_hybrid_boundary_remains_non_mutating() -> None:

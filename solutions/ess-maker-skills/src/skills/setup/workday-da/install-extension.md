@@ -15,11 +15,28 @@ doesn't support it. The router must stop DA IT agents before this file is read.
 
 ## P1.0 — Check for the DA base agent, and install the extension if it's missing
 
+Resolve the Dataverse environment that hosts the Workday extension:
+
+1. Use `.local/config.json` `dataverseEndpoint` when present (legacy
+   Dataverse-backed workspace).
+2. Otherwise read `.local/connect/workday-da/config.json`
+   `sidecarDataverseEndpoint`.
+3. If neither exists, ask the maker for the target Power Platform environment
+   URL shown in the Power Platform admin center. Explain that the MOS/native
+   agent remains in AgentBuilder while the Workday solution, connections, and
+   cloud flows require this Dataverse sidecar environment. Require an HTTPS
+   `*.crm*.dynamics.com` organization URL, show it back for confirmation, then
+   persist it as `sidecarDataverseEndpoint`.
+
+Call the resolved value `WORKDAY_DATAVERSE_URL`. Never copy it into
+`.local/config.json`; that file's native `powerPlatformApiEndpoint` remains the
+agent identity boundary.
+
 Run the checkpoint that reports both facts at once — whether a DA base agent
 exists, and whether Workday is already installed against it:
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-DA-PKG-001
+python scripts/flightcheck/cli.py --checkpoint WD-DA-PKG-001 --connect-config ".local/connect/workday-da/config.json"
 ```
 
 Read the checkpoint result from `workspace/flightcheck/results.json`. The only
@@ -58,17 +75,17 @@ environment is outside this lifecycle and must not affect DA1.1.
 ## P1.1 — Attempt an automated install
 
 ```
-python scripts/install_workday_da_extension.py --url "{ENVIRONMENT_URL}" --vertical "hr"
+python scripts/install_workday_da_extension.py --url "{WORKDAY_DATAVERSE_URL}" --vertical "hr"
 ```
 
-Run the command once. `ENVIRONMENT_URL` is the Dataverse endpoint from
-`.local/config.json`.
+Run the command once.
 
 Parse the script's JSON marker line:
 
 - **`INSTALLED_WORKDAY_DA_EXTENSION_JSON:`** → the HR package installed (or was
   already installed and the script confirmed it). Re-run
-  `--checkpoint WD-DA-PKG-001`; proceed only when it reports `PASSED`.
+`--checkpoint WD-DA-PKG-001` with the same `--connect-config`; proceed only
+when it reports `PASSED`.
 - **`WORKDAY_DA_EXTENSION_NOT_LISTED_JSON:`** → this tenant's Marketplace
   catalog doesn't list the Workday extension package for the DA agent, so it
   can't be installed automatically here. This is expected in some tenants —
@@ -84,7 +101,8 @@ Parse the script's JSON marker line:
 
   **End message.**
 
-  Wait for the user to confirm, then re-run `--checkpoint WD-DA-PKG-001`.
+  Wait for the user to confirm, then re-run `--checkpoint WD-DA-PKG-001` with
+  the same `--connect-config`.
   Loop until it passes, or fall back to **P1.2** if the user reports the
   install failed in the portal.
 - Any other exit / error → show the error verbatim and continue to **P1.2**
@@ -109,8 +127,9 @@ installed the base Employee Self-Service agent:
 
 **End message.**
 
-Wait for the user to confirm, then re-run `--checkpoint WD-DA-PKG-001`. Loop
-until it passes. While it is not yet passing, keep DA1.1 `in-progress`.
+Wait for the user to confirm, then re-run `--checkpoint WD-DA-PKG-001` with the
+same `--connect-config`. Loop until it passes. While it is not yet passing,
+keep DA1.1 `in-progress`.
 
 ---
 

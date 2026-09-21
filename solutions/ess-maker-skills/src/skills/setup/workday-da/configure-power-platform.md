@@ -147,7 +147,9 @@ supported by the script syntax.
 
 Resolve parameters instead of asking the maker to paste GUIDs:
 
-- `OrgUrl`: `.local/config.json` → `dataverseEndpoint`.
+- `OrgUrl`: `.local/config.json` `dataverseEndpoint` when present; otherwise
+  `.local/connect/workday-da/config.json` `sidecarDataverseEndpoint`. This must
+  be the same effective Dataverse environment used by DA-1.
 - `BotId`: active ESS DA HR agent → `agent.botId`.
 - `WorkflowId[]`: the target Workday workflow IDs referenced by the active
   agent's Workday topics. Resolve topic `flowId` values to Dataverse

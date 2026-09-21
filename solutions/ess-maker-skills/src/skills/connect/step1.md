@@ -234,48 +234,44 @@ Now read `src/skills/connect/servicenow/step1.md` and follow it.
 
 ### If the user chose Workday (2 or "workday")
 
-First find out which kind of ESS agent is in this environment. Read
-`.local/setup/config.json` and look at
-`selected_products` (each entry is one of `da.esshr` / `da.essit` / `da.esshub`
-/ `cea.esshr` / `cea.essit` / `cea.esshub`):
+First find out which ESS agent is active. Read `.local/config.json`, resolve
+`activeAgent` against `agents`, and fall back to the legacy `agent` object only
+when needed. For a DA agent, also read the canonical
+`.local/setup/config.json` `agents` record keyed by the active `botId` and
+require `connect_ready: true`.
 
-- **No `.local/setup/config.json`, or `selected_products` is empty** — no ESS
-  agent has been installed in this environment yet.
+- **No concrete active agent, missing schema/architecture identity, or a DA
+  agent whose canonical setup is not connect-ready** — setup is incomplete.
 
   **Message:**
 
-  I don't see an Employee Self-Service agent installed in this environment yet.
-  Run `/setup` first, then come back and run `/connect workday` again.
+  I don't see a setup-complete Employee Self-Service agent selected in this
+  workspace yet. Run `/setup` or select the intended agent first, then come
+  back and run `/connect workday` again.
 
   **End message.**
 
   Stop here.
 
-Resolve the active agent from `.local/config.json` (`activeAgent`, then the
-matching entry in `agents`; fall back to `agent` only for the legacy
-single-agent shape). Route by the resolved active agent's architecture before
-consulting the installed-product inventory:
+Route from the active agent's `releaseLine` and schema name
+(`schemaName`/`schema_name`):
 
 - active `msdyn_copilotforemployeeselfservicedahr` or
   `msdyn_copilotforemployeeselfservicedait` → use the DA rules below;
-- active CEA agent → skip to **CEA agent** below, even if DA products are also
-  installed.
+- another agent with `releaseLine: "da"` → use the DA unsupported-target
+  rules below;
+- active CEA agent → skip to **CEA agent** below.
 
-If no active agent can be resolved, infer the architecture only when every
-selected product belongs to the same architecture. If DA and CEA products are
-both installed, stop and ask the maker to select the intended agent before
-running `/connect workday` again. Never choose an architecture from whichever
-product appears first.
+Never infer the target from a retired `selected_products` field or from the
+first installed agent in a multi-agent workspace.
 
 ### DA HR agent
 
-Enter this branch only when the active agent is DA or the unresolved inventory
-contains only `da.*` products. Use the active agent's `schemaName` and the
-selected product inventory to determine the DA vertical.
+Enter this branch only when the active agent is DA. Use its schema name to
+determine the vertical.
 
 **ESS DA IT is not supported in this release.** If the active agent is
-`msdyn_copilotforemployeeselfservicedait`, or the only selected DA vertical is
-`da.essit`, show:
+`msdyn_copilotforemployeeselfservicedait`, show:
 
 **Message:**
 
@@ -288,7 +284,7 @@ Stop immediately. Do not create DA Workday state, run a Workday package
 checkpoint, install a package, or enter any DA Workday lifecycle step.
 
 **ESS DA Hub is not supported in this release.** If the active agent is the
-ESS DA Hub, or the only selected DA product is `da.esshub`, show:
+ESS DA Hub, show:
 
 **Message:**
 
@@ -300,14 +296,9 @@ Please select the ESS HR Agent or contact your administrator.
 Stop immediately without creating or updating Workday state.
 
 **ESS DA HR is supported.** Continue only when the active agent is
-`msdyn_copilotforemployeeselfservicedahr`, or the selected DA inventory
-unambiguously contains only `da.esshr`. Do not run `WD-PKG-001` or the CEA
-lifecycle: DA packages share some Workday connection-reference names with
-CEA, so that checkpoint is not an architecture discriminator.
-
-If both DA HR and DA IT are installed but the active agent cannot be resolved,
-stop and ask the maker to select the ESS HR Agent before running
-`/connect workday` again. Never guess the vertical.
+`msdyn_copilotforemployeeselfservicedahr`. Do not run `WD-PKG-001` or the CEA
+lifecycle: DA packages share some Workday connection-reference names with CEA,
+so that checkpoint is not an architecture discriminator.
 
 Read `src/skills/setup/workday-da/SKILL.md` and follow it. That skill runs
 `WD-DA-PKG-001`, installs or verifies the DA HR Workday child package, and
@@ -316,8 +307,7 @@ bot-to-flow authorization, topic selection, and signed-in runtime validation.
 
 ### CEA agent
 
-Enter this branch when the resolved active agent is CEA, or when no active
-agent is resolvable and every selected product is `cea.*`.
+Enter this branch when the resolved active agent is CEA.
 
 Check the current CEA Workday extension before honoring any existing lifecycle
 state:
@@ -335,10 +325,13 @@ by both its status and detected flavor:
   exists, read
   `src/skills/connect/workday/SKILL.md` and follow it.
 - **`Passed` + full / legacy result** — do not run the simplified V2 wiring
-  lifecycle. Read `src/skills/setup/SKILL.md` and resume the full/legacy
-  Workday setup path, which handles legacy user context explicitly.
-- **`NotConfigured`** — no Workday package is installed. Read
-  `src/skills/setup/SKILL.md` and start the resume-aware setup path.
+  lifecycle. Full/legacy CEA Workday setup is not available from the current
+  hybrid setup boundary; explain that this existing installation needs the
+  legacy CEA setup experience and stop without changing state.
+- **`NotConfigured`** — no Workday package is installed. Fresh CEA Workday
+  installation is not available from the current hybrid setup boundary;
+  explain that this release supports the DA HR Workday path and stop without
+  changing state.
 - **`Failed`** — a partial or broken install was detected. Show the checkpoint
   remediation and stop; do not treat it as a fresh environment.
 - **`Warning` / `Skipped` / `Error`**, or a `Passed` result whose flavor cannot

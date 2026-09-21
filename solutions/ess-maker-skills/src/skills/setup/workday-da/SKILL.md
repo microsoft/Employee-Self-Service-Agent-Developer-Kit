@@ -18,15 +18,13 @@ installed — that's owned by `/setup`, not by this skill. DA-1 checks for it an
 sends you to `/setup` first if it isn't there yet.
 
 This release does not support Workday for the ESS DA IT Agent. Before creating
-the working checklist or reading provider state, resolve the active agent from
-`.local/config.json` and read `.local/setup/config.json` `selected_products`.
-Continue when the active agent resolves to an ESS DA HR agent instance with a
-stable agent slug and `botId`. If no active agent is set, continue only when the
-installed-agent inventory resolves exactly one ESS DA HR agent instance with
-those fields; select that instance for this run before creating state.
-`selected_products = ["da.esshr"]` alone is not enough because it identifies a
-product, not a deployed agent. If the target is IT, Hub, CEA, mixed, ambiguous,
-incomplete, or unresolved, show:
+the working checklist or reading provider state, resolve `activeAgent` from
+`.local/config.json` and require an ESS DA HR agent entry with a stable slug,
+`botId`, and HR schema name. Then read the canonical
+`.local/setup/config.json` `agents` record keyed by that `botId` and require
+`connect_ready: true`. Do not use the retired `selected_products` field or
+choose the first agent in a multi-agent workspace. If the target is IT, Hub,
+CEA, ambiguous, incomplete, or unresolved, show:
 
 **Message:**
 

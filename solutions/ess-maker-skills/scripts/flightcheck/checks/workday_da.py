@@ -100,8 +100,44 @@ def _check_workday_da_package_installed(runner) -> list[CheckResult]:
         s.get("uniquename", "").casefold(): s for s in all_solutions
     }
 
-    hr_installed = _DA_HR_PARENT_SCHEMA in installed_names
-    it_installed = _DA_IT_PARENT_SCHEMA in installed_names
+    config = getattr(runner, "config", {}) or {}
+    agents = config.get("agents") if isinstance(config, dict) else []
+    active_slug = config.get("activeAgent") if isinstance(config, dict) else None
+    active_agent = next(
+        (
+            agent
+            for agent in agents or []
+            if isinstance(agent, dict) and agent.get("slug") == active_slug
+        ),
+        None,
+    )
+    if not isinstance(active_agent, dict):
+        candidate = config.get("agent") if isinstance(config, dict) else None
+        active_agent = candidate if isinstance(candidate, dict) else {}
+    active_schema = str(
+        active_agent.get("schemaName")
+        or active_agent.get("schema_name")
+        or ""
+    ).casefold()
+
+    if active_schema == _DA_IT_PARENT_SCHEMA:
+        return [_result(
+            Status.FAILED.value,
+            "The active agent is the ESS DA IT agent.",
+            remediation=(
+                "Workday integration with the ESS IT Agent is not supported "
+                "in this release. Select the ESS HR Agent first."
+            ),
+        )]
+
+    hr_installed = (
+        active_schema == _DA_HR_PARENT_SCHEMA
+        or _DA_HR_PARENT_SCHEMA in installed_names
+    )
+    it_installed = (
+        active_schema == _DA_IT_PARENT_SCHEMA
+        or _DA_IT_PARENT_SCHEMA in installed_names
+    )
 
     if not hr_installed and it_installed:
         return [_result(

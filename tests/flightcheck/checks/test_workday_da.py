@@ -14,7 +14,7 @@ on the resulting ``CheckResult``. Mirrors the pattern in
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
@@ -56,6 +56,7 @@ SOLUTION_ID = "22222222-2222-2222-2222-222222222222"
 class _MinimalRunner:
     env_url: str | None
     dv_token: str | None
+    config: dict[str, Any] = field(default_factory=dict)
 
 
 @pytest.fixture
@@ -143,6 +144,57 @@ def test_failed_when_hr_base_agent_present_but_workday_child_missing(
     assert r.status == "Failed"
     assert "HR" in r.result
     assert "AppSource" in r.remediation
+
+
+@responses.activate
+def test_native_hr_agent_only_requires_child_in_sidecar(
+    runner: _MinimalRunner,
+) -> None:
+    runner.config = {
+        "releaseLine": "da",
+        "activeAgent": "ess-hr",
+        "agents": [
+            {
+                "slug": "ess-hr",
+                "schemaName": "msdyn_copilotforemployeeselfservicedahr",
+            }
+        ],
+    }
+    _register_solutions(
+        solutions=[
+            _solution_record("msdyn_essdahrworkday", version="2.1.0.0"),
+        ]
+    )
+
+    result = _check_workday_da_package_installed(runner)[0]
+    assert result.status == "Passed"
+    assert "msdyn_essdahrworkday" in result.result
+
+
+@responses.activate
+def test_native_it_active_agent_is_rejected(
+    runner: _MinimalRunner,
+) -> None:
+    runner.config = {
+        "releaseLine": "da",
+        "activeAgent": "ess-it",
+        "agents": [
+            {
+                "slug": "ess-it",
+                "schemaName": "msdyn_copilotforemployeeselfservicedait",
+            }
+        ],
+    }
+    _register_solutions(
+        solutions=[
+            _solution_record("msdyn_copilotforemployeeselfservicedahr"),
+            _solution_record("msdyn_essdahrworkday"),
+        ]
+    )
+
+    result = _check_workday_da_package_installed(runner)[0]
+    assert result.status == "Failed"
+    assert "active agent is the ESS DA IT agent" in result.result
 
 
 @responses.activate

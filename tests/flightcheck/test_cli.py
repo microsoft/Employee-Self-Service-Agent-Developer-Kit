@@ -30,7 +30,9 @@ from flightcheck import cli
 
 def test_workday_da_check_is_explicit_scope_only() -> None:
     """An optional DA HR package must not fail unrelated full runs."""
-    assert ("Workday DA", cli.run_workday_da_checks) in cli.SCOPE_MAP["workdayda"]
+    assert cli.SCOPE_MAP["workdayda"] == [
+        ("Workday DA", cli.run_workday_da_checks)
+    ]
     assert ("Workday DA", cli.run_workday_da_checks) not in cli.FULL_SCOPE
 
 

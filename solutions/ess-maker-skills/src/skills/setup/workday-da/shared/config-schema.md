@@ -20,14 +20,14 @@ There are **two distinct** files. Keep them separate.
 
 | File | Owner | Purpose |
 |------|-------|---------|
-| `.local/connect/workday-da/config.json` | the `connect/workday-da` skill | Workday connection state — URLs, tenant, Entra app, OAuth client, per-step status. **This schema.** |
-| `.local/config.json` | foundation-setup + flightcheck | Agent identity, `dataverseEndpoint`, and the installed-agent inventory (`agent`/`agents`). `scripts/flightcheck/cli.py` reads this for the Dataverse endpoint. **Not this schema.** |
+| `.local/connect/workday-da/config.json` | the `connect/workday-da` skill | Workday connection state — sidecar Dataverse URL, Workday URLs, tenant, Entra app, OAuth client, per-step status. **This schema.** |
+| `.local/config.json` | foundation setup + FlightCheck | AgentBuilder-native identity (`powerPlatformApiEndpoint`, `activeAgent`, `agent`/`agents`) and, for legacy workspaces only, a foundation `dataverseEndpoint`. **Not this schema.** |
 
 Never write Workday connection fields into `.local/config.json`, and never
-write agent identity / `dataverseEndpoint` into
-`.local/connect/workday-da/config.json`. The only crossover is read-only: a
-step may *read* `.local/config.json` for `dataverseEndpoint` / `agent.botId`
-when it needs them.
+write agent identity into `.local/connect/workday-da/config.json`. A native MOS
+agent may use `sidecarDataverseEndpoint` in this schema for the Dataverse
+environment hosting the Workday solution and flows; FlightCheck consumes it
+only when foundation config has no `dataverseEndpoint`.
 
 ---
 
@@ -41,6 +41,7 @@ read by later steps. Unknown/absent fields are treated as `null`.
 
 | Field | Type | Owner | Notes |
 |-------|------|-------|-------|
+| `sidecarDataverseEndpoint` | string | DA-1 | HTTPS Dataverse organization URL hosting the Workday solution, connections, and flows for a native MOS/AgentBuilder agent. Do not copy it into foundation config. |
 | `baseUrl` | string | DA-2/DA-3 | Workday web host base URL (e.g. `https://wd2-impl.workday.com`). Captured early by DA-2 when the operator has the URL, else by DA-3. |
 | `tenant` | string | DA-2/DA-3 | Workday tenant short name. Captured early by DA-2 to pin the Entra app deterministically, else by DA-3. |
 | `tokenHost` | string | DA-2/DA-3 | Services host used to build token / REST URLs. Derived by DA-2 when the URL matches a known pattern, else by DA-3. |
@@ -110,6 +111,7 @@ authorization script.
 
 ```json
 {
+  "sidecarDataverseEndpoint": "https://contoso.crm.dynamics.com",
   "baseUrl": "https://wd2-impl.workday.com",
   "tenant": "acme_dpt1",
   "tokenHost": "wd2-impl-services1.workday.com",

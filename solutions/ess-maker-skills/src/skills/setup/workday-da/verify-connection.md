@@ -17,7 +17,7 @@ files you are reading.
 **Re-confirm the extension package.**
 
 ```
-python scripts/flightcheck/cli.py --checkpoint WD-DA-PKG-001
+python scripts/flightcheck/cli.py --checkpoint WD-DA-PKG-001 --connect-config ".local/connect/workday-da/config.json"
 ```
 
 Show the result per [`shared/checklist-updater.md`](shared/checklist-updater.md)
