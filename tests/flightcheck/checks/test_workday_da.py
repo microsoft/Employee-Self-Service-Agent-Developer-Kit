@@ -41,7 +41,8 @@ SOLN_SELECT = "solutionid,uniquename,friendlyname,ismanaged,version"
 SOLN_FILTER = (
     "uniquename eq 'msdyn_copilotforemployeeselfservicedahr' or "
     "uniquename eq 'msdyn_copilotforemployeeselfservicedait' or "
-    "uniquename eq 'msdyn_essdahrworkday'"
+    "uniquename eq 'msdyn_EssDAHRWorkday' or "
+    "uniquename eq 'msdyn_EssWorkdayRuntime'"
 )
 
 SOLUTION_ID = "22222222-2222-2222-2222-222222222222"
@@ -143,7 +144,7 @@ def test_failed_when_hr_base_agent_present_but_workday_child_missing(
     r = _check_workday_da_package_installed(runner)[0]
     assert r.status == "Failed"
     assert "HR" in r.result
-    assert "AppSource" in r.remediation
+    assert "/connect workday" in r.remediation
 
 
 @responses.activate
@@ -162,13 +163,13 @@ def test_native_hr_agent_only_requires_child_in_sidecar(
     }
     _register_solutions(
         solutions=[
-            _solution_record("msdyn_essdahrworkday", version="2.1.0.0"),
+            _solution_record("msdyn_EssWorkdayRuntime", version="2.1.0.0"),
         ]
     )
 
     result = _check_workday_da_package_installed(runner)[0]
     assert result.status == "Passed"
-    assert "msdyn_essdahrworkday" in result.result
+    assert "msdyn_EssWorkdayRuntime" in result.result
 
 
 @responses.activate
@@ -188,7 +189,7 @@ def test_native_it_active_agent_is_rejected(
     _register_solutions(
         solutions=[
             _solution_record("msdyn_copilotforemployeeselfservicedahr"),
-            _solution_record("msdyn_essdahrworkday"),
+            _solution_record("msdyn_EssWorkdayRuntime"),
         ]
     )
 
@@ -215,12 +216,12 @@ def test_failed_when_only_it_base_agent_is_present(
 def test_passed_when_hr_workday_child_present(runner: _MinimalRunner) -> None:
     _register_solutions(solutions=[
         _solution_record("msdyn_copilotforemployeeselfservicedahr"),
-        _solution_record("msdyn_essdahrworkday", version="2.0.0.1"),
+        _solution_record("msdyn_EssDAHRWorkday", version="2.0.0.1"),
     ])
 
     r = _check_workday_da_package_installed(runner)[0]
     assert r.status == "Passed"
-    assert "msdyn_essdahrworkday" in r.result
+    assert "msdyn_EssDAHRWorkday" in r.result
     assert "2.0.0.1" in r.result
     # Principle: PASSED carries no remediation.
     assert r.remediation == ""
@@ -234,13 +235,13 @@ def test_it_agent_does_not_block_supported_hr_package(
     _register_solutions(solutions=[
         _solution_record("msdyn_copilotforemployeeselfservicedahr"),
         _solution_record("msdyn_copilotforemployeeselfservicedait"),
-        _solution_record("msdyn_essdahrworkday"),
+        _solution_record("msdyn_EssDAHRWorkday"),
     ])
 
     r = _check_workday_da_package_installed(runner)[0]
     assert r.status == "Passed"
-    assert "ESS DA HR agent detected" in r.result
-    assert "msdyn_essdahrworkday" in r.result
+    assert "ESS HR agent detected" in r.result
+    assert "msdyn_EssDAHRWorkday" in r.result
 
 
 @responses.activate

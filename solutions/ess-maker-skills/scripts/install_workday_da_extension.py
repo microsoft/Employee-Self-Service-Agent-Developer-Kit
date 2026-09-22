@@ -1,12 +1,11 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Install the DA HR Workday AppSource application.
+"""Install the Workday package required by the active ESS HR agent.
 
 Used by ``src/skills/setup/workday-da/install-extension.md`` (step DA1.1).
-The installer uses the same AppSource application name as the bootstrap skill
-and reports a distinct ``not-listed`` outcome when the signed-in account cannot
-see the application in the selected environment.
+Current MOS agents use the standalone Workday runtime package. Legacy DA agents
+use the targeted DA HR Workday AppSource connector.
 """
 
 from __future__ import annotations
@@ -19,19 +18,20 @@ import time
 from auth import discover_tenant
 from flightcheck.checks.workday_da import (
     _DA_HR_WORKDAY_CHILD_SCHEMA,
+    _MOS_WORKDAY_RUNTIME_SCHEMA,
 )
 from flightcheck.powerplatform_client import PowerPlatformClient
 from flightcheck.pp_admin_client import PPAdminClient
 
-WORKDAY_DA_PACKAGES = {
-    "hr": {
+WORKDAY_PACKAGES = {
+    "runtime": {
+        "applicationName": _MOS_WORKDAY_RUNTIME_SCHEMA,
+        "schemaName": _MOS_WORKDAY_RUNTIME_SCHEMA,
+    },
+    "legacy-da": {
         "applicationName": "msdyn_EssDAHRWorkdayHCM",
         "schemaName": _DA_HR_WORKDAY_CHILD_SCHEMA,
     },
-}
-WORKDAY_DA_CHILD_SCHEMAS = {
-    vertical: package["schemaName"]
-    for vertical, package in WORKDAY_DA_PACKAGES.items()
 }
 INSTALLED_STATES = {"Installed", "TemplateInstalled"}
 IN_PROGRESS_STATES = {
@@ -192,6 +192,7 @@ def install_workday_da_extension(
     env_url: str,
     vertical: str,
     *,
+    package_flavor: str = "runtime",
     pp_admin_client_factory=PPAdminClient,
     powerplatform_client_factory=PowerPlatformClient,
     timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
@@ -201,7 +202,7 @@ def install_workday_da_extension(
     status_callback=lambda message: print(message, flush=True),
     installation_state_callback=lambda _status: None,
 ) -> str:
-    """Try to install the DA Workday extension package for one vertical.
+    """Try to install the required Workday package for one vertical.
 
     Returns the installed child solution's schema name on success. Raises
     ``ExtensionNotListedError`` when the Marketplace catalog does not return
@@ -215,7 +216,9 @@ def install_workday_da_extension(
             "Workday integration with the ESS DA IT Agent is not supported "
             "in this release."
         )
-    package_config = WORKDAY_DA_PACKAGES[vertical]
+    if package_flavor not in WORKDAY_PACKAGES:
+        raise ValueError(f"Unsupported Workday package flavor: {package_flavor}")
+    package_config = WORKDAY_PACKAGES[package_flavor]
     schema_name = package_config["schemaName"]
     application_name = package_config["applicationName"]
     tenant_id = discover_tenant(env_url)
@@ -293,8 +296,14 @@ def main() -> None:
     parser.add_argument(
         "--vertical",
         required=True,
-        choices=sorted(WORKDAY_DA_PACKAGES),
+        choices=["hr"],
         help="DA vertical (this release supports hr only)",
+    )
+    parser.add_argument(
+        "--package-flavor",
+        choices=sorted(WORKDAY_PACKAGES),
+        default="runtime",
+        help="Package required by the active ESS agent architecture.",
     )
     parser.add_argument(
         "--resolve-only",
@@ -328,8 +337,9 @@ def main() -> None:
     base_result = {
         "environmentUrl": environment_url,
         "vertical": args.vertical,
-        "schemaName": WORKDAY_DA_CHILD_SCHEMAS[args.vertical],
-        "applicationName": WORKDAY_DA_PACKAGES[args.vertical][
+        "packageFlavor": args.package_flavor,
+        "schemaName": WORKDAY_PACKAGES[args.package_flavor]["schemaName"],
+        "applicationName": WORKDAY_PACKAGES[args.package_flavor][
             "applicationName"
         ],
     }
@@ -338,6 +348,7 @@ def main() -> None:
         schema_name = install_workday_da_extension(
             environment_url,
             args.vertical,
+            package_flavor=args.package_flavor,
         )
     except ExtensionNotListedError as error:
         print(

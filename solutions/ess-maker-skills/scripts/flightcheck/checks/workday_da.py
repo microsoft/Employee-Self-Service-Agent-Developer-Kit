@@ -22,7 +22,8 @@ from auth import query_all, AuthExpiredError  # scripts/auth.py, on path via cli
 
 _DA_HR_PARENT_SCHEMA = "msdyn_copilotforemployeeselfservicedahr"
 _DA_IT_PARENT_SCHEMA = "msdyn_copilotforemployeeselfservicedait"
-_DA_HR_WORKDAY_CHILD_SCHEMA = "msdyn_essdahrworkday"
+_DA_HR_WORKDAY_CHILD_SCHEMA = "msdyn_EssDAHRWorkday"
+_MOS_WORKDAY_RUNTIME_SCHEMA = "msdyn_EssWorkdayRuntime"
 _DA_HR_AGENT_SCHEMAS = {
     _DA_HR_PARENT_SCHEMA,
     "gptagent_copilotforemployeeselfservicehr",
@@ -38,6 +39,7 @@ _ALL_TRACKED_SCHEMAS = (
     _DA_HR_PARENT_SCHEMA,
     _DA_IT_PARENT_SCHEMA,
     _DA_HR_WORKDAY_CHILD_SCHEMA,
+    _MOS_WORKDAY_RUNTIME_SCHEMA,
 )
 _SOLN_FILTER = " or ".join(
     f"uniquename eq '{schema}'" for schema in _ALL_TRACKED_SCHEMAS
@@ -167,24 +169,26 @@ def _check_workday_da_package_installed(runner) -> list[CheckResult]:
             ),
         )]
 
-    child = installed_names.get(_DA_HR_WORKDAY_CHILD_SCHEMA)
+    required_schema = (
+        _MOS_WORKDAY_RUNTIME_SCHEMA
+        if active_schema == "gptagent_copilotforemployeeselfservicehr"
+        else _DA_HR_WORKDAY_CHILD_SCHEMA
+    )
+    child = installed_names.get(required_schema.casefold())
     if not child:
         return [_result(
             Status.FAILED.value,
-            "The Workday extension package is not installed for the ESS DA HR "
-            "agent.",
+            "The Workday package required by the ESS HR agent is not "
+            "installed.",
             remediation=(
-                "Open AppSource (or the Microsoft 365 admin center), find "
-                "the Workday extension for Employee Self-Service HR, and "
-                "deploy it to this environment — the same place you "
-                "installed the base agent. Wait for the install to finish, "
-                "then re-run this check."
+                "Run /connect workday to install the required Workday package "
+                "in this environment, then re-run this check."
             ),
         )]
 
     return [_result(
         Status.PASSED.value,
-        "ESS DA HR agent detected. DA Workday extension package installed: "
+        "ESS HR agent detected. Workday package installed: "
         f"{_describe_solution(child)}.",
     )]
 

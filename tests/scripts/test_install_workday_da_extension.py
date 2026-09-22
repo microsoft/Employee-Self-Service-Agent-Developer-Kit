@@ -68,7 +68,7 @@ def test_not_listed_when_marketplace_catalog_has_no_match(_mock_discover_tenant)
 
     with pytest.raises(
         m.ExtensionNotListedError,
-        match="msdyn_EssDAHRWorkdayHCM",
+        match="msdyn_EssWorkdayRuntime",
     ):
         m.install_workday_da_extension(
             "https://org.crm.dynamics.com",
@@ -82,14 +82,14 @@ def test_not_listed_when_marketplace_catalog_has_no_match(_mock_discover_tenant)
 
 
 @patch("install_workday_da_extension.discover_tenant", return_value="tenant-123")
-def test_skips_install_when_hr_extension_already_installed(_mock_discover_tenant):
+def test_skips_install_when_runtime_already_installed(_mock_discover_tenant):
     import install_workday_da_extension as m
 
     powerplatform = FakePowerPlatformClient(
         "tenant-123",
         packages=[
             {
-                "uniqueName": "msdyn_EssDAHRWorkdayHCM",
+                "uniqueName": "msdyn_EssWorkdayRuntime",
                 "state": "Installed",
             }
         ],
@@ -102,7 +102,7 @@ def test_skips_install_when_hr_extension_already_installed(_mock_discover_tenant
         powerplatform_client_factory=lambda _tenant: powerplatform,
     )
 
-    assert schema == "msdyn_essdahrworkday"
+    assert schema == "msdyn_EssWorkdayRuntime"
     assert powerplatform.install_calls == []
 
 
@@ -110,7 +110,7 @@ def test_skips_install_when_hr_extension_already_installed(_mock_discover_tenant
 def test_installs_and_polls_until_installed(_mock_discover_tenant):
     import install_workday_da_extension as m
 
-    application_name = "msdyn_EssDAHRWorkdayHCM"
+    application_name = "msdyn_EssWorkdayRuntime"
     powerplatform = FakePowerPlatformClient(
         "tenant-123",
         packages=[
@@ -130,7 +130,7 @@ def test_installs_and_polls_until_installed(_mock_discover_tenant):
         sleep=lambda _seconds: None,
     )
 
-    assert schema == "msdyn_essdahrworkday"
+    assert schema == "msdyn_EssWorkdayRuntime"
     assert powerplatform.install_calls == [("env-123", application_name)]
 
 
@@ -138,7 +138,7 @@ def test_installs_and_polls_until_installed(_mock_discover_tenant):
 def test_times_out_and_reports_last_status(_mock_discover_tenant):
     import install_workday_da_extension as m
 
-    application_name = "msdyn_EssDAHRWorkdayHCM"
+    application_name = "msdyn_EssWorkdayRuntime"
     powerplatform = FakePowerPlatformClient(
         "tenant-123",
         packages=[
@@ -184,7 +184,7 @@ def test_rejects_unsupported_it_vertical(_mock_discover_tenant):
 def test_reports_install_permission_failure(_mock_discover_tenant):
     import install_workday_da_extension as m
 
-    application_name = "msdyn_EssDAHRWorkdayHCM"
+    application_name = "msdyn_EssWorkdayRuntime"
     powerplatform = FakePowerPlatformClient(
         "tenant-123",
         packages=[{"uniqueName": application_name, "state": "None"}],
@@ -198,6 +198,27 @@ def test_reports_install_permission_failure(_mock_discover_tenant):
             pp_admin_client_factory=FakePPAdminClient,
             powerplatform_client_factory=lambda _tenant: powerplatform,
         )
+
+
+@patch("install_workday_da_extension.discover_tenant", return_value="tenant-123")
+def test_legacy_da_uses_targeted_appsource_connector(_mock_discover_tenant):
+    import install_workday_da_extension as m
+
+    application_name = "msdyn_EssDAHRWorkdayHCM"
+    powerplatform = FakePowerPlatformClient(
+        "tenant-123",
+        packages=[{"uniqueName": application_name, "state": "Installed"}],
+    )
+
+    schema = m.install_workday_da_extension(
+        "https://org.crm.dynamics.com",
+        "hr",
+        package_flavor="legacy-da",
+        pp_admin_client_factory=FakePPAdminClient,
+        powerplatform_client_factory=lambda _tenant: powerplatform,
+    )
+
+    assert schema == "msdyn_EssDAHRWorkday"
 
 
 def test_resolves_setup_environment_id_to_dataverse_url():

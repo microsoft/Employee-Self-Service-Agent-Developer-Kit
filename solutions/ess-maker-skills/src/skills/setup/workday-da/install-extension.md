@@ -37,6 +37,14 @@ agent identity boundary. If `.local/connect/workday-da/config.json` does not
 yet exist, create it as an empty JSON object before the first checkpoint; if it
 exists, preserve all current fields.
 
+Resolve the package flavor from the active agent schema:
+
+- `gptagent_copilotforemployeeselfservicehr` → `runtime`
+- `msdyn_copilotforemployeeselfservicedahr` → `legacy-da`
+
+Call this value `PACKAGE_FLAVOR`. Stop if the active agent does not match one
+of these supported HR schemas.
+
 Run the checkpoint that reports both facts at once — whether a DA base agent
 exists, and whether Workday is already installed against it:
 
@@ -66,9 +74,9 @@ environment is outside this lifecycle and must not affect DA1.1.
 
   Halt this skill entirely — do not proceed to DA-2 or DA-3.
 
-- **`FAILED`** with "The Workday extension package is not installed for the
-  ESS DA HR agent" → the HR base agent is present but Workday isn't installed
-  yet. Continue to **P1.1**.
+- **`FAILED`** with "The Workday package required by the ESS HR agent is not
+  installed" → the HR base agent is present but Workday isn't installed yet.
+  Continue to **P1.1**.
 - Any other **`FAILED`** result → show the result and stop. Do not guess
   whether installation is safe from an unrecognized failure reason.
 - **`WARNING` / `SKIPPED`** (Dataverse verification could not run, e.g.
@@ -82,7 +90,7 @@ environment is outside this lifecycle and must not affect DA1.1.
 ## P1.1 — Attempt an automated install
 
 ```
-python scripts/install_workday_da_extension.py --environment-id "{ENVIRONMENT_ID}" --vertical "hr"
+python scripts/install_workday_da_extension.py --environment-id "{ENVIRONMENT_ID}" --vertical "hr" --package-flavor "{PACKAGE_FLAVOR}"
 ```
 
 Use the `--environment-id` form only when
@@ -91,7 +99,7 @@ this run. If the URL came from `dataverseEndpoint` or a previously saved
 `sidecarDataverseEndpoint`, run:
 
 ```
-python scripts/install_workday_da_extension.py --url "{WORKDAY_DATAVERSE_URL}" --vertical "hr"
+python scripts/install_workday_da_extension.py --url "{WORKDAY_DATAVERSE_URL}" --vertical "hr" --package-flavor "{PACKAGE_FLAVOR}"
 ```
 
 Run the selected command once.
@@ -126,6 +134,18 @@ when it reports `PASSED`.
 ---
 
 ## P1.2 — Guided manual install (fallback)
+
+If `PACKAGE_FLAVOR` is `runtime`:
+
+**Message:**
+
+The Workday package could not be installed automatically. Ask a Power Platform
+administrator to install **ESS Workday Runtime** from AppSource in this
+environment. Tell me when the installation finishes and I'll verify it.
+
+**End message.**
+
+If `PACKAGE_FLAVOR` is `legacy-da`:
 
 **Message:**
 
