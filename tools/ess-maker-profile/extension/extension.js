@@ -80,13 +80,13 @@ const CHAT_ONLY_LAYOUT = {
 // inferred from workspace contents (e.g. presence of topic yaml files).
 const ACTIONS = [
     { id: 'setup',       icon: '🔌', label: 'Setup',                  sub: 'Sign in to your environment',  query: '/setup',                    requires: [] },
-    { id: 'landingPage', icon: '🎨', label: 'Customize landing page', sub: 'Branding, links, prompts, cards', query: 'Customize my landing page', requires: ['setup'] },
     { id: 'create',      icon: '✨', label: 'Create a topic',         sub: 'Describe a new conversation',  query: '/create',                   requires: ['setup'] },
     { id: 'update',      icon: '✏️', label: 'Update a topic',         sub: 'Tweak an existing topic',      query: '/update',                   requires: ['setup'] },
     { id: 'scan',        icon: '🔍', label: 'Scan for issues',        sub: 'Find broken bindings',         query: '/scan',                     requires: ['setup'] },
     { id: 'flightcheck', icon: '✈️', label: 'Run a flightcheck',      sub: '41+ readiness checks',         query: '/flightcheck',              requires: ['setup'] },
     { id: 'evaluate',    icon: '📊', label: 'Generate tests',         sub: 'Build evaluation test sets',   query: '/evaluate',                 requires: ['setup'] },
     { id: 'push',        icon: '🚀', label: 'Push to Copilot Studio', sub: 'Safely deploy your changes',   query: '/push',                     requires: ['setup'] },
+    { id: 'landingPage', icon: '🎨', label: 'Customize landing page', sub: 'Branding, links, prompts, cards', query: '/landing-page',           requires: ['setup'] },
 ];
 
 const STATE_KEY = 'essMaker.completedActions.v3';
@@ -511,13 +511,13 @@ function getTutorialHtml() {
     <nav>
         <a href="#how">How it works</a><span class="sep">·</span>
         <a href="#connect">Setup</a><span class="sep">·</span>
-        <a href="#landing-page">Landing page</a><span class="sep">·</span>
         <a href="#create">Create</a><span class="sep">·</span>
         <a href="#update">Update</a><span class="sep">·</span>
         <a href="#scan">Scan</a><span class="sep">·</span>
         <a href="#flightcheck">FlightCheck</a><span class="sep">·</span>
         <a href="#tests">Generate tests</a><span class="sep">·</span>
-        <a href="#push">Push</a>
+        <a href="#push">Push</a><span class="sep">·</span>
+        <a href="#landing-page">Landing page</a>
     </nav>
 
     <section id="how">
@@ -526,13 +526,13 @@ function getTutorialHtml() {
         <h3>The workflow</h3>
         <ol>
             <li><strong>Setup</strong> \u2014 Sign in to your Power Platform environment.</li>
-            <li><strong>Customize landing page</strong> \u2014 Configure branding, quick links, starter prompts, and insight cards.</li>
             <li><strong>Create a topic</strong> \u2014 Describe what you want in plain English. The kit generates everything.</li>
             <li><strong>Update a topic</strong> \u2014 Modify an existing topic by describing the change.</li>
             <li><strong>Scan</strong> \u2014 Check for broken references and configuration issues.</li>
             <li><strong>Run a flightcheck</strong> \u2014 Run 41+ automated readiness checks.</li>
             <li><strong>Generate tests</strong> \u2014 Create evaluation test sets for regression testing.</li>
             <li><strong>Push</strong> \u2014 Safely deploy your changes to Copilot Studio.</li>
+            <li><strong>Customize landing page</strong> \u2014 Configure branding, quick links, starter prompts, and insight cards.</li>
         </ol>
         <p>Each step is available as a button in the <strong>Quick Actions</strong> panel on the left. Click any button to open a guided chat \u2014 just answer the prompts.</p>
         <p>You don\u2019t need to know YAML, JSON or any code.</p>
@@ -548,18 +548,6 @@ function getTutorialHtml() {
         </ul>
         <p>When you click Setup, a chat opens with the <code>/setup</code> command \u2014 just answer the prompts (environment URL, then sign-in).</p>
         <blockquote><p>First time? You\u2019ll see a browser pop-up asking you to sign in with your work account. That\u2019s expected.</p></blockquote>
-    </section>
-
-    <section id="landing-page">
-        <h2>\u{1f3a8} Customize landing page</h2>
-        <p>The <strong>Customize landing page</strong> button opens a guided chat for configuring what employees see when they open the active agent.</p>
-        <ul>
-            <li><strong>Categorized starter prompts</strong> guide employees into common scenarios and show what the agent can do.</li>
-            <li><strong>Accent colors</strong> style buttons, links, chat bubbles, and loading indicators for light and dark themes.</li>
-            <li><strong>Quick links</strong> surface important tenant resources directly on the landing page.</li>
-            <li><strong>Stay up to date</strong> shows personalized ticket status, required follow-ups, and time-sensitive tasks.</li>
-            <li><strong>Quick Access</strong> shows personal information such as time-off balances, paid holidays, and service anniversaries.</li>
-        </ul>
     </section>
 
     <section id="create">
@@ -641,6 +629,18 @@ function getTutorialHtml() {
         </ol>
         <p>You\u2019ll see a preview of every change before anything is committed, and you can cancel at any point.</p>
         <blockquote><p>Rollback is always one command away \u2014 just ask the chat to \u201croll back the last push\u201d if something goes wrong.</p></blockquote>
+    </section>
+
+    <section id="landing-page">
+        <h2>\u{1f3a8} Customize landing page</h2>
+        <p>The <strong>Customize landing page</strong> button opens a guided chat with <code>/landing-page</code> for configuring what employees see when they open the active agent.</p>
+        <ul>
+            <li><strong>Categorized starter prompts</strong> guide employees into common scenarios and show what the agent can do.</li>
+            <li><strong>Accent colors</strong> style buttons, links, chat bubbles, and loading indicators for light and dark themes.</li>
+            <li><strong>Quick links</strong> surface important tenant resources directly on the landing page.</li>
+            <li><strong>Stay up to date</strong> shows personalized ticket status, required follow-ups, and time-sensitive tasks.</li>
+            <li><strong>Quick Access</strong> shows personal information such as time-off balances, paid holidays, and service anniversaries.</li>
+        </ul>
     </section>
 <script>
     const vscode = acquireVsCodeApi();
