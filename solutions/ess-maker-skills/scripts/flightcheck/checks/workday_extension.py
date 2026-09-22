@@ -223,8 +223,12 @@ def _query_connection_references(runner):
     and ``connectionReferenceChanges`` shape already back the shipped native
     ``DA-CONN-001`` check (``checks/native_agent.py``); see
     ``tests/fixtures/cassettes/INDEX.md`` and ``tests/mocks/
-    agentbuilder_connectivity.py``. Any ``AgentBuilderHTTPError`` propagates so
-    the dispatcher degrades this checkpoint to a WARNING (fail loudly).
+    agentbuilder_connectivity.py``. Fails loudly (lets the dispatcher degrade
+    this checkpoint to a WARNING) rather than overclaiming: an
+    ``AgentBuilderHTTPError`` propagates, and a 200 payload whose
+    ``connectionReferenceChanges`` is present but not a list raises
+    ``ValueError`` (mirrors ``native_agent._connection_references``). A missing
+    changeset is treated as "no references" (genuine absence), not an error.
     """
     client = getattr(runner, "agentbuilder", None)
     config = getattr(runner, "config", None) or {}
@@ -233,8 +237,12 @@ def _query_connection_references(runner):
         return None
     changeset = client.fetch_components(agent_id) or {}
     changes = changeset.get("connectionReferenceChanges")
-    if not isinstance(changes, list):
+    if changes is None:
         return []
+    if not isinstance(changes, list):
+        raise ValueError(
+            "Component fetch returned invalid connectionReferenceChanges."
+        )
     refs = []
     for change in changes:
         ref = (change or {}).get("connectionReference") or {}

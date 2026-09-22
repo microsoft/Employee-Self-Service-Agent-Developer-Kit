@@ -324,6 +324,22 @@ class TestDataverseConnection:
         assert r.status == Status.SKIPPED.value
         assert "not available" in r.result
 
+    def test_malformed_changeset_degrades_to_warning(self):
+        # A 200 payload whose connectionReferenceChanges is present but not a
+        # list is a shape we do not understand: fail loudly (dispatcher WARNING)
+        # rather than reporting a confident "reference not found" FAILED.
+        runner = _Runner(
+            config={"agent": {"botId": ab.MOCK_AGENT_ID}},
+            agentbuilder=_FakeAgentBuilder(
+                {"connectionReferenceChanges": {"unexpected": "dict"}}
+            ),
+        )
+        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
+
+        assert r.status == Status.WARNING.value
+        assert "Unable to run DV-CONN-001" in r.result
+        assert "DV-CONN-001" in r.remediation
+
 
 # ─────────────────────────────────────────────────────────────────────
 # WD-REST-001 — REST base URL trimmed to /api (S5.5).
