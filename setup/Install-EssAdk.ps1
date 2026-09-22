@@ -53,12 +53,19 @@
     Prompts for your Dataverse environment URL and creates a minimal
     .local/config.json so FlightCheck can authenticate without running /setup.
 
+.PARAMETER InstallMode
+    Selects the VS Code experience: 'lite' (chat-first, hidden developer
+    chrome), 'standard' (default VS Code layout with /setup injection), or
+    'prompt' (default: let the ESS Maker Profile extension ask the maker
+    inside VS Code on first launch, default to standard if dismissed). The
+    ESS Maker Profile extension is installed in every mode; only the layout
+    and /setup delivery differ. Explicit values are respected without a
+    prompt; 'prompt' is the recommended default for new customers.
+
 .PARAMETER SkipMakerProfile
-    Skip installing the bundled "ESS Maker Profile" VS Code extension. The
-    profile hides developer chrome (file tree, tabs, status bar, etc.) and
-    drops the user into a chat-first surface tailored to the HR/IT admin
-    persona. Use this switch to keep the stock VS Code layout - typically
-    only relevant for developers iterating on the kit itself.
+    Back-compat switch. Equivalent to -InstallMode standard. Retained so
+    existing bootstrap.ps1 invocations and CI scripts keep working; new
+    callers should use -InstallMode instead.
 
 .EXAMPLE
     # Default invocation. May fail on stock Windows due to PowerShell
@@ -84,8 +91,21 @@ param(
     [switch] $SkipLaunch,
     [switch] $UseDsc,
     [switch] $FlightCheckOnly,
+    [ValidateSet('lite', 'standard', 'prompt')]
+    [string] $InstallMode = 'prompt',
     [switch] $SkipMakerProfile
 )
+
+# Back-compat: -SkipMakerProfile forces standard mode even when
+# -InstallMode is passed. This preserves the old behaviour where the
+# switch was the only way to say "no chat-first layout".
+if ($SkipMakerProfile) { $InstallMode = 'standard' }
+
+# Canonical mode label used throughout this script for both telemetry and
+# the VS Code settings write. Kept in $modeLabel so all downstream
+# references (5c extension install, launch, telemetry) share one source
+# of truth.
+$modeLabel = $InstallMode
 
 $ErrorActionPreference = 'Stop'
 
@@ -413,8 +433,8 @@ if (-not $essTelLoaded) {
     function Complete-EssInstallTelemetry  { param($Outcome, $ErrorRecord) }
 }
 
-$essInstaller = if ($FlightCheckOnly) { 'flightcheck' } elseif ($SkipMakerProfile) { 'adk' } else { 'lite' }
-Initialize-EssInstallTelemetry -Installer $essInstaller
+$essInstaller = if ($FlightCheckOnly) { 'flightcheck' } else { 'adk' }
+Initialize-EssInstallTelemetry -Installer $essInstaller -InstallMode $modeLabel
 
 try {
 
@@ -964,10 +984,12 @@ if (-not $FlightCheckOnly) {
 # Skipped in FlightCheckOnly mode (no VS Code launch) and when the user
 # passes -SkipExtensions (IT-locked-down boxes that block VSIX installs).
 if (-not $FlightCheckOnly -and -not $SkipExtensions) {
-    # Install the ESS Maker Profile extension in both modes. In lite mode it
-    # applies the chat-first layout; in standard mode it only handles /setup
-    # injection after the welcome wizard closes (no visual changes).
-    $modeLabel = if ($SkipMakerProfile) { 'standard' } else { 'lite' }
+    # Install the ESS Maker Profile extension in every mode. In lite mode
+    # it applies the chat-first layout; in standard mode it only handles
+    # /setup injection after the welcome wizard closes (no visual
+    # changes); in prompt mode it asks the maker inside VS Code on first
+    # launch and applies whichever mode they pick. $modeLabel is set in
+    # the param block above from -InstallMode / -SkipMakerProfile.
     Write-Step "Installing ESS Maker Profile ($modeLabel mode)"
 
     $code = Resolve-CodeCommand
@@ -1022,12 +1044,15 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions) {
         }
 
         # Write the mode setting so the extension knows whether to apply
-        # the lite layout or inject /setup (standard mode).
+        # the lite layout, inject /setup (standard mode), or prompt the
+        # maker inside VS Code on first launch (prompt mode -> empty
+        # string, which the extension treats as "not decided").
         # Uses string manipulation to preserve JSONC comments in settings.json.
         $settingsDir = Join-Path $env:APPDATA 'Code\User'
         if (-not (Test-Path $settingsDir)) { New-Item -ItemType Directory -Path $settingsDir -Force | Out-Null }
         $settingsFile = Join-Path $settingsDir 'settings.json'
-        $modeEntry = "`"essMaker.mode`": `"$modeLabel`""
+        $settingsModeValue = if ($modeLabel -eq 'prompt') { '' } else { $modeLabel }
+        $modeEntry = "`"essMaker.mode`": `"$settingsModeValue`""
         if (Test-Path $settingsFile) {
             $raw = Get-Content $settingsFile -Raw
             if ($raw -match '"essMaker\.mode"\s*:') {
@@ -1408,9 +1433,13 @@ if (-not $SkipLaunch) {
         #   handles layout + /setup injection after the welcome wizard closes.
         # - Standard mode: use `code chat '/setup'` which opens Copilot Chat in
         #   the sidebar panel on the right (the standard chat experience).
+        # - Prompt mode: open the workspace. The ESS Maker Profile extension
+        #   asks the maker which experience they want on first launch, then
+        #   applies the chosen mode's flow (layout+injection for lite, no
+        #   layout change + chat open for standard).
         Push-Location $workspace
         try {
-            if ($SkipMakerProfile) {
+            if ($modeLabel -eq 'standard') {
                 # Standard mode - use code chat to open /setup in sidebar panel
                 Write-Step 'Opening workspace in VS Code and requesting /setup in Copilot Chat'
                 $chatOutput = Invoke-Native { & $codePath chat '/setup' }
@@ -1427,12 +1456,20 @@ if (-not $SkipLaunch) {
                     Write-Host "If VS Code prompts you to trust the workspace or sign in to GitHub/Copilot, accept those prompts and /setup will run." -ForegroundColor Yellow
                     Write-Host "If /setup does not start after trust/sign-in, open Copilot Chat manually and run /setup." -ForegroundColor Yellow
                 }
-            } else {
+            } elseif ($modeLabel -eq 'lite') {
                 # Lite mode - extension handles /setup after welcome wizard
                 Write-Step 'Opening workspace in VS Code'
                 Start-Process -FilePath $codePath -ArgumentList @('.') | Out-Null
                 Write-Ok "Launched VS Code at $workspace"
                 Write-Host "The ESS Maker Profile will run /setup in Copilot Chat after the welcome screen closes." -ForegroundColor Yellow
+                Write-Host "If VS Code prompts you to trust the workspace, accept the prompt." -ForegroundColor Yellow
+            } else {
+                # Prompt mode - extension will ask which experience to apply
+                # on first launch, then run the appropriate flow.
+                Write-Step 'Opening workspace in VS Code'
+                Start-Process -FilePath $codePath -ArgumentList @('.') | Out-Null
+                Write-Ok "Launched VS Code at $workspace"
+                Write-Host "VS Code will ask you to pick a chat-first (lite) or standard developer experience on first launch." -ForegroundColor Yellow
                 Write-Host "If VS Code prompts you to trust the workspace, accept the prompt." -ForegroundColor Yellow
             }
         } finally { Pop-Location }

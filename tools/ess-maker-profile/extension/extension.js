@@ -1425,6 +1425,110 @@ async function maybePromptReinstall(repoRoot) {
     }
 }
 
+// --- First-install dispatch (ADO #7895603 consolidated installer) ---------
+// When the consolidated installer leaves essMaker.mode unset ("" or
+// "prompt"), we prompt the maker on their first VS Code launch to pick
+// lite (chat-first) vs standard (developer view) and persist the choice
+// to the essMaker.mode global setting so subsequent launches skip the
+// prompt. This exists so the consolidated Windows installer doesn't need
+// to interrupt the CLI with a mode question — the choice surfaces in
+// VS Code where the maker can preview the two options as they read them.
+async function promptForInstallMode() {
+    const picks = [
+        {
+            label: 'Standard (recommended)',
+            description: 'Default VS Code layout with GitHub Copilot Chat in the side panel',
+            detail: 'Best if you plan to inspect or edit files directly. /setup runs automatically.',
+            mode: 'standard',
+        },
+        {
+            label: 'Lite (chat-first)',
+            description: 'Hides file tree, tabs, and status bar; big-button Quick Actions rail',
+            detail: 'Best if you mostly work in chat and want a focused HR/IT admin surface.',
+            mode: 'lite',
+        },
+    ];
+    try {
+        const pick = await vscode.window.showQuickPick(picks, {
+            placeHolder: 'Choose your ESS Maker experience (you can change this later from the Command Palette)',
+            ignoreFocusOut: true,
+            matchOnDescription: true,
+            matchOnDetail: true,
+        });
+        return pick ? pick.mode : 'standard';
+    } catch (err) {
+        _log(`promptForInstallMode: error ${err && err.message}`);
+        return 'standard';
+    }
+}
+
+async function firstInstallDispatch(context, installerMode) {
+    let effectiveMode = installerMode;
+    if (!effectiveMode || effectiveMode === 'prompt') {
+        effectiveMode = await promptForInstallMode();
+        try {
+            await vscode.workspace.getConfiguration().update(
+                'essMaker.mode',
+                effectiveMode,
+                vscode.ConfigurationTarget.Global,
+            );
+        } catch (err) {
+            _log(`firstInstallDispatch: failed to persist essMaker.mode: ${err && err.message}`);
+        }
+    }
+    const isStandardMode = effectiveMode === 'standard';
+    _log(`firstInstallDispatch: effectiveMode=${effectiveMode}, isStandardMode=${isStandardMode}`);
+    context.globalState.update(LITE_MODE_KEY, !isStandardMode);
+
+    // Check if the user already has a config file (returning user who
+    // re-ran the installer). Skip /setup if already configured.
+    let alreadyConfigured = false;
+    try {
+        const met = await checkPrerequisites();
+        alreadyConfigured = met.has('setup');
+    } catch (err) {
+        _log(`firstInstallDispatch: checkPrerequisites error: ${err && err.message}`);
+    }
+    _log(`firstInstallDispatch: alreadyConfigured=${alreadyConfigured}`);
+
+    if (isStandardMode) {
+        // Standard mode: no layout changes. In prompt mode the installer
+        // could not eagerly run `code chat '/setup'` (mode was unknown at
+        // launch time), so surface /setup here for the not-yet-configured
+        // path — otherwise a maker who picks Standard here would land in
+        // an empty chat with no cue what to do next.
+        context.globalState.update(APPLIED_KEY, true);
+        if (!alreadyConfigured) {
+            _log('firstInstallDispatch: standard mode, running /setup via injectSetup');
+            waitForWelcomeWizard()
+                .then(() => new Promise(r => setTimeout(r, 3000)))
+                .then(() => injectSetup())
+                .catch((err) => _log(`firstInstallDispatch: standard injectSetup error: ${err && err.message}`));
+        } else {
+            _log('firstInstallDispatch: standard mode, already configured — no action');
+        }
+        return;
+    }
+
+    // Lite mode: apply layout.
+    applyChatOnlyLayout({ silent: false })
+        .then(() => context.globalState.update(APPLIED_KEY, true))
+        .catch(() => {});
+    if (alreadyConfigured) {
+        _log('firstInstallDispatch: skipping /setup (already configured), opening chat');
+        setTimeout(() => tryRun('workbench.action.chat.open').catch(() => {}), 3000);
+    } else {
+        waitForWelcomeWizard()
+            .then(() => { _log('firstInstallDispatch: wizard done (lite), waiting 3s...'); return new Promise(r => setTimeout(r, 3000)); })
+            .then(() => { _log('firstInstallDispatch: calling injectSetup (lite)'); return injectSetup(); })
+            .then(() => _log('firstInstallDispatch: injectSetup completed (lite)'))
+            .catch((err) => {
+                _log(`firstInstallDispatch: ERROR in lite wizard chain: ${err && err.message}`);
+                console.warn('[ess-maker] Welcome wizard wait timed out, skipping auto /setup');
+            });
+    }
+}
+
 function activate(context) {
     _extensionContext = context;
     _log(`activate: ENTRY. workspaceFolders=${JSON.stringify(vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath))}`);
@@ -1475,6 +1579,9 @@ function activate(context) {
     //   written by the installer.
     //   Lite mode: applies chat-only layout; user clicks Setup to run /setup.
     //   Standard mode: injects /setup into Copilot Chat automatically.
+    //   Empty ("") / "prompt": consolidated installer (ADO #7895603) left
+    //   the choice to us — show a QuickPick, default to standard, then
+    //   route into the chosen branch.
     // - Subsequent lite activations: silently re-apply layout.
     const alreadyApplied = context.globalState.get(APPLIED_KEY, false);
     const userWantsLite = context.globalState.get(LITE_MODE_KEY, true); // default to lite
@@ -1484,46 +1591,10 @@ function activate(context) {
 
     if (vscode.workspace.workspaceFolders?.length) {
         if (!alreadyApplied) {
-            // First install. Check installer-provided mode setting.
-            const isStandardMode = installerMode === 'standard';
-            _log(`activate: first install, isStandardMode=${isStandardMode}`);
-            context.globalState.update(LITE_MODE_KEY, !isStandardMode);
-
-            // Check if the user already has a config file (returning user
-            // who re-ran the installer). Skip /setup if already configured.
-            checkPrerequisites().then(met => {
-                const alreadyConfigured = met.has('setup');
-                _log(`activate: alreadyConfigured=${alreadyConfigured}`);
-
-                if (isStandardMode) {
-                    // Standard mode: no layout changes. The installer handles
-                    // /setup injection via `code chat` which opens in the
-                    // sidebar panel. Nothing to do here.
-                    context.globalState.update(APPLIED_KEY, true);
-                    _log('activate: standard mode — installer handles /setup via code chat');
-                } else {
-                    // Lite mode: apply layout.
-                    applyChatOnlyLayout({ silent: false })
-                        .then(() => context.globalState.update(APPLIED_KEY, true))
-                        .catch(() => {});
-                    if (alreadyConfigured) {
-                        _log('activate: skipping /setup (already configured), opening chat');
-                        // Returning user in lite mode — just open the chat panel
-                        // so they can start working right away.
-                        setTimeout(() => tryRun('workbench.action.chat.open').catch(() => {}), 3000);
-                    } else {
-                        // Wait for welcome wizard to finish, then inject /setup.
-                        waitForWelcomeWizard()
-                            .then(() => { _log('activate: wizard done (lite), waiting 3s...'); return new Promise(r => setTimeout(r, 3000)); })
-                            .then(() => { _log('activate: calling injectSetup (lite)'); return injectSetup(); })
-                            .then(() => _log('activate: injectSetup completed (lite)'))
-                            .catch((err) => {
-                                _log(`activate: ERROR in lite wizard chain: ${err && err.message}`);
-                                console.warn('[ess-maker] Welcome wizard wait timed out, skipping auto /setup');
-                            });
-                    }
-                }
-            }).catch(err => _log(`activate: checkPrerequisites error: ${err && err.message}`));
+            // First install. Resolve mode (prompting the maker if the
+            // consolidated installer didn't pin it), then dispatch.
+            firstInstallDispatch(context, installerMode)
+                .catch(err => _log(`activate: firstInstallDispatch error: ${err && err.message}`));
         } else if (userWantsLite) {
             // Subsequent lite mode launch: silently re-apply layout.
             setTimeout(() => { applyChatOnlyLayout({ silent: true }).catch(() => {}); }, 1500);

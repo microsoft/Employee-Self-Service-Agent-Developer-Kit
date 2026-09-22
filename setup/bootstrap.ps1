@@ -75,7 +75,7 @@ $installer = Join-Path $tempDir 'Install-EssAdk.ps1'
 $scriptContent = [System.IO.File]::ReadAllText($installer, [System.Text.Encoding]::UTF8)
 $scriptBlock = [ScriptBlock]::Create($scriptContent)
 
-$installerArgs = @{ Branch = $Branch; SkipMakerProfile = $true }
+$installerArgs = @{ Branch = $Branch }
 if ($InstallRoot) { $installerArgs.InstallRoot = $InstallRoot }
 
 & $scriptBlock @installerArgs

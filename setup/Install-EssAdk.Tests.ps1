@@ -34,9 +34,24 @@ Test 'script parses without syntax errors' {
     }
 }
 
-Test 'script declares SkipMakerProfile parameter' {
+Test 'script declares InstallMode parameter' {
+    if ($src -notmatch "\[string\]\s*\`$InstallMode\s*=\s*'prompt'") {
+        throw 'InstallMode parameter with prompt default not found'
+    }
+    if ($src -notmatch "ValidateSet\('lite',\s*'standard',\s*'prompt'\)") {
+        throw 'InstallMode ValidateSet(lite,standard,prompt) not found'
+    }
+}
+
+Test 'script declares SkipMakerProfile parameter (back-compat)' {
     if ($src -notmatch '\[switch\]\s*\$SkipMakerProfile') {
         throw 'SkipMakerProfile switch parameter not found'
+    }
+}
+
+Test 'SkipMakerProfile forces InstallMode standard for back-compat' {
+    if ($src -notmatch 'if\s*\(\$SkipMakerProfile\)\s*\{\s*\$InstallMode\s*=\s*''standard''\s*\}') {
+        throw 'SkipMakerProfile back-compat coercion to InstallMode=standard not found'
     }
 }
 
@@ -74,9 +89,12 @@ Test 'non-git directory detection exists' {
     }
 }
 
-Test 'extension installs in both modes (writes essMaker.mode setting)' {
-    if ($src -notmatch "essMaker\.mode.*\`$modeLabel") {
-        throw 'Mode setting write logic not found'
+Test 'extension installs in every mode (writes essMaker.mode setting; prompt -> empty)' {
+    if ($src -notmatch "essMaker\.mode.*\`$settingsModeValue") {
+        throw 'Mode setting write logic (uses $settingsModeValue) not found'
+    }
+    if ($src -notmatch "if\s*\(\`$modeLabel\s+-eq\s+'prompt'\)\s*\{\s*''") {
+        throw "prompt mode should map to '' in essMaker.mode (extension prompts on first launch)"
     }
 }
 
@@ -92,9 +110,12 @@ Test 'bootstrap.ps1 parses without errors' {
     if ($errors.Count -gt 0) { throw "Parse errors: $($errors[0].Message)" }
 }
 
-Test 'bootstrap.ps1 passes SkipMakerProfile = $true' {
-    if ($bootstrapSrc -notmatch 'SkipMakerProfile\s*=\s*\$true') {
-        throw 'SkipMakerProfile not set to $true in standard bootstrap'
+Test 'bootstrap.ps1 does not pin SkipMakerProfile (consolidated installer prompts in VS Code)' {
+    if ($bootstrapSrc -match 'SkipMakerProfile\s*=\s*\$true') {
+        throw 'bootstrap.ps1 should not set SkipMakerProfile = $true after installer consolidation (ADO #7895603)'
+    }
+    if ($bootstrapSrc -match "InstallMode\s*=\s*'(lite|standard)'") {
+        throw "bootstrap.ps1 should not pin InstallMode; it should let the installer default to 'prompt' so VS Code asks the maker."
     }
 }
 
@@ -109,10 +130,12 @@ Test 'bootstrap-lite.ps1 parses without errors' {
     if ($errors.Count -gt 0) { throw "Parse errors: $($errors[0].Message)" }
 }
 
-Test 'bootstrap-lite.ps1 does NOT pass SkipMakerProfile as an argument' {
-    # It may mention SkipMakerProfile in a comment, but the actual args hash should not include it
+Test 'bootstrap-lite.ps1 passes -InstallMode lite (back-compat shim)' {
     if ($liteSrc -match 'SkipMakerProfile\s*=\s*\$true') {
         throw 'bootstrap-lite.ps1 should not set SkipMakerProfile = $true'
+    }
+    if ($liteSrc -notmatch "InstallMode\s*=\s*'lite'") {
+        throw "bootstrap-lite.ps1 should pin InstallMode = 'lite' so old links keep landing in lite mode"
     }
 }
 
@@ -169,9 +192,16 @@ Test 'defines no-op telemetry stubs when the emitter is absent (fail-open)' {
     if ($src -notmatch 'function Initialize-EssInstallTelemetry') { throw 'no-op stub fallback not found' }
 }
 
-Test 'derives installer mode (flightcheck | adk | lite)' {
+Test 'derives installer mode (flightcheck | adk) - lite consolidated into adk' {
     if ($src -notmatch "FlightCheckOnly.*'flightcheck'") { throw 'flightcheck mode not derived' }
-    if ($src -notmatch "SkipMakerProfile.*'adk'") { throw 'adk mode not derived' }
+    if ($src -notmatch "\}\s*else\s*\{\s*'adk'\s*\}") { throw "post-consolidation installer identity should collapse to 'adk' for non-flightcheck installs" }
+    if ($src -match "SkipMakerProfile.*'adk'.*else.*'lite'") { throw 'lite installer identity should no longer be derived here (installMode dim carries the distinction)' }
+}
+
+Test 'passes -InstallMode to Initialize-EssInstallTelemetry' {
+    if ($src -notmatch 'Initialize-EssInstallTelemetry\s+-Installer\s+\$essInstaller\s+-InstallMode\s+\$modeLabel') {
+        throw '-InstallMode $modeLabel must be threaded into telemetry init'
+    }
 }
 
 Test 'Write-Step is hooked to emit a per-step telemetry event' {
@@ -239,21 +269,47 @@ Test 'envelope time is culture-invariant ISO-8601 (non-colon-separator locales)'
         [System.Threading.Thread]::CurrentThread.CurrentCulture = $orig
     }
 }
-Test 'lite installer is not instrumented (no telemetry ready, no events)' {
+Test 'installer telemetry emits an installMode dimension' {
+    Initialize-EssInstallTelemetry -Installer 'adk' -InstallMode 'lite'
+    try {
+        $data = Get-EssTelCommonData
+        if (-not $data.ContainsKey('installMode')) { throw 'installMode dimension not emitted' }
+        if ($data.installMode -ne 'lite') { throw "installMode wrong: $($data.installMode)" }
+    } finally { $script:EssTel.Ready = $false; $script:EssTel.Completed = $false }
+}
+
+Test 'installer telemetry defaults installMode to prompt when unspecified' {
+    Initialize-EssInstallTelemetry -Installer 'adk'
+    try {
+        $data = Get-EssTelCommonData
+        if ($data.installMode -ne 'prompt') { throw "expected default prompt, got: $($data.installMode)" }
+    } finally { $script:EssTel.Ready = $false; $script:EssTel.Completed = $false }
+}
+
+Test 'lite installer identity is instrumented (post-consolidation)' {
+    # Regression: pre-consolidation the emitter guarded out Installer='lite'
+    # because the lite installer was slated for removal. With bootstrap-lite.ps1
+    # now a compat shim into the unified installer that passes -InstallMode lite,
+    # the guard would drop all lite-shim events. It must be gone.
     $old = $env:ESS_ADK_TELEMETRY
     try {
-        $env:ESS_ADK_TELEMETRY = ''   # ensure telemetry is otherwise enabled
-        Initialize-EssInstallTelemetry -Installer 'lite'
-        if ($script:EssTel.Ready) { throw 'lite installer should not be telemetry-ready' }
-    } finally { $env:ESS_ADK_TELEMETRY = $old }
+        $env:ESS_ADK_TELEMETRY = ''
+        Initialize-EssInstallTelemetry -Installer 'lite' -InstallMode 'lite'
+        if (-not $script:EssTel.Ready) { throw 'lite installer should be telemetry-ready after consolidation' }
+    } finally { $env:ESS_ADK_TELEMETRY = $old; $script:EssTel.Ready = $false; $script:EssTel.Completed = $false }
 }
-Test 'PowerShell emitter guards out the lite installer' {
+Test 'PowerShell emitter no longer guards out the lite installer' {
     $emitterSrc = Get-Content $psEmitter -Raw
-    if ($emitterSrc -notmatch "Installer\s+-eq\s+'lite'") { throw 'lite guard missing in PS emitter' }
+    if ($emitterSrc -match "if\s*\(\`$Installer\s+-eq\s+'lite'\)\s*\{\s*\`$script:EssTel\.Ready\s*=\s*\`$false") {
+        throw 'PS emitter still guards out lite installer; guard should be removed after consolidation (ADO #7895603)'
+    }
 }
-Test 'bash emitter guards out the lite installer' {
+Test 'bash emitter still guards out the lite installer (macOS scope unchanged in this iteration)' {
+    # macOS consolidation is out of scope for ADO #7895603. Until a follow-up
+    # US addresses macOS, bootstrap-lite-mac.sh remains a separate installer
+    # tagged as ess_tel_installer=lite and the bash emitter still gates it out.
     $shSrc = Get-Content $shEmitter -Raw
-    if ($shSrc -notmatch 'ESS_TEL_INSTALLER.*==.*"lite"') { throw 'lite guard missing in bash emitter' }
+    if ($shSrc -notmatch 'ESS_TEL_INSTALLER.*==.*"lite"') { throw 'lite guard missing in bash emitter (macOS scope not yet migrated)' }
 }
 
 # --- macOS installer + all bootstraps wiring -------------------------------

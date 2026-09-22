@@ -14,13 +14,15 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-mac.sh)"
 ```
 
-Once complete, VS Code opens at `solutions/ess-maker-skills/` and `/setup` is automatically requested in Copilot Chat. You'll be prompted to trust the workspace and sign in to GitHub/Copilot — accept these prompts and `/setup` will connect the workspace to an existing editable DA Dev agent.
+Once complete, VS Code opens at `solutions/ess-maker-skills/` and — on the first launch — you'll be asked to pick **Standard** (default developer view with Copilot Chat in the side panel) or **Lite** (chat-first, big-button layout). Standard is the recommended default and will be applied if you dismiss the prompt. `/setup` is then automatically requested in Copilot Chat. You'll be prompted to trust the workspace and sign in to GitHub/Copilot — accept these prompts and `/setup` will connect the workspace to an existing editable DA Dev agent.
 
 > **GitHub Copilot subscription is required** for the in-editor maker experience. This script installs the toolchain and extension scaffolding; it does not grant the Copilot entitlement.
 
 ## Lite Mode (Chat-First Layout)
 
-For users who prefer a simplified, chat-first experience that hides developer chrome (file tree, tabs, status bar) and shows a "Quick Actions" button rail:
+The one-shot Windows installer (`bootstrap.ps1`) will ask you to choose between Standard and Lite on first VS Code launch, so lite mode is a one-click choice from the main installer — no separate command needed.
+
+For scripts and docs that need to pin the choice up front (bypassing the in-VS-Code prompt), a lite-mode shortcut is retained:
 
 **Windows** (PowerShell):
 
@@ -34,7 +36,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-lite-mac.sh)"
 ```
 
-This installs everything the standard installer does, plus the **ESS Maker Profile** extension which provides:
+Lite mode is the same install as standard plus the **ESS Maker Profile** extension applying:
 - A chat-only layout with all developer surfaces hidden
 - Big-button "Quick Actions" rail for common tasks (Connect, Customize landing page, Create, Scan, FlightCheck, Push)
 - A built-in tutorial explaining each button

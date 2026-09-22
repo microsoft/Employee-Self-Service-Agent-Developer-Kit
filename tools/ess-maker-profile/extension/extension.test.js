@@ -200,6 +200,29 @@ test('exposes the essMaker.autoUpdateCheck opt-out setting', () => {
     assert.strictEqual(prop.default, true);
 });
 
+console.log('\nfirst-install mode prompt (ADO #7895603):');
+
+test('extension source declares promptForInstallMode helper', () => {
+    assert.ok(/async function promptForInstallMode\s*\(/.test(src), 'promptForInstallMode not declared');
+});
+
+test('mode prompt offers Standard and Lite choices', () => {
+    assert.ok(/Standard \(recommended\)/.test(src), 'Standard option label missing');
+    assert.ok(/Lite \(chat-first\)/.test(src), 'Lite option label missing');
+});
+
+test('mode prompt defaults to standard when the maker dismisses the QuickPick', () => {
+    assert.ok(/return pick \? pick\.mode : 'standard'/.test(src), 'Dismiss-defaults-to-standard fallback missing');
+});
+
+test('firstInstallDispatch prompts when installerMode is empty or "prompt"', () => {
+    assert.ok(/if\s*\(!effectiveMode \|\| effectiveMode === 'prompt'\)/.test(src), 'promptForInstallMode should be invoked when installer setting is unset');
+});
+
+test('firstInstallDispatch persists the chosen mode to global settings', () => {
+    assert.ok(/'essMaker\.mode',[\s\S]*?ConfigurationTarget\.Global/.test(src), 'chosen mode should be persisted with ConfigurationTarget.Global');
+});
+
 console.log('\nauto-update: parseLsRemoteSha:');
 
 test('extracts sha from a ls-remote line', () => {

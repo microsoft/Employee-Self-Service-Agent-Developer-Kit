@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.4.26 (POC)
+
+- **First-launch mode prompt.** After the consolidated Windows installer
+  (see ADO #7895603 — one `bootstrap.ps1` for both experiences), the
+  extension asks the maker on first VS Code launch which experience they
+  want: **Standard (recommended)** — default developer view with GitHub
+  Copilot Chat in the side panel and automatic `/setup` — or **Lite
+  (chat-first)** — hidden developer chrome and the Quick Actions rail.
+  The choice is persisted to the `essMaker.mode` global setting so
+  subsequent launches skip the prompt; dismissing the QuickPick defaults
+  to Standard. Legacy invocations that pin `essMaker.mode` to `lite` or
+  `standard` (including the back-compat `bootstrap-lite.ps1` shim)
+  bypass the prompt.
+
 ## 0.4.25 (POC)
 
 - **Customize landing page** is available in Quick Actions. The setup-gated action opens a guided Copilot chat for branding, quick links, starter prompts, and insight cards.

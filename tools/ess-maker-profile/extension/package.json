@@ -2,7 +2,7 @@
   "name": "ess-maker-profile",
   "displayName": "ESS Maker",
   "description": "Chat-only, big-button experience for customizing your Employee Self-Service agent. POC.",
-  "version": "0.4.25",
+  "version": "0.4.26",
   "publisher": "microsoft-ess",
   "private": true,
   "engines": {
@@ -94,7 +94,7 @@
           "type": "string",
           "enum": ["lite", "standard", ""],
           "default": "",
-          "description": "Install mode set by the ESS installer. 'lite' applies chat-first layout; 'standard' uses default VS Code layout with /setup injection only."
+          "description": "Install mode set by the ESS installer. 'lite' applies the chat-first layout; 'standard' uses the default VS Code layout with /setup injection; empty string means the consolidated installer left the choice unset and the extension will ask on first launch."
         },
         "essMaker.autoUpdateCheck": {
           "type": "boolean",

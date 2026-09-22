@@ -1,19 +1,21 @@
 <#
 .SYNOPSIS
-    One-liner bootstrap for the ESS Maker Kit in Lite Mode.
+    Back-compat one-liner bootstrap that pins the installer to Lite Mode.
 
 .DESCRIPTION
-    Downloads the installer script into a temp folder and runs it with the
-    ESS Maker Profile extension enabled. This gives users a chat-first,
-    big-button experience that hides developer chrome (file tree, tabs,
-    status bar, etc.) and surfaces a "Quick Actions" button rail.
+    Downloads the installer and runs it with -InstallMode lite. Kept so
+    existing links (docs, blog posts, share sheets) that point at
+    bootstrap-lite.ps1 keep working after the standard + lite installers
+    were merged into a single bootstrap.ps1.
 
-    Designed to be invoked from a single command:
+    New customers should use bootstrap.ps1, which prompts inside VS Code
+    on first launch to pick the experience. This shim is documented as
+    a redirect only.
 
         iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-lite.ps1)
 
     All real work happens in Install-EssAdk.ps1; this file just gets the bits
-    onto the customer's machine and ensures the Maker Profile is installed.
+    onto the customer's machine and pins the mode to lite.
 
 .PARAMETER InstallRoot
     Forwarded to Install-EssAdk.ps1. See that script for details.
@@ -79,8 +81,10 @@ $installer = Join-Path $tempDir 'Install-EssAdk.ps1'
 $scriptContent = [System.IO.File]::ReadAllText($installer, [System.Text.Encoding]::UTF8)
 $scriptBlock = [ScriptBlock]::Create($scriptContent)
 
-# Lite mode: do NOT pass -SkipMakerProfile so the chat-first profile installs.
-$installerArgs = @{ Branch = $Branch }
+# Lite mode: pass -InstallMode lite so the ESS Maker Profile applies the
+# chat-first layout without asking the maker. Kept as a compat shim while
+# the single bootstrap.ps1 becomes the recommended entry point.
+$installerArgs = @{ Branch = $Branch; InstallMode = 'lite' }
 if ($InstallRoot) { $installerArgs.InstallRoot = $InstallRoot }
 
 & $scriptBlock @installerArgs
