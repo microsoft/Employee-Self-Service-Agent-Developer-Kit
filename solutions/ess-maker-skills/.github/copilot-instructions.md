@@ -50,6 +50,14 @@ Respond with ONLY this exact message and nothing else:
   `flightCheckOnly: true`, proceed with `src/skills/flightcheck/SKILL.md`.
   This exception applies only to `/flightcheck`; every other command remains
   gated.
+- If the user typed `/connect`, allow the command after **local workspace
+  materialization**, even when runtime `connect_ready` is false. Require
+  `schema_version: 4`, resolve `.local/config.json` `activeAgent` to the
+  canonical agent whose `agent.workspace_slug` matches, and require canonical
+  workspace evidence plus `steps.SETUP-07.state: "done"`. Connector readiness
+  is intentionally not a prerequisite because `/connect` is the workflow that
+  resolves product-extension connection gaps. If materialization is incomplete,
+  show the setup message above and stop.
 
 **Except for the cases above, this gate applies to ALL user messages** —
 including "hello", "hi", "help",
@@ -79,8 +87,9 @@ After canonical DA setup is complete:
   available;
 - Dataverse push and server-backed validation are permitted in this
   workspace; run the push pipeline when the maker asks to push local changes;
-- `/connect` and integration troubleshooting require the corresponding DA-GA
-  product extension guidance, which is not yet available;
+- `/connect workday` uses the checked-in ESS DA HR Workday extension guidance;
+  unsupported products or agent verticals must stop at their explicit routing
+  boundary;
 - `/backup-template-configs` and `/restore-template-configs` are no longer
   supported because they belonged to the retired Dataverse-based agent model;
 - `/flightcheck` may run only its local-files scope.
