@@ -1,6 +1,6 @@
 ---
 mode: agent
-description: "Check DA-GA product extension setup availability"
+description: "Connect Workday or another supported integration"
 ---
 
 # Connect

@@ -17,9 +17,15 @@ import pytest
 
 
 class FakePPAdminClient:
-    def __init__(self, tenant_id, environment_id="env-123"):
+    def __init__(
+        self,
+        tenant_id,
+        environment_id="env-123",
+        environment=None,
+    ):
         self.tenant_id = tenant_id
         self.environment_id = environment_id
+        self.environment = environment
         self.authenticated = False
 
     def authenticate(self, *, include_flow=True):
@@ -28,6 +34,9 @@ class FakePPAdminClient:
 
     def find_environment_id_by_dataverse_url(self, _env_url):
         return self.environment_id
+
+    def get_environment(self, _environment_id):
+        return self.environment
 
 
 class FakePowerPlatformClient:
@@ -57,7 +66,10 @@ def test_not_listed_when_marketplace_catalog_has_no_match(_mock_discover_tenant)
 
     powerplatform = FakePowerPlatformClient("tenant-123", packages=[])
 
-    with pytest.raises(m.ExtensionNotListedError, match="msdyn_essdahrworkday"):
+    with pytest.raises(
+        m.ExtensionNotListedError,
+        match="msdyn_EssDAHRWorkdayHCM",
+    ):
         m.install_workday_da_extension(
             "https://org.crm.dynamics.com",
             "hr",
@@ -75,7 +87,12 @@ def test_skips_install_when_hr_extension_already_installed(_mock_discover_tenant
 
     powerplatform = FakePowerPlatformClient(
         "tenant-123",
-        packages=[{"uniqueName": "msdyn_essdahrworkday", "state": "Installed"}],
+        packages=[
+            {
+                "uniqueName": "msdyn_EssDAHRWorkdayHCM",
+                "state": "Installed",
+            }
+        ],
     )
 
     schema = m.install_workday_da_extension(
@@ -93,13 +110,13 @@ def test_skips_install_when_hr_extension_already_installed(_mock_discover_tenant
 def test_installs_and_polls_until_installed(_mock_discover_tenant):
     import install_workday_da_extension as m
 
-    schema_name = "msdyn_essdahrworkday"
+    application_name = "msdyn_EssDAHRWorkdayHCM"
     powerplatform = FakePowerPlatformClient(
         "tenant-123",
         packages=[
-            [{"uniqueName": schema_name, "state": "None"}],
-            [{"uniqueName": schema_name, "state": "Installing"}],
-            [{"uniqueName": schema_name, "state": "Installed"}],
+            [{"uniqueName": application_name, "state": "None"}],
+            [{"uniqueName": application_name, "state": "Installing"}],
+            [{"uniqueName": application_name, "state": "Installed"}],
         ],
         install_result={"_operationId": "operation-123"},
     )
@@ -113,21 +130,21 @@ def test_installs_and_polls_until_installed(_mock_discover_tenant):
         sleep=lambda _seconds: None,
     )
 
-    assert schema == schema_name
-    assert powerplatform.install_calls == [("env-123", schema_name)]
+    assert schema == "msdyn_essdahrworkday"
+    assert powerplatform.install_calls == [("env-123", application_name)]
 
 
 @patch("install_workday_da_extension.discover_tenant", return_value="tenant-123")
 def test_times_out_and_reports_last_status(_mock_discover_tenant):
     import install_workday_da_extension as m
 
-    schema_name = "msdyn_essdahrworkday"
+    application_name = "msdyn_EssDAHRWorkdayHCM"
     powerplatform = FakePowerPlatformClient(
         "tenant-123",
         packages=[
-            [{"uniqueName": schema_name, "state": "None"}],
-            [{"uniqueName": schema_name, "state": "Installing"}],
-            [{"uniqueName": schema_name, "state": "Installing"}],
+            [{"uniqueName": application_name, "state": "None"}],
+            [{"uniqueName": application_name, "state": "Installing"}],
+            [{"uniqueName": application_name, "state": "Installing"}],
         ],
         install_result={"_operationId": "operation-123"},
     )
@@ -167,10 +184,10 @@ def test_rejects_unsupported_it_vertical(_mock_discover_tenant):
 def test_reports_install_permission_failure(_mock_discover_tenant):
     import install_workday_da_extension as m
 
-    schema_name = "msdyn_essdahrworkday"
+    application_name = "msdyn_EssDAHRWorkdayHCM"
     powerplatform = FakePowerPlatformClient(
         "tenant-123",
-        packages=[{"uniqueName": schema_name, "state": "None"}],
+        packages=[{"uniqueName": application_name, "state": "None"}],
         install_result={"_error": "insufficient_permissions", "_status": 403},
     )
 
@@ -180,4 +197,61 @@ def test_reports_install_permission_failure(_mock_discover_tenant):
             "hr",
             pp_admin_client_factory=FakePPAdminClient,
             powerplatform_client_factory=lambda _tenant: powerplatform,
+        )
+
+
+def test_resolves_setup_environment_id_to_dataverse_url():
+    import install_workday_da_extension as m
+
+    environment = {
+        "properties": {
+            "linkedEnvironmentMetadata": {
+                "instanceUrl": "https://org.crm.dynamics.com/"
+            }
+        }
+    }
+
+    result = m.resolve_dataverse_url(
+        "env-123",
+        pp_admin_client_factory=lambda tenant_id: FakePPAdminClient(
+            tenant_id,
+            environment=environment,
+        ),
+    )
+
+    assert result == "https://org.crm.dynamics.com"
+
+
+def test_resolves_instance_api_url_when_instance_url_is_absent():
+    import install_workday_da_extension as m
+
+    environment = {
+        "properties": {
+            "linkedEnvironmentMetadata": {
+                "instanceApiUrl": "https://org.api.crm.dynamics.com/"
+            }
+        }
+    }
+
+    result = m.resolve_dataverse_url(
+        "env-123",
+        pp_admin_client_factory=lambda tenant_id: FakePPAdminClient(
+            tenant_id,
+            environment=environment,
+        ),
+    )
+
+    assert result == "https://org.api.crm.dynamics.com"
+
+
+def test_rejects_environment_without_dataverse():
+    import install_workday_da_extension as m
+
+    with pytest.raises(RuntimeError, match="does not have Dataverse"):
+        m.resolve_dataverse_url(
+            "env-123",
+            pp_admin_client_factory=lambda tenant_id: FakePPAdminClient(
+                tenant_id,
+                environment={"properties": {}},
+            ),
         )

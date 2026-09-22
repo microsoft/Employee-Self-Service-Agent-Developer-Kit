@@ -6,27 +6,30 @@ not rephrase, add commentary, or tell the user what tools you are calling or wha
 files you are reading.
 
 This step completes **DA1.1** on the Workday connect checklist. It confirms the
-DA Employee Self-Service HR base agent is installed, then installs the Workday
-extension package against it — attempting an automated install first and
-falling back to guided manual steps only if this tenant's Marketplace catalog
-doesn't support it. The router must stop DA IT agents before this file is read.
+ESS HR agent is available, then installs its Workday package. The router must
+stop DA IT agents before this file is read.
 
 ---
 
 ## P1.0 — Check for the DA base agent, and install the extension if it's missing
 
-Resolve the Dataverse environment that hosts the Workday extension:
+Resolve the target environment automatically:
 
 1. Use `.local/config.json` `dataverseEndpoint` when present (legacy
    Dataverse-backed workspace).
 2. Otherwise read `.local/connect/workday-da/config.json`
    `sidecarDataverseEndpoint`.
-3. If neither exists, ask the maker for the target Power Platform environment
-   URL shown in the Power Platform admin center. Explain that the MOS/native
-   agent remains in AgentBuilder while the Workday solution, connections, and
-   cloud flows require this Dataverse sidecar environment. Require an HTTPS
-   `*.crm*.dynamics.com` organization URL, show it back for confirmation, then
-   persist it as `sidecarDataverseEndpoint`.
+3. If neither exists, read `.local/config.json` `environmentId` and run:
+
+   ```
+   python scripts/install_workday_da_extension.py --environment-id "{ENVIRONMENT_ID}" --vertical "hr" --resolve-only
+   ```
+
+   Parse `WORKDAY_DA_ENVIRONMENT_JSON:` and persist its `environmentUrl` as
+   `sidecarDataverseEndpoint`.
+4. Only if automatic discovery fails, show the environments available to the
+   signed-in account and ask the maker to choose one. Do not ask them to type or
+   copy a URL when a selectable environment is available.
 
 Call the resolved value `WORKDAY_DATAVERSE_URL`. Never copy it into
 `.local/config.json`; that file's native `powerPlatformApiEndpoint` remains the
@@ -79,10 +82,19 @@ environment is outside this lifecycle and must not affect DA1.1.
 ## P1.1 — Attempt an automated install
 
 ```
+python scripts/install_workday_da_extension.py --environment-id "{ENVIRONMENT_ID}" --vertical "hr"
+```
+
+Use the `--environment-id` form only when
+`WORKDAY_DATAVERSE_URL` was resolved from that setup environment ID during
+this run. If the URL came from `dataverseEndpoint` or a previously saved
+`sidecarDataverseEndpoint`, run:
+
+```
 python scripts/install_workday_da_extension.py --url "{WORKDAY_DATAVERSE_URL}" --vertical "hr"
 ```
 
-Run the command once.
+Run the selected command once.
 
 Parse the script's JSON marker line:
 
@@ -90,10 +102,9 @@ Parse the script's JSON marker line:
   already installed and the script confirmed it). Re-run
 `--checkpoint WD-DA-PKG-001` with the same `--connect-config`; proceed only
 when it reports `PASSED`.
-- **`WORKDAY_DA_EXTENSION_NOT_LISTED_JSON:`** → this tenant's Marketplace
-  catalog doesn't list the Workday extension package for the DA agent, so it
-  can't be installed automatically here. This is expected in some tenants —
-  it is not a failure. Continue to **P1.2** (manual install).
+- **`WORKDAY_DA_EXTENSION_NOT_LISTED_JSON:`** → the Workday package is not
+  available to the signed-in account through the environment's application
+  catalog. Continue to **P1.2**.
 - **`WORKDAY_DA_EXTENSION_INSTALL_TIMEOUT_JSON:`** → the install was started
   but didn't finish within the wait window.
 
@@ -118,16 +129,9 @@ when it reports `PASSED`.
 
 **Message:**
 
-I couldn't install the Workday extension package automatically in this
-environment, so let's do it from the admin center — the same place you
-installed the base Employee Self-Service agent:
-
-1. Open the [Microsoft 365 admin center](https://admin.microsoft.com) (or
-   AppSource, if that's where you installed the base agent).
-2. Find the **Workday extension for Employee Self-Service HR** package.
-3. Deploy the package to this environment.
-4. Wait for the deployment to finish, then tell me it's done and I'll verify
-   it.
+The Workday package could not be installed automatically. Ask a Power Platform
+administrator to install **Workday HCM DA Connector (HR)** from AppSource in
+this environment. Tell me when the installation finishes and I'll verify it.
 
 **End message.**
 

@@ -1,23 +1,12 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Attempt an automated install of the DA Workday extension package.
+"""Install the DA HR Workday AppSource application.
 
 Used by ``src/skills/setup/workday-da/install-extension.md`` (step DA1.1).
-The DA Workday extension package has no entry in
-``src/reference/ess-agent-installation/config.json`` — there is no confirmed
-Marketplace catalog record for it. This script therefore does not assume the
-package is installable through the Marketplace application API; it only
-*tries* through
-``PowerPlatformClient.list_environment_application_packages`` /
-``install_application_package``), and reports a distinct, honest outcome —
-``not-listed`` — when the tenant's Marketplace catalog does not return the
-package at all. The calling skill step must treat ``not-listed`` as "hand off
-to the manual AppSource install", never as a failure.
-
-This mirrors the principle already stated for the CEA extension pack install
-(``src/skills/setup/workday/install-workday-extension-pack.md``): never infer
-success from an unsupported or incomplete API response.
+The installer uses the same AppSource application name as the bootstrap skill
+and reports a distinct ``not-listed`` outcome when the signed-in account cannot
+see the application in the selected environment.
 """
 
 from __future__ import annotations
@@ -34,7 +23,16 @@ from flightcheck.checks.workday_da import (
 from flightcheck.powerplatform_client import PowerPlatformClient
 from flightcheck.pp_admin_client import PPAdminClient
 
-WORKDAY_DA_CHILD_SCHEMAS = {"hr": _DA_HR_WORKDAY_CHILD_SCHEMA}
+WORKDAY_DA_PACKAGES = {
+    "hr": {
+        "applicationName": "msdyn_EssDAHRWorkdayHCM",
+        "schemaName": _DA_HR_WORKDAY_CHILD_SCHEMA,
+    },
+}
+WORKDAY_DA_CHILD_SCHEMAS = {
+    vertical: package["schemaName"]
+    for vertical, package in WORKDAY_DA_PACKAGES.items()
+}
 INSTALLED_STATES = {"Installed", "TemplateInstalled"}
 IN_PROGRESS_STATES = {
     "InstallRequested",
@@ -58,9 +56,9 @@ class InstallationTimeoutError(RuntimeError):
         )
 
 
-def _find_package(packages: list[dict], schema_name: str) -> dict | None:
-    """Find the entitled application whose unique name matches the schema."""
-    target = schema_name.casefold()
+def _find_package(packages: list[dict], package_name: str) -> dict | None:
+    """Find an entitled application by unique or application name."""
+    target = package_name.casefold()
     for package in packages:
         names = (package.get("uniqueName"), package.get("applicationName"))
         if any(
@@ -164,6 +162,32 @@ class ExtensionNotListedError(RuntimeError):
         )
 
 
+def resolve_dataverse_url(
+    environment_id: str,
+    *,
+    pp_admin_client_factory=PPAdminClient,
+) -> str:
+    """Resolve the Dataverse URL for a setup-captured environment ID."""
+    client = pp_admin_client_factory("organizations")
+    client.authenticate(include_flow=False)
+    environment = client.get_environment(environment_id)
+    if not isinstance(environment, dict) or environment.get("_error"):
+        raise RuntimeError(
+            "Could not read the selected Power Platform environment."
+        )
+    linked = (
+        environment.get("properties", {})
+        .get("linkedEnvironmentMetadata", {})
+    )
+    for key in ("instanceUrl", "instanceApiUrl"):
+        value = linked.get(key)
+        if isinstance(value, str) and value.startswith("https://"):
+            return value.rstrip("/")
+    raise RuntimeError(
+        "The selected Power Platform environment does not have Dataverse."
+    )
+
+
 def install_workday_da_extension(
     env_url: str,
     vertical: str,
@@ -191,7 +215,9 @@ def install_workday_da_extension(
             "Workday integration with the ESS DA IT Agent is not supported "
             "in this release."
         )
-    schema_name = WORKDAY_DA_CHILD_SCHEMAS[vertical]
+    package_config = WORKDAY_DA_PACKAGES[vertical]
+    schema_name = package_config["schemaName"]
+    application_name = package_config["applicationName"]
     tenant_id = discover_tenant(env_url)
 
     pp_admin = pp_admin_client_factory(tenant_id)
@@ -204,11 +230,14 @@ def install_workday_da_extension(
 
     client = powerplatform_client_factory(tenant_id)
     client.authenticate()
-    package = _find_package(_list_packages(client, environment_id), schema_name)
+    package = _find_package(
+        _list_packages(client, environment_id),
+        application_name,
+    )
     if not package:
-        raise ExtensionNotListedError(schema_name)
+        raise ExtensionNotListedError(application_name)
 
-    unique_name = package.get("uniqueName") or schema_name
+    unique_name = package.get("uniqueName") or application_name
     state = package.get("state")
     if state in INSTALLED_STATES:
         installation_state_callback("automatic-complete")
@@ -255,23 +284,61 @@ def main() -> None:
             "package for one ESS vertical."
         )
     )
-    parser.add_argument("--url", required=True, help="Dataverse environment URL")
+    target = parser.add_mutually_exclusive_group(required=True)
+    target.add_argument("--url", help="Dataverse environment URL")
+    target.add_argument(
+        "--environment-id",
+        help="Power Platform environment ID captured during setup",
+    )
     parser.add_argument(
         "--vertical",
         required=True,
-        choices=sorted(WORKDAY_DA_CHILD_SCHEMAS),
+        choices=sorted(WORKDAY_DA_PACKAGES),
         help="DA vertical (this release supports hr only)",
+    )
+    parser.add_argument(
+        "--resolve-only",
+        action="store_true",
+        help="Resolve and print the Dataverse URL without installing.",
     )
     args = parser.parse_args()
 
+    try:
+        environment_url = (
+            args.url.rstrip("/")
+            if args.url
+            else resolve_dataverse_url(args.environment_id)
+        )
+    except (OSError, RuntimeError, ValueError) as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        sys.exit(1)
+
+    if args.resolve_only:
+        print(
+            "WORKDAY_DA_ENVIRONMENT_JSON:"
+            + json.dumps(
+                {
+                    "environmentId": args.environment_id,
+                    "environmentUrl": environment_url,
+                }
+            )
+        )
+        return
+
     base_result = {
-        "environmentUrl": args.url.rstrip("/"),
+        "environmentUrl": environment_url,
         "vertical": args.vertical,
         "schemaName": WORKDAY_DA_CHILD_SCHEMAS[args.vertical],
+        "applicationName": WORKDAY_DA_PACKAGES[args.vertical][
+            "applicationName"
+        ],
     }
 
     try:
-        schema_name = install_workday_da_extension(args.url, args.vertical)
+        schema_name = install_workday_da_extension(
+            environment_url,
+            args.vertical,
+        )
     except ExtensionNotListedError as error:
         print(
             "WORKDAY_DA_EXTENSION_NOT_LISTED_JSON:"
