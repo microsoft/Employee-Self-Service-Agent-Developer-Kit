@@ -64,6 +64,20 @@ class TestParseOnlyGlobs:
         assert globs == ["topics/A.mcs.yml", "topics/B.mcs.yml"]
 
 
+def test_da_push_stops_before_dataverse_configuration(
+    monkeypatch,
+    capsys,
+):
+    monkeypatch.setattr(push, "is_connect_ready", lambda: True)
+    monkeypatch.setattr("sys.argv", ["push.py"])
+
+    with pytest.raises(SystemExit) as error:
+        push.main()
+
+    assert error.value.code == 1
+    assert "no Dataverse request was attempted" in capsys.readouterr().out
+
+
 class TestMatchesOnly:
     def test_empty_globs_matches_everything(self):
         assert push.matches_only("anything/at/all.yml", []) is True
@@ -79,6 +93,48 @@ class TestMatchesOnly:
 
     def test_backslash_path_normalised(self):
         assert push.matches_only("topics\\A.mcs.yml", ["topics/A.mcs.yml"])
+
+
+class TestEvaluationReviewMetadata:
+    def test_review_json_is_pushable_metadata(self):
+        assert push.classify_path(
+            "evaluations/compensation/review.json"
+        ) == "evaluation-review"
+
+    def test_review_metadata_resolves_existing_parent(self):
+        review_path = "evaluations/compensation/review.json"
+        parent_path = "evaluations/compensation/compensation.mcs.yml"
+        component_map = {
+            parent_path: {
+                "componenttype": 19,
+                "botcomponentid": "parent-id",
+            }
+        }
+        working = {
+            parent_path: "kind: EvaluationSet\n",
+            review_path: "{}",
+        }
+
+        assert push._evaluation_parent_path(
+            review_path, component_map, working
+        ) == parent_path
+
+    def test_new_parent_description_comes_from_review_metadata(self):
+        parent_path = "evaluations/compensation/compensation.mcs.yml"
+        working = {
+            parent_path: "kind: EvaluationSet\n",
+            "evaluations/compensation/review.json": (
+                '{"status":"review_requested",'
+                '"baseDescription":"Human description"}'
+            ),
+        }
+
+        assert push._review_description_for_create(
+            parent_path, working
+        ) == (
+            "Human description\n\n"
+            "[ADK-REVIEW status=review_requested]"
+        )
 
 
 class TestUpdateBaselineScoped:

@@ -8,13 +8,13 @@ tests/mocks/dataverse.py to prove the kit's Dataverse client correctly
 handles paginated responses, 401/403 errors, and the WWW-Authenticate
 challenge format.
 
-Two of the discover_tenant tests are regression tests pinning a known
-regex bug — see the test docstrings.
+Tenant discovery supports quoted challenges and optional resource IDs.
 """
 
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 import responses
@@ -25,6 +25,89 @@ from tests.mocks import dataverse as dv
 require_validated_mock(dv)
 
 
+def test_da_setup_completion_uses_active_agents_canonical_marker(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import auth
+
+    state_path = tmp_path / ".local" / "setup" / "config.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 4,
+                "agents": {
+                    "agent-1": {
+                        "agent": {"workspace_slug": "employee-self-service"},
+                        "connect_ready": True,
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / ".local" / "config.json").write_text(
+        json.dumps({"activeAgent": "employee-self-service"}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert auth.is_connect_ready()
+
+
+def test_da_setup_completion_is_scoped_to_active_agent(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import auth
+
+    state_path = tmp_path / ".local" / "setup" / "config.json"
+    state_path.parent.mkdir(parents=True)
+    state_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 4,
+                "agents": {
+                    "ready": {
+                        "agent": {"workspace_slug": "ready-agent"},
+                        "connect_ready": True,
+                    },
+                    "active": {
+                        "agent": {"workspace_slug": "active-agent"},
+                        "connect_ready": False,
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / ".local" / "config.json").write_text(
+        json.dumps({"activeAgent": "active-agent"}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert not auth.is_connect_ready()
+
+
+def test_da_setup_completion_ignores_operational_config(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import auth
+
+    config_path = tmp_path / ".local" / "config.json"
+    config_path.parent.mkdir(parents=True)
+    config_path.write_text(
+        json.dumps({"setup": "complete"}),
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+
+    assert not auth.is_connect_ready()
+
+
 @pytest.fixture
 def dataverse_url(fake_dataverse_url: str) -> str:
     return fake_dataverse_url
@@ -33,12 +116,8 @@ def dataverse_url(fake_dataverse_url: str) -> str:
 class TestDiscoverTenant:
     """Drives scripts/auth.py:discover_tenant through the mock.
 
-    The kit's regex `login\\.microsoftonline\\.com/([^/]+)` is fragile.
-    Two of the three documented Microsoft challenge formats trigger
-    over-capture. The tests below pin which formats work and which
-    leak garbage into the returned tenant ID. When the regex is
-    tightened (TODO: solutions/ess-maker-skills/scripts/auth.py:110),
-    flip the regression-test assertions.
+    The documented challenge formats include quoted and unquoted authority
+    URLs, with optional resource IDs.
     """
 
     @responses.activate
@@ -57,14 +136,10 @@ class TestDiscoverTenant:
         assert result == "11111111-2222-3333-4444-555555555555"
 
     @responses.activate
-    def test_overcaptures_when_header_includes_resource_id(
+    def test_extracts_tenant_id_when_header_includes_resource_id(
         self, dataverse_url: str
     ) -> None:
-        """Regression: even unquoted, the regex over-captures across the
-        comma into the resource_id suffix.
-
-        TODO: tighten regex in auth.py:110.
-        """
+        """The resource_id attribute is separate from the tenant ID."""
         import auth
 
         responses.add(**dv.discover_tenant_challenge(
@@ -74,20 +149,13 @@ class TestDiscoverTenant:
         ))
 
         result = auth.discover_tenant(dataverse_url)
-        assert result.startswith("11111111-2222-3333-4444-555555555555")
-        assert "resource_id" in result, (
-            "auth.discover_tenant regex was tightened — flip this assertion."
-        )
+        assert result == "11111111-2222-3333-4444-555555555555"
 
     @responses.activate
-    def test_overcaptures_when_header_is_quoted(
+    def test_extracts_tenant_id_when_header_is_quoted(
         self, dataverse_url: str
     ) -> None:
-        """Regression: regex over-captures the closing quote in
-        authorization_uri="..." (RFC 7235 quoted-string).
-
-        TODO: tighten regex in auth.py:110.
-        """
+        """RFC 7235 quoted-string delimiters are excluded from the tenant ID."""
         import auth
 
         responses.add(**dv.discover_tenant_challenge(
@@ -97,10 +165,7 @@ class TestDiscoverTenant:
         ))
 
         result = auth.discover_tenant(dataverse_url)
-        assert result.startswith("11111111-2222-3333-4444-555555555555")
-        assert result.endswith('"'), (
-            "auth.discover_tenant regex was tightened — flip this assertion."
-        )
+        assert result == "11111111-2222-3333-4444-555555555555"
 
     @responses.activate
     def test_falls_back_to_organizations_when_header_missing(

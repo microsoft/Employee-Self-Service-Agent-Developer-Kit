@@ -25,6 +25,7 @@ Contracts pinned:
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import pytest
@@ -37,6 +38,7 @@ def _args(
     checkpoint: str,
     tmp_path: Path,
     environment_url: str | None = None,
+    environment_id: str | None = None,
     no_telemetry: bool = True,
     invocation_source: str | None = None,
     quiet_auth: bool = False,
@@ -44,7 +46,7 @@ def _args(
     return argparse.Namespace(
         checkpoint=checkpoint,
         environment_url=environment_url,
-        environment_id=None,
+        environment_id=environment_id,
         output=str(tmp_path / "out"),
         no_telemetry=no_telemetry,
         invocation_source=invocation_source,
@@ -80,11 +82,14 @@ class TestGates:
             "ENV-001",
             "ENV-002",
             "ENV-009",
-            "ENV-CAPACITY-001",
         ):
             plan = registry.transitive_requirements(checkpoint)
             assert plan.requires_config is False
             assert plan.requires_dataverse_endpoint is True
+
+        capacity = registry.transitive_requirements("ENV-CAPACITY-001")
+        assert capacity.requires_config is False
+        assert capacity.requires_dataverse_endpoint is False
 
     def test_unknown_checkpoint_exits_2(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -125,6 +130,87 @@ class TestGates:
         with pytest.raises(SystemExit) as exc:
             cli._run_single_checkpoint(_args("ESS-SOLN-001", tmp_path))
         assert exc.value.code == 1
+
+    def test_capacity_uses_explicit_environment_id_without_dataverse(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+
+        class _PowerPlatform:
+            def __init__(self, tenant_id: str) -> None:
+                assert tenant_id == "organizations"
+
+            def authenticate(self) -> str:
+                return "token"
+
+            def get_currency_allocations(self, environment_id: str):
+                assert (
+                    environment_id
+                    == "00000000-0000-4000-8000-000000001111"
+                )
+                return [{"currencyType": "MCSMessages", "allocated": 100}]
+
+        monkeypatch.setattr(cli, "PowerPlatformClient", _PowerPlatform)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(
+                _args(
+                    "ENV-CAPACITY-001",
+                    tmp_path,
+                    environment_id=(
+                        "00000000-0000-4000-8000-000000001111"
+                    ),
+                )
+            )
+
+        assert exc.value.code == 0
+
+    def test_capacity_uses_native_config_environment_id_without_dataverse(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        _silence_output: None,
+    ) -> None:
+        local_dir = tmp_path / ".local"
+        local_dir.mkdir()
+        (local_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "releaseLine": "da",
+                    "environmentId": (
+                        "00000000-0000-4000-8000-000000001111"
+                    ),
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+
+        class _PowerPlatform:
+            def __init__(self, tenant_id: str) -> None:
+                assert tenant_id == "organizations"
+
+            def authenticate(self) -> str:
+                return "token"
+
+            def get_currency_allocations(self, environment_id: str):
+                assert (
+                    environment_id
+                    == "00000000-0000-4000-8000-000000001111"
+                )
+                return [{"currencyType": "MCSMessages", "allocated": 100}]
+
+        monkeypatch.setattr(cli, "PowerPlatformClient", _PowerPlatform)
+
+        with pytest.raises(SystemExit) as exc:
+            cli._run_single_checkpoint(
+                _args("ENV-CAPACITY-001", tmp_path)
+            )
+
+        assert exc.value.code == 0
 
 
 class TestHermeticRun:

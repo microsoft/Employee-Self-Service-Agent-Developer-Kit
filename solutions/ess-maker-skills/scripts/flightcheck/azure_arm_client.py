@@ -4,10 +4,9 @@
 """
 ESS Maker Kit — Azure Resource Manager (ARM) Client
 
-Provides authenticated read access to the Azure Resource Manager
-subscriptions surface for FlightCheck PRE-005 — verifying the health
-(``state``) of the Azure subscription a Power Platform Pay-As-You-Go
-billing policy is bound to.
+Provides authenticated read access to Azure Resource Manager tenant and
+subscription surfaces. Foundation setup uses tenant listing for a friendly
+organization picker; FlightCheck PRE-005 reads subscription health.
 
 This is a separate Entra token from the Power Platform one: the ARM
 audience is ``https://management.azure.com``. Authentication reuses the
@@ -20,6 +19,8 @@ the MS Learn Subscriptions - Get reference (api-version 2022-12-01).
 
 import os
 import sys
+from pathlib import Path
+from urllib.parse import urlparse
 
 try:
     import msal
@@ -66,13 +67,21 @@ _SESSION.mount("https://", HTTPAdapter(max_retries=_RETRY))
 
 
 class AzureArmClient:
-    """Azure Resource Manager client for subscription health queries."""
+    """Azure Resource Manager client for tenant and subscription queries."""
 
-    def __init__(self, tenant_id: str):
+    def __init__(
+        self,
+        tenant_id: str,
+        *,
+        cache_path: str | os.PathLike[str] | None = None,
+    ):
         self.tenant_id = tenant_id
+        self.cache_path = Path(
+            cache_path or os.path.join(".local", ".token_cache.bin")
+        )
         self._token: str | None = None
 
-    def authenticate(self) -> str:
+    def authenticate(self, *, force_account_selection: bool = False) -> str:
         """Acquire an Azure Resource Manager access token.
 
         Uses the shared MSAL cache so the operator's existing sign-in is
@@ -82,19 +91,17 @@ class AzureArmClient:
         """
         authority = f"https://login.microsoftonline.com/{self.tenant_id}"
         cache = msal.SerializableTokenCache()
-        cache_path = os.path.join(".local", ".token_cache.bin")
-
-        if os.path.exists(cache_path):
-            with open(cache_path, "r") as f:
+        if self.cache_path.exists():
+            with self.cache_path.open("r", encoding="utf-8") as f:
                 cache.deserialize(f.read())
 
         app = msal.PublicClientApplication(
             CLIENT_ID, authority=authority, token_cache=cache
         )
 
-        accounts = app.get_accounts()
         result = None
-        if accounts:
+        accounts = app.get_accounts()
+        if accounts and not force_account_selection:
             result = app.acquire_token_silent([ARM_SCOPE], account=accounts[0])
         if not result or "access_token" not in result:
             print("Opening browser for Azure (ARM) sign-in...")
@@ -108,15 +115,15 @@ class AzureArmClient:
             raise RuntimeError(f"Azure ARM auth failed ({error}).")
 
         if cache.has_state_changed:
-            os.makedirs(".local", exist_ok=True)
+            self.cache_path.parent.mkdir(parents=True, exist_ok=True)
             try:
-                os.chmod(".local", 0o700)
+                os.chmod(self.cache_path.parent, 0o700)
             except OSError:
                 pass  # Windows ignores chmod for directories
             flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
             if hasattr(os, "O_BINARY"):
                 flags |= os.O_BINARY
-            fd = os.open(cache_path, flags, 0o600)
+            fd = os.open(self.cache_path, flags, 0o600)
             with os.fdopen(fd, "w", encoding="utf-8") as f:
                 f.write(cache.serialize())
 
@@ -131,6 +138,59 @@ class AzureArmClient:
             "Authorization": f"Bearer {self._token}",
             "Accept": "application/json",
         }
+
+    def list_tenants(self) -> list[dict]:
+        """List organizations available to the authenticated account."""
+        url = f"{ARM_BASE}/tenants"
+        params = {"api-version": API_VERSION}
+        tenants: list[dict] = []
+        for _page in range(20):
+            resp = _SESSION.get(
+                url,
+                headers=self.headers,
+                params=params,
+                timeout=60,
+            )
+            if resp.status_code in (401, 403):
+                raise RuntimeError(
+                    "Azure organization discovery is not authorized."
+                )
+            resp.raise_for_status()
+            try:
+                body = resp.json()
+            except ValueError as exc:
+                raise RuntimeError(
+                    "Azure organization discovery returned invalid JSON."
+                ) from exc
+            values = body.get("value") if isinstance(body, dict) else None
+            if not isinstance(values, list) or not all(
+                isinstance(item, dict) for item in values
+            ):
+                raise RuntimeError(
+                    "Azure organization discovery returned an invalid shape."
+                )
+            tenants.extend(values)
+            next_link = body.get("nextLink")
+            if not next_link:
+                return tenants
+            parsed = urlparse(str(next_link))
+            if (
+                parsed.scheme != "https"
+                or parsed.hostname != "management.azure.com"
+                or parsed.username
+                or parsed.password
+                or parsed.port not in (None, 443)
+                or parsed.path != "/tenants"
+            ):
+                raise RuntimeError(
+                    "Azure organization discovery returned an unsafe "
+                    "continuation URL."
+                )
+            url = str(next_link)
+            params = None
+        raise RuntimeError(
+            "Azure organization discovery returned too many pages."
+        )
 
     def get_subscription(self, subscription_id: str) -> dict:
         """Get details about a subscription, including its ``state``.

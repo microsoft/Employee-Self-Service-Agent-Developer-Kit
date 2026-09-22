@@ -130,6 +130,29 @@ class TestPackageFlavorDetection:
         assert len(runner._workday_connection_refs) == 3
 
     @responses.activate
+    def test_runtime_install_uses_simplified_behavior(
+        self, runner: _MinimalRunner, fake_dataverse_url: str
+    ) -> None:
+        from flightcheck.checks.workday import _check_package_flavor
+
+        _register_connection_refs(
+            base_url=fake_dataverse_url,
+            refs=dv.workday_connection_refs_runtime(),
+        )
+
+        runner._workday_flows = [{"name": "ESS Workday Runtime"}]
+        results = _check_package_flavor(
+            runner,
+            wd_flows=runner._workday_flows,
+        )
+
+        r = _result_by_id(results, "WD-PKG-001")
+        assert r.status == "Passed"
+        assert runner._workday_package_flavor == "simplified"
+        assert "msdyn_EssWorkdayRuntime" in r.result
+        assert len(runner._workday_connection_refs) == 1
+
+    @responses.activate
     def test_no_workday_refs_returns_not_configured_with_flavor_none(
         self, runner: _MinimalRunner, fake_dataverse_url: str
     ) -> None:
@@ -318,6 +341,35 @@ class TestPackageConnectionCompleteness:
         r = _result_by_id(results, "WD-CONN-012")
 
         assert r.status == "Passed"
+
+    def test_runtime_all_bound_passes(self, runner: _MinimalRunner) -> None:
+        from flightcheck.checks.workday import _check_package_connection_completeness
+
+        runner._workday_package_flavor = "simplified"
+        runner._workday_connection_refs = [
+            dv.workday_connection_refs_runtime()[0]
+        ]
+
+        results = _check_package_connection_completeness(runner)
+        r = _result_by_id(results, "WD-CONN-012")
+
+        assert r.status == "Passed"
+        assert "Workday Runtime (OBO)" in r.result
+
+    def test_runtime_unbound_fails(self, runner: _MinimalRunner) -> None:
+        from flightcheck.checks.workday import _check_package_connection_completeness
+
+        runtime_ref = dv.workday_connection_refs_runtime()[0]
+        runtime_ref["connectionid"] = None
+        runner._workday_package_flavor = "simplified"
+        runner._workday_connection_refs = [runtime_ref]
+
+        results = _check_package_connection_completeness(runner)
+        r = _result_by_id(results, "WD-CONN-012")
+
+        assert r.status == "Failed"
+        assert "Workday Runtime (OBO)" in r.result
+        assert "unbound" in r.result
 
     def test_full_with_one_unbound_fails_with_role_in_diagnostic(
         self, runner: _MinimalRunner

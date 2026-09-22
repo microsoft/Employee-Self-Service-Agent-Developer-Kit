@@ -2,14 +2,14 @@
 # Licensed under the MIT License.
 
 """
-ESS Agent Development Kit — general telemetry SDK (Aria / 1DS).
+ESS Agent Development Kit — general telemetry SDK (Aria/1DS).
 
 Implements the ``adk.*`` event family from the *ADK Telemetry* PM spec
 (ADO Feature #7403772) for the ADK's CLI skills — everything *except*
 the FlightCheck outcome events, which keep their own dedicated emitter in
 ``flightcheck/telemetry.py`` (those feed the existing leadership
 dashboards and must not change shape). This module is **additive**: it
-adds the spec's session / agent / build / api / capability event family
+adds the spec's session/agent/build/api/capability event family
 plus spec-named ``adk.flightcheck.*`` events, all reusing the proven 1DS
 OneCollector transport from ``flightcheck.telemetry``.
 
@@ -28,23 +28,24 @@ Design rules (deliberate — read before changing):
   lives in the top-level README and CONTRIBUTING.md; no runtime banner is
   printed.
 
-* **Privacy: no developer identity collected; tenant_id raw OII; enums only,
-  no free text.** We do NOT collect or emit any developer/user identifier
-  (not even hashed). Active-user / DAU-WAU-MAU counts dedupe on
+* **Privacy: no developer identity collected; tenant_id raw OII; scrubbed
+  free text.** We do NOT collect or emit any developer/user identifier
+  (not even hashed). Active-user/DAU-WAU-MAU counts dedupe on
   ``instance_id`` — a random GUID generated per ADK install (persisted to
   ``.local/.instance_id``) that is not linkable to any AAD user. ``tenant_id``
   is emitted as the RAW Microsoft Entra tenant GUID: the approved Data Profile
   (Data Scout, privacy review COMPLETED) classifies it Organizational
   Identifiable Information (OII) with "No Data Transformation" (it identifies
-  the enterprise tenant, not an individual user), retained <= 30 days. Error
-  fields are scrubbed of paths / URLs and truncated. We never emit user
-  content.
+  the enterprise tenant, not an individual user), retained <= 30 days. Client
+  event names and string property values may contain free text. Those values
+  and error fields are scrubbed of paths/URLs/emails/GUIDs and truncated.
+  Callers must keep customer content out of telemetry.
 
 * **Reliability.** On send failure events are buffered to
-  ``~/.adk/telemetry-buffer.ndjson`` (capped at 1000 events / 5 MB) and
+  ``~/.adk/telemetry-buffer.ndjson`` (capped at 1000 events/5 MB) and
   flushed on the next successful emit (spec Failure Scenarios).
 
-iKeys / OneCollector contract are inherited from ``flightcheck.telemetry``
+iKeys/OneCollector contract are inherited from ``flightcheck.telemetry``
 (same dev/prod Aria projects, so these events land alongside FlightCheck
 in the same tenant the dashboards read from).
 """
@@ -58,6 +59,7 @@ import sys
 import threading
 import time
 import uuid
+from datetime import datetime
 from typing import Any
 
 # Reuse the OneCollector transport + helpers from the FlightCheck emitter.
@@ -70,7 +72,9 @@ from flightcheck import telemetry as _fc  # noqa: E402
 
 # --- Spec constants -------------------------------------------------------
 # 1.1.0: added derived ``tenant_class`` (internal vs customer) — ADO 7558661.
-SCHEMA_VERSION = "1.1.0"
+# 1.3.0: defines the Vorpal bridge schema-v2 ``client_*`` field projection,
+#        including batch, source chronology, host context, and operation IDs.
+SCHEMA_VERSION = "1.3.0"
 
 # Surfaces the ADK emits from (spec enum: sdk | cli | studio | docs). The
 # Python skill scripts are the CLI surface.
@@ -88,6 +92,53 @@ EVENT_CAPABILITY_USE = "adk.capability.use"
 EVENT_FLIGHTCHECK_RUN = "adk.flightcheck.run"
 EVENT_FLIGHTCHECK_RESULT = "adk.flightcheck.result"
 EVENT_FLIGHTCHECK_ERROR = "adk.flightcheck.error"
+EVENT_CLIENT = "adk.client.event"
+
+CLIENT_EVENTS_SCHEMA_VERSION = 2
+# An out-of-memory guard set well above client batcher sizes, so client-side
+# batch-size changes can ship independently of ADK.
+CLIENT_EVENTS_MAX_BATCH_EVENTS = 1000
+CLIENT_EVENTS_MAX_STRING_LENGTH = 200
+# Property keys live inside the JSON blob. Bound their length so a single key
+# cannot consume the blob budget.
+CLIENT_EVENTS_MAX_PROPERTY_KEY_LENGTH = 64
+# Cap on the serialized ``client_properties`` blob. Shed whole properties
+# until the blob fits so it remains parseable by KQL's ``parse_json``.
+#
+# This is a self-imposed budget. Aria documents no per-field string limit
+# (https://www.aria.ms/developers/deep-dives/service-limits); the only
+# ingestion ceiling is 2.5 MB uncompressed for a whole event, which one blob
+# cannot realistically approach. The 8 KB budget is deliberately conservative.
+#
+# A 25-event client batch carries at most ~200 KB of property blobs, within the
+# ~3.15 MB request ceiling the 1DS client enforces. ``_emit_many_sync`` posts
+# each batch in one request.
+CLIENT_EVENTS_MAX_PROPERTIES_BYTES = 8 * 1024
+
+CLIENT_EVENTS_REJECTED_UNSUPPORTED_SCHEMA_VERSION = "unsupported_schema_version"
+CLIENT_EVENTS_REJECTED_INVALID_CORRELATION_ID = "invalid_correlation_id"
+# A distinct reason lets dashboards attribute a failure to the mount id.
+# Clients that do not recognize this reason map it to ``unrecognized_reason``;
+# ``getTelemetryBridgeOutcome`` classifies that as a rejection and drops it.
+CLIENT_EVENTS_REJECTED_INVALID_MOUNT_ID = "invalid_mount_id"
+CLIENT_EVENTS_REJECTED_EMPTY_BATCH = "empty_batch"
+CLIENT_EVENTS_REJECTED_BATCH_TOO_LARGE = "batch_too_large"
+CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE = "invalid_event_shape"
+
+_CLIENT_EVENTS_REJECTED_REASONS = frozenset(
+    {
+        CLIENT_EVENTS_REJECTED_UNSUPPORTED_SCHEMA_VERSION,
+        CLIENT_EVENTS_REJECTED_INVALID_CORRELATION_ID,
+        CLIENT_EVENTS_REJECTED_INVALID_MOUNT_ID,
+        CLIENT_EVENTS_REJECTED_EMPTY_BATCH,
+        CLIENT_EVENTS_REJECTED_BATCH_TOO_LARGE,
+        CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE,
+    }
+)
+# Batch, mount, and tool-call identifiers are emitted verbatim for event
+# stitching. Apply the bounded ASCII format to the whole value; field names
+# distinguish each id's purpose independently of the producer's prefix.
+_CLIENT_EVENTS_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 # --- Canonical ADK capability value-list (single source of truth) ---------
 # Every ``adk_capability`` value emitted anywhere in the kit MUST be one of
@@ -250,6 +301,8 @@ def set_identity(
     tenant_id: str | None = None,
     instance_id: str | None = None,
     tenant_name: str | None = None,
+    *,
+    local_dir: str | None = None,
 ) -> dict[str, str]:
     """Record the install + tenant identity for all subsequent events.
 
@@ -303,13 +356,44 @@ def set_identity(
     # emit_capability.py shim launched from a SKILL.md step) — which never
     # calls set_identity itself — can still stamp the tenant on its events.
     if _IDENTITY["tenant_id"]:
-        _fc.cache_tenant_id(_IDENTITY["tenant_id"])
+        if local_dir is None:
+            _fc.cache_tenant_id(_IDENTITY["tenant_id"])
+        else:
+            _fc.cache_tenant_id(_IDENTITY["tenant_id"], local_dir=local_dir)
     # Persist the tenant name so ADK events emitted later in a *different*
     # process (which only has a Dataverse/BAP token and can't resolve it)
     # can reuse it. Only cache when both fields are present.
     if _IDENTITY["tenant_name"] and _IDENTITY["tenant_id"]:
-        _fc.cache_tenant_name(_IDENTITY["tenant_id"], _IDENTITY["tenant_name"])
+        if local_dir is None:
+            _fc.cache_tenant_name(
+                _IDENTITY["tenant_id"],
+                _IDENTITY["tenant_name"],
+            )
+        else:
+            _fc.cache_tenant_name(
+                _IDENTITY["tenant_id"],
+                _IDENTITY["tenant_name"],
+                local_dir=local_dir,
+            )
     return dict(_IDENTITY)
+
+
+def initialize_tenant_identity(
+    tenant_id: str,
+    *,
+    local_dir: str = ".local",
+) -> dict[str, str]:
+    """Initialize telemetry from an authenticated tenant and its cached name."""
+    normalized_tenant_id = _sanitize_tenant_id(tenant_id)
+    tenant_name = _fc.get_cached_tenant_name(
+        normalized_tenant_id,
+        local_dir=local_dir,
+    )
+    return set_identity(
+        tenant_id=normalized_tenant_id,
+        tenant_name=tenant_name or None,
+        local_dir=local_dir,
+    )
 
 
 # --- Consent / opt-out ----------------------------------------------------
@@ -617,6 +701,372 @@ def _emit(event_name: str, data: dict[str, Any], *, block: bool = False) -> dict
     _THREADS[:] = [x for x in _THREADS if x.is_alive()]
     _THREADS.append(t)
     return {"sent": None, "async": True, "event": event_name}
+
+
+def _emit_many_sync(event_name: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Emit a validated batch through the same opt-out, buffer, and 1DS path."""
+    if not telemetry_enabled():
+        return {
+            "sent": False,
+            "events": 0,
+            "status": None,
+            "reason": "disabled",
+        }
+    try:
+        ikey, env = resolve_ikey()
+        envelopes = []
+        for row in rows:
+            data = dict(row)
+            data.setdefault("env", env)
+            envelopes.append(build_event(event_name, data, _fc.envelope_ikey(ikey)))
+        _buffer_flush(ikey)
+        status = _fc._post(ikey, envelopes)
+        ok = status in (200, 204)
+        if not ok:
+            _buffer_append(envelopes)
+        return {
+            "sent": ok,
+            "events": len(envelopes) if ok else 0,
+            "status": status,
+            "env": env,
+            "event": event_name,
+            "reason": "ok" if ok else f"http {status}",
+        }
+    except Exception as e:  # noqa: BLE001 — telemetry must never break a caller
+        try:
+            ikey, env = resolve_ikey()
+            buffered = []
+            for row in rows:
+                data = dict(row)
+                data.setdefault("env", env)
+                buffered.append(build_event(event_name, data, _fc.envelope_ikey(ikey)))
+            _buffer_append(buffered)
+        except Exception:  # noqa: BLE001
+            pass
+        return {
+            "sent": False,
+            "events": 0,
+            "status": None,
+            "event": event_name,
+            "reason": f"{type(e).__name__}: {e}",
+        }
+
+
+def _emit_many(event_name: str, rows: list[dict[str, Any]], *, block: bool = False) -> dict[str, Any]:
+    """Dispatch a batch emit. Async (daemon thread) unless sync/block requested."""
+    if _SYNC or block:
+        return _emit_many_sync(event_name, rows)
+    t = threading.Thread(target=_emit_many_sync, args=(event_name, rows), daemon=True)
+    t.start()
+    _THREADS[:] = [x for x in _THREADS if x.is_alive()]
+    _THREADS.append(t)
+    return {"sent": None, "async": True, "event": event_name, "events": len(rows)}
+
+
+def _is_finite_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and value == value and value not in (float("inf"), float("-inf"))
+
+
+def _valid_client_string(value: Any, *, allow_empty: bool = False) -> bool:
+    """True when ``value`` is a string the bridge can emit.
+
+    Validate presence here. ``_scrub_client_scalar`` scrubs and truncates the
+    emitted value to ``CLIENT_EVENTS_MAX_STRING_LENGTH``, so long input strings
+    remain acceptable.
+    """
+    return isinstance(value, str) and (allow_empty or bool(value))
+
+
+def _valid_bounded_client_string(value: Any, *, allow_empty: bool = False) -> bool:
+    """Validate a raw projected string without mutating its supplied value."""
+    return _valid_client_string(value, allow_empty=allow_empty) and len(value) <= CLIENT_EVENTS_MAX_STRING_LENGTH
+
+
+def _valid_client_identifier(value: Any) -> bool:
+    """True when ``value`` is an identifier-shaped ephemeral client id.
+
+    Required batch and mount ids must match the bounded ASCII format.
+    They retain their exact values for event stitching: applying ``_scrub``
+    to an embedded UUID would collapse distinct ids to ``<guid>``.
+    The envelope validator rejects invalid required ids and omits invalid
+    optional tool-call ids.
+    """
+    return isinstance(value, str) and bool(_CLIENT_EVENTS_IDENTIFIER_RE.match(value))
+
+
+def _valid_client_number(value: Any) -> bool:
+    return _is_finite_number(value) and value >= 0
+
+
+def _valid_client_timestamp(value: Any) -> bool:
+    """Validate a timezone-aware ISO-8601 timestamp without rewriting it."""
+    if not isinstance(value, str) or not value:
+        return False
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return parsed.tzinfo is not None
+
+
+def _valid_client_sequence_number(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value > 0
+
+
+def _valid_client_operation_id(value: Any) -> bool:
+    """Validate Vorpal's canonical, hyphenated generated-operation UUID."""
+    return isinstance(value, str) and bool(_GUID_RE.fullmatch(value))
+
+
+def _scrub_client_scalar(value: Any) -> Any:
+    """Redact paths/URLs/emails/GUIDs from a bridge string value.
+
+    Bounded primitives still reach Aria verbatim otherwise, so a widget that
+    puts a UPN, a local path, or an object id into a property value would
+    contradict the approved Data Profile. Non-strings pass through unchanged.
+    """
+    if isinstance(value, str):
+        return _scrub(value, limit=CLIENT_EVENTS_MAX_STRING_LENGTH)
+    return value
+
+
+def _emittable_property(value: Any) -> tuple[bool, Any]:
+    """Scrub one property value, or report that it cannot be emitted.
+
+    Returns ``(True, scrubbed)`` or ``(False, None)``. Values are scrubbed
+    INDIVIDUALLY, before serialization — never over the serialized blob.
+    ``_scrub``'s ``(?<!\\w)/[^\\s]+`` -> ``<path>`` rule runs to the next
+    whitespace, and compact JSON has none, so running it over
+    ``{"a":"/x","b":"y"}`` would eat through to the closing brace and destroy
+    the document.
+
+    Filter non-finite numbers before ``json.dumps`` to keep the emitted blob
+    valid JSON for ``parse_json``.
+    """
+    if value is None or isinstance(value, (bool, str)):
+        return True, _scrub_client_scalar(value)
+    if isinstance(value, (int, float)):
+        return (True, value) if _is_finite_number(value) else (False, None)
+    if isinstance(value, list):
+        items = []
+        for item in value:
+            keep, scrubbed = _emittable_property(item)
+            if not keep:
+                return False, None
+            if isinstance(scrubbed, list):
+                return False, None
+            items.append(scrubbed)
+        return True, items
+    return False, None
+
+
+def _client_properties_blob(properties: Any) -> tuple[str, int]:
+    """Render a bridge property bag as one JSON string plus a dropped count.
+
+    The ``client_properties`` column has a fixed string type. Property names
+    and value types live inside its JSON payload, keeping the Aria field set
+    stable as clients add properties. ``SCHEMA_VERSION`` describes that
+    emitted field set.
+
+    Keys are NOT scrubbed: they are call-site literals, and rewriting them
+    would corrupt the field names analysts query.
+    """
+    if properties is None:
+        return "{}", 0
+    if not isinstance(properties, dict):
+        # Emit the event with an empty bag and one dropped-property count so
+        # diagnostics distinguish malformed bags from absent properties.
+        return "{}", 1
+    if not properties:
+        return "{}", 0
+
+    dropped = 0
+    payload: dict[str, Any] = {}
+    for key, value in properties.items():
+        if not isinstance(key, str) or len(key) > CLIENT_EVENTS_MAX_PROPERTY_KEY_LENGTH:
+            dropped += 1
+            continue
+        keep, scrubbed = _emittable_property(value)
+        if not keep:
+            dropped += 1
+            continue
+        payload[key] = scrubbed
+
+    # Shed the largest properties until the blob fits, so the survivors stay
+    # parseable. Ordering by serialized size means one oversized value cannot
+    # evict a dozen small ones.
+    while payload:
+        try:
+            blob = json.dumps(payload, allow_nan=False, separators=(",", ":"))
+        except (TypeError, ValueError):
+            return "{}", len(properties)
+        if len(blob.encode("utf-8")) <= CLIENT_EVENTS_MAX_PROPERTIES_BYTES:
+            return blob, dropped
+        widest = max(payload, key=lambda k: len(json.dumps(payload[k], default=str)))
+        del payload[widest]
+        dropped += 1
+
+    return "{}", dropped
+
+
+def _rejection(reason: str) -> dict[str, Any]:
+    if reason not in _CLIENT_EVENTS_REJECTED_REASONS:
+        reason = CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE
+    return {
+        "status": "rejected",
+        "acceptedEventCount": 0,
+        "rejectedReason": reason,
+    }
+
+
+def _validate_client_events_envelope(envelope: Any) -> tuple[str | None, list[dict[str, Any]]]:
+    if not isinstance(envelope, dict):
+        return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+    schema_version = envelope.get("schemaVersion")
+    if (
+        not isinstance(schema_version, int)
+        or isinstance(schema_version, bool)
+        or schema_version != CLIENT_EVENTS_SCHEMA_VERSION
+    ):
+        return CLIENT_EVENTS_REJECTED_UNSUPPORTED_SCHEMA_VERSION, []
+    if not _valid_client_identifier(envelope.get("batchId")):
+        return CLIENT_EVENTS_REJECTED_INVALID_CORRELATION_ID, []
+    if not _valid_client_identifier(envelope.get("mountId")):
+        return CLIENT_EVENTS_REJECTED_INVALID_MOUNT_ID, []
+    if not _valid_client_string(envelope.get("appName")):
+        return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+    if not _valid_client_string(envelope.get("buildEnvironment")):
+        return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+    if not _valid_bounded_client_string(envelope.get("buildNumber"), allow_empty=True):
+        return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+    platform = envelope.get("platform")
+    if platform is not None and not _valid_bounded_client_string(platform, allow_empty=True):
+        return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+    user_agent = envelope.get("userAgent")
+    if user_agent is not None and not _valid_bounded_client_string(user_agent, allow_empty=True):
+        return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+    tool_call_id = envelope.get("toolCallId")
+    # The host supplies this optional diagnostic id. Omit incompatible values;
+    # batchId and mountId provide the identifiers required for stitching.
+    if tool_call_id is not None and not _valid_client_identifier(tool_call_id):
+        tool_call_id = None
+
+    events = envelope.get("events")
+    if not isinstance(events, list) or not events:
+        return CLIENT_EVENTS_REJECTED_EMPTY_BATCH, []
+    if len(events) > CLIENT_EVENTS_MAX_BATCH_EVENTS:
+        return CLIENT_EVENTS_REJECTED_BATCH_TOO_LARGE, []
+
+    rows: list[dict[str, Any]] = []
+    for event in events:
+        if not isinstance(event, dict):
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        # Read recognized fields only so clients can add optional event fields
+        # independently of ADK releases. Event names occupy a fixed column and
+        # are scrubbed and bounded during emission.
+        if not _valid_client_string(event.get("eventName")):
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        level = event.get("level")
+        if not isinstance(level, str) or level not in {"info", "error"}:
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        if not _valid_client_timestamp(event.get("eventTimestamp")):
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        if not _valid_client_number(event.get("timeSinceMount")):
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        if not _valid_client_sequence_number(event.get("sequenceNumber")):
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        locale = event.get("locale")
+        if locale is not None and not _valid_client_string(locale):
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        display_mode = event.get("displayMode")
+        if display_mode is not None and not _valid_bounded_client_string(display_mode):
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        theme_name = event.get("themeName")
+        if theme_name is not None and (
+            not isinstance(theme_name, str) or theme_name not in {"light", "dark"}
+        ):
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+        operation_id = event.get("operationId")
+        if operation_id is not None and not _valid_client_operation_id(operation_id):
+            return CLIENT_EVENTS_REJECTED_INVALID_EVENT_SHAPE, []
+
+    # ``get_session`` mutates ~/.adk/session.json (it mints a fresh id once the
+    # inactivity window lapses and stamps ``last`` on every call), so it runs
+    # only after the whole batch has passed validation — a rejected batch must
+    # leave no side effect on ADK session state.
+    sid, _ = get_session(SURFACE_CLI)
+    for event in events:
+        locale = event.get("locale")
+        display_mode = event.get("displayMode")
+        theme_name = event.get("themeName")
+        operation_id = event.get("operationId")
+        row = common_dimensions(SURFACE_CLI, session_id=sid)
+        row.update(
+            {
+                "client_event_name": _scrub_client_scalar(event["eventName"]),
+                "client_batch_id": envelope["batchId"],
+                "client_mount_id": envelope["mountId"],
+                "client_app_name": _scrub_client_scalar(envelope["appName"]),
+                "client_build_environment": _scrub_client_scalar(envelope["buildEnvironment"]),
+                "client_build_number": envelope["buildNumber"],
+                "client_level": event["level"],
+                "client_event_timestamp": event["eventTimestamp"],
+                "client_time_since_mount_ms": event["timeSinceMount"],
+                "client_sequence_number": event["sequenceNumber"],
+            }
+        )
+        if tool_call_id is not None:
+            row["client_tool_call_id"] = tool_call_id
+        if platform is not None:
+            row["client_platform"] = platform
+        if user_agent is not None:
+            row["client_user_agent"] = user_agent
+        if locale is not None:
+            row["client_locale"] = _scrub_client_scalar(locale)
+        if display_mode is not None:
+            row["client_display_mode"] = display_mode
+        if theme_name is not None:
+            row["client_theme_name"] = theme_name
+        if operation_id is not None:
+            row["client_operation_id"] = operation_id
+        blob, dropped = _client_properties_blob(event.get("properties"))
+        row["client_properties"] = blob
+        row["client_prop_dropped_count"] = dropped
+        rows.append(row)
+
+    return None, rows
+
+
+def report_client_events(envelope: dict[str, Any], *, block: bool = False) -> dict[str, Any]:
+    """Validate and emit a Vorpal bridge event batch through ADK telemetry.
+
+    Always returns a contract-shaped verdict. Vorpal reads a result without a
+    ``status`` as a transient failure and retries the batch, so an internal ADK
+    fault must never escape as an exception: it resolves to ``accepted`` for the
+    whole batch (fail-open, matching the module's "never break a caller" rule —
+    ADK's own buffer owns delivery retries).
+    """
+    try:
+        reason, rows = _validate_client_events_envelope(envelope)
+        if reason:
+            return _rejection(reason)
+        _emit_many(EVENT_CLIENT, rows, block=block)
+        return {"status": "accepted", "acceptedEventCount": len(rows)}
+    except Exception:  # noqa: BLE001 — the bridge must never break the widget
+        return {
+            "status": "accepted",
+            "acceptedEventCount": _client_events_batch_size(envelope),
+        }
+
+
+def _client_events_batch_size(envelope: Any) -> int:
+    """Best-effort count of the events a caller sent.
+
+    A fail-open acceptance must echo the full sent cardinality so Vorpal can
+    account for every event and avoid retrying an already-handled batch.
+    """
+    events = envelope.get("events") if isinstance(envelope, dict) else None
+    return len(events) if isinstance(events, list) else 0
 
 
 def flush(timeout: float = 5.0) -> None:

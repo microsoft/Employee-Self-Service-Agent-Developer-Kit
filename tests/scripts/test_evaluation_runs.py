@@ -1,0 +1,1060 @@
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+import pytest
+
+
+SCRIPTS = (
+    Path(__file__).resolve().parents[2]
+    / "solutions"
+    / "ess-maker-skills"
+    / "scripts"
+)
+sys.path.insert(0, str(SCRIPTS))
+
+import evaluation_runs  # noqa: E402
+
+
+class FakeClient:
+    def __init__(self):
+        self.started = []
+        self.list_runs_calls = 0
+
+    def list_environments_for_user(self):
+        return [{
+            "id": "environment-id",
+            "url": "https://contoso.crm.dynamics.com",
+        }]
+
+    def list_maker_evaluation_test_sets(self, environment_id, bot_id):
+        assert environment_id == "environment-id"
+        assert bot_id == "bot-id"
+        return [
+            {
+                "id": "set-comp",
+                "displayName": "Compensation",
+                "state": "Active",
+                "totalTestCases": 6,
+            },
+            {
+                "id": "set-benefits",
+                "displayName": "Benefits and Leave",
+                "state": "Active",
+                "totalTestCases": 10,
+            },
+            {
+                "id": "set-old",
+                "displayName": "Old Set",
+                "state": "Inactive",
+                "totalTestCases": 1,
+            },
+        ]
+
+    def run_maker_evaluation_test_set(
+        self,
+        environment_id,
+        bot_id,
+        test_set_id,
+        body,
+    ):
+        self.started.append((environment_id, bot_id, test_set_id, body))
+        return {
+            "runId": "run-1",
+            "state": "Queued",
+            "executionState": "Initializing",
+            "lastUpdatedAt": "2026-08-24T15:00:00Z",
+            "totalTestCases": 6,
+            "testCasesProcessed": 0,
+        }
+
+    def list_maker_evaluation_test_runs(self, environment_id, bot_id):
+        self.list_runs_calls += 1
+        return [{
+            "id": "remote-run",
+            "testSetId": "set-benefits",
+            "name": "Benefits nightly run",
+            "state": "Completed",
+            "startTime": "2026-08-24T14:00:00Z",
+            "totalTestCases": 10,
+        }]
+
+    def get_maker_evaluation_test_run(self, environment_id, bot_id, run_id):
+        return {
+            "id": run_id,
+            "testSetId": "set-comp",
+            "state": "Completed",
+            "testCasesResults": [{
+                "testCaseId": "case-1",
+                "state": "Completed",
+                "metricsResults": [{
+                    "type": "CompareMeaning",
+                    "result": {"status": "Pass"},
+                }],
+            }],
+        }
+
+
+def test_match_test_sets_filters_inactive_and_ranks_fuzzy_name():
+    client = FakeClient()
+    matches = evaluation_runs.match_test_sets(
+        client.list_maker_evaluation_test_sets("environment-id", "bot-id"),
+        "comp evals",
+    )
+
+    assert [item["displayName"] for item in matches] == ["Compensation"]
+    assert matches[0]["matchScore"] >= 0.45
+
+
+def test_resolve_environment_id_matches_dataverse_hostname():
+    environment_id = evaluation_runs.resolve_environment_id(
+        {"dataverseEndpoint": "https://contoso.crm.dynamics.com/"},
+        FakeClient(),
+    )
+
+    assert environment_id == "environment-id"
+
+
+def test_list_agent_test_sets_uses_local_parent_ids_and_remote_active_state(
+    tmp_path,
+):
+    evaluations = tmp_path / "evaluations" / "compensation"
+    evaluations.mkdir(parents=True)
+    (evaluations / "compensation.mcs.yml").write_text(
+        "kind: EvaluationSet\n",
+        encoding="utf-8",
+    )
+    (evaluations / "case.mcs.yml").write_text(
+        "kind: EvaluationData\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".component-map.json").write_text(
+        json.dumps({
+            "evaluations/compensation/compensation.mcs.yml": {
+                "botcomponentid": "set-comp",
+                "componenttype": 19,
+                "name": "Compensation",
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    sets = evaluation_runs.list_agent_test_sets(
+        FakeClient(),
+        "environment-id",
+        "bot-id",
+        tmp_path,
+        "comp",
+    )
+
+    assert len(sets) == 1
+    assert sets[0]["id"] == "set-comp"
+    assert sets[0]["localSetName"] == "compensation"
+    assert sets[0]["localTestCaseCount"] == 1
+    assert sets[0]["source"] == "Configured agent evaluations folder"
+
+
+def test_list_agent_test_sets_excludes_review_requested_sets(tmp_path):
+    evaluations = tmp_path / "evaluations" / "compensation"
+    evaluations.mkdir(parents=True)
+    (evaluations / "compensation.mcs.yml").write_text(
+        "kind: EvaluationSet\n",
+        encoding="utf-8",
+    )
+    (evaluations / "review.json").write_text(
+        json.dumps({
+            "status": "review_requested",
+            "baseDescription": "Needs SME review",
+        }),
+        encoding="utf-8",
+    )
+    (tmp_path / ".component-map.json").write_text(
+        json.dumps({
+            "evaluations/compensation/compensation.mcs.yml": {
+                "botcomponentid": "set-comp",
+                "componenttype": 19,
+                "name": "Compensation",
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    sets = evaluation_runs.list_agent_test_sets(
+        FakeClient(),
+        "environment-id",
+        "bot-id",
+        tmp_path,
+        "compensation",
+    )
+
+    assert sets == []
+
+
+def test_list_agent_test_sets_explains_review_pending_when_requested(
+    tmp_path,
+):
+    evaluations = tmp_path / "evaluations" / "compensation"
+    evaluations.mkdir(parents=True)
+    (evaluations / "compensation.mcs.yml").write_text(
+        "kind: EvaluationSet\n",
+        encoding="utf-8",
+    )
+    (evaluations / "review.json").write_text(
+        json.dumps({"status": "review_requested"}),
+        encoding="utf-8",
+    )
+    (tmp_path / ".component-map.json").write_text(
+        json.dumps({
+            "evaluations/compensation/compensation.mcs.yml": {
+                "botcomponentid": "set-comp",
+                "componenttype": 19,
+                "name": "Compensation",
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    sets = evaluation_runs.list_agent_test_sets(
+        FakeClient(),
+        "environment-id",
+        "bot-id",
+        tmp_path,
+        include_blocked=True,
+    )
+
+    assert len(sets) == 1
+    assert sets[0]["runnable"] is False
+    assert sets[0]["blockedReason"] == (
+        evaluation_runs.REVIEW_PENDING_GUIDANCE
+    )
+
+
+def test_list_agent_test_sets_allows_review_completed_sets(tmp_path):
+    evaluations = tmp_path / "evaluations" / "compensation"
+    baseline = tmp_path / ".baseline" / "evaluations" / "compensation"
+    evaluations.mkdir(parents=True)
+    baseline.mkdir(parents=True)
+    (evaluations / "compensation.mcs.yml").write_text(
+        "kind: EvaluationSet\n",
+        encoding="utf-8",
+    )
+    (evaluations / "review.json").write_text(
+        json.dumps({
+            "status": "review_completed",
+            "baseDescription": "Reviewed by SME",
+        }),
+        encoding="utf-8",
+    )
+    (baseline / "review.json").write_text(
+        json.dumps({
+            "status": "review_completed",
+            "baseDescription": "Reviewed by SME",
+        }),
+        encoding="utf-8",
+    )
+    (tmp_path / ".component-map.json").write_text(
+        json.dumps({
+            "evaluations/compensation/compensation.mcs.yml": {
+                "botcomponentid": "set-comp",
+                "componenttype": 19,
+                "name": "Compensation",
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    sets = evaluation_runs.list_agent_test_sets(
+        FakeClient(),
+        "environment-id",
+        "bot-id",
+        tmp_path,
+    )
+
+    assert [item["id"] for item in sets] == ["set-comp"]
+    assert sets[0]["reviewStatus"] == "review_completed"
+
+
+def test_list_agent_test_sets_blocks_unpushed_completion_without_baseline(
+    tmp_path,
+):
+    evaluations = tmp_path / "evaluations" / "compensation"
+    evaluations.mkdir(parents=True)
+    (evaluations / "compensation.mcs.yml").write_text(
+        "kind: EvaluationSet\n",
+        encoding="utf-8",
+    )
+    (evaluations / "review.json").write_text(
+        json.dumps({"status": "review_completed"}),
+        encoding="utf-8",
+    )
+    (tmp_path / ".component-map.json").write_text(
+        json.dumps({
+            "evaluations/compensation/compensation.mcs.yml": {
+                "botcomponentid": "set-comp",
+                "componenttype": 19,
+                "name": "Compensation",
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    sets = evaluation_runs.list_agent_test_sets(
+        FakeClient(),
+        "environment-id",
+        "bot-id",
+        tmp_path,
+        include_blocked=True,
+    )
+
+    assert sets[0]["runnable"] is False
+    assert sets[0]["blockedReason"] == (
+        evaluation_runs.REVIEW_COMPLETION_NOT_PUSHED_GUIDANCE
+    )
+
+
+def test_list_agent_test_sets_excludes_unpushed_review_completion(tmp_path):
+    evaluations = tmp_path / "evaluations" / "compensation"
+    baseline = tmp_path / ".baseline" / "evaluations" / "compensation"
+    evaluations.mkdir(parents=True)
+    baseline.mkdir(parents=True)
+    (evaluations / "compensation.mcs.yml").write_text(
+        "kind: EvaluationSet\n",
+        encoding="utf-8",
+    )
+    (evaluations / "review.json").write_text(
+        json.dumps({"status": "review_completed"}),
+        encoding="utf-8",
+    )
+    (baseline / "review.json").write_text(
+        json.dumps({"status": "review_requested"}),
+        encoding="utf-8",
+    )
+    (tmp_path / ".component-map.json").write_text(
+        json.dumps({
+            "evaluations/compensation/compensation.mcs.yml": {
+                "botcomponentid": "set-comp",
+                "componenttype": 19,
+                "name": "Compensation",
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    sets = evaluation_runs.list_agent_test_sets(
+        FakeClient(),
+        "environment-id",
+        "bot-id",
+        tmp_path,
+    )
+
+    assert sets == []
+
+
+def test_list_agent_test_sets_explains_unpushed_review_completion(tmp_path):
+    evaluations = tmp_path / "evaluations" / "compensation"
+    baseline = tmp_path / ".baseline" / "evaluations" / "compensation"
+    evaluations.mkdir(parents=True)
+    baseline.mkdir(parents=True)
+    (evaluations / "compensation.mcs.yml").write_text(
+        "kind: EvaluationSet\n",
+        encoding="utf-8",
+    )
+    (evaluations / "review.json").write_text(
+        json.dumps({"status": "review_completed"}),
+        encoding="utf-8",
+    )
+    (baseline / "review.json").write_text(
+        json.dumps({"status": "review_requested"}),
+        encoding="utf-8",
+    )
+    (tmp_path / ".component-map.json").write_text(
+        json.dumps({
+            "evaluations/compensation/compensation.mcs.yml": {
+                "botcomponentid": "set-comp",
+                "componenttype": 19,
+                "name": "Compensation",
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    sets = evaluation_runs.list_agent_test_sets(
+        FakeClient(),
+        "environment-id",
+        "bot-id",
+        tmp_path,
+        include_blocked=True,
+    )
+
+    assert len(sets) == 1
+    assert sets[0]["runnable"] is False
+    assert sets[0]["blockedReason"] == (
+        evaluation_runs.REVIEW_COMPLETION_NOT_PUSHED_GUIDANCE
+    )
+
+
+class _RemoteMarkerClient(FakeClient):
+    """FakeClient variant that stamps a review marker on the remote set,
+    simulating the live Dataverse description for set-comp."""
+
+    def __init__(self, remote_status):
+        super().__init__()
+        self._remote_status = remote_status
+
+    def list_maker_evaluation_test_sets(self, environment_id, bot_id):
+        sets = super().list_maker_evaluation_test_sets(environment_id, bot_id)
+        for item in sets:
+            if item["id"] == "set-comp":
+                item["description"] = f"[ADK-REVIEW status={self._remote_status}]"
+        return sets
+
+
+def test_list_agent_test_sets_blocks_when_remote_requested_but_local_untagged(
+    tmp_path,
+):
+    """Untagged local copy must not run while the live remote set is
+    review_requested — the remote marker governs when there is no pending
+    local change."""
+    evaluations = tmp_path / "evaluations" / "compensation"
+    evaluations.mkdir(parents=True)
+    (evaluations / "compensation.mcs.yml").write_text(
+        "kind: EvaluationSet\n",
+        encoding="utf-8",
+    )
+    (tmp_path / ".component-map.json").write_text(
+        json.dumps({
+            "evaluations/compensation/compensation.mcs.yml": {
+                "botcomponentid": "set-comp",
+                "componenttype": 19,
+                "name": "Compensation",
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    sets = evaluation_runs.list_agent_test_sets(
+        _RemoteMarkerClient("review_requested"),
+        "environment-id",
+        "bot-id",
+        tmp_path,
+        include_blocked=True,
+    )
+
+    assert len(sets) == 1
+    assert sets[0]["runnable"] is False
+    assert sets[0]["blockedReason"] == evaluation_runs.REVIEW_PENDING_GUIDANCE
+
+
+def test_list_agent_test_sets_clears_when_remote_completed_after_local_request(
+    tmp_path,
+):
+    """A stale local+baseline review_requested must clear once the live
+    remote set is review_completed — no genuine pending local change, so
+    the remote marker governs."""
+    evaluations = tmp_path / "evaluations" / "compensation"
+    baseline = tmp_path / ".baseline" / "evaluations" / "compensation"
+    evaluations.mkdir(parents=True)
+    baseline.mkdir(parents=True)
+    (evaluations / "compensation.mcs.yml").write_text(
+        "kind: EvaluationSet\n",
+        encoding="utf-8",
+    )
+    for review_dir in (evaluations, baseline):
+        (review_dir / "review.json").write_text(
+            json.dumps({"status": "review_requested"}),
+            encoding="utf-8",
+        )
+    (tmp_path / ".component-map.json").write_text(
+        json.dumps({
+            "evaluations/compensation/compensation.mcs.yml": {
+                "botcomponentid": "set-comp",
+                "componenttype": 19,
+                "name": "Compensation",
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    sets = evaluation_runs.list_agent_test_sets(
+        _RemoteMarkerClient("review_completed"),
+        "environment-id",
+        "bot-id",
+        tmp_path,
+    )
+
+    assert [item["id"] for item in sets] == ["set-comp"]
+    assert sets[0]["runnable"] is True
+
+
+def test_run_command_reports_review_block_reason(
+    monkeypatch,
+    capsys,
+    tmp_path,
+):
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "evaluation_runs.py",
+            "run",
+            "--test-set-id",
+            "set-comp",
+        ],
+    )
+    monkeypatch.setattr(evaluation_runs, "load_config", lambda: {})
+    monkeypatch.setattr(
+        evaluation_runs,
+        "_runtime",
+        lambda config: (
+            FakeClient(),
+            "environment-id",
+            "bot-id",
+            tmp_path,
+        ),
+    )
+    monkeypatch.setattr(
+        evaluation_runs,
+        "list_agent_test_sets",
+        lambda *args, **kwargs: [{
+            "id": "set-comp",
+            "runnable": False,
+            "blockedReason": evaluation_runs.REVIEW_PENDING_GUIDANCE,
+        }],
+    )
+    monkeypatch.setattr(
+        evaluation_runs,
+        "resolve_mcs_connection",
+        lambda *args, **kwargs: pytest.fail(
+            "Blocked sets must not resolve a connection"
+        ),
+    )
+
+    assert evaluation_runs.main() == 1
+    assert evaluation_runs.REVIEW_PENDING_GUIDANCE in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    ("config", "message"),
+    [
+        ({}, "Dataverse endpoint is missing"),
+        (
+            {"dataverseEndpoint": "https://example.crm.dynamics.com"},
+            "Configured agent details are missing",
+        ),
+        (
+            {
+                "dataverseEndpoint": "https://example.crm.dynamics.com",
+                "agent": {},
+            },
+            "Configured agent botId or folder is missing",
+        ),
+    ],
+)
+def test_runtime_rejects_incomplete_config(config, message):
+    with pytest.raises(evaluation_runs.EvaluationRunError, match=message):
+        evaluation_runs._runtime(config)
+
+
+def test_list_agent_test_sets_rejects_unknown_review_status(tmp_path):
+    evaluations = tmp_path / "evaluations" / "compensation"
+    evaluations.mkdir(parents=True)
+    (evaluations / "compensation.mcs.yml").write_text(
+        "kind: EvaluationSet\n",
+        encoding="utf-8",
+    )
+    (evaluations / "review.json").write_text(
+        json.dumps({
+            "status": "unknown",
+            "baseDescription": "Legacy metadata",
+        }),
+        encoding="utf-8",
+    )
+    (tmp_path / ".component-map.json").write_text(
+        json.dumps({
+            "evaluations/compensation/compensation.mcs.yml": {
+                "botcomponentid": "set-comp",
+                "componenttype": 19,
+                "name": "Compensation",
+            }
+        }),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(
+        evaluation_runs.EvaluationRunError,
+        match="Review status must be",
+    ):
+        evaluation_runs.list_agent_test_sets(
+            FakeClient(),
+            "environment-id",
+            "bot-id",
+            tmp_path,
+        )
+
+
+def test_start_run_returns_api_details_without_local_mapping(tmp_path):
+    client = FakeClient()
+    result = evaluation_runs.start_run(
+        client,
+        "environment-id",
+        "bot-id",
+        {
+            "id": "set-comp",
+            "displayName": "Compensation",
+            "totalTestCases": 6,
+        },
+        "connection-1",
+    )
+
+    assert result["runId"] == "run-1"
+    assert result["testSetName"] == "Compensation"
+    assert result["testSetId"] == "set-comp"
+    assert result["userGuidance"] == (
+        "Running your evaluation may take a while. Please return in 10-15 "
+        "minutes to see the results."
+    )
+    assert client.started[0][3]["runOnPublishedBot"] is False
+    assert client.started[0][3]["mcsConnectionId"] == "connection-1"
+    assert not (tmp_path / "evaluations" / "runs.json").exists()
+
+
+def test_start_run_includes_resolved_tool_connections():
+    client = FakeClient()
+    tools_connections = [{
+        "botId": "bot-id",
+        "botSchemaName": "contoso_agent",
+        "connections": [{
+            "connectorId": "shared_alchemy",
+            "connectionId": "tool-connection",
+            "connectionReferenceName": "contoso_agent.shared_alchemy.ref",
+        }],
+    }]
+
+    evaluation_runs.start_run(
+        client,
+        "environment-id",
+        "bot-id",
+        {"id": "set-comp", "displayName": "Compensation"},
+        "profile-connection",
+        tools_connections=tools_connections,
+    )
+
+    assert client.started[0][3]["toolsConnections"] == tools_connections
+
+
+def _connection(
+    connection_id,
+    *,
+    status="Connected",
+    account_name=None,
+    created_by_upn=None,
+    last_modified=None,
+):
+    return {
+        "name": connection_id,
+        "properties": {
+            "displayName": f"Profile {connection_id}",
+            "accountName": account_name,
+            "createdBy": {"userPrincipalName": created_by_upn},
+            "statuses": [{"status": status}],
+            "lastModifiedTime": last_modified,
+        },
+    }
+
+
+def test_select_mcs_connection_rejects_no_connected_profiles():
+    connections = [
+        _connection("broken", status="Error"),
+        _connection("disabled", status="Disconnected"),
+    ]
+
+    try:
+        evaluation_runs.select_mcs_connection(connections)
+    except evaluation_runs.EvaluationRunError as exc:
+        assert "No Connected" in str(exc)
+    else:
+        raise AssertionError("Expected missing connection to block the run")
+
+
+def test_select_mcs_connection_uses_only_connected_profile():
+    selected = evaluation_runs.select_mcs_connection([
+        _connection("broken", status="Error"),
+        _connection("connected"),
+    ])
+
+    assert selected["id"] == "connected"
+
+
+def test_select_mcs_connection_matches_signed_in_account():
+    selected = evaluation_runs.select_mcs_connection(
+        [
+            _connection(
+                "other",
+                created_by_upn="other@example.com",
+            ),
+            _connection(
+                "current",
+                account_name="maker@example.com",
+            ),
+        ],
+        signed_in_username="maker@example.com",
+    )
+
+    assert selected["id"] == "current"
+
+
+def test_select_mcs_connection_uses_latest_profile_for_signed_in_account():
+    selected = evaluation_runs.select_mcs_connection(
+        [
+            _connection(
+                "older",
+                account_name="maker@example.com",
+                last_modified="2026-08-01T00:00:00Z",
+            ),
+            _connection(
+                "newer",
+                account_name="maker@example.com",
+                last_modified="2026-09-01T00:00:00Z",
+            ),
+            _connection(
+                "other",
+                account_name="other@example.com",
+                last_modified="2026-09-02T00:00:00Z",
+            ),
+        ],
+        signed_in_username="maker@example.com",
+    )
+
+    assert selected["id"] == "newer"
+
+
+def test_select_mcs_connection_rejects_ambiguous_profiles():
+    connections = [
+        _connection("second", created_by_upn="two@example.com"),
+        _connection("first", created_by_upn="one@example.com"),
+    ]
+
+    with pytest.raises(
+        evaluation_runs.EvaluationRunError,
+        match="Multiple Connected",
+    ):
+        evaluation_runs.select_mcs_connection(
+            connections,
+            signed_in_username="maker@example.com",
+        )
+
+
+def test_select_mcs_connection_validates_explicit_profile_status():
+    connections = [
+        _connection("broken", status="Error"),
+        _connection("connected"),
+    ]
+
+    try:
+        evaluation_runs.select_mcs_connection(
+            connections,
+            requested_id="broken",
+        )
+    except evaluation_runs.EvaluationRunError as exc:
+        assert "not Connected" in str(exc)
+    else:
+        raise AssertionError("Expected an invalid explicit profile to fail")
+
+
+def test_resolve_mcs_connection_uses_ppapi_signed_in_account(monkeypatch):
+    observed = {}
+
+    class FakeAdminClient:
+        signed_in_username = "maker@example.com"
+
+        def __init__(self, tenant_id):
+            observed["tenantId"] = tenant_id
+
+        def authenticate(self, **kwargs):
+            observed["authenticate"] = kwargs
+
+        def get_connector_connections(self, environment_id, connector_name):
+            return [
+                _connection("other", account_name="other@example.com"),
+                _connection("current", account_name="maker@example.com"),
+            ]
+
+    monkeypatch.setattr(
+        evaluation_runs,
+        "discover_tenant",
+        lambda env_url: "tenant-id",
+    )
+    monkeypatch.setattr(evaluation_runs, "PPAdminClient", FakeAdminClient)
+
+    selected = evaluation_runs.resolve_mcs_connection(
+        {"dataverseEndpoint": "https://example.crm.dynamics.com"},
+        "environment-id",
+        signed_in_username="maker@example.com",
+    )
+
+    assert selected["id"] == "current"
+    assert observed["authenticate"] == {
+        "include_flow": False,
+        "preferred_username": "maker@example.com",
+    }
+
+
+def test_resolve_tool_connections_uses_signed_in_account(
+    monkeypatch,
+    tmp_path,
+):
+    installation = tmp_path / "config.json"
+    installation.write_text(
+        json.dumps({
+            "installations": {
+                "cea.it": {
+                    "requiredConnection": {
+                        "connectorApiName": "shared_alchemy",
+                        "referenceLogicalName": (
+                            "contoso_agent.shared_alchemy.reference"
+                        ),
+                    }
+                }
+            }
+        }),
+        encoding="utf-8",
+    )
+    observed = {}
+
+    class FakeAdminClient:
+        signed_in_username = "maker@example.com"
+
+        def __init__(self, tenant_id):
+            pass
+
+        def authenticate(self, **kwargs):
+            observed["authenticate"] = kwargs
+
+        def get_connector_connections(self, environment_id, connector_name):
+            assert connector_name == "shared_alchemy"
+            return [
+                _connection("other", account_name="other@example.com"),
+                _connection("current", account_name="maker@example.com"),
+            ]
+
+    monkeypatch.setattr(
+        evaluation_runs,
+        "INSTALLATION_CONFIG_PATH",
+        installation,
+    )
+    monkeypatch.setattr(
+        evaluation_runs,
+        "discover_tenant",
+        lambda env_url: "tenant-id",
+    )
+    monkeypatch.setattr(evaluation_runs, "PPAdminClient", FakeAdminClient)
+
+    result = evaluation_runs.resolve_tool_connections(
+        {
+            "dataverseEndpoint": "https://example.crm.dynamics.com",
+            "agent": {"schemaName": "contoso_agent"},
+        },
+        "environment-id",
+        "bot-id",
+        "maker@example.com",
+    )
+
+    assert result == [{
+        "botId": "bot-id",
+        "botSchemaName": "contoso_agent",
+        "connections": [{
+            "connectorId": "shared_alchemy",
+            "connectionId": "current",
+            "connectionReferenceName": (
+                "contoso_agent.shared_alchemy.reference"
+            ),
+        }],
+    }]
+    assert observed["authenticate"]["preferred_username"] == (
+        "maker@example.com"
+    )
+
+
+def test_list_runs_uses_remote_api_and_joins_test_set_name():
+    client = FakeClient()
+
+    runs = evaluation_runs.list_runs(
+        client,
+        "environment-id",
+        "bot-id",
+    )
+
+    assert runs[0]["runId"] == "remote-run"
+    assert runs[0]["testSetName"] == "Benefits and Leave"
+    assert runs[0]["source"] == "Power Platform API"
+    assert client.list_runs_calls == 1
+
+
+def test_get_results_enriches_local_test_case_and_set_names(tmp_path):
+    (tmp_path / ".component-map.json").write_text(
+        json.dumps({
+            "evaluations/compensation/base-pay.mcs.yml": {
+                "botcomponentid": "case-1",
+                "parentbotcomponentid": "set-comp",
+                "componenttype": 19,
+                "name": "Base pay",
+            }
+        }),
+        encoding="utf-8",
+    )
+    result = evaluation_runs.get_run_results(
+        FakeClient(),
+        "environment-id",
+        "bot-id",
+        tmp_path,
+        "run-1",
+    )
+
+    assert result["testSetName"] == "Compensation"
+    assert result["testCasesResults"][0]["testCaseName"] == "Base pay"
+    assert result["analysis"]["summary"] == {
+        "totalCases": 1,
+        "passedCases": 1,
+        "failedCases": 0,
+        "passRate": 100.0,
+    }
+    assert result["analysis"]["scenarioGroups"][0]["group"] == "Compensation"
+
+
+def test_get_results_preserves_unmapped_test_case_id(tmp_path):
+    result = evaluation_runs.get_run_results(
+        FakeClient(),
+        "environment-id",
+        "bot-id",
+        tmp_path,
+        "run-1",
+    )
+
+    assert result["testCasesResults"][0]["testCaseName"] == "case-1"
+
+
+def test_get_results_joins_remote_test_set_name_without_local_history(tmp_path):
+    result = evaluation_runs.get_run_results(
+        FakeClient(),
+        "environment-id",
+        "bot-id",
+        tmp_path,
+        "run-1",
+    )
+
+    assert result["testSetName"] == "Compensation"
+
+
+def test_analyze_run_results_groups_ai_reason_and_general_quality_failures():
+    result = {
+        "testSetName": "Compensation",
+        "testCasesResults": [
+            {
+                "testCaseName": "Comp Ratio",
+                "metricsResults": [{
+                    "type": "CompareMeaning",
+                    "result": {
+                        "status": "Fail",
+                        "aiResultReason": (
+                            "The agent returned an error instead of the ratio."
+                        ),
+                    },
+                }],
+            },
+            {
+                "testCaseName": "Privacy",
+                "metricsResults": [
+                    {
+                        "type": "GeneralQuality",
+                        "result": {
+                            "status": "Fail",
+                            "data": {
+                                "abstention": "Yes",
+                                "completeness": "No",
+                            },
+                        },
+                    },
+                    {
+                        "type": "CompareMeaning",
+                        "result": {
+                            "status": "Pass",
+                            "aiResultReason": (
+                                "The refusal matches the expected response."
+                            ),
+                        },
+                    },
+                ],
+            },
+            {
+                "testCaseName": "Base Comp",
+                "metricsResults": [{
+                    "type": "CompareMeaning",
+                    "result": {"status": "Pass"},
+                }],
+            },
+        ],
+    }
+
+    analysis = evaluation_runs.analyze_run_results(result)
+
+    assert analysis["summary"] == {
+        "totalCases": 3,
+        "passedCases": 1,
+        "failedCases": 2,
+        "passRate": 33.3,
+    }
+    assert analysis["scenarioGroups"] == [{
+        "group": "Compensation",
+        "cases": 3,
+        "passed": 1,
+        "failed": 2,
+        "passRate": 33.3,
+    }]
+    assert {
+        item["category"] for item in analysis["failureGroups"]
+    } == {
+        "Expected-meaning mismatch",
+        "Abstention graded incomplete",
+    }
+    assert any(
+        "returned an error" in item["representativeEvidence"]
+        for item in analysis["failureGroups"]
+    )
+
+
+def test_analyze_run_results_treats_no_metrics_case_as_non_pass():
+    """A completed case that produced no metric results must not be counted
+    as a silent pass — it cannot be verified, so it is surfaced for review."""
+    result = {
+        "testSetName": "Compensation",
+        "testCasesResults": [
+            {
+                "testCaseName": "No metrics",
+                "state": "Completed",
+                "metricsResults": [],
+            },
+            {
+                "testCaseName": "Real pass",
+                "state": "Completed",
+                "metricsResults": [{
+                    "type": "CompareMeaning",
+                    "result": {"status": "Pass"},
+                }],
+            },
+        ],
+    }
+
+    analysis = evaluation_runs.analyze_run_results(result)
+
+    assert analysis["summary"] == {
+        "totalCases": 2,
+        "passedCases": 1,
+        "failedCases": 1,
+        "passRate": 50.0,
+    }
+    assert any(
+        item["category"] == "Execution or metric failure"
+        for item in analysis["failureGroups"]
+    )

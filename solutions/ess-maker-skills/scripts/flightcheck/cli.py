@@ -53,10 +53,17 @@ from flightcheck.pp_admin_client import PPAdminClient, derive_environment_id
 from flightcheck.pva_client import PVAClient
 from flightcheck.powerplatform_client import PowerPlatformClient
 from flightcheck.azure_arm_client import AzureArmClient
+from agentbuilder import (
+    AgentBuilderClient,
+    ConnectivityClient,
+    authenticate_flightcheck,
+    ring_from_environment_host,
+    validate_environment_host,
+)
 
 # Check modules
 from flightcheck.checks.prerequisites import run_prerequisites_checks
-from flightcheck.checks.environment import run_environment_checks
+from flightcheck.checks.environment import run_capacity_check, run_environment_checks
 from flightcheck.checks.authentication import run_authentication_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
@@ -73,6 +80,7 @@ from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.checks.licensing import run_licensing_checks
 from flightcheck.checks.cloud_policy import run_cloud_policy_checks
 from flightcheck.checks.infrastructure import run_infrastructure_checks
+from flightcheck.checks.native_agent import run_native_agent_checks
 from flightcheck import consent
 
 
@@ -130,6 +138,22 @@ FULL_SCOPE = [
     ("Publishing", run_publishing_checks),
     ("Cloud Policies", run_cloud_policy_checks),
 ]
+
+NATIVE_NO_DATAVERSE_SCOPE_MAP = {
+    "full": [
+        ("Native Agent", run_native_agent_checks),
+        ("Environment", run_capacity_check),
+        ("Local Files", run_local_file_checks),
+    ],
+    "environment": [("Environment", run_capacity_check)],
+    "servicenow": [("Native Agent", run_native_agent_checks)],
+    "workday": [("Native Agent", run_native_agent_checks)],
+}
+NATIVE_CONNECTOR_FILTERS = {
+    "servicenow": ("shared_service-now",),
+    "workday": ("shared_workdaysoap",),
+}
+NATIVE_NO_DATAVERSE_LOCAL_SCOPES = frozenset({"infrastructure", "local"})
 
 # Scopes whose checks query the Copilot Studio Island Gateway (PVA) and so
 # require PVA authentication in main(). Keep in sync with the SCOPE_MAP checks
@@ -659,6 +683,30 @@ def _resolve_target_selection(args, runner):
         _resolve_servicenow_connection(args, runner)
 
 
+def _active_agent_config(config: dict) -> dict:
+    active_slug = str(config.get("activeAgent") or "")
+    agents = config.get("agents")
+    if isinstance(agents, list):
+        for agent in agents:
+            if (
+                isinstance(agent, dict)
+                and str(agent.get("slug") or "") == active_slug
+            ):
+                return agent
+    agent = config.get("agent")
+    return agent if isinstance(agent, dict) else {}
+
+
+def _is_native_no_dataverse(config: dict, env_url: str) -> bool:
+    if env_url:
+        return False
+    release_line = str(config.get("releaseLine") or "").casefold()
+    if release_line == "da":
+        return True
+    active = _active_agent_config(config)
+    return str(active.get("releaseLine") or "").casefold() == "da"
+
+
 def _run_single_checkpoint(args):
     """Run exactly one checkpoint (or family) by ID and report only its result.
 
@@ -717,13 +765,21 @@ def _run_single_checkpoint(args):
     pp_admin = None
     pva = None
     powerplatform = None
+    agentbuilder = None
+    connectivity = None
 
     # Tenant discovery feeds Graph / Power Platform / PVA auth. Normally read
     # from the Dataverse environment's auth challenge; when this checkpoint
     # needs no Dataverse endpoint (Entra-only), fall back to the multi-tenant
     # "organizations" authority so interactive sign-in resolves the operator's
     # home tenant.
-    if needed & {registry.GRAPH, registry.PP_ADMIN, registry.PVA, registry.DATAVERSE, registry.POWERPLATFORM}:
+    if needed & {
+        registry.GRAPH,
+        registry.PP_ADMIN,
+        registry.PVA,
+        registry.DATAVERSE,
+        registry.POWERPLATFORM,
+    }:
         from auth import discover_tenant
         if env_url:
             try:
@@ -770,12 +826,55 @@ def _run_single_checkpoint(args):
             print(f"  Power Platform: WARNING — {e}")
             pp_admin = None
 
-    env_id = None
-    if registry.PP_ADMIN in needed:
-        if args.environment_id:
-            env_id = args.environment_id
-        elif env_url:
-            env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
+    env_id = args.environment_id or config.get("environmentId") or None
+    if not env_id and registry.PP_ADMIN in needed and env_url:
+        env_id = derive_environment_id(env_url, dv_token, pp_admin=pp_admin)
+
+    if needed & {registry.AGENTBUILDER, registry.CONNECTIVITY}:
+        native_host = config.get("powerPlatformApiEndpoint", "")
+        if not native_host:
+            print(
+                "ERROR: No powerPlatformApiEndpoint in .local/config.json. "
+                "Run /setup again."
+            )
+            sys.exit(1)
+        try:
+            native_ring = ring_from_environment_host(native_host)
+            native_host = validate_environment_host(native_host, native_ring)
+        except ValueError as e:
+            print(f"ERROR: {e}")
+            sys.exit(1)
+        if not quiet_auth:
+            print("Authenticating to native AgentBuilder APIs...")
+        try:
+            native_token, native_tenant_id = authenticate_flightcheck(
+                native_ring,
+                include_connectivity=registry.CONNECTIVITY in needed,
+            )
+            tenant_id = native_tenant_id
+            agentbuilder = AgentBuilderClient(
+                native_host,
+                native_token,
+                ring=native_ring,
+                tenant_id=native_tenant_id,
+                api_version=config.get(
+                    "agentBuilderApiVersion", "2024-10-01"
+                ),
+            )
+            if registry.CONNECTIVITY in needed:
+                connectivity = ConnectivityClient(
+                    native_token,
+                    ring=native_ring,
+                    api_version=config.get(
+                        "agentBuilderApiVersion", "2024-10-01"
+                    ),
+                )
+            if not quiet_auth:
+                print("  Native AgentBuilder APIs: OK")
+        except Exception as e:
+            print(f"  Native AgentBuilder APIs: WARNING — {e}")
+            agentbuilder = None
+            connectivity = None
 
     if registry.PVA in needed:
         if not quiet_auth:
@@ -815,6 +914,8 @@ def _run_single_checkpoint(args):
     runner.pva = pva
     runner.powerplatform = powerplatform
     runner.azure_arm = None
+    runner.agentbuilder = agentbuilder
+    runner.connectivity = connectivity
 
     # No runtime-reachability consent here: INFRA-003 is not individually
     # targetable in single-checkpoint mode (there is no INFRA CheckpointSpec in
@@ -836,8 +937,7 @@ def _run_single_checkpoint(args):
     if not result.results:
         print(f"\nNOTE: checkpoint {target} produced no result rows (the owning "
               "check may have skipped it for this tenant state).")
-        if not getattr(spec, "is_family", False):
-            sys.exit(1)
+        sys.exit(1)
 
     # --- Emit anonymous outcome telemetry (best-effort; never affects exit) ---
     # Single-checkpoint mode never auto-opens the HTML report; results.json /
@@ -1078,8 +1178,31 @@ def main():
         config = json.load(f)
 
     infra_only_scope = args.scope == "infrastructure"
+    da_local_scope = args.scope == "local"
     env_url = args.environment_url or config.get("dataverseEndpoint", "")
-    if not env_url and not infra_only_scope:
+    native_no_dataverse = _is_native_no_dataverse(config, env_url)
+    native_remote_scope = (
+        native_no_dataverse
+        and args.scope in NATIVE_NO_DATAVERSE_SCOPE_MAP
+    )
+    native_supported_scopes = (
+        set(NATIVE_NO_DATAVERSE_SCOPE_MAP)
+        | set(NATIVE_NO_DATAVERSE_LOCAL_SCOPES)
+    )
+    if native_no_dataverse and args.scope not in native_supported_scopes:
+        supported = ", ".join(sorted(native_supported_scopes))
+        print(
+            f"ERROR: Scope '{args.scope}' requires Dataverse and is not "
+            "available for this native no-Dataverse agent. "
+            f"Supported scopes: {supported}."
+        )
+        sys.exit(1)
+    if (
+        not env_url
+        and not infra_only_scope
+        and not da_local_scope
+        and not native_remote_scope
+    ):
         print("ERROR: No dataverseEndpoint in .local/config.json.")
         sys.exit(1)
 
@@ -1103,12 +1226,29 @@ def main():
         for a in agents:
             marker = "->" if a.get("slug") == active else "  "
             print(f"    {marker} {a.get('name', 'Unknown')}")
-    print(f"  Environment: {env_url}")
+    print(
+        f"  Environment: "
+        f"{env_url or config.get('powerPlatformApiEndpoint') or 'AgentBuilder workspace (local files only)'}"
+    )
     print(f"  Scope:       {args.scope}")
     print("=" * 64)
     print()
 
-    if infra_only_scope:
+    agentbuilder = None
+    connectivity = None
+    powerplatform = None
+    azure_arm = None
+    if da_local_scope:
+        tenant_id = None
+        dv_token = None
+        graph = None
+        pp_admin = None
+        env_id = config.get("environmentId") or None
+        print(
+            "Skipping Dataverse and remote-service authentication for "
+            "DA local-files scope."
+        )
+    elif infra_only_scope:
         # Infrastructure scope skips auth to stay fast and read-only. The one
         # exception is the INFRA-003 egress probe: when explicitly opted in with
         # --runtime-reachability it needs Dataverse + Power Platform tokens to
@@ -1142,6 +1282,65 @@ def main():
             print(
                 "Skipping Dataverse/Graph/Power Platform auth for infrastructure scope."
             )
+    elif native_remote_scope:
+        tenant_id = None
+        dv_token = None
+        graph = None
+        pp_admin = None
+        env_id = args.environment_id or config.get("environmentId") or None
+        if not env_id:
+            print(
+                "ERROR: Native FlightCheck requires environmentId in "
+                ".local/config.json or --environment-id."
+            )
+            sys.exit(1)
+
+        needs_agent_readiness = args.scope in {"full", "servicenow", "workday"}
+        if needs_agent_readiness:
+            environment_host = str(
+                config.get("powerPlatformApiEndpoint") or ""
+            ).strip()
+            if not environment_host:
+                print(
+                    "ERROR: Native FlightCheck requires "
+                    "powerPlatformApiEndpoint in .local/config.json."
+                )
+                sys.exit(1)
+            try:
+                ring = ring_from_environment_host(environment_host)
+                environment_host = validate_environment_host(
+                    environment_host,
+                    ring,
+                )
+            except ValueError as exc:
+                print(f"ERROR: Invalid native Power Platform endpoint: {exc}")
+                sys.exit(1)
+            print("Authenticating for native AgentBuilder FlightCheck...")
+            token, tenant_id = authenticate_flightcheck(
+                ring,
+                include_connectivity=True,
+            )
+            agentbuilder = AgentBuilderClient(
+                environment_host,
+                token,
+                ring=ring,
+                tenant_id=tenant_id,
+            )
+            connectivity = ConnectivityClient(token, ring=ring)
+            print("  AgentBuilder and connection inventory: OK")
+        else:
+            tenant_id = "organizations"
+
+        if args.scope in {"full", "environment"}:
+            print("Authenticating to Power Platform API (capacity)...")
+            powerplatform = PowerPlatformClient(tenant_id)
+            try:
+                powerplatform.authenticate()
+                print("  Power Platform API: OK")
+            except Exception as exc:
+                print(f"  Power Platform API: WARNING — {exc}")
+                print("  (ENV-CAPACITY-001 will be skipped)")
+                powerplatform = None
     else:
         # --- Authenticate ---
         from auth import authenticate, discover_tenant
@@ -1237,7 +1436,13 @@ def main():
     # Authenticating unconditionally would prompt for a second interactive login
     # on scopes like --scope prerequisites that don't need it.
     pva = None
-    if infra_only_scope:
+    if native_remote_scope:
+        print("Skipping legacy Copilot Studio auth for native DA scope.")
+    elif da_local_scope:
+        print(
+            "Skipping Copilot Studio auth for DA local-files scope."
+        )
+    elif infra_only_scope:
         print("Skipping Copilot Studio auth for infrastructure scope.")
     elif args.scope in PVA_SCOPES:
         print("Authenticating to Copilot Studio (Island Gateway)...")
@@ -1260,9 +1465,10 @@ def main():
     # prerequisites checks read them, and each is a separate interactive
     # sign-in (Power Platform API + Azure ARM are distinct audiences), so
     # don't prompt on scopes that won't run PRE-005. Mirrors the PVA gating.
-    powerplatform = None
-    azure_arm = None
-    if args.scope in ("full", "prerequisites"):
+    if (
+        not native_remote_scope
+        and args.scope in ("full", "prerequisites")
+    ):
         print("Authenticating to Power Platform API (billing policies)...")
         powerplatform = PowerPlatformClient(tenant_id)
         try:
@@ -1294,6 +1500,11 @@ def main():
     runner.pva = pva
     runner.powerplatform = powerplatform
     runner.azure_arm = azure_arm
+    runner.agentbuilder = agentbuilder
+    runner.connectivity = connectivity
+    runner.native_connector_filter = NATIVE_CONNECTOR_FILTERS.get(
+        args.scope
+    )
 
     # --- Target selection (standalone scope runs only) ---
     # Pin the Workday SSO app / ServiceNow connection the operator wants this
@@ -1301,10 +1512,13 @@ def main():
     # interactive picker). This is reached ONLY from the scope-mode main();
     # --checkpoint mode builds its own runner and never calls this, keeping
     # setup gates deterministic.
-    _resolve_target_selection(args, runner)
+    if not native_remote_scope:
+        _resolve_target_selection(args, runner)
 
     # Register checks based on scope
-    if args.scope == "full":
+    if native_remote_scope:
+        checks = NATIVE_NO_DATAVERSE_SCOPE_MAP[args.scope]
+    elif args.scope == "full":
         checks = FULL_SCOPE
     else:
         checks = SCOPE_MAP.get(args.scope, FULL_SCOPE)
@@ -1417,7 +1631,7 @@ def main():
         open_report_in_browser(args.output)
 
     # Exit code
-    sys.exit(1 if result.failed > 0 else 0)
+    sys.exit(1 if result.failed > 0 or result.errors > 0 else 0)
 
 
 def _print_prioritized_summary(result, *, verbose_manual=False):

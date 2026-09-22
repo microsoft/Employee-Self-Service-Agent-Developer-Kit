@@ -122,6 +122,10 @@ _REF_SUFFIX_RE = re.compile(r"_([0-9a-f]{5})$")
 #   d6081: Context Generic User (ISU - context)  [full / legacy only]
 SIMPLIFIED_REF_SUFFIXES = frozenset({"ff0df"})
 LEGACY_REF_SUFFIXES = frozenset({"ff0df", "0786a", "d6081"})
+WORKDAY_RUNTIME_PACKAGE = "msdyn_EssWorkdayRuntime"
+WORKDAY_RUNTIME_REF_LOGICAL_NAME = (
+    "msdyn_sharedworkdaysoap_workdayruntime"
+)
 
 # Human-readable role labels for diagnostics.
 _REF_SUFFIX_ROLES = {
@@ -1123,7 +1127,7 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
     WD-CONN-012 doesn't have to re-query).
 
     The verdict is one of:
-      * ``simplified`` — exact match on {ff0df}
+      * ``simplified`` — exact match on {ff0df}, or the Workday Runtime ref
       * ``full``       — exact match on {ff0df, 0786a, d6081}
       * ``none``       — no Workday refs at all (no Workday integration)
       * ``partial``    — strict non-empty subset of LEGACY_REF_SUFFIXES that
@@ -1181,10 +1185,17 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
     # Classify each Workday row's suffix (some may not match the
     # _<5hex> pattern — surface those rather than silently dropping them).
     known_suffixes: set[str] = set()
+    runtime_refs: list[dict] = []
     unknown_format_names: list[str] = []
     unknown_suffixes: set[str] = set()
     for r in workday_refs:
         logical = r.get("connectionreferencelogicalname")
+        if (
+            str(logical or "").casefold()
+            == WORKDAY_RUNTIME_REF_LOGICAL_NAME.casefold()
+        ):
+            runtime_refs.append(r)
+            continue
         suffix = _extract_ref_suffix(logical)
         if suffix is None:
             unknown_format_names.append(logical or "<missing>")
@@ -1210,7 +1221,35 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
         ))
         return results
 
-    # 2. Exact simplified match.
+    # 2. Exact Workday Runtime match. Runtime uses the same OBO/no-legacy-ISU
+    # behavior as the existing simplified package, so preserve the established
+    # flavor value consumed by downstream gates.
+    if (
+        len(runtime_refs) == 1
+        and not known_suffixes
+        and not unknown_suffixes
+        and not unknown_format_names
+    ):
+        runner._workday_package_flavor = "simplified"
+        flow_note = ""
+        if not wd_flows:
+            flow_note = (
+                " No Workday flows are deployed yet in this environment "
+                "— the package is present but downstream flows have not run."
+            )
+        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+            checkpoint_id="WD-PKG-001", category="Workday",
+            priority=Priority.HIGH.value, status=Status.PASSED.value,
+            description="Workday install flavor (simplified vs full / legacy)",
+            result=(
+                f"Detected {WORKDAY_RUNTIME_PACKAGE} reference shape "
+                "(1 Workday Runtime OBO connection reference)." + flow_note
+            ),
+            doc_link=doc_simplified,
+        ))
+        return results
+
+    # 3. Exact simplified match.
     if known_suffixes == SIMPLIFIED_REF_SUFFIXES and not unknown_suffixes and not unknown_format_names:
         runner._workday_package_flavor = "simplified"
         # The `{ff0df}` suffix is shared between simplified and full
@@ -1238,7 +1277,7 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
         ))
         return results
 
-    # 3. Exact full / legacy match.
+    # 4. Exact full / legacy match.
     if known_suffixes == LEGACY_REF_SUFFIXES and not unknown_suffixes and not unknown_format_names:
         runner._workday_package_flavor = "full"
         flow_note = ""
@@ -1259,8 +1298,8 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
         ))
         return results
 
-    # 4. Strict non-empty subset of legacy suffixes -> partial install.
-    if known_suffixes and not unknown_suffixes and not unknown_format_names \
+    # 5. Strict non-empty subset of legacy suffixes -> partial install.
+    if not runtime_refs and known_suffixes and not unknown_suffixes and not unknown_format_names \
             and known_suffixes < LEGACY_REF_SUFFIXES:
         runner._workday_package_flavor = "partial"
         missing = LEGACY_REF_SUFFIXES - known_suffixes
@@ -1285,13 +1324,18 @@ def _check_package_flavor(runner, *, wd_flows: list) -> list[CheckResult]:
         ))
         return results
 
-    # 5. Anything else: unrecognized suffix(es) and/or malformed
+    # 6. Anything else: mixed runtime/legacy refs, unrecognized suffix(es),
+    #    and/or malformed
     #    logicalname(s) on Workday-connector rows.
     runner._workday_package_flavor = "unknown"
     diagnostics: list[str] = []
     if known_suffixes:
         diagnostics.append(
             "recognized: " + ", ".join(sorted(_REF_SUFFIX_ROLES[s] for s in known_suffixes))
+        )
+    if runtime_refs:
+        diagnostics.append(
+            f"{WORKDAY_RUNTIME_PACKAGE} references: {len(runtime_refs)}"
         )
     if unknown_suffixes:
         diagnostics.append("unrecognized suffixes: " + ", ".join(sorted(unknown_suffixes)))
@@ -1359,23 +1403,38 @@ def _check_package_connection_completeness(runner) -> list[CheckResult]:
             ),
         )]
 
-    expected = SIMPLIFIED_REF_SUFFIXES if flavor == "simplified" else LEGACY_REF_SUFFIXES
-
-    # Map suffix -> ref dict so we can check each expected role.
-    by_suffix: dict[str, dict] = {}
-    for r in refs:
-        suffix = _extract_ref_suffix(r.get("connectionreferencelogicalname"))
-        if suffix in expected:
-            by_suffix[suffix] = r
+    runtime_refs = [
+        r
+        for r in refs
+        if str(r.get("connectionreferencelogicalname") or "").casefold()
+        == WORKDAY_RUNTIME_REF_LOGICAL_NAME.casefold()
+    ]
+    if flavor == "simplified" and runtime_refs:
+        expected_rows = [("Workday Runtime (OBO)", runtime_refs[0])]
+    else:
+        expected = (
+            SIMPLIFIED_REF_SUFFIXES
+            if flavor == "simplified"
+            else LEGACY_REF_SUFFIXES
+        )
+        by_suffix: dict[str, dict] = {}
+        for r in refs:
+            suffix = _extract_ref_suffix(
+                r.get("connectionreferencelogicalname")
+            )
+            if suffix in expected:
+                by_suffix[suffix] = r
+        expected_rows = [
+            (_REF_SUFFIX_ROLES.get(suffix, suffix), by_suffix.get(suffix))
+            for suffix in expected
+        ]
 
     unbound: list[str] = []
     inactive: list[str] = []
     missing: list[str] = []
     bound_roles: list[str] = []
 
-    for suffix in expected:
-        role = _REF_SUFFIX_ROLES.get(suffix, suffix)
-        row = by_suffix.get(suffix)
+    for role, row in expected_rows:
         if row is None:
             # Shouldn't normally happen — WD-PKG-001 already classified
             # the install as matching `expected`. Guard anyway.
@@ -1409,7 +1468,7 @@ def _check_package_connection_completeness(runner) -> list[CheckResult]:
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description="Workday package connection-reference binding completeness",
             result=(
-                f"All {len(expected)} Workday connection reference(s) expected "
+                f"All {len(expected_rows)} Workday connection reference(s) expected "
                 f"for the {flavor} install are bound to active connections "
                 f"({', '.join(sorted(bound_roles))})."
             ),

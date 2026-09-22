@@ -30,7 +30,7 @@
 //    essmakerkit_flightcheck_check  (1 per check; category + status)
 //    essmakerkit_installer_start / _complete
 //    adk_session_start, adk_capability_use, adk_agent_create, adk_agent_deploy,
-//    adk_build_complete, adk_api_call   (ADK platform family)
+//    adk_build_complete, adk_api_call, adk_client_event   (ADK platform family)
 //  Time column on every table: EventInfo_Time (UTC).
 // =============================================================================
 
@@ -181,3 +181,62 @@ essmakerkit_flightcheck_run
 | summarize p50 = percentile(durationSecs, 50),
             p95 = percentile(durationSecs, 95),
             p99 = percentile(durationSecs, 99)
+
+
+// -----------------------------------------------------------------------------
+// 8) VORPAL CLIENT EVENTS (schemaVersion 2)
+// -----------------------------------------------------------------------------
+// Vorpal supplies the source chronology. ADK's EventInfo_Time remains the
+// collector timestamp and does not replace client_event_timestamp,
+// client_time_since_mount_ms, or client_sequence_number.
+//
+// Envelope projection on every row:
+//   batchId          -> client_batch_id
+//   mountId          -> client_mount_id
+//   appName          -> client_app_name
+//   buildEnvironment -> client_build_environment
+//   buildNumber      -> client_build_number
+//   toolCallId       -> client_tool_call_id       (optional)
+//   platform         -> client_platform           (optional, supplied verbatim)
+//   userAgent        -> client_user_agent         (optional, supplied verbatim)
+//
+// Event projection:
+//   eventName        -> client_event_name
+//   level            -> client_level
+//   eventTimestamp   -> client_event_timestamp
+//   timeSinceMount   -> client_time_since_mount_ms
+//   sequenceNumber   -> client_sequence_number
+//   locale           -> client_locale             (optional)
+//   displayMode      -> client_display_mode       (optional)
+//   themeName        -> client_theme_name         (optional)
+//   operationId      -> client_operation_id       (optional)
+//   properties       -> client_properties         (scrubbed JSON string)
+//
+// client_operation_id is supplied from Vorpal's generated-operation context.
+// UUID validation establishes its format; ordinary GUID-valued properties
+// continue to be scrubbed. Deduplicate retries by mount + sequence, then order
+// by the client source timestamp and sequence number.
+adk_client_event
+| where EventInfo_Time > ago(30d)
+| summarize arg_max(EventInfo_Time, *) by client_mount_id, client_sequence_number
+| order by client_event_timestamp asc, client_sequence_number asc
+| project EventInfo_Time,
+          client_batch_id,
+          client_mount_id,
+          client_tool_call_id,
+          client_app_name,
+          client_build_environment,
+          client_build_number,
+          client_platform,
+          client_user_agent,
+          client_event_name,
+          client_level,
+          client_event_timestamp,
+          client_time_since_mount_ms,
+          client_sequence_number,
+          client_locale,
+          client_display_mode,
+          client_theme_name,
+          client_operation_id,
+          client_properties,
+          client_prop_dropped_count

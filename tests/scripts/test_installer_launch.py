@@ -299,6 +299,16 @@ class TestBashInstallerAutoLaunch:
         ), "install-ess-adk.sh header comment should mention auto-/setup"
 
 
+class TestInstallerMcpDefaults:
+    def test_powershell_materializes_defaults(self, ps1_text: str) -> None:
+        assert "mcp_config.py" in ps1_text
+        assert "materialize-defaults" in ps1_text
+
+    def test_bash_materializes_defaults(self, bash_text: str) -> None:
+        assert "mcp_config.py" in bash_text
+        assert "materialize-defaults" in bash_text
+
+
 # ---------------------------------------------------------------------------
 # Workspace settings (suppress Welcome tab)
 # ---------------------------------------------------------------------------

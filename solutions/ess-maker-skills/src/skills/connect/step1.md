@@ -206,14 +206,8 @@ Now read `src/skills/connect/servicenow/step1.md` and follow it.
 
 ### If the user chose Workday (2 or "workday")
 
-Workday connection is handled by the **setup orchestrator**, which provisions
-the Power Platform environment, installs the ESS base agent, provisions the
-Entra app, configures the Workday tenant, installs the extension pack, and
-verifies the connection. It is resume-aware: if setup was already started it
-picks up at the first unverified step, and it fast-forwards steps that are
-already done.
-
-Now read `src/skills/setup/SKILL.md` and follow it.
+Now read `src/skills/setup/SKILL.md` and follow its hybrid-extension
+availability boundary. Do not run the retained Workday playbooks directly.
 
 ### If the user said something else
 
