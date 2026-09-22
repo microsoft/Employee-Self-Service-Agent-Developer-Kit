@@ -51,7 +51,6 @@ read by later steps. Unknown/absent fields are treated as `null`.
 | `domainName` | string | DA-3 | Workday domain name, when discovered. |
 | `tenantId` | string | DA-2 | **Entra** tenant ID (GUID) — set during Entra setup. |
 | `installPath` | string | DA-3/DA-4 | `"simplified"`. |
-| `migrationSource` | string | DA-4 | `"legacy-isu-raas"` when upgrading an existing legacy setup; absent for a fresh simplified setup. |
 | `status` | string | all | `"in-progress"` \| `"configured"` \| `"ready"`. `"configured"` means setup values are recorded but runtime is not proven. Only DA-5 sets `"ready"` after a signed-in Workday scenario succeeds. |
 | `verticals` | array[string] | DA-1 | Always `["hr"]` for this release. ESS DA IT is not supported by `/connect workday`. |
 | `vertical` | string | DA-1 | Always `"hr"` for this release. |
@@ -99,11 +98,11 @@ same data.
 
 ## Power Platform integration state
 
-DA-4 records manual evidence for connection references, parameter sharing,
-binding, flow state, selected topics, and firewall allowlisting until reliable
-DA-scoped APIs are available. It must not reuse CEA checkpoints as proof.
-DA4.6 is the exception: its programmatic evidence comes from the checked-in
-authorization script.
+DA-4 records programmatic evidence for solution-reference binding and supported
+flow activation. Agent connection sharing, topic selection, and firewall
+allowlisting remain manual or attested until reliable DA-scoped APIs are
+available. It must not reuse CEA checkpoints as proof. DA4.6 uses programmatic
+evidence from the checked-in authorization script.
 
 ---
 

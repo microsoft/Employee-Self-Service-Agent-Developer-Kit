@@ -79,8 +79,7 @@ def test_connect_workday_provider_contract_and_review_guards() -> None:
     assert "stable slug,\n`botId`" in da_skill
     assert 'steps.SETUP-07.state: "done"' in da_skill
     assert "Do not\nrequire `connect_ready: true`" in da_skill
-    assert "Run `/setup` once to refresh the" in da_skill
-    assert "shows any unrelated prerequisite" in da_skill
+    assert "you\ndo not need to run `/setup` again" in da_skill
     assert 'provider `status` to be `"ready"`' in da_skill
 
     updater = (
@@ -123,6 +122,31 @@ def test_connect_workday_provider_contract_and_review_guards() -> None:
     assert "Azure CLI Dataverse\ntoken before use" in power_platform
     assert "msdyn_sharedworkdaysoap_workdayruntime" in power_platform
     assert "msdyn_sharedcommondataserviceforapps_workdayruntime" in power_platform
+    assert "Enable all Workday topics" in power_platform
+    assert "legacy ISU/RaaS" not in power_platform
+    assert "migrationSource" not in power_platform
+    assert "make.preprod.powerautomate.com" in power_platform
+
+    verify_connection = (
+        _SOLUTION
+        / "src"
+        / "skills"
+        / "setup"
+        / "workday-da"
+        / "verify-connection.md"
+    ).read_text(encoding="utf-8")
+    assert "generic or ISU sign-in" not in verify_connection
+
+    tasks = (
+        _SOLUTION
+        / "src"
+        / "skills"
+        / "setup"
+        / "workday-da"
+        / "tasks.md"
+    ).read_text(encoding="utf-8")
+    assert "Connect Microsoft Entra sign-in to Workday" in tasks
+    assert "Match the signed-in employee" in tasks
 
     authorization_script = (
         _SOLUTION

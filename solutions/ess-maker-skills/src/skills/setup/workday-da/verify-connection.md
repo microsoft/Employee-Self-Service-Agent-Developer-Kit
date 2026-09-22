@@ -65,7 +65,7 @@ path:
 3. Start a new conversation so stale user-flow state is not reused.
 4. Run one enabled Workday scenario, such as checking a vacation balance.
 5. Confirm the agent identifies the signed-in employee and returns real
-   Workday data without asking for an unexpected generic or ISU sign-in.
+   Workday data without asking for another unexpected sign-in.
 
 Did the scenario complete successfully?
 

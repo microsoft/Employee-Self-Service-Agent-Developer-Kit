@@ -223,13 +223,13 @@ When it returns, go back to **Start** to resume at the next unverified row.
 ### DA4.1 through DA4.8 — Configure Power Platform and agent integration (DA-4)
 
 Read `src/skills/setup/workday-da/configure-power-platform.md` and follow it.
-That playbook configures or guides the Workday OAuthUser and Dataverse
-connections, parameter sharing, stale-connection recovery, connection binding,
-cloud-flow state, checked-in script authorization, DA V2 employee context, topic
-selection, and firewall allowlisting. It updates rows **DA4.1**–**DA4.8**
-through the shared checklist-updater. Manual and attestation rows require
-explicit evidence; DA4.6 is programmatic and passes only when the checked-in
-authorization script verifies every target workflow.
+That playbook guides creation of the Workday and Dataverse connections, binds
+the installed solution references, activates the runtime flows, connects the
+flows to the agent with parameter sharing, applies checked-in script
+authorization, configures DA V2 employee context and topic selection, and
+records firewall allowlisting. It updates rows **DA4.1**–**DA4.8** through the
+shared checklist-updater. Manual and attestation rows require explicit
+evidence; DA4.3, supported DA4.4 activation, and DA4.6 are programmatic.
 
 When it returns, go back to **Start** to resume at DA5.1.
 
@@ -247,8 +247,7 @@ When it returns, go back to **Start** — every row should now be `done`.
 **Message:**
 
 Your ESS DA HR Agent is connected to Workday and the signed-in employee path
-has been validated in this environment. Run `/setup` once to refresh the
-environment's runtime-readiness checks. This keeps the completed Workday
-connection and shows any unrelated prerequisite that still needs attention.
+has been validated in this environment. The Workday connection is ready; you
+do not need to run `/setup` again.
 
 **End message.**

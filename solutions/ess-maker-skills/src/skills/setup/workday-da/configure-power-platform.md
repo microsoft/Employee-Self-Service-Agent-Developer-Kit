@@ -9,57 +9,46 @@ extension. It owns checklist rows **DA4.1 through DA4.8**.
 Every **Message** block is the exact text to show the user. Copy it verbatim. Do
 not claim that a manual portal setting was verified automatically.
 
-The two required connection references depend on the package flavor installed
-in DA-1:
+The two required runtime connection references are:
 
-| Package | Connection | Logical name |
-| --- | --- | --- |
-| MOS runtime (`msdyn_EssWorkdayRuntime`) | Workday OAuthUser | `msdyn_sharedworkdaysoap_workdayruntime` |
-| MOS runtime (`msdyn_EssWorkdayRuntime`) | Microsoft Dataverse | `msdyn_sharedcommondataserviceforapps_workdayruntime` |
-| Legacy DA (`msdyn_EssDAHRWorkdayHCM`) | Workday OAuthUser | `new_sharedworkdaysoap_ff0df` |
-| Legacy DA (`msdyn_EssDAHRWorkdayHCM`) | Microsoft Dataverse | `msviess_sharedcommondataserviceforapps_92b66` |
-
-Resolve the rows from the installed solution and connector IDs before showing
-portal instructions. Do not report a missing connection merely because a
-logical name from the other package flavor is absent.
+| Connection | Logical name |
+| --- | --- |
+| Workday OAuthUser | `msdyn_sharedworkdaysoap_workdayruntime` |
+| Microsoft Dataverse | `msdyn_sharedcommondataserviceforapps_workdayruntime` |
 
 Never reuse Dev connection IDs, bot IDs, or workflow IDs in another
 environment.
 
 ---
 
-## DA4.0 — Determine fresh setup or simplified-setup upgrade
+## DA4.0 — Prepare the connections page
 
-Ask whether this environment is a fresh simplified setup or an upgrade from a
-legacy ISU/RaaS Workday installation.
+This setup always uses the signed-in employee Workday runtime. Do not present
+an installation-path or migration choice.
 
-- **Fresh setup** — continue normally.
-- **Upgrade** — explain that updating the Workday package can make its
-  connection stale. Reuse and update the existing Workday API client where
-  appropriate, add the required functional areas and Workday-owned scope,
-  reconnect the Power Platform connection, and move to the package's V2
-  signed-in-user context. Do not decommission the legacy ISU, security groups,
-  RaaS reports, or credentials until the simplified path has passed in every
-  environment and has been observed for an agreed business cycle.
+Build the environment's Connections URL from the recorded ring:
 
-Persist `installPath: "simplified"` and, for an upgrade, also persist
-`migrationSource: "legacy-isu-raas"`.
+- `preprod` →
+  `https://make.preprod.powerautomate.com/environments/{ENV_ID}/connections`
+- `prod` →
+  `https://make.powerautomate.com/environments/{ENV_ID}/connections`
+
+Persist `installPath: "simplified"`.
 
 ## DA4.1 — Connect the Workday OAuthUser reference
 
 **Message:**
 
-Now we'll create the Workday connection used on behalf of each signed-in
-employee, then attach it to the installed Workday solution.
+Now we'll create the two connections the Workday runtime needs.
 
-1. In the Power Apps maker portal, select this environment.
-2. Open **Connections** → **New connection**, search for **Workday**, and create
-   a connection using **Microsoft Entra ID Integrated** authentication.
+Open this environment's **Connections** page:
+
+{CONNECTIONS_URL}
+
+1. Select **New connection**, search for **Workday**, and create a connection
+   using **Microsoft Entra ID Integrated** authentication.
 3. Enter the values below. Complete the sign-in/consent window if one opens.
-4. After the connection shows **Connected**, open **Solutions** → the installed
-   Workday runtime solution → **Connection references**.
-5. Open **Workday OAuth Runtime**, select the connection you just created, and
-   save. Reopen it once to confirm the selection was retained.
+4. Wait until the Workday connection shows **Connected**.
 
 Use the values captured earlier:
 
@@ -70,15 +59,13 @@ Use the values captured earlier:
 - SOAP base URL: `{soapBaseUrl}`.
 - REST base URL: `{restBaseUrl}`. It must end exactly at `/api`.
 
-Even if the page shows every reference as connected after the first connection,
-open and configure each reference separately.
-
 **End message.**
 
 If no Workday connection exists yet, do not ask the maker to confirm the
-reference binding—guide the connection creation first. Ask the maker to confirm
-that OAuthUser is connected with the values above and that the
-`connectionreference` row has a non-empty `connectionid`.
+reference binding—guide the connection creation first. Re-read the ring-native
+connection inventory and confirm the new `shared_workdaysoap` connection is
+`Connected` and carries the expected resource, token, client, SOAP, REST, and
+tenant values.
 Record DA4.1 with `GATE="manual"`, `ACK=true`, and evidence describing the
 connection name and environment. If it is not connected, leave the row
 `in-progress`.
@@ -87,72 +74,39 @@ connection name and environment. If it is not connected, leave the row
 
 **Message:**
 
-1. In Power Apps **Connections**, create a **Microsoft Dataverse** connection
-   with your maker account if this environment does not already have one.
-2. Return to the installed Workday runtime solution → **Connection references**.
-3. Open **Microsoft Dataverse - Workday Runtime**, select that Dataverse
-   connection, and save.
-4. Reopen the reference and confirm the selection was retained and targets this
-   environment, not a Dev connection copied from another environment.
+On the same **Connections** page, select **New connection** and create a
+**Microsoft Dataverse** connection with your maker account. Wait until both the
+Workday and Dataverse connections show **Connected**, then tell me they are
+ready.
 
 **End message.**
 
-Ask for confirmation and record DA4.2 as a manual row with the connection name
-and environment in the evidence. Verify its `connectionreference` row has a
-non-empty `connectionid`; if it remains empty, do not advance to flow activation.
+Re-read the ring-native connection inventory and confirm the Dataverse
+connection is `Connected` and belongs to this environment. Record DA4.2 with
+the connection name and environment in the evidence.
 
-## DA4.3 — Share parameters and repair stale connections
+## DA4.3 — Bind the extension connections
 
-**Message:**
+Bind the installed solution references programmatically:
 
-Open the active agent's **Copilot Studio → Settings → Connection settings**
-page:
+1. Resolve the physical Workday and Dataverse connection IDs created in
+   DA4.1–DA4.2.
+2. PATCH `msdyn_sharedworkdaysoap_workdayruntime.connectionid` to the Workday
+   connection ID.
+3. PATCH
+   `msdyn_sharedcommondataserviceforapps_workdayruntime.connectionid` to the
+   Dataverse connection ID.
+4. Re-read both rows and confirm the IDs persisted.
+5. Confirm neither reference points to a connection from a different
+   environment or user.
 
-`https://{CPS_HOST}/environments/{ENV_ID}/copilots/{BOT_ID}/da-settings/connectionSettings`
+Preview the two target logical names and connection display names before
+PATCHing. The authorization script does not perform this step. Record DA4.3
+only after the post-write verification passes.
 
-For each Workday flow entry:
+## DA4.4 — Turn on the Workday cloud flows
 
-1. Click the entry → **Connect**.
-2. Select the Workday connection created in DA4.1 and submit.
-3. Under **Manage**, click **See details**.
-4. Open the **Connection parameters** tab.
-5. Turn on **Allow permission to share parameters** and save.
-
-If the parameter values appear empty, turn the setting off and save, turn it
-back on and save again, then confirm the REST, SOAP, token, client, and resource
-values are still populated.
-
-If the connection is **Stale**, **Needs attention**, or no longer connected
-after a package update or parameter change, reconnect it now. Users may also be
-asked to authorize again on their next Workday request.
-
-**End message.**
-
-This setting is agent/runtime wiring; do not infer it from the physical
-connection inventory's `allowSharing` property. Require explicit confirmation
-that every Workday flow entry is connected, parameter sharing is enabled, the
-fields remain populated, and the connection is connected. Record DA4.3 as
-manual.
-
-## DA4.4 — Confirm connection binding
-
-Guide the maker through the Workday solution's connection-reference and
-connection-parameter configuration. Confirm:
-
-1. OAuthUser is bound to the Workday connection created in DA4.1.
-2. Microsoft Dataverse is bound to the Dataverse connection from DA4.2.
-3. The required `connectionparametersetconfig` values are populated for the
-   target environment.
-4. No reference points to a connection from a different environment or user.
-5. The Copilot Studio connection-settings entries are wired separately per
-   DA4.3; solution-level Dataverse binding does not replace that runtime step.
-
-The authorization script does not perform this step. Require explicit
-confirmation and record DA4.4 as manual.
-
-## DA4.5 — Turn on the Workday cloud flows
-
-Do not activate flows until DA4.1–DA4.4 are complete and the two installed
+Do not activate flows until DA4.1–DA4.3 are complete and the two installed
 runtime `connectionreference` rows have non-empty connection bindings. A flow
 whose references are unbound may activate but will fail at runtime.
 
@@ -171,8 +125,37 @@ flows from other solutions.
 
 **End message.**
 
-Record DA4.5 only after the maker confirms the complete DA Workday flow set is
-on.
+Record DA4.4 only after every target Workday flow is verified as active.
+
+## DA4.5 — Connect the agent and share parameters
+
+**Message:**
+
+The Workday and Dataverse connections are ready and the runtime flows are on.
+Now connect those flows to this agent:
+
+1. Open the active agent's **Copilot Studio → Settings → Connection settings**
+   page:
+
+   `https://{CPS_HOST}/environments/{ENV_ID}/copilots/{BOT_ID}/da-settings/connectionSettings`
+2. Open each Workday flow entry and select **Connect**.
+3. Select the Workday connection created earlier and submit.
+4. Under **Manage**, select **See details**.
+5. Open **Connection parameters**.
+6. Turn on **Allow permission to share parameters** and save.
+
+If the parameter values appear empty, turn the setting off and save, turn it
+back on and save again, then confirm the REST, SOAP, token, client, and resource
+values remain populated.
+
+**End message.**
+
+This is agent/runtime wiring; solution-level binding does not replace it. Do
+not infer it from the physical connection inventory's `allowSharing` property.
+Require explicit confirmation that every Workday flow entry is connected,
+parameter sharing is enabled, the fields remain populated, and the connection
+is connected. If a connection is **Stale** or **Needs attention**, reconnect it
+before continuing. Record DA4.5 as manual.
 
 ## DA4.6 — Authorize the DA to use the Workday flows
 
@@ -245,24 +228,36 @@ of reading `workspace/flightcheck/results.json`. On an apply or verification
 failure, use `CHECKPOINT_RESULT="FAILED"`, `RESULT_SOURCE="external"`, and the
 safe failure summary so the row becomes blocked.
 
-## DA4.7 — Configure employee context and selected topics
+## DA4.7 — Configure employee context and Workday topics
 
 Inspect the installed DA package before changing the agent. Do not assume the
 CEA topic name or file shape. Identify the package's V2 signed-in-user context
 component that uses the Workday `/workers/me` path.
 
-Present the available Workday topics and let the maker choose which scenarios
-to enable. Preview the exact topic changes and obtain approval before mutating
-the agent. Confirm:
+Present these choices:
+
+1. **Enable all Workday topics** — recommended for makers who want the complete
+   Workday experience.
+2. **Choose specific Workday topics** — show a multi-select list of available
+   business scenarios.
+3. **Keep the current topic selection** — make no topic-status changes.
+
+Whichever option is selected, include the V2 signed-in-user context and every
+system dependency required by the selected business topics. Preview the exact
+topic list and obtain approval before changing anything. Confirm:
 
 - the DA-equivalent V2 user-context component is enabled and wired;
 - selected topics are enabled;
 - unselected topics remain disabled;
-- no legacy ISU/RaaS user-context component is selected for the simplified
-  path.
+- choosing **Enable all** enables every installed Workday business topic plus
+  the required Workday system topics.
 
-If the package does not expose enough metadata to make this safe, provide the
-equivalent Copilot Studio steps and record DA4.7 as manual after confirmation.
+Topic activation is server-only state and is not stored in the topic YAML.
+The current AgentBuilder client can fetch components, update the bot entity,
+import, and publish, but it has no proven per-component status mutation API.
+Until a supported API is added, do not guess a MinimalBot payload. Provide the
+equivalent Copilot Studio enablement steps, including the **Enable all**
+selection, and record DA4.7 as manual after confirmation.
 
 ## DA4.8 — Record firewall allowlisting
 

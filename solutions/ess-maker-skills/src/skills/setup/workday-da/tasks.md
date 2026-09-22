@@ -53,21 +53,21 @@ express; all items start `pending`.
 - [ ] **Install the Workday extension package** — Add the Workday extension package to your ESS DA HR agent so it can talk to Workday. If the HR base agent isn't installed yet, this step sends you to `/setup` first.
   <!-- id: DA1.1 | role: Environment Maker | skill: da-1 | automatable: Attempt | checkpoints: WD-DA-PKG-001 | gate: prog, else manual | status: pending -->
 
-### 2. Workday single sign-on (Entra)
+### 2. Connect Microsoft Entra sign-in to Workday
 
-- [ ] **Create the Workday single sign-on app** — Set up the Entra SSO application for Workday in SAML mode, with the right sign-on URLs and an active signing certificate.
+- [ ] **Set up Workday sign-in** — Create the Microsoft Entra application Workday uses to recognize signed-in employees.
   <!-- id: DA2.1 | role: App/Cloud App Admin | skill: da-2 | automatable: Yes | checkpoints: WD-CONN-102 | gate: prog instantiate (Graph); WD-CONN-102 healthy-state = MANUAL (Entra cert health auto-checked; Workday certificate parity deferred to DA3.4) | status: pending -->
-- [ ] **Expose the Workday API permission** — Publish the sign-in scope, pre-authorize the Workday connector, and request the Microsoft Graph permissions the agent needs.
+- [ ] **Allow Power Platform to call Workday** — Add the permission used by the Workday connector and the Microsoft Graph permissions needed for sign-in.
   <!-- id: DA2.2 | role: App/Cloud App Admin or App Owner | skill: da-2 | automatable: Yes | checkpoints: WD-ENTRA-SCOPE-001 | gate: prog | status: pending -->
-- [ ] **Grant admin consent** — Approve the requested Microsoft Graph permissions on behalf of your organization.
+- [ ] **Approve the sign-in permissions** — Grant organization-wide consent for the permissions the Workday connection needs.
   <!-- id: DA2.3 | role: Consent-capable role (App/Cloud App Admin, Priv Role Admin, GA) | skill: da-2 | automatable: Attempt | checkpoints: WD-ENTRA-CONSENT-001 | gate: prog; escalate to manual if blocked | status: pending -->
-- [ ] **Assign users to the Workday app** — Give the right people or groups access to the Workday enterprise application, or confirm assignment isn't required.
+- [ ] **Choose who can use Workday** — Assign the employees or groups allowed to use the Workday application, or confirm assignment is not required.
   <!-- id: DA2.4 | role: App/Cloud App Admin | skill: da-2 | automatable: Yes | checkpoints: WD-ASSIGN-001 | gate: prog | status: pending -->
-- [ ] **Map the sign-in identifier** — Configure the NameID claim so Workday recognizes each signed-in employee.
+- [ ] **Match the signed-in employee** — Configure the sign-in identifier Workday uses to find the current employee.
   <!-- id: DA2.5 | role: App/Cloud App Admin | skill: da-2 | automatable: Attempt | checkpoints: WD-ENTRA-NAMEID-001 | gate: prog; degrade to manual portal row if brittle | status: pending -->
-- [ ] **Set the SAML signing option** — Turn on "Sign SAML response and assertion" so Workday trusts the sign-in tokens.
+- [ ] **Sign the Workday sign-in response** — Turn on "Sign SAML response and assertion" so Workday trusts the sign-in response.
   <!-- id: DA2.6 | role: App/Cloud App Admin | skill: da-2 | automatable: No (portal-only) | checkpoints: WD-ENTRA-SIGNOPT-001 | gate: manual | status: pending -->
-- [ ] **Confirm a single sign-in tenant** — Verify Workday and Entra are federated to the same single tenant so sign-in lines up.
+- [ ] **Confirm the correct Microsoft Entra tenant** — Verify Workday is connected to this environment's Microsoft Entra tenant.
   <!-- id: DA2.7 | role: App/Cloud App Admin | skill: da-2 | automatable: No | checkpoints: WD-CONN-010 | gate: attest | status: pending -->
 
 ### 3. Workday tenant configuration
@@ -83,16 +83,16 @@ express; all items start `pending`.
 
 ### 4. Power Platform and agent integration
 
-- [ ] **Connect the Workday account** — Create or reconnect the Workday OAuthUser connection with Microsoft Entra ID Integrated sign-in and the captured Workday endpoints.
+- [ ] **Create the Workday connection** — Create the signed-in employee Workday connection with the captured Workday endpoints.
   <!-- id: DA4.1 | role: Environment Maker | skill: da-4 | automatable: No | checkpoints: n/a | gate: manual | status: pending -->
-- [ ] **Connect Microsoft Dataverse** — Bind the Workday extension's Dataverse connection reference to an active connection owned by the maker.
+- [ ] **Create the Microsoft Dataverse connection** — Create or select an active Dataverse connection owned by the maker in this environment.
   <!-- id: DA4.2 | role: Environment Maker | skill: da-4 | automatable: No | checkpoints: n/a | gate: manual | status: pending -->
-- [ ] **Share the Workday connection parameters** — Allow the extension to share its connection parameters for on-behalf-of authentication, and repair any stale connection after package or parameter changes.
-  <!-- id: DA4.3 | role: Environment Maker | skill: da-4 | automatable: No | checkpoints: n/a | gate: manual | status: pending -->
-- [ ] **Bind the extension connections** — Confirm the Workday and Dataverse references and required connection parameter configuration point to this environment's connections.
-  <!-- id: DA4.4 | role: Environment Maker | skill: da-4 | automatable: No | checkpoints: n/a | gate: manual | status: pending -->
-- [ ] **Turn on the Workday cloud flows** — Confirm every Workday flow used by the ESS DA HR Agent is enabled.
-  <!-- id: DA4.5 | role: Environment Maker | skill: da-4 | automatable: Attempt | checkpoints: n/a | gate: manual | status: pending -->
+- [ ] **Bind the extension connections** — Attach the Workday and Dataverse connections to the installed Workday runtime references.
+  <!-- id: DA4.3 | role: Environment Maker | skill: da-4 | automatable: Yes | checkpoints: post-write reference verification | gate: prog | status: pending -->
+- [ ] **Turn on the Workday cloud flows** — Enable every Workday runtime flow after its connections are bound.
+  <!-- id: DA4.4 | role: Environment Maker | skill: da-4 | automatable: Attempt | checkpoints: flow state verification | gate: prog, else manual | status: pending -->
+- [ ] **Connect Workday to the agent** — Connect each Workday flow in Copilot Studio and allow it to share the connection parameters used for signed-in employee access.
+  <!-- id: DA4.5 | role: Environment Maker | skill: da-4 | automatable: No | checkpoints: n/a | gate: manual | status: pending -->
 - [ ] **Authorize the agent to use the Workday flows** — Preview and apply the delegated authorization and workflow sharing required by the ESS DA HR Agent.
   <!-- id: DA4.6 | role: Power Platform Administrator | skill: da-4 | automatable: Yes | checkpoints: authorization script verification | gate: prog | status: pending -->
 - [ ] **Configure employee context and topics** — Use the DA package's V2 signed-in-user context and enable the Workday topics selected for this agent.
