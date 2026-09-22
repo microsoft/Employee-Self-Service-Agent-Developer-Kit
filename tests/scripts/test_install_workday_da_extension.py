@@ -1,278 +1,207 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Tests for the DA Workday extension package installer.
-
-Mirrors the mocking pattern in ``tests/scripts/test_install_ess_agent.py``:
-fake ``PPAdminClient``/``PowerPlatformClient`` factories stand in for the
-real Power Platform REST APIs, and ``discover_tenant`` is patched so no
-network call is made.
-"""
+"""Tests for the PAC-based Workday package installer."""
 
 from __future__ import annotations
 
-from unittest.mock import patch
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 
-class FakePPAdminClient:
-    def __init__(
-        self,
-        tenant_id,
-        environment_id="env-123",
-        environment=None,
-    ):
-        self.tenant_id = tenant_id
-        self.environment_id = environment_id
-        self.environment = environment
-        self.authenticated = False
-
-    def authenticate(self, *, include_flow=True):
-        self.authenticated = True
-        self.include_flow = include_flow
-
-    def find_environment_id_by_dataverse_url(self, _env_url):
-        return self.environment_id
-
-    def get_environment(self, _environment_id):
-        return self.environment
-
-
-class FakePowerPlatformClient:
-    def __init__(self, tenant_id, *, packages, install_result=None):
-        self.tenant_id = tenant_id
-        self.packages = list(packages)
-        self.install_result = install_result or {}
-        self.authenticated = False
-        self.install_calls = []
-
-    def authenticate(self):
-        self.authenticated = True
-
-    def list_environment_application_packages(self, _environment_id):
-        if self.packages and isinstance(self.packages[0], list):
-            return self.packages.pop(0)
-        return self.packages
-
-    def install_application_package(self, environment_id, unique_name):
-        self.install_calls.append((environment_id, unique_name))
-        return self.install_result
-
-
-@patch("install_workday_da_extension.discover_tenant", return_value="tenant-123")
-def test_not_listed_when_marketplace_catalog_has_no_match(_mock_discover_tenant):
-    import install_workday_da_extension as m
-
-    powerplatform = FakePowerPlatformClient("tenant-123", packages=[])
-
-    with pytest.raises(
-        m.ExtensionNotListedError,
-        match="msdyn_EssWorkdayRuntime",
-    ):
-        m.install_workday_da_extension(
-            "https://org.crm.dynamics.com",
-            "hr",
-            pp_admin_client_factory=FakePPAdminClient,
-            powerplatform_client_factory=lambda _tenant: powerplatform,
-        )
-
-    # Never attempts an install call against a package that isn't listed.
-    assert powerplatform.install_calls == []
-
-
-@patch("install_workday_da_extension.discover_tenant", return_value="tenant-123")
-def test_skips_install_when_runtime_already_installed(_mock_discover_tenant):
-    import install_workday_da_extension as m
-
-    powerplatform = FakePowerPlatformClient(
-        "tenant-123",
-        packages=[
-            {
-                "uniqueName": "msdyn_EssWorkdayRuntime",
-                "state": "Installed",
-            }
-        ],
+def _result(returncode=0, stdout="", stderr=""):
+    return SimpleNamespace(
+        returncode=returncode,
+        stdout=stdout,
+        stderr=stderr,
     )
 
-    schema = m.install_workday_da_extension(
-        "https://org.crm.dynamics.com",
-        "hr",
-        pp_admin_client_factory=FakePPAdminClient,
-        powerplatform_client_factory=lambda _tenant: powerplatform,
+
+def test_parse_profiles_reads_cloud_and_active_marker():
+    import install_workday_da_extension as m
+
+    profiles = m._parse_profiles(
+        "[1]   user@contoso.com Public\n"
+        "[2] * user@contoso.com Preprod https://org.crm10.dynamics.com\n"
+    )
+
+    assert profiles == [
+        {"index": "1", "active": False, "cloud": "Public"},
+        {"index": "2", "active": True, "cloud": "Preprod"},
+    ]
+
+
+def test_runtime_install_uses_preprod_pac_profile_and_application():
+    import install_workday_da_extension as m
+
+    calls = []
+
+    def runner(command, *, capture_output, timeout):
+        calls.append(([str(part) for part in command], capture_output, timeout))
+        if command[1:3] == ["auth", "list"]:
+            return _result(
+                stdout=(
+                    "[1] * user@contoso.com Preprod "
+                    "https://org.crm10.dynamics.com\n"
+                )
+            )
+        return _result()
+
+    schema = m.install_workday_package(
+        "https://org.crm10.dynamics.com",
+        "runtime",
+        ring="preprod",
+        pac_resolver=lambda: Path("pac.exe"),
+        runner=runner,
     )
 
     assert schema == "msdyn_EssWorkdayRuntime"
-    assert powerplatform.install_calls == []
+    assert calls[-1][0] == [
+        "pac.exe",
+        "application",
+        "install",
+        "--environment",
+        "https://org.crm10.dynamics.com",
+        "--application-name",
+        "msdyn_EssWorkdayRuntime",
+    ]
+    assert calls[-1][1] is False
 
 
-@patch("install_workday_da_extension.discover_tenant", return_value="tenant-123")
-def test_installs_and_polls_until_installed(_mock_discover_tenant):
+def test_preprod_auth_uses_environment_anchor_when_profile_is_missing():
     import install_workday_da_extension as m
 
-    application_name = "msdyn_EssWorkdayRuntime"
-    powerplatform = FakePowerPlatformClient(
-        "tenant-123",
-        packages=[
-            [{"uniqueName": application_name, "state": "None"}],
-            [{"uniqueName": application_name, "state": "Installing"}],
-            [{"uniqueName": application_name, "state": "Installed"}],
-        ],
-        install_result={"_operationId": "operation-123"},
+    calls = []
+
+    def runner(command, *, capture_output, timeout):
+        calls.append([str(part) for part in command])
+        return _result()
+
+    m.install_workday_package(
+        "https://org.crm10.dynamics.com",
+        "runtime",
+        ring="preprod",
+        pac_resolver=lambda: Path("pac.exe"),
+        runner=runner,
     )
 
-    schema = m.install_workday_da_extension(
+    assert calls[1] == [
+        "pac.exe",
+        "auth",
+        "create",
+        "--cloud",
+        "Preprod",
+        "--environment",
+        "https://org.crm10.dynamics.com",
+        "--deviceCode",
+    ]
+
+
+def test_selects_single_inactive_profile_for_requested_ring():
+    import install_workday_da_extension as m
+
+    calls = []
+
+    def runner(command, *, capture_output, timeout):
+        calls.append([str(part) for part in command])
+        if command[1:3] == ["auth", "list"]:
+            return _result(stdout="[4] user@contoso.com Public\n")
+        return _result()
+
+    m.ensure_pac_auth(
+        Path("pac.exe"),
+        ring="prod",
+        environment_url="https://org.crm.dynamics.com",
+        runner=runner,
+    )
+
+    assert calls[-1] == [
+        "pac.exe",
+        "auth",
+        "select",
+        "--index",
+        "4",
+    ]
+
+
+def test_rejects_ambiguous_profiles_for_requested_ring():
+    import install_workday_da_extension as m
+
+    def runner(command, *, capture_output, timeout):
+        return _result(
+            stdout=(
+                "[1] user1@contoso.com Preprod\n"
+                "[2] user2@contoso.com Preprod\n"
+            )
+        )
+
+    with pytest.raises(m.PacCliError, match="Multiple PAC profiles"):
+        m.ensure_pac_auth(
+            Path("pac.exe"),
+            ring="preprod",
+            environment_url="https://org.crm10.dynamics.com",
+            runner=runner,
+        )
+
+
+def test_legacy_da_uses_targeted_appsource_application():
+    import install_workday_da_extension as m
+
+    calls = []
+
+    def runner(command, *, capture_output, timeout):
+        calls.append([str(part) for part in command])
+        if command[1:3] == ["auth", "list"]:
+            return _result(stdout="[1] * user@contoso.com Public\n")
+        return _result()
+
+    schema = m.install_workday_package(
         "https://org.crm.dynamics.com",
-        "hr",
-        pp_admin_client_factory=FakePPAdminClient,
-        powerplatform_client_factory=lambda _tenant: powerplatform,
-        poll_interval_seconds=0,
-        sleep=lambda _seconds: None,
-    )
-
-    assert schema == "msdyn_EssWorkdayRuntime"
-    assert powerplatform.install_calls == [("env-123", application_name)]
-
-
-@patch("install_workday_da_extension.discover_tenant", return_value="tenant-123")
-def test_times_out_and_reports_last_status(_mock_discover_tenant):
-    import install_workday_da_extension as m
-
-    application_name = "msdyn_EssWorkdayRuntime"
-    powerplatform = FakePowerPlatformClient(
-        "tenant-123",
-        packages=[
-            [{"uniqueName": application_name, "state": "None"}],
-            [{"uniqueName": application_name, "state": "Installing"}],
-            [{"uniqueName": application_name, "state": "Installing"}],
-        ],
-        install_result={"_operationId": "operation-123"},
-    )
-    now = [0]
-
-    def sleep(seconds):
-        now[0] += seconds
-
-    with pytest.raises(m.InstallationTimeoutError, match="10 minutes"):
-        m.install_workday_da_extension(
-            "https://org.crm.dynamics.com",
-            "hr",
-            pp_admin_client_factory=FakePPAdminClient,
-            powerplatform_client_factory=lambda _tenant: powerplatform,
-            poll_interval_seconds=300,
-            sleep=sleep,
-            clock=lambda: now[0],
-        )
-
-
-@patch("install_workday_da_extension.discover_tenant", return_value="tenant-123")
-def test_rejects_unsupported_it_vertical(_mock_discover_tenant):
-    import install_workday_da_extension as m
-
-    with pytest.raises(ValueError, match="ESS DA IT Agent is not supported"):
-        m.install_workday_da_extension(
-            "https://org.crm.dynamics.com",
-            "it",
-            pp_admin_client_factory=FakePPAdminClient,
-            powerplatform_client_factory=lambda _tenant: FakePowerPlatformClient(
-                "tenant-123", packages=[]
-            ),
-        )
-
-
-@patch("install_workday_da_extension.discover_tenant", return_value="tenant-123")
-def test_reports_install_permission_failure(_mock_discover_tenant):
-    import install_workday_da_extension as m
-
-    application_name = "msdyn_EssWorkdayRuntime"
-    powerplatform = FakePowerPlatformClient(
-        "tenant-123",
-        packages=[{"uniqueName": application_name, "state": "None"}],
-        install_result={"_error": "insufficient_permissions", "_status": 403},
-    )
-
-    with pytest.raises(RuntimeError, match="cannot install"):
-        m.install_workday_da_extension(
-            "https://org.crm.dynamics.com",
-            "hr",
-            pp_admin_client_factory=FakePPAdminClient,
-            powerplatform_client_factory=lambda _tenant: powerplatform,
-        )
-
-
-@patch("install_workday_da_extension.discover_tenant", return_value="tenant-123")
-def test_legacy_da_uses_targeted_appsource_connector(_mock_discover_tenant):
-    import install_workday_da_extension as m
-
-    application_name = "msdyn_EssDAHRWorkdayHCM"
-    powerplatform = FakePowerPlatformClient(
-        "tenant-123",
-        packages=[{"uniqueName": application_name, "state": "Installed"}],
-    )
-
-    schema = m.install_workday_da_extension(
-        "https://org.crm.dynamics.com",
-        "hr",
-        package_flavor="legacy-da",
-        pp_admin_client_factory=FakePPAdminClient,
-        powerplatform_client_factory=lambda _tenant: powerplatform,
+        "legacy-da",
+        ring="prod",
+        pac_resolver=lambda: Path("pac.exe"),
+        runner=runner,
     )
 
     assert schema == "msdyn_EssDAHRWorkday"
+    assert calls[-1][-1] == "msdyn_EssDAHRWorkdayHCM"
 
 
-def test_resolves_setup_environment_id_to_dataverse_url():
+def test_surfaces_pac_install_failure():
     import install_workday_da_extension as m
 
-    environment = {
-        "properties": {
-            "linkedEnvironmentMetadata": {
-                "instanceUrl": "https://org.crm.dynamics.com/"
-            }
-        }
-    }
+    def runner(command, *, capture_output, timeout):
+        if command[1:3] == ["auth", "list"]:
+            return _result(stdout="[1] * user@contoso.com Public\n")
+        return _result(returncode=1)
 
-    result = m.resolve_dataverse_url(
-        "env-123",
-        pp_admin_client_factory=lambda tenant_id: FakePPAdminClient(
-            tenant_id,
-            environment=environment,
-        ),
-    )
-
-    assert result == "https://org.crm.dynamics.com"
-
-
-def test_resolves_instance_api_url_when_instance_url_is_absent():
-    import install_workday_da_extension as m
-
-    environment = {
-        "properties": {
-            "linkedEnvironmentMetadata": {
-                "instanceApiUrl": "https://org.api.crm.dynamics.com/"
-            }
-        }
-    }
-
-    result = m.resolve_dataverse_url(
-        "env-123",
-        pp_admin_client_factory=lambda tenant_id: FakePPAdminClient(
-            tenant_id,
-            environment=environment,
-        ),
-    )
-
-    assert result == "https://org.api.crm.dynamics.com"
-
-
-def test_rejects_environment_without_dataverse():
-    import install_workday_da_extension as m
-
-    with pytest.raises(RuntimeError, match="does not have Dataverse"):
-        m.resolve_dataverse_url(
-            "env-123",
-            pp_admin_client_factory=lambda tenant_id: FakePPAdminClient(
-                tenant_id,
-                environment={"properties": {}},
-            ),
+    with pytest.raises(m.PacCliError, match="could not install"):
+        m.install_workday_package(
+            "https://org.crm.dynamics.com",
+            "runtime",
+            ring="prod",
+            pac_resolver=lambda: Path("pac.exe"),
+            runner=runner,
         )
+
+
+def test_rejects_non_https_environment_url():
+    import install_workday_da_extension as m
+
+    with pytest.raises(ValueError, match="must use HTTPS"):
+        m.install_workday_package(
+            "http://org.crm.dynamics.com",
+            "runtime",
+            ring="prod",
+        )
+
+
+def test_resolve_pac_reports_missing_cli(monkeypatch):
+    import install_workday_da_extension as m
+
+    monkeypatch.setattr(m.shutil, "which", lambda _candidate: None)
+
+    with pytest.raises(m.PacCliError, match="PAC CLI is not installed"):
+        m.resolve_pac_executable(environ={})

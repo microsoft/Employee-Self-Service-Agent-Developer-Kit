@@ -1,27 +1,24 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""Install the Workday package required by the active ESS HR agent.
-
-Used by ``src/skills/setup/workday-da/install-extension.md`` (step DA1.1).
-Current MOS agents use the standalone Workday runtime package. Legacy DA agents
-use the targeted DA HR Workday AppSource connector.
-"""
+"""Install the Workday package required by the active ESS HR agent."""
 
 from __future__ import annotations
 
 import argparse
 import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
 import sys
-import time
 
-from auth import discover_tenant
 from flightcheck.checks.workday_da import (
     _DA_HR_WORKDAY_CHILD_SCHEMA,
     _MOS_WORKDAY_RUNTIME_SCHEMA,
 )
-from flightcheck.powerplatform_client import PowerPlatformClient
-from flightcheck.pp_admin_client import PPAdminClient
+
 
 WORKDAY_PACKAGES = {
     "runtime": {
@@ -33,271 +30,206 @@ WORKDAY_PACKAGES = {
         "schemaName": _DA_HR_WORKDAY_CHILD_SCHEMA,
     },
 }
-INSTALLED_STATES = {"Installed", "TemplateInstalled"}
-IN_PROGRESS_STATES = {
-    "InstallRequested",
-    "Installing",
-    "InstallScheduled",
-    "InstallRetrying",
+CLOUD_FOR_RING = {
+    "preprod": "Preprod",
+    "prod": "Public",
 }
-FAILED_STATES = {"InstallFailed"}
-DEFAULT_TIMEOUT_SECONDS = 10 * 60
+_PROFILE_RE = re.compile(r"^\s*\[(\d+)\]\s*(\*)?\s*(.*)$")
 
 
-class InstallationTimeoutError(RuntimeError):
-    """Raised when Power Platform does not finish installation in time."""
-
-    def __init__(self, unique_name: str, timeout_seconds: int):
-        self.unique_name = unique_name
-        self.timeout_seconds = timeout_seconds
-        super().__init__(
-            "Application installation did not finish within "
-            f"{timeout_seconds // 60} minutes."
-        )
+class PacCliError(RuntimeError):
+    """Raised when PAC is unavailable or cannot complete an operation."""
 
 
-def _find_package(packages: list[dict], package_name: str) -> dict | None:
-    """Find an entitled application by unique or application name."""
-    target = package_name.casefold()
-    for package in packages:
-        names = (package.get("uniqueName"), package.get("applicationName"))
-        if any(
-            isinstance(name, str) and name.casefold() == target
-            for name in names
-        ):
-            return package
-    return None
-
-
-def _error_message(response: dict, default: str) -> str:
-    """Return a concise API error without dumping the full response."""
-    error = (
-        response.get("error")
-        or response.get("errorDetails")
-        or response.get("lastError")
-        or {}
+def resolve_pac_executable(environ=os.environ) -> Path:
+    """Prefer the shared managed PAC installation, then PAC on PATH."""
+    local_app_data = environ.get("LOCALAPPDATA")
+    if local_app_data:
+        managed = Path(local_app_data) / "InternalTools" / "pac" / "pac.exe"
+        if managed.is_file():
+            return managed
+    for candidate in ("pac", "pac.cmd", "pac.exe"):
+        resolved = shutil.which(candidate)
+        if resolved:
+            return Path(resolved)
+    raise PacCliError(
+        "PAC CLI is not installed. Install Microsoft Power Platform CLI, "
+        "then retry /connect workday."
     )
-    if isinstance(error, dict):
-        message = error.get("message") or error.get("errorName")
-        if message:
-            return str(message)
-    message = response.get("statusMessage")
-    return str(message) if message else default
 
 
-def _list_packages(
-    client: PowerPlatformClient, environment_id: str
-) -> list[dict]:
-    packages = client.list_environment_application_packages(environment_id)
-    if isinstance(packages, dict) and packages.get("_error"):
-        raise RuntimeError(
-            "Your account cannot read Marketplace applications for this "
-            "environment. Use a Power Platform or Dynamics 365 administrator "
-            "account."
+def _run(command, *, capture_output: bool, timeout: int):
+    """Run one PAC command without invoking a shell."""
+    try:
+        return subprocess.run(
+            [str(part) for part in command],
+            capture_output=capture_output,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=timeout,
+            check=False,
         )
-    return packages
+    except subprocess.TimeoutExpired as exc:
+        raise PacCliError(
+            f"PAC command did not finish within {timeout // 60} minutes."
+        ) from exc
 
 
-def _wait_for_install(
-    client: PowerPlatformClient,
-    environment_id: str,
-    unique_name: str,
+def _parse_profiles(output: str) -> list[dict]:
+    """Parse the profile index, active marker, and cloud from PAC output."""
+    profiles = []
+    for line in output.splitlines():
+        match = _PROFILE_RE.match(line)
+        if not match:
+            continue
+        remainder = match.group(3)
+        cloud = next(
+            (
+                token
+                for token in re.split(r"\s+", remainder)
+                if token.casefold() in {"public", "preprod"}
+            ),
+            None,
+        )
+        if cloud:
+            profiles.append(
+                {
+                    "index": match.group(1),
+                    "active": bool(match.group(2)),
+                    "cloud": cloud,
+                }
+            )
+    return profiles
+
+
+def ensure_pac_auth(
+    pac_executable: Path,
     *,
-    timeout_seconds: int,
-    poll_interval_seconds: int,
-    sleep,
-    clock,
-    status_callback,
+    ring: str,
+    environment_url: str,
+    runner=_run,
 ) -> None:
-    """Poll the application-package collection until installation completes."""
-    started_at = clock()
-    deadline = started_at + timeout_seconds
-    poll_number = 0
-
-    while True:
-        now = clock()
-        if now >= deadline:
-            break
-        poll_number += 1
-        observed_status = "Unknown"
-        package = _find_package(
-            _list_packages(client, environment_id),
-            unique_name,
-        )
-        if package:
-            state = package.get("state")
-            observed_status = state or "Unknown"
-            if state in INSTALLED_STATES:
-                return
-            if state in FAILED_STATES:
-                raise RuntimeError(
-                    _error_message(
-                        package,
-                        f"Application installation ended with state {state}.",
-                    )
-                )
-        status_callback(
-            "Installation status "
-            f"(poll {poll_number}, {int(now - started_at)}s elapsed): "
-            f"{observed_status}"
-        )
-        sleep(poll_interval_seconds)
-
-    raise InstallationTimeoutError(unique_name, timeout_seconds)
-
-
-class ExtensionNotListedError(RuntimeError):
-    """The DA Workday extension is not in this tenant's Marketplace catalog.
-
-    Not a failure — the calling skill step must treat this as "automation is
-    not available here" and fall back to the manual AppSource install, the
-    same guidance ``WD-DA-PKG-001`` (``checks/workday_da.py``) already gives.
-    """
-
-    def __init__(self, unique_name: str):
-        self.unique_name = unique_name
-        super().__init__(
-            f"'{unique_name}' was not found in this tenant's Marketplace "
-            "application catalog."
-        )
-
-
-def resolve_dataverse_url(
-    environment_id: str,
-    *,
-    pp_admin_client_factory=PPAdminClient,
-) -> str:
-    """Resolve the Dataverse URL for a setup-captured environment ID."""
-    client = pp_admin_client_factory("organizations")
-    client.authenticate(include_flow=False)
-    environment = client.get_environment(environment_id)
-    if not isinstance(environment, dict) or environment.get("_error"):
-        raise RuntimeError(
-            "Could not read the selected Power Platform environment."
-        )
-    linked = (
-        environment.get("properties", {})
-        .get("linkedEnvironmentMetadata", {})
+    """Select or create a PAC profile for the requested Power Platform ring."""
+    cloud = CLOUD_FOR_RING[ring]
+    listed = runner(
+        [pac_executable, "auth", "list"],
+        capture_output=True,
+        timeout=60,
     )
-    for key in ("instanceUrl", "instanceApiUrl"):
-        value = linked.get(key)
-        if isinstance(value, str) and value.startswith("https://"):
-            return value.rstrip("/")
-    raise RuntimeError(
-        "The selected Power Platform environment does not have Dataverse."
+    profiles = (
+        _parse_profiles(listed.stdout or "")
+        if listed.returncode == 0
+        else []
     )
-
-
-def install_workday_da_extension(
-    env_url: str,
-    vertical: str,
-    *,
-    package_flavor: str = "runtime",
-    pp_admin_client_factory=PPAdminClient,
-    powerplatform_client_factory=PowerPlatformClient,
-    timeout_seconds: int = DEFAULT_TIMEOUT_SECONDS,
-    poll_interval_seconds: int = 20,
-    sleep=time.sleep,
-    clock=time.monotonic,
-    status_callback=lambda message: print(message, flush=True),
-    installation_state_callback=lambda _status: None,
-) -> str:
-    """Try to install the required Workday package for one vertical.
-
-    Returns the installed child solution's schema name on success. Raises
-    ``ExtensionNotListedError`` when the Marketplace catalog does not return
-    the package at all (automation genuinely unavailable — not an error to
-    surface as a failure). Raises ``InstallationTimeoutError`` or
-    ``RuntimeError`` for other automation problems.
-    """
-    env_url = env_url.rstrip("/")
-    if vertical != "hr":
-        raise ValueError(
-            "Workday integration with the ESS DA IT Agent is not supported "
-            "in this release."
+    matching = [
+        profile
+        for profile in profiles
+        if profile["cloud"].casefold() == cloud.casefold()
+    ]
+    active = [profile for profile in matching if profile["active"]]
+    if len(active) == 1:
+        return
+    if len(matching) == 1:
+        selected = runner(
+            [
+                pac_executable,
+                "auth",
+                "select",
+                "--index",
+                matching[0]["index"],
+            ],
+            capture_output=True,
+            timeout=60,
         )
+        if selected.returncode != 0:
+            raise PacCliError("PAC could not select the required auth profile.")
+        return
+    if len(matching) > 1:
+        raise PacCliError(
+            f"Multiple PAC profiles exist for {cloud}. Select the correct "
+            "profile with 'pac auth select', then retry /connect workday."
+        )
+
+    command = [
+        pac_executable,
+        "auth",
+        "create",
+        "--cloud",
+        cloud,
+    ]
+    if ring == "preprod":
+        command.extend(["--environment", environment_url])
+    command.append("--deviceCode")
+    authenticated = runner(
+        command,
+        capture_output=False,
+        timeout=15 * 60,
+    )
+    if authenticated.returncode != 0:
+        raise PacCliError(
+            f"PAC authentication for {cloud} did not complete successfully."
+        )
+
+
+def install_workday_package(
+    environment_url: str,
+    package_flavor: str,
+    *,
+    ring: str,
+    pac_resolver=resolve_pac_executable,
+    runner=_run,
+) -> str:
+    """Install one Workday AppSource package through the supported PAC flow."""
     if package_flavor not in WORKDAY_PACKAGES:
         raise ValueError(f"Unsupported Workday package flavor: {package_flavor}")
-    package_config = WORKDAY_PACKAGES[package_flavor]
-    schema_name = package_config["schemaName"]
-    application_name = package_config["applicationName"]
-    tenant_id = discover_tenant(env_url)
+    environment_url = environment_url.rstrip("/")
+    if not environment_url.startswith("https://"):
+        raise ValueError("The Power Platform environment URL must use HTTPS.")
 
-    pp_admin = pp_admin_client_factory(tenant_id)
-    pp_admin.authenticate(include_flow=False)
-    environment_id = pp_admin.find_environment_id_by_dataverse_url(env_url)
-    if not environment_id:
-        raise RuntimeError(
-            "Could not resolve the selected environment's Power Platform ID."
+    package = WORKDAY_PACKAGES[package_flavor]
+    pac_executable = pac_resolver()
+    ensure_pac_auth(
+        pac_executable,
+        ring=ring,
+        environment_url=environment_url,
+        runner=runner,
+    )
+    installed = runner(
+        [
+            pac_executable,
+            "application",
+            "install",
+            "--environment",
+            environment_url,
+            "--application-name",
+            package["applicationName"],
+        ],
+        capture_output=False,
+        timeout=20 * 60,
+    )
+    if installed.returncode != 0:
+        raise PacCliError(
+            "PAC could not install the Workday package. Review the PAC output "
+            "above, confirm environment access, and retry /connect workday."
         )
-
-    client = powerplatform_client_factory(tenant_id)
-    client.authenticate()
-    package = _find_package(
-        _list_packages(client, environment_id),
-        application_name,
-    )
-    if not package:
-        raise ExtensionNotListedError(application_name)
-
-    unique_name = package.get("uniqueName") or application_name
-    state = package.get("state")
-    if state in INSTALLED_STATES:
-        installation_state_callback("automatic-complete")
-        return schema_name
-
-    if state in IN_PROGRESS_STATES:
-        installation_state_callback("installing")
-    else:
-        result = client.install_application_package(environment_id, unique_name)
-        if result.get("_error"):
-            raise RuntimeError(
-                "Your account cannot install Marketplace applications in this "
-                "environment. Use a Power Platform or Dynamics 365 "
-                "administrator account."
-            )
-        last_state = result.get("lastOperation", {}).get("state")
-        if last_state in INSTALLED_STATES:
-            installation_state_callback("automatic-complete")
-            return schema_name
-        if last_state in FAILED_STATES:
-            raise RuntimeError(
-                _error_message(result.get("lastOperation", {}), "Installation failed.")
-            )
-        installation_state_callback("installing")
-
-    _wait_for_install(
-        client,
-        environment_id,
-        unique_name,
-        timeout_seconds=timeout_seconds,
-        poll_interval_seconds=poll_interval_seconds,
-        sleep=sleep,
-        clock=clock,
-        status_callback=status_callback,
-    )
-    installation_state_callback("automatic-complete")
-    return schema_name
+    return package["schemaName"]
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description=(
-            "Attempt an automated install of the DA Workday extension "
-            "package for one ESS vertical."
-        )
+        description="Install the Workday package required by an ESS HR agent."
     )
-    target = parser.add_mutually_exclusive_group(required=True)
-    target.add_argument("--url", help="Dataverse environment URL")
-    target.add_argument(
-        "--environment-id",
-        help="Power Platform environment ID captured during setup",
+    parser.add_argument(
+        "--url",
+        required=True,
+        help="Dataverse environment URL",
     )
     parser.add_argument(
         "--vertical",
         required=True,
         choices=["hr"],
-        help="DA vertical (this release supports hr only)",
+        help="ESS vertical (this release supports hr only)",
     )
     parser.add_argument(
         "--package-flavor",
@@ -306,73 +238,41 @@ def main() -> None:
         help="Package required by the active ESS agent architecture.",
     )
     parser.add_argument(
-        "--resolve-only",
-        action="store_true",
-        help="Resolve and print the Dataverse URL without installing.",
+        "--ring",
+        choices=sorted(CLOUD_FOR_RING),
+        default="prod",
+        help="Power Platform ring captured during setup.",
     )
     args = parser.parse_args()
 
-    try:
-        environment_url = (
-            args.url.rstrip("/")
-            if args.url
-            else resolve_dataverse_url(args.environment_id)
-        )
-    except (OSError, RuntimeError, ValueError) as error:
-        print(f"ERROR: {error}", file=sys.stderr)
-        sys.exit(1)
-
-    if args.resolve_only:
-        print(
-            "WORKDAY_DA_ENVIRONMENT_JSON:"
-            + json.dumps(
-                {
-                    "environmentId": args.environment_id,
-                    "environmentUrl": environment_url,
-                }
-            )
-        )
-        return
-
+    package = WORKDAY_PACKAGES[args.package_flavor]
     base_result = {
-        "environmentUrl": environment_url,
+        "environmentUrl": args.url.rstrip("/"),
         "vertical": args.vertical,
+        "ring": args.ring,
         "packageFlavor": args.package_flavor,
-        "schemaName": WORKDAY_PACKAGES[args.package_flavor]["schemaName"],
-        "applicationName": WORKDAY_PACKAGES[args.package_flavor][
-            "applicationName"
-        ],
+        "schemaName": package["schemaName"],
+        "applicationName": package["applicationName"],
     }
-
     try:
-        schema_name = install_workday_da_extension(
-            environment_url,
-            args.vertical,
-            package_flavor=args.package_flavor,
+        schema_name = install_workday_package(
+            args.url,
+            args.package_flavor,
+            ring=args.ring,
         )
-    except ExtensionNotListedError as error:
+    except (OSError, PacCliError, RuntimeError, ValueError) as error:
         print(
-            "WORKDAY_DA_EXTENSION_NOT_LISTED_JSON:"
-            f"{json.dumps(base_result)}",
+            "WORKDAY_PACKAGE_INSTALL_FAILED_JSON:"
+            f"{json.dumps({**base_result, 'error': str(error)})}",
             flush=True,
         )
-        print(f"INFO: {error}", file=sys.stderr)
-        sys.exit(3)
-    except InstallationTimeoutError as error:
-        result = {**base_result, "timeoutMinutes": error.timeout_seconds // 60}
-        print(
-            "WORKDAY_DA_EXTENSION_INSTALL_TIMEOUT_JSON:"
-            f"{json.dumps(result)}",
-            flush=True,
-        )
-        print(f"ERROR: {error}", file=sys.stderr)
-        sys.exit(2)
-    except (OSError, RuntimeError, ValueError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         sys.exit(1)
 
-    result = {**base_result, "schemaName": schema_name}
-    print(f"INSTALLED_WORKDAY_DA_EXTENSION_JSON:{json.dumps(result)}")
+    print(
+        "INSTALLED_WORKDAY_DA_EXTENSION_JSON:"
+        f"{json.dumps({**base_result, 'schemaName': schema_name})}"
+    )
 
 
 if __name__ == "__main__":

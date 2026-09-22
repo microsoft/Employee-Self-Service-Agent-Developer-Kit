@@ -19,17 +19,10 @@ Resolve the target environment automatically:
    Dataverse-backed workspace).
 2. Otherwise read `.local/connect/workday-da/config.json`
    `sidecarDataverseEndpoint`.
-3. If neither exists, read `.local/config.json` `environmentId` and run:
-
-   ```
-   python scripts/install_workday_da_extension.py --environment-id "{ENVIRONMENT_ID}" --vertical "hr" --resolve-only
-   ```
-
-   Parse `WORKDAY_DA_ENVIRONMENT_JSON:` and persist its `environmentUrl` as
-   `sidecarDataverseEndpoint`.
-4. Only if automatic discovery fails, show the environments available to the
+3. If neither exists, show the environments available to the
    signed-in account and ask the maker to choose one. Do not ask them to type or
-   copy a URL when a selectable environment is available.
+   copy a URL when a selectable environment is available. Persist the selected
+   Dataverse URL as `sidecarDataverseEndpoint`.
 
 Call the resolved value `WORKDAY_DATAVERSE_URL`. Never copy it into
 `.local/config.json`; that file's native `powerPlatformApiEndpoint` remains the
@@ -90,19 +83,13 @@ environment is outside this lifecycle and must not affect DA1.1.
 ## P1.1 — Attempt an automated install
 
 ```
-python scripts/install_workday_da_extension.py --environment-id "{ENVIRONMENT_ID}" --vertical "hr" --package-flavor "{PACKAGE_FLAVOR}"
+python scripts/install_workday_da_extension.py --url "{WORKDAY_DATAVERSE_URL}" --vertical "hr" --package-flavor "{PACKAGE_FLAVOR}" --ring "{RING}"
 ```
 
-Use the `--environment-id` form only when
-`WORKDAY_DATAVERSE_URL` was resolved from that setup environment ID during
-this run. If the URL came from `dataverseEndpoint` or a previously saved
-`sidecarDataverseEndpoint`, run:
-
-```
-python scripts/install_workday_da_extension.py --url "{WORKDAY_DATAVERSE_URL}" --vertical "hr" --package-flavor "{PACKAGE_FLAVOR}"
-```
-
-Run the selected command once.
+Read `RING` from canonical setup state `environment.ring`; use `prod` only for
+legacy state with no recorded ring. Run the command once. The installer selects
+or creates a PAC profile for that ring and PAC polls AppSource installation
+internally.
 
 Parse the script's JSON marker line:
 
@@ -110,54 +97,23 @@ Parse the script's JSON marker line:
   already installed and the script confirmed it). Re-run
 `--checkpoint WD-DA-PKG-001` with the same `--connect-config`; proceed only
 when it reports `PASSED`.
-- **`WORKDAY_DA_EXTENSION_NOT_LISTED_JSON:`** → the Workday package is not
-  available to the signed-in account through the environment's application
-  catalog. Continue to **P1.2**.
-- **`WORKDAY_DA_EXTENSION_INSTALL_TIMEOUT_JSON:`** → the install was started
-  but didn't finish within the wait window.
+- **`WORKDAY_PACKAGE_INSTALL_FAILED_JSON:`** → show its concise `error` value
+  and stop with DA1.1 `in-progress`. Do not claim the package needs a manual
+  AppSource installation. PAC's output is the source of truth:
+  - If PAC CLI is missing, ask whether the maker wants the kit to install the
+    current-user managed copy. If approved, run:
 
-  **Message:**
+    ```powershell
+    dotnet tool install --tool-path "$env:LOCALAPPDATA\InternalTools\pac" --interactive --verbosity n --configfile "scripts\managed-pac.nuget.config" Microsoft.PowerApps.CLI.Tool
+    ```
 
-  The Workday extension package install is still in progress in Power
-  Platform — this can take a few minutes. Check back shortly and I'll
-  re-verify it.
-
-  **End message.**
-
-  Wait for the user to confirm, then re-run `--checkpoint WD-DA-PKG-001` with
-  the same `--connect-config`.
-  Loop until it passes, or fall back to **P1.2** if the user reports the
-  install failed in the portal.
-- Any other exit / error → show the error verbatim and continue to **P1.2**
-  (manual install) so the user isn't blocked by an automation failure.
-
----
-
-## P1.2 — Guided manual install (fallback)
-
-If `PACKAGE_FLAVOR` is `runtime`:
-
-**Message:**
-
-The Workday package could not be installed automatically. Ask a Power Platform
-administrator to install **ESS Workday Runtime** from AppSource in this
-environment. Tell me when the installation finishes and I'll verify it.
-
-**End message.**
-
-If `PACKAGE_FLAVOR` is `legacy-da`:
-
-**Message:**
-
-The Workday package could not be installed automatically. Ask a Power Platform
-administrator to install **Workday HCM DA Connector (HR)** from AppSource in
-this environment. Tell me when the installation finishes and I'll verify it.
-
-**End message.**
-
-Wait for the user to confirm, then re-run `--checkpoint WD-DA-PKG-001` with the
-same `--connect-config`. Loop until it passes. While it is not yet passing,
-keep DA1.1 `in-progress`.
+    If the tool is already present but needs repair or update, run the same
+    command with `update` instead of `install`. Then rerun P1.1.
+  - If PAC starts device-code authentication, wait for it to finish.
+  - If multiple profiles exist for the required ring, ask the maker to select
+    the intended profile with `pac auth select`, then retry.
+  - For permission or package-availability errors, show PAC's output and ask
+    the maker to correct that exact issue before retrying.
 
 ---
 
