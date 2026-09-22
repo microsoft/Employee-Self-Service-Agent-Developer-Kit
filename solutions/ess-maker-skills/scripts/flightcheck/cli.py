@@ -1726,8 +1726,8 @@ def _print_prioritized_summary(result, *, verbose_manual=False):
       3. ACTION REQUIRED — full per-row detail (Failed / Error).
       4. NEEDS MANUAL VERIFICATION — one line per row (Warning /
          Manual / NotConfigured).
-      5. PASSED — count only (includes Passed + Skipped); point to
-         report.html for the list.
+      5. SKIPPED — count only, when present.
+      6. PASSED — count only; point to report.html for the list.
 
     The goal is for an operator scanning the terminal to see, in
     order: am I OK? what must I fix? what must I verify? — without
@@ -1736,7 +1736,9 @@ def _print_prioritized_summary(result, *, verbose_manual=False):
     buckets = bucket_results(result.results)
     action = buckets[BUCKET_ACTION]
     manual = buckets[BUCKET_MANUAL]
-    passed = buckets[BUCKET_PASSED]
+    completed = buckets[BUCKET_PASSED]
+    passed = [r for r in completed if r.status == Status.PASSED.value]
+    skipped = [r for r in completed if r.status == Status.SKIPPED.value]
 
     print()
     print("=" * 64)
@@ -1823,7 +1825,13 @@ def _print_prioritized_summary(result, *, verbose_manual=False):
             print("  (Open report.html for the full result + verification "
                   "steps.)")
 
-    # Section 3 — PASSED (count only; the operator doesn't need to
+    if skipped:
+        print()
+        print(f"  SKIPPED ({len(skipped)})")
+        print("  " + "-" * 62)
+        print("  See report.html for the checks that could not be evaluated.")
+
+    # Section 4 — PASSED (count only; the operator doesn't need to
     # scroll past 200+ green rows to find what needs their attention).
     print()
     print(f"  PASSED ({len(passed)})")

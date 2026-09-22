@@ -66,6 +66,29 @@ and DA2.1, skip any row whose `setupStatus` state is already `done`.
 
 ## DA2.0 — Role gate (App / Cloud Application Administrator)
 
+Before querying roles or changing any application, align Azure CLI to the
+canonical tenant selected during `/setup`:
+
+1. Read `environment.tenant_id` from `.local/setup/config.json` and save it as
+   `SETUP_TENANT_ID`. If it is absent, stop and ask the user to rerun `/setup`;
+   never infer the tenant from the current Azure CLI session.
+2. Read the active Azure CLI tenant:
+
+   ```
+   az account show --query tenantId -o tsv
+   ```
+
+3. If it does not exactly equal `SETUP_TENANT_ID`, sign in to the setup tenant:
+
+   ```
+   az login --tenant "{SETUP_TENANT_ID}" --use-device-code --allow-no-subscriptions
+   ```
+
+4. Re-run `az account show --query tenantId -o tsv`. If it still differs, halt
+   before running the role query or any `az ad` / Graph mutation. Persist
+   `tenantId = SETUP_TENANT_ID` to
+   `.local/connect/workday-da/config.json` only after this verification.
+
 Apply the shared [`shared/permission-gate.md`](shared/permission-gate.md) before
 any Entra work, with:
 
@@ -175,9 +198,19 @@ carries `http://www.workday.com/{tenant}` in its `identifierUris`, so no guessin
 is needed:
 
 ```
-az ad app list --all --query "[?identifierUris[?contains(@, 'workday.com/{tenant}')]].{name:displayName, appId:appId, id:id, identifierUris:identifierUris}" -o json
+$targetIdentifier = "http://www.workday.com/{tenant}"
+$normalizedTarget = $targetIdentifier.Trim().TrimEnd('/').ToLowerInvariant()
+$apps = az ad app list --all --query "[?identifierUris != null].{name:displayName, appId:appId, id:id, identifierUris:identifierUris}" -o json | ConvertFrom-Json
+$matches = @($apps | Where-Object {
+  @($_.identifierUris | ForEach-Object {
+    ([string]$_).Trim().TrimEnd('/').ToLowerInvariant()
+  }) -contains $normalizedTarget
+})
 ```
 
+- Match only normalized **exact equality** as shown above. Never use
+  `contains()` or substring matching: a tenant such as `microsoft_dpt6` can
+  coexist with `microsoft_dpt6_okta`, and substring matching selects both.
 - **Exactly one match** → this is unambiguously the right app. Save its `appId` →
   `WD_ENTRA_APP_ID` and its `id` → `WD_ENTRA_APP_OBJECT_ID`, then resolve the
   service-principal id (`az ad sp list --filter "appId eq '{WD_ENTRA_APP_ID}'"

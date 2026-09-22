@@ -105,6 +105,10 @@ def test_connect_workday_provider_contract_and_review_guards() -> None:
     ).read_text(encoding="utf-8")
     assert "^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$" in entra
     assert "label-to-app mapping" in entra
+    assert 'az account show --query tenantId -o tsv' in entra
+    assert '--tenant "{SETUP_TENANT_ID}"' in entra
+    assert "normalized **exact equality**" in entra
+    assert "contains(@, 'workday.com/{tenant}')" not in entra
 
     power_platform = (
         _SOLUTION
@@ -116,6 +120,18 @@ def test_connect_workday_provider_contract_and_review_guards() -> None:
     ).read_text(encoding="utf-8")
     assert "exactly one MCSBot delegated authorization" in power_platform
     assert "contains no `[FAIL]` line" in power_platform
+    assert "Azure CLI Dataverse\ntoken before use" in power_platform
+    assert "msdyn_sharedworkdaysoap_workdayruntime" in power_platform
+    assert "msdyn_sharedcommondataserviceforapps_workdayruntime" in power_platform
+
+    authorization_script = (
+        _SOLUTION
+        / "scripts"
+        / "alm"
+        / "Enable-CosmosDAFlowAuthorization.ps1"
+    ).read_text(encoding="utf-8")
+    assert "Test-DataverseToken" in authorization_script
+    assert "get_dataverse_token.py" in authorization_script
 
     install = (
         _SOLUTION

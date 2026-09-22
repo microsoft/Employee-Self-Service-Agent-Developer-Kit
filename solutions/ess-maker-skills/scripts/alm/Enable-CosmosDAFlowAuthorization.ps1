@@ -79,15 +79,57 @@ function Write-Reuse  { param([string]$m) Write-Host "  [reuse]  $m" -Foreground
 function Write-Create { param([string]$m) Write-Host "  [create] $m" -ForegroundColor Yellow }
 function Write-Fail   { param([string]$m) Write-Host "  [FAIL]   $m" -ForegroundColor Red }
 
+function Test-DataverseToken {
+    param(
+        [Parameter(Mandatory = $true)][string]$Resource,
+        [Parameter(Mandatory = $true)][string]$Token
+    )
+    try {
+        Invoke-RestMethod `
+            -Method GET `
+            -Uri "$($Resource.TrimEnd('/'))/api/data/v9.1/WhoAmI" `
+            -Headers @{ Authorization = "******"; Accept = 'application/json' } `
+            -ErrorAction Stop | Out-Null
+        return $true
+    } catch {
+        if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 401) {
+            return $false
+        }
+        throw
+    }
+}
+
 function Get-DataverseToken {
     param([string]$Resource)
+    $tok = $null
     try {
         $tok = az account get-access-token --resource $Resource --query accessToken -o tsv 2>$null
     } catch {
-        throw "Azure CLI token acquisition failed. Run 'az login' and ensure the account has access to $Resource."
+        $tok = $null
     }
+    if (-not [string]::IsNullOrWhiteSpace($tok) -and (Test-DataverseToken -Resource $Resource -Token $tok)) {
+        return $tok
+    }
+
+    Write-Host "  Azure CLI token was unavailable or rejected; using the kit's Dataverse sign-in." -ForegroundColor Yellow
+    $helper = Join-Path $PSScriptRoot 'get_dataverse_token.py'
+    $python = Get-Command python -ErrorAction SilentlyContinue
+    if (-not $python -or -not (Test-Path $helper)) {
+        throw "Could not acquire a valid Dataverse token. Install Python, then run the kit setup or sign in with an account that can access $Resource."
+    }
+
+    $output = @(& $python.Source $helper --environment $Resource 2>&1)
+    if ($LASTEXITCODE -ne 0) {
+        $safeError = ($output | Where-Object { $_ -notmatch '^ESS_DATAVERSE_TOKEN=' }) -join [Environment]::NewLine
+        throw "Kit Dataverse authentication failed: $safeError"
+    }
+    $marker = $output | Where-Object { $_ -match '^ESS_DATAVERSE_TOKEN=' } | Select-Object -Last 1
+    if (-not $marker) {
+        throw "Kit Dataverse authentication did not return an access token."
+    }
+    $tok = ([string]$marker).Substring('ESS_DATAVERSE_TOKEN='.Length)
     if ([string]::IsNullOrWhiteSpace($tok)) {
-        throw "Could not acquire a Dataverse token for $Resource. Check 'az account show' and that the correct subscription/tenant is selected."
+        throw "Kit Dataverse authentication returned an empty access token for $Resource."
     }
     return $tok
 }
@@ -104,6 +146,7 @@ function Invoke-Dv {
         Accept             = 'application/json'
         'OData-MaxVersion' = '4.0'
         'OData-Version'    = '4.0'
+        Prefer             = 'return=representation'
     }
     try {
         if ($null -ne $Body) {
@@ -184,7 +227,6 @@ if ($teamExisting.Count -gt 0) {
     if (-not $AdministratorId) {
         # The team administrator must hold System Administrator, otherwise team creation fails
         # with 0x80041d0a "The team administrator does not have privilege read team."
-        $admins = (Invoke-Dv -Path ("systemuserrolescollection?`$select=systemuserid&`$top=0")) 2>$null
         $roleQ  = 'roles?$select=roleid&$filter=name eq ''System Administrator'''
         $role   = (Invoke-Dv -Path $roleQ).value
         if (-not $role) { throw 'Could not locate the System Administrator role. Pass -AdministratorId explicitly.' }

@@ -9,12 +9,19 @@ extension. It owns checklist rows **DA4.1 through DA4.8**.
 Every **Message** block is the exact text to show the user. Copy it verbatim. Do
 not claim that a manual portal setting was verified automatically.
 
-The two required connection references are:
+The two required connection references depend on the package flavor installed
+in DA-1:
 
-| Connection | Logical name |
-| --- | --- |
-| Workday OAuthUser | `new_sharedworkdaysoap_ff0df` |
-| Microsoft Dataverse | `msviess_sharedcommondataserviceforapps_92b66` |
+| Package | Connection | Logical name |
+| --- | --- | --- |
+| MOS runtime (`msdyn_EssWorkdayRuntime`) | Workday OAuthUser | `msdyn_sharedworkdaysoap_workdayruntime` |
+| MOS runtime (`msdyn_EssWorkdayRuntime`) | Microsoft Dataverse | `msdyn_sharedcommondataserviceforapps_workdayruntime` |
+| Legacy DA (`msdyn_EssDAHRWorkdayHCM`) | Workday OAuthUser | `new_sharedworkdaysoap_ff0df` |
+| Legacy DA (`msdyn_EssDAHRWorkdayHCM`) | Microsoft Dataverse | `msviess_sharedcommondataserviceforapps_92b66` |
+
+Resolve the rows from the installed solution and connector IDs before showing
+portal instructions. Do not report a missing connection merely because a
+logical name from the other package flavor is absent.
 
 Never reuse Dev connection IDs, bot IDs, or workflow IDs in another
 environment.
@@ -42,12 +49,17 @@ Persist `installPath: "simplified"` and, for an upgrade, also persist
 
 **Message:**
 
-Now we'll create or reconnect the Workday connection used on behalf of each
-signed-in employee.
+Now we'll create the Workday connection used on behalf of each signed-in
+employee, then attach it to the installed Workday solution.
 
-In the Power Apps maker portal, select this environment and open the installed
-Workday solution. Configure the **OAuthUser** connection reference using a
-Workday connection with **Microsoft Entra ID Integrated** authentication.
+1. In the Power Apps maker portal, select this environment.
+2. Open **Connections** → **New connection**, search for **Workday**, and create
+   a connection using **Microsoft Entra ID Integrated** authentication.
+3. Enter the values below. Complete the sign-in/consent window if one opens.
+4. After the connection shows **Connected**, open **Solutions** → the installed
+   Workday runtime solution → **Connection references**.
+5. Open **Workday OAuth Runtime**, select the connection you just created, and
+   save. Reopen it once to confirm the selection was retained.
 
 Use the values captured earlier:
 
@@ -63,7 +75,10 @@ open and configure each reference separately.
 
 **End message.**
 
-Ask the maker to confirm that OAuthUser is connected with the values above.
+If no Workday connection exists yet, do not ask the maker to confirm the
+reference binding—guide the connection creation first. Ask the maker to confirm
+that OAuthUser is connected with the values above and that the
+`connectionreference` row has a non-empty `connectionid`.
 Record DA4.1 with `GATE="manual"`, `ACK=true`, and evidence describing the
 connection name and environment. If it is not connected, leave the row
 `in-progress`.
@@ -72,21 +87,36 @@ connection name and environment. If it is not connected, leave the row
 
 **Message:**
 
-In the same Workday solution, configure the **Microsoft Dataverse** connection
-reference with an active connection owned by your maker account. Confirm it
-targets this environment, not a Dev connection copied from another environment.
+1. In Power Apps **Connections**, create a **Microsoft Dataverse** connection
+   with your maker account if this environment does not already have one.
+2. Return to the installed Workday runtime solution → **Connection references**.
+3. Open **Microsoft Dataverse - Workday Runtime**, select that Dataverse
+   connection, and save.
+4. Reopen the reference and confirm the selection was retained and targets this
+   environment, not a Dev connection copied from another environment.
 
 **End message.**
 
 Ask for confirmation and record DA4.2 as a manual row with the connection name
-and environment in the evidence.
+and environment in the evidence. Verify its `connectionreference` row has a
+non-empty `connectionid`; if it remains empty, do not advance to flow activation.
 
 ## DA4.3 — Share parameters and repair stale connections
 
 **Message:**
 
-Open the Workday connection's **Connection parameters** page and turn on
-**Allow permission to share parameters**, then save.
+Open the active agent's **Copilot Studio → Settings → Connection settings**
+page:
+
+`https://{CPS_HOST}/environments/{ENV_ID}/copilots/{BOT_ID}/da-settings/connectionSettings`
+
+For each Workday flow entry:
+
+1. Click the entry → **Connect**.
+2. Select the Workday connection created in DA4.1 and submit.
+3. Under **Manage**, click **See details**.
+4. Open the **Connection parameters** tab.
+5. Turn on **Allow permission to share parameters** and save.
 
 If the parameter values appear empty, turn the setting off and save, turn it
 back on and save again, then confirm the REST, SOAP, token, client, and resource
@@ -98,8 +128,11 @@ asked to authorize again on their next Workday request.
 
 **End message.**
 
-Require explicit confirmation that parameter sharing is enabled, the fields
-remain populated, and the connection is connected. Record DA4.3 as manual.
+This setting is agent/runtime wiring; do not infer it from the physical
+connection inventory's `allowSharing` property. Require explicit confirmation
+that every Workday flow entry is connected, parameter sharing is enabled, the
+fields remain populated, and the connection is connected. Record DA4.3 as
+manual.
 
 ## DA4.4 — Confirm connection binding
 
@@ -111,11 +144,17 @@ connection-parameter configuration. Confirm:
 3. The required `connectionparametersetconfig` values are populated for the
    target environment.
 4. No reference points to a connection from a different environment or user.
+5. The Copilot Studio connection-settings entries are wired separately per
+   DA4.3; solution-level Dataverse binding does not replace that runtime step.
 
 The authorization script does not perform this step. Require explicit
 confirmation and record DA4.4 as manual.
 
 ## DA4.5 — Turn on the Workday cloud flows
+
+Do not activate flows until DA4.1–DA4.4 are complete and the two installed
+runtime `connectionreference` rows have non-empty connection bindings. A flow
+whose references are unbound may activate but will fail at runtime.
 
 Discover the Workday flows installed with the ESS DA HR extension when a
 reliable DA-scoped listing is available. If they can be enabled through the
@@ -143,7 +182,10 @@ Use the checked-in authorization script:
 
 Execute this PowerShell file directly. Do not translate, regenerate, or replace
 it with Python. PowerShell 7 is preferred; Windows PowerShell 5.1 is also
-supported by the script syntax.
+supported by the script syntax. The script validates the Azure CLI Dataverse
+token before use. If that token is rejected (including PPE environments), it
+automatically reuses the kit's Dataverse authentication cache and opens the
+standard kit sign-in only when a refresh is required.
 
 Resolve parameters instead of asking the maker to paste GUIDs:
 
@@ -165,9 +207,9 @@ delegated-authorization and team lookups documented by the script:
 - exactly one MCSBot delegated authorization and one linked Access team already
   exist for the bot → the script may verify/reuse them and add missing workflow
   shares;
-- no authorization or team exists → stop before apply. The checked-in source
-  version requires a Microsoft-owned update that requests Dataverse POST
-  representations before it can safely create and bind those records;
+- no authorization or team exists → the script may create them. Its Dataverse
+  writes request `Prefer: return=representation`, so the new record IDs are
+  captured and bound in the same run;
 - more than one linked team exists → stop and require administrator
   remediation. Do not rely on the script's exit code because this source
   version can print `[FAIL]` for multiple teams without returning failure.
@@ -176,15 +218,14 @@ First run the script with `-WhatIf`, show the target organization, agent, and
 flow display names, and obtain explicit approval. Then run the same command
 without `-WhatIf`.
 
-When the authorization and team already exist but workflow shares are missing,
-the unchanged script's `-WhatIf` run may exit `1` after showing the correct
-`would share` plan. This happens because its final verification checks for
-shares that `-WhatIf` intentionally did not write. Treat that preview as
-acceptable only when the target values are correct and every `[FAIL]` is solely
-an expected missing share corresponding to a listed preview operation. A
-`would create` authorization/team operation, authentication, permission,
-lookup, missing-flow, wrong-target, or unexpected-existing-record error remains
-blocking. Do not apply based on an ambiguous preview.
+The script's `-WhatIf` run may exit `1` after showing a correct `would create`
+or `would share` plan. This happens because its final verification checks for
+records and shares that `-WhatIf` intentionally did not write. Treat that
+preview as acceptable only when the target values are correct and every
+`[FAIL]` corresponds exactly to a listed preview operation. Authentication,
+permission, lookup, missing-flow, wrong-target, conflicting-existing-record, or
+multiple-team errors remain blocking. Do not apply based on an ambiguous
+preview.
 
 DA4.6 passes only when the preflight found exactly one linked Access team, the
 script exits with code `0`, ends with
