@@ -165,6 +165,22 @@ function Resolve-Python {
     return $null
 }
 
+function Resolve-CodeCommand {
+    $code = Get-Command code -ErrorAction SilentlyContinue
+    if ($code) { return $code }
+
+    $knownPaths = @(
+        "$env:LOCALAPPDATA\Programs\Microsoft VS Code\bin\code.cmd",
+        "$env:ProgramFiles\Microsoft VS Code\bin\code.cmd",
+        "${env:ProgramFiles(x86)}\Microsoft VS Code\bin\code.cmd"
+    )
+    foreach ($path in $knownPaths) {
+        if (Test-Path -LiteralPath $path) { return Get-Item -LiteralPath $path }
+    }
+
+    return $null
+}
+
 # Helper: detect Windows ARM64 host. Used to add ARM64-specific guardrails to
 # pip install (cryptography only shipped win_arm64 wheels in 46.0+; older
 # resolutions fall back to a Rust source-build that needs VS Build Tools).
@@ -454,7 +470,13 @@ if (-not $wingetAvailable) {
     # logs "already installed" for present packages.
     foreach ($pkg in $packages) {
         # Skip if already installed (avoids unnecessary winget calls + elevation prompts)
-        $existing = if ($pkg.Cmd -eq 'python') { Resolve-Python } else { Get-Command $pkg.Cmd -ErrorAction SilentlyContinue }
+        $existing = if ($pkg.Cmd -eq 'python') {
+            Resolve-Python
+        } elseif ($pkg.Cmd -eq 'code') {
+            Resolve-CodeCommand
+        } else {
+            Get-Command $pkg.Cmd -ErrorAction SilentlyContinue
+        }
         if ($existing) {
             Write-Ok "$($pkg.Name) (already installed)"
             continue
@@ -536,14 +558,7 @@ if ($FlightCheckOnly) {
 } elseif (-not $SkipExtensions) {
     Write-Step 'Installing VS Code extensions'
 
-    $code = Get-Command code -ErrorAction SilentlyContinue
-    if (-not $code) {
-        # Fallback: check the known VS Code install location (winget/user install)
-        $knownCodeCmd = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd'
-        if (Test-Path $knownCodeCmd) {
-            $code = Get-Item $knownCodeCmd
-        }
-    }
+    $code = Resolve-CodeCommand
     if (-not $code) {
         Write-Warn2 'code CLI not on PATH yet. Open a new PowerShell window after this script and run:'
         Write-Warn2 '  code --install-extension GitHub.copilot'
@@ -557,7 +572,23 @@ if ($FlightCheckOnly) {
             'GitHub.copilot-chat',
             'ms-python.python'
         )
+        $installedExtensions = @()
+        $extensionListOutput = Invoke-Native { & $codeBin --list-extensions }
+        if ($LASTEXITCODE -eq 0) {
+            $installedExtensions = @(
+                $extensionListOutput |
+                    ForEach-Object { "$_".Trim().ToLowerInvariant() } |
+                    Where-Object { $_ }
+            )
+        } else {
+            Write-Warn2 'Could not list installed VS Code extensions. Existing extensions will be verified individually.'
+        }
         foreach ($ext in $extensions) {
+            if ($installedExtensions -contains $ext.ToLowerInvariant()) {
+                Write-Ok "extension $ext (already present / built-in)"
+                continue
+            }
+
             # `code` writes its install errors to stderr; combined with the
             # script-global $ErrorActionPreference='Stop' that causes 2>&1 to
             # raise a terminating exception before we can inspect the output.
@@ -751,11 +782,7 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions) {
     $modeLabel = if ($SkipMakerProfile) { 'standard' } else { 'lite' }
     Write-Step "Installing ESS Maker Profile ($modeLabel mode)"
 
-    $code = Get-Command code -ErrorAction SilentlyContinue
-    if (-not $code) {
-        $knownCodeCmd = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd'
-        if (Test-Path $knownCodeCmd) { $code = Get-Item $knownCodeCmd }
-    }
+    $code = Resolve-CodeCommand
     $codeBin = if ($code.Source) { $code.Source } elseif ($code.FullName) { $code.FullName } else { $null }
     if (-not $codeBin) {
         Write-Warn2 'code CLI not on PATH. ESS Maker Profile will not be installed.'
@@ -774,25 +801,35 @@ if (-not $FlightCheckOnly -and -not $SkipExtensions) {
         if (-not $vsix) {
             Write-Warn2 "No ess-maker-profile-*.vsix found under $vsixDir. Skipping extension install."
         } else {
-            $out = $null
-            $vsix_exit = 0
-            try {
-                $prevEAP = $ErrorActionPreference
-                $ErrorActionPreference = 'Continue'
-                $out = & $codeBin --install-extension $vsix.FullName --force 2>&1
-                $vsix_exit = $LASTEXITCODE
-            } catch {
-                $out = $_.Exception.Message
-                $vsix_exit = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }
-            } finally {
-                $ErrorActionPreference = $prevEAP
-            }
+            $makerVersion = if ($vsix.BaseName -match '^ess-maker-profile-(.+)$') { $Matches[1] } else { $null }
+            $installedVersionedExtensions = @(Invoke-Native { & $codeBin --list-extensions --show-versions })
+            $makerProfileCurrent = $makerVersion -and
+                $LASTEXITCODE -eq 0 -and
+                ($installedVersionedExtensions -contains "microsoft-ess.ess-maker-profile@$makerVersion")
 
-            if ($vsix_exit -eq 0) {
-                Write-Ok "ESS Maker Profile installed ($($vsix.Name)) - $modeLabel mode"
+            if ($makerProfileCurrent) {
+                Write-Ok "ESS Maker Profile $makerVersion (already installed) - $modeLabel mode"
             } else {
-                Write-Warn2 "ess-maker-profile vsix install returned exit $vsix_exit (non-fatal)"
-                ($out | Out-String).TrimEnd() -split "`r?`n" | ForEach-Object { Write-Warn2 "  $_" }
+                $out = $null
+                $vsix_exit = 0
+                try {
+                    $prevEAP = $ErrorActionPreference
+                    $ErrorActionPreference = 'Continue'
+                    $out = & $codeBin --install-extension $vsix.FullName --force 2>&1
+                    $vsix_exit = $LASTEXITCODE
+                } catch {
+                    $out = $_.Exception.Message
+                    $vsix_exit = if ($LASTEXITCODE) { $LASTEXITCODE } else { 1 }
+                } finally {
+                    $ErrorActionPreference = $prevEAP
+                }
+
+                if ($vsix_exit -eq 0) {
+                    Write-Ok "ESS Maker Profile installed ($($vsix.Name)) - $modeLabel mode"
+                } else {
+                    Write-Warn2 "ess-maker-profile vsix install returned exit $vsix_exit (non-fatal)"
+                    ($out | Out-String).TrimEnd() -split "`r?`n" | ForEach-Object { Write-Warn2 "  $_" }
+                }
             }
         }
 
@@ -1175,11 +1212,7 @@ if ($FlightCheckOnly) {
 # 7. Launch
 # ---------------------------------------------------------------------------
 if (-not $SkipLaunch) {
-    $code = Get-Command code -ErrorAction SilentlyContinue
-    if (-not $code) {
-        $knownCodeCmd = Join-Path $env:LOCALAPPDATA 'Programs\Microsoft VS Code\bin\code.cmd'
-        if (Test-Path $knownCodeCmd) { $code = Get-Item $knownCodeCmd }
-    }
+    $code = Resolve-CodeCommand
     $codePath = if ($code.Source) { $code.Source } elseif ($code.FullName) { $code.FullName } else { $null }
     if ($codePath) {
         # Launch strategy depends on mode:
