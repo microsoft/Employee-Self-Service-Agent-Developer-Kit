@@ -7,10 +7,9 @@ the configured agent only after the user confirms the push. After a successful
 push, the temporary workspace-level source is removed so the configured-agent
 copy becomes the single local source of truth.
 
-Complete the checkpoint, local edit, and validation, but skip every push or
-deployment-verification instruction. Finish by saying the local files are
-ready
-and DA-GA evaluation deployment is not yet available.
+Complete the checkpoint, local edit, and validation, then push when the user
+asks, following the push and deployment-verification steps. Evaluation push is
+available in this workspace.
 
 ## Evaluation locations
 

@@ -6,10 +6,9 @@ artifacts, and pushing the `.mcs.yml` representation directly to Copilot Studio
 via Dataverse. Test cases are stored as `botcomponent` records with
 `componenttype=19` in a parent→child hierarchy (EvaluationSet → EvaluationData).
 
-Generate and validate evaluation files locally, but skip every dry-run, push,
-and
-deployment-verification instruction. Finish by saying the local files are ready
-and DA-GA evaluation deployment is not yet available.
+Generate and validate evaluation files locally, then push them when the user
+asks, following the dry-run, push, and deployment-verification steps.
+Evaluation push is available in this workspace.
 
 ## Rules
 
@@ -761,9 +760,13 @@ Show the user the dry run output and ask for confirmation.
 
 ### 4.6 — Push
 
-Run `python scripts/push.py` to push the evaluation test sets to Copilot Studio.
-The push script handles two-pass ordering automatically: parent EvaluationSet records
-are created first, then child EvaluationData records are linked via `parentbotcomponentid`.
+Run `python scripts/push.py --yes` to push the evaluation test sets to Copilot
+Studio. Pass `--yes` — the script otherwise prompts on `input()`, which a
+non-interactive subprocess cannot answer and which reads as a hang. The user
+already confirmed the push after the Step 4.5 dry run, so this flag bypasses no
+approval the maker did not give. The push script handles two-pass ordering
+automatically: parent EvaluationSet records are created first, then child
+EvaluationData records are linked via `parentbotcomponentid`.
 
 If the push fails or is cancelled, show:
 

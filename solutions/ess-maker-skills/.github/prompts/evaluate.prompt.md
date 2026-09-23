@@ -10,9 +10,9 @@ agent. Updating can also proceed without setup when workspace-level evaluation
 sets exist. Deleting deployed agent sets requires completed canonical setup and
 a configured agent.
 
-Continue generating or editing evaluation files locally but skip every
-instruction to push them. Finish by stating that the local files were saved
-and DA-GA evaluation deployment is not yet available in this release.
+Generate or edit evaluation files locally, then push them when the user asks;
+follow each skill's push instructions. Evaluation push is available in this
+workspace.
 
 ## Flow
 

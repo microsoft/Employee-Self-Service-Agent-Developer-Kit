@@ -77,8 +77,8 @@ After canonical DA setup is complete:
 
 - local authoring, review, scan, and browser-based topic driving remain
   available;
-- never run Dataverse push, publish, deletion, or server-backed validation
-  instructions; explain that DA-GA deployment is not yet available;
+- Dataverse push and server-backed validation are permitted in this
+  workspace; run the push pipeline when the maker asks to push local changes;
 - `/connect` and integration troubleshooting require the corresponding DA-GA
   product extension guidance, which is not yet available;
 - `/backup-template-configs` and `/restore-template-configs` are no longer
@@ -197,7 +197,7 @@ For full schemas, reference the topic YAML and workflow JSON files in the user's
 - Review and scan supported local agent components
 
 ### What requires admin/portal access
-- Applying and publishing local changes while native DA-GA deployment is unavailable
+- Publishing the agent to make changes live in the portal
 - Adding new connector types or configuring authentication
 - Managing knowledge sources
 - Changing AI settings or authentication mode
@@ -288,9 +288,8 @@ pipeline:
 | 2. Local edit | Create, modify, or delete files in `workspace/agents/{slug}/` | File tools |
 | 3. Scan | Check for compile errors | Diagnostics tool on agent folder |
 
-Always state clearly that local authoring does not change the live agent.
-DA-GA deployment is not yet available in this release; do not run the retired
-Dataverse mutation pipeline as a fallback.
+Always state clearly that local authoring does not change the live agent until
+pushed. Run the push pipeline when the maker asks to push local changes.
 
 ### Skill routing for CRUD operations
 
@@ -385,14 +384,14 @@ If the subagent or its detector scripts cannot run, say the review was skipped
 and continue.
 
 **When the user asks to modify, delete, rename, or otherwise change an agent
-component, ALWAYS load and follow the corresponding skill file.** For DA-GA,
-the supported pipeline ends after the local scan. Do not improvise a
-Dataverse deployment.
+component, ALWAYS load and follow the corresponding skill file.** The
+supported pipeline includes pushing local changes via the push pipeline
+after the local scan.
 
 ## Testing and Deployment
 
 1. **Check for errors**: After creating or modifying files, check the VS Code Problems panel for compile errors.
-2. **State the boundary**: Explain that the local files are ready, but DA-GA deployment is not yet available in this release.
+2. **Push when asked**: When the maker asks to push, run the push pipeline to upsert local changes to the agent.
 3. **Test existing runtime behavior**: Browser-based topic driving may test the currently deployed agent, but it does not include unpublished local changes.
 
 ## Code Quality Rules

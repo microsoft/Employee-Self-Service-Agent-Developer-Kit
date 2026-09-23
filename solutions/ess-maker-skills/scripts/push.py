@@ -42,7 +42,6 @@ from auth import (
     query_all,
     record_exists,
     dataverse_get,
-    is_connect_ready,
     load_config,
     AuthExpiredError,
 )
@@ -51,6 +50,11 @@ from evaluation_review import (
     ReviewMetadataError,
     metadata_description,
     parse_review_metadata,
+)
+from minimalbot_evaluation import (
+    MinimalBotEvaluationClient,
+    MinimalBotEvaluationError,
+    is_minimalbot,
 )
 
 EXCLUDE_DIRS = {".baseline", ".checkpoints"}
@@ -1115,6 +1119,139 @@ def update_baseline_scoped(agent_dir, only_globs):
                 pass
 
 
+def _warn_minimalbot_non_eval_changes(agent_dir):
+    """Report pending non-evaluation changes the MinimalBot push cannot deploy.
+
+    MinimalBot (Dataverse-free) push handles evaluation components only. Rather
+    than silently dropping topic/workflow/template-config edits, surface them so
+    the maker knows they still require a Dataverse-backed environment.
+    """
+    baseline_dir = os.path.join(agent_dir, ".baseline")
+    if not os.path.isdir(baseline_dir):
+        return
+    try:
+        changed, new, deleted = compute_diff(
+            collect_files(baseline_dir), collect_files(agent_dir))
+    except OSError:
+        return
+    non_eval = sorted({
+        f for f in (*changed, *new, *deleted)
+        if classify_path(f)
+        and not f.replace("\\", "/").startswith("evaluations/")
+    })
+    if not non_eval:
+        return
+    print(
+        "WARNING: the following non-evaluation change(s) will NOT be pushed "
+        "(Dataverse-free agents support evaluation components only):"
+    )
+    for path in non_eval[:20]:
+        print(f"  - {path}")
+    if len(non_eval) > 20:
+        print(f"  ... and {len(non_eval) - 20} more")
+
+
+def _minimalbot_push(
+    config,
+    *,
+    dry_run=False,
+    force_delete=False,
+    repair_mode=False,
+    only_globs=None,
+    auto_yes=False,
+):
+    """Push evaluation sets to a Dataverse-free MinimalBot agent.
+
+    Uses the Power Platform MinimalBot components API on the agent's ring (see
+    :mod:`minimalbot_evaluation`). Only evaluation components are supported for
+    MinimalBot agents today; other component types (topics, workflows) still
+    require a Dataverse-backed environment. Destructive/scoped/repair flags are
+    rejected or honoured rather than silently ignored, so a ``--force-delete``
+    never turns into a duplicate insert and a scoped ``--only`` never expands
+    into an every-set push.
+
+    The script-level confirmation gate (a second safety layer the ``/push``
+    prompt relies on) is enforced here before any component insert, mirroring
+    the classic Dataverse path: ``--yes`` bypasses it and dry runs never mutate.
+    """
+    agent_dir = config["agent"]["folder"]
+    if not os.path.exists(agent_dir):
+        print(f"ERROR: Agent folder not found: {agent_dir}")
+        sys.exit(1)
+
+    if repair_mode:
+        print(
+            "ERROR: --repair applies to Dataverse flow registration and is not "
+            "supported for Dataverse-free (MinimalBot) agents. No request was "
+            "made."
+        )
+        sys.exit(1)
+    if force_delete:
+        print(
+            "ERROR: --force-delete is not supported for Dataverse-free "
+            "(MinimalBot) agents; evaluation components cannot be deleted "
+            "through this path yet. No request was made."
+        )
+        sys.exit(1)
+
+    _warn_minimalbot_non_eval_changes(agent_dir)
+
+    print("MinimalBot agent detected (Dataverse-free).")
+    if only_globs:
+        print(f"(Scoped push — {len(only_globs)} filter(s) active)")
+
+    client = MinimalBotEvaluationClient.from_config(config)
+
+    # Build the plan offline first (no auth, no mutation) so the change set can
+    # be shown and confirmed BEFORE any component insert. Honouring only_globs
+    # here is a correctness requirement: each push mints fresh component IDs, so
+    # a scoped update that silently pushed every set would duplicate all of them.
+    try:
+        plan = client.push_agent_evaluations(
+            agent_dir, dry_run=True, only_globs=only_globs)
+    except MinimalBotEvaluationError as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
+
+    print(f"\nWould push {len(plan['sets'])} evaluation set(s), "
+          f"{plan['componentCount']} component(s):")
+    for entry in plan["sets"]:
+        print(f"  • {entry['displayName']}  (cases: {entry['cases']})")
+
+    if dry_run:
+        print("\n(Dry run — no changes pushed)")
+        return
+
+    # Confirmation gate — the second safety layer preserved by /push. --yes
+    # covers it (matching the classic path); dry runs return above, never here.
+    if not auto_yes:
+        response = input(
+            "\nPush these changes to Copilot Studio? (yes/no): "
+        ).strip().lower()
+        if response not in ("yes", "y"):
+            print("Push cancelled.")
+            return
+
+    print("Pushing evaluations via the Power Platform MinimalBot API...")
+    try:
+        client.authenticate()
+        result = client.push_agent_evaluations(
+            agent_dir, dry_run=False, only_globs=only_globs)
+    except MinimalBotEvaluationError as exc:
+        print(f"ERROR: {exc}")
+        sys.exit(1)
+
+    if client.signed_in_username:
+        print(f"Signed in as: {client.signed_in_username}")
+    print(f"\n✅ Pushed {len(result['sets'])} evaluation set(s), "
+          f"{result['verifiedComponents']} component(s) verified:")
+    for entry in result["sets"]:
+        print(f"  • {entry['displayName']}")
+        print(f"      testSetId: {entry['testSetId']}  (cases: {entry['cases']})")
+    print("\nRun a set with:")
+    print("  python scripts/evaluation_runs.py run --test-set-id <testSetId>")
+
+
 def main():
     dry_run = "--dry-run" in sys.argv
     auto_yes = "--yes" in sys.argv
@@ -1127,13 +1264,21 @@ def main():
             repair_name = sys.argv[_idx + 1]
     only_globs = parse_only_globs(sys.argv[1:])
 
-    if is_connect_ready():
-        print(
-            "ERROR: Native DA push is not available in this workstream yet; "
-            "no Dataverse request was attempted."
-        )
-        sys.exit(1)
     config = load_config()
+
+    # Dataverse-free MinimalBot agents cannot use the Dataverse Web API below.
+    # Route evaluation pushes through the Power Platform MinimalBot components
+    # API on the agent's ring instead (see scripts/minimalbot_evaluation.py).
+    if is_minimalbot(config):
+        return _minimalbot_push(
+            config,
+            dry_run=dry_run,
+            force_delete=force_delete,
+            repair_mode=repair_mode,
+            only_globs=only_globs,
+            auto_yes=auto_yes,
+        )
+
     agent_dir = config["agent"]["folder"]
     env_url = config["dataverseEndpoint"]
     bot_id = config["agent"]["botId"]
