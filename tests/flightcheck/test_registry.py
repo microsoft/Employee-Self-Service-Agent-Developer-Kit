@@ -188,6 +188,21 @@ class TestTransitiveRequirements:
         assert plan.requires_config is False
         assert len(plan.ordered_fns) == 1
 
+    def test_env_004_resolves_to_agentbuilder_without_dataverse(self):
+        spec = registry.resolve("ENV-004")
+        assert spec is not None and spec.key == "ENV-004"
+        assert spec.category_label == "Environment"
+        assert spec.clients == frozenset({registry.AGENTBUILDER})
+        # ENV-004 was re-pointed off the Dataverse connectionreference table to
+        # the Declarative Agent minimalBots components API, so it must not
+        # require a Dataverse endpoint, and its detail rows must not resolve.
+        plan = registry.transitive_requirements("ENV-004")
+        assert registry.AGENTBUILDER in plan.clients
+        assert plan.requires_dataverse_endpoint is False
+        assert plan.requires_config is True
+        assert registry.resolve("ENV-004-GRS") is None
+        assert registry.resolve("ENV-004-UR-001") is None
+
     def test_native_agent_checkpoints_use_only_native_read_clients(self):
         access = registry.transitive_requirements("DA-AGENT-001")
         assert access.clients == frozenset({registry.AGENTBUILDER})

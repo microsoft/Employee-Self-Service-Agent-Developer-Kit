@@ -58,6 +58,7 @@ from pathlib import Path
 
 from ..runner import CheckResult, Priority, Role, Status
 from ..agent_scope import resolve_agent_directory, validate_agent_slug
+from ._da_connection_refs import read_active_agent_connection_references
 
 DOC_BASE = (
     "https://learn.microsoft.com/en-us/copilot/microsoft-365/"
@@ -227,35 +228,14 @@ def _query_connection_references(runner):
     this checkpoint to a WARNING) rather than overclaiming: an
     ``AgentBuilderHTTPError`` propagates, and a 200 payload whose
     ``connectionReferenceChanges`` is present but not a list raises
-    ``ValueError`` (mirrors ``native_agent._connection_references``). A missing
+    ``ValueError`` (mirrors ``native_agent._connection_references``).     A missing
     changeset is treated as "no references" (genuine absence), not an error.
+
+    The fetch + normalize + fail-loudly logic is shared with ``ENV-004`` via
+    ``_da_connection_refs`` so the two DA connection-reference checks cannot
+    drift apart; this wrapper pins DV-CONN-001 to the single active agent.
     """
-    client = getattr(runner, "agentbuilder", None)
-    config = getattr(runner, "config", None) or {}
-    agent_id = (config.get("agent") or {}).get("botId")
-    if client is None or not agent_id:
-        return None
-    changeset = client.fetch_components(agent_id) or {}
-    changes = changeset.get("connectionReferenceChanges")
-    if changes is None:
-        return []
-    if not isinstance(changes, list):
-        raise ValueError(
-            "Component fetch returned invalid connectionReferenceChanges."
-        )
-    refs = []
-    for change in changes:
-        ref = (change or {}).get("connectionReference") or {}
-        refs.append(
-            {
-                "connectionreferencelogicalname": ref.get(
-                    "connectionReferenceLogicalName"
-                ),
-                "connectorid": ref.get("connectorId"),
-                "connectionid": ref.get("connectionId"),
-            }
-        )
-    return refs
+    return read_active_agent_connection_references(runner)
 
 
 def _get_connections(runner):
