@@ -15,16 +15,13 @@ from typing import Any
 
 import pytest
 
-from agentbuilder import AgentBuilderHTTPError, DEV_REALM
-from flightcheck.checks.solution import _check_ess_solution_installed
+from agentbuilder import AgentBuilderHTTPError, DEV_REALM, PROD_REALM, TEST_REALM
+from flightcheck.checks.solution import _alm_realm, _check_ess_solution_installed
 from flightcheck.runner import Status
 from tests.conftest import require_validated_mock
 from tests.mocks import agentbuilder_connectivity as ab
 
 require_validated_mock(ab)
-
-
-VALIDATED_COMMIT_SHA = "4bc80d2768da5de930fd56a1f5ee815b8f9d1d3b"
 
 
 class _FakeResponse:
@@ -43,7 +40,7 @@ class _FakeAgentBuilder:
         *,
         error: Exception | None = None,
     ) -> None:
-        self._payload = payload or _configuration_with_commit()
+        self._payload = payload or ab.configuration()
         self._error = error
         self.calls: list[tuple[str, int]] = []
 
@@ -58,13 +55,6 @@ class _FakeAgentBuilder:
 class _Runner:
     agentbuilder: Any = None
     config: dict[str, Any] = field(default_factory=dict)
-
-
-def _configuration_with_commit(**overrides: Any) -> dict[str, Any]:
-    payload = ab.configuration()
-    payload["commitSha"] = VALIDATED_COMMIT_SHA
-    payload.update(overrides)
-    return payload
 
 
 def _config(*, bot_id: str | None = ab.MOCK_AGENT_ID) -> dict[str, Any]:
@@ -85,9 +75,10 @@ def test_passes_when_configure_returns_grs_repository_and_commit() -> None:
     result = _check_ess_solution_installed(runner)[0]
 
     assert result.status == Status.PASSED.value
-    assert "ESS base package is present in GRS" in result.result
-    assert ab.MOCK_FAMILY_ID in result.result
-    assert VALIDATED_COMMIT_SHA in result.result
+    assert "Agent has a committed GRS package" in result.result
+    assert "ESS base-package identity match pending US 7792604" in result.result
+    assert ab.MOCK_ENV_ID in result.result
+    assert ab.MOCK_COMMIT_SHA in result.result
     assert result.remediation == ""
     assert agentbuilder.calls == [(ab.MOCK_AGENT_ID, DEV_REALM)]
 
@@ -103,7 +94,7 @@ def test_fails_when_configure_omits_required_package_state(
     field: str,
     result_phrase: str,
 ) -> None:
-    payload = _configuration_with_commit()
+    payload = ab.configuration()
     payload[field] = ""
     runner = _Runner(agentbuilder=_FakeAgentBuilder(payload), config=_config())
 
@@ -161,6 +152,46 @@ def test_skips_when_bot_id_is_missing() -> None:
     assert result.status == Status.SKIPPED.value
     assert "No agent botId" in result.result
     assert "Run setup" in result.remediation
+
+
+def test_fails_when_configured_alm_realm_is_not_supported() -> None:
+    config = _config()
+    config["almRealm"] = "sandbox"
+    agentbuilder = _FakeAgentBuilder()
+    runner = _Runner(agentbuilder=agentbuilder, config=config)
+
+    result = _check_ess_solution_installed(runner)[0]
+
+    assert result.status == Status.FAILED.value
+    assert "configured ALM realm is not Dev, Test, or Prod" in result.result
+    assert "Set almRealm, grsRealm, or minimalBotsAlmRealm" in (
+        result.remediation
+    )
+    assert "Dev, Test, or Prod" in result.remediation
+    assert agentbuilder.calls == []
+
+
+@pytest.mark.parametrize(
+    ("raw_realm", "expected"),
+    [
+        (DEV_REALM, DEV_REALM),
+        ("dev", DEV_REALM),
+        ("DEV", DEV_REALM),
+        ("test", TEST_REALM),
+        ("TeSt", TEST_REALM),
+        ("prod", PROD_REALM),
+        ("PROD", PROD_REALM),
+        (str(TEST_REALM), TEST_REALM),
+        ("sandbox", None),
+    ],
+)
+def test_alm_realm_maps_supported_config_values(
+    raw_realm: Any,
+    expected: int | None,
+) -> None:
+    runner = _Runner(config={"almRealm": raw_realm})
+
+    assert _alm_realm(runner) == expected
 
 
 def test_warning_when_configure_read_errors() -> None:

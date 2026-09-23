@@ -143,8 +143,9 @@ def _check_ess_solution_installed(runner) -> list[CheckResult]:
         _result(
             Status.PASSED.value,
             (
-                "ESS base package is present in GRS: "
-                f"repository {grs_repository_id}, commit {commit_sha}."
+                "Agent has a committed GRS package "
+                f"(repository {grs_repository_id}, commit {commit_sha}); "
+                "ESS base-package identity match pending US 7792604."
             ),
         )
     ]

@@ -22,6 +22,7 @@ MOCK_AGENT_ID = "00000000-0000-0000-0000-000000002222"
 MOCK_FAMILY_ID = "00000000-0000-0000-0000-000000003333"
 MOCK_CONNECTION_ID = "mock-servicenow-connection"
 MOCK_WORKDAY_CONNECTION_ID = "mock-workday-connection"
+MOCK_COMMIT_SHA = "4bc80d2768da5de930fd56a1f5ee815b8f9d1d3b"
 MOCK_AGENTBUILDER_BASE = (
     "https://00000000000000000000000000000000."
     "0.environment.api.test.powerplatform.com"
@@ -42,7 +43,8 @@ def configuration() -> dict[str, Any]:
         "realm": "Dev",
         "cdsBotId": MOCK_AGENT_ID,
         "schemaName": "gptagent_mockemployeeselfservice",
-        "grsRepositoryId": MOCK_FAMILY_ID,
+        "grsRepositoryId": MOCK_ENV_ID,
+        "commitSha": MOCK_COMMIT_SHA,
     }
 
 
