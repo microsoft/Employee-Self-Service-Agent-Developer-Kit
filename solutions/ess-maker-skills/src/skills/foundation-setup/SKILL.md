@@ -283,7 +283,24 @@ python scripts/emit_capability.py setup
 
 When the maker has already supplied a native agent package or explicitly asked to use one, read `src/skills/foundation-setup/da-alm-import.md` and follow it. That skill owns the explicit package handoff and reads the canonical import reference. This is an advanced handoff, not a setup option to advertise or recommend.
 
-When the request identifies an environment but not an agent or fresh-agent intent, read `src/skills/foundation-setup/da-existing-dev.md` and follow its environment-candidate selection path.
+When the request identifies an environment and explicitly asks to connect to an existing agent, read `src/skills/foundation-setup/da-existing-dev.md` and follow its environment-candidate selection path.
+
+When the request identifies an environment but not an agent or create-versus-connect intent, retain the resolved environment ID and service ring. Send the current progress snapshot using the shared **Message** contract, then ask exactly:
+
+> What would you like to set up in `{environment name or the selected Power Platform environment}`?
+
+Offer exactly:
+
+- **Create a fresh agent in this environment**
+- **Connect to an existing agent in this environment**
+- **Cancel setup**
+
+Require an explicit selection; all choices begin unselected.
+Resolve the environment label from known context. This question confirms the selected target; the access-verification stage remains current until a service operation succeeds.
+
+- For **Create a fresh agent in this environment**, continue directly through `src/skills/foundation-setup/da-mos-starter.md` with the retained environment and ring.
+- For **Connect to an existing agent in this environment**, read `src/skills/foundation-setup/da-existing-dev.md` and follow its environment-candidate selection path with the retained environment and ring.
+- For **Cancel setup**, make no changes and stop.
 
 When the request does not identify an agent or environment and no usable local target exists, ask:
 
