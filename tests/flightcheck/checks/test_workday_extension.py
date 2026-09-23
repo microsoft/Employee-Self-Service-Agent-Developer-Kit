@@ -13,7 +13,8 @@ Coverage per emitter:
   * DV-CONN-001 — PASS/FAIL/SKIPPED over the validated minimalBots components
     read (Workday SOAP connection reference; faked ``runner.agentbuilder``);
     owner echo via the ``validated`` pp_admin mock.
-  * WD-REST-001 — pure-config check (restBaseUrl trimmed to '/api').
+  * WD-REST-001 — AgentBuilder components check
+    (sharedConnectionParameters.values.restBaseUri trimmed to '/api').
   * WD-REST-002 — pure local-file check (user-context redirect topic);
     SKIPPED on the legacy install path.
   * WD-NET-001 — always-MANUAL InfoSec/IT attestation (never PASSED).
@@ -354,8 +355,21 @@ class TestDataverseConnection:
 
 
 class TestRestBaseUrl:
+    def _runner(self, *, rest_base_uri: str | None):
+        return _runner_with_refs(
+            [
+                ab.workday_connection_reference(
+                    shared_connection_parameters=(
+                        ab.shared_connection_parameters(
+                            rest_base_uri=rest_base_uri
+                        )
+                    )
+                )
+            ]
+        )
+
     def test_trimmed_url_passes(self):
-        runner = _Runner(config={"restBaseUrl": "https://wd.example.com/ccx/api"})
+        runner = self._runner(rest_base_uri="https://wd.example.com/ccx/api")
         r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
 
         assert r.status == Status.PASSED.value
@@ -363,29 +377,62 @@ class TestRestBaseUrl:
         assert "https://wd.example.com/ccx/api" in r.result
 
     def test_trailing_slash_still_passes(self):
-        runner = _Runner(config={"restBaseUrl": "https://wd.example.com/ccx/api/"})
+        runner = self._runner(rest_base_uri="https://wd.example.com/ccx/api/")
         r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
 
         assert r.status == Status.PASSED.value
 
     def test_untrimmed_url_fails(self):
-        runner = _Runner(
-            config={"restBaseUrl": "https://wd.example.com/ccx/api/staffing/v1"}
+        runner = self._runner(
+            rest_base_uri="https://wd.example.com/ccx/api/staffing/v1"
         )
         r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
 
         assert r.status == Status.FAILED.value
         assert "not trimmed to '/api'" in r.result
         assert "https://wd.example.com/ccx/api/staffing/v1" in r.result
+        assert "restBaseUri" in r.remediation
         assert "remove any trailing path" in r.remediation
 
-    def test_absent_url_not_configured(self):
-        runner = _Runner(config={})
+    def test_absent_url_fails(self):
+        runner = self._runner(rest_base_uri=None)
         r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
 
-        assert r.status == Status.NOT_CONFIGURED.value
-        assert "restBaseUrl is empty" in r.result
-        assert "trim it to end at '/api'" in r.remediation
+        assert r.status == Status.FAILED.value
+        assert "restBaseUri is missing or empty" in r.result
+        assert "restBaseUri is captured" in r.remediation
+
+    def test_no_agentbuilder_client_skips(self):
+        runner = _Runner(config={"agent": {"botId": ab.MOCK_AGENT_ID}})
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
+
+        assert r.status == Status.SKIPPED.value
+        assert "not available" in r.result
+        assert "native AgentBuilder access" in r.remediation
+
+    def test_no_active_agent_botid_skips(self):
+        runner = _Runner(
+            config={},
+            agentbuilder=_FakeAgentBuilder(ab.components_with_references()),
+        )
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
+
+        assert r.status == Status.SKIPPED.value
+        assert "active-agent botId" in r.result
+        assert "configured active-agent botId" in r.remediation
+
+    def test_malformed_components_shape_degrades_to_warning(self):
+        runner = _Runner(
+            config={"agent": {"botId": ab.MOCK_AGENT_ID}},
+            agentbuilder=_FakeAgentBuilder(
+                {"connectionReferenceChanges": {"unexpected": "dict"}}
+            ),
+        )
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
+
+        assert r.status == Status.WARNING.value
+        assert "Unable to run WD-REST-001" in r.result
+        assert "WD-REST-001" in r.remediation
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -648,7 +695,7 @@ class TestDispatcher:
         assert by_id["WD-NET-001"].status == Status.MANUAL.value
 
     def test_config_reading_emitters_warn_on_boom_config(self):
-        # A config whose .get raises breaks the three config-reading emitters;
+        # A config whose .get raises breaks the two config-reading emitters;
         # each degrades to WARNING and the run still returns all five rows.
         results = wx.run_workday_extension_checks(_Runner(config=_BoomConfig()))
         by_id = _by_id(results)

@@ -40,6 +40,7 @@ from defusedxml.common import DefusedXmlException
 from ..runner import CheckResult, Priority, Role, Status
 from .. import live_egress_probe
 from ..agent_scope import resolve_agent_directory
+from ._da_connection_refs import workday_shared_connection_parameters
 from .infrastructure import (
     _infra_003_directive,
     _infra_003_probe_layer_note,
@@ -76,6 +77,13 @@ ENV_VARS = {
         "description": "Report instance name",
     },
 }
+
+_WORKDAY_SHARED_ENV_KEYS = (
+    "tenantName",
+    "token:ResourceUri",
+    "token:WorkdayTokenUri",
+    "token:WorkdayClientId",
+)
 
 # ─────────────────────────────────────────────────────────────────────────
 # Workday install-flavor fingerprint (WD-PKG-001 / WD-CONN-012)
@@ -651,6 +659,18 @@ def run_workday_checks(runner) -> list[CheckResult]:
     # when the kit-side Workday install isn't deployed yet.
     results.extend(_check_entra_workday_federation_alignment(runner))
 
+    # WD-ENV-001 — DA Workday tenant/OAuth configuration from the native
+    # AgentBuilder components payload. Run it before the legacy no-Workday
+    # early-return only when the native client exists or this exact checkpoint
+    # was requested; Graph-only no-Dataverse probes must stay non-interactive.
+    should_run_da_env = (
+        getattr(runner, "agentbuilder", None) is not None
+        or str(getattr(runner, "scope", "")) == "checkpoint:WD-ENV-001"
+    )
+    if should_run_da_env:
+        results.extend(_check_da_env_config(runner))
+        runner._da_env_config_checked = True
+
     # If neither flows nor any Workday connection references are
     # present, this tenant has no Workday integration. Skip the
     # downstream Workday-specific checks (preserves the pre-existing
@@ -672,7 +692,7 @@ def run_workday_checks(runner) -> list[CheckResult]:
 
     print("\n  Running Workday deep validation...")
 
-    # --- Environment Variables ---
+    # --- Legacy Environment Variables ---
     results.extend(_check_env_vars(runner))
 
     # --- ISU username vs Entra UPN format alignment ---
@@ -1727,15 +1747,89 @@ def _simplified_install_skip(
     )
 
 
+def _check_da_env_config(runner) -> list[CheckResult]:
+    """WD-ENV-001 — validate Workday tenant/OAuth config from DA components."""
+    try:
+        values, unavailable_reason = workday_shared_connection_parameters(runner)
+    except ValueError as exc:
+        return [CheckResult(roles=[Role.ESS_MAKER.value],
+            checkpoint_id="WD-ENV-001", category="Workday",
+            priority=Priority.CRITICAL.value, status=Status.WARNING.value,
+            description="Workday tenant and OAuth connection configuration",
+            result=f"Unable to run WD-ENV-001: ValueError: {exc}",
+            remediation=(
+                "Re-run FlightCheck; if this persists, report the checkpoint "
+                "ID (WD-ENV-001) and the error above."
+            ),
+            doc_link=f"{DOC_BASE}/workday-simplified-setup",
+        )]
+
+    if values is None:
+        return [CheckResult(roles=[Role.ESS_MAKER.value],
+            checkpoint_id="WD-ENV-001", category="Workday",
+            priority=Priority.CRITICAL.value, status=Status.SKIPPED.value,
+            description="Workday tenant and OAuth connection configuration",
+            result=(
+                "AgentBuilder client or active-agent botId not available — "
+                "skipping the Workday tenant configuration check."
+            ),
+            remediation=(
+                "Run FlightCheck with native AgentBuilder access and a "
+                "configured active-agent botId."
+            ),
+            doc_link=f"{DOC_BASE}/workday-simplified-setup",
+        )]
+
+    missing = [key for key in _WORKDAY_SHARED_ENV_KEYS if not values.get(key)]
+    if missing:
+        reason = f" {unavailable_reason}." if unavailable_reason else ""
+        return [CheckResult(roles=[Role.ESS_MAKER.value],
+            checkpoint_id="WD-ENV-001", category="Workday",
+            priority=Priority.CRITICAL.value, status=Status.FAILED.value,
+            description="Workday tenant and OAuth connection configuration",
+            result=(
+                "Workday sharedConnectionParameters.values is missing "
+                f"required entries: {', '.join(missing)}.{reason}"
+            ),
+            remediation=(
+                "Reconnect the Workday connection from Copilot Studio so "
+                "tenantName, token:ResourceUri, token:WorkdayTokenUri, and "
+                "token:WorkdayClientId are captured on the Workday connection "
+                "reference."
+            ),
+            doc_link=f"{DOC_BASE}/workday-simplified-setup",
+        )]
+
+    return [CheckResult(roles=[Role.ESS_MAKER.value],
+        checkpoint_id="WD-ENV-001", category="Workday",
+        priority=Priority.CRITICAL.value, status=Status.PASSED.value,
+        description="Workday tenant and OAuth connection configuration",
+        result=(
+            "Workday tenant and OAuth configuration is present in "
+            "sharedConnectionParameters.values: tenantName="
+            f"{values['tenantName']}, token:ResourceUri="
+            f"{values['token:ResourceUri']}."
+        ),
+        doc_link=f"{DOC_BASE}/workday-simplified-setup",
+    )]
+
+
 def _check_env_vars(runner) -> list[CheckResult]:
-    """Validate Workday environment variables in Dataverse.
+    """Validate legacy Workday environment variables in Dataverse.
 
     Gated on `runner._workday_package_flavor`: skipped on
-    `"simplified"` because the three env vars (ISU account name,
-    RaaS report name, RaaS report instance) are only consumed by the
-    full / legacy install's RaaS code path. See
+    `"simplified"` because the legacy RaaS report-name variables are
+    only consumed by the full / legacy install's RaaS code path. See
     `_simplified_install_skip` for the SKIP message contract.
     """
+    include_legacy_wd_env_001 = not getattr(
+        runner, "_da_env_config_checked", False
+    )
+    legacy_vars = {
+        var_name: meta
+        for var_name, meta in ENV_VARS.items()
+        if include_legacy_wd_env_001 or meta["id"] != "WD-ENV-001"
+    }
     flavor = getattr(runner, "_workday_package_flavor", None)
     if flavor == "simplified":
         return [
@@ -1747,7 +1841,7 @@ def _check_env_vars(runner) -> list[CheckResult]:
                     else Priority.HIGH.value
                 ),
             )
-            for meta in ENV_VARS.values()
+            for meta in legacy_vars.values()
         ]
 
     results = []
@@ -1755,13 +1849,22 @@ def _check_env_vars(runner) -> list[CheckResult]:
     dv_token = runner.dv_token
 
     if not env_url or not dv_token:
-        results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-            checkpoint_id="WD-ENV-001", category="Workday",
-            priority=Priority.CRITICAL.value, status=Status.SKIPPED.value,
-            description="Workday environment variables",
-            result="Dataverse token not available — skipping env var checks",
-        ))
-        return results
+        return [
+            CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
+                checkpoint_id=meta["id"], category="Workday",
+                priority=(
+                    Priority.CRITICAL.value if meta["critical"]
+                    else Priority.HIGH.value
+                ),
+                status=Status.SKIPPED.value,
+                description=meta["description"],
+                result=(
+                    "Dataverse token not available — skipping legacy Workday "
+                    "environment variable checks"
+                ),
+            )
+            for meta in legacy_vars.values()
+        ]
 
     try:
         # Import Dataverse query helper from auth.py
@@ -1790,7 +1893,7 @@ def _check_env_vars(runner) -> list[CheckResult]:
                 schema = def_map[def_id].get("schemaname", "")
                 val_map[schema] = v.get("value", "")
 
-        for var_name, meta in ENV_VARS.items():
+        for var_name, meta in legacy_vars.items():
             actual_value = None
             # Find by partial match on schema name
             for k, v in val_map.items():
@@ -1826,8 +1929,8 @@ def _check_env_vars(runner) -> list[CheckResult]:
                 ))
     except Exception as e:
         results.append(CheckResult(roles=[Role.POWER_PLATFORM_ADMIN.value],
-            checkpoint_id="WD-ENV-001", category="Workday",
-            priority=Priority.CRITICAL.value, status=Status.WARNING.value,
+            checkpoint_id="WD-ENV-002", category="Workday",
+            priority=Priority.HIGH.value, status=Status.WARNING.value,
             description="Workday environment variables",
             result=f"Unable to check: {e}",
         ))

@@ -37,8 +37,10 @@ import pytest
 import responses
 
 from tests.conftest import require_validated_mock
+from tests.mocks import agentbuilder_connectivity as ab
 from tests.mocks import dataverse as dv
 
+require_validated_mock(ab)
 require_validated_mock(dv)
 
 
@@ -55,6 +57,14 @@ require_validated_mock(dv)
 class _MinimalRunner:
     env_url: str
     dv_token: str
+
+
+class _FakeAgentBuilder:
+    def __init__(self, components: dict[str, Any]):
+        self._components = components
+
+    def fetch_components(self, _agent_id: str):
+        return self._components
 
 
 @pytest.fixture
@@ -135,9 +145,115 @@ def _result_by_id(results: list, checkpoint_id: str):
     return matches[0]
 
 
+def _runner_with_da_components(
+    payload: dict[str, Any],
+    *,
+    include_bot_id: bool = True,
+) -> _MinimalRunner:
+    runner = _MinimalRunner(env_url="", dv_token="")
+    runner.agentbuilder = _FakeAgentBuilder(payload)
+    runner.config = (
+        {"agent": {"botId": ab.MOCK_AGENT_ID}}
+        if include_bot_id
+        else {}
+    )
+    return runner
+
+
 # ───────────────────────────────────────────────────────────────────────
 # Tests
 # ───────────────────────────────────────────────────────────────────────
+
+
+class TestDeclarativeAgentWorkdayEnvConfig:
+    """WD-ENV-001 now reads Workday sharedConnectionParameters from DA
+    components instead of Dataverse environment variables."""
+
+    def test_required_shared_parameters_present_passes(self) -> None:
+        from flightcheck.checks.workday import _check_da_env_config
+
+        runner = _runner_with_da_components(
+            ab.components_with_references(
+                references=[
+                    ab.workday_connection_reference(
+                        shared_connection_parameters=(
+                            ab.shared_connection_parameters()
+                        )
+                    )
+                ]
+            )
+        )
+
+        result = _check_da_env_config(runner)[0]
+
+        assert result.checkpoint_id == "WD-ENV-001"
+        assert result.status == "Passed"
+        assert "sharedConnectionParameters.values" in result.result
+        assert "tenantName=mocktenant" in result.result
+        assert "token:ResourceUri" in result.result
+
+    def test_missing_required_token_key_fails(self) -> None:
+        from flightcheck.checks.workday import _check_da_env_config
+
+        runner = _runner_with_da_components(
+            ab.components_with_references(
+                references=[
+                    ab.workday_connection_reference(
+                        shared_connection_parameters=(
+                            ab.shared_connection_parameters(token_uri=None)
+                        )
+                    )
+                ]
+            )
+        )
+
+        result = _check_da_env_config(runner)[0]
+
+        assert result.status == "Failed"
+        assert "token:WorkdayTokenUri" in result.result
+        assert "missing required entries" in result.result
+        assert "Reconnect the Workday connection" in result.remediation
+        assert "token:WorkdayClientId" in result.remediation
+
+    def test_no_agentbuilder_client_skips(self) -> None:
+        from flightcheck.checks.workday import _check_da_env_config
+
+        runner = _MinimalRunner(env_url="", dv_token="")
+        runner.config = {"agent": {"botId": ab.MOCK_AGENT_ID}}
+
+        result = _check_da_env_config(runner)[0]
+
+        assert result.status == "Skipped"
+        assert "not available" in result.result
+        assert "native AgentBuilder access" in result.remediation
+
+    def test_no_active_agent_botid_skips(self) -> None:
+        from flightcheck.checks.workday import _check_da_env_config
+
+        runner = _runner_with_da_components(
+            ab.components_with_references(),
+            include_bot_id=False,
+        )
+
+        result = _check_da_env_config(runner)[0]
+
+        assert result.status == "Skipped"
+        assert "active-agent botId" in result.result
+        assert "configured active-agent botId" in result.remediation
+
+    def test_malformed_components_shape_returns_warning(self) -> None:
+        from flightcheck.checks.workday import _check_da_env_config
+
+        runner = _runner_with_da_components(
+            {"connectionReferenceChanges": {"unexpected": "dict"}}
+        )
+
+        result = _check_da_env_config(runner)[0]
+
+        assert result.status == "Warning"
+        assert "Unable to run WD-ENV-001" in result.result
+        assert "invalid connectionReferenceChanges" in result.result
+        assert "report the checkpoint ID" in result.remediation
 
 
 class TestGoodConfig:
@@ -292,17 +408,21 @@ class TestEdgeCases:
         assert _result_by_id(results, "WD-ENV-003").status == "Passed"
 
     def test_skips_when_no_dataverse_token(self) -> None:
-        """No token (e.g. user opted out of auth) — check returns a single
-        SKIPPED result, doesn't crash, doesn't try to make an HTTP call."""
+        """No token (e.g. user opted out of auth) — legacy env checks return
+        SKIPPED results and do not try to make an HTTP call."""
         from flightcheck.checks.workday import _check_env_vars
 
         runner_no_token = _MinimalRunner(env_url="", dv_token="")
 
         results = _check_env_vars(runner_no_token)
-        assert len(results) == 1
-        assert results[0].checkpoint_id == "WD-ENV-001"
-        assert results[0].status == "Skipped"
-        assert "token not available" in results[0].result.lower()
+        assert {r.checkpoint_id for r in results} == {
+            "WD-ENV-001",
+            "WD-ENV-002",
+            "WD-ENV-003",
+        }
+        for result in results:
+            assert result.status == "Skipped"
+            assert "token not available" in result.result.lower()
 
     @responses.activate
     def test_partial_match_on_schema_name_works(

@@ -26,8 +26,10 @@ via ``--checkpoint``:
     **own** account. Programmatic PASS/FAIL on the validated minimalBots
     components read (same endpoint + ``connectionReferenceChanges`` shape as the
     shipped native ``DA-CONN-001`` check).
-  * ``WD-REST-001`` (S5.5) — the captured ``restBaseUrl`` is present and
-    **trimmed to** ``/api``. Pure-config check, no client.
+  * ``WD-REST-001`` (S5.5) — the Workday connection reference's
+    ``sharedConnectionParameters.values.restBaseUri`` is present and
+    **trimmed to** ``/api``. Read through the same AgentBuilder components
+    payload used by ``DV-CONN-001``.
   * ``WD-REST-002`` (S5.7) — the agent's ``user-context-setup.mcs.yml`` topic
     contains a ``BeginDialog`` redirect to the Workday user-context system topic
     (``WorkdaySystemGetUserContextV2`` on the simplified pack). Pure local-file
@@ -58,6 +60,10 @@ from pathlib import Path
 
 from ..runner import CheckResult, Priority, Role, Status
 from ..agent_scope import resolve_agent_directory, validate_agent_slug
+from ._da_connection_refs import (
+    read_active_agent_connection_references,
+    workday_shared_connection_parameters,
+)
 
 DOC_BASE = (
     "https://learn.microsoft.com/en-us/copilot/microsoft-365/"
@@ -103,7 +109,7 @@ _CONN_AUTH_DESC = (
 _DV_CONN_DESC = (
     "Workday SOAP connection reference bound to a connection you own"
 )
-_REST_URL_DESC = "Workday REST base URL present and trimmed to '/api'"
+_REST_URL_DESC = "Workday REST base URI present and trimmed to '/api'"
 _REDIRECT_DESC = (
     "User-context topic redirects to the Workday user-context system topic"
 )
@@ -230,32 +236,7 @@ def _query_connection_references(runner):
     ``ValueError`` (mirrors ``native_agent._connection_references``). A missing
     changeset is treated as "no references" (genuine absence), not an error.
     """
-    client = getattr(runner, "agentbuilder", None)
-    config = getattr(runner, "config", None) or {}
-    agent_id = (config.get("agent") or {}).get("botId")
-    if client is None or not agent_id:
-        return None
-    changeset = client.fetch_components(agent_id) or {}
-    changes = changeset.get("connectionReferenceChanges")
-    if changes is None:
-        return []
-    if not isinstance(changes, list):
-        raise ValueError(
-            "Component fetch returned invalid connectionReferenceChanges."
-        )
-    refs = []
-    for change in changes:
-        ref = (change or {}).get("connectionReference") or {}
-        refs.append(
-            {
-                "connectionreferencelogicalname": ref.get(
-                    "connectionReferenceLogicalName"
-                ),
-                "connectorid": ref.get("connectorId"),
-                "connectionid": ref.get("connectionId"),
-            }
-        )
-    return refs
+    return read_active_agent_connection_references(runner)
 
 
 def _get_connections(runner):
@@ -506,21 +487,38 @@ def _check_dv_connection(runner) -> list[CheckResult]:
 
 
 def _check_rest_base_url(runner) -> list[CheckResult]:
-    config = getattr(runner, "config", None) or {}
-    rest = config.get("restBaseUrl")
+    values, unavailable_reason = workday_shared_connection_parameters(runner)
+    if values is None:
+        return [CheckResult(roles=_MAKER_ROLES,
+            checkpoint_id="WD-REST-001", category=_CATEGORY,
+            priority=Priority.HIGH.value, status=Status.SKIPPED.value,
+            description=_REST_URL_DESC,
+            result=(
+                "AgentBuilder client or active-agent botId not available — "
+                "skipping the Workday REST base URI check."
+            ),
+            remediation=(
+                "Run FlightCheck with native AgentBuilder access and a "
+                "configured active-agent botId."
+            ),
+            doc_link=_DOC_SIMPLIFIED,
+        )]
+
+    rest = values.get("restBaseUri")
 
     if not rest:
         return [CheckResult(roles=_MAKER_ROLES,
             checkpoint_id="WD-REST-001", category=_CATEGORY,
-            priority=Priority.HIGH.value, status=Status.NOT_CONFIGURED.value,
+            priority=Priority.HIGH.value, status=Status.FAILED.value,
             description=_REST_URL_DESC,
             result=(
-                "No Workday REST base URL has been captured yet (restBaseUrl "
-                "is empty)."
+                "Workday sharedConnectionParameters.values.restBaseUri is "
+                f"missing or empty. {unavailable_reason}".strip()
             ),
             remediation=(
-                "Capture the Workday REST base URL and trim it to end at "
-                "'/api' (e.g. https://<host>/ccx/api)."
+                "Reconnect the Workday connection from Copilot Studio so "
+                "restBaseUri is captured and trimmed to end at '/api' "
+                "(e.g. https://<host>/ccx/api)."
             ),
             doc_link=_DOC_SIMPLIFIED,
         )]
@@ -531,7 +529,7 @@ def _check_rest_base_url(runner) -> list[CheckResult]:
             checkpoint_id="WD-REST-001", category=_CATEGORY,
             priority=Priority.HIGH.value, status=Status.PASSED.value,
             description=_REST_URL_DESC,
-            result=f"REST base URL is present and trimmed to '/api': {rest}",
+            result=f"REST base URI is present and trimmed to '/api': {rest}",
             doc_link=_DOC_SIMPLIFIED,
         )]
 
@@ -540,13 +538,13 @@ def _check_rest_base_url(runner) -> list[CheckResult]:
         priority=Priority.HIGH.value, status=Status.FAILED.value,
         description=_REST_URL_DESC,
         result=(
-            f"REST base URL is present but not trimmed to '/api': {rest}. It "
+            f"REST base URI is present but not trimmed to '/api': {rest}. It "
             "must end at '/api' with no trailing path or version segment."
         ),
         remediation=(
-            "Edit the captured restBaseUrl so it ends at '/api' (e.g. "
-            "https://<host>/ccx/api) — remove any trailing path, version, or "
-            "resource segment."
+            "Edit the Workday connection's restBaseUri so it ends at '/api' "
+            "(e.g. https://<host>/ccx/api) — remove any trailing path, "
+            "version, or resource segment."
         ),
         doc_link=_DOC_SIMPLIFIED,
     )]
