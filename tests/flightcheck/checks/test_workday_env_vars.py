@@ -192,6 +192,30 @@ class TestDeclarativeAgentWorkdayEnvConfig:
         assert "tenantName=mocktenant" in result.result
         assert "token:ResourceUri" in result.result
 
+    def test_shared_parameters_json_string_shape_passes(self) -> None:
+        # Live AgentBuilder returns sharedConnectionParameters as a JSON
+        # string; WD-ENV-001 must parse it, not just accept a nested object.
+        from flightcheck.checks.workday import _check_da_env_config
+
+        runner = _runner_with_da_components(
+            ab.components_with_references(
+                references=[
+                    ab.workday_connection_reference(
+                        shared_connection_parameters=(
+                            ab.shared_connection_parameters_json_string()
+                        )
+                    )
+                ]
+            )
+        )
+
+        result = _check_da_env_config(runner)[0]
+
+        assert result.checkpoint_id == "WD-ENV-001"
+        assert result.status == "Passed"
+        assert "tenantName=mocktenant" in result.result
+        assert "token:ResourceUri" in result.result
+
     def test_required_shared_parameters_can_be_on_later_workday_ref(self) -> None:
         from flightcheck.checks.workday import _check_da_env_config
 
