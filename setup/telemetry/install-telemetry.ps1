@@ -224,15 +224,16 @@ function Initialize-EssInstallTelemetry {
     .SYNOPSIS Begin installer telemetry: notice, identity, and the start event.
     .PARAMETER Installer  One of adk | lite | flightcheck. 'lite' is retained
         for the back-compat bootstrap-lite.ps1 shim; new callers should pass
-        'adk' with -InstallMode lite instead.
+        'adk' with -InstallMode maker instead.
     .PARAMETER InstallMode  The VS Code experience the maker will land in
-        after the installer completes: lite | standard | prompt. 'prompt'
-        means the ESS Maker Profile extension will ask on first launch.
+        after the installer completes: maker | developer | prompt (or the
+        legacy aliases 'lite' | 'standard'). 'prompt' means the ESS Maker
+        Profile extension will ask on first launch.
     #>
     param(
         [ValidateSet('adk', 'lite', 'flightcheck')]
         [string]$Installer = 'adk',
-        [ValidateSet('lite', 'standard', 'prompt')]
+        [ValidateSet('maker', 'developer', 'prompt', 'lite', 'standard')]
         [string]$InstallMode = 'prompt'
     )
     try {

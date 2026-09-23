@@ -206,13 +206,15 @@ test('extension source declares promptForInstallMode helper', () => {
     assert.ok(/async function promptForInstallMode\s*\(/.test(src), 'promptForInstallMode not declared');
 });
 
-test('mode prompt offers Standard and Lite choices', () => {
-    assert.ok(/Standard \(recommended\)/.test(src), 'Standard option label missing');
-    assert.ok(/Lite \(chat-first\)/.test(src), 'Lite option label missing');
+test('mode prompt offers Maker and Developer choices', () => {
+    assert.ok(/Maker \(recommended\)/.test(src), 'Maker option label missing');
+    assert.ok(/label:\s*'Developer'/.test(src), 'Developer option label missing');
+    assert.ok(/mode:\s*'maker'/.test(src), "mode value 'maker' missing");
+    assert.ok(/mode:\s*'developer'/.test(src), "mode value 'developer' missing");
 });
 
-test('mode prompt defaults to standard when the maker dismisses the QuickPick', () => {
-    assert.ok(/return pick \? pick\.mode : 'standard'/.test(src), 'Dismiss-defaults-to-standard fallback missing');
+test('mode prompt defaults to maker when the maker dismisses the QuickPick', () => {
+    assert.ok(/return pick \? pick\.mode : 'maker'/.test(src), 'Dismiss-defaults-to-maker fallback missing');
 });
 
 test('firstInstallDispatch prompts when installerMode is empty or "prompt"', () => {
@@ -221,6 +223,22 @@ test('firstInstallDispatch prompts when installerMode is empty or "prompt"', () 
 
 test('firstInstallDispatch persists the chosen mode to global settings', () => {
     assert.ok(/'essMaker\.mode',[\s\S]*?ConfigurationTarget\.Global/.test(src), 'chosen mode should be persisted with ConfigurationTarget.Global');
+});
+
+test('legacy essMaker.mode values are normalized (lite -> maker, standard -> developer)', () => {
+    assert.ok(/function normalizeInstallerMode/.test(src), 'normalizeInstallerMode helper missing');
+    assert.ok(/if\s*\(mode === 'lite'\)\s*return 'maker'/.test(src), "'lite' should be normalized to 'maker'");
+    assert.ok(/if\s*\(mode === 'standard'\)\s*return 'developer'/.test(src), "'standard' should be normalized to 'developer'");
+    assert.ok(/normalizeInstallerMode\(installerMode\)/.test(src), 'firstInstallDispatch should normalize before checking prompt');
+});
+
+test('essMaker.mode config schema accepts the new maker/developer values', () => {
+    const modeProp = pkg.contributes.configuration.properties['essMaker.mode'];
+    assert.ok(modeProp, 'essMaker.mode missing from configuration');
+    assert.ok(modeProp.enum.includes('maker'), "enum should include 'maker'");
+    assert.ok(modeProp.enum.includes('developer'), "enum should include 'developer'");
+    assert.ok(modeProp.enum.includes('lite'), "enum should still include legacy 'lite'");
+    assert.ok(modeProp.enum.includes('standard'), "enum should still include legacy 'standard'");
 });
 
 console.log('\nauto-update: parseLsRemoteSha:');

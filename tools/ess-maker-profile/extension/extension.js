@@ -19,6 +19,10 @@ function _log(msg) {
 
 const EXT_ID = 'microsoft-ess.ess-maker-profile';
 const APPLIED_KEY = 'essMaker.chatOnlyApplied.v7';
+// Historical key name: stores whether the user wants the chat-only ("Maker
+// mode") layout applied on activation. Kept as-is on disk (essMaker.liteMode.v1)
+// to preserve existing users' persisted preference across the lite -> maker
+// rename; renaming the storage key would silently reset everyone to the default.
 const LITE_MODE_KEY = 'essMaker.liteMode.v1';
 const SETTINGS_BACKUP_KEY = 'essMaker.settingsBackup.v1';
 
@@ -255,7 +259,7 @@ async function tryRun(commandId, ...args) {
     catch (err) { console.warn(`[ess-maker] ${commandId} failed:`, err.message); return false; }
 }
 
-function isLiteMode() {
+function isMakerLayout() {
     const cfg = vscode.workspace.getConfiguration();
     return cfg.get('workbench.activityBar.location') === 'hidden';
 }
@@ -821,7 +825,7 @@ async function restoreStandardLayout() {
     }
 
     const sel = await vscode.window.showInformationMessage(
-        'ESS Maker: standard layout restored. Reload the window to see all changes.',
+        'ESS Maker: Developer layout restored. Reload the window to see all changes.',
         'Reload Window'
     );
     if (sel === 'Reload Window') {
@@ -894,7 +898,7 @@ class ActionsViewProvider {
                 await tryRun('workbench.files.action.expandRecursively');
                 await this.refresh();
                 const sel = await vscode.window.showInformationMessage(
-                    'Standard layout restored. Reload the window for full effect.',
+                    'Developer layout restored. Reload the window for full effect.',
                     'Reload Window'
                 );
                 if (sel === 'Reload Window') {
@@ -905,7 +909,7 @@ class ActionsViewProvider {
                 await applySettings(CHAT_ONLY_LAYOUT, vscode.ConfigurationTarget.Global);
                 await this.refresh();
                 const sel = await vscode.window.showInformationMessage(
-                    'Lite mode applied. Reload the window for full effect.',
+                    'Maker mode applied. Reload the window for full effect.',
                     'Reload Window'
                 );
                 if (sel === 'Reload Window') {
@@ -937,9 +941,9 @@ class ActionsViewProvider {
         for (const a of ACTIONS) {
             states[a.id] = actionState(a, completed);
         }
-        const liteMode = isLiteMode();
+        const makerLayout = isMakerLayout();
         try {
-            await this._view.webview.postMessage({ type: 'state', states, liteMode });
+            await this._view.webview.postMessage({ type: 'state', states, makerLayout });
         } catch {}
     }
 
@@ -1042,10 +1046,10 @@ class ActionsViewProvider {
     <h2>Customize your ESS agent</h2>
     ${buttons}
     <hr />
-    <button class="action secondary" data-action="reapplyLayout" id="btn-lite">
+    <button class="action secondary" data-action="reapplyLayout" id="btn-maker">
         <div class="icon">🪟</div>
         <div class="text">
-            <div class="label">Switch to lite mode</div>
+            <div class="label">Switch to Maker mode</div>
             <div class="sub">Chat-only layout with big buttons</div>
         </div>
     </button>
@@ -1063,10 +1067,10 @@ class ActionsViewProvider {
             <div class="sub">How each button works</div>
         </div>
     </button>
-    <button class="action secondary" data-action="restoreLayout" id="btn-standard">
+    <button class="action secondary" data-action="restoreLayout" id="btn-developer">
         <div class="icon">⚙️</div>
         <div class="text">
-            <div class="label">Switch to standard VS Code</div>
+            <div class="label">Switch to Developer mode</div>
             <div class="sub">Show menus, files, status bar</div>
         </div>
     </button>
@@ -1116,14 +1120,14 @@ class ActionsViewProvider {
             }
         }
         // Show/hide mode-toggle buttons based on current layout.
-        const btnLite = document.getElementById('btn-lite');
-        const btnStandard = document.getElementById('btn-standard');
-        if (e.data.liteMode) {
-            btnLite.style.display = 'none';
-            btnStandard.style.display = '';
+        const btnMaker = document.getElementById('btn-maker');
+        const btnDeveloper = document.getElementById('btn-developer');
+        if (e.data.makerLayout) {
+            btnMaker.style.display = 'none';
+            btnDeveloper.style.display = '';
         } else {
-            btnLite.style.display = '';
-            btnStandard.style.display = 'none';
+            btnMaker.style.display = '';
+            btnDeveloper.style.display = 'none';
         }
     });
     vscode.postMessage({ type: 'ready' });
@@ -1428,24 +1432,28 @@ async function maybePromptReinstall(repoRoot) {
 // --- First-install dispatch (ADO #7895603 consolidated installer) ---------
 // When the consolidated installer leaves essMaker.mode unset ("" or
 // "prompt"), we prompt the maker on their first VS Code launch to pick
-// lite (chat-first) vs standard (developer view) and persist the choice
-// to the essMaker.mode global setting so subsequent launches skip the
-// prompt. This exists so the consolidated Windows installer doesn't need
-// to interrupt the CLI with a mode question — the choice surfaces in
+// maker (chat-first) vs developer (default VS Code view) and persist the
+// choice to the essMaker.mode global setting so subsequent launches skip
+// the prompt. This exists so the consolidated Windows installer doesn't
+// need to interrupt the CLI with a mode question - the choice surfaces in
 // VS Code where the maker can preview the two options as they read them.
+//
+// Legacy value migration: the pre-rename installer wrote 'lite'/'standard'
+// to essMaker.mode. Reads here normalize those to the new 'maker'/'developer'
+// values so existing users keep the mode they picked.
 async function promptForInstallMode() {
     const picks = [
         {
-            label: 'Standard (recommended)',
-            description: 'Default VS Code layout with GitHub Copilot Chat in the side panel',
-            detail: 'Best if you plan to inspect or edit files directly. /setup runs automatically.',
-            mode: 'standard',
-        },
-        {
-            label: 'Lite (chat-first)',
+            label: 'Maker (recommended)',
             description: 'Hides file tree, tabs, and status bar; big-button Quick Actions rail',
             detail: 'Best if you mostly work in chat and want a focused HR/IT admin surface.',
-            mode: 'lite',
+            mode: 'maker',
+        },
+        {
+            label: 'Developer',
+            description: 'Default VS Code layout with GitHub Copilot Chat in the side panel',
+            detail: 'Best if you plan to inspect or edit files directly. /setup runs automatically.',
+            mode: 'developer',
         },
     ];
     try {
@@ -1455,15 +1463,24 @@ async function promptForInstallMode() {
             matchOnDescription: true,
             matchOnDetail: true,
         });
-        return pick ? pick.mode : 'standard';
+        return pick ? pick.mode : 'maker';
     } catch (err) {
         _log(`promptForInstallMode: error ${err && err.message}`);
-        return 'standard';
+        return 'maker';
     }
 }
 
+// Normalize legacy essMaker.mode values ('lite', 'standard') written by
+// the pre-rename installer to the new canonical names, so existing users
+// don't get re-prompted after upgrading the extension.
+function normalizeInstallerMode(mode) {
+    if (mode === 'lite') return 'maker';
+    if (mode === 'standard') return 'developer';
+    return mode;
+}
+
 async function firstInstallDispatch(context, installerMode) {
-    let effectiveMode = installerMode;
+    let effectiveMode = normalizeInstallerMode(installerMode);
     if (!effectiveMode || effectiveMode === 'prompt') {
         effectiveMode = await promptForInstallMode();
         try {
@@ -1476,9 +1493,9 @@ async function firstInstallDispatch(context, installerMode) {
             _log(`firstInstallDispatch: failed to persist essMaker.mode: ${err && err.message}`);
         }
     }
-    const isStandardMode = effectiveMode === 'standard';
-    _log(`firstInstallDispatch: effectiveMode=${effectiveMode}, isStandardMode=${isStandardMode}`);
-    context.globalState.update(LITE_MODE_KEY, !isStandardMode);
+    const isDeveloperMode = effectiveMode === 'developer';
+    _log(`firstInstallDispatch: effectiveMode=${effectiveMode}, isDeveloperMode=${isDeveloperMode}`);
+    context.globalState.update(LITE_MODE_KEY, !isDeveloperMode);
 
     // Check if the user already has a config file (returning user who
     // re-ran the installer). Skip /setup if already configured.
@@ -1491,26 +1508,26 @@ async function firstInstallDispatch(context, installerMode) {
     }
     _log(`firstInstallDispatch: alreadyConfigured=${alreadyConfigured}`);
 
-    if (isStandardMode) {
-        // Standard mode: no layout changes. In prompt mode the installer
+    if (isDeveloperMode) {
+        // Developer mode: no layout changes. In prompt mode the installer
         // could not eagerly run `code chat '/setup'` (mode was unknown at
         // launch time), so surface /setup here for the not-yet-configured
-        // path — otherwise a maker who picks Standard here would land in
+        // path - otherwise a maker who picks Developer here would land in
         // an empty chat with no cue what to do next.
         context.globalState.update(APPLIED_KEY, true);
         if (!alreadyConfigured) {
-            _log('firstInstallDispatch: standard mode, running /setup via injectSetup');
+            _log('firstInstallDispatch: developer mode, running /setup via injectSetup');
             waitForWelcomeWizard()
                 .then(() => new Promise(r => setTimeout(r, 3000)))
                 .then(() => injectSetup())
-                .catch((err) => _log(`firstInstallDispatch: standard injectSetup error: ${err && err.message}`));
+                .catch((err) => _log(`firstInstallDispatch: developer injectSetup error: ${err && err.message}`));
         } else {
-            _log('firstInstallDispatch: standard mode, already configured — no action');
+            _log('firstInstallDispatch: developer mode, already configured - no action');
         }
         return;
     }
 
-    // Lite mode: apply layout.
+    // Maker mode: apply layout.
     applyChatOnlyLayout({ silent: false })
         .then(() => context.globalState.update(APPLIED_KEY, true))
         .catch(() => {});
@@ -1519,11 +1536,11 @@ async function firstInstallDispatch(context, installerMode) {
         setTimeout(() => tryRun('workbench.action.chat.open').catch(() => {}), 3000);
     } else {
         waitForWelcomeWizard()
-            .then(() => { _log('firstInstallDispatch: wizard done (lite), waiting 3s...'); return new Promise(r => setTimeout(r, 3000)); })
-            .then(() => { _log('firstInstallDispatch: calling injectSetup (lite)'); return injectSetup(); })
-            .then(() => _log('firstInstallDispatch: injectSetup completed (lite)'))
+            .then(() => { _log('firstInstallDispatch: wizard done (maker), waiting 3s...'); return new Promise(r => setTimeout(r, 3000)); })
+            .then(() => { _log('firstInstallDispatch: calling injectSetup (maker)'); return injectSetup(); })
+            .then(() => _log('firstInstallDispatch: injectSetup completed (maker)'))
             .catch((err) => {
-                _log(`firstInstallDispatch: ERROR in lite wizard chain: ${err && err.message}`);
+                _log(`firstInstallDispatch: ERROR in maker wizard chain: ${err && err.message}`);
                 console.warn('[ess-maker] Welcome wizard wait timed out, skipping auto /setup');
             });
     }
@@ -1575,19 +1592,20 @@ function activate(context) {
     startPrereqWatcher(context);
 
     // First-run vs subsequent runs:
-    // - First run: determine mode (lite vs standard) from VS Code setting
-    //   written by the installer.
-    //   Lite mode: applies chat-only layout; user clicks Setup to run /setup.
-    //   Standard mode: injects /setup into Copilot Chat automatically.
+    // - First run: determine mode (maker vs developer) from VS Code setting
+    //   written by the installer. Legacy values 'lite'/'standard' are
+    //   normalized to 'maker'/'developer' in firstInstallDispatch.
+    //   Maker mode: applies chat-only layout; user clicks Setup to run /setup.
+    //   Developer mode: injects /setup into Copilot Chat automatically.
     //   Empty ("") / "prompt": consolidated installer (ADO #7895603) left
-    //   the choice to us — show a QuickPick, default to standard, then
+    //   the choice to us - show a QuickPick, default to maker, then
     //   route into the chosen branch.
-    // - Subsequent lite activations: silently re-apply layout.
+    // - Subsequent maker-mode activations: silently re-apply layout.
     const alreadyApplied = context.globalState.get(APPLIED_KEY, false);
-    const userWantsLite = context.globalState.get(LITE_MODE_KEY, true); // default to lite
+    const userWantsMakerLayout = context.globalState.get(LITE_MODE_KEY, true); // default to maker layout
     const installerMode = vscode.workspace.getConfiguration().get('essMaker.mode', '');
 
-    _log(`activate: alreadyApplied=${alreadyApplied}, userWantsLite=${userWantsLite}, installerMode="${installerMode}", workspaceFolders=${vscode.workspace.workspaceFolders?.length || 0}`);
+    _log(`activate: alreadyApplied=${alreadyApplied}, userWantsMakerLayout=${userWantsMakerLayout}, installerMode="${installerMode}", workspaceFolders=${vscode.workspace.workspaceFolders?.length || 0}`);
 
     if (vscode.workspace.workspaceFolders?.length) {
         if (!alreadyApplied) {
@@ -1595,11 +1613,11 @@ function activate(context) {
             // consolidated installer didn't pin it), then dispatch.
             firstInstallDispatch(context, installerMode)
                 .catch(err => _log(`activate: firstInstallDispatch error: ${err && err.message}`));
-        } else if (userWantsLite) {
-            // Subsequent lite mode launch: silently re-apply layout.
+        } else if (userWantsMakerLayout) {
+            // Subsequent maker-mode launch: silently re-apply layout.
             setTimeout(() => { applyChatOnlyLayout({ silent: true }).catch(() => {}); }, 1500);
         }
-        // If userWantsLite is false (standard mode), skip re-applying.
+        // If userWantsMakerLayout is false (developer mode), skip re-applying.
 
         // Auto-update nudge (ADO 7569528 / 7569530): check whether the local
         // clone is behind origin/main and, if so, offer a one-click pull.

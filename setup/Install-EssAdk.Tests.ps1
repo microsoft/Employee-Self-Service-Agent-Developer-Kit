@@ -38,8 +38,14 @@ Test 'script declares InstallMode parameter' {
     if ($src -notmatch "\[string\]\s*\`$InstallMode\s*=\s*'prompt'") {
         throw 'InstallMode parameter with prompt default not found'
     }
-    if ($src -notmatch "ValidateSet\('lite',\s*'standard',\s*'prompt'\)") {
-        throw 'InstallMode ValidateSet(lite,standard,prompt) not found'
+    if ($src -notmatch "ValidateSet\('maker',\s*'developer',\s*'prompt'") {
+        throw "InstallMode ValidateSet should start with the canonical 'maker','developer','prompt' triple"
+    }
+    # Legacy aliases 'lite'/'standard' remain in the ValidateSet so old
+    # bootstrap-lite invocations and any pinned CI script don't blow up
+    # under the rename.
+    if ($src -notmatch "ValidateSet\('maker',\s*'developer',\s*'prompt',\s*'lite',\s*'standard'\)") {
+        throw "InstallMode ValidateSet should also accept legacy 'lite','standard' values"
     }
 }
 
@@ -49,9 +55,18 @@ Test 'script declares SkipMakerProfile parameter (back-compat)' {
     }
 }
 
-Test 'SkipMakerProfile forces InstallMode standard for back-compat' {
-    if ($src -notmatch 'if\s*\(\$SkipMakerProfile\)\s*\{\s*\$InstallMode\s*=\s*''standard''\s*\}') {
-        throw 'SkipMakerProfile back-compat coercion to InstallMode=standard not found'
+Test 'SkipMakerProfile forces InstallMode developer for back-compat' {
+    if ($src -notmatch 'if\s*\(\$SkipMakerProfile\)\s*\{\s*\$InstallMode\s*=\s*''developer''\s*\}') {
+        throw 'SkipMakerProfile back-compat coercion to InstallMode=developer not found'
+    }
+}
+
+Test 'legacy InstallMode values (lite/standard) are coerced to maker/developer' {
+    if ($src -notmatch "if\s*\(\`$InstallMode\s+-eq\s+'lite'\)\s*\{\s*\`$InstallMode\s*=\s*'maker'\s*\}") {
+        throw "legacy 'lite' -> 'maker' coercion missing"
+    }
+    if ($src -notmatch "if\s*\(\`$InstallMode\s+-eq\s+'standard'\)\s*\{\s*\`$InstallMode\s*=\s*'developer'\s*\}") {
+        throw "legacy 'standard' -> 'developer' coercion missing"
     }
 }
 
@@ -114,7 +129,7 @@ Test 'bootstrap.ps1 does not pin SkipMakerProfile (consolidated installer prompt
     if ($bootstrapSrc -match 'SkipMakerProfile\s*=\s*\$true') {
         throw 'bootstrap.ps1 should not set SkipMakerProfile = $true after installer consolidation (ADO #7895603)'
     }
-    if ($bootstrapSrc -match "InstallMode\s*=\s*'(lite|standard)'") {
+    if ($bootstrapSrc -match "InstallMode\s*=\s*'(maker|developer|lite|standard)'") {
         throw "bootstrap.ps1 should not pin InstallMode; it should let the installer default to 'prompt' so VS Code asks the maker."
     }
 }
@@ -130,12 +145,37 @@ Test 'bootstrap-lite.ps1 parses without errors' {
     if ($errors.Count -gt 0) { throw "Parse errors: $($errors[0].Message)" }
 }
 
-Test 'bootstrap-lite.ps1 passes -InstallMode lite (back-compat shim)' {
+Test 'bootstrap-lite.ps1 passes -InstallMode maker (back-compat shim for legacy URL)' {
     if ($liteSrc -match 'SkipMakerProfile\s*=\s*\$true') {
         throw 'bootstrap-lite.ps1 should not set SkipMakerProfile = $true'
     }
-    if ($liteSrc -notmatch "InstallMode\s*=\s*'lite'") {
-        throw "bootstrap-lite.ps1 should pin InstallMode = 'lite' so old links keep landing in lite mode"
+    if ($liteSrc -notmatch "InstallMode\s*=\s*'maker'") {
+        throw "bootstrap-lite.ps1 should pin InstallMode = 'maker' so old links keep landing in maker mode (was 'lite' before the rename)"
+    }
+}
+
+Write-Host "`nbootstrap-dev.ps1:" -ForegroundColor Cyan
+
+$devPath = Join-Path $PSScriptRoot 'bootstrap-dev.ps1'
+$devSrc = if (Test-Path $devPath) { Get-Content $devPath -Raw } else { '' }
+
+Test 'bootstrap-dev.ps1 exists' {
+    if (-not (Test-Path $devPath)) {
+        throw "bootstrap-dev.ps1 should exist as the shortcut for makers who want the Developer (default VS Code) experience"
+    }
+}
+
+Test 'bootstrap-dev.ps1 parses without errors' {
+    if (-not $devSrc) { return }
+    $tokens = $null; $errors = $null
+    $null = [System.Management.Automation.Language.Parser]::ParseFile($devPath, [ref]$tokens, [ref]$errors)
+    if ($errors.Count -gt 0) { throw "Parse errors: $($errors[0].Message)" }
+}
+
+Test 'bootstrap-dev.ps1 passes -InstallMode developer' {
+    if (-not $devSrc) { throw 'bootstrap-dev.ps1 does not exist' }
+    if ($devSrc -notmatch "InstallMode\s*=\s*'developer'") {
+        throw "bootstrap-dev.ps1 should pin InstallMode = 'developer'"
     }
 }
 
@@ -270,11 +310,11 @@ Test 'envelope time is culture-invariant ISO-8601 (non-colon-separator locales)'
     }
 }
 Test 'installer telemetry emits an installMode dimension' {
-    Initialize-EssInstallTelemetry -Installer 'adk' -InstallMode 'lite'
+    Initialize-EssInstallTelemetry -Installer 'adk' -InstallMode 'maker'
     try {
         $data = Get-EssTelCommonData
         if (-not $data.ContainsKey('installMode')) { throw 'installMode dimension not emitted' }
-        if ($data.installMode -ne 'lite') { throw "installMode wrong: $($data.installMode)" }
+        if ($data.installMode -ne 'maker') { throw "installMode wrong: $($data.installMode)" }
     } finally { $script:EssTel.Ready = $false; $script:EssTel.Completed = $false }
 }
 
@@ -286,26 +326,39 @@ Test 'installer telemetry defaults installMode to prompt when unspecified' {
     } finally { $script:EssTel.Ready = $false; $script:EssTel.Completed = $false }
 }
 
-Test 'lite installer identity is instrumented (post-consolidation)' {
+Test 'installer telemetry accepts legacy lite/standard values (back-compat)' {
+    # Old bootstrap-lite invocations may still pass -InstallMode lite until
+    # they resync. The emitter must accept those without validation errors.
+    Initialize-EssInstallTelemetry -Installer 'adk' -InstallMode 'lite'
+    try {
+        if ($script:EssTel.InstallMode -ne 'lite') { throw "legacy 'lite' should be accepted verbatim" }
+    } finally { $script:EssTel.Ready = $false; $script:EssTel.Completed = $false }
+    Initialize-EssInstallTelemetry -Installer 'adk' -InstallMode 'standard'
+    try {
+        if ($script:EssTel.InstallMode -ne 'standard') { throw "legacy 'standard' should be accepted verbatim" }
+    } finally { $script:EssTel.Ready = $false; $script:EssTel.Completed = $false }
+}
+
+Test 'maker installer identity is instrumented (post-consolidation)' {
     # Regression: pre-consolidation the emitter guarded out Installer='lite'
     # because the lite installer was slated for removal. With bootstrap-lite.ps1
-    # now a compat shim into the unified installer that passes -InstallMode lite,
-    # the guard would drop all lite-shim events. It must be gone.
+    # now a compat shim into the unified installer that passes -InstallMode maker,
+    # the guard would drop all shim events. It must be gone.
     $old = $env:ESS_ADK_TELEMETRY
     try {
         $env:ESS_ADK_TELEMETRY = ''
-        Initialize-EssInstallTelemetry -Installer 'lite' -InstallMode 'lite'
-        if (-not $script:EssTel.Ready) { throw 'lite installer should be telemetry-ready after consolidation' }
+        Initialize-EssInstallTelemetry -Installer 'lite' -InstallMode 'maker'
+        if (-not $script:EssTel.Ready) { throw 'legacy lite installer identity should be telemetry-ready after consolidation' }
     } finally { $env:ESS_ADK_TELEMETRY = $old; $script:EssTel.Ready = $false; $script:EssTel.Completed = $false }
 }
-Test 'PowerShell emitter no longer guards out the lite installer' {
+Test 'PowerShell emitter no longer guards out the legacy lite installer' {
     $emitterSrc = Get-Content $psEmitter -Raw
     if ($emitterSrc -match "if\s*\(\`$Installer\s+-eq\s+'lite'\)\s*\{\s*\`$script:EssTel\.Ready\s*=\s*\`$false") {
         throw 'PS emitter still guards out lite installer; guard should be removed after consolidation (ADO #7895603)'
     }
 }
-Test 'bash emitter still guards out the lite installer (macOS scope unchanged in this iteration)' {
-    # macOS consolidation is out of scope for ADO #7895603. Until a follow-up
+Test 'bash emitter still guards out the legacy lite installer (macOS scope unchanged in this iteration)' {
+    # macOS consolidation is out of scope for the current PR. Until a follow-up
     # US addresses macOS, bootstrap-lite-mac.sh remains a separate installer
     # tagged as ess_tel_installer=lite and the bash emitter still gates it out.
     $shSrc = Get-Content $shEmitter -Raw
@@ -328,14 +381,41 @@ Test 'install-ess-adk.sh step() emits a per-step telemetry event' {
     if ($macInstaller -notmatch 'ess_tel_step' -or $macInstaller -notmatch 'ess_step_key') { throw 'step hook missing' }
 }
 
-foreach ($bs in @('bootstrap.ps1', 'bootstrap-flightcheck.ps1', 'bootstrap-lite.ps1')) {
+Test 'install-ess-adk.sh honors INSTALL_MODE (maker|developer|prompt) with legacy SKIP_MAKER_PROFILE alias' {
+    if ($macInstaller -notmatch 'INSTALL_MODE=') { throw 'INSTALL_MODE env var not consumed' }
+    if ($macInstaller -notmatch 'SKIP_MAKER_PROFILE.*==.*"true"[\s\S]{0,120}INSTALL_MODE="developer"') {
+        throw 'legacy SKIP_MAKER_PROFILE=true should map to INSTALL_MODE=developer'
+    }
+    if ($macInstaller -notmatch 'INSTALL_MODE.*==.*"lite"[\s\S]{0,80}INSTALL_MODE="maker"') {
+        throw "legacy 'lite' should be coerced to 'maker' on macOS"
+    }
+    if ($macInstaller -notmatch 'INSTALL_MODE.*==.*"standard"[\s\S]{0,80}INSTALL_MODE="developer"') {
+        throw "legacy 'standard' should be coerced to 'developer' on macOS"
+    }
+    if ($macInstaller -notmatch 'INSTALL_MODE"?\s*==\s*"developer"') { throw 'developer launch branch missing' }
+    if ($macInstaller -notmatch 'INSTALL_MODE"?\s*==\s*"maker"') { throw 'maker launch branch missing' }
+}
+
+Test 'bootstrap-dev-mac.sh exists and pins INSTALL_MODE=developer' {
+    $devMacPath = Join-Path $PSScriptRoot 'bootstrap-dev-mac.sh'
+    if (-not (Test-Path $devMacPath)) { throw 'bootstrap-dev-mac.sh missing' }
+    $devMacSrc = Get-Content $devMacPath -Raw
+    if ($devMacSrc -notmatch 'INSTALL_MODE="developer"') { throw 'bootstrap-dev-mac.sh should pin INSTALL_MODE=developer' }
+}
+
+Test 'bootstrap-lite-mac.sh pins INSTALL_MODE=maker (back-compat shim)' {
+    $liteMacSrc = Get-Content (Join-Path $PSScriptRoot 'bootstrap-lite-mac.sh') -Raw
+    if ($liteMacSrc -notmatch 'INSTALL_MODE="maker"') { throw 'bootstrap-lite-mac.sh should pin INSTALL_MODE=maker so legacy URL still lands in the chat-first experience' }
+}
+
+foreach ($bs in @('bootstrap.ps1', 'bootstrap-flightcheck.ps1', 'bootstrap-lite.ps1', 'bootstrap-dev.ps1')) {
     $bsSrc = Get-Content (Join-Path $PSScriptRoot $bs) -Raw
     Test "$bs downloads the telemetry lib and sets ESS_INSTALL_TELEMETRY_LIB" {
         if ($bsSrc -notmatch 'install-telemetry\.ps1') { throw 'telemetry lib not downloaded' }
         if ($bsSrc -notmatch 'ESS_INSTALL_TELEMETRY_LIB') { throw 'env var not set' }
     }
 }
-foreach ($bs in @('bootstrap-mac.sh', 'bootstrap-flightcheck-mac.sh', 'bootstrap-lite-mac.sh')) {
+foreach ($bs in @('bootstrap-mac.sh', 'bootstrap-flightcheck-mac.sh', 'bootstrap-lite-mac.sh', 'bootstrap-dev-mac.sh')) {
     $bsSrc = Get-Content (Join-Path $PSScriptRoot $bs) -Raw
     Test "$bs downloads the telemetry lib and sets ESS_INSTALL_TELEMETRY_LIB" {
         if ($bsSrc -notmatch 'install-telemetry\.sh') { throw 'telemetry lib not downloaded' }

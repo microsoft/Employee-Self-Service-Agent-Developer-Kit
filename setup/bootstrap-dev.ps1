@@ -1,24 +1,22 @@
 <#
 .SYNOPSIS
-    Back-compat one-liner bootstrap that pins the installer to Maker Mode
-    (formerly known as "Lite Mode").
+    One-liner bootstrap that pins the installer to Developer Mode.
 
 .DESCRIPTION
-    Downloads the installer and runs it with -InstallMode maker. Kept so
-    existing links (docs, blog posts, share sheets) that point at
-    bootstrap-lite.ps1 keep working after the standard + lite installers
-    were merged into a single bootstrap.ps1 and the modes were renamed
-    from lite/standard to maker/developer.
+    Downloads the installer and runs it with -InstallMode developer, giving
+    the maker the default VS Code layout (activity bar, file explorer,
+    status bar visible) plus automatic /setup injection into the Copilot
+    Chat side panel. This is the shortcut for makers who already know they
+    want the developer experience and want to skip the in-VS-Code mode
+    prompt on first launch.
 
     New customers should use bootstrap.ps1, which prompts inside VS Code
-    on first launch to pick the experience. This shim is documented as
-    a redirect only.
+    on first launch and defaults to Maker (chat-first) mode.
 
-        iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-lite.ps1)
+        iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-dev.ps1)
 
     All real work happens in Install-EssAdk.ps1; this file just gets the bits
-    onto the customer's machine and pins the mode to maker (the chat-first
-    experience).
+    onto the customer's machine and pins the mode to developer.
 
 .PARAMETER InstallRoot
     Forwarded to Install-EssAdk.ps1. See that script for details.
@@ -60,7 +58,7 @@ foreach ($f in $files) {
         Write-Host "  [ERR] Failed to download: $url" -ForegroundColor Red
         Write-Host "  If raw.githubusercontent.com is blocked by your firewall/proxy," -ForegroundColor Yellow
         Write-Host "  download the repo manually and run:" -ForegroundColor Yellow
-        Write-Host "    .\setup\Install-EssAdk.ps1" -ForegroundColor Yellow
+        Write-Host "    .\setup\Install-EssAdk.ps1 -InstallMode developer" -ForegroundColor Yellow
         throw $_
     }
 }
@@ -84,11 +82,11 @@ $installer = Join-Path $tempDir 'Install-EssAdk.ps1'
 $scriptContent = [System.IO.File]::ReadAllText($installer, [System.Text.Encoding]::UTF8)
 $scriptBlock = [ScriptBlock]::Create($scriptContent)
 
-# Maker mode (was "Lite mode" before the rename): pass -InstallMode maker
-# so the ESS Maker Profile applies the chat-first layout without asking the
-# maker. Kept as a compat shim while the single bootstrap.ps1 becomes the
-# recommended entry point.
-$installerArgs = @{ Branch = $Branch; InstallMode = 'maker' }
+# Developer mode: pass -InstallMode developer so the installer skips the
+# in-VS-Code mode prompt and lands directly in the default VS Code layout
+# with /setup requested via `code chat`. Same physical installer as the
+# other bootstraps; just a different pinned mode.
+$installerArgs = @{ Branch = $Branch; InstallMode = 'developer' }
 if ($InstallRoot) { $installerArgs.InstallRoot = $InstallRoot }
 
 & $scriptBlock @installerArgs

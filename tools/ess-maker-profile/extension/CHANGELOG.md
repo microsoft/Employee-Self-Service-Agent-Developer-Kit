@@ -1,13 +1,35 @@
 # Changelog
 
+## 0.4.27 (POC)
+
+- **Modes renamed: Lite -> Maker (default), Standard -> Developer.**
+  User research showed "Lite" undersold the mode (it is a full,
+  streamlined chat-first UX, not a cut-down one) and "Standard" was not
+  really standard (it still opens Copilot Chat and runs `/setup` on
+  first launch). The first-launch QuickPick now offers **Maker
+  (recommended)** and **Developer**, dismissing defaults to Maker,
+  and a new `setup/bootstrap-dev.ps1` shortcut mirrors the existing
+  `bootstrap-lite.ps1`. The `essMaker.mode` setting accepts the new
+  values (`maker`, `developer`) and still accepts the legacy values
+  (`lite`, `standard`) so pinned CI, docs, and previously-installed
+  users are not disrupted; legacy values are normalized on read at the
+  top of `firstInstallDispatch`. The `essMaker.restoreStandardLayout`
+  command ID is preserved (its user-facing title is now "Restore
+  Developer Layout"). The persisted on-disk key `essMaker.liteMode.v1`
+  is likewise preserved so existing users do not lose their layout
+  preference. macOS gets a matching `bootstrap-dev-mac.sh` shortcut;
+  `bootstrap-lite-mac.sh` continues to work and pins Maker mode. The
+  installer emits an additional `installMode` telemetry dimension
+  (maker | developer | prompt, or legacy lite | standard).
+
 ## 0.4.26 (POC)
 
 - **First-launch mode prompt.** After the consolidated Windows installer
-  (see ADO #7895603 — one `bootstrap.ps1` for both experiences), the
+  (see ADO #7895603 - one `bootstrap.ps1` for both experiences), the
   extension asks the maker on first VS Code launch which experience they
-  want: **Standard (recommended)** — default developer view with GitHub
-  Copilot Chat in the side panel and automatic `/setup` — or **Lite
-  (chat-first)** — hidden developer chrome and the Quick Actions rail.
+  want: **Standard (recommended)** - default developer view with GitHub
+  Copilot Chat in the side panel and automatic `/setup` - or **Lite
+  (chat-first)** - hidden developer chrome and the Quick Actions rail.
   The choice is persisted to the `essMaker.mode` global setting so
   subsequent launches skip the prompt; dismissing the QuickPick defaults
   to Standard. Legacy invocations that pin `essMaker.mode` to `lite` or
