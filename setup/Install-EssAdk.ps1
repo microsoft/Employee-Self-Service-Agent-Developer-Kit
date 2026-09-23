@@ -630,7 +630,7 @@ if (-not $SkipClone) {
     }
 
     if (Test-Path (Join-Path $repoPath '.git')) {
-        Write-Ok "Repo already cloned at $repoPath - pulling latest"
+        Write-Ok "Repo already cloned at $repoPath - refreshing requested ref"
         Push-Location $repoPath
         try {
             # Self-heal --single-branch clones from earlier installer versions.
@@ -640,12 +640,20 @@ if (-not $SkipClone) {
             # from. Idempotent: no-op if the refspec is already broad.
             $null = Invoke-Native { & git remote set-branches origin '*' }
 
-            $gitOutput = Invoke-Native { & git fetch --quiet origin }
+            $gitOutput = Invoke-Native { & git fetch --quiet --tags origin }
             foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
             if ($LASTEXITCODE -ne 0) {
                 Write-Warn2 "git fetch failed (exit $LASTEXITCODE). Continuing with local copy."
             } else {
-                $currentBranch = (Invoke-Native { & git branch --show-current } | Select-Object -First 1).Trim()
+                $currentRef = Invoke-Native { & git branch --show-current } |
+                    Select-Object -First 1
+                if ([string]::IsNullOrWhiteSpace([string]$currentRef)) {
+                    $currentCommit = Invoke-Native { & git rev-parse --short HEAD } |
+                        Select-Object -First 1
+                    $currentRef = "detached HEAD at $currentCommit"
+                } else {
+                    $currentRef = $currentRef.Trim()
+                }
                 $gitOutput = Invoke-Native { & git checkout --quiet $Branch }
                 foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
                 if ($LASTEXITCODE -ne 0) {
@@ -654,17 +662,33 @@ if (-not $SkipClone) {
                     # open" regression reports for users who first installed
                     # from a feature branch.
                     Write-Warn2 "git checkout $Branch failed (exit $LASTEXITCODE)."
-                    Write-Warn2 "Your local clone is on '$currentBranch' and cannot switch to '$Branch'."
-                    Write-Warn2 "You will run STALE code from '$currentBranch' instead of '$Branch'."
+                    Write-Warn2 "Your local clone is on '$currentRef' and cannot switch to '$Branch'."
+                    Write-Warn2 "You will run STALE code from '$currentRef' instead of '$Branch'."
                     Write-Warn2 "To recover: delete the local clone and re-run, e.g."
                     Write-Warn2 "  Remove-Item -Recurse -Force '$repoPath'"
                     Write-Warn2 "Then re-run the installer / bootstrap command."
                 } else {
-                    $gitOutput = Invoke-Native { & git pull --quiet --ff-only }
-                    foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
-                    if ($LASTEXITCODE -ne 0) {
-                        Write-Warn2 "git pull failed (exit $LASTEXITCODE). Continuing with local copy (may be behind '$Branch')."
-                        Write-Warn2 "If you see stale behavior, delete '$repoPath' and re-run."
+                    $null = Invoke-Native {
+                        & git show-ref --verify --quiet "refs/remotes/origin/$Branch"
+                    }
+                    if ($LASTEXITCODE -eq 0) {
+                        $gitOutput = Invoke-Native {
+                            & git pull --quiet --ff-only origin $Branch
+                        }
+                        foreach ($line in $gitOutput) { if ($line) { Write-Host "      $line" } }
+                        if ($LASTEXITCODE -ne 0) {
+                            Write-Warn2 "git pull failed (exit $LASTEXITCODE). Continuing with local copy (may be behind '$Branch')."
+                            Write-Warn2 "If you see stale behavior, delete '$repoPath' and re-run."
+                        }
+                    } else {
+                        $null = Invoke-Native {
+                            & git show-ref --verify --quiet "refs/tags/$Branch"
+                        }
+                        if ($LASTEXITCODE -eq 0) {
+                            Write-Ok "Checked out pinned tag $Branch"
+                        } else {
+                            Write-Ok "Checked out pinned ref $Branch"
+                        }
                     }
                 }
             }
