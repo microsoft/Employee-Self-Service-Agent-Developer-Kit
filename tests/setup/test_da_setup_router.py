@@ -824,6 +824,58 @@ def test_foundation_uses_maker_facing_progress_without_duplicate_state() -> None
     assert "No, I need a fresh agent" in text
 
 
+def test_environment_only_request_resolves_agent_intent_before_routing() -> None:
+    text = _FOUNDATION.read_text(encoding="utf-8")
+    normalized = " ".join(text.split())
+
+    assert (
+        "When the request identifies an environment and explicitly asks to "
+        "connect to an existing agent"
+    ) in normalized
+    assert (
+        "When the request identifies an environment but not an agent or "
+        "create-versus-connect intent"
+    ) in normalized
+    assert (
+        "What would you like to set up in "
+        "`{environment name or the selected Power Platform environment}`?"
+    ) in normalized
+    for choice in (
+        "Create a fresh agent in this environment",
+        "Connect to an existing agent in this environment",
+        "Cancel setup",
+    ):
+        assert choice in text
+    assert "Require an explicit selection; all choices begin unselected" in normalized
+    assert "then ask exactly" in normalized
+    assert (
+        "This question confirms the selected target; the access-verification "
+        "stage remains current until a service operation succeeds"
+    ) in normalized
+    assert "retain the resolved environment ID and service ring" in normalized
+    assert (
+        "Send the current progress snapshot using the shared **Message** contract"
+    ) in normalized
+    assert (
+        "continue directly through "
+        "`src/skills/foundation-setup/da-mos-starter.md` with the retained "
+        "environment and ring"
+    ) in normalized
+    assert (
+        "follow its environment-candidate selection path with the retained "
+        "environment and ring"
+    ) in normalized
+    assert (
+        "When the request identifies an environment but not an agent or "
+        "fresh-agent intent"
+    ) not in normalized
+    assert normalized.index(
+        "What would you like to set up in"
+    ) < normalized.index(
+        "For **Connect to an existing agent in this environment**"
+    )
+
+
 def test_foundation_has_one_authorization_wait_contract() -> None:
     text = _FOUNDATION.read_text(encoding="utf-8")
     normalized = " ".join(text.split())
