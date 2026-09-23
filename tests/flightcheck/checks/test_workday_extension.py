@@ -298,8 +298,15 @@ class TestDataverseConnection:
         assert "bind the Workday SOAP connection reference" in r.remediation
 
     def test_workday_ref_absent_fails(self):
-        # Only the default ServiceNow ref present — no Workday SOAP ref.
-        runner = _runner_with_refs(None)
+        # Only a ServiceNow ref is present - no Workday SOAP ref.
+        runner = _runner_with_refs(
+            [
+                ab.connection_reference_change(
+                    connector="shared_service-now",
+                    connection_id="sn-1",
+                )
+            ]
+        )
         r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
 
         assert r.status == Status.FAILED.value
