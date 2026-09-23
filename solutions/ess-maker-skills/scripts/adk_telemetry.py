@@ -143,10 +143,17 @@ _CLIENT_EVENTS_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 # --- Canonical ADK capability value-list (single source of truth) ---------
 # Every ``adk_capability`` value emitted anywhere in the kit MUST be one of
 # these. This is the ONE place the taxonomy is defined: the synthetic
-# emitter, the ``emit_capability.py`` shim, and the Aria "Capability Usage by
-# Type" donut value-list are all kept in sync with it. When you add a
-# capability here, also add it to that Aria cube dimension value-list (see the
-# telemetry dashboards story, ADO #7532631) so the new slice renders.
+# emitter, the ``emit_capability.py`` shim, and the Aria "Capability Usage
+# by Type" donut are all kept in sync with it.
+#
+# The Aria "Capability Usage by Type" tiles filter the ``adk Capability``
+# dimension with ``not in <blank>``, so every value emitted from here shows
+# up on the donut automatically — no dashboard change is required when a
+# new capability is added below. (Historical: the tiles used to pin an
+# explicit ``in {value-list}`` filter, which meant new capabilities would
+# silently drop off the donut until the filter was updated. The
+# ``not in <blank>`` change landed 2026-09-22; see the telemetry dashboards
+# story, ADO #7532631, for context.)
 #
 # One capability per real maker-facing ADK skill / entry point. The taxonomy
 # is intentionally granular: every distinct command a maker can run has its
