@@ -365,6 +365,22 @@ class TestWorkdayExtensionCheckpoints:
             assert cp in keys
 
 
+class TestPublishingCheckpoints:
+    def test_pub_checks_resolve_to_publishing_category_with_agentbuilder(self):
+        for cp in ("PUB-001", "PUB-002"):
+            spec = registry.resolve(cp)
+            assert spec is not None and spec.key == cp
+            assert spec.category_label == "Publishing"
+            assert spec.clients == frozenset({registry.AGENTBUILDER})
+            assert spec.requires_dataverse_endpoint is False
+            assert spec.priority == Priority.CRITICAL.value
+            assert Role.ESS_MAKER.value in spec.roles
+
+    def test_pub_checks_are_listable(self):
+        keys = {spec.key for spec in registry.list_checkpoints()}
+        assert {"PUB-001", "PUB-002"} <= keys
+
+
 class TestTopicCheckpoints:
     """skill-6 mints two FAMILY checkpoints (one row per new/custom topic),
     both sharing checks/topics.run_topic_checks, category "Workday Topics".

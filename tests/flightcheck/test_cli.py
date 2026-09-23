@@ -282,7 +282,7 @@ class TestAgentBuilderNativeScopes:
         [
             (
                 "full",
-                ["Native Agent", "Environment", "Local Files"],
+                ["Native Agent", "Environment", "Local Files", "Publishing"],
                 True,
                 True,
                 None,
@@ -302,6 +302,7 @@ class TestAgentBuilderNativeScopes:
                 False,
                 ("shared_workdaysoap",),
             ),
+            ("publishing", ["Publishing"], True, False, None),
         ],
     )
     def test_native_no_dataverse_scope_uses_only_native_clients(
