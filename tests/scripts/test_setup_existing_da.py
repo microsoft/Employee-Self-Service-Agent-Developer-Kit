@@ -1555,6 +1555,14 @@ def test_parser_exposes_only_composable_setup_operations() -> None:
         ]
     )
     assert parsed.account == "test.user@example.test"
+    inspect_help = " ".join(
+        subparsers.choices["inspect-agent"].format_help().split()
+    )
+    assert (
+        "Microsoft account sign-in name used to access the target Power "
+        "Platform environment"
+        in inspect_help
+    )
 
 
 def test_maintain_flightcheck_command_updates_local_state(

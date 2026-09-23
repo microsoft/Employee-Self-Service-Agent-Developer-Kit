@@ -40,7 +40,7 @@ packs, and topics are explicitly outside this skill.
 
 ## Maker-facing progress
 
-Write the exact maker-facing progress checklist below as a complete snapshot at these render points: the first interactive setup surface in a turn, a change to any of its five markers, a blocked state that requires maker action, and the final handoff. Every rendered update contains all five stages in this order and uses the same ordinary Markdown shape: one single-level bullet and one leading status emoji per stage. Use the latest canonical setup state read in this invocation and results observed in this invocation to set their statuses. A sequence of setup operations that retains the same markers continues to its next render point without another progress snapshot. Preserve completed stages and keep pending stages present. Report setup-owned FlightChecks in the separate runtime-readiness table defined by the shared existing-agent completion path; a FlightCheck result does not roll back a completed access, identity, agent-establishment, or materialization stage. Mark **Review the setup handoff** complete in the final snapshot. Do not expose the eight internal setup-step IDs or show skipped internal records as successful checks.
+Write the exact maker-facing progress checklist below as a complete snapshot at these render points: the first interactive setup surface in a turn, a change to any of its five markers, a blocked state that requires maker action, and the final handoff. Every rendered update contains all five stages in this order and uses the same ordinary Markdown shape: one single-level bullet and one leading status emoji per stage. Send the complete **Message** block as its own chat message. Finish that message before opening the next question or interactive control; the next control begins with its own prompt, explanation, and choices. Use the latest canonical setup state read in this invocation and results observed in this invocation to set their statuses. A sequence of setup operations that retains the same markers continues to its next render point without another progress snapshot. Preserve completed stages and keep pending stages present. Report setup-owned FlightChecks in the separate runtime-readiness table defined by the shared existing-agent completion path; a FlightCheck result does not roll back a completed access, identity, agent-establishment, or materialization stage. Mark **Review the setup handoff** complete in the final snapshot. Do not expose the eight internal setup-step IDs or show skipped internal records as successful checks.
 
 **Message:**
 
@@ -78,11 +78,12 @@ python scripts/setup_existing_da.py cached-accounts
 
 Parse `DA_AGENTBUILDER_ACCOUNTS_JSON:`. This is a local read and does not authenticate.
 
-- For one cached sign-in name, ask **Use {account} for setup?** and offer exactly **Continue with this account** and **Use another account**. Do not preselect either choice.
-- For multiple cached sign-in names, ask **Which account should setup use?** and offer each returned sign-in name plus **Use another account**. Do not preselect an account.
-- For no cached sign-in names, or after **Use another account**, ask **Do you have a test tenant user?** Allow the maker to enter that account's sign-in name or skip. When multiple cached accounts exist, require a sign-in name after **Use another account** so subsequent setup commands do not reopen account selection.
+- Ask exactly one account question: **Which Microsoft account should setup use to access the target Power Platform environment?** Explain that this Microsoft sign-in is separate from GitHub/Copilot sign-in.
+- Build the choices in this order: **Skip — Use the Microsoft account picker** first, followed by every cached sign-in name. Do not preselect or recommend an option. Allow a different account sign-in name as free-form input. Do not add a separate **Use another account** choice or a follow-up account question.
 
-Retain a confirmed or supplied sign-in name as `{SETUP_ACCOUNT}` and append `--account "{SETUP_ACCOUNT}"` to every `setup_existing_da.py`, `setup_mos_starter.py`, `setup_alm_export.py`, and `setup_alm_import.py` command in this invocation. Never infer a corp account. When the maker skips with no cached accounts, omit `--account` and let Microsoft sign-in present its account picker.
+Retain a confirmed or supplied sign-in name as `{SETUP_ACCOUNT}` and append `--account "{SETUP_ACCOUNT}"` to every `setup_existing_da.py`, `setup_mos_starter.py`, `setup_alm_export.py`, and `setup_alm_import.py` command in this invocation. Never infer a corp account. When the maker selects **Skip — Use the Microsoft account picker**, omit `--account` and append `--select-account` to those commands so a cached identity is not selected silently.
+
+Account selection does not prove that the maker holds a particular administrator role. Let each service operation validate its own permissions and preserve its specific authorization error instead of rejecting the selected account through a blanket local admin check.
 
 Present account confirmation once per setup invocation. Do not repeat it before later commands.
 

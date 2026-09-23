@@ -599,10 +599,39 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "scripts/prepare_fresh_workspace.py" in foundation
     assert "--open-vscode" in foundation
     assert "DA_PREPARED_WORKSPACE_JSON:" in foundation
-    assert "Do you have a test tenant user?" in foundation
+    assert (
+        "Which Microsoft account should setup use to access the target "
+        "Power Platform environment?"
+    ) in foundation
+    assert (
+        "Send the complete **Message** block as its own chat message"
+    ) in normalized_foundation
+    assert (
+        "Finish that message before opening the next question or interactive "
+        "control; the next control begins with its own prompt, explanation, and choices"
+    ) in normalized_foundation
+    assert "Ask exactly one account question" in foundation
+    assert (
+        "**Skip — Use the Microsoft account picker** first, followed by every "
+        "cached sign-in name"
+    ) in foundation
+    assert "separate from GitHub/Copilot sign-in" in foundation
+    assert "Do not add a separate **Use another account** choice" in foundation
+    assert "**Continue with this account**" not in foundation
+    assert (
+        "When the maker selects **Skip — Use the Microsoft account picker**, "
+        "omit `--account`"
+    ) in normalized_foundation
+    assert (
+        "append `--select-account` to those commands so a cached identity is "
+        "not selected silently"
+    ) in normalized_foundation
+    assert "Do you have a test tenant user?" not in foundation
+    assert "does not prove that the maker holds a particular administrator role" in (
+        normalized_foundation
+    )
     assert "setup_existing_da.py cached-accounts" in foundation
     assert "DA_AGENTBUILDER_ACCOUNTS_JSON:" in foundation
-    assert "**Continue with this account**" in foundation
     assert '--account "{SETUP_ACCOUNT}"' in foundation
     assert "Never infer a corp account" in normalized_foundation
     assert "Present account confirmation once" in normalized_foundation
@@ -965,6 +994,15 @@ def test_ui_guidance_keeps_ux_meta_intentions_out_of_maker_copy() -> None:
     assert '"chatter," "noise," "narration," "render point," "surface,"' in text
     assert "Authoring rationale or UX-policy language presented as setup progress" in (
         normalized
+    )
+    assert "Send each progress snapshot as its own complete chat message" in normalized
+    assert (
+        "Finish that message before opening the next question or interactive control"
+        in normalized
+    )
+    assert (
+        "The next control begins with its own decision prompt, explanation, and choices"
+        in normalized
     )
 
 

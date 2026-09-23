@@ -2369,8 +2369,9 @@ def _add_agentbuilder_target_arguments(
     parser.add_argument(
         "--account",
         help=(
-            "Optional test tenant account sign-in name. Reuse its cached "
-            "AgentBuilder token when available or prefill Microsoft sign-in."
+            "Optional Microsoft account sign-in name used to access the target "
+            "Power Platform environment. Reuse its cached AgentBuilder token "
+            "when available or prefill Microsoft sign-in."
         ),
     )
     parser.add_argument("--host")
