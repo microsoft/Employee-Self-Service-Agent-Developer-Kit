@@ -291,10 +291,20 @@ if [[ -d "$REPO_PATH" && ! -d "$REPO_PATH/.git" ]]; then
 fi
 
 if [[ -d "$REPO_PATH/.git" ]]; then
-    ok "Repo already cloned at $REPO_PATH — pulling latest"
-    git -C "$REPO_PATH" fetch --quiet origin
-    git -C "$REPO_PATH" checkout "$BRANCH" 2>/dev/null || warn "git checkout $BRANCH failed. Continuing on current branch."
-    git -C "$REPO_PATH" pull --quiet origin "$BRANCH" 2>/dev/null || warn "git pull failed. Continuing with local copy."
+    ok "Repo already cloned at $REPO_PATH — refreshing requested ref"
+    git -C "$REPO_PATH" fetch --quiet --tags origin
+    if git -C "$REPO_PATH" checkout --quiet "$BRANCH"; then
+        if git -C "$REPO_PATH" show-ref --verify --quiet "refs/remotes/origin/$BRANCH"; then
+            git -C "$REPO_PATH" pull --quiet --ff-only origin "$BRANCH" ||
+                warn "git pull failed. Continuing with local copy."
+        elif git -C "$REPO_PATH" show-ref --verify --quiet "refs/tags/$BRANCH"; then
+            ok "Checked out pinned tag $BRANCH"
+        else
+            ok "Checked out pinned ref $BRANCH"
+        fi
+    else
+        warn "git checkout $BRANCH failed. Continuing on current ref."
+    fi
 else
     echo "    Cloning to $REPO_PATH..."
     mkdir -p "$INSTALL_ROOT"
