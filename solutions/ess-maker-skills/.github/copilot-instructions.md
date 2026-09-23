@@ -50,8 +50,9 @@ Respond with ONLY this exact message and nothing else:
   `flightCheckOnly: true`, proceed with `src/skills/flightcheck/SKILL.md`.
   This exception applies only to `/flightcheck`; every other command remains
   gated.
-- If the user typed `/connect`, allow the command after **local workspace
-  materialization**, even when runtime `connect_ready` is false. Require
+- If the user typed `/connect` or `/connect-workday`, allow the command after
+  **local workspace materialization**, even when runtime `connect_ready` is
+  false. Require
   `schema_version: 4`, resolve `.local/config.json` `activeAgent` to the
   canonical agent whose `agent.workspace_slug` matches, and require canonical
   workspace evidence plus `steps.SETUP-07.state: "done"`. Connector readiness
