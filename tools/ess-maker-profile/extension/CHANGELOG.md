@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.4.26 (POC)
+
+- **Customize landing page** opens `/landing-page` and appears after **Push to Copilot Studio** at the bottom of Quick Actions. The tutorial follows the same action order. ([PR 311 - Align landing-page quick action](https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/pull/311))
+
 ## 0.4.25 (POC)
 
 - **Customize landing page** is available in Quick Actions. The setup-gated action opens a guided Copilot chat for branding, quick links, starter prompts, and insight cards.
