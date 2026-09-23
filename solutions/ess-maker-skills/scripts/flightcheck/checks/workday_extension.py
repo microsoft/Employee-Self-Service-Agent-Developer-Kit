@@ -228,7 +228,7 @@ def _query_connection_references(runner):
     this checkpoint to a WARNING) rather than overclaiming: an
     ``AgentBuilderHTTPError`` propagates, and a 200 payload whose
     ``connectionReferenceChanges`` is present but not a list raises
-    ``ValueError`` (mirrors ``native_agent._connection_references``).     A missing
+    ``ValueError`` (mirrors ``native_agent._connection_references``). A missing
     changeset is treated as "no references" (genuine absence), not an error.
 
     The fetch + normalize + fail-loudly logic is shared with ``ENV-004`` via
