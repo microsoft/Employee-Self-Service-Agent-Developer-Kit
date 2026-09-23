@@ -86,6 +86,10 @@ Retain a confirmed or supplied sign-in name as `{SETUP_ACCOUNT}` and append `--a
 
 Present account confirmation once per setup invocation. Do not repeat it before later commands.
 
+## Reconcile every selected agent
+
+Whenever one exact environment and agent has been selected, read `src/skills/foundation-setup/product-line-reconciliation.md` and complete that handoff before the next DA-GA-only operation. This applies regardless of whether the identity came from a supplied URL, active local setup state, a configured-agent switch, environment candidate selection, MOS creation, or ALM import. Run it once per selected identity in this invocation and again only when the selection changes.
+
 ## Shared authorization message
 
 The account question is the confirmation for a selected account. When the maker chose the Microsoft account picker, show:
@@ -161,7 +165,7 @@ python scripts/reset_local_workspace.py --confirm-reset
 
 Parse `DA_RESET_WORKSPACE_JSON:`. When `outcome` is `workspace-reset`, say that the local setup was archived to `{backupRoot}`, then continue from the unoccupied-workspace route. When `outcome` is `nothing-to-reset`, continue without a backup message. For any error, report its `ERROR:` and `NOTE:` output and stop; each note identifies a path that could not be restored.
 
-For **Switch to another configured agent**, show the locally configured agents other than the active one. After the maker selects an exact agent, run:
+For **Switch to another configured agent**, show the locally configured agents other than the active one. After the maker selects an exact agent, complete the selected-agent product-line reconciliation before changing the active local selection, then run:
 
 ```text
 python scripts/setup_existing_da.py select-agent \
@@ -212,7 +216,7 @@ Offer exactly these context-appropriate choices:
 
 Do not preselect a choice. Follow the corresponding shared workspace choice above.
 
-For **Continue with this agent** or **Resume setup for this agent**, complete the one-time account selection above, then run:
+For **Continue with this agent** or **Resume setup for this agent**, complete the one-time account selection and selected-agent product-line reconciliation above, then run:
 
 ```text
 python scripts/setup_existing_da.py inspect-agent \
@@ -237,10 +241,13 @@ already targets its related Dev agent.
 
 When the maker supplies a Copilot Studio URL that identifies an agent and has
 not explicitly selected package import, infer its environment ID, agent ID,
-and service ring. The URL should have a segment denoting the ring, such as
-`test` or `preprod`; when neither segment is present, confirm the `prod` ring
-with the user. Ask only when the environment ID or agent ID is unclear. Then
-run:
+and service ring. Treat a recognized Copilot Studio hostname as authoritative
+ring evidence, including `copilotstudio.microsoft.com` and
+`copilotstudio.preview.microsoft.com` for `prod`. A recognized hostname
+completes ring selection. Ask for the ring only when the hostname is
+unrecognized, and ask for the environment ID or agent ID only when either is
+unclear. Complete the selected-agent product-line reconciliation before
+running:
 
 ```text
 python scripts/setup_existing_da.py inspect-agent \

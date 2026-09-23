@@ -9,13 +9,13 @@ Use only intent supplied in the current request and results observed in this inv
 ## Identify the target
 
 Ask for an environment URL when the target is not supplied. Infer its
-environment ID and service ring. The URL should have a segment denoting the
-ring, such as `test` or `preprod`; when neither segment is present, confirm the
-`prod` ring with the user. Ask only when the environment ID is unclear. Retain
-the resolved environment ID and ring for every operation in this setup
-invocation. Do not ask the maker to classify the product before loading the
-catalog. When fresh-agent intent and the target environment are known, mark
-**Choose the starting point and target environment** complete.
+environment ID and service ring. A recognized Copilot Studio hostname is
+authoritative ring evidence and completes ring selection. Ask for the ring only
+when the hostname is unrecognized, and ask for the environment ID only when it
+is unclear. Retain the resolved environment ID and ring for every operation in
+this setup invocation. Do not ask the maker to classify the product before
+loading the catalog. When fresh-agent intent and the target environment are
+known, mark **Choose the starting point and target environment** complete.
 
 ## Use the workspace environment
 
@@ -107,13 +107,15 @@ The response, outcome label, fuse disposition, HTTP status, and request details 
 
 When the annotations report `outcome: created`, keep the distinction between `catalogPackageVersion` and `templateVersion` in diagnostic evidence; do not explain those internal version concepts to the maker. Say that the new agent was created and setup is not complete.
 
+The successful native create result is authoritative DA-GA evidence. Run the parent's selected-agent product-line reconciliation with the returned identity and `--native-da-ga` before the enable-ALM operation.
+
 When the annotations report `outcome: collision`, do not infer which visible agent corresponds to the package. List visible Dev agents in the same environment through `setup_existing_da.py list-agents`, then offer exactly:
 
 - **Choose an existing agent in this environment**
 - **Choose a different catalog product**
 - **Cancel setup**
 
-Do not preselect a choice. For **Choose an existing agent in this environment**, show the returned names, let the maker select one exact agent, and continue through `da-existing-dev.md`. The selected agent is maker-supplied intent, not proof of package identity. This path does not replace an agent.
+Do not preselect a choice. For **Choose an existing agent in this environment**, show the returned names, let the maker select one exact agent, run the parent's selected-agent product-line reconciliation with `--native-da-ga`, and continue through `da-existing-dev.md`. The selected agent is maker-supplied intent, not proof of package identity. This path does not replace an agent.
 
 For **Choose a different catalog product**, present the valid rows from the latest successful catalog result and let the maker select another exact product. Continue through **Confirm the exact product and target** for that selection. A new create request becomes available only after the maker confirms the new product and uses a new client request UUID.
 

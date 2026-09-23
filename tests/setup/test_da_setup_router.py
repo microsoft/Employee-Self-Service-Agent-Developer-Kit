@@ -24,6 +24,16 @@ _DA_PROD_TO_DEV = (
 _DA_MOS_STARTER = (
     _SOLUTION / "src" / "skills" / "foundation-setup" / "da-mos-starter.md"
 )
+_PRODUCT_LINE_RECONCILIATION = (
+    _SOLUTION
+    / "src"
+    / "skills"
+    / "foundation-setup"
+    / "product-line-reconciliation.md"
+)
+_PRODUCT_LINE_RELEASES = (
+    _SOLUTION / "src" / "reference" / "product-line-releases.json"
+)
 _NATIVE_ALM_REFERENCE = (
     _SOLUTION / "src" / "reference" / "native-alm-import.md"
 )
@@ -53,6 +63,79 @@ def test_public_setup_routes_to_da_foundation_module() -> None:
     assert "before announcing a mismatch" in instructions
     assert "src/skills/foundation-setup/SKILL.md" in prompt
     assert "Do not route to Dataverse foundation or onboarding playbooks" in prompt
+
+
+def test_setup_reconciles_every_selected_agent_before_da_only_work() -> None:
+    foundation = _FOUNDATION.read_text(encoding="utf-8")
+    normalized_foundation = " ".join(foundation.split())
+    prompt = _SETUP_PROMPT.read_text(encoding="utf-8")
+    normalized_prompt = " ".join(prompt.split())
+    reconciliation = _PRODUCT_LINE_RECONCILIATION.read_text(encoding="utf-8")
+    normalized_reconciliation = " ".join(reconciliation.split())
+    existing_dev = _DA_EXISTING_DEV.read_text(encoding="utf-8")
+    mos_starter = _DA_MOS_STARTER.read_text(encoding="utf-8")
+    alm_import = _DA_ALM_IMPORT.read_text(encoding="utf-8")
+    prod_to_dev = _DA_PROD_TO_DEV.read_text(encoding="utf-8")
+
+    assert _PRODUCT_LINE_RECONCILIATION.is_file()
+    assert _PRODUCT_LINE_RELEASES.is_file()
+    assert "## Reconcile every selected agent" in foundation
+    assert (
+        "regardless of whether the identity came from a supplied URL, active "
+        "local setup state, a configured-agent switch, environment candidate "
+        "selection, MOS creation, or ALM import"
+    ) in normalized_foundation
+    assert foundation.index("product-line-reconciliation.md") < foundation.index(
+        "setup_existing_da.py inspect-agent"
+    )
+    assert "product-line reconciliation before the next DA-GA-only operation" in (
+        " ".join(prompt.split())
+    )
+    assert normalized_prompt.index(
+        "product-line reconciliation now"
+    ) < normalized_prompt.index(
+        "check the Microsoft Object Model converter"
+    )
+    assert (
+        "do not install or validate the Microsoft Object Model converter"
+        in normalized_prompt
+    )
+    assert "complete its kit-switch handoff" in normalized_prompt
+    assert "python scripts/reconcile_setup_agent.py" in reconciliation
+    assert "--native-da-ga" in reconciliation
+    assert "DA_SETUP_PRODUCT_RECONCILIATION_JSON:" in reconciliation
+    assert "action: stop-and-use-cea-kit" in reconciliation
+    assert "action: continue-da-ga-setup" in reconciliation
+    assert "deliberately fail-open" in normalized_reconciliation
+    assert "generic API failures" in normalized_reconciliation
+    for mismatch_state in (
+        "**Choose the starting point and target environment** as complete",
+        "**Verify access and agent identity** as blocked",
+        "**Establish an editable Dev agent** and "
+        "**Materialize the local workspace** as pending",
+        "**Review the setup handoff** as in progress",
+    ):
+        assert mismatch_state in normalized_reconciliation
+    assert (
+        "Want me to install the compatible CEA kit in a separate folder and open "
+        "it now?"
+    ) in normalized_reconciliation
+    assert "When the maker accepts, run `recoveryCommand`" in reconciliation
+    assert "When the maker declines" in reconciliation
+    assert "When command execution fails" in reconciliation
+    assert "Do not label the unchanged command as a retry" in reconciliation
+    assert "verify that its checkout matches `releaseTag`" in reconciliation
+    assert "offer to open its `solutions/ess-maker-skills` workspace directly" in (
+        reconciliation
+    )
+    assert reconciliation.count("**Review the setup handoff** as complete") == 2
+    assert reconciliation.count("**Review the setup handoff** as blocked") == 2
+    assert "No Copilot Studio agent or setup state was changed" in reconciliation
+    assert "installation was not changed" not in reconciliation
+    assert "identity returned by this native list" in existing_dev
+    assert mos_starter.count("selected-agent product-line reconciliation") >= 2
+    assert alm_import.count("selected-agent product-line reconciliation") >= 2
+    assert "selected-agent product-line reconciliation" in prod_to_dev
 
 
 def test_foundation_defines_setup_state_sources() -> None:
@@ -131,6 +214,8 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
         in normalized_foundation
     )
     assert "At the first interactive setup surface in a turn" in normalized_prompt
+    assert "Begin every snapshot with:" in prompt
+    assert "Here's your ESS agent setup:" in prompt
     assert "when a marker changes" in normalized_prompt
     assert "when a blocked state requires maker action" in normalized_prompt
     assert "in the final handoff" in normalized_prompt
@@ -253,6 +338,7 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
         "src/skills/foundation-setup/da-existing-dev.md",
         "src/skills/foundation-setup/da-prod-to-dev.md",
         "src/skills/foundation-setup/da-mos-starter.md",
+        "src/skills/foundation-setup/product-line-reconciliation.md",
     }
     assert "not a setup option to advertise or recommend" in normalized
     assert "src/reference/native-alm-import.md" in import_text
@@ -266,9 +352,11 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     assert "accept an environment url and infer its environment id" in (
         normalized_import
     )
-    assert "segment denoting the service ring" in normalized_import
-    assert "confirm the `prod` ring with the user" in normalized_import
-    assert "ask the maker only when" in normalized_import
+    assert "recognized copilot studio hostname" in normalized_import
+    assert "completes ring selection" in normalized_import
+    assert "ask for the ring only when the hostname is unrecognized" in (
+        normalized_import
+    )
     assert "`connectReady: true`" in import_text
     assert "including when `connectReady` is false" in import_text
     assert "`setupStatus`" not in import_text
@@ -299,7 +387,8 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     assert '--environment-id "{ENVIRONMENT_ID}"' in text
     assert '--agent-id "{AGENT_ID}"' in text
     assert '--ring "{RING}"' in text
-    assert "confirm the `prod` ring with the user" in normalized.casefold()
+    assert "copilotstudio.preview.microsoft.com" in normalized.casefold()
+    assert "a recognized hostname completes ring selection" in normalized.casefold()
     assert text.index("setup_existing_da.py inspect-agent") < text.index(
         "da-existing-dev.md"
     )
@@ -335,9 +424,12 @@ def test_native_setup_skills_pass_resolved_target_fields() -> None:
     assert '--ring "{TARGET_RING}"' in prod_to_dev
 
     for text in (foundation, existing, imported, prod_to_dev, mos):
-        assert "confirm the `prod` ring with the user" in " ".join(
-            text.split()
-        ).casefold()
+        normalized_text = " ".join(text.split()).casefold()
+        assert "recognized copilot studio hostname" in normalized_text
+        assert "completes ring selection" in normalized_text
+        assert "ask for the ring only when the hostname is unrecognized" in (
+            normalized_text
+        )
 
 
 def test_empty_setup_offers_recorded_agent_without_requesting_url() -> None:

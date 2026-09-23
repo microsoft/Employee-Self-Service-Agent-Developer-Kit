@@ -302,6 +302,61 @@ def test_authenticate_replaces_dataverse_rejected_cached_token(
     ) == "refreshed"
 
 
+def test_authenticate_uses_the_preferred_cached_account(monkeypatch) -> None:
+    import adk_telemetry
+    import auth
+    from flightcheck import graph_client
+
+    selected_accounts = []
+
+    class FakeCache:
+        has_state_changed = False
+
+    class FakeApp:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+        def get_accounts(self) -> list[dict]:
+            return [
+                {"username": "other@example.com"},
+                {"username": "Maker@Example.com"},
+            ]
+
+        def acquire_token_silent(self, scopes, account):
+            selected_accounts.append(account)
+            return {
+                "access_token": "preferred-token",
+                "id_token_claims": {"tid": "tenant-id"},
+            }
+
+        def acquire_token_interactive(self, scopes, **kwargs):
+            raise AssertionError("cached preferred account should be reused")
+
+    monkeypatch.setattr(auth, "discover_tenant", lambda _url: "tenant-id")
+    monkeypatch.setattr(
+        auth,
+        "_dataverse_accepts_token",
+        lambda _url, _token: True,
+    )
+    monkeypatch.setattr(auth.msal, "SerializableTokenCache", FakeCache)
+    monkeypatch.setattr(auth.msal, "PublicClientApplication", FakeApp)
+    monkeypatch.setattr(auth, "_persist_token_cache", lambda *_args: None)
+    monkeypatch.setattr(
+        graph_client,
+        "resolve_tenant_display_name_silent",
+        lambda _tenant: None,
+    )
+    monkeypatch.setattr(adk_telemetry, "start_session", lambda **_kwargs: None)
+
+    token = auth.authenticate(
+        "https://example.crm.dynamics.com",
+        preferred_username="maker@example.com",
+    )
+
+    assert token == "preferred-token"
+    assert selected_accounts == [{"username": "Maker@Example.com"}]
+
+
 def test_authenticate_resolves_tenant_name_before_start_session(
     tmp_path, monkeypatch
 ) -> None:

@@ -84,7 +84,7 @@ Continue here only when no directly validated related Dev exists. Keep **Establi
 > No related editable Dev agent was found. Setup can create one from the
 > verified Prod agent without changing Prod.
 
-Use the same Power Platform environment as the supplied Prod agent. If the maker explicitly requests another environment, ask for its environment URL and infer its environment ID and service ring. The URL should have a segment denoting the ring, such as `test` or `preprod`; when neither segment is present, confirm the `prod` ring with the user. Ask only when the environment ID is unclear. Then run:
+Use the same Power Platform environment as the supplied Prod agent. If the maker explicitly requests another environment, ask for its environment URL and infer its environment ID and service ring. A recognized Copilot Studio hostname is authoritative ring evidence and completes ring selection. Ask for the ring only when the hostname is unrecognized, and ask for the environment ID only when it is unclear. Then run:
 
 ```text
 python scripts/setup_alm_export.py export \
@@ -158,8 +158,9 @@ relationship from the failed Prod operation.
 
 ## Attach and complete
 
-On a validated related-Dev path or successful import result, attach the returned
-identity:
+On a validated related-Dev path or successful import result, run the parent's
+selected-agent product-line reconciliation with `--native-da-ga` for the
+returned identity, then attach it:
 
 ```text
 python scripts/setup_existing_da.py attach \
