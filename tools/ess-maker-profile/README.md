@@ -53,8 +53,12 @@ The standard installer (`bootstrap.ps1` / `bootstrap-mac.sh`) does NOT install t
 
 Requires Node.js 18+ and VS Code 1.86+.
 
+Every extension behavior change must include a version increment in `extension/package.json`, an entry in `extension/CHANGELOG.md`, and a rebuilt `extension/ess-maker-profile-<version>.vsix` in the same PR. Run the extension checks, package the current source, and confirm the archive's manifest version and `extension.js` match the working tree. Remove the superseded VSIX so the installers select the current package. Build each mirrored branch's VSIX from that branch's source to preserve its setup behavior.
+
 ```pwsh
 cd tools\ess-maker-profile\extension
+npm test
+npm run validate
 npx @vscode/vsce package --no-dependencies
 code --install-extension ess-maker-profile-*.vsix --force
 ```

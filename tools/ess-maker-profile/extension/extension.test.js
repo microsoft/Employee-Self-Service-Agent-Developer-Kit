@@ -252,9 +252,9 @@ test('extensionIsStale true only when repo version is newer', () => {
     assert.strictEqual(extensionIsStale('0.4.25', '0.4.24'), false);
 });
 
-test('landing-page package prompts existing 0.4.24 installs to reinstall', () => {
+test('landing-page package prompts existing 0.4.25 installs to reinstall', () => {
     const packageJson = JSON.parse(fs.readFileSync(path.join(__dirname, 'package.json'), 'utf8'));
-    assert.strictEqual(extensionIsStale('0.4.24', packageJson.version), true);
+    assert.strictEqual(extensionIsStale('0.4.25', packageJson.version), true);
     assert.ok(ACTIONS.some((action) => action.id === 'landingPage'));
 });
 
