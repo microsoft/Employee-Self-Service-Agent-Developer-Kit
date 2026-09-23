@@ -33,11 +33,17 @@
 param(
     [string] $InstallRoot,
     [string] $Branch = 'main',
-    [string] $SourceBaseUrl = 'https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup'
+    [string] $SourceBaseUrl
 )
 
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
+# Derive SourceBaseUrl from -Branch when not explicitly set, so `-Branch <feature>`
+# actually pulls the installer bits from that feature branch (not from main).
+if (-not $SourceBaseUrl) {
+    $SourceBaseUrl = "https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/$Branch/setup"
+}
 
 $tempDir = Join-Path $env:TEMP "ess-adk-bootstrap-$([Guid]::NewGuid().ToString('N').Substring(0,8))"
 New-Item -ItemType Directory -Path $tempDir -Force | Out-Null

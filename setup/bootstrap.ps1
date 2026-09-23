@@ -26,11 +26,19 @@
 param(
     [string] $InstallRoot,
     [string] $Branch = 'main',
-    [string] $SourceBaseUrl = 'https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup'
+    [ValidateSet('maker','developer','prompt','lite','standard','')]
+    [string] $InstallMode = '',
+    [string] $SourceBaseUrl
 )
 
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+
+# Derive SourceBaseUrl from -Branch when not explicitly set, so `-Branch <feature>`
+# actually pulls the installer bits from that feature branch (not from main).
+if (-not $SourceBaseUrl) {
+    $SourceBaseUrl = "https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/$Branch/setup"
+}
 
 $tempDir = Join-Path $env:TEMP "ess-adk-bootstrap-$([Guid]::NewGuid().ToString('N').Substring(0,8))"
 New-Item -ItemType Directory -Path $tempDir -Force | Out-Null
@@ -76,6 +84,10 @@ $scriptContent = [System.IO.File]::ReadAllText($installer, [System.Text.Encoding
 $scriptBlock = [ScriptBlock]::Create($scriptContent)
 
 $installerArgs = @{ Branch = $Branch }
+# Forward -InstallMode when the caller pinned one; otherwise leave the
+# installer to fall back to its own default (prompt), which fires the
+# in-VS-Code Maker/Developer QuickPick on first launch.
+if ($InstallMode) { $installerArgs.InstallMode = $InstallMode }
 if ($InstallRoot) { $installerArgs.InstallRoot = $InstallRoot }
 
 & $scriptBlock @installerArgs
