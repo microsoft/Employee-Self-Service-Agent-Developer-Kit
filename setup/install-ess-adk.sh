@@ -368,6 +368,7 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
         # is older than the bundled one. Check --list-extensions first.
         REQUIRED_EXTENSIONS=("GitHub.copilot" "GitHub.copilot-chat")
         INSTALLED_EXTENSIONS=$("$CODE_CMD" --list-extensions 2>/dev/null || true)
+        INSTALLED_EXTENSIONS_WITH_VERSIONS=$("$CODE_CMD" --list-extensions --show-versions 2>/dev/null || true)
         for ext in "${REQUIRED_EXTENSIONS[@]}"; do
             if echo "$INSTALLED_EXTENSIONS" | grep -qi "^${ext}$"; then
                 ok "extension $ext (already present / built-in)"
@@ -412,6 +413,10 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
 
         if [[ -z "$MAKER_VSIX" ]]; then
             warn "No ess-maker-profile-*.vsix found under $MAKER_VSIX_DIR. Skipping extension install."
+        elif MAKER_VERSION="$(basename "$MAKER_VSIX" .vsix)" &&
+             MAKER_VERSION="${MAKER_VERSION#ess-maker-profile-}" &&
+             echo "$INSTALLED_EXTENSIONS_WITH_VERSIONS" | grep -Fqix "microsoft-ess.ess-maker-profile@$MAKER_VERSION"; then
+            ok "ESS Maker Profile $MAKER_VERSION (already installed) — $MODE_LABEL mode"
         elif "$CODE_CMD" --install-extension "$MAKER_VSIX" --force 2>/dev/null; then
             ok "ESS Maker Profile ($(basename "$MAKER_VSIX")) — $MODE_LABEL mode"
         else
