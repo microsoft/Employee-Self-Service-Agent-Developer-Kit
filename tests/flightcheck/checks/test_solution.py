@@ -1,229 +1,179 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-"""End-to-end tests for ESS-SOLN-001 (ESS base agent solution installed) in
-``solutions/ess-maker-skills/scripts/flightcheck/checks/solution.py``.
+"""Tests for ESS-SOLN-001's Declarative Agent ALM configure read.
 
-Mocks the single Dataverse Web API endpoint the check calls (the ``solutions``
-table query) with the ``responses`` library, then invokes the real production
-helper ``_check_ess_solution_installed`` and asserts on the resulting
-``CheckResult``.
-
-Mock backing: Dataverse Web API v9.2 is the ``documented`` tier per
-``tests/fixtures/cassettes/INDEX.md`` — no cassette required. The ``solutions``
-response shape comes from the MS Learn entity reference:
-https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solution
+The check consumes the validated AgentBuilder Minimal Bot API
+``GET /copilotstudio/minimalBots/alm/{agent_id}/configure`` shape captured in
+``tests/fixtures/cassettes/agentbuilder_readiness.yaml``.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import pytest
-import responses
 
-from tests.conftest import FAKE_DATAVERSE_URL, require_validated_mock
-from tests.mocks import dataverse as dv
+from agentbuilder import AgentBuilderHTTPError, DEV_REALM
+from flightcheck.checks.solution import _check_ess_solution_installed
+from flightcheck.runner import Status
+from tests.conftest import require_validated_mock
+from tests.mocks import agentbuilder_connectivity as ab
 
-require_validated_mock(dv)
-
-
-# Production module — flightcheck is importable because pyproject.toml puts
-# solutions/ess-maker-skills/scripts on pythonpath.
-from flightcheck.checks.solution import _check_ess_solution_installed  # noqa: E402
+require_validated_mock(ab)
 
 
-BASE_URL = FAKE_DATAVERSE_URL
-
-# Verbatim from the production check; if these drift, mock-builder URLs will
-# stop matching and tests fail loudly with an unregistered-URL error.
-ESS_SOLN_SELECT = "solutionid,uniquename,friendlyname,ismanaged,version"
-ESS_SOLN_FILTER = "startswith(uniquename,'msdyn_copilotforemployeeselfservice')"
-
-SOLUTION_ID = "11111111-1111-1111-1111-111111111111"
+VALIDATED_COMMIT_SHA = "4bc80d2768da5de930fd56a1f5ee815b8f9d1d3b"
 
 
-# ───────────────────────────────────────────────────────────────────────
-# Minimal runner for solution-check tests.
-# ───────────────────────────────────────────────────────────────────────
+class _FakeResponse:
+    def __init__(self, payload: dict[str, Any]):
+        self.status_code = 400
+        self._payload = payload
+
+    def json(self) -> dict[str, Any]:
+        return self._payload
+
+
+class _FakeAgentBuilder:
+    def __init__(
+        self,
+        payload: dict[str, Any] | None = None,
+        *,
+        error: Exception | None = None,
+    ) -> None:
+        self._payload = payload or _configuration_with_commit()
+        self._error = error
+        self.calls: list[tuple[str, int]] = []
+
+    def get_realm_configuration(self, agent_id: str, realm: int) -> dict[str, Any]:
+        self.calls.append((agent_id, realm))
+        if self._error is not None:
+            raise self._error
+        return self._payload
 
 
 @dataclass
-class _MinimalRunner:
-    env_url: str | None
-    dv_token: str | None
+class _Runner:
+    agentbuilder: Any = None
+    config: dict[str, Any] = field(default_factory=dict)
 
 
-@pytest.fixture
-def runner(fake_dataverse_url: str, fake_token: str) -> _MinimalRunner:
-    return _MinimalRunner(env_url=fake_dataverse_url, dv_token=fake_token)
+def _configuration_with_commit(**overrides: Any) -> dict[str, Any]:
+    payload = ab.configuration()
+    payload["commitSha"] = VALIDATED_COMMIT_SHA
+    payload.update(overrides)
+    return payload
 
 
-# ───────────────────────────────────────────────────────────────────────
-# Mock payload builders + registration helpers
-# ───────────────────────────────────────────────────────────────────────
-
-
-def _solution_record(
-    uniquename: str,
-    *,
-    version: str = "1.0.0.0",
-    ismanaged: bool = True,
-) -> dict[str, Any]:
-    """One ``solutions`` row matching the production $select.
-
-    Field naming per
-    https://learn.microsoft.com/power-apps/developer/data-platform/reference/entities/solution
-    """
+def _config(*, bot_id: str | None = ab.MOCK_AGENT_ID) -> dict[str, Any]:
+    agent: dict[str, Any] = {"slug": "ess-dev"}
+    if bot_id is not None:
+        agent["botId"] = bot_id
     return {
-        "@odata.etag": 'W/"1"',
-        "solutionid": SOLUTION_ID,
-        "uniquename": uniquename,
-        "friendlyname": uniquename,
-        "ismanaged": ismanaged,
-        "version": version,
+        "activeAgent": "ess-dev",
+        "agent": agent.copy(),
+        "agents": [agent],
     }
 
 
-def _register_solutions(solutions: list[dict[str, Any]]) -> None:
-    responses.add(**dv.query(
-        base_url=BASE_URL,
-        entity_set="solutions",
-        records=solutions,
-        select=ESS_SOLN_SELECT,
-        filter_expr=ESS_SOLN_FILTER,
-    ))
+def test_passes_when_configure_returns_grs_repository_and_commit() -> None:
+    agentbuilder = _FakeAgentBuilder()
+    runner = _Runner(agentbuilder=agentbuilder, config=_config())
+
+    result = _check_ess_solution_installed(runner)[0]
+
+    assert result.status == Status.PASSED.value
+    assert "ESS base package is present in GRS" in result.result
+    assert ab.MOCK_FAMILY_ID in result.result
+    assert VALIDATED_COMMIT_SHA in result.result
+    assert result.remediation == ""
+    assert agentbuilder.calls == [(ab.MOCK_AGENT_ID, DEV_REALM)]
 
 
-# ───────────────────────────────────────────────────────────────────────
-# Tests — one per verdict path.
-# ───────────────────────────────────────────────────────────────────────
+@pytest.mark.parametrize(
+    ("field", "result_phrase"),
+    [
+        ("grsRepositoryId", "grsRepositoryId"),
+        ("commitSha", "commitSha"),
+    ],
+)
+def test_fails_when_configure_omits_required_package_state(
+    field: str,
+    result_phrase: str,
+) -> None:
+    payload = _configuration_with_commit()
+    payload[field] = ""
+    runner = _Runner(agentbuilder=_FakeAgentBuilder(payload), config=_config())
 
+    result = _check_ess_solution_installed(runner)[0]
 
-def test_skipped_when_env_url_missing() -> None:
-    results = _check_ess_solution_installed(
-        _MinimalRunner(env_url=None, dv_token="tok")
+    assert result.status == Status.FAILED.value
+    assert result_phrase in result.result
+    assert "not present in the agent's GRS package state" in result.result
+    assert "Install or import the Employee Self Service base package" in (
+        result.remediation
     )
-    assert len(results) == 1
-    r = results[0]
-    assert r.checkpoint_id == "ESS-SOLN-001"
-    assert r.category == "Solution"
-    assert r.status == "Skipped"
-    assert "Dataverse URL or access token not available" in r.result
-
-
-def test_skipped_when_token_missing() -> None:
-    results = _check_ess_solution_installed(
-        _MinimalRunner(env_url=BASE_URL, dv_token=None)
-    )
-    assert results[0].status == "Skipped"
-
-
-@responses.activate
-def test_failed_when_no_ess_solution(runner: _MinimalRunner) -> None:
-    _register_solutions(solutions=[])
-
-    results = _check_ess_solution_installed(runner)
-    assert len(results) == 1
-    r = results[0]
-    assert r.checkpoint_id == "ESS-SOLN-001"
-    assert r.status == "Failed"
-    assert "not present" in r.result
-    assert "AppSource" in r.remediation
-
-
-@responses.activate
-def test_passed_when_base_solution_present(runner: _MinimalRunner) -> None:
-    _register_solutions(solutions=[
-        _solution_record("msdyn_copilotforemployeeselfservice", version="1.2.3.4"),
-    ])
-
-    results = _check_ess_solution_installed(runner)
-    assert len(results) == 1
-    r = results[0]
-    assert r.checkpoint_id == "ESS-SOLN-001"
-    assert r.status == "Passed"
-    assert "msdyn_copilotforemployeeselfservice" in r.result
-    assert "1.2.3.4" in r.result
-    # Principle 8: PASSED carries no remediation.
-    assert r.remediation == ""
-
-
-@responses.activate
-def test_passed_when_it_variant_present(runner: _MinimalRunner) -> None:
-    _register_solutions(solutions=[
-        _solution_record("msdyn_copilotforemployeeselfserviceit"),
-    ])
-
-    r = _check_ess_solution_installed(runner)[0]
-    assert r.status == "Passed"
-    assert "msdyn_copilotforemployeeselfserviceit" in r.result
-
-
-@responses.activate
-def test_passed_when_hr_variant_present(runner: _MinimalRunner) -> None:
-    _register_solutions(solutions=[
-        _solution_record("msdyn_copilotforemployeeselfservicehr"),
-    ])
-
-    r = _check_ess_solution_installed(runner)[0]
-    assert r.status == "Passed"
-    assert "msdyn_copilotforemployeeselfservicehr" in r.result
-
-
-@responses.activate
-def test_passed_lists_multiple_editions(runner: _MinimalRunner) -> None:
-    _register_solutions(solutions=[
-        _solution_record("msdyn_copilotforemployeeselfservice"),
-        _solution_record("msdyn_copilotforemployeeselfserviceit"),
-    ])
-
-    r = _check_ess_solution_installed(runner)[0]
-    assert r.status == "Passed"
-    assert "msdyn_copilotforemployeeselfservice " in r.result
-    assert "msdyn_copilotforemployeeselfserviceit" in r.result
-
-
-@responses.activate
-def test_warning_when_dataverse_returns_500(runner: _MinimalRunner) -> None:
-    """A transient platform error must surface as WARNING, not silently PASS."""
-    responses.add(
-        "GET",
-        dv.build_query_url(
-            BASE_URL,
-            "solutions",
-            select=ESS_SOLN_SELECT,
-            filter_expr=ESS_SOLN_FILTER,
-        ),
-        json={"error": {"code": "0x80040220", "message": "boom"}},
-        status=500,
+    assert "confirm the ALM configure response has a repository and commit" in (
+        result.remediation
     )
 
-    r = _check_ess_solution_installed(runner)[0]
-    assert r.status == "Warning"
-    assert "Unable to verify the ESS solution" in r.result
 
-
-@responses.activate
-def test_warning_when_dataverse_returns_401(runner: _MinimalRunner) -> None:
-    """A 401 must surface as WARNING with an auth-expired hint.
-
-    Exercises the AuthExpiredError catch block in _check_ess_solution_installed.
-    """
-    responses.add(
-        "GET",
-        dv.build_query_url(
-            BASE_URL,
-            "solutions",
-            select=ESS_SOLN_SELECT,
-            filter_expr=ESS_SOLN_FILTER,
-        ),
-        json={"error": {"code": "0x80048306", "message": "token expired"}},
-        status=401,
+def test_not_configured_when_agent_is_not_opted_into_alm() -> None:
+    error = AgentBuilderHTTPError(
+        "Dev realm configuration",
+        400,
+        response=_FakeResponse({"ErrorCode": 4003}),
+    )
+    runner = _Runner(
+        agentbuilder=_FakeAgentBuilder(error=error),
+        config=_config(),
     )
 
-    r = _check_ess_solution_installed(runner)[0]
-    assert r.status == "Warning"
-    assert "401" in r.result
-    assert "Re-run FlightCheck" in r.remediation
+    result = _check_ess_solution_installed(runner)[0]
+
+    assert result.status == Status.NOT_CONFIGURED.value
+    assert "not opted into ALM" in result.result
+    assert "error code 4003" in result.result
+    assert "Opt the agent into Application Lifecycle Management" in (
+        result.remediation
+    )
+    assert "Copilot Studio" in result.remediation
+
+
+def test_skips_when_agentbuilder_client_is_missing() -> None:
+    result = _check_ess_solution_installed(_Runner(config=_config()))[0]
+
+    assert result.status == Status.SKIPPED.value
+    assert "AgentBuilder client not available" in result.result
+    assert "native AgentBuilder authentication" in result.remediation
+
+
+def test_skips_when_bot_id_is_missing() -> None:
+    runner = _Runner(
+        agentbuilder=_FakeAgentBuilder(),
+        config=_config(bot_id=None),
+    )
+
+    result = _check_ess_solution_installed(runner)[0]
+
+    assert result.status == Status.SKIPPED.value
+    assert "No agent botId" in result.result
+    assert "Run setup" in result.remediation
+
+
+def test_warning_when_configure_read_errors() -> None:
+    error = AgentBuilderHTTPError("Dev realm configuration", 500)
+    runner = _Runner(
+        agentbuilder=_FakeAgentBuilder(error=error),
+        config=_config(),
+    )
+
+    result = _check_ess_solution_installed(runner)[0]
+
+    assert result.status == Status.WARNING.value
+    assert "Unable to verify ESS package state" in result.result
+    assert "Dev realm configuration failed with HTTP 500" in result.result
+    assert "Retry the read-only ALM configure check" in result.remediation
+    assert "AgentBuilder access" in result.remediation

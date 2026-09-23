@@ -207,6 +207,17 @@ class TestTransitiveRequirements:
             "Native Agent"
         ]
 
+    def test_ess_soln_uses_agentbuilder_without_dataverse(self):
+        spec = registry.resolve("ESS-SOLN-001")
+        assert spec is not None and spec.key == "ESS-SOLN-001"
+        assert spec.clients == frozenset({registry.AGENTBUILDER})
+        assert spec.requires_dataverse_endpoint is False
+
+        plan = registry.transitive_requirements("ESS-SOLN-001")
+        assert plan.clients == frozenset({registry.AGENTBUILDER})
+        assert plan.requires_config is True
+        assert plan.requires_dataverse_endpoint is False
+
     def test_env009_is_individually_targetable_with_dataverse_only(self):
         spec = registry.resolve("ENV-009")
         assert spec is not None and spec.key == "ENV-009"
@@ -216,24 +227,19 @@ class TestTransitiveRequirements:
         assert plan.requires_dataverse_endpoint is True
         assert len(plan.ordered_fns) == 1
 
-    def test_ess_soln_001_resolves_and_pulls_env_prereqs(self):
+    def test_ess_soln_001_resolves_to_agentbuilder_configure_read(self):
         spec = registry.resolve("ESS-SOLN-001")
         assert spec is not None and spec.key == "ESS-SOLN-001"
         assert spec.category_label == "Solution"
         assert spec.category_fn is run_solution_checks
-        # Solution presence is a pure Dataverse read.
-        assert spec.clients == frozenset({registry.DATAVERSE})
-        assert spec.prereqs == ("ENV-002",)
+        assert spec.clients == frozenset({registry.AGENTBUILDER})
+        assert spec.prereqs == ()
         plan = registry.transitive_requirements("ESS-SOLN-001")
-        assert registry.DATAVERSE in plan.clients
+        assert plan.clients == frozenset({registry.AGENTBUILDER})
         assert plan.requires_config is True
-        assert plan.requires_dataverse_endpoint is True
-        # Own fn (run_solution_checks) plus the shared run_environment_checks
-        # that ENV-001+ENV-002 pull in -> exactly two, environment first.
+        assert plan.requires_dataverse_endpoint is False
         fns = [fn for _label, fn in plan.ordered_fns]
-        assert run_solution_checks in fns
-        assert len(fns) == 2
-        assert fns.index(run_solution_checks) == len(fns) - 1
+        assert fns == [run_solution_checks]
 
 
 class TestListCheckpoints:
