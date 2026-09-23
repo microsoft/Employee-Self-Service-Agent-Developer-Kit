@@ -156,7 +156,11 @@ def _invalid_archive_reason(path: Path) -> str | None:
                 return "the package archive has no entries"
             for name in names:
                 entry = Path(name)
-                if entry.is_absolute() or ".." in entry.parts:
+                if (
+                    name.startswith(("/", "\\"))
+                    or entry.is_absolute()
+                    or ".." in entry.parts
+                ):
                     return f"the package archive contains unsafe entry {name!r}"
             first_bad = archive.testzip()
             if first_bad is not None:
@@ -467,7 +471,6 @@ def _build_checks(runner) -> list[dict]:
     """Per-check authored content. Constructed at call-time so deep
     links can incorporate the runner's environment / agent IDs."""
     studio = _studio_agent_url(runner)
-    solutions = _maker_solutions_url(runner)
     publish_doc = f"{DOC_BASE}/publish"
     deploy_doc = f"{DOC_BASE}/deploy-overview-alm"
     evaluations_doc = f"{DOC_BASE}/evaluations"
@@ -475,10 +478,6 @@ def _build_checks(runner) -> list[dict]:
     # Studio link as a markdown fragment ready to splice into prose,
     # or the literal phrase "Copilot Studio" when no deep link exists.
     studio_md = f"[Copilot Studio]({studio})" if studio else "Copilot Studio"
-    solutions_md = (
-        f"[Power Apps → Solutions]({solutions})"
-        if solutions else "Power Apps → Solutions"
-    )
 
     return [
         {
@@ -546,18 +545,17 @@ def _build_checks(runner) -> list[dict]:
             "id": "PUB-001",
             "p": "Critical",
             "roles": [Role.ESS_MAKER.value],
-            "desc": "Export your customization solution as a managed solution",
+            "desc": "Export the agent's ALM package as a .zip from AgentBuilder",
             "result": (
-                "The kit can't inspect maker-portal solution exports — "
-                "confirm a managed (.zip) export exists for promotion to test/UAT/prod."
+                "The kit can't inspect AgentBuilder ALM package downloads — "
+                "confirm the agent's ALM package .zip exists for promotion to test/UAT/prod."
             ),
             "remediation": (
-                f"In {solutions_md} → select the solution that contains your "
-                f"agent customizations → ⋯ → **Export solution** → **Publish** "
-                f"(publish all customizations first) → **Next** → choose "
-                f"**Managed** → **Export** → **Download**. Keep the .zip — "
-                f"it's the artifact you import into test/UAT/prod. See the "
-                f"[publish guide]({publish_doc}) for the full deployment flow."
+                f"In {studio_md}, open the agent → **Settings** → **ALM**. "
+                f"Enroll the agent if prompted, then export and download the "
+                f"agent's ALM package .zip. Keep the .zip — it's the artifact "
+                f"you import into test/UAT/prod. See the [publish guide]"
+                f"({publish_doc}) for the full deployment flow."
             ),
             "doc_link": publish_doc,
         },
@@ -565,18 +563,18 @@ def _build_checks(runner) -> list[dict]:
             "id": "PUB-002",
             "p": "Critical",
             "roles": [Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
-            "desc": "Import the managed solution into a test environment",
+            "desc": "Import the agent's ALM package into a test environment",
             "result": (
                 "The kit only sees the configured environment — "
-                "confirm the managed solution was imported into a non-production environment and smoke-tested."
+                "confirm the agent's ALM package was imported into a non-production environment and smoke-tested."
             ),
             "remediation": (
-                "Switch to your test environment in the Power Apps maker → "
-                "**Solutions** → **Import solution** → upload the managed .zip "
-                "from PUB-001 → install any prompted dependencies (the ESS "
-                "agent itself plus any connector solutions) → open the agent "
-                f"and smoke-test a handful of representative prompts. See the "
-                f"[publish guide]({publish_doc}) for the full deployment flow."
+                "Switch to your test environment in Copilot Studio, open "
+                "**Settings** → **ALM**, then import the agent's ALM package "
+                ".zip from PUB-001. Install any prompted dependencies, open "
+                "the imported agent, and smoke-test a handful of representative "
+                f"prompts. See the [publish guide]({publish_doc}) for the full "
+                f"deployment flow."
             ),
             "doc_link": publish_doc,
         },

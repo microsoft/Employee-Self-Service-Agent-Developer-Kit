@@ -23,7 +23,9 @@ These tests pin those contracts so the rows can't drift back to
 
 from __future__ import annotations
 
+import io
 import sys
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -124,6 +126,13 @@ def _runner(
 def _results_by_id(runner) -> dict:
     from flightcheck.checks.publishing import run_publishing_checks
     return {r.checkpoint_id: r for r in run_publishing_checks(runner)}
+
+
+def _zip_bytes(entry_name: str) -> bytes:
+    archive_bytes = io.BytesIO()
+    with zipfile.ZipFile(archive_bytes, "w") as archive:
+        archive.writestr(entry_name, "content")
+    return archive_bytes.getvalue()
 
 
 # --------------------------------------------------------------- shape
@@ -232,15 +241,15 @@ def test_qa_checks_point_at_evaluations_doc():
 # ----------------------------------------------------------- PUB deep links
 
 
-def test_pub_001_links_to_maker_solutions_for_export():
+def test_pub_001_links_to_studio_alm_for_export():
     by_id = _results_by_id(_runner(env_id="env-abc", agentbuilder=None))
     text = by_id["PUB-001"].remediation
-    assert "https://make.powerapps.com/environments/env-abc/solutions" in text, (
-        f"PUB-001 must deep-link to the maker Solutions list so the "
-        f"operator can find Export → Managed; got: {text!r}"
+    assert "https://copilotstudio.microsoft.com/environments/env-abc/" in text, (
+        f"PUB-001 must deep-link to Copilot Studio so the operator can "
+        f"export the agent ALM package; got: {text!r}"
     )
     # And the operator is told what to actually click.
-    assert "Export solution" in text and "Managed" in text
+    assert "Settings" in text and "ALM" in text and "package .zip" in text
 
 
 def test_pub_002_describes_target_environment_import():
@@ -248,7 +257,7 @@ def test_pub_002_describes_target_environment_import():
     # The action happens in a *different* environment than the kit
     # was pointed at, so we can't deep-link — but we must say where.
     assert "test environment" in text.lower()
-    assert "Import solution" in text
+    assert "ALM package" in text and "Copilot Studio" in text
 
 
 def test_pub_003_is_explicitly_organizational():
@@ -309,6 +318,19 @@ def test_pub_001_fails_when_export_archive_is_corrupt():
     assert row.status == Status.FAILED.value
     assert "not a valid zip archive" in row.result
     assert "central directory and CRC checks pass" in row.remediation
+
+
+def test_pub_001_fails_when_export_archive_has_posix_absolute_entry():
+    from flightcheck.runner import Status
+
+    by_id = _results_by_id(
+        _runner(agentbuilder=_FakeAgentBuilder(export_bytes=_zip_bytes("/evil")))
+    )
+
+    row = by_id["PUB-001"]
+    assert row.status == Status.FAILED.value
+    assert "unsafe entry '/evil'" in row.result
+    assert "readable .zip package" in row.remediation
 
 
 def test_pub_001_fails_when_export_returns_4003_not_opted_in():
@@ -378,6 +400,21 @@ def test_pub_002_passes_when_import_returns_valid_identity():
     assert "gptagent_mockemployeeselfservice_imported" in row.result
     assert row.remediation == ""
     assert client.import_calls
+
+
+def test_pub_002_skips_import_probe_when_not_opted_in_with_client_present():
+    from flightcheck.runner import Status
+
+    client = _FakeAgentBuilder()
+    by_id = _results_by_id(
+        _runner(agentbuilder=client, alm_import_probe=False)
+    )
+
+    row = by_id["PUB-002"]
+    assert row.status == Status.SKIPPED.value
+    assert "import probe was not explicitly enabled" in row.result
+    assert "throwaway environment" in row.remediation
+    assert not client.import_calls
 
 
 def test_pub_002_fails_on_same_environment_import_conflict():
