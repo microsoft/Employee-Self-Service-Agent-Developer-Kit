@@ -376,6 +376,43 @@ class TestRestBaseUrl:
         assert "trimmed to '/api'" in r.result
         assert "https://wd.example.com/ccx/api" in r.result
 
+    def test_trimmed_url_can_be_on_later_workday_ref(self):
+        runner = _runner_with_refs(
+            [
+                ab.workday_connection_reference(
+                    connection_id="mock-obo-connection",
+                    logical_name=(
+                        "gptagent_mockemployeeselfservice."
+                        "msdyn_sharedworkdaysoap_ff0df"
+                    ),
+                ),
+                ab.workday_connection_reference(
+                    connection_id="mock-isu-connection",
+                    logical_name=(
+                        "gptagent_mockemployeeselfservice."
+                        "msdyn_sharedworkdaysoap_0786a"
+                    ),
+                    shared_connection_parameters=(
+                        ab.shared_connection_parameters(
+                            rest_base_uri="https://wd.example.com/ccx/api"
+                        )
+                    ),
+                ),
+                ab.workday_connection_reference(
+                    connection_id="mock-context-isu-connection",
+                    logical_name=(
+                        "gptagent_mockemployeeselfservice."
+                        "msdyn_sharedworkdaysoap_d6081"
+                    ),
+                ),
+            ]
+        )
+
+        r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]
+
+        assert r.status == Status.PASSED.value
+        assert "https://wd.example.com/ccx/api" in r.result
+
     def test_trailing_slash_still_passes(self):
         runner = self._runner(rest_base_uri="https://wd.example.com/ccx/api/")
         r = _by_id(wx.run_workday_extension_checks(runner))["WD-REST-001"]

@@ -61,6 +61,7 @@ from pathlib import Path
 from ..runner import CheckResult, Priority, Role, Status
 from ..agent_scope import resolve_agent_directory, validate_agent_slug
 from ._da_connection_refs import (
+    WORKDAY_SOAP_CONNECTOR_SUFFIX as _WORKDAY_CONNECTOR_SUFFIX,
     read_active_agent_connection_references,
     workday_shared_connection_parameters,
 )
@@ -92,9 +93,6 @@ _WORKDAY_AUTH_REF_SUFFIX = "ff0df"
 _WORKDAY_RUNTIME_REF_LOGICAL_NAME = (
     "msdyn_sharedworkdaysoap_workdayruntime"
 )
-# The Workday SOAP connection reference the Declarative Agent reports via the
-# minimalBots components API (connector ``shared_workdaysoap``).
-_WORKDAY_CONNECTOR_SUFFIX = "/apis/shared_workdaysoap"
 _REF_SUFFIX_RE = re.compile(r"_([0-9a-f]{5})$")
 
 # ---- Local user-context topic (WD-REST-002) ----

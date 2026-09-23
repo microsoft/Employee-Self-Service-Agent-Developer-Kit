@@ -192,6 +192,46 @@ class TestDeclarativeAgentWorkdayEnvConfig:
         assert "tenantName=mocktenant" in result.result
         assert "token:ResourceUri" in result.result
 
+    def test_required_shared_parameters_can_be_on_later_workday_ref(self) -> None:
+        from flightcheck.checks.workday import _check_da_env_config
+
+        runner = _runner_with_da_components(
+            ab.components_with_references(
+                references=[
+                    ab.workday_connection_reference(
+                        connection_id="mock-obo-connection",
+                        logical_name=(
+                            "gptagent_mockemployeeselfservice."
+                            "msdyn_sharedworkdaysoap_ff0df"
+                        ),
+                    ),
+                    ab.workday_connection_reference(
+                        connection_id="mock-isu-connection",
+                        logical_name=(
+                            "gptagent_mockemployeeselfservice."
+                            "msdyn_sharedworkdaysoap_0786a"
+                        ),
+                        shared_connection_parameters=(
+                            ab.shared_connection_parameters()
+                        ),
+                    ),
+                    ab.workday_connection_reference(
+                        connection_id="mock-context-isu-connection",
+                        logical_name=(
+                            "gptagent_mockemployeeselfservice."
+                            "msdyn_sharedworkdaysoap_d6081"
+                        ),
+                    ),
+                ]
+            )
+        )
+
+        result = _check_da_env_config(runner)[0]
+
+        assert result.status == "Passed"
+        assert "tenantName=mocktenant" in result.result
+        assert "token:ResourceUri" in result.result
+
     def test_missing_required_token_key_fails(self) -> None:
         from flightcheck.checks.workday import _check_da_env_config
 
