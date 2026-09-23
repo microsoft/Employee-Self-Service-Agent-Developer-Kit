@@ -166,7 +166,6 @@ _CLIENT_EVENTS_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 #                              the adk.agent.create event at the end of setup is
 #                              tracked separately by the "Agents Created" KPI and
 #                              is NOT a capability-donut slice)
-#   onboarding              -> workspace bootstrap after foundation setup
 #   connect                 -> ServiceNow / Workday connection setup
 #   topic_create            -> author a new topic
 #   topic_update            -> modify an existing topic
@@ -190,7 +189,6 @@ _CLIENT_EVENTS_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 #   flightcheck             -> pre-deployment readiness check
 ADK_CAPABILITIES = (
     "setup",
-    "onboarding",
     "connect",
     "topic_create",
     "topic_update",
