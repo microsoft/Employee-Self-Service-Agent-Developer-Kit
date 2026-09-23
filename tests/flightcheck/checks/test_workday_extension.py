@@ -70,6 +70,19 @@ class _FakeAgentBuilder:
         return self._components
 
 
+class _PerBotAgentBuilder:
+    """Stand-in for FlightCheckRunner.agentbuilder that routes
+    ``fetch_components`` by agent id, so multi-agent selection can be
+    exercised. Component shapes come from the validated
+    ``agentbuilder_connectivity`` builders."""
+
+    def __init__(self, components_by_bot: dict[str, Any]):
+        self._components_by_bot = components_by_bot
+
+    def fetch_components(self, agent_id: str):
+        return self._components_by_bot[agent_id]
+
+
 @dataclass
 class _Runner:
     config: Any = field(default_factory=dict)
@@ -348,6 +361,42 @@ class TestDataverseConnection:
         assert "Unable to run DV-CONN-001" in r.result
         assert "DV-CONN-001" in r.remediation
 
+    def test_reads_only_active_agent_not_other_configured_agents(self):
+        # Regression (DV-CONN-001 single-active scoping): the check must
+        # validate the Workday SOAP reference on the *active* agent only. Here
+        # the active agent has no Workday reference while a second configured
+        # agent does. A correct single-active read FAILs "not found"; the
+        # earlier all-agents read PASSed on the other agent's reference — a
+        # false green on a HIGH-priority binding check.
+        other_bot_id = "00000000-0000-0000-0000-0000000033aa"
+        runner = _Runner(
+            config={
+                "agent": {"botId": ab.MOCK_AGENT_ID},
+                "agents": [
+                    {"botId": ab.MOCK_AGENT_ID},
+                    {"botId": other_bot_id},
+                ],
+            },
+            agentbuilder=_PerBotAgentBuilder(
+                {
+                    ab.MOCK_AGENT_ID: ab.components_with_references(
+                        references=None
+                    ),
+                    other_bot_id: ab.components_with_references(
+                        references=[
+                            ab.workday_connection_reference(
+                                connection_id="wd-conn-other-agent"
+                            )
+                        ]
+                    ),
+                }
+            ),
+        )
+        r = _by_id(wx.run_workday_extension_checks(runner))["DV-CONN-001"]
+
+        assert r.status == Status.FAILED.value
+        assert "was not found" in r.result
+        assert "Install or repair the Workday extension pack" in r.remediation
 
 # ─────────────────────────────────────────────────────────────────────
 # WD-REST-001 — REST base URL trimmed to /api (S5.5).
