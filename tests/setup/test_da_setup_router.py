@@ -164,9 +164,49 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
     foundation = _FOUNDATION.read_text(encoding="utf-8")
     normalized_prompt = " ".join(prompt.split())
     normalized_foundation = " ".join(foundation.split())
+    runtime_message = """> **Setup command approvals**
+>
+> VS Code will ask you to approve commands that:
+>
+> - check Python and prepare the required local tools;
+> - sign you in and inspect the selected environment and agent;
+> - perform the setup actions you confirm and prepare the local workspace;
+> - download required Microsoft components when needed.
+>
+> To avoid repeated prompts, open the permissions menu below the chat input and
+> select **Allow all** for this chat session. This applies to every tool used in
+> the session, not only setup. Provide a screenshot of your chat input if you
+> need guidance finding the setting.
+>
+> When you're ready, choose:"""
+    declined_command_message = """> **Run this command manually**
+>
+> Setup paused before running this command:
+
+```{SHELL}
+{COMMAND}
+```
+
+> Run it from the current workspace. When it finishes, return here with the
+> result and I'll continue setup from this step."""
 
     assert prompt.index("Read `src/skills/foundation-setup/SKILL.md` first") < (
         prompt.index("{PYTHON} -m pip install")
+    )
+    assert runtime_message in foundation
+    assert foundation.index(runtime_message) < foundation.index(
+        '{PYTHON} -c "import sys; print(sys.executable)"'
+    )
+    assert foundation.index("- **Continue setup**") < foundation.index(
+        "- **Cancel setup**"
+    )
+    assert "Do not preselect a choice." in foundation
+    assert "For **Cancel setup**, run no commands and stop." in foundation
+    assert "### When command approval is declined" in foundation
+    assert declined_command_message in foundation
+    assert (
+        "Resume from the paused operation when the maker returns."
+        in normalized_foundation
     )
     object_model_check = (
         "{PYTHON} -c \"import sys; sys.path.insert(0, 'scripts'); "
@@ -181,8 +221,11 @@ def test_public_setup_resolves_python_before_bootstrap_commands() -> None:
     assert normalized_prompt.index(object_model_check) < normalized_prompt.index(
         "{PYTHON} scripts/install_agentbuilder_object_model.py"
     )
-    assert "If the check fails" in prompt
+    assert "If the check fails, run:" in prompt
     assert "Then rerun the check" in prompt
+    assert "without showing it to the user" not in prompt
+    assert "Prepare the local setup tools" not in prompt
+    assert "Prepare agent-file support" not in prompt
     assert "python -m pip install" not in prompt
     assert "python scripts/mcp_config.py" not in prompt
     assert "For any command failure" in normalized_prompt
@@ -705,9 +748,14 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
         "omit `--account`"
     ) in normalized_foundation
     assert (
-        "append `--select-account` to those commands so a cached identity is "
-        "not selected silently"
+        "append `--select-account` only to the first command that can authenticate"
     ) in normalized_foundation
+    assert "Parse `DA_AGENTBUILDER_AUTH_JSON:`" in foundation
+    assert (
+        "later commands reuse its cached token and sign-in name"
+        in normalized_foundation
+    )
+    assert "setup_existing_da.py cached-accounts` again" in foundation
     assert "Do you have a test tenant user?" not in foundation
     assert "does not prove that the maker holds a particular administrator role" in (
         normalized_foundation
@@ -715,6 +763,7 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "setup_existing_da.py cached-accounts" in foundation
     assert "DA_AGENTBUILDER_ACCOUNTS_JSON:" in foundation
     assert '--account "{SETUP_ACCOUNT}"' in foundation
+    assert "reconcile_setup_agent.py" in foundation
     assert "Never infer a corp account" in normalized_foundation
     assert "Present account confirmation once" in normalized_foundation
     assert "Continue in an occupied workspace" in normalized
