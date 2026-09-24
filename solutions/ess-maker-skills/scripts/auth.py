@@ -38,10 +38,9 @@ except ImportError:
 from http_errors import APIError, raise_api_error  # noqa: E402
 
 
-# Microsoft public client ID for Power Platform CLI / Dataverse delegated access.
-# Source: https://learn.microsoft.com/power-platform/admin/programmability-authentication-v2
-# Scope: user_impersonation only (delegated, no admin consent).
-CLIENT_ID = "51f81489-12ee-4a9e-aaae-a2591f45987d"
+# Shared public client ID used across the ADK's MSAL flows. Delegated access
+# only (user_impersonation).
+CLIENT_ID = "417219b4-3a7d-42a2-bdb1-972bd8281a02"
 
 # Delegated scope for the Power Automate Flow Management API
 # (https://api.flow.microsoft.com). The double slash is required — the resource
@@ -804,3 +803,36 @@ def load_config():
         )
         sys.exit(1)
     return cfg
+
+
+def is_connect_ready():
+    """Return readiness for the active locally configured DA agent."""
+    state_path = os.path.join(LOCAL_STATE_DIR, "setup", "config.json")
+    config_path = os.path.join(LOCAL_STATE_DIR, "config.json")
+    if not os.path.exists(state_path) or not os.path.exists(config_path):
+        return False
+    try:
+        with open(state_path, "r", encoding="utf-8") as f:
+            state = json.load(f)
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(
+            "ERROR: Could not read DA workspace state at "
+            f"{state_path} and {config_path}: "
+            f"{exc}. Run /setup again."
+        )
+        sys.exit(1)
+    if state.get("schema_version") != 4:
+        return False
+    agents = state.get("agents")
+    active_slug = config.get("activeAgent")
+    if not isinstance(agents, dict) or not isinstance(active_slug, str):
+        return False
+    return any(
+        isinstance(agent_state, dict)
+        and isinstance(agent_state.get("agent"), dict)
+        and agent_state["agent"].get("workspace_slug") == active_slug
+        and agent_state.get("connect_ready") is True
+        for agent_state in agents.values()
+    )

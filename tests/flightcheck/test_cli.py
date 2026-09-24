@@ -18,6 +18,7 @@ URIs. These tests pin that behavior so it doesn't regress.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -114,7 +115,10 @@ class TestOpenReportInBrowser:
 
 
 class _FakeRunner:
+    last_instance = None
+
     def __init__(self, scope: str) -> None:
+        type(self).last_instance = self
         self.scope = scope
         self.registered = []
         self.config = None
@@ -124,6 +128,11 @@ class _FakeRunner:
         self.graph = None
         self.pp_admin = None
         self.pva = None
+        self.powerplatform = None
+        self.azure_arm = None
+        self.agentbuilder = None
+        self.connectivity = None
+        self.native_connector_filter = None
 
     def register(self, category, fn):
         self.registered.append((category, fn))
@@ -185,6 +194,259 @@ class TestInfrastructureScopeAuthGating:
         (local_dir / "config.json").write_text('{"agents":[]}', encoding="utf-8")
         monkeypatch.chdir(tmp_path)
         monkeypatch.setattr("sys.argv", ["cli.py", "--scope", "environment", "--no-open"])
+
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+
+        assert exc.value.code == 1
+
+
+class TestAgentBuilderLocalScope:
+    def test_runs_without_dataverse_or_remote_authentication(
+        self,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        local_dir = tmp_path / ".local"
+        local_dir.mkdir()
+        (local_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "environmentId": "environment-id",
+                    "agents": [],
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(cli, "FlightCheckRunner", _FakeRunner)
+        monkeypatch.setattr(
+            cli,
+            "_print_prioritized_summary",
+            lambda _result: None,
+        )
+        monkeypatch.setattr(cli, "save_results", lambda _result, _output: None)
+        for client_name in (
+            "GraphClient",
+            "PPAdminClient",
+            "PVAClient",
+            "PowerPlatformClient",
+            "AzureArmClient",
+        ):
+            monkeypatch.setattr(
+                cli,
+                client_name,
+                lambda *_args, _name=client_name, **_kwargs: (
+                    _ for _ in ()
+                ).throw(
+                    AssertionError(
+                        f"{_name} auth should be skipped"
+                    )
+                ),
+            )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "cli.py",
+                "--scope",
+                "local",
+                "--no-open",
+                "--no-telemetry",
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+
+        assert exc.value.code == 0
+
+
+class TestAgentBuilderNativeScopes:
+    @pytest.mark.parametrize(
+        (
+            "scope",
+            "expected_categories",
+            "expects_agent_clients",
+            "expects_capacity_client",
+            "expected_filter",
+        ),
+        [
+            (
+                "full",
+                ["Native Agent", "Environment", "Local Files"],
+                True,
+                True,
+                None,
+            ),
+            ("environment", ["Environment"], False, True, None),
+            (
+                "servicenow",
+                ["Native Agent"],
+                True,
+                False,
+                ("shared_service-now",),
+            ),
+            (
+                "workday",
+                ["Native Agent"],
+                True,
+                False,
+                ("shared_workdaysoap",),
+            ),
+        ],
+    )
+    def test_native_no_dataverse_scope_uses_only_native_clients(
+        self,
+        scope: str,
+        expected_categories: list[str],
+        expects_agent_clients: bool,
+        expects_capacity_client: bool,
+        expected_filter: tuple[str, ...] | None,
+        tmp_path: Path,
+        monkeypatch,
+    ) -> None:
+        local_dir = tmp_path / ".local"
+        local_dir.mkdir()
+        config = {
+            "releaseLine": "da",
+            "environmentId": "00000000-0000-4000-8000-000000001111",
+            "agent": {
+                "slug": "mock-agent",
+                "botId": "00000000-0000-4000-8000-000000002222",
+                "releaseLine": "da",
+            },
+            "activeAgent": "mock-agent",
+        }
+        if expects_agent_clients:
+            config["powerPlatformApiEndpoint"] = (
+                "https://0000000000004000800000000000111."
+                "1.environment.api.test.powerplatform.com"
+            )
+        (local_dir / "config.json").write_text(
+            json.dumps(config),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(cli, "FlightCheckRunner", _FakeRunner)
+        monkeypatch.setattr(
+            cli,
+            "_print_prioritized_summary",
+            lambda _result: None,
+        )
+        monkeypatch.setattr(cli, "save_results", lambda _result, _output: None)
+        monkeypatch.setattr(
+            cli,
+            "_resolve_target_selection",
+            lambda *_a, **_k: (_ for _ in ()).throw(
+                AssertionError("Legacy target selection should be skipped")
+            ),
+        )
+        for client_name in ("GraphClient", "PPAdminClient", "PVAClient", "AzureArmClient"):
+            monkeypatch.setattr(
+                cli,
+                client_name,
+                lambda *_a, _name=client_name, **_k: (
+                    _ for _ in ()
+                ).throw(AssertionError(f"{_name} should be skipped")),
+            )
+
+        auth_calls = []
+
+        def _authenticate_native(ring, **kwargs):
+            auth_calls.append((ring, kwargs))
+            return "native-token", "tenant-id"
+
+        created_agent_clients = []
+        created_connectivity_clients = []
+        created_capacity_clients = []
+        monkeypatch.setattr(cli, "authenticate_flightcheck", _authenticate_native)
+        monkeypatch.setattr(
+            cli,
+            "AgentBuilderClient",
+            lambda *args, **kwargs: (
+                created_agent_clients.append((args, kwargs)) or object()
+            ),
+        )
+        monkeypatch.setattr(
+            cli,
+            "ConnectivityClient",
+            lambda *args, **kwargs: (
+                created_connectivity_clients.append((args, kwargs)) or object()
+            ),
+        )
+
+        class _CapacityClient:
+            def __init__(self, *args, **kwargs) -> None:
+                created_capacity_clients.append((args, kwargs))
+
+            def authenticate(self):
+                return None
+
+        monkeypatch.setattr(cli, "PowerPlatformClient", _CapacityClient)
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "cli.py",
+                "--scope",
+                scope,
+                "--no-open",
+                "--no-telemetry",
+            ],
+        )
+
+        with pytest.raises(SystemExit) as exc:
+            cli.main()
+
+        assert exc.value.code == 0
+        assert auth_calls == (
+            [("test", {"include_connectivity": True})]
+            if expects_agent_clients
+            else []
+        )
+        assert bool(created_agent_clients) is expects_agent_clients
+        assert bool(created_connectivity_clients) is expects_agent_clients
+        assert bool(created_capacity_clients) is expects_capacity_client
+        runner = _FakeRunner.last_instance
+        assert runner is not None
+        assert [category for category, _ in runner.registered] == expected_categories
+        assert runner.native_connector_filter == expected_filter
+
+    def test_native_no_dataverse_rejects_legacy_only_scope(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        local_dir = tmp_path / ".local"
+        local_dir.mkdir()
+        (local_dir / "config.json").write_text(
+            json.dumps(
+                {
+                    "releaseLine": "da",
+                    "environmentId": "00000000-0000-4000-8000-000000001111",
+                    "powerPlatformApiEndpoint": (
+                        "https://0000000000004000800000000000111."
+                        "1.environment.api.test.powerplatform.com"
+                    ),
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            cli,
+            "authenticate_flightcheck",
+            lambda *_a, **_k: (_ for _ in ()).throw(
+                AssertionError("Authentication should not start")
+            ),
+        )
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "cli.py",
+                "--scope",
+                "solution",
+                "--no-open",
+                "--no-telemetry",
+            ],
+        )
 
         with pytest.raises(SystemExit) as exc:
             cli.main()
@@ -266,4 +528,3 @@ class TestPvaScopeGating:
 
         assert exc.value.code == 0
         assert _RecordingPVA.instantiated is True
-

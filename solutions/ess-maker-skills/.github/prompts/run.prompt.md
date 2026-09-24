@@ -5,8 +5,9 @@ description: "Run evaluation test sets or view evaluation run results"
 
 # Run Evaluation Test Sets
 
-Read `.local/config.json`. If it is missing or `setup` is not `"complete"`,
-show:
+Read `.local/setup/config.json` and `.local/config.json`. If canonical state
+does not have `schema_version: 4` and an `agents` entry matching the active
+workspace slug with `connect_ready: true`, show:
 
 > Welcome to the ESS Maker Kit. Before running evaluation test sets, type `/setup` to set up your environment.
 

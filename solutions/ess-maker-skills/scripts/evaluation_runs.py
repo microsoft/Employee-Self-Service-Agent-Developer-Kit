@@ -16,6 +16,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from auth import discover_tenant, load_config
+from agentbuilder import ring_from_environment_host
 from evaluation_review import (
     REVIEW_COMPLETED,
     REVIEW_FILENAME,
@@ -26,6 +27,11 @@ from evaluation_review import (
 )
 from flightcheck.pp_admin_client import PPAdminClient
 from flightcheck.powerplatform_client import PowerPlatformClient
+from minimalbot_evaluation import (
+    MinimalBotEvaluationClient,
+    MinimalBotEvaluationError,
+    is_minimalbot,
+)
 
 
 MCS_CONNECTOR_NAME = "shared_microsoftcopilotstudio"
@@ -48,6 +54,66 @@ REVIEW_COMPLETION_NOT_PUSHED_GUIDANCE = (
     "Review is completed locally, but Copilot Studio still shows "
     "review_requested. Push the review completion before running."
 )
+COPILOT_STUDIO_ORIGIN_BY_RING = {
+    "prod": "https://copilotstudio.microsoft.com",
+    "preprod": "https://copilotstudio.preprod.microsoft.com",
+    "test": "https://copilotstudio.test.microsoft.com",
+}
+DEFAULT_COPILOT_STUDIO_ORIGIN = COPILOT_STUDIO_ORIGIN_BY_RING["prod"]
+
+
+def _studio_origin_for_config(config: dict[str, Any]) -> str:
+    """Return the ring-appropriate Copilot Studio origin for this environment.
+
+    The ring (prod / preprod / test) is derived from the configured Power
+    Platform API endpoint host using the same suffix map ``agentbuilder``
+    relies on, then mapped to the confirmed Studio host from
+    ``setup_existing_da.STUDIO_RING_BY_HOST``. Falls back to the prod origin
+    when the endpoint is absent or the ring cannot be determined.
+    """
+    endpoint = str(config.get("powerPlatformApiEndpoint") or "")
+    try:
+        ring = ring_from_environment_host(endpoint)
+    except ValueError:
+        return DEFAULT_COPILOT_STUDIO_ORIGIN
+    return COPILOT_STUDIO_ORIGIN_BY_RING.get(ring, DEFAULT_COPILOT_STUDIO_ORIGIN)
+
+
+def _agent_studio_url(
+    origin: str,
+    environment_id: str,
+    bot_id: str,
+    test_set_id: str | None = None,
+    run_id: str | None = None,
+    agent_backend: str | None = None,
+) -> str | None:
+    """Return the Copilot Studio link for a completed run, or None.
+
+    When both ``test_set_id`` and ``run_id`` are known, a deep link to the
+    exact run's results is built using the confirmed Copilot Studio route
+    ``/environments/{env}/copilots/{bot}/evaluation/runsDetails/{testSetId}/{runId}``
+    (verified against a live test-ring portal URL). ``agent_backend`` is
+    appended as the ``?agentBackend=`` query parameter when supplied (e.g.
+    ``cosmos`` for the test-ring MinimalBot).
+
+    When the run/test-set IDs are unavailable, it falls back to the agent's
+    overview page via the ``/environments/{env}/bots/{bot}/overview`` path
+    already relied on by flightcheck (``checks/publishing.py``,
+    ``checks/local_files.py``) and foundation-setup (``da-existing-dev.md``).
+    Both forms are combined with the ring-aware ``origin``; no unverified
+    route is fabricated.
+    """
+    if not origin or not environment_id or not bot_id:
+        return None
+    if test_set_id and run_id:
+        url = (
+            f"{origin}/environments/{environment_id}/copilots/{bot_id}"
+            f"/evaluation/runsDetails/{test_set_id}/{run_id}"
+        )
+        if agent_backend:
+            url += f"?agentBackend={agent_backend}"
+        return url
+    return f"{origin}/environments/{environment_id}/bots/{bot_id}/overview"
 
 
 class EvaluationRunError(RuntimeError):
@@ -254,6 +320,24 @@ def resolve_mcs_connection(
     signed_in_username: str | None = None,
 ) -> dict[str, Any]:
     """Discover and select the current user's Copilot Studio connection."""
+    connections, effective_username = _discover_mcs_connections(
+        config,
+        environment_id,
+        signed_in_username,
+    )
+    return select_mcs_connection(
+        connections,
+        effective_username,
+        requested_id,
+    )
+
+
+def _discover_mcs_connections(
+    config: dict[str, Any],
+    environment_id: str,
+    signed_in_username: str | None = None,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Return raw Copilot Studio connections and the authenticated username."""
     env_url = str(config["dataverseEndpoint"]).rstrip("/")
     client = PPAdminClient(discover_tenant(env_url))
     client.authenticate(
@@ -265,11 +349,40 @@ def resolve_mcs_connection(
         MCS_CONNECTOR_NAME,
     )
     _raise_api_error(connections, "list Copilot Studio connections")
-    return select_mcs_connection(
-        connections,
-        signed_in_username or client.signed_in_username,
-        requested_id,
+    if not isinstance(connections, list):
+        raise EvaluationRunError(
+            "Power Platform API returned an invalid connection list."
+        )
+    return connections, signed_in_username or client.signed_in_username
+
+
+def list_mcs_connections(
+    config: dict[str, Any],
+    environment_id: str,
+    signed_in_username: str | None = None,
+) -> list[dict[str, Any]]:
+    """List connected profiles so the user can explicitly choose one."""
+    connections, effective_username = _discover_mcs_connections(
+        config,
+        environment_id,
+        signed_in_username,
     )
+    username = str(effective_username or "").casefold()
+    return [
+        {
+            **connection,
+            "matchesSignedInAccount": bool(
+                username
+                and username in {
+                    str(connection.get("accountName") or "").casefold(),
+                    str(
+                        connection.get("createdByUserPrincipalName") or ""
+                    ).casefold(),
+                }
+            ),
+        }
+        for connection in connected_mcs_connections(connections)
+    ]
 
 
 def _required_agent_connection(config: dict[str, Any]) -> dict[str, Any] | None:
@@ -813,6 +926,7 @@ def get_run_results(
     bot_id: str,
     agent_folder: str | Path,
     run_id: str,
+    studio_origin: str = DEFAULT_COPILOT_STUDIO_ORIGIN,
 ) -> dict[str, Any]:
     """Retrieve one run and enrich test case IDs with local case names."""
     result = client.get_maker_evaluation_test_run(
@@ -854,11 +968,79 @@ def get_run_results(
                 selected.get("displayName") or test_set_id
             )
     result["analysis"] = analyze_run_results(result)
+    result["agentStudioUrl"] = _agent_studio_url(
+        studio_origin,
+        str(environment_id or ""),
+        str(bot_id or ""),
+        test_set_id=test_set_id or None,
+        run_id=str(run_id or "") or None,
+    )
     return result
 
 
 def _print_json(value: Any) -> None:
     print(json.dumps(value, indent=2, ensure_ascii=False))
+
+
+def _minimalbot_command(args: argparse.Namespace, config: dict[str, Any]) -> int:
+    """Handle evaluation subcommands for Dataverse-free MinimalBot agents.
+
+    ``list-sets``, ``run``, ``list-runs``, and ``results`` are supported on the
+    agent's ring (derived from ``powerPlatformApiEndpoint``). Run history and
+    results use the standard Power Platform ``makerevaluation/testruns`` API
+    (not the MinimalBot components API); ``list-connections`` is not wired for
+    MinimalBot agents.
+    """
+    client = MinimalBotEvaluationClient.from_config(config)
+    client.authenticate()
+
+    if args.command == "list-sets":
+        sets = client.list_test_sets()
+        if getattr(args, "query", None):
+            needle = _normalized_name(args.query)
+            sets = [
+                item for item in sets
+                if needle in _normalized_name(item.get("displayName", ""))
+            ]
+        _print_json(sets)
+        return 0
+    if args.command == "run":
+        result = client.run_test_set(
+            args.test_set_id,
+            run_name=args.run_name,
+            run_on_published_bot=args.published,
+            mcs_connection_id=args.mcs_connection_id,
+        )
+        result["userGuidance"] = RUN_WAIT_GUIDANCE
+        _print_json(result)
+        return 0
+    if args.command == "list-runs":
+        _print_json(client.list_test_runs())
+        return 0
+    if args.command == "results":
+        result = client.get_test_run(args.run_id)
+        if isinstance(result, dict):
+            env_id = str(
+                config.get("environmentId")
+                or (config.get("agent") or {}).get("environmentId")
+                or ""
+            )
+            bot_id = str((config.get("agent") or {}).get("botId") or "")
+            result["agentStudioUrl"] = _agent_studio_url(
+                _studio_origin_for_config(config),
+                env_id,
+                bot_id,
+                test_set_id=str(result.get("testSetId", "")) or None,
+                run_id=str(args.run_id or "") or None,
+                agent_backend=getattr(client, "agent_backend", None),
+            )
+        _print_json(result)
+        return 0
+    raise MinimalBotEvaluationError(
+        f"The '{args.command}' command is not supported for MinimalBot "
+        "(Dataverse-free) agents. Use 'list-sets', 'run', 'list-runs', or "
+        "'results'."
+    )
 
 
 def main() -> int:
@@ -877,6 +1059,7 @@ def main() -> int:
     run_parser.add_argument("--published", action="store_true")
     run_parser.add_argument("--mcs-connection-id")
 
+    subparsers.add_parser("list-connections")
     subparsers.add_parser("list-runs")
 
     results_parser = subparsers.add_parser("results")
@@ -885,6 +1068,10 @@ def main() -> int:
     args = parser.parse_args()
     try:
         config = load_config()
+        # Dataverse-free MinimalBot agents use the Power Platform MinimalBot
+        # components API on their own ring instead of the Dataverse-backed path.
+        if is_minimalbot(config):
+            return _minimalbot_command(args, config)
         client, environment_id, bot_id, agent_folder = _runtime(config)
         if args.command == "list-sets":
             _print_json(list_agent_test_sets(
@@ -941,6 +1128,12 @@ def main() -> int:
                 run_on_published_bot=args.published,
                 tools_connections=tools_connections,
             ))
+        elif args.command == "list-connections":
+            _print_json(list_mcs_connections(
+                config,
+                environment_id,
+                client.signed_in_username,
+            ))
         elif args.command == "list-runs":
             _print_json(list_runs(
                 client,
@@ -954,8 +1147,9 @@ def main() -> int:
                 bot_id,
                 agent_folder,
                 args.run_id,
+                _studio_origin_for_config(config),
             ))
-    except EvaluationRunError as exc:
+    except (EvaluationRunError, MinimalBotEvaluationError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 1
     return 0

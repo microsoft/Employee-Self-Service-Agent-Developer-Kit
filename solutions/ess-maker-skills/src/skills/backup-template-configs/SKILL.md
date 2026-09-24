@@ -5,6 +5,11 @@ they install a new ESS Workday HCM package release. The script writes a
 portable JSON file; pair with `/restore-template-configs` after the package
 update to put the customisations back.
 
+This is a bounded **hybrid Workday** operation. It reads only Workday
+reference-data template configurations from the extension's Dataverse
+environment. It does not install an ESS parent solution, discover or bind a
+Dataverse bot, register flows, or configure a preferred solution.
+
 Auto-discovers ESS HR / IT / DA-HR / DA-IT agent flavours installed in the
 env. The customer does not pick which agent — the script picks up whatever
 `msdyn_*WorkdayHCMReferenceData_*` records are present.
@@ -17,20 +22,22 @@ are calling.
 
 ## Start
 
-Read `.local/config.json` to confirm setup is complete and get the
-`dataverseEndpoint`.
+Read `.local/config.json` and get `dataverseEndpoint`.
 
-If setup is not complete, show:
+If `dataverseEndpoint` is missing or empty, show:
 
 **Message:**
 
-You need to run `/setup` first before backing up template configs.
+Workday template-config backup needs the Dataverse environment used by your
+hybrid Workday extension. That extension has not recorded a Dataverse endpoint
+in this workspace, so no backup was started.
 
 **End message.**
 
 Stop here.
 
-If setup is complete, proceed.
+Do not invoke foundation setup, install a solution, bind a flow, or infer an
+endpoint. Once the Workday extension has recorded `dataverseEndpoint`, proceed.
 
 ---
 

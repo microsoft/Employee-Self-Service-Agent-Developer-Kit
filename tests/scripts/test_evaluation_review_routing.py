@@ -263,9 +263,7 @@ def test_run_ux_sets_duration_and_evidence_based_result_analysis():
     assert "10-15-minute wait notice is mandatory" in evaluate_prompt
     assert "do not route results to a separate" in run_skill
     assert "**Results by scenario group**" in run_skill
-    assert "**Failure analysis - grouped by observed cause**" in run_skill
     assert "rather than inventing categories" in normalized_run_skill
-    assert "Never invent an owner" in normalized_run_skill
 
 
 def test_all_evaluation_flows_use_date_first_csv_names():

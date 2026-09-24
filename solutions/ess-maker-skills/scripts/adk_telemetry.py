@@ -143,12 +143,23 @@ _CLIENT_EVENTS_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 # --- Canonical ADK capability value-list (single source of truth) ---------
 # Every ``adk_capability`` value emitted anywhere in the kit MUST be one of
 # these. This is the ONE place the taxonomy is defined: the synthetic
-# emitter, the ``emit_capability.py`` shim, and the Aria "Capability Usage by
-# Type" donut value-list are all kept in sync with it. When you add a
-# capability here, also add it to that Aria cube dimension value-list (see the
-# telemetry dashboards story, ADO #7532631) so the new slice renders.
+# emitter, the ``emit_capability.py`` shim, and the Aria "Capability Usage
+# by Type" donut are all kept in sync with it.
 #
-# One capability per real maker-facing ADK skill / entry point:
+# The Aria "Capability Usage by Type" tiles filter the ``adk Capability``
+# dimension with ``not in <blank>``, so every value emitted from here shows
+# up on the donut automatically — no dashboard change is required when a
+# new capability is added below. (Historical: the tiles used to pin an
+# explicit ``in {value-list}`` filter, which meant new capabilities would
+# silently drop off the donut until the filter was updated. The
+# ``not in <blank>`` change landed 2026-09-22; see the telemetry dashboards
+# story, ADO #7532631, for context.)
+#
+# One capability per real maker-facing ADK skill / entry point. The taxonomy
+# is intentionally granular: every distinct command a maker can run has its
+# own donut slice, so we can see which specific action drove a change in
+# usage. Umbrella labels (a single "evaluations" or "publishing" wedge
+# covering multiple commands) hide that signal, so we split them apart.
 #   setup                   -> first-run environment setup + discovery
 #                              (discover / list_environments are sub-steps of
 #                              this flow and do NOT emit their own capability;
@@ -156,14 +167,25 @@ _CLIENT_EVENTS_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 #                              tracked separately by the "Agents Created" KPI and
 #                              is NOT a capability-donut slice)
 #   connect                 -> ServiceNow / Workday connection setup
-#   topic_*                 -> topic authoring (create / update / delete)
-#   workflow_*              -> workflow authoring (create / update / delete)
-#   evaluations             -> eval test-set authoring + validation runs
+#   topic_create            -> author a new topic
+#   topic_update            -> modify an existing topic
+#   topic_delete            -> delete a topic
+#   topic_review            -> advisory conformance review of a topic
+#   topic_test              -> debug-and-validate loop for a topic
+#   workflow_create         -> author a new workflow
+#   workflow_update         -> modify an existing workflow
+#   workflow_delete         -> delete a workflow
+#   workflow_test           -> debug a workflow via run history
+#   evaluation_create       -> author eval test cases
+#   evaluation_update       -> modify eval test cases
+#   evaluation_delete       -> delete eval test cases
+#   evaluation_validate     -> quality-score generated eval sets
 #   cleanup                 -> error scan / fix pass
 #   troubleshoot            -> connectivity / auth diagnosis
 #   backup_template_configs -> Workday template-config backup
 #   restore_template_configs-> Workday template-config restore
-#   publishing              -> push / deploy to Copilot Studio
+#   push                    -> upload local changes to Dataverse (staging)
+#   publishing              -> publish so pushed changes go live in runtime
 #   flightcheck             -> pre-deployment readiness check
 ADK_CAPABILITIES = (
     "setup",
@@ -171,14 +193,21 @@ ADK_CAPABILITIES = (
     "topic_create",
     "topic_update",
     "topic_delete",
+    "topic_review",
+    "topic_test",
     "workflow_create",
     "workflow_update",
     "workflow_delete",
-    "evaluations",
+    "workflow_test",
+    "evaluation_create",
+    "evaluation_update",
+    "evaluation_delete",
+    "evaluation_validate",
     "cleanup",
     "troubleshoot",
     "backup_template_configs",
     "restore_template_configs",
+    "push",
     "publishing",
     "flightcheck",
 )

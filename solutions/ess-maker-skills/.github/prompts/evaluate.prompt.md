@@ -5,10 +5,14 @@ description: "Generate or manage evaluation test sets"
 
 # Evaluate
 
-**Setup-state note.** Read `.local/config.json`. Creating a fresh test set does
-not require a configured agent. Updating can also proceed without setup when
-workspace-level evaluation sets exist. Deleting deployed agent sets requires a
-configured agent.
+**Workspace note.** Creating a fresh test set does not require a configured
+agent. Updating can also proceed without setup when workspace-level evaluation
+sets exist. Deleting deployed agent sets requires completed canonical setup and
+a configured agent.
+
+Generate or edit evaluation files locally, then push them when the user asks;
+follow each skill's push instructions. Evaluation push is available in this
+workspace.
 
 ## Flow
 
@@ -32,9 +36,11 @@ configured agent.
      the 10-15-minute wait notice is mandatory.
    - **view results** / **show run IDs** -> read
      `src/skills/evaluations/run/SKILL.md` and follow **Flow B**.
-   - **delete** -> if `.local/config.json` is missing or `setup` is not
-     `"complete"`, show the message below and STOP; otherwise read
-     `src/skills/evaluations/delete/SKILL.md` and follow it.
+   - **delete** -> read `.local/setup/config.json` and `.local/config.json`. If
+     canonical state does not have `schema_version: 4` and an `agents` entry
+     matching the active workspace slug with `connect_ready: true`, show the message below and
+     STOP; otherwise read `src/skills/evaluations/delete/SKILL.md` and follow
+     it.
 4. If the answer is ambiguous, ask once more before routing.
 
 The phrase **"review test sets"** means review sets tagged

@@ -134,15 +134,23 @@ async function checkPrerequisites() {
     if (!folders || !folders.length) return met;
     const root = folders[0].uri;
 
-    // /setup is complete when .local/config.json exists with "setup": "complete"
+    // Canonical setup state is the only setup-completion contract.
+    let canonicalComplete = false;
     try {
-        const configUri = vscode.Uri.joinPath(root, '.local', 'config.json');
-        const content = await vscode.workspace.fs.readFile(configUri);
+        const stateUri = vscode.Uri.joinPath(root, '.local', 'setup', 'config.json');
+        const content = await vscode.workspace.fs.readFile(stateUri);
         const json = JSON.parse(Buffer.from(content).toString('utf8'));
-        if (json.setup === 'complete') {
-            met.add('setup');
-        }
+        const configUri = vscode.Uri.joinPath(root, '.local', 'config.json');
+        const configContent = await vscode.workspace.fs.readFile(configUri);
+        const config = JSON.parse(Buffer.from(configContent).toString('utf8'));
+        canonicalComplete = json.schema_version === 4
+            && Object.values(json.agents || {}).some(agentState =>
+                agentState?.agent?.workspace_slug === config.activeAgent
+                && agentState.connect_ready === true
+            );
     } catch (_) { /* file doesn't exist or invalid */ }
+
+    if (canonicalComplete) met.add('setup');
 
     // /flightcheck is complete when workspace/flightcheck/results.json exists
     try {
@@ -190,11 +198,11 @@ function startPrereqWatcher(context) {
     const folders = vscode.workspace.workspaceFolders;
     if (!folders || !folders.length) return;
 
-    // Watch for .local/config.json and workspace/flightcheck/results.json
-    const configPattern = new vscode.RelativePattern(folders[0], '.local/config.json');
+    // Watch canonical setup state and FlightCheck results.
+    const statePattern = new vscode.RelativePattern(folders[0], '.local/setup/config.json');
     const flightcheckPattern = new vscode.RelativePattern(folders[0], 'workspace/flightcheck/results.json');
 
-    const configWatcher = vscode.workspace.createFileSystemWatcher(configPattern);
+    const stateWatcher = vscode.workspace.createFileSystemWatcher(statePattern);
     const flightcheckWatcher = vscode.workspace.createFileSystemWatcher(flightcheckPattern);
 
     const refresh = async () => {
@@ -206,21 +214,21 @@ function startPrereqWatcher(context) {
     };
 
     // Trigger on create, change, or delete
-    configWatcher.onDidCreate(refresh);
-    configWatcher.onDidChange(refresh);
-    configWatcher.onDidDelete(refresh);
+    stateWatcher.onDidCreate(refresh);
+    stateWatcher.onDidChange(refresh);
+    stateWatcher.onDidDelete(refresh);
     flightcheckWatcher.onDidCreate(refresh);
     flightcheckWatcher.onDidChange(refresh);
     flightcheckWatcher.onDidDelete(refresh);
 
-    _prereqWatcher = { configWatcher, flightcheckWatcher };
+    _prereqWatcher = { stateWatcher, flightcheckWatcher };
 
     // Also poll every 10s as a fallback (file watchers can miss events
     // when files are written by external processes like the MCP server).
     const interval = setInterval(refresh, 10000);
 
     // Register disposables
-    context.subscriptions.push(configWatcher, flightcheckWatcher, {
+    context.subscriptions.push(stateWatcher, configWatcher, flightcheckWatcher, {
         dispose: () => clearInterval(interval)
     });
 
@@ -1590,7 +1598,7 @@ function activate(context) {
 
     // Start watching workspace files for prerequisite artifacts.
     // This enables/disables buttons based on actual file existence
-    // (e.g. .local/config.json for setup, workspace/flightcheck/results.json).
+    // (e.g. .local/setup/config.json for setup, workspace/flightcheck/results.json).
     startPrereqWatcher(context);
 
     // First-run vs subsequent runs:

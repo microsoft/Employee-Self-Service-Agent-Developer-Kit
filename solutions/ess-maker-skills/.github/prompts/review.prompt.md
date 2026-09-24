@@ -24,8 +24,9 @@ validation. Quality validation requires words such as "validate",
 
 ## Topic review
 
-**Setup-state check.** Read `.local/config.json`. If it does not exist, OR
-`setup` is not `"complete"`, show:
+**Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`.
+If canonical state does not have `schema_version: 4` and an `agents` entry
+matching the active workspace slug with `connect_ready: true`, show:
 
 > Welcome to the ESS Maker Kit. Before reviewing topics, type `/setup` to set up your environment.
 

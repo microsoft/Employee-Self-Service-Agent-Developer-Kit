@@ -362,6 +362,23 @@ def test_classify_tenant_env_allowlist_extends(monkeypatch):
     assert _fc.classify_tenant("11111111-1111-1111-1111-111111111111") == "customer"
 
 
+def test_classify_tenant_hardcoded_internal_dogfood_tenants(monkeypatch):
+    # Well-known internal dogfood/demo tenants (EmployeeHub + the two Contoso
+    # test tenancies surfaced by usage analysis) must classify as ``internal``
+    # even when the env-var allow-list is empty. Without this, the External
+    # dashboard silently attributes Microsoft-internal dogfooding to real
+    # customers — the exact issue that motivated PR #242's customer-attribution
+    # audit and this follow-up.
+    monkeypatch.delenv("ESS_ADK_INTERNAL_TENANTS", raising=False)
+    _fc._parse_internal_tenant_ids.cache_clear()
+    assert _fc.classify_tenant(_fc.EMPLOYEEHUB_TENANT_ID) == "internal"
+    assert _fc.classify_tenant(_fc.CONTOSO_INTERNAL_TENANT_ID) == "internal"
+    assert _fc.classify_tenant(_fc.CRONTOSO_INTERNAL_TENANT_ID) == "internal"
+    assert _fc.classify_tenant(_fc.COCREATE_TEST_TENANT_ID) == "internal"
+    # Case / whitespace insensitive on the new hardcoded entries too.
+    assert _fc.classify_tenant(f"  {_fc.CONTOSO_INTERNAL_TENANT_ID.upper()} ") == "internal"
+
+
 def test_classify_tenant_non_guid_maps_to_unknown():
     # Defense-in-depth: a non-empty tenant_id that isn't a canonical Entra
     # tenant GUID must NEVER classify as "customer" — otherwise the External
@@ -577,12 +594,12 @@ def test_resolve_ikey_env_and_raw_override(monkeypatch):
 # --- emit happy path + fail-open + buffering ------------------------------
 def test_emit_happy_path_posts_envelope(captured_post, monkeypatch):
     monkeypatch.setenv("ESS_ADK_ARIA_ENV", "dev")
-    res = adk.emit_capability_use("evaluations", block=True)
+    res = adk.emit_capability_use("evaluation_validate", block=True)
     assert res["sent"] is True
     assert len(captured_post) == 1
     _ikey, envelopes = captured_post[0]
     assert envelopes[0]["name"] == "adk.capability.use"
-    assert envelopes[0]["data"]["adk_capability"] == "evaluations"
+    assert envelopes[0]["data"]["adk_capability"] == "evaluation_validate"
     assert envelopes[0]["iKey"] == f"o:{DEV_TOKEN}"
 
 
@@ -1650,18 +1667,78 @@ def test_wired_capabilities_are_in_canonical_list():
     "unknown" on the dashboards. This is the "keep in sync" contract."""
     wired = {
         # emit_capability_use(...) from the Python entry points
-        "setup", "evaluations",
+        "setup", "evaluation_validate",
         "backup_template_configs", "restore_template_configs",
-        # emit_build_*/flightcheck_* event families
-        "publishing", "flightcheck",
+        "push",
+        # emit_flightcheck_*() event family
+        "flightcheck",
         # emit_capability.py shim invocations across the SKILL.md skills
+        # (publish.py also invokes the shim with "publishing")
         "connect",
         "topic_create", "topic_update", "topic_delete",
+        "topic_review", "topic_test",
         "workflow_create", "workflow_update", "workflow_delete",
+        "workflow_test",
+        "evaluation_create", "evaluation_update", "evaluation_delete",
         "cleanup", "troubleshoot",
+        "publishing",
     }
     missing = wired - set(adk.ADK_CAPABILITIES)
     assert not missing, f"wired capabilities not in ADK_CAPABILITIES: {missing}"
+
+
+# --- reverse direction: every canonical capability must actually be emitted -
+def test_every_canonical_capability_is_actually_emitted():
+    """Reverse of ``test_wired_capabilities_are_in_canonical_list``: every
+    value declared in ``ADK_CAPABILITIES`` must be emitted somewhere in the
+    kit, so a dead value (added to the tuple but never wired to a real
+    skill or entry point) fails CI.
+
+    Scans ``solutions/ess-maker-skills/scripts`` and
+    ``solutions/ess-maker-skills/src/skills`` for these emit sites:
+
+      * shim usage in SKILL.md: ``python scripts/emit_capability.py <cap>``
+      * shim usage from Python subprocess: ``"emit_capability.py"), "<cap>"``
+      * direct Python call: ``emit_capability_use("<cap>"...``
+      * event-family kwarg: ``adk_capability="<cap>"`` (also matches the
+        default value on ``emit_flightcheck_*`` signatures)
+    """
+    import re as _re
+    from pathlib import Path as _Path
+
+    repo_root = _Path(__file__).resolve().parent.parent
+    scripts_dir = repo_root / "solutions" / "ess-maker-skills" / "scripts"
+    skills_dir = repo_root / "solutions" / "ess-maker-skills" / "src" / "skills"
+
+    md_pat = _re.compile(r'emit_capability\.py\s+([A-Za-z_][A-Za-z0-9_\-]*)')
+    py_shim_pat = _re.compile(
+        r'"emit_capability\.py"\)?\s*,\s*\n?\s*["\']([A-Za-z_][A-Za-z0-9_\-]*)["\']'
+    )
+    use_pat = _re.compile(
+        r'emit_capability_use\(\s*["\']([A-Za-z_][A-Za-z0-9_\-]*)["\']'
+    )
+    kw_pat = _re.compile(
+        r'adk_capability\s*[:=]\s*(?:str\s*=\s*)?["\']([A-Za-z_][A-Za-z0-9_\-]*)["\']'
+    )
+
+    emitted: set[str] = set()
+    for path in scripts_dir.rglob("*.py"):
+        text = path.read_text(encoding="utf-8")
+        for pat in (py_shim_pat, use_pat, kw_pat):
+            for m in pat.finditer(text):
+                emitted.add(m.group(1))
+    for path in skills_dir.rglob("SKILL.md"):
+        text = path.read_text(encoding="utf-8")
+        for m in md_pat.finditer(text):
+            emitted.add(m.group(1))
+
+    canonical = set(adk.ADK_CAPABILITIES)
+    dead = canonical - emitted
+    assert not dead, (
+        "Capabilities declared in ADK_CAPABILITIES but never emitted anywhere "
+        f"in the kit: {sorted(dead)}. Either wire them to a real skill / "
+        "entry point, or remove them from the canonical tuple."
+    )
 
 
 # --- guard: any string a caller passes to the shim must be canonical --------

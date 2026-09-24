@@ -92,12 +92,33 @@ Copilot Studio connections in the selected environment and keeps only profiles
 whose status is `Connected`.
 
 - If exactly one profile is connected, use it automatically.
-- If multiple profiles exist, use the one that uniquely matches the signed-in
+- If multiple profiles exist, use the latest profile matching the signed-in
   Power Apps account.
-- If multiple connected profiles remain, automatically use the first profile
-  in deterministic name/ID order and try the run without asking the user.
-- If none are connected, stop and explain that the user must create or repair
-  the connection in Power Apps or Power Automate.
+- If automatic matching fails, run:
+
+  ```text
+  python scripts/evaluation_runs.py list-connections
+  ```
+
+  Display every returned profile with its display name, account name, creator,
+  and connection ID. Ask the user to select one using `vscode_askQuestions`,
+  then **STOP**. Do not start the evaluation in the same turn.
+- After the user selects a profile, retry the previously selected test set:
+
+  ```text
+  python scripts/evaluation_runs.py run --test-set-id "{id}" --test-set-name "{displayName}" --mcs-connection-id "{connectionId}"
+  ```
+
+- If no connected profile is returned, explain that the connection must be
+  created or repaired in Power Apps or Power Automate. Ask the user to choose
+  **Retry connection discovery** when ready, then stop. On their next turn,
+  rerun `list-connections`.
+
+> **Dataverse-free (MinimalBot) agents:** `list-connections` is not wired for
+> these agents. `run` auto-selects the single connected `shared_microsoftcopilotstudio`
+> profile in the environment; if selection is ambiguous, pass
+> `--mcs-connection-id` explicitly. Do not instruct the maker to run
+> `list-connections` for a Dataverse-free agent.
 
 Every run must include a validated `mcsConnectionId`; do not start an
 anonymous evaluation run.
@@ -152,6 +173,16 @@ python scripts/evaluation_runs.py results --run-id "{runId}"
 
 Use this existing run skill for results; do not route results to a separate
 result skill.
+
+When the run has completed, the **first line** of the results response must be:
+
+> Done. I ran your test set through [Copilot Studio]({agentStudioUrl}).
+
+Use the `agentStudioUrl` value returned by the `results` command as the link
+target, so "Copilot Studio" opens this run's results directly in the agent's
+Evaluate view. If `agentStudioUrl` is absent or `null`, render the same
+sentence with "Copilot Studio" as plain text (no link). Never fabricate a
+different URL. This line precedes everything below.
 
 First show:
 

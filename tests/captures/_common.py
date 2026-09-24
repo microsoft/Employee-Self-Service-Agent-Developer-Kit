@@ -374,6 +374,8 @@ _WORKDAY_TYPED_ID_PATTERN = re.compile(
 # Each entry maps a JSON key (case-sensitive) to a replacement value. None
 # means "set to null".
 SCRUB_JSON_KEYS: dict[str, Any] = {
+    # Opaque service continuation/state tokens can embed tenant object IDs.
+    "changeToken": "REDACTED_CHANGE_TOKEN",
     # Tenant identity
     "displayName": "Mock Display Name",
     "friendlyName": "Mock Friendly Name",
@@ -474,6 +476,14 @@ SCRUB_HEADERS = {
     "x-ms-request-id",
     "x-ms-routing-request-id",
     "x-ms-service-request-id",
+    "x-ms-correlation-request-id",
+    "x-ms-activity-vector",
+    "x-ms-firewall-client-ip",
+    "x-ms-gateway-clusters",
+    "x-ms-igw-tracking-id",
+    "x-ms-islandgateway",
+    "x-ms-ppapigateway",
+    "x-servicefabric",
     "authactivityid",        # Dataverse-emitted activity id
     "req_id",                # Dataverse-emitted request id
     "x-source",              # Dataverse-emitted opaque routing tokens

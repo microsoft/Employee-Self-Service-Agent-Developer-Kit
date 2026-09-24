@@ -801,6 +801,73 @@ def test_resolve_mcs_connection_uses_ppapi_signed_in_account(monkeypatch):
     }
 
 
+def test_list_mcs_connections_marks_signed_in_profile(monkeypatch):
+    monkeypatch.setattr(
+        evaluation_runs,
+        "_discover_mcs_connections",
+        lambda *args, **kwargs: (
+            [
+                _connection(
+                    "current",
+                    account_name="maker@example.com",
+                ),
+                _connection(
+                    "other",
+                    account_name="other@example.com",
+                ),
+            ],
+            "maker@example.com",
+        ),
+    )
+
+    connections = evaluation_runs.list_mcs_connections(
+        {"dataverseEndpoint": "https://example.crm.dynamics.com"},
+        "environment-id",
+    )
+
+    assert [item["id"] for item in connections] == ["current", "other"]
+    assert connections[0]["matchesSignedInAccount"] is True
+    assert connections[1]["matchesSignedInAccount"] is False
+
+
+def test_list_connections_command_prints_selectable_profiles(
+    monkeypatch,
+    capsys,
+    tmp_path,
+):
+    client = FakeClient()
+    client.signed_in_username = "maker@example.com"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["evaluation_runs.py", "list-connections"],
+    )
+    monkeypatch.setattr(evaluation_runs, "load_config", lambda: {})
+    monkeypatch.setattr(
+        evaluation_runs,
+        "_runtime",
+        lambda config: (
+            client,
+            "environment-id",
+            "bot-id",
+            tmp_path,
+        ),
+    )
+    monkeypatch.setattr(
+        evaluation_runs,
+        "list_mcs_connections",
+        lambda *args, **kwargs: [{
+            "id": "connection-id",
+            "displayName": "Maker profile",
+            "matchesSignedInAccount": True,
+        }],
+    )
+
+    assert evaluation_runs.main() == 0
+    output = json.loads(capsys.readouterr().out)
+    assert output[0]["id"] == "connection-id"
+
+
 def test_resolve_tool_connections_uses_signed_in_account(
     monkeypatch,
     tmp_path,

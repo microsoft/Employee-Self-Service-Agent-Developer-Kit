@@ -25,6 +25,12 @@ Stop here.
 
 If setup is complete, proceed.
 
+Treat a config with `releaseLine: "da"` and no `dataverseEndpoint` as a native
+no-Dataverse agent. Its supported scopes are `full`, `environment`,
+`servicenow`, `workday`, `local`, and `infrastructure`. If
+`dataverseEndpoint` is present, use the existing hybrid/legacy path even when
+the release line is `da`.
+
 ---
 
 ## Step 1: Ask scope (optional)
@@ -41,6 +47,7 @@ Use `vscode_askQuestions`:
       { "label": "Workday only", "description": "Workday connections, flows, env vars, and SOAP workflow tests" },
       { "label": "ServiceNow only", "description": "ServiceNow connections, flows, template configs, and local topics" },
       { "label": "Local files only", "description": "Validate extracted topic files, agent config, variables" },
+      { "label": "Environment only", "description": "Validate environment readiness and Copilot Studio capacity" },
       { "label": "Prerequisites only", "description": "Licenses, roles, capacity" }
     ],
     "allowFreeformInput": false
@@ -53,7 +60,13 @@ Map the selection to a scope flag:
 - "Workday only" → `workday`
 - "ServiceNow only" → `servicenow`
 - "Local files only" → `local`
+- "Environment only" → `environment`
 - "Prerequisites only" → `prerequisites`
+
+For a native no-Dataverse agent, omit "Prerequisites only". Its full scope
+runs exact-agent access, authored-content, native connection readiness,
+environment capacity, and applicable local-file checks; it does not run
+Dataverse, Graph, Power Platform Admin, or legacy flow checks.
 
 ---
 
@@ -66,6 +79,8 @@ of them together and a healthy prod app could be masked by an unrelated
 sandbox app. This step lets the user pin the one they are verifying.
 
 **Only run this step for scopes that touch those integrations:**
+- native no-Dataverse agent → **skip this step entirely**; connection checks
+  use the exact active agent and never guess among physical candidates
 - scope is `full` or `workday` → discover Workday SSO apps
 - scope is `full` or `servicenow` → discover ServiceNow connections
 - any other scope (`local`, `prerequisites`, …) → **skip this step entirely.**
@@ -141,6 +156,10 @@ the consent gate is required whenever **either** mutating probe is in scope.
 WD-RUN-001), `workday`, or `workdayextension` (WD-RUN-001).** For ServiceNow-only,
 Local-files-only, or Prerequisites-only scopes, skip this gate and go straight to
 Step 2b.
+
+For a native no-Dataverse agent, skip this gate for every supported scope.
+Its AgentBuilder, connection-inventory, capacity, and local checks are
+read-only and never create a transient flow.
 
 Ask using this exact wording, swapping `<SYSTEM>` for the system being checked
 (Workday / ServiceNow / SAP SuccessFactors / custom HTTP — use the connected

@@ -240,6 +240,29 @@ def workday_connection_refs_full() -> list[dict[str, Any]]:
     ]
 
 
+def workday_connection_refs_runtime() -> list[dict[str, Any]]:
+    """Connection refs shipped by the ESS Workday Runtime package."""
+    return [
+        connection_ref(
+            logical_name="msdyn_sharedworkdaysoap_workdayruntime",
+            display_name="Workday OAuth Runtime",
+            connector_id=WORKDAY_SOAP_CONNECTOR_ID,
+            connection_id="shared-workdaysoap-runtime",
+        ),
+        connection_ref(
+            logical_name=(
+                "msdyn_sharedcommondataserviceforapps_workdayruntime"
+            ),
+            display_name="Microsoft Dataverse - Workday Runtime",
+            connector_id=(
+                "/providers/Microsoft.PowerApps/apis/"
+                "shared_commondataserviceforapps"
+            ),
+            connection_id="shared-dataverse-runtime",
+        ),
+    ]
+
+
 def collection(
     records: Iterable[Mapping[str, Any]],
     *,

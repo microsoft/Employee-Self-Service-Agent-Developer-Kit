@@ -1,0 +1,431 @@
+kind: BotDefinition
+entity:
+  version: 1
+  managedProperties:
+    isManaged: true
+    isCustomizable: true
+
+  auditInfo:
+    createdTimeUtc: 2026-08-11T16:18:18.0000000Z
+    modifiedTimeUtc: 2026-08-11T16:19:19.0000000Z
+    createdBy: b43923a9-9f93-482f-939e-6461def6d786
+
+  displayName: ${config.values["botName"]}
+  schemaName: gptagent_copilotforemployeeselfservicecore
+  componentIdUnique: 00000000-0000-0000-0000-000000000000
+  cdsBotId: 00000000-0000-0000-0000-000000000000
+  accessControlPolicy: GroupMembership
+  authenticationMode: Integrated
+  authenticationTrigger: Always
+  teamsAppInformation:
+    teams:
+      version: "1.0.0"
+    copilotChat:
+      isEnabled: true
+
+  configuration:
+    settings:
+      GenerativeActionsEnabled: true
+      alm.isAlmEnabled: true
+
+    isAgentConnectable: false
+    gPTSettings:
+      defaultSchemaName: gptagent_copilotforemployeeselfservicecore.gpt.default
+
+    aISettings:
+      useModelKnowledge: false
+      isFileAnalysisEnabled: false
+      isSemanticSearchEnabled: true
+      contentModeration: High
+      optInUseLatestModels: false
+      model:
+        kind: MicrosoftCopilotModels
+
+    recognizer:
+      kind: GenerativeAIRecognizer
+
+  synchronizationStatus: {}
+  template: gptagent-1.0.0
+  iconBase64: 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
+  language: 1033
+  state: Active
+  status: 1
+
+components:
+  - kind: DialogComponent
+    version: 1
+    managedProperties:
+      isCustomizable: true
+
+    auditInfo:
+      createdTimeUtc: 2026-08-11T16:18:28.0000000Z
+      modifiedTimeUtc: 2026-08-11T16:18:28.0000000Z
+      createdBy: b43923a9-9f93-482f-939e-6461def6d786
+      modifiedBy: b43923a9-9f93-482f-939e-6461def6d786
+
+    displayName: Conversation Start
+    id: cd782f43-89a4-4d63-a81e-411249be940b
+    parentBotId: 00000000-0000-0000-0000-000000000000
+    description: This system topic triggers when the bot receives an Activity indicating the beginning of a new conversation. If do not want the bot to initiate the conversation, disable this topic.
+    shareContext: {}
+    state: Active
+    status: Active
+    schemaName: gptagent_copilotforemployeeselfservicecore.topic.ConversationStart
+    dialog:
+      beginDialog:
+        kind: OnConversationStart
+        id: main
+        actions:
+          - kind: ConditionGroup
+            id: conditionGroup_Tr9mnW
+            conditions:
+              - id: conditionItem_M6kV2x
+                condition: =System.Activity.InvocationSource = InvocationSource.Agent
+                displayName: Check if a connected-agent flow
+
+            elseActions:
+              - kind: SendActivity
+                id: sendActivity_8evfML
+                displayName: Welcome Message
+                activity: Hi {System.User.FirstName}, I can help you navigate your employee experience by helping answer questions about workplace policies, troubleshoot technical issues, or find wellness resources. Start by asking me an employment-related question.
+
+  - kind: GptComponent
+    version: 1
+    managedProperties:
+      isCustomizable: true
+
+    auditInfo:
+      createdTimeUtc: 2026-08-11T16:18:28.0000000Z
+      modifiedTimeUtc: 2026-08-11T16:18:28.0000000Z
+      createdBy: b43923a9-9f93-482f-939e-6461def6d786
+      modifiedBy: b43923a9-9f93-482f-939e-6461def6d786
+
+    displayName: Employee Self-Service
+    id: be855ac6-cf8d-4189-a93f-8c0a4d442e07
+    parentBotId: 00000000-0000-0000-0000-000000000000
+    description: Get personalized support that understands your needs. Employee Self-Service taps into official company resources to deliver accurate, personalized, and up-to-date answers about your benefits, training requirements, policies, and more. From updating your information to exploring new opportunities, simply ask your questions like you're talking to a trusted colleague.
+    shareContext: {}
+    state: Active
+    status: Active
+    schemaName: gptagent_copilotforemployeeselfservicecore.gpt.default
+    metadata:
+      instructions: |-
+        #Core identity 
+        You are the core agent router in a multi-agent system that helps employees of large enterprise organizations navigate their employee experience. Your job is to: 
+          1) Detect intent 
+          2) Gather minimal user context needed for routing  
+          3) Delegate to the best domain agent
+
+        # Scope and boundaries
+          When a user begins a conversation, assess whether their prompt relates to Human Resources (HR) or Information Technology (IT) by identifying common intent signals and contextual clues.  
+          You route to connected HR/IT domain agents; you do not answer domain questions yourself. If the relevant domain agent is not connected, tell the user that capability isn’t available right now and do not invent answers, data, or actions.
+
+        ##HR domain intents 
+        If the prompt includes any of these topics, route to the HR domain agent.  
+        HR-related prompts typically include: 
+         - Benefits and compensation: “What’s covered under my health plan?” “How do I view my paystub?” 
+         - Leave and time off: “How do I request parental leave?” “What are the vacation policies?” 
+         - Career and development: “Where can I find training courses?” “How do I apply for internal roles?” 
+         - Employee policies: “What’s the hybrid work policy?” “Can I update my emergency contact info?” 
+         - Wellbeing and support: “Is there mental health support available?” “How do I access EAP resources?” 
+
+        ##IT domain intents 
+          If the prompt includes any of these topics, route to the IT domain agent.  
+          IT-related prompts typically include: 
+            - Device setup and troubleshooting: “My laptop won’t connect to Wi-Fi.” “How do I install Teams?” 
+            - Account and access issues: “I forgot my password.” “How do I access the VPN?” 
+            - Security and data protection: “How do I report suspicious activity?” “What’s the policy on sharing files externally?” 
+            - Software and tools: “How do I request Adobe access?” “Where can I find the latest version of Power BI?” 
+
+        ##Mixed domain intents 
+          If the prompt spans both HR and IT (e.g., “new hire laptop and payroll setup”): handle it as sequential hand-offs — route to the more immediate/blocking domain agent first, then hand off to the second agent, carrying forward the user’s intent and any results. Do not attempt to call both domain agents simultaneously.
+
+          If the prompt is ambiguous or unclear: 
+            - When the request is ambiguous, underspecified, or could have multiple interpretations, ask 1–2 concise clarifying questions before routing. Rephrase what you understood, confirm before acting, and do not invent missing facts, names, or details.
+              Example: “Just to clarify, are you asking about accessing your paystub through a system, or about your compensation details?” 
+
+        ##Out-of-scope topics
+          - Do not rank, evaluate, or profile people
+          - Do not provide medical or financial advice
+          - Do not speculate about confidential or sensitive matters
+          - Do not act as a decision-maker or interpret unclear policies
+      gptCapabilities: {}
+      conversationStarters:
+        - title: Navigate benefits
+          text: Help me learn more about benefits and resources
+
+        - title: Check policies
+          text: What are my options for taking time off work?
+
+        - title: Discover resources
+          text: Tell me more about hybrid and remote work policies
+
+        - title: Grow skills
+          text: Where can I find training and learning opportunities?
+
+        - title: Find balance
+          text: How do I learn more about physical and mental wellbeing?
+
+        - title: Ask questions
+          text: Where is my most recent paystub?
+
+      aISettings:
+        useModelKnowledge: false
+        model:
+          kind: MicrosoftCopilotModels
+          modelNameHint: GPT55Chat
+
+        extensionData:
+          lastUsedCustomModel: {}
+
+  - kind: DialogComponent
+    version: 1
+    managedProperties:
+      isCustomizable: true
+
+    auditInfo:
+      createdTimeUtc: 2026-08-11T16:18:27.0000000Z
+      modifiedTimeUtc: 2026-08-11T16:18:27.0000000Z
+      createdBy: b43923a9-9f93-482f-939e-6461def6d786
+      modifiedBy: b43923a9-9f93-482f-939e-6461def6d786
+
+    displayName: "[System] - On Error"
+    id: dc9175be-9a5f-4a91-93c6-e56a0d176422
+    parentBotId: 00000000-0000-0000-0000-000000000000
+    description: This system topic triggers when the bot encounters an error. When using the test chat pane, the full error description is displayed.
+    shareContext: {}
+    state: Active
+    status: Active
+    schemaName: gptagent_copilotforemployeeselfservicecore.topic.OnError
+    dialog:
+      inputs:
+        - kind: AutomaticTaskInput
+          propertyName: varErrorCode
+          description: get error code for this error
+          entity: StringPrebuiltEntity
+          shouldPromptUser: true
+
+        - kind: AutomaticTaskInput
+          propertyName: varErrorMessage
+          description: get error message for this error
+          entity: StringPrebuiltEntity
+          shouldPromptUser: true
+
+        - kind: ManualTaskInput
+          propertyName: varShowDebugInfo
+          value: false
+
+      beginDialog:
+        kind: OnError
+        id: main
+        actions:
+          - kind: SetVariable
+            id: setVariable_timestamp
+            variable: init:Topic.CurrentTime
+            value: =Text(Now(), DateTimeFormat.UTC)
+
+          - kind: SetVariable
+            id: setVariable_Ntcx24
+            variable: Topic.ActualErrorCode
+            value: =System.Error.Code
+
+          - kind: LogCustomTelemetryEvent
+            id: UZT6bO
+            eventName: OnErrorLog
+            properties: |-
+              ={
+                  ErrorMessage: If(IsBlank(Topic.varErrorMessage),
+                      System.Error.Message,
+                      Topic.varErrorMessage
+                  ),
+                  ErrorCode: If(IsBlank(Topic.varErrorCode),
+                      System.Error.Code,
+                      Topic.varErrorCode
+                  ),
+                  TimeUTC: Topic.CurrentTime,
+                  ConversationId: System.Conversation.Id
+              }
+
+          - kind: ConditionGroup
+            id: conditionGroup_fq0AmY
+            conditions:
+              - id: conditionItem_M8zo4n
+                condition: =!IsBlank(Topic.varErrorCode) && !IsBlank(Topic.varErrorMessage)
+                actions:
+                  - kind: SetVariable
+                    id: setVariable_FJQxON
+                    variable: Topic.varErrorMessageToShow
+                    value: |-
+                      =If(
+                          Topic.varShowDebugInfo,
+                          " Error code: " & Topic.varErrorCode &
+                          " Error Message: " & Topic.varErrorMessage &
+                          " Conversation Id: " & System.Conversation.Id &
+                          " Time (UTC): " & Topic.CurrentTime,
+                          " Error code: " & Topic.varErrorCode &
+                          " Error Message: " & Topic.varErrorMessage
+                      )
+
+                  - kind: SendActivity
+                    id: sendMessage_dZ0gaF
+                    activity:
+                      text:
+                        - "{Topic.varErrorMessageToShow}"
+                      speak:
+                        - An error has occurred, please try again.
+
+                  - kind: CancelAllDialogs
+                    id: g3KNzK
+
+          - kind: ConditionGroup
+            id: conditionGroup_ZmpY0g
+            conditions:
+              - id: conditionItem_FTTtR9
+                condition: =Topic.ActualErrorCode = "ContentFiltered"
+                actions:
+                  - kind: SendActivity
+                    id: sendActivity_YOelyq
+                    activity: I can't help with the request. Try asking me about benefits or workplace policies.
+
+                  - kind: CancelAllDialogs
+                    id: kpYUId
+
+          - kind: ConditionGroup
+            id: conditionGroup_PHyW5T
+            conditions:
+              - id: conditionItem_AUdLrZ
+                condition: =Topic.ActualErrorCode = "OpenAIRateLimitReached"
+                actions:
+                  - kind: SendActivity
+                    id: sendActivity_6PFm7W
+                    activity: We are working on increasing the capacity for usage. Please wait for a couple of minutes before retrying the Employee Self-Service agent. We regret the inconvenience.
+
+                  - kind: CancelAllDialogs
+                    id: IT5hvN
+
+          - kind: SetVariable
+            id: setVariable_wXMVKz
+            variable: Topic.formattedErrorMessage
+            value: |-
+              =If(
+                  Topic.varShowDebugInfo,
+                  "An unexpected error has ocurred. Please try rephrasing your question or contact the owner of this bot." &
+                  " Conversation Id: " & System.Conversation.Id &
+                  " Time (UTC): " & Topic.CurrentTime,
+                  "An unexpected error has ocurred. Please try rephrasing your question or contact the owner of this bot."
+              )
+
+          - kind: SendActivity
+            id: cQRSJk
+            activity: "{Topic.formattedErrorMessage}"
+
+          - kind: CancelAllDialogs
+            id: eM24F4
+
+      inputType:
+        properties:
+          varErrorCode:
+            displayName: varErrorCode
+            description: get error code for this error
+            type: String
+
+          varErrorMessage:
+            displayName: varErrorMessage
+            description: get error message for this error
+            type: String
+
+          varShowDebugInfo:
+            displayName: varShowDebugInfo
+            description: toggle to show conversationId and time when an error happens
+            type: Boolean
+
+      outputType: {}
+
+  - kind: DialogComponent
+    version: 1
+    managedProperties:
+      isCustomizable: true
+
+    auditInfo:
+      createdTimeUtc: 2026-08-11T16:18:23.0000000Z
+      modifiedTimeUtc: 2026-08-11T16:18:23.0000000Z
+      createdBy: b43923a9-9f93-482f-939e-6461def6d786
+      modifiedBy: b43923a9-9f93-482f-939e-6461def6d786
+
+    displayName: "[System] - Log Telemetry Event"
+    id: 32e5ac71-1240-4a38-aeb3-e6acf5736f7b
+    parentBotId: 00000000-0000-0000-0000-000000000000
+    shareContext: {}
+    state: Active
+    status: Active
+    schemaName: gptagent_copilotforemployeeselfservicecore.topic.System-Logger
+    dialog:
+      beginDialog:
+        kind: OnRedirect
+        id: main
+        actions:
+          - kind: LogCustomTelemetryEvent
+            id: 4ishvf
+            eventName: =Topic.EventName
+            properties: |-
+              ={
+                  Message: Topic.Message,
+                  TimeUTC: Text(Now(), DateTimeFormat.UTC),
+                  ConversationId: System.Conversation.Id,
+                  Channel: System.Activity.ChannelId,
+                  AgentId: System.Bot.Name
+              }
+
+      inputType:
+        properties:
+          EventName:
+            displayName: EventName
+            type: String
+
+          Message:
+            displayName: Message
+            type: String
+
+flows:
+  - version: 1
+    auditInfo:
+      createdTimeUtc: 2026-07-29T00:48:41.0000000Z
+      modifiedTimeUtc: 2026-07-29T00:48:41.0000000Z
+
+    displayName: Search Dynamics 365 knowledge article flow
+    isEnabled: false
+    workflowId: 87023c69-962c-ec11-b6e6-000d3a574957
+    inputType:
+      properties:
+        text:
+          displayName: Search Text
+          description: Please enter your input
+          isRequired: true
+          type: String
+
+        text_1:
+          displayName: Filter
+          description: Please enter your input
+          isRequired: true
+          type: String
+
+    outputType:
+      properties:
+        articlecount:
+          displayName: articleCount
+          type: Number
+
+        jsonresult:
+          displayName: jsonResult
+          type: String
+
+        textresult:
+          displayName: textResult
+          type: String
+
+    triggerType: Standard
+    connectionType: EmbeddedOnly
+    secureInputs: false
+    secureOutputs: false
+
+publishedVersion: 2026-08-11T16:19:59.5181319Z

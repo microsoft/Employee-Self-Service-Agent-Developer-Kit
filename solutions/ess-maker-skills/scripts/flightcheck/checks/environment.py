@@ -377,6 +377,11 @@ def run_preferred_solution_check(runner) -> list[CheckResult]:
     return _check_preferred_solution(runner)
 
 
+def run_capacity_check(runner) -> list[CheckResult]:
+    """Run ENV-CAPACITY-001 without requiring other environment clients."""
+    return _check_copilot_studio_capacity_provisioned(runner)
+
+
 def _env_capacity(status: str, result: str, remediation: str = "") -> CheckResult:
     """Build an ENV-CAPACITY-001 row (every branch shares id/category/role)."""
     return CheckResult(

@@ -5,26 +5,62 @@ description: "Type Enter to set up your ESS customization environment"
 
 # Setup
 
-Run this command without showing it to the user:
+Read `src/skills/foundation-setup/SKILL.md` first. Follow its **Command runtime**
+instructions to establish a working Python invocation before running any Python
+command.
+
+After reading the foundation skill, use its explicit progress render points.
+At the first interactive setup surface in a turn, write the complete
+maker-facing progress checklist below using the latest canonical setup state
+and results observed in that invocation. Use the exact ordinary Markdown shape
+defined in the foundation skill: one single-level bullet and one leading
+status emoji per stage.
+
+- {marker} Choose the starting point and target environment
+- {marker} Verify access and agent identity
+- {marker} Establish an editable Dev agent
+- {marker} Materialize the local workspace
+- {marker} Review the setup handoff
+
+Use ✅ for completed, 🔄 for the current stage, ⛔ for a blocked stage, and ⬜
+for pending. Every rendered update is a full snapshot containing all five
+stages in this order. Render it at the first interactive surface in a turn,
+when a marker changes, when a blocked state requires maker action, and in the
+final handoff. A sequence of setup operations that retains the same markers
+continues to its next render point without another progress snapshot.
+
+Run setup commands from the current ESS Maker Skills workspace folder.
+
+Using the resolved launcher in place of `{PYTHON}`, run this command without
+showing it to the user:
 
 ```powershell
-python -m pip install -r scripts/requirements.txt
+{PYTHON} -m pip install -r scripts/requirements.txt
 ```
 
-If dependency installation fails, show the error and stop.
-
-Run this command without showing it to the user:
+Check the Microsoft Object Model converter dependencies:
 
 ```powershell
-python scripts/mcp_config.py materialize-defaults
+{PYTHON} -c "import sys;
+sys.path.insert(0, 'scripts');
+import agentbuilder_object_model as m;
+m.validate_object_model_runtime()"
 ```
 
-If default MCP materialization fails, show the exact error and stop. The command
-preserves user-configured servers and locally customized default definitions.
+If the check fails, run:
 
-Read `src/skills/foundation-setup/SKILL.md` and follow it.
+```powershell
+{PYTHON} scripts/install_agentbuilder_object_model.py
+```
 
-Do not route directly to `src/skills/onboarding/SKILL.md`. Foundation setup owns
-environment selection, prerequisites, starter installation, and readiness. It
-invokes onboarding itself only after the environment is locked and the
-foundation is ready.
+Then rerun the check.
+
+After successful runtime, dependency, and converter checks, run the next setup
+operation. When a check requires maker action, state the observed failure and
+its single recovery action.
+
+For any command failure, follow the **Command runtime** recovery guidance.
+
+Do not route to Dataverse foundation or onboarding playbooks.
+Foundation setup owns DA-GA environment and editable Dev-agent selection,
+workspace materialization, and canonical setup completion.

@@ -45,7 +45,7 @@ SOLUTION_ID = "11111111-1111-1111-1111-111111111111"
 
 
 # ───────────────────────────────────────────────────────────────────────
-# Minimal runner — mirrors the pattern in test_preferred_solution.py.
+# Minimal runner for solution-check tests.
 # ───────────────────────────────────────────────────────────────────────
 
 
