@@ -662,10 +662,48 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "`setupStatus`" not in text
     assert "Do not ask the maker to classify the product before loading the catalog" in normalized
     assert "infer a concise user-friendly product name" in normalized
-    assert "render `Employee Self-Service IT` as `Employee Self-Service (IT)`" in normalized
-    assert "render `Employee Self-Service HR` as `Employee Self-Service (HR)`" in normalized
+    assert (
+        "Render `Employee Self-Service IT` or `Employee Self-Service (IT)` as "
+        "`Employee Self-Service (IT)`"
+        in normalized
+    )
+    assert (
+        "render `Employee Self-Service HR` or `Employee Self-Service (HR)` as "
+        "`Employee Self-Service (HR)`"
+        in normalized
+    )
     assert "use the exact service-provided product name unchanged" in normalized
     assert "must not change the underlying `packageId`" in normalized
+    assert (
+        "render the following friendly product name and supporting description "
+        "exactly as written"
+        in normalized
+    )
+    assert (
+        "Do not paraphrase, shorten, or combine this copy with the "
+        "service-provided description."
+        in normalized
+    )
+    assert (
+        "Use this product if you want to organize HR, IT, or other domain "
+        "agents as connected agents behind one unified employee experience."
+        in normalized
+    )
+    assert (
+        "Create an HR domain agent that helps employees get HR answers and "
+        "complete requests."
+        in normalized
+    )
+    assert (
+        "Create an IT domain agent that helps employees resolve technical "
+        "issues and access support."
+        in normalized
+    )
+    assert (
+        "For every other product, use its exact service-provided name unchanged "
+        "and use `shortDescription`, then `description`"
+        in normalized
+    )
     assert "host's interactive single-selection control" in normalized
     assert "Do not ask the maker to type a product name" in normalized
     assert "**{friendly product name} {version}**" in text
