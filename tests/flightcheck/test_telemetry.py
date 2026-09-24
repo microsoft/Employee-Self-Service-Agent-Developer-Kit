@@ -157,18 +157,39 @@ def test_get_toolkit_git_sha_prefers_env_override(monkeypatch):
     assert telemetry.get_toolkit_git_sha() == "1234567"
 
 
-def test_get_toolkit_git_sha_truncates_oversized_override(monkeypatch):
-    # An override longer than 40 chars is capped so a stray value never
-    # inflates every emitted event.
-    monkeypatch.setenv("ESS_ADK_GIT_SHA", "a" * 200)
+def test_get_toolkit_git_sha_override_validates_and_shortens(monkeypatch):
+    # Overrides go through the same validation as repo-derived values so
+    # a full-length or lowercased override lands in the same telemetry
+    # bucket as ``git rev-parse HEAD`` on the same commit.
+    monkeypatch.setenv(
+        "ESS_ADK_GIT_SHA", "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+    )
     telemetry.get_toolkit_git_sha.cache_clear()
-    assert len(telemetry.get_toolkit_git_sha()) == 40
+    assert telemetry.get_toolkit_git_sha() == "abcdef0"
 
 
-def test_get_toolkit_git_branch_prefers_env_override(monkeypatch):
+def test_get_toolkit_git_sha_override_non_hex_returns_unknown(monkeypatch):
+    # A stray non-SHA value ("release-2026-06" etc.) must NOT propagate to
+    # the emitted event as a distinct bucket — that would let anything
+    # end up in the SHA dimension.
+    monkeypatch.setenv("ESS_ADK_GIT_SHA", "release-2026-06")
+    telemetry.get_toolkit_git_sha.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "unknown"
+
+
+def test_get_toolkit_git_branch_override_classifies(monkeypatch):
+    # Overrides must go through the bounded classifier, same as
+    # repo-derived values, so CI can't sneak a personal name into the
+    # emitted dimension.
     monkeypatch.setenv("ESS_ADK_GIT_BRANCH", "main-ca")
     telemetry.get_toolkit_git_branch.cache_clear()
     assert telemetry.get_toolkit_git_branch() == "main-ca"
+
+
+def test_get_toolkit_git_branch_override_personal_name_becomes_other(monkeypatch):
+    monkeypatch.setenv("ESS_ADK_GIT_BRANCH", "amilandin/some-feature")
+    telemetry.get_toolkit_git_branch.cache_clear()
+    assert telemetry.get_toolkit_git_branch() == "other"
 
 
 def test_get_toolkit_git_sha_reads_unpacked_ref(tmp_path, monkeypatch):
@@ -232,8 +253,8 @@ def test_get_toolkit_git_sha_gitdir_file_indirection(tmp_path, monkeypatch):
     real_git = tmp_path / "real-git"
     refs_heads = real_git / "refs" / "heads"
     refs_heads.mkdir(parents=True)
-    (real_git / "HEAD").write_text("ref: refs/heads/wt-branch\n", encoding="utf-8")
-    (refs_heads / "wt-branch").write_text(
+    (real_git / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (refs_heads / "main").write_text(
         "cafebabecafebabecafebabecafebabecafebabe\n", encoding="utf-8"
     )
     fake_git_file = tmp_path / "worktree" / ".git"
@@ -243,7 +264,67 @@ def test_get_toolkit_git_sha_gitdir_file_indirection(tmp_path, monkeypatch):
     telemetry.get_toolkit_git_sha.cache_clear()
     telemetry.get_toolkit_git_branch.cache_clear()
     assert telemetry.get_toolkit_git_sha() == "cafebab"
-    assert telemetry.get_toolkit_git_branch() == "wt-branch"
+    assert telemetry.get_toolkit_git_branch() == "main"
+
+
+def test_get_toolkit_git_sha_real_linked_worktree_layout(tmp_path, monkeypatch):
+    """Real ``git worktree add`` stores per-worktree HEAD in ``.git/worktrees/<name>/``
+    while refs and ``packed-refs`` stay in the common directory. The per-worktree
+    dir has a ``commondir`` file pointing at the shared admin dir.
+
+    This test models the real linked-worktree layout that the pre-fix code
+    missed — searching for refs / packed-refs inside the per-worktree dir
+    only resolved SHA correctly because the old test fixture put refs
+    there. On a real linked worktree the SHA silently became ``unknown``.
+    """
+    common = tmp_path / "main-clone" / ".git"
+    refs_heads = common / "refs" / "heads"
+    refs_heads.mkdir(parents=True)
+    (refs_heads / "feature-x").write_text(
+        "deadbee0000000000000000000000000000000ff\n", encoding="utf-8"
+    )
+    # Per-worktree admin dir: has its own HEAD but points at common for refs.
+    wt_admin = common / "worktrees" / "feature-x"
+    wt_admin.mkdir(parents=True)
+    (wt_admin / "HEAD").write_text("ref: refs/heads/feature-x\n", encoding="utf-8")
+    (wt_admin / "commondir").write_text("../..\n", encoding="utf-8")
+    # And the linked worktree's checkout has a ``.git`` file pointing at wt_admin.
+    linked_wt = tmp_path / "wt-feature-x"
+    linked_wt.mkdir()
+    linked_dot_git = linked_wt / ".git"
+    linked_dot_git.write_text(f"gitdir: {wt_admin}\n", encoding="utf-8")
+    monkeypatch.setattr(telemetry, "_find_git_dir", lambda: str(linked_dot_git))
+    telemetry.get_toolkit_git_sha.cache_clear()
+    telemetry.get_toolkit_git_branch.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "deadbee"
+    # feature-x is a topic branch, not a shipping branch, so it collapses
+    # to "other" — never leaks the actual name.
+    assert telemetry.get_toolkit_git_branch() == "other"
+
+
+def test_get_toolkit_git_sha_real_linked_worktree_packed_refs(tmp_path, monkeypatch):
+    """Same as above but the ref lives in the common ``packed-refs`` file
+    (after ``git gc`` on the common dir)."""
+    common = tmp_path / "main-clone" / ".git"
+    common.mkdir(parents=True)
+    (common / "packed-refs").write_text(
+        "# pack-refs with: peeled fully-peeled sorted\n"
+        "12345670000000000000000000000000000000ab refs/heads/main-ca\n",
+        encoding="utf-8",
+    )
+    wt_admin = common / "worktrees" / "ca-branch"
+    wt_admin.mkdir(parents=True)
+    (wt_admin / "HEAD").write_text("ref: refs/heads/main-ca\n", encoding="utf-8")
+    (wt_admin / "commondir").write_text("../..\n", encoding="utf-8")
+    linked_wt = tmp_path / "wt-ca"
+    linked_wt.mkdir()
+    linked_dot_git = linked_wt / ".git"
+    linked_dot_git.write_text(f"gitdir: {wt_admin}\n", encoding="utf-8")
+    monkeypatch.setattr(telemetry, "_find_git_dir", lambda: str(linked_dot_git))
+    telemetry.get_toolkit_git_sha.cache_clear()
+    telemetry.get_toolkit_git_branch.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "1234567"
+    assert telemetry.get_toolkit_git_branch() == "main-ca"
 
 
 def test_get_toolkit_git_sha_malformed_head_returns_unknown(tmp_path, monkeypatch):
@@ -254,6 +335,41 @@ def test_get_toolkit_git_sha_malformed_head_returns_unknown(tmp_path, monkeypatc
     telemetry.get_toolkit_git_sha.cache_clear()
     telemetry.get_toolkit_git_branch.cache_clear()
     assert telemetry.get_toolkit_git_sha() == "unknown"
+    # A malformed HEAD (not a ``ref:`` line, not a valid SHA) must NOT
+    # report ``branch=detached`` alongside ``sha=unknown``: that lies
+    # about the checkout state. Return unknown for both.
+    assert telemetry.get_toolkit_git_branch() == "unknown"
+
+
+def test_classify_branch_privacy_bounded():
+    """The classifier must collapse anything outside the allowed set to
+    a fixed vocabulary — raw branch names are not permitted in telemetry.
+
+    Rationale (see CONTRIBUTING.md privacy contract): branch names can
+    carry aliases, personal names, customer labels, or free-form tokens.
+    Emitting them raw would violate the documented "no developer
+    identifier" guarantee.
+    """
+    # Allowed shipping branches pass through.
+    assert telemetry._classify_branch("main") == "main"
+    assert telemetry._classify_branch("main-ca") == "main-ca"
+    # Special reserved values pass through.
+    assert telemetry._classify_branch("detached") == "detached"
+    assert telemetry._classify_branch("unknown") == "unknown"
+    # Everything else — including anything that could carry identity —
+    # collapses to "other".
+    for personal in [
+        "amilandin/some-feature",
+        "nkemms/fix-bug",
+        "customer-contoso/pilot",
+        "release-2026-06",
+        "hotfix",
+        "wip",
+        "some-random-label",
+    ]:
+        assert telemetry._classify_branch(personal) == "other", personal
+    # Empty is "unknown", not "other" (nothing to classify).
+    assert telemetry._classify_branch("") == "unknown"
 
 
 def test_telemetry_schema_version_bumped_for_toolkit_git_fields():

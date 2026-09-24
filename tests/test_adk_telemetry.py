@@ -481,6 +481,9 @@ def test_common_dimensions_carries_toolkit_git_sha_and_branch(monkeypatch):
     # tests; the real git-walk code path is exercised in the FlightCheck
     # test module against a fabricated .git dir.
     monkeypatch.setenv("ESS_ADK_GIT_SHA", "abcdef0")
+    # Branch overrides now go through the bounded classifier — a
+    # personal-name override collapses to "other" so free-form values
+    # never appear in the emitted dimension.
     monkeypatch.setenv("ESS_ADK_GIT_BRANCH", "amilandin/adk-telemetry-x")
     _fc = __import__("flightcheck.telemetry", fromlist=["telemetry"])
     _fc.get_toolkit_git_sha.cache_clear()
@@ -488,7 +491,7 @@ def test_common_dimensions_carries_toolkit_git_sha_and_branch(monkeypatch):
 
     dims = adk.common_dimensions(adk.SURFACE_CLI, session_id="sid-1")
     assert dims["toolkit_git_sha"] == "abcdef0"
-    assert dims["toolkit_git_branch"] == "amilandin/adk-telemetry-x"
+    assert dims["toolkit_git_branch"] == "other"
 
 
 def test_build_event_is_common_schema_4_0():
