@@ -72,8 +72,14 @@ def _clean_env(monkeypatch):
         "ESS_FLIGHTCHECK_ARIA_ENV",
         "ESS_FLIGHTCHECK_ARIA_IKEY",
         "ESS_ADK_VERSION",
+        "ESS_ADK_GIT_SHA",
+        "ESS_ADK_GIT_BRANCH",
     ):
         monkeypatch.delenv(var, raising=False)
+    # Toolkit git-sha/branch are ``@lru_cache``d — clear so the env
+    # override the individual test sets is picked up.
+    telemetry.get_toolkit_git_sha.cache_clear()
+    telemetry.get_toolkit_git_branch.cache_clear()
     # resolve_ikey() now also honors the unified `adk telemetry off` opt-out
     # (adk_telemetry.telemetry_enabled). Pin it ON so these tests don't depend
     # on the developer's real ~/.adk/config; the opt-out test overrides this.
@@ -137,6 +143,122 @@ def test_build_events_shape_and_required_fields():
     assert run_data["agentId"] == "bot-xyz"
     assert run_data["instanceId"] == "inst-123"
     assert run_data["invocationSource"] == "cli"
+    # Precise upgrade-posture + CA/DA-attribution dimensions ride on the
+    # run event (ADO #7943642). Best-effort: they resolve to "unknown"
+    # outside a git clone. The dedicated tests below cover the resolution
+    # code paths.
+    assert "toolkitGitSha" in run_data
+    assert "toolkitGitBranch" in run_data
+
+
+def test_get_toolkit_git_sha_prefers_env_override(monkeypatch):
+    monkeypatch.setenv("ESS_ADK_GIT_SHA", "1234567")
+    telemetry.get_toolkit_git_sha.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "1234567"
+
+
+def test_get_toolkit_git_sha_truncates_oversized_override(monkeypatch):
+    # An override longer than 40 chars is capped so a stray value never
+    # inflates every emitted event.
+    monkeypatch.setenv("ESS_ADK_GIT_SHA", "a" * 200)
+    telemetry.get_toolkit_git_sha.cache_clear()
+    assert len(telemetry.get_toolkit_git_sha()) == 40
+
+
+def test_get_toolkit_git_branch_prefers_env_override(monkeypatch):
+    monkeypatch.setenv("ESS_ADK_GIT_BRANCH", "main-ca")
+    telemetry.get_toolkit_git_branch.cache_clear()
+    assert telemetry.get_toolkit_git_branch() == "main-ca"
+
+
+def test_get_toolkit_git_sha_reads_unpacked_ref(tmp_path, monkeypatch):
+    """Fabricate a .git dir the sha helper can walk without git installed."""
+    git_dir = tmp_path / ".git"
+    refs_heads = git_dir / "refs" / "heads"
+    refs_heads.mkdir(parents=True)
+    (git_dir / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+    (refs_heads / "main").write_text(
+        "abcdef0123456789abcdef0123456789abcdef01\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(telemetry, "_find_git_dir", lambda: str(git_dir))
+    telemetry.get_toolkit_git_sha.cache_clear()
+    telemetry.get_toolkit_git_branch.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "abcdef0"
+    assert telemetry.get_toolkit_git_branch() == "main"
+
+
+def test_get_toolkit_git_sha_reads_packed_refs(tmp_path, monkeypatch):
+    """After ``git gc`` the ref file moves into ``packed-refs``."""
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("ref: refs/heads/main-ca\n", encoding="utf-8")
+    (git_dir / "packed-refs").write_text(
+        "# pack-refs with: peeled fully-peeled sorted\n"
+        "1111111222222223333333344444444555555556 refs/heads/main-ca\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(telemetry, "_find_git_dir", lambda: str(git_dir))
+    telemetry.get_toolkit_git_sha.cache_clear()
+    telemetry.get_toolkit_git_branch.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "1111111"
+    assert telemetry.get_toolkit_git_branch() == "main-ca"
+
+
+def test_get_toolkit_git_sha_detached_head(tmp_path, monkeypatch):
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text(
+        "abcdef0123456789abcdef0123456789abcdef01\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(telemetry, "_find_git_dir", lambda: str(git_dir))
+    telemetry.get_toolkit_git_sha.cache_clear()
+    telemetry.get_toolkit_git_branch.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "abcdef0"
+    # Detached HEAD reports "detached", not the SHA (the SHA already lives
+    # in toolkit_git_sha; splitting the concerns keeps dashboards tidy).
+    assert telemetry.get_toolkit_git_branch() == "detached"
+
+
+def test_get_toolkit_git_sha_no_repo_returns_unknown(monkeypatch):
+    monkeypatch.setattr(telemetry, "_find_git_dir", lambda: "")
+    telemetry.get_toolkit_git_sha.cache_clear()
+    telemetry.get_toolkit_git_branch.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "unknown"
+    assert telemetry.get_toolkit_git_branch() == "unknown"
+
+
+def test_get_toolkit_git_sha_gitdir_file_indirection(tmp_path, monkeypatch):
+    """A worktree checkout has ``.git`` as a text file pointing at the real dir."""
+    real_git = tmp_path / "real-git"
+    refs_heads = real_git / "refs" / "heads"
+    refs_heads.mkdir(parents=True)
+    (real_git / "HEAD").write_text("ref: refs/heads/wt-branch\n", encoding="utf-8")
+    (refs_heads / "wt-branch").write_text(
+        "cafebabecafebabecafebabecafebabecafebabe\n", encoding="utf-8"
+    )
+    fake_git_file = tmp_path / "worktree" / ".git"
+    fake_git_file.parent.mkdir()
+    fake_git_file.write_text(f"gitdir: {real_git}\n", encoding="utf-8")
+    monkeypatch.setattr(telemetry, "_find_git_dir", lambda: str(fake_git_file))
+    telemetry.get_toolkit_git_sha.cache_clear()
+    telemetry.get_toolkit_git_branch.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "cafebab"
+    assert telemetry.get_toolkit_git_branch() == "wt-branch"
+
+
+def test_get_toolkit_git_sha_malformed_head_returns_unknown(tmp_path, monkeypatch):
+    git_dir = tmp_path / ".git"
+    git_dir.mkdir()
+    (git_dir / "HEAD").write_text("garbage\n", encoding="utf-8")
+    monkeypatch.setattr(telemetry, "_find_git_dir", lambda: str(git_dir))
+    telemetry.get_toolkit_git_sha.cache_clear()
+    telemetry.get_toolkit_git_branch.cache_clear()
+    assert telemetry.get_toolkit_git_sha() == "unknown"
+
+
+def test_telemetry_schema_version_bumped_for_toolkit_git_fields():
+    """Version-gate the new dimensions so dashboards can pin on schema 1.2."""
+    assert telemetry.TELEMETRY_SCHEMA_VERSION == "1.2"
 
 
 def test_derive_run_outcome_precedence():
