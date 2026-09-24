@@ -223,6 +223,18 @@ test('firstInstallDispatch persists the resolved mode to global settings', () =>
     assert.ok(/'essMaker\.mode',[\s\S]*?ConfigurationTarget\.Global/.test(src), 'resolved mode should be persisted with ConfigurationTarget.Global');
 });
 
+test('developer mode does NOT inject /setup from the extension (installer owns dispatch)', () => {
+    // F-3 regression guard: the installer already runs ``code chat "/setup"``
+    // for developer mode before launching VS Code, so injecting again in
+    // the extension opens two /setup chats on the fresh-install path.
+    // The isDeveloperMode branch of firstInstallDispatch must therefore
+    // not call injectSetup / waitForWelcomeWizard.
+    const devBranch = src.match(/if\s*\(isDeveloperMode\)\s*\{([\s\S]*?)\n\s*return;\s*\n\s*\}/);
+    assert.ok(devBranch, 'isDeveloperMode branch not found in firstInstallDispatch');
+    assert.ok(!/injectSetup\s*\(/.test(devBranch[1]), 'developer branch must not call injectSetup - installer owns /setup dispatch');
+    assert.ok(!/waitForWelcomeWizard\s*\(/.test(devBranch[1]), 'developer branch must not wait for welcome wizard to inject /setup');
+});
+
 test('legacy essMaker.mode values are normalized (lite -> maker, standard -> developer)', () => {
     assert.ok(/function normalizeInstallerMode/.test(src), 'normalizeInstallerMode helper missing');
     assert.ok(/if\s*\(mode === 'lite'\)\s*return 'maker'/.test(src), "'lite' should be normalized to 'maker'");

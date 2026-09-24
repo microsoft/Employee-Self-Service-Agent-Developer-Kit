@@ -88,10 +88,10 @@ $installer = Join-Path $tempDir 'Install-EssAdk.ps1'
 $scriptContent = [System.IO.File]::ReadAllText($installer, [System.Text.Encoding]::UTF8)
 $scriptBlock = [ScriptBlock]::Create($scriptContent)
 
-# Developer mode: pass -InstallMode developer so the installer skips the
-# in-VS-Code mode prompt and lands directly in the default VS Code layout
-# with /setup requested via `code chat`. Same physical installer as the
-# other bootstraps; just a different pinned mode.
+# Developer mode: pass -InstallMode developer so the installer's terminal
+# mode prompt is skipped and the maker lands directly in the default VS Code
+# layout with /setup requested via `code chat`. Same physical installer as
+# the other bootstraps; just a different pinned mode.
 $installerArgs = @{ Branch = $Branch; InstallMode = 'developer' }
 if ($InstallRoot) { $installerArgs.InstallRoot = $InstallRoot }
 

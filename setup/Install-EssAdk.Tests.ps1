@@ -93,6 +93,53 @@ Test 'InstallMode=prompt defaults to maker under non-interactive stdin / CI' {
     }
 }
 
+Test 'Install-EssAdk.ps1 parses under Windows PowerShell 5.1' {
+    # F-1: the supported Windows path invokes Windows PowerShell 5.1 - if
+    # anything in the script uses a PS7-only operator (``??``, ``?.``,
+    # pipeline chain ``||`` / ``&&``, ternary) the 5.1 parser rejects the
+    # whole file before running a line. Testing under $PSVersionTable
+    # (which is PS7 in this suite) catches nothing; we have to invoke
+    # ``powershell.exe`` (5.1) explicitly with -NoProfile -Command and let
+    # its Language.Parser::ParseFile look at the file.
+    $pwsh5 = Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
+    if (-not (Test-Path $pwsh5)) {
+        # Non-Windows test host: skip (macOS / Linux CI). Windows CI hits this.
+        return
+    }
+    $scriptPath = Join-Path $PSScriptRoot 'Install-EssAdk.ps1'
+    $probe = @'
+$errors = $null
+$tokens = $null
+[System.Management.Automation.Language.Parser]::ParseFile($args[0], [ref]$tokens, [ref]$errors) | Out-Null
+if ($errors.Count -gt 0) {
+    $errors | ForEach-Object { Write-Output $_.Message }
+    exit 1
+}
+exit 0
+'@
+    $probeFile = Join-Path $env:TEMP 'ess-adk-ps51-parse-probe.ps1'
+    Set-Content -LiteralPath $probeFile -Value $probe -Encoding ASCII
+    try {
+        $result = & $pwsh5 -NoProfile -ExecutionPolicy Bypass -File $probeFile $scriptPath 2>&1
+        if ($LASTEXITCODE -ne 0) {
+            throw "PS 5.1 parser rejected Install-EssAdk.ps1: $($result -join '; ')"
+        }
+    } finally {
+        Remove-Item -LiteralPath $probeFile -ErrorAction SilentlyContinue
+    }
+}
+
+Test 'installer answer-normalization is PS 5.1 compatible (no ??)' {
+    # Direct guard rail for F-1: fail loudly if a future edit reintroduces
+    # ``??`` in executable code. Strip PowerShell single-line comments
+    # first so the guard-rail commentary in the script itself does not
+    # trip this check.
+    $stripped = ($src -split "`n" | ForEach-Object { ($_ -replace '#.*$', '') }) -join "`n"
+    if ($stripped -match '\?\?') {
+        throw 'Install-EssAdk.ps1 must not use PS7-only ``??`` (breaks Windows PowerShell 5.1). Use ``if ($null -eq ...) { ... }`` instead.'
+    }
+}
+
 Test 'script declares SkipLaunch parameter' {
     if ($src -notmatch '\[switch\]\s*\$SkipLaunch') {
         throw 'SkipLaunch switch parameter not found'

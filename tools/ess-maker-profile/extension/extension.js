@@ -1492,21 +1492,13 @@ async function firstInstallDispatch(context, installerMode) {
     _log(`firstInstallDispatch: alreadyConfigured=${alreadyConfigured}`);
 
     if (isDeveloperMode) {
-        // Developer mode: no layout changes. In prompt mode the installer
-        // could not eagerly run `code chat '/setup'` (mode was unknown at
-        // launch time), so surface /setup here for the not-yet-configured
-        // path - otherwise a maker who picks Developer here would land in
-        // an empty chat with no cue what to do next.
+        // Developer mode: no layout changes. The installer already dispatched
+        // ``code chat "/setup"`` before launching VS Code (Install-EssAdk.ps1
+        // and install-ess-adk.sh both do this for the developer branch), so
+        // the extension deliberately does NOT inject /setup again here -
+        // doing so would open two /setup chats on the fresh-install path.
         context.globalState.update(APPLIED_KEY, true);
-        if (!alreadyConfigured) {
-            _log('firstInstallDispatch: developer mode, running /setup via injectSetup');
-            waitForWelcomeWizard()
-                .then(() => new Promise(r => setTimeout(r, 3000)))
-                .then(() => injectSetup())
-                .catch((err) => _log(`firstInstallDispatch: developer injectSetup error: ${err && err.message}`));
-        } else {
-            _log('firstInstallDispatch: developer mode, already configured - no action');
-        }
+        _log(`firstInstallDispatch: developer mode, alreadyConfigured=${alreadyConfigured} - installer owns /setup dispatch, extension no-ops`);
         return;
     }
 

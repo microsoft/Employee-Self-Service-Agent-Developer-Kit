@@ -27,11 +27,13 @@ FLIGHTCHECK_ONLY="${FLIGHTCHECK_ONLY:-false}"
 # 'developer' (was 'standard') - default VS Code layout, /setup via `code chat`
 # 'prompt'                    - ask the maker in the terminal (defaults to
 #                               maker under a non-interactive shell)
-# Legacy env var SKIP_MAKER_PROFILE=true is still accepted and mapped to
-# INSTALL_MODE=developer for back-compat with pinned CI scripts and old docs.
+# Legacy env var SKIP_MAKER_PROFILE=true is still accepted and, matching the
+# Windows -SkipMakerProfile switch's precedence, always coerces to
+# INSTALL_MODE=developer even when INSTALL_MODE is also set - so pinned CI
+# scripts on either platform get the same answer.
 INSTALL_MODE="${INSTALL_MODE:-}"
 SKIP_MAKER_PROFILE="${SKIP_MAKER_PROFILE:-false}"
-if [[ -z "$INSTALL_MODE" && "$SKIP_MAKER_PROFILE" == "true" ]]; then
+if [[ "$SKIP_MAKER_PROFILE" == "true" ]]; then
     INSTALL_MODE="developer"
 fi
 if [[ -z "$INSTALL_MODE" ]]; then

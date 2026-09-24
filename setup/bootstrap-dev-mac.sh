@@ -8,13 +8,13 @@
 # Installs the full maker kit and lands the maker in the default VS Code
 # layout (activity bar, file explorer, status bar visible) with /setup
 # injected into Copilot Chat. Shortcut for makers who already know they want
-# the Developer experience and want to skip the in-VS-Code mode prompt.
+# the Developer experience and want to skip the terminal mode prompt.
 # ---------------------------------------------------------------------------
 set -euo pipefail
 
 # Developer mode: pin INSTALL_MODE so install-ess-adk.sh uses `code chat`
-# to open /setup in the sidebar panel and does not apply the chat-first
-# layout.
+# to open /setup in the sidebar panel, skips the terminal mode prompt, and
+# does not apply the chat-first layout.
 export INSTALL_MODE="developer"
 
 # Parse optional --branch / --source-base-url arguments

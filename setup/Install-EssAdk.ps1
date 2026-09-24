@@ -138,7 +138,11 @@ if ($InstallMode -eq 'prompt') {
         $choice = $null
         while ($null -eq $choice) {
             $answer = Read-Host "Enter 1 for Maker, 2 for Developer (default: 1)"
-            $answer = ($answer ?? '').Trim()
+            # ``$answer ?? ''`` would need PS7's null-coalescing operator, but
+            # the supported Windows path invokes Windows PowerShell 5.1 - the
+            # 5.1 parser rejects ``??`` before running a line of the installer.
+            if ($null -eq $answer) { $answer = '' }
+            $answer = $answer.Trim()
             switch -Regex ($answer) {
                 '^(1|maker|m|)$'      { $choice = 'maker' }
                 '^(2|developer|dev|d)$' { $choice = 'developer' }
