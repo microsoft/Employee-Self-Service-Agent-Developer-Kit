@@ -47,7 +47,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-lite-mac.sh)"
 ```
 
-The standard installer (`bootstrap.ps1` / `bootstrap-mac.sh`) does NOT install the Maker Profile — it uses stock VS Code with `code chat /setup`.
+The Developer Mode installer (`bootstrap.ps1` / `bootstrap-mac.sh`) also installs the Maker Profile, but runs it in Developer Mode: stock VS Code layout with `code chat /setup` on first launch and a rendered README preview, rather than the Maker Mode guided layout. The mode is set via the `essMaker.mode` setting the installer writes (`standard` vs `lite`).
 
 ### From source (development)
 
