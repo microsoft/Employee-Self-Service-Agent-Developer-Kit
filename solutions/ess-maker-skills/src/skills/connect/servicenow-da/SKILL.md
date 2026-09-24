@@ -13,8 +13,11 @@ Run:
 python scripts/connect_servicenow_da.py inspect
 ```
 
-If setup is not schema v3, is not `connect_ready`, is not the editable Dev
-realm, or is not the HR agent, show the returned error and stop.
+If setup is not schema v4, has not established the environment, exact editable
+Dev agent, and local workspace, or is not the HR agent, show the returned error
+and stop. Do not require aggregate `connect_ready`: setup can report the
+ServiceNow connection as not configured, and this workflow exists to resolve
+that condition.
 
 Summarize:
 

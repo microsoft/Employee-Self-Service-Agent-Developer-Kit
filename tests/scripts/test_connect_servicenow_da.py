@@ -176,12 +176,26 @@ def test_load_context_requires_matching_schema_v4_hr_agent(
                 },
                 "agents": {
                     AGENT_ID: {
-                        "connect_ready": True,
+                        "connect_ready": False,
                         "agent": {
                             "id": AGENT_ID,
                             "schema_name": snow.HR_SCHEMA_NAME,
                             "realm": "dev",
                             "workspace_slug": "employee-self-service-hr",
+                        },
+                        "workspace": {
+                            "folder": "workspace/agents/employee-self-service-hr",
+                            "agent_path": "agent.mcs.yml",
+                        },
+                        "steps": {
+                            "SETUP-01": {"state": "done"},
+                            "SETUP-02.1": {"state": "done"},
+                            "SETUP-02.2": {"state": "blocked"},
+                            "SETUP-03": {"state": "done"},
+                            "SETUP-04": {"state": "done"},
+                            "SETUP-05": {"state": "blocked"},
+                            "SETUP-06": {"state": "done"},
+                            "SETUP-07": {"state": "done"},
                         },
                     }
                 },
@@ -209,6 +223,22 @@ def test_load_context_requires_matching_schema_v4_hr_agent(
 
     assert result["agent"]["id"] == AGENT_ID
     assert result["snapshotPath"] == tmp_path / snapshot
+
+
+def test_load_context_rejects_incomplete_foundation_step(
+    tmp_path: Path,
+) -> None:
+    test_load_context_requires_matching_schema_v4_hr_agent(tmp_path)
+    setup_path = tmp_path / snow.SETUP_STATE
+    setup = json.loads(setup_path.read_text(encoding="utf-8"))
+    setup["agents"][AGENT_ID]["steps"]["SETUP-03"]["state"] = "blocked"
+    setup_path.write_text(json.dumps(setup), encoding="utf-8")
+
+    with pytest.raises(
+        snow.ServiceNowConnectError,
+        match="incomplete.*SETUP-03",
+    ):
+        snow.load_context(tmp_path)
 
 
 def test_bind_requires_confirmation() -> None:

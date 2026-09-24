@@ -38,6 +38,13 @@ CONNECTIVITY_API_VERSION = "1"
 SETUP_SCHEMA_VERSION = 4
 HR_SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
 TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
+CONNECT_FOUNDATION_STEPS = (
+    "SETUP-01",
+    "SETUP-02.1",
+    "SETUP-03",
+    "SETUP-04",
+    "SETUP-07",
+)
 
 
 class ServiceNowConnectError(RuntimeError):
@@ -142,8 +149,6 @@ def load_context(root: Path = Path(".")) -> dict[str, Any]:
         raise ServiceNowConnectError(
             "The active agent has no canonical /setup record."
         )
-    if canonical.get("connect_ready") is not True:
-        raise ServiceNowConnectError("DA foundation setup is not connect-ready.")
     agent = canonical.get("agent")
     if not isinstance(agent, dict):
         raise ServiceNowConnectError("The setup record has no agent identity.")
@@ -160,6 +165,30 @@ def load_context(root: Path = Path(".")) -> dict[str, Any]:
     if agent.get("schema_name") != HR_SCHEMA_NAME:
         raise ServiceNowConnectError(
             "This prototype supports only Employee Self-Service (HR)."
+        )
+    steps = canonical.get("steps")
+    if not isinstance(steps, dict):
+        raise ServiceNowConnectError("The setup record has no foundation steps.")
+    incomplete = [
+        step_id
+        for step_id in CONNECT_FOUNDATION_STEPS
+        if not isinstance(steps.get(step_id), dict)
+        or steps[step_id].get("state") != "done"
+    ]
+    if incomplete:
+        raise ServiceNowConnectError(
+            "DA foundation setup is incomplete for /connect: "
+            + ", ".join(incomplete)
+            + "."
+        )
+    workspace = canonical.get("workspace")
+    if (
+        not isinstance(workspace, dict)
+        or not workspace.get("folder")
+        or not workspace.get("agent_path")
+    ):
+        raise ServiceNowConnectError(
+            "DA foundation setup has no materialized agent workspace."
         )
 
     relative_snapshot = active.get("agentBuilderChangeSetPath")
