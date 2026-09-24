@@ -150,7 +150,7 @@ def test_connection_summary_prefers_token_status() -> None:
     assert "password" not in result["parameterValues"]
 
 
-def test_load_context_requires_matching_schema_v3_hr_agent(
+def test_load_context_requires_matching_schema_v4_hr_agent(
     tmp_path: Path,
 ) -> None:
     setup_path = tmp_path / snow.SETUP_STATE
@@ -163,9 +163,8 @@ def test_load_context_requires_matching_schema_v3_hr_agent(
     setup_path.write_text(
         json.dumps(
             {
-                "schema_version": 3,
+                "schema_version": 4,
                 "intent": "DA foundation setup",
-                "connect_ready": True,
                 "environment": {
                     "id": ENVIRONMENT_ID,
                     "tenant_id": "00000000-0000-4000-8000-000000009999",
@@ -175,10 +174,16 @@ def test_load_context_requires_matching_schema_v3_hr_agent(
                         "https://example.environment.api.test.powerplatform.com"
                     ),
                 },
-                "agent": {
-                    "id": AGENT_ID,
-                    "schema_name": snow.HR_SCHEMA_NAME,
-                    "realm": "dev",
+                "agents": {
+                    AGENT_ID: {
+                        "connect_ready": True,
+                        "agent": {
+                            "id": AGENT_ID,
+                            "schema_name": snow.HR_SCHEMA_NAME,
+                            "realm": "dev",
+                            "workspace_slug": "employee-self-service-hr",
+                        },
+                    }
                 },
             }
         ),

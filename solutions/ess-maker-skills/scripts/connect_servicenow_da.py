@@ -26,7 +26,6 @@ from agentbuilder import (
     AgentBuilderError,
     RING_CONFIG,
     authenticate,
-    authenticate_scopes,
     validate_environment_host,
 )
 
@@ -36,7 +35,7 @@ ACTIVE_CONFIG = Path(".local/config.json")
 CONNECTOR_ID = "/providers/Microsoft.PowerApps/apis/shared_service-now"
 CONNECTOR_NAME = "shared_service-now"
 CONNECTIVITY_API_VERSION = "1"
-SETUP_SCHEMA_VERSION = 3
+SETUP_SCHEMA_VERSION = 4
 HR_SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
 TOKEN_CACHE = Path(".local/.agentbuilder_token_cache.bin")
 
@@ -94,38 +93,73 @@ def load_context(root: Path = Path(".")) -> dict[str, Any]:
         )
     if setup.get("intent") != "DA foundation setup":
         raise ServiceNowConnectError("The setup state is not DA foundation setup.")
-    if setup.get("connect_ready") is not True:
-        raise ServiceNowConnectError("DA foundation setup is not connect-ready.")
 
     environment = setup.get("environment")
-    agent = setup.get("agent")
-    if not isinstance(environment, dict) or not isinstance(agent, dict):
-        raise ServiceNowConnectError("The setup handoff is missing agent or environment.")
-    if agent.get("realm") != "dev":
-        raise ServiceNowConnectError("/connect only supports the editable Dev realm.")
-    if agent.get("schema_name") != HR_SCHEMA_NAME:
-        raise ServiceNowConnectError(
-            "This prototype supports only Employee Self-Service (HR)."
-        )
-
     config = _load_json(root / ACTIVE_CONFIG)
     active_slug = config.get("activeAgent")
-    agents = config.get("agents")
-    if not isinstance(agents, list):
+    operational_agents = config.get("agents")
+    if not isinstance(environment, dict):
+        raise ServiceNowConnectError("The setup handoff has no environment.")
+    if not isinstance(active_slug, str) or not active_slug:
+        raise ServiceNowConnectError("Operational config has no active agent.")
+    if not isinstance(operational_agents, list):
         raise ServiceNowConnectError("Operational setup config has no agent list.")
     active = next(
         (
             item
-            for item in agents
+            for item in operational_agents
             if isinstance(item, dict) and item.get("slug") == active_slug
         ),
         None,
     )
     if not isinstance(active, dict):
         raise ServiceNowConnectError("Could not resolve the active setup agent.")
-    if active.get("botId") != agent.get("id"):
+
+    active_bot_id = active.get("botId")
+    if not isinstance(active_bot_id, str):
+        raise ServiceNowConnectError("The active agent has no bot ID.")
+    try:
+        normalized_bot_id = str(uuid.UUID(active_bot_id))
+    except ValueError as exc:
+        raise ServiceNowConnectError(
+            "The active agent bot ID is invalid."
+        ) from exc
+
+    canonical_agents = setup.get("agents")
+    if not isinstance(canonical_agents, dict):
+        raise ServiceNowConnectError("Canonical setup state has no agent map.")
+    canonical = next(
+        (
+            value
+            for key, value in canonical_agents.items()
+            if isinstance(key, str)
+            and key.casefold() == normalized_bot_id.casefold()
+            and isinstance(value, dict)
+        ),
+        None,
+    )
+    if not isinstance(canonical, dict):
+        raise ServiceNowConnectError(
+            "The active agent has no canonical /setup record."
+        )
+    if canonical.get("connect_ready") is not True:
+        raise ServiceNowConnectError("DA foundation setup is not connect-ready.")
+    agent = canonical.get("agent")
+    if not isinstance(agent, dict):
+        raise ServiceNowConnectError("The setup record has no agent identity.")
+    if str(agent.get("id") or "").casefold() != normalized_bot_id.casefold():
         raise ServiceNowConnectError(
             "Canonical setup state and active agent config identify different agents."
+        )
+    if agent.get("workspace_slug") != active_slug:
+        raise ServiceNowConnectError(
+            "Canonical setup state and active workspace identify different agents."
+        )
+    if agent.get("realm") != "dev":
+        raise ServiceNowConnectError("/connect only supports the editable Dev realm.")
+    if agent.get("schema_name") != HR_SCHEMA_NAME:
+        raise ServiceNowConnectError(
+            "This prototype supports only Employee Self-Service (HR)."
         )
 
     relative_snapshot = active.get("agentBuilderChangeSetPath")
@@ -135,6 +169,7 @@ def load_context(root: Path = Path(".")) -> dict[str, Any]:
     return {
         "root": root,
         "setup": setup,
+        "agentSetup": canonical,
         "config": config,
         "environment": environment,
         "agent": agent,
@@ -499,11 +534,12 @@ def _connectivity_client(
     force_account_selection: bool = False,
 ) -> ConnectivityClient:
     environment = context["environment"]
-    token = authenticate_scopes(
+    token = authenticate(
         environment["tenant_id"],
-        connectivity_scopes(environment["ring"]),
+        environment["ring"],
         cache_path=TOKEN_CACHE,
         force_account_selection=force_account_selection,
+        scopes=tuple(connectivity_scopes(environment["ring"])),
     )
     return ConnectivityClient(
         environment["power_platform_api_endpoint"],
@@ -710,7 +746,9 @@ def publish(
         raise ServiceNowConnectError(
             "Publishing requires explicit confirmation (--yes)."
         )
-    response = _agentbuilder_client(context).publish(context["agent"]["id"])
+    response = _agentbuilder_client(context).publish_agent(
+        context["agent"]["id"]
+    )
     state_path = _state_path(context["agent"]["id"])
     state = _load_json(state_path) if state_path.exists() else {
         "schemaVersion": 1,

@@ -18,9 +18,10 @@ pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
 
 Read `.local/config.json`.
 
-If `releaseLine` is `da` and the selected integration is ServiceNow, read
-`src/skills/connect/servicenow-da/SKILL.md` and follow it. This is the DA-GA HR
-prototype and it must not route through the retained Preview-era ServiceNow
+Resolve the entry in `agents` whose `slug` equals `activeAgent`. If that
+entry's `releaseLine` is `da` and the selected integration is ServiceNow, read
+`src/skills/connect/servicenow-da/SKILL.md` and follow it. This is the DA-GA
+HR prototype and it must not route through the retained Preview-era ServiceNow
 steps.
 
 Otherwise read `src/skills/connect/step1.md` and follow it.
