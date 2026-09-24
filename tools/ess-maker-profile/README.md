@@ -19,7 +19,7 @@ When the extension activates inside the ESS Maker workspace it:
    - **Run a flightcheck** → `/flightcheck`
    - **Generate tests** → `/evaluate` (available after setup)
    - **Push to Copilot Studio** → `/push` (available after setup)
-   - plus: *View tutorial*, *Switch to standard VS Code / lite mode*
+   - plus: *View tutorial*, *Switch to standard VS Code / Maker Mode*
 4. **Routes every button click into Copilot Chat** with its guided query pre-filled.
 5. **Provides a "View tutorial"** button that opens a custom webview panel beside chat explaining how each button works.
 
@@ -27,7 +27,7 @@ The customer never sees code, a file tree, or a menu. The whole window is: **cha
 
 ## Layout
 
-| Stock VS Code | ESS Maker (lite mode) |
+| Stock VS Code | ESS Maker (Maker Mode) |
 |---|---|
 | Menu bar, activity bar, file tree, editor tabs, status bar | Chat fills the editor area; "Quick actions" button rail on the left; everything else hidden |
 
@@ -35,7 +35,7 @@ The customer never sees code, a file tree, or a menu. The whole window is: **cha
 
 ### Via the one-shot installer (recommended)
 
-The lite mode installer installs VS Code + the Maker Profile extension:
+The Maker Mode installer installs VS Code + the Maker Profile extension:
 
 **Windows** (PowerShell):
 ```powershell
@@ -47,7 +47,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-lite-mac.sh)"
 ```
 
-The standard installer (`bootstrap.ps1` / `bootstrap-mac.sh`) does NOT install the Maker Profile — it uses stock VS Code with `code chat /setup`.
+The Developer Mode installer (`bootstrap.ps1` / `bootstrap-mac.sh`) also installs the Maker Profile, but runs it in Developer Mode: stock VS Code layout with `code chat /setup` on first launch and a rendered README preview, rather than the Maker Mode guided layout. The mode is set via the `essMaker.mode` setting the installer writes (`standard` vs `lite`).
 
 ### From source (development)
 
@@ -61,7 +61,7 @@ code --install-extension ess-maker-profile-*.vsix --force
 
 Or press **F5** from `tools/ess-maker-profile/extension` for an Extension Development Host.
 
-On first activation the maker layout auto-applies. To restore the standard workbench, click "Switch to standard mode" in Quick Actions or run **ESS Maker: Restore Standard Layout** from the command palette.
+On first activation the maker layout auto-applies. To restore the standard workbench, click "Switch to standard VS Code" in Quick Actions or run **ESS Maker: Restore Standard Layout** from the command palette.
 
 ## What's in the box
 

@@ -1,5 +1,52 @@
 # Changelog
 
+## 0.4.26 (POC)
+
+- **Mode terminology renamed.** The two install experiences are now called
+  **Maker Mode** (formerly "lite" — the chat-first guided layout) and
+  **Developer Mode** (formerly "standard" — default VS Code layout with `/setup`
+  injection). Internal identifiers (the `essMaker.mode` values `lite`/`standard`,
+  installer flags) are unchanged; only user-facing labels and docs were updated.
+- **Developer Mode auto-sends `/setup` on every start.** In Developer Mode the
+  installer only runs `code chat /setup` on the very first launch; the extension
+  now re-sends `/setup` into Copilot Chat (alongside the README preview) on every
+  subsequent reopen, so Developer Mode users always land in setup. Maker Mode is
+  unchanged — setup there stays user-driven from the walkthrough/rail.
+- **Guided extension experience redesign.** The extension now opens a guided
+  layout modeled on the M365 Agents Toolkit: the activity bar stays visible with
+  an **Agent Developer Kit** rail, the getting-started walkthrough opens in the
+  center, and Copilot Chat sits on the right. This replaces the older chat-only
+  "lite" layout as the default (the chat-only layout is still available via the
+  **ESS Maker: Start Chat-Only Layout** command).
+  - **Quick start** view: a compact set of buttons — *Tutorial* (opens the
+    walkthrough), *Start set up* (`/setup`), *Modify a topic* (`/update`), and
+    *Run a flight check* (`/flightcheck`).
+  - **Customization** view: *Set up* (`/setup`), *Create or modify topic*
+    (`/create`), *Flight check* (`/flightcheck`), and *Push* (`/push`). Items
+    are gated behind setup with a lock icon, each has an inline ℹ️ info action,
+    and once setup completes the connected environment/agent shows under *Set
+    up* with a green check.
+  - **Help** view: *Introduction*, *Tutorial*, and *Documentation* links.
+  - **Getting started walkthrough** (`contributes.walkthroughs`) with six steps:
+    Introduction, Set up, Create a topic, Modify a topic, Run a flightcheck, and
+    Push to Copilot.
+  - New commands: `essMaker.runUpdate`, `essMaker.openIntroduction`,
+    `essMaker.showItemInfo`, `essMaker.openDocs`, and
+    `essMaker.openGuidedLayout` (re-open the guided view on demand). The
+    activity-bar container is retitled **Agent Developer Kit**.
+- **Developer-mode README preview is now extension-owned.** The rendered README
+  preview for Developer Mode is opened by the extension (`markdown.showPreview`)
+  instead of a committed `workbench.startupEditor: readme` workspace setting.
+  That shared setting used to also fire in the guided experience (and could
+  dirty the git tree the auto-update pull relies on); the preview is now scoped
+  to Developer Mode only.
+  - **Installer safety net.** Because the Developer-mode README preview now
+    depends on the extension being present, both installers
+    (`install-ess-adk.sh` / `Install-EssAdk.ps1`) track whether the extension
+    was confirmed installed and, in Developer Mode, open `README.md` directly at
+    launch when it was not — so the user always lands on the README even if the
+    extension install was skipped or failed.
+
 ## 0.4.25 (POC)
 
 - **Customize landing page** is available in Quick Actions. The setup-gated action opens a guided Copilot chat for branding, quick links, starter prompts, and insight cards.

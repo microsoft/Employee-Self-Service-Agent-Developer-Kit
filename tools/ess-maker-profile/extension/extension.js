@@ -74,6 +74,17 @@ const CHAT_ONLY_LAYOUT = {
     'telemetry.telemetryLevel': 'error',
 };
 
+// Guided layout (the extension's default experience). Unlike the older
+// chat-only layout, this keeps the activity bar visible so the Agent Developer
+// Kit rail (Quick start / Customization / Help) is reachable, and lets the
+// getting-started walkthrough open in the center with Copilot Chat on the
+// right. We only override the couple of settings needed to make that shape
+// reliable; everything else stays at the user's normal VS Code defaults.
+const GUIDED_LAYOUT = {
+    'workbench.activityBar.location': 'default',
+    'workbench.startupEditor': 'none',
+};
+
 // Copilot queries the user can fire through the Quick Actions button rail.
 // `requires` lists action ids that must already be "done" before this one
 // becomes clickable. The state is tracked in globalState and is also
@@ -196,8 +207,9 @@ function startPrereqWatcher(context) {
 
     const refresh = async () => {
         const changed = await syncPrerequisites(context);
-        if (changed && _actionsViewProvider) {
-            _actionsViewProvider.refresh();
+        if (changed) {
+            if (_actionsViewProvider) _actionsViewProvider.refresh();
+            if (_customizationProvider) _customizationProvider.refresh();
         }
     };
 
@@ -829,6 +841,62 @@ async function restoreStandardLayout() {
     }
 }
 
+// Apply the guided extension layout: activity bar visible, the Agent Developer
+// Kit rail focused on the left, the getting-started walkthrough in the center,
+// and Copilot Chat on the right. On first run we open the walkthrough + chat;
+// on later launches we just make sure the rail is reachable (settings persist,
+// so there is nothing aggressive to re-apply).
+async function applyGuidedLayout({ silent = false, firstRun = false } = {}) {
+    // Back up affected settings once so restoreStandardLayout can revert them.
+    if (_extensionContext && !_extensionContext.globalState.get(SETTINGS_BACKUP_KEY)) {
+        const cfg = vscode.workspace.getConfiguration();
+        const backup = {};
+        for (const key of Object.keys(GUIDED_LAYOUT)) {
+            const inspect = cfg.inspect(key);
+            if (inspect && inspect.globalValue !== undefined) {
+                backup[key] = inspect.globalValue;
+            }
+        }
+        await _extensionContext.globalState.update(SETTINGS_BACKUP_KEY, backup);
+    }
+
+    await applySettings(GUIDED_LAYOUT, vscode.ConfigurationTarget.Global);
+
+    // Let VS Code settle after folder/editor restore.
+    await new Promise((r) => setTimeout(r, firstRun ? 1200 : 400));
+
+    // Left: reveal the Agent Developer Kit rail.
+    await tryRun('workbench.view.extension.essMakerActions');
+    await tryRun('essMaker.actionsView.focus');
+
+    if (firstRun) {
+        // Standard-mode workspaces ship a "README on startup" setting, and VS
+        // Code may restore other editors. In the guided experience the
+        // walkthrough owns the center, so close any auto-opened editors first.
+        try {
+            const allTabs = [];
+            for (const group of vscode.window.tabGroups.all || []) {
+                for (const tab of group.tabs || []) allTabs.push(tab);
+            }
+            if (allTabs.length) await vscode.window.tabGroups.close(allTabs, true);
+        } catch {}
+        await tryRun('workbench.action.closeAllEditors');
+
+        // Center: open the getting-started walkthrough.
+        await openGettingStarted();
+        // Right: open Copilot Chat in the secondary side bar.
+        await new Promise((r) => setTimeout(r, 500));
+        await tryRun('workbench.action.chat.open');
+        // Folder restore can steal focus back to the Explorer — re-reveal the
+        // rail a couple of times so it stays put.
+        for (const delay of [800, 2000]) {
+            setTimeout(() => {
+                vscode.commands.executeCommand('workbench.view.extension.essMakerActions').then(() => {}, () => {});
+            }, delay);
+        }
+    }
+}
+
 async function openChatWithQuery(query) {
     // Strategy: focus the chat view, then call `workbench.action.chat.open`
     // with the query. The `{ query }` payload populates the input; some
@@ -877,13 +945,12 @@ class ActionsViewProvider {
             if (msg?.type === 'action') {
                 const action = ACTIONS.find(a => a.id === msg.id);
                 if (!action) return;
-                const completed = getCompleted(this._context);
-                const { enabled } = actionState(action, completed);
-                if (!enabled) return;
+                // Quick start buttons are always actionable; the skill itself
+                // guides the user if a prerequisite (e.g. setup) is missing.
+                // Gating/locks are surfaced in the Customization view instead.
                 await openChatWithQuery(action.query);
-                // Don't optimistically mark as completed — the file watcher
-                // will detect when the actual artifact appears on disk and
-                // enable dependent buttons at that point.
+            } else if (msg?.type === 'openWalkthrough') {
+                await openGettingStarted();
             } else if (msg?.type === 'restoreLayout') {
                 await this._context.globalState.update(LITE_MODE_KEY, false);
                 await clearSettings(Object.keys(CHAT_ONLY_LAYOUT), vscode.ConfigurationTarget.Global);
@@ -905,7 +972,7 @@ class ActionsViewProvider {
                 await applySettings(CHAT_ONLY_LAYOUT, vscode.ConfigurationTarget.Global);
                 await this.refresh();
                 const sel = await vscode.window.showInformationMessage(
-                    'Lite mode applied. Reload the window for full effect.',
+                    'Maker mode applied. Reload the window for full effect.',
                     'Reload Window'
                 );
                 if (sel === 'Reload Window') {
@@ -920,8 +987,6 @@ class ActionsViewProvider {
                     await resetCompleted(this._context);
                     await this.refresh();
                 }
-            } else if (msg?.type === 'openWalkthrough') {
-                toggleTutorialPanel();
             } else if (msg?.type === 'ready') {
                 await this.refresh();
             }
@@ -948,16 +1013,6 @@ class ActionsViewProvider {
             'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789'.charAt(Math.floor(Math.random() * 62))
         ).join('');
 
-        const buttons = ACTIONS.map(a => `
-            <button class="action" data-id="${a.id}" disabled>
-                <div class="icon">${a.icon}</div>
-                <div class="text">
-                    <div class="label">${a.label} <span class="badge" data-badge="${a.id}"></span></div>
-                    <div class="sub" data-sub="${a.id}">${a.sub}</div>
-                </div>
-            </button>
-        `).join('');
-
         return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -968,168 +1023,223 @@ class ActionsViewProvider {
         font-family: var(--vscode-font-family);
         font-size: var(--vscode-font-size);
         color: var(--vscode-foreground);
-        padding: 12px 10px 16px;
+        padding: 14px 12px 18px;
         margin: 0;
     }
-    h2 {
-        margin: 4px 4px 12px;
-        font-size: 13px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
+    .intro {
+        font-size: 12px;
+        line-height: 1.5;
         color: var(--vscode-descriptionForeground);
+        margin: 0 2px 16px;
     }
     .action {
         display: flex;
         align-items: center;
-        gap: 12px;
+        gap: 10px;
         width: 100%;
         margin: 0 0 8px;
-        padding: 12px 12px;
-        background: var(--vscode-button-secondaryBackground, var(--vscode-editor-background));
-        color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
-        border: 1px solid var(--vscode-panel-border, transparent);
-        border-radius: 6px;
+        padding: 10px 12px;
+        background: var(--vscode-button-background);
+        color: var(--vscode-button-foreground);
+        border: 1px solid transparent;
+        border-radius: 4px;
         cursor: pointer;
         text-align: left;
-        transition: background-color 100ms ease, opacity 100ms ease;
+        transition: background-color 100ms ease;
         font-family: inherit;
     }
-    .action:hover:not(:disabled) {
+    .action:hover { background: var(--vscode-button-hoverBackground); }
+    .action:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
+    .action.secondary {
+        background: var(--vscode-button-secondaryBackground, transparent);
+        color: var(--vscode-button-secondaryForeground, var(--vscode-foreground));
+        border-color: var(--vscode-panel-border, rgba(128,128,128,0.3));
+    }
+    .action.secondary:hover {
         background: var(--vscode-button-secondaryHoverBackground, var(--vscode-list-hoverBackground));
     }
-    .action:focus { outline: 1px solid var(--vscode-focusBorder); outline-offset: 1px; }
-    .action:disabled {
-        opacity: 0.45;
-        cursor: not-allowed;
-        filter: grayscale(0.5);
-    }
-    .action.done {
-        border-color: var(--vscode-charts-green, #4caf50);
-    }
-    .icon { font-size: 22px; line-height: 1; flex: 0 0 26px; text-align: center; }
-    .text { flex: 1; min-width: 0; }
-    .label { font-size: 13px; font-weight: 600; display: flex; align-items: center; gap: 6px; }
-    .sub { font-size: 11px; opacity: 0.75; margin-top: 2px; }
-    .badge {
-        font-size: 10px;
-        font-weight: 600;
-        padding: 1px 6px;
-        border-radius: 8px;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-    }
-    .badge.done {
-        background: var(--vscode-charts-green, #4caf50);
-        color: var(--vscode-editor-background);
-    }
-    .badge.locked {
-        background: var(--vscode-badge-background, rgba(128,128,128,0.25));
-        color: var(--vscode-badge-foreground, var(--vscode-foreground));
-    }
-    hr {
-        border: 0;
-        border-top: 1px solid var(--vscode-panel-border, rgba(128,128,128,0.2));
-        margin: 16px 0 12px;
-    }
-    .secondary {
-        background: transparent;
-        border: 1px dashed var(--vscode-panel-border, rgba(128,128,128,0.3));
-    }
+    .icon { font-size: 18px; line-height: 1; flex: 0 0 22px; text-align: center; }
+    .label { font-size: 13px; font-weight: 600; }
 </style>
 </head>
 <body>
-    <h2>Customize your ESS agent</h2>
-    ${buttons}
-    <hr />
-    <button class="action secondary" data-action="reapplyLayout" id="btn-lite">
-        <div class="icon">🪟</div>
-        <div class="text">
-            <div class="label">Switch to lite mode</div>
-            <div class="sub">Chat-only layout with big buttons</div>
-        </div>
-    </button>
-    <button class="action secondary" data-action="resetProgress">
-        <div class="icon">↩️</div>
-        <div class="text">
-            <div class="label">Reset progress</div>
-            <div class="sub">Re-lock the steps</div>
-        </div>
-    </button>
-    <button class="action secondary" data-action="openWalkthrough" id="btn-tutorial">
+    <p class="intro">
+        Build, update, and publish your Employee Self-Service agent in plain English &mdash; no code required.
+        Start with the tutorial, or jump straight in below.
+    </p>
+    <button class="action secondary" data-action="openWalkthrough">
         <div class="icon">📖</div>
-        <div class="text">
-            <div class="label" id="btn-tutorial-label">View tutorial</div>
-            <div class="sub">How each button works</div>
-        </div>
+        <div class="label">Tutorial</div>
     </button>
-    <button class="action secondary" data-action="restoreLayout" id="btn-standard">
-        <div class="icon">⚙️</div>
-        <div class="text">
-            <div class="label">Switch to standard VS Code</div>
-            <div class="sub">Show menus, files, status bar</div>
-        </div>
+    <button class="action" data-id="setup">
+        <div class="icon">🔌</div>
+        <div class="label">Start set up</div>
+    </button>
+    <button class="action" data-id="update">
+        <div class="icon">✏️</div>
+        <div class="label">Modify a topic</div>
+    </button>
+    <button class="action" data-id="flightcheck">
+        <div class="icon">✈️</div>
+        <div class="label">Run a flight check</div>
     </button>
 <script nonce="${nonce}">
     const vscode = acquireVsCodeApi();
-    const subs = {};
     document.querySelectorAll('button[data-id]').forEach(btn => {
-        subs[btn.dataset.id] = btn.querySelector('.sub').textContent;
-        btn.addEventListener('click', () => {
-            if (btn.disabled) return;
-            vscode.postMessage({ type: 'action', id: btn.dataset.id });
-        });
+        btn.addEventListener('click', () => vscode.postMessage({ type: 'action', id: btn.dataset.id }));
     });
     document.querySelectorAll('button[data-action]').forEach(btn => {
         btn.addEventListener('click', () => vscode.postMessage({ type: btn.dataset.action }));
-    });
-    window.addEventListener('message', (e) => {
-        if (e.data?.type === 'tutorialState') {
-            const label = document.getElementById('btn-tutorial-label');
-            if (label) label.textContent = e.data.open ? 'Hide tutorial' : 'View tutorial';
-            return;
-        }
-        if (e.data?.type !== 'state') return;
-        for (const [id, s] of Object.entries(e.data.states)) {
-            const btn = document.querySelector('button[data-id="' + id + '"]');
-            if (!btn) continue;
-            btn.disabled = !s.enabled;
-            btn.classList.toggle('done', !!s.done);
-            const badge = btn.querySelector('[data-badge="' + id + '"]');
-            const sub = btn.querySelector('[data-sub="' + id + '"]');
-            if (s.done) {
-                badge.className = 'badge done';
-                badge.textContent = '✓';
-            } else if (!s.enabled) {
-                badge.className = 'badge locked';
-                badge.textContent = 'locked';
-            } else {
-                badge.className = 'badge';
-                badge.textContent = '';
-            }
-            if (!s.enabled && s.blockedBy) {
-                btn.title = 'Complete first: ' + s.blockedBy.join(', ');
-                sub.textContent = 'Complete first: ' + s.blockedBy.join(', ');
-            } else {
-                btn.title = '';
-                sub.textContent = subs[id];
-            }
-        }
-        // Show/hide mode-toggle buttons based on current layout.
-        const btnLite = document.getElementById('btn-lite');
-        const btnStandard = document.getElementById('btn-standard');
-        if (e.data.liteMode) {
-            btnLite.style.display = 'none';
-            btnStandard.style.display = '';
-        } else {
-            btnLite.style.display = '';
-            btnStandard.style.display = 'none';
-        }
     });
     vscode.postMessage({ type: 'ready' });
 </script>
 </body>
 </html>`;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Native "Getting started" walkthrough + Customization / Help tree views
+// ---------------------------------------------------------------------------
+
+const WALKTHROUGH_ID = 'microsoft-ess.ess-maker-profile#essMaker.gettingStarted';
+
+// Open the built-in VS Code walkthrough (center panel). When `stepId` is given
+// we focus that specific step; otherwise the walkthrough opens at its start.
+async function openGettingStarted(stepId) {
+    try {
+        if (stepId) {
+            await vscode.commands.executeCommand(
+                'workbench.action.openWalkthrough',
+                { category: WALKTHROUGH_ID, step: `${WALKTHROUGH_ID}#${stepId}` },
+                false
+            );
+        } else {
+            await vscode.commands.executeCommand('workbench.action.openWalkthrough', WALKTHROUGH_ID, false);
+        }
+    } catch (err) {
+        try { _log(`openGettingStarted error: ${err && err.message}`); } catch {}
+    }
+}
+
+// The Customization rail mirrors the guided journey. `requires` gates an item
+// behind Setup; locked items show a lock icon and a "complete setup" nudge.
+const CUSTOMIZATION_ITEMS = [
+    { id: 'setup',       label: 'Set up',                 run: 'essMaker.runSetup',       icon: 'account',   requires: [],        desc: 'Sign in to your Power Platform environment and connect your agent.' },
+    { id: 'create',      label: 'Create or modify topic', run: 'essMaker.runCreate',      icon: 'edit',      requires: ['setup'], desc: 'Create a new topic or change an existing one, described in plain English.' },
+    { id: 'flightcheck', label: 'Flight check',           run: 'essMaker.runFlightcheck', icon: 'checklist', requires: ['setup'], desc: 'Run 41+ readiness checks on your agent before you deploy.' },
+    { id: 'push',        label: 'Push',                   run: 'essMaker.runPush',        icon: 'rocket',    requires: ['setup'], desc: 'Push your Employee Self-Service agent changes to your audience.' },
+];
+
+// Read the connected environment/agent from .local/config.json so the Set up
+// item can show what the workspace is currently pointed at (with a green
+// check). Returns null when setup is not complete or the file is unreadable.
+async function getConnectedInfo() {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || !folders.length) return null;
+    try {
+        const uri = vscode.Uri.joinPath(folders[0].uri, '.local', 'config.json');
+        const buf = await vscode.workspace.fs.readFile(uri);
+        const cfg = JSON.parse(Buffer.from(buf).toString('utf8'));
+        if (cfg.setup !== 'complete') return null;
+        const name = (cfg.agent && (cfg.agent.name || cfg.agent.displayName)) || cfg.activeAgent;
+        let env = '';
+        try { env = new URL(cfg.dataverseEndpoint).host; } catch {}
+        return { label: name || env || 'Connected', detail: env };
+    } catch {
+        return null;
+    }
+}
+
+class CustomizationTreeProvider {
+    constructor(context) {
+        this._context = context;
+        this._emitter = new vscode.EventEmitter();
+        this.onDidChangeTreeData = this._emitter.event;
+    }
+    refresh() { this._emitter.fire(); }
+    getTreeItem(item) { return item; }
+    async getChildren(element) {
+        if (element && element._adkId === 'setup') {
+            const info = await getConnectedInfo();
+            if (!info) return [];
+            const child = new vscode.TreeItem(info.label, vscode.TreeItemCollapsibleState.None);
+            child.iconPath = new vscode.ThemeIcon('pass-filled', new vscode.ThemeColor('charts.green'));
+            child.tooltip = info.detail ? `Connected: ${info.detail}` : 'Connected';
+            child.contextValue = 'adkAccount';
+            return [child];
+        }
+        if (element) return [];
+        const completed = getCompleted(this._context);
+        const info = await getConnectedInfo();
+        return CUSTOMIZATION_ITEMS.map((meta) => {
+            const isSetup = meta.id === 'setup';
+            const unlocked = meta.requires.every((r) => completed.has(r));
+            const collapsible = (isSetup && info)
+                ? vscode.TreeItemCollapsibleState.Expanded
+                : vscode.TreeItemCollapsibleState.None;
+            const item = new vscode.TreeItem(meta.label, collapsible);
+            item._adkId = meta.id;
+            item._adkInfo = `${meta.label}: ${meta.desc}`;
+            item.contextValue = 'adkInfo:' + meta.id;
+            item.tooltip = new vscode.MarkdownString(`**${meta.label}**\n\n${meta.desc}`);
+            if (isSetup || unlocked) {
+                item.iconPath = new vscode.ThemeIcon(meta.icon);
+                item.command = { command: meta.run, title: meta.label };
+            } else {
+                item.iconPath = new vscode.ThemeIcon('lock');
+                item.description = 'Complete Set up first';
+                item.command = { command: 'essMaker.itemLocked', title: meta.label };
+            }
+            return item;
+        });
+    }
+}
+
+class HelpTreeProvider {
+    getTreeItem(item) { return item; }
+    getChildren(element) {
+        if (element) return [];
+        const intro = new vscode.TreeItem('Introduction', vscode.TreeItemCollapsibleState.None);
+        intro.iconPath = new vscode.ThemeIcon('info');
+        intro.tooltip = 'What the Agent Developer Kit does and how the panels fit together.';
+        intro.command = { command: 'essMaker.openIntroduction', title: 'Introduction' };
+
+        const tutorial = new vscode.TreeItem('Tutorial', vscode.TreeItemCollapsibleState.None);
+        tutorial.iconPath = new vscode.ThemeIcon('book');
+        tutorial.tooltip = 'Step-by-step walkthrough of building an ESS agent.';
+        tutorial.command = { command: 'essMaker.openWalkthrough', title: 'Tutorial' };
+
+        const docs = new vscode.TreeItem('Documentation', vscode.TreeItemCollapsibleState.None);
+        docs.iconPath = new vscode.ThemeIcon('link-external');
+        docs.tooltip = 'Open the Employee Self-Service Agent Developer Kit documentation.';
+        docs.command = { command: 'essMaker.openDocs', title: 'Documentation' };
+
+        return [intro, tutorial, docs];
+    }
+}
+
+let _customizationProvider = null;
+let _helpProvider = null;
+
+// Standard mode ships no guided layout; instead it shows a rendered preview of
+// the workspace README (the "static README preview") alongside the Copilot Chat
+// that the installer opens via `code chat /setup`. This lives in the extension
+// (not a committed workspace setting) so it never touches the guided/lite
+// experience and never dirties the git tree the auto-update pull relies on.
+async function openReadmePreview() {
+    const folders = vscode.workspace.workspaceFolders;
+    if (!folders || !folders.length) return;
+    const readme = vscode.Uri.joinPath(folders[0].uri, 'README.md');
+    try {
+        await vscode.workspace.fs.stat(readme);
+    } catch {
+        return; // no README to preview
+    }
+    try {
+        await vscode.commands.executeCommand('markdown.showPreview', readme);
+    } catch (err) {
+        try { _log(`openReadmePreview error: ${err && err.message}`); } catch {}
     }
 }
 
@@ -1438,6 +1548,7 @@ function activate(context) {
     const legacyMap = {
         'essMaker.runSetup': '/setup',
         'essMaker.runCreate': '/create',
+        'essMaker.runUpdate': '/update',
         'essMaker.runScan': '/scan',
         'essMaker.runFlightcheck': '/flightcheck',
         'essMaker.runPush': '/push',
@@ -1448,6 +1559,9 @@ function activate(context) {
         );
     }
 
+    _customizationProvider = new CustomizationTreeProvider(context);
+    _helpProvider = new HelpTreeProvider();
+
     context.subscriptions.push(
         vscode.commands.registerCommand('essMaker.applyMakerLayout', () => applyChatOnlyLayout()),
         vscode.commands.registerCommand('essMaker.startChatOnly', () => applyChatOnlyLayout()),
@@ -1456,13 +1570,30 @@ function activate(context) {
             tryRun('workbench.view.extension.essMakerActions').then(() => tryRun('essMaker.actionsView.focus'))
         ),
         vscode.commands.registerCommand('essMaker.openWalkthrough', () =>
-            toggleTutorialPanel()
+            openGettingStarted()
+        ),
+        vscode.commands.registerCommand('essMaker.openGuidedLayout', () =>
+            applyGuidedLayout({ silent: false, firstRun: true })
+        ),
+        vscode.commands.registerCommand('essMaker.openIntroduction', () =>
+            openGettingStarted('introduction')
+        ),
+        vscode.commands.registerCommand('essMaker.showItemInfo', (item) =>
+            vscode.window.showInformationMessage(item && item._adkInfo ? item._adkInfo : 'Agent Developer Kit')
+        ),
+        vscode.commands.registerCommand('essMaker.itemLocked', () =>
+            vscode.window.showInformationMessage('Complete Set up first to unlock this step.')
+        ),
+        vscode.commands.registerCommand('essMaker.openDocs', () =>
+            vscode.env.openExternal(vscode.Uri.parse('https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit'))
         ),
         vscode.window.registerWebviewViewProvider(
             'essMaker.actionsView',
             _actionsViewProvider = new ActionsViewProvider(context.extensionUri, context),
             { webviewOptions: { retainContextWhenHidden: true } }
-        )
+        ),
+        vscode.window.registerTreeDataProvider('essMaker.customizationView', _customizationProvider),
+        vscode.window.registerTreeDataProvider('essMaker.helpView', _helpProvider)
     );
 
     // Start watching workspace files for prerequisite artifacts.
@@ -1474,8 +1605,12 @@ function activate(context) {
     // - First run: determine mode (lite vs standard) from VS Code setting
     //   written by the installer.
     //   Lite mode: applies chat-only layout; user clicks Setup to run /setup.
-    //   Standard mode: injects /setup into Copilot Chat automatically.
+    //   Standard mode: the installer runs `code chat /setup`, so /setup is
+    //   already sent on the first launch; the extension only adds the README
+    //   preview here.
     // - Subsequent lite activations: silently re-apply layout.
+    // - Subsequent standard activations: re-show the README preview AND
+    //   auto-send /setup (the installer does not re-run on later reopens).
     const alreadyApplied = context.globalState.get(APPLIED_KEY, false);
     const userWantsLite = context.globalState.get(LITE_MODE_KEY, true); // default to lite
     const installerMode = vscode.workspace.getConfiguration().get('essMaker.mode', '');
@@ -1496,37 +1631,37 @@ function activate(context) {
                 _log(`activate: alreadyConfigured=${alreadyConfigured}`);
 
                 if (isStandardMode) {
-                    // Standard mode: no layout changes. The installer handles
-                    // /setup injection via `code chat` which opens in the
-                    // sidebar panel. Nothing to do here.
+                    // Standard mode: no guided layout. The installer opens
+                    // Copilot Chat + /setup via `code chat`; the extension adds
+                    // the rendered README preview (previously a committed
+                    // workspace setting, which also affected the guided
+                    // experience — now scoped to standard mode only).
                     context.globalState.update(APPLIED_KEY, true);
-                    _log('activate: standard mode — installer handles /setup via code chat');
+                    _log('activate: standard mode — README preview; installer handles /setup via code chat');
+                    setTimeout(() => { openReadmePreview().catch(() => {}); }, 1200);
                 } else {
-                    // Lite mode: apply layout.
-                    applyChatOnlyLayout({ silent: false })
+                    // Extension (guided) mode: activity bar + rail visible,
+                    // walkthrough in the center, Copilot Chat on the right.
+                    // Setup is user-driven from the walkthrough / rail, so we
+                    // do not auto-inject /setup here.
+                    applyGuidedLayout({ silent: false, firstRun: true })
                         .then(() => context.globalState.update(APPLIED_KEY, true))
                         .catch(() => {});
-                    if (alreadyConfigured) {
-                        _log('activate: skipping /setup (already configured), opening chat');
-                        // Returning user in lite mode — just open the chat panel
-                        // so they can start working right away.
-                        setTimeout(() => tryRun('workbench.action.chat.open').catch(() => {}), 3000);
-                    } else {
-                        // Wait for welcome wizard to finish, then inject /setup.
-                        waitForWelcomeWizard()
-                            .then(() => { _log('activate: wizard done (lite), waiting 3s...'); return new Promise(r => setTimeout(r, 3000)); })
-                            .then(() => { _log('activate: calling injectSetup (lite)'); return injectSetup(); })
-                            .then(() => _log('activate: injectSetup completed (lite)'))
-                            .catch((err) => {
-                                _log(`activate: ERROR in lite wizard chain: ${err && err.message}`);
-                                console.warn('[ess-maker] Welcome wizard wait timed out, skipping auto /setup');
-                            });
-                    }
                 }
             }).catch(err => _log(`activate: checkPrerequisites error: ${err && err.message}`));
         } else if (userWantsLite) {
-            // Subsequent lite mode launch: silently re-apply layout.
-            setTimeout(() => { applyChatOnlyLayout({ silent: true }).catch(() => {}); }, 1500);
+            // Subsequent guided-mode launch: settings persist, so just make
+            // sure the rail is reachable without re-opening walkthrough/chat.
+            setTimeout(() => { applyGuidedLayout({ silent: true, firstRun: false }).catch(() => {}); }, 1200);
+        } else {
+            // Subsequent standard-mode launch: the installer only runs `code
+            // chat /setup` on the very first launch, so on every later reopen
+            // the extension re-shows the README preview AND re-sends /setup
+            // into Copilot Chat automatically (standard mode only).
+            setTimeout(() => {
+                openReadmePreview().catch(() => {});
+                setTimeout(() => { injectSetup().catch(() => {}); }, 1000);
+            }, 1200);
         }
         // If userWantsLite is false (standard mode), skip re-applying.
 
