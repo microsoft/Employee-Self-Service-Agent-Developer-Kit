@@ -10,12 +10,16 @@ has `connect_ready: true`. Read `src/skills/flightcheck/SKILL.md` and follow its
 Start section before choosing a scope. Do not send the generic `/setup` welcome
 message solely because canonical readiness is incomplete.
 
-For completed DA setup and standalone `flightCheckOnly` mode, this DA-only
-release supports only the local-files FlightCheck scope. Follow the skill with
-scope fixed to `local`. Do not offer or run Dataverse, integration,
-prerequisite, or publishing checks. For incomplete DA setup, use only the
-skill's bounded **DA setup readiness recovery** route and stop after its
-runtime-readiness report.
+For completed DA setup, follow the skill's normal FlightCheck scope flow. Do
+not force the local-files scope. For standalone `flightCheckOnly` mode, keep
+the scope fixed to `local`; do not offer or run Dataverse, integration,
+prerequisite, or publishing checks.
+
+For incomplete DA setup, follow the skill's Start section. Generic setup
+validation uses the bounded **DA setup readiness recovery** route. An explicit
+full FlightCheck request first refreshes that setup readiness through the same
+route and then continues into the existing native full scope. A bare
+`/flightcheck` asks the maker to choose between those two paths.
 
 You are a script executor. Read `src/skills/flightcheck/SKILL.md` and follow
 it. It will tell you what to do.

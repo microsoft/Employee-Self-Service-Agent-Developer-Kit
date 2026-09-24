@@ -1240,7 +1240,7 @@ def test_da_local_capabilities_remain_available() -> None:
         assert "unchanged deployed" in normalized, name
 
 
-def test_flightcheck_preserves_standalone_and_local_only_modes() -> None:
+def test_flightcheck_composes_setup_recovery_with_native_full_scope() -> None:
     prompt = (_PROMPTS / "flightcheck.prompt.md").read_text(encoding="utf-8")
     normalized = " ".join(prompt.split())
     skill = (
@@ -1251,10 +1251,22 @@ def test_flightcheck_preserves_standalone_and_local_only_modes() -> None:
     assert "diagnose incomplete DA runtime readiness" in normalized
     assert "generic `/setup` welcome message" in normalized
     assert "DA setup readiness recovery" in normalized
+    assert "For completed DA setup" in normalized
+    assert "Do not force the local-files scope" in normalized
+    assert "For standalone `flightCheckOnly` mode" in normalized
     assert "scope fixed to `local`" in normalized
+    assert "explicit full FlightCheck request" in normalized
+    assert "A bare `/flightcheck` asks the maker to choose" in normalized
     assert "`flightCheckOnly: true`" in normalized_skill
+    assert (
+        "For standalone `flightCheckOnly` mode, follow the normal flow with scope fixed "
+        "to `local`"
+    ) in normalized_skill
     assert "`agent.workspace_slug` matches local config's `activeAgent`" in normalized_skill
     assert "`connect_ready` is `false`" in normalized_skill
+    assert "Full FlightCheck during incomplete DA setup" in normalized_skill
+    assert "Recheck setup readiness" in normalized_skill
+    assert "Run full FlightCheck" in normalized_skill
     assert "Run all four setup-owned checkpoints" in normalized_skill
     assert (
         "agent access, environment capacity, native connections, and agent content"
@@ -1263,4 +1275,17 @@ def test_flightcheck_preserves_standalone_and_local_only_modes() -> None:
     assert (
         "Do not rerun attachment, materialization, import, or agent selection"
         in normalized_skill
+    )
+    assert (
+        "including a `maintain-flightcheck` call for every checkpoint that produced "
+        "results"
+    ) in normalized_skill
+    assert "Continue at **Step 2b** with scope fixed to `full`" in normalized_skill
+    assert "Do not hand-author or edit any `results.json`" in normalized_skill
+    assert (
+        "The setup maintenance result remains authoritative for `connect_ready`"
+        in normalized_skill
+    )
+    assert "Do not derive setup readiness from the full FlightCheck aggregate counts" in (
+        normalized_skill
     )
