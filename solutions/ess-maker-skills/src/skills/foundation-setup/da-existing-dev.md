@@ -10,10 +10,10 @@ Use one Power Platform environment per ADK workspace. The workspace can contain 
 
 Ask for the URL of the agent in Copilot Studio only when the parent setup router has neither a current-invocation inspection result nor a complete recorded local target. A complete agent URL is preferred for a new target because it identifies the environment and agent without tenant-wide inventory. Never request a URL merely to revalidate the exact agent already recorded for this workspace.
 
-Infer the environment ID, agent ID, and service ring from the URL. A recognized
-Copilot Studio hostname is authoritative ring evidence and completes ring
-selection. Ask for the ring only when the hostname is unrecognized, and ask for
-the environment ID or agent ID only when either is unclear.
+Infer the environment ID, agent ID, and service ring from the URL. When the URL
+does not identify the ring, use **Resolve the service ring** in
+`src/skills/foundation-setup/da-environment-target.md` exactly. Ask only when
+the environment ID or agent ID is unclear.
 
 Use a current-invocation `DA_AGENT_ROUTE_JSON:` result when the parent setup
 router already inspected the supplied or recorded agent. Otherwise, use the
@@ -86,7 +86,13 @@ python scripts/setup_existing_da.py list-agents \
   --ring "{RING}"
 ```
 
-Show candidate display names and ask the maker to choose one. For an identity returned by this native list, run the parent's selected-agent product-line reconciliation with `--native-da-ga` before validation or attachment. Validate only the selected candidate through `validate-agent` or `attach`. A missing list entry is not proof that a directly addressable agent is absent; accept a known agent ID and run the full selected-agent product-line reconciliation without `--native-da-ga` before validating it directly.
+When candidates are returned, show their display names and ask the maker to choose one. For an identity returned by this native list, run the parent's selected-agent product-line reconciliation with `--native-da-ga` before validation or attachment. Validate only the selected candidate through `validate-agent` or `attach`.
+
+When the list is empty, say:
+
+> No visible editable Dev agents were listed in this environment. A directly addressable agent may still be available.
+
+Present **Retry setup with another target** from `da-environment-target.md`, including its **Use an agent URL** choice. For an exact agent selected through that URL, run the full selected-agent product-line reconciliation without `--native-da-ga` before validating it directly.
 
 ## Maintain native FlightCheck evidence
 

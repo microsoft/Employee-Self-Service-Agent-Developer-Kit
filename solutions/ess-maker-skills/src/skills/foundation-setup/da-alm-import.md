@@ -11,10 +11,10 @@ This skill owns the maker interaction and the handoff into existing-Dev setup.
 
 ## Identify the target
 
-Accept an environment URL and infer its environment ID and service ring. A
-recognized Copilot Studio hostname is authoritative ring evidence and completes
-ring selection. Ask for the ring only when the hostname is unrecognized, and
-ask for the environment ID only when it is unclear.
+Accept an environment URL and infer its environment ID and service ring. When
+the URL does not identify the ring, use **Resolve the service ring** in
+`src/skills/foundation-setup/da-environment-target.md` exactly. Ask the maker
+only when the environment ID is unclear.
 
 Pass the resolved environment ID and ring to the import command.
 

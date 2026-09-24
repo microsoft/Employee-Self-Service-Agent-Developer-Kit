@@ -32,6 +32,7 @@ from agentbuilder import (
     cached_account_names,
     canonical_json,
     derive_environment_host,
+    list_environments,
     validate_environment_host,
 )
 from agentbuilder_object_model import (
@@ -130,11 +131,9 @@ def _print_exception(error: BaseException) -> None:
         print(f"NOTE: {note}", file=sys.stderr)
 
 
-def _print_http_error_response(
+def _find_http_error(
     error: BaseException,
-    *,
-    marker: str,
-) -> None:
+) -> AgentBuilderHTTPError | None:
     current: BaseException | None = error
     seen: set[int] = set()
     while (
@@ -144,8 +143,17 @@ def _print_http_error_response(
     ):
         seen.add(id(current))
         current = current.__cause__ or current.__context__
+    return current if isinstance(current, AgentBuilderHTTPError) else None
+
+
+def _print_http_error_response(
+    error: BaseException,
+    *,
+    marker: str,
+) -> None:
+    current = _find_http_error(error)
     if (
-        not isinstance(current, AgentBuilderHTTPError)
+        current is None
         or current.response is None
     ):
         return
@@ -2332,6 +2340,68 @@ def summarize_agents(agents: list[dict[str, Any]]) -> list[dict[str, str]]:
     )
 
 
+def summarize_environments(
+    environments: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return stable maker-selection fields for visible environments."""
+    choices: list[dict[str, Any]] = []
+    for environment in environments:
+        environment_id = _normalize_environment_id(
+            str(environment.get("id") or "")
+        )
+        display_name = str(
+            environment.get("displayName") or environment_id
+        ).strip()
+        choices.append(
+            {
+                "id": environment_id,
+                "name": display_name or environment_id,
+                "type": str(environment.get("type") or ""),
+                "state": str(environment.get("state") or ""),
+                "region": str(
+                    environment.get("geo")
+                    or environment.get("azureRegion")
+                    or ""
+                ),
+            }
+        )
+    return sorted(
+        choices,
+        key=lambda item: (item["name"].casefold(), item["id"]),
+    )
+
+
+def write_environment_list_evidence(
+    kit_root: Path,
+    *,
+    tenant_id: str,
+    ring: str,
+    environments: list[dict[str, Any]],
+) -> Path:
+    """Persist the complete service response outside the picker payload."""
+    evidence_path = (
+        kit_root.resolve()
+        / ".local"
+        / "setup"
+        / f"environment-list-{ring}.json"
+    )
+    evidence_path.parent.mkdir(parents=True, exist_ok=True)
+    evidence_path.write_text(
+        json.dumps(
+            {
+                "tenantId": tenant_id,
+                "ring": ring,
+                "environments": environments,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    return evidence_path
+
+
 def _add_agentbuilder_target_arguments(
     parser: argparse.ArgumentParser,
 ) -> None:
@@ -2418,6 +2488,30 @@ def build_parser() -> argparse.ArgumentParser:
     )
     select_agent.add_argument("--agent-id", required=True)
     select_agent.add_argument("--kit-root", type=Path, default=Path.cwd())
+    list_environment_choices = commands.add_parser(
+        "list-environments",
+        help="List Power Platform environments visible to one account.",
+    )
+    list_environment_choices.add_argument(
+        "--ring",
+        choices=("prod", "preprod", "test"),
+        required=True,
+    )
+    list_environment_choices.add_argument("--tenant-id")
+    list_environment_choices.add_argument(
+        "--select-account",
+        action="store_true",
+    )
+    list_environment_choices.add_argument("--account")
+    list_environment_choices.add_argument(
+        "--api-version",
+        default=DEFAULT_API_VERSION,
+    )
+    list_environment_choices.add_argument(
+        "--kit-root",
+        type=Path,
+        default=Path.cwd(),
+    )
     list_agents = commands.add_parser(
         "list-agents",
         help="List directly discoverable AgentBuilder agents.",
@@ -2523,6 +2617,30 @@ def main(argv: list[str] | None = None) -> int:
             result = {"accounts": cached_account_names(cache_path)}
             print(
                 "DA_AGENTBUILDER_ACCOUNTS_JSON:"
+                f"{json.dumps(result, ensure_ascii=True)}"
+            )
+            return 0
+        if args.command == "list-environments":
+            token, tenant_id = _authentication_from_args(args, args.ring)
+            environments = list_environments(
+                token,
+                args.ring,
+                api_version=args.api_version,
+            )
+            evidence_path = write_environment_list_evidence(
+                args.kit_root,
+                tenant_id=tenant_id,
+                ring=args.ring,
+                environments=environments,
+            )
+            result = {
+                "tenantId": tenant_id,
+                "ring": args.ring,
+                "environments": summarize_environments(environments),
+                "evidencePath": str(evidence_path),
+            }
+            print(
+                "DA_ENVIRONMENT_LIST_JSON:"
                 f"{json.dumps(result, ensure_ascii=True)}"
             )
             return 0
@@ -2642,9 +2760,28 @@ def main(argv: list[str] | None = None) -> int:
         OSError,
         ValueError,
     ) as exc:
+        if args.command == "list-environments":
+            http_error = _find_http_error(exc)
+            if http_error is not None:
+                error_result = {
+                    "statusCode": http_error.status_code,
+                    "errorCode": http_error.error_code,
+                    "requestId": http_error.request_id,
+                    "authorizationFailure": (
+                        http_error.status_code in (401, 403)
+                    ),
+                }
+                print(
+                    "DA_ENVIRONMENT_LIST_ERROR_JSON:"
+                    f"{json.dumps(error_result, ensure_ascii=True)}"
+                )
         _print_http_error_response(
             exc,
-            marker="DA_EXISTING_DEV_ERROR",
+            marker=(
+                "DA_ENVIRONMENT_LIST_ERROR"
+                if args.command == "list-environments"
+                else "DA_EXISTING_DEV_ERROR"
+            ),
         )
         _print_exception(exc)
         return 1

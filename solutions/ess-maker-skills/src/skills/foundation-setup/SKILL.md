@@ -242,13 +242,10 @@ already targets its related Dev agent.
 
 When the maker supplies a Copilot Studio URL that identifies an agent and has
 not explicitly selected package import, infer its environment ID, agent ID,
-and service ring. Treat a recognized Copilot Studio hostname as authoritative
-ring evidence, including `copilotstudio.microsoft.com` and
-`copilotstudio.preview.microsoft.com` for `prod`. A recognized hostname
-completes ring selection. Ask for the ring only when the hostname is
-unrecognized, and ask for the environment ID or agent ID only when either is
-unclear. Complete the selected-agent product-line reconciliation before
-running:
+and service ring. When the URL does not identify the ring, use **Resolve the
+service ring** in `src/skills/foundation-setup/da-environment-target.md`
+exactly. Ask only when the environment ID or agent ID is unclear. Complete the
+selected-agent product-line reconciliation before running:
 
 ```text
 python scripts/setup_existing_da.py inspect-agent \

@@ -39,7 +39,8 @@ Do not describe an unknown claim as supported behavior.
 1. For the session-facing supplied-package path, require the caller to supply
    an explicitly resolved environment ID and service ring. Treat a recognized
    Copilot Studio hostname as authoritative ring evidence that completes ring
-   selection. Ask for the ring only when the hostname is unrecognized, and ask
+   selection. When the hostname is unrecognized and the ring remains
+   unresolved, use the foundation setup's shared ring-selection template. Ask
    for the target only when it remains unclear.
 2. Validate the exact environment-specific API host before sending a token.
 3. Validate local projection dependencies before remote mutation.
