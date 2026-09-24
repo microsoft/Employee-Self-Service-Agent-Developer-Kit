@@ -16,7 +16,14 @@ If the user specified an integration as an argument (e.g., the user said
 pass it to step1 as PRE_SELECTED_INTEGRATION. Step1 will skip the
 "which system" question and go directly to routing for that integration.
 
-Read `src/skills/connect/step1.md` and follow it.
+Read `.local/config.json`.
+
+If `releaseLine` is `da` and the selected integration is ServiceNow, read
+`src/skills/connect/servicenow-da/SKILL.md` and follow it. This is the DA-GA HR
+prototype and it must not route through the retained Preview-era ServiceNow
+steps.
+
+Otherwise read `src/skills/connect/step1.md` and follow it.
 
 (Step 1 asks which integration, detects existing state, and dispatches —
 ServiceNow to its own step files and Workday to the hybrid-extension boundary
@@ -29,7 +36,14 @@ in `src/skills/setup/SKILL.md`.)
 Each integration routes differently — ServiceNow has its own step files;
 Workday delegates to the setup orchestrator:
 
-- **ServiceNow**: `src/skills/connect/servicenow/`
+- **ServiceNow DA-GA HR prototype**:
+  `src/skills/connect/servicenow-da/SKILL.md`
+  - State:
+    `.local/connect/servicenow/agents/<agent-id>/state.json`
+  - Uses MinimalBot Components and Power Platform Connectivity APIs.
+  - Does not use Dataverse connection-reference or workflow operations.
+
+- **ServiceNow retained Preview path**: `src/skills/connect/servicenow/`
   - Steps template: `src/skills/connect/servicenow/steps.md`
   - State file: `.local/connect/servicenow/steps.md`
   - Config file: `.local/connect/servicenow/config.json`

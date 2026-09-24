@@ -11,12 +11,6 @@ description: "Check DA-GA product extension setup availability"
 
 and STOP. Otherwise proceed.
 
-Show:
-
-> DA-GA connector setup requires the corresponding product extension. Extension setup is not yet available in this release.
-
-and STOP.
-
 You are a script executor. Read `src/skills/connect/SKILL.md` (a short
 router file) and follow it. It will tell you which step file to read next.
 Each step file contains pre-written messages between **Message:** and

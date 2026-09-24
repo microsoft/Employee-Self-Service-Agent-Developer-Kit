@@ -452,8 +452,14 @@ def _acquire_token(
     token = result.get("access_token") if result else None
     if not token:
         error = result.get("error", "unknown_error") if result else "unknown_error"
+        description = (
+            str(result.get("error_description", "")).strip()
+            if result
+            else ""
+        )
+        detail = f": {description}" if description else ""
         raise AgentBuilderError(
-            f"AgentBuilder authentication failed ({error})."
+            f"AgentBuilder authentication failed ({error}){detail}"
         )
     if cache.has_state_changed:
         _persist_token_cache(cache, cache_path)
@@ -467,6 +473,7 @@ def authenticate(
     cache_path: Path = DEFAULT_TOKEN_CACHE,
     force_account_selection: bool = False,
     account_hint: str | None = None,
+    scopes: tuple[str, ...] | None = None,
 ) -> str:
     """Acquire an ESS ADK delegated token without contacting Dataverse."""
     try:
@@ -480,6 +487,7 @@ def authenticate(
         cache_path=cache_path,
         force_account_selection=force_account_selection,
         account_hint=account_hint,
+        scopes=scopes,
     )
 
 
@@ -845,6 +853,26 @@ class AgentBuilderClient:
         )
         if not isinstance(body, dict):
             raise AgentBuilderError("Component fetch returned an invalid shape.")
+        return body
+
+    def update_components(
+        self,
+        agent_id: str,
+        change_set: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Apply one caller-supplied MinimalBot component change set."""
+        if not isinstance(change_set, dict):
+            raise ValueError("Component change set must be a JSON object.")
+        body = self._json(
+            "PUT",
+            f"/copilotstudio/minimalBots/api/{agent_id}/components",
+            "Component update",
+            params={"api-version": NATIVE_ALM_API_VERSION},
+            body=change_set,
+            timeout=180,
+        )
+        if not isinstance(body, dict):
+            raise AgentBuilderError("Component update returned an invalid shape.")
         return body
 
     def update_bot_entity(
