@@ -1170,7 +1170,18 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
         "**⬜ Not checked**",
     ):
         assert readiness_status in text
-    assert "Have you verified in Power Platform Admin Center" in text
+    assert "### Capacity follow-up" in text
+    assert (
+        "We weren’t able to automatically verify capacity for this "
+        "environment."
+    ) in text
+    assert "Your agent and local authoring workspace are already available." in text
+    assert "#### Copilot Studio message capacity" in text
+    assert (
+        "After checking Power Platform Admin Center, is Copilot Studio "
+        "message capacity allocated to this environment?"
+    ) in text
+    assert "Complete this check to finish foundation readiness" not in text
     assert "--manual-attested" in text
     assert "never overrides a known zero allocation" in normalized
     assert "When it is false after materialization" in normalized

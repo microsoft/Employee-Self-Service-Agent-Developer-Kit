@@ -114,9 +114,25 @@ python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}"
 python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint DA-CONTENT-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONTENT-001/results.json
 ```
 
-Inspect the exact `ENV-CAPACITY-001` row before applying it. Apply `Passed` or `Failed` normally. When its status is `Manual`, ask exactly one confirmation question before applying the result:
+Inspect the exact `ENV-CAPACITY-001` row before applying it. Apply `Passed` or `Failed` normally. When its status is `Manual`, present this guidance and confirmation before applying the result:
 
-**Have you verified in Power Platform Admin Center that Copilot Studio message capacity is allocated to this environment?**
+**Message:**
+
+### Capacity follow-up
+
+We weren’t able to automatically verify capacity for this environment. Your agent and local authoring workspace are already available.
+
+#### Copilot Studio message capacity
+
+1. Open [Power Platform Admin Center](https://admin.powerplatform.microsoft.com/billing/licenses/copilotStudio/overview).
+2. Find the selected environment.
+3. Confirm that Copilot Studio message capacity is allocated to it.
+
+**End message.**
+
+Then ask exactly:
+
+**After checking Power Platform Admin Center, is Copilot Studio message capacity allocated to this environment?**
 
 Offer exactly:
 
