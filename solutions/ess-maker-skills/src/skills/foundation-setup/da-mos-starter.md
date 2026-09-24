@@ -65,7 +65,6 @@ Use the host's interactive single-selection control and offer one choice for eac
 The successful list proves target access, but not a new agent identity. Keep **Verify access and agent identity** current until create and direct attachment validation succeed.
 
 If the catalog is empty, mark the maker's product choices unavailable and say that no entitled products are currently available in the selected environment. Present **Retry setup with another target** from `da-environment-target.md`.
-
 If `catalogWarnings` is non-empty, tell the maker the product listing was incomplete -- some entries could not be read -- without repeating the warning detail itself. A row reported in `catalogWarnings` is never selectable; only offer products backed by rows from the `packages` array.
 
 If the command instead fails, parse `DA_MOS_STARTER_LIST_ANNOTATIONS_JSON:` and the response body (`DA_MOS_STARTER_LIST_RESPONSE_JSON:` or `..._RESPONSE_TEXT:`) the same way `create`'s response is interpreted below. Preserve the detailed evidence internally, say that entitled products could not be loaded and nothing was changed, then present **Retry setup with another target** from `da-environment-target.md`.
@@ -73,6 +72,8 @@ If the command instead fails, parse `DA_MOS_STARTER_LIST_ANNOTATIONS_JSON:` and 
 ## Confirm the exact product and target
 
 After the maker selects one product from the interactive list, confirm the target Power Platform environment. Do not preselect a choice. Once confirmed, keep the product's underlying `packageId`, `name`, and `version` for the next step; these are internal command inputs, not maker-facing text.
+
+Read `src/reference/da-product-setup-registry.json` for setup requirements. A registry-declared connection is evaluated after creation and attachment; do not inspect or require a physical connection before dispatching create. Products without a declared requirement proceed without a connection gate.
 
 Substitute the selected picker label and show:
 
@@ -156,12 +157,9 @@ python scripts/setup_existing_da.py attach \
   --expected-schema-name "{RETURNED_SCHEMA_NAME}"
 ```
 
-This attachment validates the returned agent through its direct Dev route and component identity; it does not require published Dev configuration. On failure, preserve the command's specific `ERROR:` text and any canonical `active_step` and `failure_causes` as diagnostic evidence. Translate them into the visible setup stage and a plain explanation of the unmet prerequisite as described in `da-existing-dev.md`; never show internal step IDs or raw technical output as ordinary maker copy. Publishing is outside foundation setup and is not remediation for an attachment failure. On success, parse `DA_EXISTING_DEV_SETUP_JSON:`. When attachment reports `connectionStatus: workspace-ready`, mark the access, identity, editable-agent, and materialization stages complete, then run the four setup-owned FlightChecks as the single presentation unit defined in `da-existing-dev.md`. Complete every check whose prerequisites remain available before producing the factual workspace and runtime-readiness handoff. When an operation requires maker action or prevents later checks from running, state the observed blocker and supported recovery. The request-scoped create evidence intentionally remains as an audit note. Do not publish, remove, or replace components from this path.
+This attachment validates the returned agent through its direct Dev route and component identity; it does not require published Dev configuration. It resolves any connection requirement from the product registry by exact agent identity and records that requirement on canonical `SETUP-05`. On failure, preserve the command's specific `ERROR:` text and any canonical `active_step` and `failure_causes` as diagnostic evidence. Translate them into the visible setup stage and a plain explanation of the unmet prerequisite as described in `da-existing-dev.md`; never show internal step IDs or raw technical output as ordinary maker copy. Publishing is outside foundation setup and is not remediation for an attachment failure. On success, parse `DA_EXISTING_DEV_SETUP_JSON:`. When attachment reports `connectionStatus: workspace-ready`, mark the access, identity, editable-agent, and materialization stages complete, then run the three setup-readiness FlightChecks and broad connection diagnostic as the single presentation unit defined in `da-existing-dev.md`. Complete every check whose prerequisites remain available before producing the factual workspace and runtime-readiness handoff. When an operation requires maker action or prevents later checks from running, state the observed blocker and supported recovery. The request-scoped create evidence intentionally remains as an audit note. Do not publish, remove, or replace components from this path.
 
 After all four FlightChecks have been attempted, render the factual workspace and runtime-readiness report from `da-existing-dev.md` using **New entitled MOS product** as the starting point, including when `connectReady` is false.
-
 For every non-created outcome (`pre-dispatch-failure`, `collision`, `rejected`, `malformed-success`, `source-package-mismatch`, or an uncertain response or transport failure), end the create operation. The existing read-only `list` and `setup_existing_da.py validate-agent`/`list-agents` commands remain available for a separately requested inspection.
 
-## Hybrid follow-up
-
-After attachment completes, if the selected product explicitly identifies a hybrid ISV such as Workday or ServiceNow, recommend running `/connect` afterward to wire that product's connection. Never invoke `/connect`, install a connector, or configure Dataverse, publishing, promotion, or telemetry from this skill yourself.
+Connection setup is outside this foundation path. Never invoke `/connect`, install a connector, or configure Dataverse, publishing, promotion, or telemetry from this skill.
