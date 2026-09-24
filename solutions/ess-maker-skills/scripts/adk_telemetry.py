@@ -77,7 +77,10 @@ from flightcheck import telemetry as _fc  # noqa: E402
 # 1.4.0: added ``toolkit_git_sha`` + ``toolkit_git_branch`` common
 #        dimensions for precise upgrade-posture reporting and CA-vs-DA
 #        attribution — ADO 7943642.
-SCHEMA_VERSION = "1.4.0"
+# 1.5.0: added derived ``agent_type`` common dimension (custom_agent |
+#        declarative_agent | unknown), driven by ``toolkit_git_branch``,
+#        so PMs can split adoption dashboards by CA vs DA — ADO 7830949.
+SCHEMA_VERSION = "1.5.0"
 
 # Surfaces the ADK emits from (spec enum: sdk | cli | studio | docs). The
 # Python skill scripts are the CLI surface.
@@ -570,8 +573,18 @@ def common_dimensions(
         "adk_version": _fc.get_adk_version(),
         "toolkit_git_sha": _fc.get_toolkit_git_sha(),
         "toolkit_git_branch": _fc.get_toolkit_git_branch(),
+        "agent_type": _fc.classify_agent_type(_fc.get_toolkit_git_branch()),
         "timestamp": _fc._iso_ms(_fc._now()),
     }
+
+
+# Re-export for scripts / tests that import from ``adk_telemetry`` — the
+# canonical definitions live in ``flightcheck.telemetry`` so the same
+# classifier drives both event streams.
+AGENT_TYPE_CUSTOM = _fc.AGENT_TYPE_CUSTOM
+AGENT_TYPE_DECLARATIVE = _fc.AGENT_TYPE_DECLARATIVE
+AGENT_TYPE_UNKNOWN = _fc.AGENT_TYPE_UNKNOWN
+AGENT_TYPES = _fc.AGENT_TYPES
 
 
 def _scrub(text: str, limit: int = 200) -> str:

@@ -149,6 +149,10 @@ def test_build_events_shape_and_required_fields():
     # code paths.
     assert "toolkitGitSha" in run_data
     assert "toolkitGitBranch" in run_data
+    # Derived CA-vs-DA bucket rides on every run event (ADO #7830949)
+    # so FlightCheck dashboards can split pass-rate / duration / etc.
+    # by agent type without a join.
+    assert run_data["agentType"] in telemetry.AGENT_TYPES
 
 
 def test_get_toolkit_git_sha_prefers_env_override(monkeypatch):
@@ -373,8 +377,43 @@ def test_classify_branch_privacy_bounded():
 
 
 def test_telemetry_schema_version_bumped_for_toolkit_git_fields():
-    """Version-gate the new dimensions so dashboards can pin on schema 1.2."""
-    assert telemetry.TELEMETRY_SCHEMA_VERSION == "1.2"
+    """Version-gate the new dimensions so dashboards can pin on schema 1.3."""
+    assert telemetry.TELEMETRY_SCHEMA_VERSION == "1.3"
+
+
+def test_classify_agent_type_maps_main_ca_to_custom_agent():
+    assert telemetry.classify_agent_type("main-ca") == telemetry.AGENT_TYPE_CUSTOM
+
+
+def test_classify_agent_type_maps_main_to_declarative_agent():
+    assert telemetry.classify_agent_type("main") == telemetry.AGENT_TYPE_DECLARATIVE
+
+
+def test_classify_agent_type_case_and_whitespace_insensitive():
+    # A caller that pre-normalizes (upper-cases, pads whitespace) still
+    # lands in the intended bucket instead of falling through to unknown.
+    assert telemetry.classify_agent_type("  MAIN-CA  ") == telemetry.AGENT_TYPE_CUSTOM
+    assert telemetry.classify_agent_type("Main") == telemetry.AGENT_TYPE_DECLARATIVE
+
+
+def test_classify_agent_type_unknown_branches_bucketed():
+    # Personal branches, detached HEAD, and the "unknown" sentinel from
+    # a failed resolution all map to the "unknown" bucket so
+    # out-of-taxonomy values never leak into custom_agent / declarative_agent.
+    for branch in ("amilandin/adk-telemetry-agent-type", "detached", "unknown", "", "release/1.0"):
+        assert telemetry.classify_agent_type(branch) == telemetry.AGENT_TYPE_UNKNOWN
+
+
+def test_classify_agent_type_taxonomy_is_closed():
+    # A test-time contract: the AGENT_TYPES frozenset is the *complete*
+    # taxonomy dashboards can filter on. If a value is ever added to
+    # the classifier, it must also land in AGENT_TYPES so the dashboard
+    # split-by list stays exhaustive.
+    assert telemetry.AGENT_TYPES == frozenset({
+        telemetry.AGENT_TYPE_CUSTOM,
+        telemetry.AGENT_TYPE_DECLARATIVE,
+        telemetry.AGENT_TYPE_UNKNOWN,
+    })
 
 
 def test_derive_run_outcome_precedence():
