@@ -100,7 +100,9 @@ EVENT_CHECK = "ESSMakerKit.FlightCheck.Check"
 # 1.1: added derived ``tenantClass`` (internal vs customer) — ADO 7558661.
 # 1.2: added ``toolkitGitSha`` + ``toolkitGitBranch`` for precise
 # upgrade-posture and CA-vs-DA attribution — ADO 7943642.
-TELEMETRY_SCHEMA_VERSION = "1.2"
+# 1.3: added derived ``agentType`` (custom_agent | declarative_agent |
+# unknown) driven by ``toolkitGitBranch`` — ADO 7830949.
+TELEMETRY_SCHEMA_VERSION = "1.3"
 
 # Short, fail-open timeout (connect, read) seconds. Telemetry runs at the
 # very end of a FlightCheck; we never want it to hang the CLI.
@@ -644,6 +646,45 @@ def get_toolkit_git_branch() -> str:
         return "unknown"
 
 
+# --- Agent-type classification (ADO #7830949) -----------------------------
+# Distinguishes Custom Agent (CA) makers from Declarative Agent (DA) makers
+# so PMs can split adoption / capability / build / FlightCheck dashboards
+# by agent type. The signal is the ADK clone's current git branch: the CEA
+# (Custom Agent) migration lives on ``main-ca``; the DA-GA line lives on
+# ``main``. Anything else (a personal working branch, a detached tag,
+# ``"unknown"`` when git resolution failed) is bucketed to ``"unknown"``
+# so out-of-taxonomy values never leak into the two named buckets.
+#
+# Emitted as a common dimension on every ADK / FlightCheck event, so a
+# single query can attribute any event stream (capability, build, deploy,
+# api, session, flightcheck) to the correct audience.
+AGENT_TYPE_CUSTOM = "custom_agent"
+AGENT_TYPE_DECLARATIVE = "declarative_agent"
+AGENT_TYPE_UNKNOWN = "unknown"
+AGENT_TYPES = frozenset({AGENT_TYPE_CUSTOM, AGENT_TYPE_DECLARATIVE, AGENT_TYPE_UNKNOWN})
+
+
+def classify_agent_type(git_branch: str) -> str:
+    """Map a git branch name to the ``agent_type`` common dimension.
+
+    ``main-ca`` -> ``custom_agent``. ``main`` -> ``declarative_agent``.
+    Anything else -> ``unknown`` (personal branches, tags, detached
+    HEAD, ``"unknown"`` when git resolution failed).
+
+    Case- and whitespace-insensitive on the branch name so a caller that
+    pre-normalizes (or a future CI override that pads whitespace) still
+    lands in the intended bucket.
+    """
+    if not git_branch:
+        return AGENT_TYPE_UNKNOWN
+    normalized = git_branch.strip().lower()
+    if normalized == "main-ca":
+        return AGENT_TYPE_CUSTOM
+    if normalized == "main":
+        return AGENT_TYPE_DECLARATIVE
+    return AGENT_TYPE_UNKNOWN
+
+
 def _build_event(name: str, ikey_envelope: str, data: dict[str, Any]) -> dict[str, Any]:
     """Build a minimal Common Schema 4.0 envelope.
 
@@ -747,6 +788,7 @@ def _run_data(
         "adkVersion": get_adk_version(),
         "toolkitGitSha": get_toolkit_git_sha(),
         "toolkitGitBranch": get_toolkit_git_branch(),
+        "agentType": classify_agent_type(get_toolkit_git_branch()),
         "scope": scope,
         "invocationSource": invocation_source,
         "overall": getattr(run_result, "overall", ""),
@@ -910,6 +952,7 @@ def selftest() -> int:
             "adkVersion": get_adk_version(),
             "toolkitGitSha": get_toolkit_git_sha(),
             "toolkitGitBranch": get_toolkit_git_branch(),
+            "agentType": classify_agent_type(get_toolkit_git_branch()),
         },
     )
     print(f"Posting selftest event to env='{env}' "
