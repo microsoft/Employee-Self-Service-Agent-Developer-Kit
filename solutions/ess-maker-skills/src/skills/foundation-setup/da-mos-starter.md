@@ -8,14 +8,7 @@ Use only intent supplied in the current request and results observed in this inv
 
 ## Identify the target
 
-Ask for an environment URL when the target is not supplied. Infer its
-environment ID and service ring. The URL should have a segment denoting the
-ring, such as `test` or `preprod`; when neither segment is present, confirm the
-`prod` ring with the user. Ask only when the environment ID is unclear. Retain
-the resolved environment ID and ring for every operation in this setup
-invocation. Do not ask the maker to classify the product before loading the
-catalog. When fresh-agent intent and the target environment are known, mark
-**Choose the starting point and target environment** complete.
+Read `src/skills/foundation-setup/da-environment-target.md` and follow it, including its exact **Resolve the service ring** decision surface whenever the ring is not identified. Retain the resolved environment ID and ring for every operation in this invocation. Do not ask the maker to classify the product before loading the catalog. When fresh-agent intent and the target environment are known, mark **Choose the starting point and target environment** complete.
 
 ## Use the workspace environment
 
@@ -39,7 +32,9 @@ Loading entitled products for **{environment name}**...
 
 ## List the catalog
 
-Complete the shared account-selection and authorization steps in `SKILL.md`, then run:
+If account selection was not already completed while discovering the target,
+complete the shared account-selection and authorization steps in `SKILL.md`.
+Then run:
 
 ```text
 python scripts/setup_mos_starter.py list \
@@ -59,11 +54,11 @@ Use the host's interactive single-selection control and offer one choice for eac
 
 The successful list proves target access, but not a new agent identity. Keep **Verify access and agent identity** current until create and direct attachment validation succeed.
 
-If the catalog is empty, mark the maker's product choices unavailable, say that no entitled products are currently available, and stop; do not guess a substitute or fall back to another setup path.
+If the catalog is empty, mark the maker's product choices unavailable and say that no entitled products are currently available in the selected environment. Present **Retry setup with another target** from `da-environment-target.md`.
 
 If `catalogWarnings` is non-empty, tell the maker the product listing was incomplete -- some entries could not be read -- without repeating the warning detail itself. A row reported in `catalogWarnings` is never selectable; only offer products backed by rows from the `packages` array.
 
-If the command instead fails, parse `DA_MOS_STARTER_LIST_ANNOTATIONS_JSON:` and the response body (`DA_MOS_STARTER_LIST_RESPONSE_JSON:` or `..._RESPONSE_TEXT:`) the same way `create`'s response is interpreted below. Preserve the detailed evidence internally, but tell the maker only that entitled products could not be loaded, nothing was changed, and setup has stopped.
+If the command instead fails, parse `DA_MOS_STARTER_LIST_ANNOTATIONS_JSON:` and the response body (`DA_MOS_STARTER_LIST_RESPONSE_JSON:` or `..._RESPONSE_TEXT:`) the same way `create`'s response is interpreted below. Preserve the detailed evidence internally, say that entitled products could not be loaded and nothing was changed, then present **Retry setup with another target** from `da-environment-target.md`.
 
 ## Confirm the exact product and target
 

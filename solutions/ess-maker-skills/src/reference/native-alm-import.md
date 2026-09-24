@@ -38,8 +38,8 @@ Do not describe an unknown claim as supported behavior.
 
 1. For the session-facing supplied-package path, require the caller to supply
    an explicitly resolved environment ID and service ring. Infer `test` or
-   `preprod` from the environment URL; when neither segment is present,
-   confirm the `prod` ring with the user. Ask when the target remains unclear.
+   `preprod` from the environment URL; when the ring remains unresolved, use
+   the foundation setup's shared ring-selection template.
 2. Validate the exact environment-specific API host before sending a token.
 3. Validate local projection dependencies before remote mutation.
 4. Observe package type, schema, and SHA-256 without extracting or rewriting

@@ -237,10 +237,9 @@ already targets its related Dev agent.
 
 When the maker supplies a Copilot Studio URL that identifies an agent and has
 not explicitly selected package import, infer its environment ID, agent ID,
-and service ring. The URL should have a segment denoting the ring, such as
-`test` or `preprod`; when neither segment is present, confirm the `prod` ring
-with the user. Ask only when the environment ID or agent ID is unclear. Then
-run:
+and service ring. When the URL does not identify the ring, use **Resolve the
+service ring** in `src/skills/foundation-setup/da-environment-target.md`
+exactly. Ask only when the environment ID or agent ID is unclear. Then run:
 
 ```text
 python scripts/setup_existing_da.py inspect-agent \

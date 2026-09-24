@@ -24,6 +24,13 @@ _DA_PROD_TO_DEV = (
 _DA_MOS_STARTER = (
     _SOLUTION / "src" / "skills" / "foundation-setup" / "da-mos-starter.md"
 )
+_DA_ENVIRONMENT_TARGET = (
+    _SOLUTION
+    / "src"
+    / "skills"
+    / "foundation-setup"
+    / "da-environment-target.md"
+)
 _NATIVE_ALM_REFERENCE = (
     _SOLUTION / "src" / "reference" / "native-alm-import.md"
 )
@@ -250,6 +257,7 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
 
     assert set(_PATH_RE.findall(text)) == {
         "src/skills/foundation-setup/da-alm-import.md",
+        "src/skills/foundation-setup/da-environment-target.md",
         "src/skills/foundation-setup/da-existing-dev.md",
         "src/skills/foundation-setup/da-prod-to-dev.md",
         "src/skills/foundation-setup/da-mos-starter.md",
@@ -266,8 +274,8 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     assert "accept an environment url and infer its environment id" in (
         normalized_import
     )
-    assert "segment denoting the service ring" in normalized_import
-    assert "confirm the `prod` ring with the user" in normalized_import
+    assert "resolve the service ring" in normalized_import
+    assert "da-environment-target.md" in normalized_import
     assert "ask the maker only when" in normalized_import
     assert "`connectReady: true`" in import_text
     assert "including when `connectReady` is false" in import_text
@@ -299,7 +307,7 @@ def test_foundation_routes_supported_da_setup_paths() -> None:
     assert '--environment-id "{ENVIRONMENT_ID}"' in text
     assert '--agent-id "{AGENT_ID}"' in text
     assert '--ring "{RING}"' in text
-    assert "confirm the `prod` ring with the user" in normalized.casefold()
+    assert "resolve the service ring" in normalized.casefold()
     assert text.index("setup_existing_da.py inspect-agent") < text.index(
         "da-existing-dev.md"
     )
@@ -317,6 +325,7 @@ def test_native_setup_skills_pass_resolved_target_fields() -> None:
     imported = _DA_ALM_IMPORT.read_text(encoding="utf-8")
     prod_to_dev = _DA_PROD_TO_DEV.read_text(encoding="utf-8")
     mos = _DA_MOS_STARTER.read_text(encoding="utf-8")
+    environment_target = _DA_ENVIRONMENT_TARGET.read_text(encoding="utf-8")
 
     for text in (foundation, existing, imported, prod_to_dev, mos):
         assert "--target-url" not in text
@@ -335,9 +344,16 @@ def test_native_setup_skills_pass_resolved_target_fields() -> None:
     assert '--ring "{TARGET_RING}"' in prod_to_dev
 
     for text in (foundation, existing, imported, prod_to_dev, mos):
-        assert "confirm the `prod` ring with the user" in " ".join(
-            text.split()
-        ).casefold()
+        normalized = " ".join(text.split()).casefold()
+        assert "resolve the service ring" in normalized
+        assert "da-environment-target.md" in normalized
+    assert "Which Power Platform service ring should setup use?" in (
+        environment_target
+    )
+    assert "render this exact decision surface" in environment_target
+    assert "Present all three labels unchanged with no default selection" in (
+        environment_target
+    )
 
 
 def test_empty_setup_offers_recorded_agent_without_requesting_url() -> None:
@@ -462,10 +478,79 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     normalized_foundation = " ".join(foundation.split())
     text = _DA_MOS_STARTER.read_text(encoding="utf-8")
     normalized = " ".join(text.split())
+    environment_target = _DA_ENVIRONMENT_TARGET.read_text(encoding="utf-8")
+    normalized_environment_target = " ".join(environment_target.split())
     reference = _MOS_STARTER_REFERENCE.read_text(encoding="utf-8")
     existing_dev = _DA_EXISTING_DEV.read_text(encoding="utf-8")
 
     assert "src/reference/mos-starter-package.md" in text
+    assert "src/skills/foundation-setup/da-environment-target.md" in text
+    assert "setup_existing_da.py list-environments" in environment_target
+    assert "DA_ENVIRONMENT_LIST_JSON:" in environment_target
+    assert "compact environment-selection result" in environment_target
+    assert "Retain its `evidencePath`" in environment_target
+    assert "read that file only when richer diagnostics" in environment_target
+    assert "Environment discovery is separate from agent discovery" in (
+        normalized_environment_target
+    )
+    assert "Which Power Platform service ring should setup use?" in (
+        environment_target
+    )
+    for ring_choice in ("Production / Preview", "Pre-production", "Test"):
+        assert f"**{ring_choice}**" in environment_target
+    assert "Map **Production / Preview** to `prod`" in environment_target
+    assert "Present all three labels unchanged with no default selection" in (
+        normalized_environment_target
+    )
+    assert "A ring is resolved only by an explicit URL segment" in (
+        normalized_environment_target
+    )
+    assert "Before showing the shared authorization message" in (
+        normalized_environment_target
+    )
+    assert "do not run `list-agents`" in normalized_environment_target
+    assert "Present every environment returned by the Power Platform API" in (
+        normalized_environment_target
+    )
+    assert "without filtering by URL, Dataverse metadata, or environment type" in (
+        normalized_environment_target
+    )
+    assert "No Power Platform environments were listed for this account" in (
+        environment_target
+    )
+    for empty_environment_choice in (
+        "Use another account",
+        "Use an environment URL",
+        "Create a Power Platform environment",
+        "Cancel setup",
+    ):
+        assert f"**{empty_environment_choice}**" in environment_target
+    assert "does not require a Dataverse database" in environment_target
+    assert "Do not route into a Dataverse provisioning skill" in (
+        normalized_environment_target
+    )
+    assert "authorizationFailure" in environment_target
+    assert "DA_ENVIRONMENT_LIST_ERROR_JSON:" in environment_target
+    assert "DA_ENVIRONMENT_LIST_ERROR_RESPONSE_JSON:" in environment_target
+    assert "Do not convert an authorization failure" in (
+        normalized_environment_target
+    )
+    assert "## Retry setup with another target" in environment_target
+    assert "How would you like to continue setup?" in environment_target
+    for retry_choice in (
+        "Try with a different user",
+        "Try a different environment",
+        "Cancel setup",
+    ):
+        assert f"**{retry_choice}**" in environment_target
+    assert "present these labels unchanged with the selection initially unset" in (
+        normalized_environment_target
+    )
+    assert "rerun environment discovery for that account" in (
+        normalized_environment_target
+    )
+    assert "retain the current account and ring" in normalized_environment_target
+    assert "also offer **Use an agent URL**" in environment_target
     assert "setup_mos_starter.py list" in text
     assert "DA_MOS_STARTER_PACKAGES_JSON:" in text
     assert "setup_mos_starter.py create" in text
@@ -542,6 +627,13 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "The agent was created. Preparing its local authoring workspace" in normalized
     assert "{PRODUCT_COUNT} entitled products are available" in text
     assert "Loading entitled products for **{environment name}**..." in text
+    assert "no entitled products are currently available in the selected environment" in (
+        normalized
+    )
+    assert normalized.count("**Retry setup with another target**") == 2
+    assert "entitled products could not be loaded and nothing was changed" in (
+        normalized
+    )
     assert text.index("Loading entitled products for **{environment name}**...") < (
         text.index("{PRODUCT_COUNT} entitled products are available")
     )
@@ -766,7 +858,6 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
         assert command in text
     for removed_command in (
         "setup_existing_da.py status",
-        "setup_existing_da.py list-environments",
         "setup_existing_da.py list-organizations",
     ):
         assert removed_command not in text
@@ -776,6 +867,9 @@ def test_existing_da_dev_path_never_routes_through_dataverse() -> None:
     assert "`connectReady: true`" in text
     assert "visible Dev-realm candidates" in text
     assert "Validate only the selected candidate" in text
+    assert "No visible editable Dev agents were listed in this environment" in text
+    assert "A directly addressable agent may still be available" in text
+    assert "including its **Use an agent URL** choice" in text
     assert "before authentication or remote agent validation" in text
     assert "Do not run `validate-agent` immediately before `attach`" in text
     assert "Your local workspace is ready for authoring." in text

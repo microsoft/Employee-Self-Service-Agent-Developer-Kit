@@ -11,10 +11,10 @@ This skill owns the maker interaction and the handoff into existing-Dev setup.
 
 ## Identify the target
 
-Accept an environment URL and infer its environment ID. The URL should have a
-segment denoting the service ring, such as `test` or `preprod`; when neither
-segment is present, confirm the `prod` ring with the user. Ask the maker only
-when the environment ID is unclear.
+Accept an environment URL and infer its environment ID and service ring. When
+the URL does not identify the ring, use **Resolve the service ring** in
+`src/skills/foundation-setup/da-environment-target.md` exactly. Ask the maker
+only when the environment ID is unclear.
 
 Pass the resolved environment ID and ring to the import command.
 
