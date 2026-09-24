@@ -220,7 +220,7 @@ function startPrereqWatcher(context) {
     const interval = setInterval(refresh, 10000);
 
     // Register disposables
-    context.subscriptions.push(stateWatcher, configWatcher, flightcheckWatcher, {
+    context.subscriptions.push(stateWatcher, flightcheckWatcher, {
         dispose: () => clearInterval(interval)
     });
 
