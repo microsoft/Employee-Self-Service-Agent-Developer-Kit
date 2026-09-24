@@ -1930,6 +1930,93 @@ def test_maintain_flightcheck_command_accepts_connection_family(
     assert '"state": "done"' in output
 
 
+def test_capacity_manual_result_requires_explicit_attestation(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        "ENV-CAPACITY-001",
+        "Manual",
+    )
+
+    blocked = setup_existing_da.maintain_setup_flightcheck(
+        tmp_path,
+        agent_id=AGENT_ID,
+        checkpoint="ENV-CAPACITY-001",
+        results_path=results_path,
+    )
+
+    assert blocked["state"] == "blocked"
+    assert blocked["evidenceStatuses"] == ["Manual"]
+    assert blocked["mode"] is None
+
+
+def test_capacity_manual_result_accepts_explicit_attestation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        "ENV-CAPACITY-001",
+        "Manual",
+    )
+
+    exit_code = setup_existing_da.main(
+        [
+            "maintain-flightcheck",
+            "--checkpoint",
+            "ENV-CAPACITY-001",
+            "--agent-id",
+            AGENT_ID,
+            "--results",
+            str(results_path),
+            "--manual-attested",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert '"state": "done"' in output
+    assert '"mode": "manual-attested"' in output
+    step = _agent_setup_state(tmp_path)["steps"]["SETUP-02.2"]
+    assert step["state"] == "done"
+    assert step["mode"] == "manual-attested"
+
+
+@pytest.mark.parametrize(
+    ("checkpoint", "status"),
+    [
+        ("ENV-CAPACITY-001", "Failed"),
+        ("ENV-CAPACITY-001", "Passed"),
+        ("DA-AGENT-001", "Manual"),
+    ],
+)
+def test_manual_attestation_rejects_unsupported_evidence(
+    tmp_path: Path,
+    checkpoint: str,
+    status: str,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        checkpoint,
+        status,
+    )
+
+    with pytest.raises(setup_existing_da.ExistingDASetupError):
+        setup_existing_da.maintain_setup_flightcheck(
+            tmp_path,
+            agent_id=AGENT_ID,
+            checkpoint=checkpoint,
+            results_path=results_path,
+            manual_attested=True,
+        )
+
+
 def test_authentication_uses_workspace_cache_and_account_hint(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

@@ -879,6 +879,7 @@ def maintain_setup_flightcheck(
     agent_id: str,
     checkpoint: str,
     results_path: Path,
+    manual_attested: bool = False,
 ) -> dict[str, Any]:
     """Persist one supported FlightCheck result into canonical setup state."""
     state = _load_canonical_setup_state(kit_root)
@@ -967,7 +968,24 @@ def maintain_setup_flightcheck(
         str(row.get("status") or "")
         for row in matching
     }
-    if requirement is not None:
+    if manual_attested:
+        if checkpoint != "ENV-CAPACITY-001":
+            raise ExistingDASetupError(
+                "Manual attestation is supported only for "
+                "ENV-CAPACITY-001."
+            )
+        if (
+            len(matching) != 1
+            or statuses != {"Manual"}
+            or payload.get("failed") != 0
+            or payload.get("errors") != 0
+        ):
+            raise ExistingDASetupError(
+                "Manual attestation requires a current Manual "
+                "ENV-CAPACITY-001 result."
+            )
+        complete = True
+    elif requirement is not None:
         complete = bool(statuses) and statuses <= {"Passed", "Warning"}
     else:
         run_blocked = (
@@ -979,6 +997,14 @@ def maintain_setup_flightcheck(
     now = _utc_now()
     if complete:
         note = SETUP_STEP_NOTES[step_id]
+        mode = "automated"
+        if manual_attested:
+            mode = "manual-attested"
+            note = (
+                "A maker explicitly confirmed that Copilot Studio message "
+                "capacity is allocated to this environment after the "
+                "Licensing API result required manual verification."
+            )
         if requirement is not None:
             note = (
                 f"{requirement['displayName']} satisfies the "
@@ -986,7 +1012,7 @@ def maintain_setup_flightcheck(
             )
         agent_state["steps"][step_id] = _step_record(
             "done",
-            mode="automated",
+            mode=mode,
             note=note,
             recorded_at=now,
             checkpoint=checkpoint,
@@ -1035,6 +1061,7 @@ def maintain_setup_flightcheck(
         "failureCauses": list(
             agent_state["steps"][step_id].get("failure_causes", [])
         ),
+        "mode": agent_state["steps"][step_id].get("mode"),
         "connectReady": agent_state["connect_ready"],
         "activeStep": agent_state["active_step"],
     }
@@ -2594,6 +2621,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the FlightCheck results.json file.",
     )
     maintain_flightcheck.add_argument(
+        "--manual-attested",
+        action="store_true",
+        help=(
+            "Record an explicit maker attestation for a current Manual "
+            "ENV-CAPACITY-001 result."
+        ),
+    )
+    maintain_flightcheck.add_argument(
         "--kit-root",
         type=Path,
         default=Path.cwd(),
@@ -2770,6 +2805,7 @@ def main(argv: list[str] | None = None) -> int:
                 agent_id=args.agent_id,
                 checkpoint=args.checkpoint,
                 results_path=results_path,
+                manual_attested=args.manual_attested,
             )
             print(
                 "DA_SETUP_FLIGHTCHECK_JSON:"

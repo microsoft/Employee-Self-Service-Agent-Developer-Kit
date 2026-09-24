@@ -404,9 +404,9 @@ def _check_copilot_studio_capacity_provisioned(runner) -> list[CheckResult]:
     it asks only whether the environment has any dedicated Copilot Studio
     capacity (``population=None``).
 
-    Capacity is a hard setup gate. When allocation cannot be read
-    programmatically or allocation is zero, the row fails rather than allowing
-    a billing selection or manual attestation to bypass the check.
+    Capacity is a hard setup gate. A known zero allocation fails. When the
+    allocation cannot be read, the row requires explicit manual confirmation
+    rather than presenting the unknown result as a known failure.
     """
     env_id = getattr(runner, "env_id", None)
     if not env_id:
@@ -420,9 +420,9 @@ def _check_copilot_studio_capacity_provisioned(runner) -> list[CheckResult]:
         allocated, population=None, payg_flag=payg_flag)
 
     if reason == "unreadable":
-        return [_env_capacity(Status.FAILED.value,
-            "This environment's Copilot Studio message capacity allocation could not be verified because the Power Platform Licensing API was unavailable or permission was denied.",
-            f"Sign in with the Power Platform Administrator role, verify capacity in {_CAPACITY_PORTAL}, then rerun this checkpoint. Setup cannot continue until the automated check succeeds.")]
+        return [_env_capacity(Status.MANUAL.value,
+            "The Power Platform Licensing API was unavailable or permission was denied, so FlightCheck could not verify this environment's Copilot Studio message capacity allocation programmatically.",
+            f"Verify in {_CAPACITY_PORTAL} that Copilot Studio message capacity is allocated to this environment. If it is allocated, explicitly attest that result during setup; otherwise allocate capacity before continuing.")]
     if reason == "covered":
         return [_env_capacity(Status.PASSED.value,
             f"{allocated} Copilot Studio message credit(s) are allocated to this environment.")]

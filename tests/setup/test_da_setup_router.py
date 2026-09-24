@@ -1164,10 +1164,15 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
         "**⚠️ Ready with limitation**",
         "**➖ Not required**",
         "**⛔ Action required**",
+        "**⛔ Manual confirmation required**",
+        "**✅ Ready — manually confirmed**",
         "**⚠️ Check unavailable**",
         "**⬜ Not checked**",
     ):
         assert readiness_status in text
+    assert "Have you verified in Power Platform Admin Center" in text
+    assert "--manual-attested" in text
+    assert "never overrides a known zero allocation" in normalized
     assert "When it is false after materialization" in normalized
     assert (
         "local authoring is ready while the setup-owned prerequisites remain"

@@ -97,18 +97,19 @@ def test_fails_zero_capacity_unknown_payg():
     assert "cannot continue" in r.remediation.lower()
 
 
-def test_fails_when_no_powerplatform_client():
+def test_requires_manual_confirmation_when_no_powerplatform_client():
     r = _run(_runner(powerplatform=None, payg=False))
-    assert r.status == "Failed"
-    assert "could not be verified" in r.result
+    assert r.status == "Manual"
+    assert "could not verify" in r.result
     assert "Manage capacity" in r.remediation
+    assert "explicitly attest" in r.remediation
 
 
-def test_fails_when_allocation_read_denied():
+def test_requires_manual_confirmation_when_allocation_read_denied():
     pp_denied = _FakePP({"_error": "insufficient_permissions", "_status": 403})
     r = _run(_runner(powerplatform=pp_denied, payg=False))
-    assert r.status == "Failed"
-    assert "could not be verified" in r.result
+    assert r.status == "Manual"
+    assert "could not verify" in r.result
 
 
 def test_fails_when_no_env_id():

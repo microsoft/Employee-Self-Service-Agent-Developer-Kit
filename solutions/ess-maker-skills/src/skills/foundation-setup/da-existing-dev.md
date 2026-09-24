@@ -107,13 +107,29 @@ python scripts/flightcheck/cli.py --checkpoint "DA-CONN-*" --quiet-auth --no-ope
 python scripts/flightcheck/cli.py --checkpoint DA-CONTENT-001 --quiet-auth --no-open --output .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONTENT-001
 ```
 
-After each setup-readiness run, even when that FlightCheck exits nonzero, apply its result to canonical setup state:
+After each setup-readiness run, even when that FlightCheck exits nonzero, apply its result to canonical setup state. Apply agent access and content directly:
 
 ```text
 python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint DA-AGENT-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/DA-AGENT-001/results.json
-python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint ENV-CAPACITY-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/ENV-CAPACITY-001/results.json
 python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint DA-CONTENT-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/DA-CONTENT-001/results.json
 ```
+
+Inspect the exact `ENV-CAPACITY-001` row before applying it. Apply `Passed` or `Failed` normally. When its status is `Manual`, ask exactly one confirmation question before applying the result:
+
+**Have you verified in Power Platform Admin Center that Copilot Studio message capacity is allocated to this environment?**
+
+Offer exactly:
+
+- **Yes — capacity is allocated**
+- **Not yet**
+
+For **Yes — capacity is allocated**, apply the same current evidence with explicit attestation:
+
+```text
+python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}" --checkpoint ENV-CAPACITY-001 --results .local/setup/agents/{AGENT_ID}/flightcheck/ENV-CAPACITY-001/results.json --manual-attested
+```
+
+For **Not yet**, apply the result without `--manual-attested`. Leave capacity blocked, preserve the manual verification guidance, and return control to the maker.
 
 When canonical `SETUP-05` contains a registry-declared `requirement`, also apply the broad connection result:
 
@@ -137,7 +153,7 @@ For the exact registry-required row:
 
 When the registry declares no connection requirement for the resolved product, or the agent does not exactly match a registered product, keep `SETUP-05` skipped and render Connections as **➖ Not required**. A required connection does not prevent creation, attachment, or workspace materialization, but it does keep canonical `connectReady` false until its exact post-attachment evidence is ready.
 
-`ENV-CAPACITY-001` remains a programmatic gate. Non-queryable governance prerequisites are outside this read-only check; disclose that limitation without treating it as a setup policy or a downstream `/connect` deferral.
+`ENV-CAPACITY-001` uses the Licensing API when available. `Passed` is **✅ Ready** and `Failed` is **⛔ Action required**. `Manual` is **⛔ Manual confirmation required** until the maker explicitly confirms the allocation; an accepted `--manual-attested` result is **✅ Ready — manually confirmed**. Manual confirmation is allowed only for an unreadable allocation and never overrides a known zero allocation or another failed result. Non-queryable governance prerequisites are outside this check; disclose that limitation without treating it as a setup policy or a downstream `/connect` deferral.
 
 ## Interpret results
 
