@@ -17,7 +17,7 @@ pure logic.
 | `capture.py` | Observe-mode detectors that read what a Task produced from local kit state (the `/setup` → `environmentId` hand-off, from `.local/config.json`), plus `ask_artifact` for assignee-supplied (mode-b) outputs. |
 | `research.py` | Table-of-Contents-first Learn research: parse a fetched `toc.json`, classify child/sibling links, relevance-select the pages to read within a budget, and extract role/output candidates from page text (`extract_signals`). Pure logic except `fetch_toc` / `fetch_page_text` (best-effort network). |
 | `facts.py` + `planner_facts.json` | **Non-Learn** planning facts only — scenario *dependencies* (each with an explicit `source`) and a small recognition lexicon for `extract_signals`. This is **not** a business-scenario catalogue: scenarios come from the maker's description grounded in Learn (PM spec FR-1/FR-3). |
-| `cli.py` | The command surface the skill invokes (`init`, `set-context`, `add-system`, `add-scenario`, `add-scenario-dependency`, `check-deps`, `add-task`, `update-task`, `remove-task`, `assign`, `claim`, `set-state`, `task-brief`, `capture-setup`, `pin-output`, `mine`, `research`, `summary`, `validate`). |
+| `cli.py` | The command surface the skill invokes (`init`, `ingest-upload`, `gaps`, `set-context`, `add-system`, `add-scenario`, `add-scenario-dependency`, `check-deps`, `add-task`, `update-task`, `remove-task`, `assign`, `claim`, `set-state`, `task-brief`, `capture-setup`, `pin-output`, `mine`, `research`, `summary`, `validate`). `ingest-upload` builds a whole plan from a maker-authored uploaded plan (normalized JSON) in one atomic write and reports the remaining gaps; `gaps` lists the intent slots a plan still lacks. |
 
 ## Local Plan location
 

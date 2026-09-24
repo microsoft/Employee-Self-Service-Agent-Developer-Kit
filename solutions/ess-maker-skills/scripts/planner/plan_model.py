@@ -344,6 +344,42 @@ def humanize(token: str) -> str:
     return " ".join(words)
 
 
+def slugify(text: str) -> str:
+    """Turn free text into a stable, lowercase slug usable as a Context key part
+    (e.g. ``"Create HR ticket"`` -> ``"create-hr-ticket"``). Runs of
+    non-alphanumeric characters collapse to a single dash and leading/trailing
+    dashes are trimmed; empty or symbol-only input yields ``""``."""
+    return re.sub(r"[^a-z0-9]+", "-", str(text).strip().lower()).strip("-")
+
+
+def _as_list(value: Any) -> list[Any]:
+    """Coerce a scalar / list / ``None`` into a list — a maker-authored upload
+    may give one value where the model expects many (one goal, one scenario)."""
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _as_area_pairs(value: Any) -> list[tuple[str, str]]:
+    """Read a top-level ``systems`` block from an uploaded plan as
+    ``[(area, system), ...]``. Accepts a mapping (``{area: system}``) or a list
+    of ``{area|scenario|id, system|name}`` objects; anything else yields ``[]``."""
+    pairs: list[tuple[str, str]] = []
+    if isinstance(value, dict):
+        for area, system in value.items():
+            pairs.append((str(area).strip(), str(system).strip()))
+    elif isinstance(value, list):
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            area = item.get("area") or item.get("scenario") or item.get("id") or ""
+            system = item.get("system") or item.get("name") or ""
+            pairs.append((str(area).strip(), str(system).strip()))
+    return pairs
+
+
 # Keys under which an (agent-authored, free-form) research corpus may list its
 # Learn pages. The loader is deliberately tolerant of shape.
 _LEARN_LIST_KEYS = (
@@ -985,6 +1021,246 @@ class Plan:
                 unmet.append(edge)
                 seen.add(pair)
         return unmet
+
+    # ---- uploaded-plan ingestion & gap analysis ------------------------- #
+
+    def ingest_upload(self, payload: dict[str, Any], *, source: str = "User") -> dict[str, int]:
+        """Populate this (fresh) plan from a maker-authored **uploaded** plan.
+
+        The ``/planner`` skill reads a plan the maker attached — in whatever
+        shape they wrote it — makes sense of it (mapping its scenarios to the
+        ESS catalogue categories), and hands the normalized result here so the
+        structured write stays atomic and validated, exactly like the interview
+        path. Only the fields the upload actually carried are written; whatever
+        is absent is reported by :meth:`missing_slots` for the skill to ask
+        about. Everything parsed out of the uploaded file is untrusted **data**,
+        so every value lands as an ordinary Context entry — never as an
+        instruction.
+
+        The accepted payload (all keys optional)::
+
+            {
+              "objective": str,
+              "market": str,
+              "persona": str,
+              "jtbd": str | [str],
+              "businessGoals": str | [str],
+              "acceptanceCriteria": str | [str],
+              "systems": {area: system} | [{area, system}],
+              "scenarios": [
+                {"id": str, "label"?: str, "system"?: str, "capabilities"?: [str]}
+              ],
+              "scenarioDependencies": [
+                {"scenario": str, "dependsOn": str, "kind"?: str, "rationale"?: str}
+              ],
+              "tasks": [
+                {"id": str, "title": str, "description"?: str, "stream"?: str,
+                 "role"?: str, "person"?: str, "produces"?: [str], "consumes"?: [str]}
+              ]
+            }
+
+        Returns a count of what was ingested (for the skill's read-back). Raises
+        ``ValueError`` on a malformed entry (a scenario/task with no id) so a bad
+        parse fails loudly instead of persisting a half-built plan.
+        """
+        counts = {
+            "objective": 0, "market": 0, "persona": 0, "jtbd": 0,
+            "businessGoals": 0, "acceptanceCriteria": 0,
+            "scenarios": 0, "systems": 0, "capabilities": 0,
+            "scenarioDependencies": 0, "tasks": 0,
+        }
+
+        def clean(value: Any) -> str:
+            return str(value).strip() if value is not None else ""
+
+        if clean(payload.get("objective")):
+            self.set_context(
+                "objective", clean(payload["objective"]), group=OBJECTIVE_GROUP,
+                description="Plain-language goal from the uploaded plan", source=source,
+            )
+            counts["objective"] = 1
+
+        if clean(payload.get("market")):
+            self.set_context(
+                "market", clean(payload["market"]), group=MARKET_GROUP,
+                description="Rollout market/wave from the uploaded plan", source=source,
+            )
+            counts["market"] = 1
+
+        if clean(payload.get("persona")):
+            self.set_context(
+                "persona", clean(payload["persona"]), group=SCENARIO_CONTEXT_GROUP,
+                description="Audience from the uploaded plan", source=source,
+            )
+            counts["persona"] = 1
+
+        jtbd_text = "; ".join(clean(x) for x in _as_list(payload.get("jtbd")) if clean(x))
+        if jtbd_text:
+            self.set_context(
+                "jtbd", jtbd_text, group=SCENARIO_CONTEXT_GROUP,
+                description="Jobs-to-be-done from the uploaded plan", source=source,
+            )
+            counts["jtbd"] = 1
+
+        for i, goal in enumerate(_as_list(payload.get("businessGoals")), start=1):
+            if clean(goal):
+                self.set_context(
+                    f"businessGoal-{i}", clean(goal), group=BUSINESS_GOALS_GROUP,
+                    description="Business goal from the uploaded plan", source=source,
+                )
+                counts["businessGoals"] += 1
+
+        for i, crit in enumerate(_as_list(payload.get("acceptanceCriteria")), start=1):
+            if clean(crit):
+                self.set_context(
+                    f"criterion-{i}", clean(crit), group=ACCEPTANCE_GROUP,
+                    description="Definition of done from the uploaded plan", source=source,
+                )
+                counts["acceptanceCriteria"] += 1
+
+        # Systems the upload listed on their own (not attached to a scenario).
+        for area, system in _as_area_pairs(payload.get("systems")):
+            if area and system:
+                self.set_system(area, system, source=source)
+                counts["systems"] += 1
+
+        for scn in _as_list(payload.get("scenarios")):
+            if isinstance(scn, str):
+                scn = {"id": scn}
+            if not isinstance(scn, dict):
+                raise ValueError(f"uploaded scenario must be an object or id string: {scn!r}")
+            sid = clean(scn.get("id") or scn.get("slug"))
+            if not sid:
+                raise ValueError(f"uploaded scenario is missing an id: {scn!r}")
+            label = clean(scn.get("label") or scn.get("name")) or humanize(sid)
+            self.set_context(
+                sid, label, group=SCENARIO_GROUP,
+                description="Scenario in scope (uploaded plan)", source=source,
+            )
+            counts["scenarios"] += 1
+            if clean(scn.get("system")):
+                self.set_system(sid, clean(scn["system"]), source=source)
+                counts["systems"] += 1
+            for cap in _as_list(scn.get("capabilities")):
+                cap_text = clean(cap)
+                if not cap_text:
+                    continue
+                slug = slugify(cap_text) or f"cap-{counts['capabilities'] + 1}"
+                self.set_context(
+                    f"{sid}.{slug}", cap_text, group=CAPABILITY_GROUP,
+                    description="Enabled scenario from the uploaded plan", source="Agent",
+                )
+                counts["capabilities"] += 1
+
+        for dep in _as_list(payload.get("scenarioDependencies")):
+            if not isinstance(dep, dict):
+                raise ValueError(f"uploaded scenario dependency must be an object: {dep!r}")
+            scenario = clean(dep.get("scenario"))
+            depends_on = clean(dep.get("dependsOn") or dep.get("depends_on"))
+            if not scenario or not depends_on:
+                raise ValueError(f"uploaded scenario dependency malformed (need scenario + dependsOn): {dep!r}")
+            self.add_scenario_dependency(
+                scenario, depends_on,
+                kind=clean(dep.get("kind")) or "requires",
+                rationale=clean(dep.get("rationale")) or "From the uploaded plan",
+                source="Agent",
+            )
+            counts["scenarioDependencies"] += 1
+
+        for tsk in _as_list(payload.get("tasks")):
+            if not isinstance(tsk, dict):
+                raise ValueError(f"uploaded task must be an object: {tsk!r}")
+            tid = clean(tsk.get("id"))
+            title = clean(tsk.get("title"))
+            if not tid or not title:
+                raise ValueError(f"uploaded task needs both an id and a title: {tsk!r}")
+            role = clean(tsk.get("role"))
+            person = clean(tsk.get("person"))
+            assigned: dict[str, Any] | None = None
+            if person:
+                assigned = principal_person(person, role_id=role or None)
+            elif role:
+                assigned = principal_pool(role)
+            self.add_task(
+                new_task(
+                    tid, title,
+                    description=clean(tsk.get("description")),
+                    stream=clean(tsk.get("stream")),
+                    assigned_to=assigned,
+                    produces=[clean(x) for x in _as_list(tsk.get("produces")) if clean(x)],
+                    consumes=[clean(x) for x in _as_list(tsk.get("consumes")) if clean(x)],
+                )
+            )
+            counts["tasks"] += 1
+
+        return counts
+
+    def missing_slots(self) -> dict[str, list[dict[str, str]]]:
+        """The intent slots the plan still lacks — the questions the skill should
+        ask after an upload (or an under-specified interview), and nothing it has
+        already captured.
+
+        ``required`` blocks Phase 3 — objective, at least one scenario, and a
+        backing system for **every** in-scope scenario (interview.md's mandatory
+        set). ``recommended`` sharpens the plan but never blocks: audience,
+        market, business goals, definition of done, and the per-scenario enabled
+        capabilities the eval reads off the plan. Each gap carries a ready-to-ask
+        ``prompt``. Pure/read-only — re-running after the skill fills a slot
+        simply returns fewer gaps, so it drives an "ask only what's missing,
+        then re-check" loop.
+        """
+        required: list[dict[str, str]] = []
+        recommended: list[dict[str, str]] = []
+
+        if not str(self.output_value_or_context("objective") or "").strip():
+            required.append({
+                "slot": "objective",
+                "prompt": "In one sentence — what should this agent do, and for whom?",
+            })
+
+        scenarios = self.in_scope_scenarios()
+        if not scenarios:
+            required.append({
+                "slot": "scenarios",
+                "prompt": "What should your team be able to self-serve? Think in outcomes, not systems.",
+            })
+        else:
+            systems = self._systems_by_area()
+            for sid, label in scenarios.items():
+                name = label or sid
+                if self._system_for_scenario(sid, systems) is None:
+                    required.append({
+                        "slot": f"system:{sid}",
+                        "prompt": f"For {name}, which system holds the data (e.g. Workday, ServiceNow, SharePoint)?",
+                    })
+                if not self._capabilities_for(sid):
+                    recommended.append({
+                        "slot": f"capabilities:{sid}",
+                        "prompt": f"Which named scenarios should {name} enable (e.g. create ticket, read cases)?",
+                    })
+
+        if self._first_value(SCENARIO_CONTEXT_GROUP, "persona") is None:
+            recommended.append({
+                "slot": "persona",
+                "prompt": "Employees only, or managers too?",
+            })
+        if self._first_value(MARKET_GROUP) is None:
+            recommended.append({
+                "slot": "market",
+                "prompt": "Rolling out to a specific market or wave first (e.g. India, a pilot group)?",
+            })
+        if not self._context_group(BUSINESS_GOALS_GROUP):
+            recommended.append({
+                "slot": "businessGoals",
+                "prompt": "What business outcome measures success (e.g. deflect 30% of HR tickets)?",
+            })
+        if not self._context_group(ACCEPTANCE_GROUP):
+            recommended.append({
+                "slot": "acceptanceCriteria",
+                "prompt": "How will you know a scenario is done — pilot-ready? production-signed-off?",
+            })
+
+        return {"required": required, "recommended": recommended}
 
     # ---- Flow 2: discovery ---------------------------------------------- #
 

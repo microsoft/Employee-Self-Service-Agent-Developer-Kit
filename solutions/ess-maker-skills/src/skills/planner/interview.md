@@ -5,6 +5,13 @@ Plan. Research (Phase 1) already proposed candidate scenarios, prerequisites,
 and roles — so **propose, don't interrogate**, and only ask about a slot when
 research didn't answer it. Batch by theme, one theme at a time, and stop early.
 
+**Frontload the goals.** Lead with what success looks like and the handful of
+scenarios employees actually ask about, so you can **render the golden-prompt
+preview within the first couple of turns** — the acceptance bar, up front — then
+iterate the tech stack (systems, connectors, dependencies) right after. Goals are
+the non-negotiable; the systems behind them can be refined once the sponsor has
+seen the bar.
+
 Every intent answer is stored as a **context entry** (grouped), via:
 
 ```
@@ -32,12 +39,12 @@ ticketing) they may have wanted.
 
 | # | Ask | Store as |
 |---|-----|----------|
-| 1 | "In one sentence — what should this agent do, and for whom?" | `set-context --group objective` |
-| 2 | **Scenarios (jobs‑to‑be‑done) — ask this before any system.** "What should your team be able to self‑serve? Think in outcomes, not systems." Map their answer to the **catalogue categories**: **HR Knowledge**, **HR Profile** (read/write), **Manager**, **HR Ticketing**, **IT** (knowledge + ticketing), **Handoff** — plus **extensible** scenarios (e.g. Request Time Off). Offer these, capture the sponsor's own words, and confirm which categories are in scope. | `set-context --group scenarioContext` (key `jtbd`) + `add-scenario` per category |
+| 1 | **Goal + success, together.** "In one sentence — what should this agent do, and for whom? And what does success look like — fewer support tickets, faster policy answers, or something else?" (The success half seeds the measure in Q6.) | `set-context --group objective` |
+| 2 | **Scenarios (jobs‑to‑be‑done) — ask this before any system.** "Which 2–3 things do employees ask about most?" (e.g. *"How many vacation days do I have?"*, *"Reset my password"*, *"Update my phone number"*) — then widen: "Which scenarios are you thinking about beyond that?" To prioritise, offer a starting point: "Pick a focus — HR or IT — and expand from there. Where do employees feel the most friction today?" Map their answer to the **catalogue categories**: **HR Knowledge**, **HR Profile** (read/write), **Manager**, **HR Ticketing**, **IT** (knowledge + ticketing), **Handoff** — plus **extensible** scenarios (e.g. Request Time Off). Offer these, capture the sponsor's own words, and confirm which categories are in scope. | `set-context --group scenarioContext` (key `jtbd`) + `add-scenario` per category |
 | 3 | **System per scenario — only after scenarios are captured.** "For **{scenario/area}**, which system holds the data?" — ground the options in the ESS native integrations from Phase‑1 research (Workday, ServiceNow HRSD/ITSM, SAP SuccessFactors); SharePoint / M365 content is a knowledge source. | `add-system --area {area} --system "{name}"` |
 | 4 | "Employees only, or managers too?" | `set-context --group scenarioContext` (key `persona`) |
 | 5 | "Rolling out to a specific market or wave first (e.g. India, a pilot group)?" | `set-context --group market` |
-| 6 | "What business outcome measures success (e.g. deflect 30% of HR tickets)?" | `set-context --group businessGoals` |
+| 6 | "What business outcome measures success (e.g. deflect 30% of HR tickets)?" — tie it back to the success picture from Q1. | `set-context --group businessGoals` |
 | 7 | "How will you know a scenario is done — pilot‑ready? production‑signed‑off?" | `set-context --group acceptanceCriteria` |
 
 **The catalogue IS the grounded scenario set — map the goal to it, don't invent.**
@@ -93,6 +100,15 @@ not end the interview (or jump to sponsor/timeframe) until scenarios and their
 systems are captured. Ask 4–7 as scope warrants.
 
 Use scalar values (one fact per entry); group related facts rather than nesting.
+
+**Capture what's off the table — early.** Right after the scenarios, ask
+"Anything off the table for now — like write-backs, escalations, or manager
+scenarios?" and record the boundary so both the golden-prompt preview and the plan
+respect it (the eval **drops** out-of-scope work — `src/skills/planner/evaluate.md`):
+
+```
+python scripts/planner/cli.py set-context --key outOfScope --value "No manager scenarios; no write-backs this wave" --group scenarioContext --description "Explicitly out of scope for this wave" --source User
+```
 
 ## Register the scenarios and expose dependencies
 
@@ -184,6 +200,11 @@ This preview **renders only — it generates nothing**: it displays the golden p
 in chat but writes no file, creates no eval records, and pushes nothing. Actual eval
 generation stays with the *Generate evaluation tests* task (topic-driven, later).
 It is **non-blocking**: after rendering, continue to the stop condition and Phase 3.
+
+This is the **golden-prompts-in-the-first-couple-of-turns** moment the flow is
+built around: goals first, the bar rendered early, then systems and dependencies
+captured right after. Rendering the bar does **not** wait for every system to be
+pinned — scenarios + goals are enough to show what "good" looks like.
 
 ## Stop condition — both satisfied
 
