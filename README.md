@@ -22,7 +22,7 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 
 > **GitHub Copilot subscription is required** for the in-editor maker experience.
 
-Other setup paths — Lite Mode (chat-first layout), GitHub Codespaces, FlightCheck-only, and manual install — are documented in the [Setup README](setup/README.md).
+Other setup paths — Maker Mode (chat-first layout), GitHub Codespaces, FlightCheck-only, and manual install — are documented in the [Setup README](setup/README.md).
 
 For more info on the available solutions, samples, repository structure, and telemetry, see [MORE_INFO.md](MORE_INFO.md).
 

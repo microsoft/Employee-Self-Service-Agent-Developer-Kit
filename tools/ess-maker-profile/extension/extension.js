@@ -972,7 +972,7 @@ class ActionsViewProvider {
                 await applySettings(CHAT_ONLY_LAYOUT, vscode.ConfigurationTarget.Global);
                 await this.refresh();
                 const sel = await vscode.window.showInformationMessage(
-                    'Lite mode applied. Reload the window for full effect.',
+                    'Maker mode applied. Reload the window for full effect.',
                     'Reload Window'
                 );
                 if (sel === 'Reload Window') {

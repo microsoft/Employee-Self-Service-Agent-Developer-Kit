@@ -18,7 +18,7 @@ Once complete, VS Code opens at `solutions/ess-maker-skills/` and `/setup` is au
 
 > **GitHub Copilot subscription is required** for the in-editor maker experience. This script installs the toolchain and extension scaffolding; it does not grant the Copilot entitlement.
 
-## Lite Mode (Chat-First Layout)
+## Maker Mode (Chat-First Layout)
 
 For users who prefer a simplified, chat-first experience that hides developer chrome (file tree, tabs, status bar) and shows a "Quick Actions" button rail:
 
@@ -39,7 +39,7 @@ This installs everything the standard installer does, plus the **ESS Maker Profi
 - Big-button "Quick Actions" rail for common tasks (Connect, Customize landing page, Create, Scan, FlightCheck, Push)
 - A built-in tutorial explaining each button
 
-You can switch between lite mode and standard VS Code at any time using the toggle buttons in the Quick Actions panel.
+You can switch between Maker Mode and standard VS Code at any time using the toggle buttons in the Quick Actions panel.
 
 ## GitHub Codespaces (no local install)
 
@@ -121,10 +121,10 @@ cd ~/source/Employee-Self-Service-Agent-Developer-Kit/solutions/ess-maker-skills
 | `Install-EssAdk.ps1` | Windows orchestrator. Installs toolchain via winget, pip dependencies, clones repo, installs extensions, launches VS Code. With `-FlightCheckOnly`, installs minimal toolchain and runs FlightCheck. |
 | `install-ess-adk.sh` | macOS orchestrator. Same as above but uses Homebrew. Set `FLIGHTCHECK_ONLY=true` for FlightCheck-only mode. |
 | `bootstrap.ps1` | Windows one-liner entry point (standard VS Code layout). |
-| `bootstrap-lite.ps1` | Windows one-liner entry point (lite mode — chat-first layout). |
+| `bootstrap-lite.ps1` | Windows one-liner entry point (Maker Mode — chat-first layout). |
 | `bootstrap-flightcheck.ps1` | Windows one-liner entry point (FlightCheck only). |
 | `bootstrap-mac.sh` | macOS one-liner entry point (standard VS Code layout). |
-| `bootstrap-lite-mac.sh` | macOS one-liner entry point (lite mode — chat-first layout). |
+| `bootstrap-lite-mac.sh` | macOS one-liner entry point (Maker Mode — chat-first layout). |
 | `bootstrap-flightcheck-mac.sh` | macOS one-liner entry point (FlightCheck only). |
 | `ess-adk-setup.winget.yaml` | Declarative DSC config consumed by `winget configure` (optional Windows path). |
 | `telemetry/install-telemetry.ps1` | Installer telemetry emitter (PowerShell). Fail-open; emits install start/step/completion to Aria/1DS. |
@@ -219,7 +219,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipEx
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipClone           # skip git clone (toolchain only)
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipLaunch          # don't open VS Code at the end
 powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -FlightCheckOnly     # minimal install for FlightCheck only
-powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipMakerProfile    # standard VS Code (no lite mode)
+powershell -NoProfile -ExecutionPolicy Bypass -File .\Install-EssAdk.ps1 -SkipMakerProfile    # standard VS Code (no Maker Mode)
 ```
 
 For air-gapped / locked-down environments, IT can mirror the files internally and serve them from an intranet URL by passing `-SourceBaseUrl`.
@@ -232,7 +232,7 @@ From this folder:
 # Full installer:
 bash install-ess-adk.sh
 
-# Full installer with lite mode (chat-first layout):
+# Full installer with Maker Mode (chat-first layout):
 SKIP_MAKER_PROFILE=false bash install-ess-adk.sh
 
 # FlightCheck only:

@@ -2,10 +2,15 @@
 
 ## 0.4.26 (POC)
 
-- **Standard mode auto-sends `/setup` on every start.** In standard mode the
+- **Mode terminology renamed.** The two install experiences are now called
+  **Maker Mode** (formerly "lite" — the chat-first guided layout) and
+  **Developer Mode** (formerly "standard" — default VS Code layout with `/setup`
+  injection). Internal identifiers (the `essMaker.mode` values `lite`/`standard`,
+  installer flags) are unchanged; only user-facing labels and docs were updated.
+- **Developer Mode auto-sends `/setup` on every start.** In Developer Mode the
   installer only runs `code chat /setup` on the very first launch; the extension
   now re-sends `/setup` into Copilot Chat (alongside the README preview) on every
-  subsequent reopen, so standard-mode users always land in setup. Guided mode is
+  subsequent reopen, so Developer Mode users always land in setup. Maker Mode is
   unchanged — setup there stays user-driven from the walkthrough/rail.
 - **Guided extension experience redesign.** The extension now opens a guided
   layout modeled on the M365 Agents Toolkit: the activity bar stays visible with
@@ -29,16 +34,16 @@
     `essMaker.showItemInfo`, `essMaker.openDocs`, and
     `essMaker.openGuidedLayout` (re-open the guided view on demand). The
     activity-bar container is retitled **Agent Developer Kit**.
-- **Standard-mode README preview is now extension-owned.** The rendered README
-  preview for standard mode is opened by the extension (`markdown.showPreview`)
+- **Developer-mode README preview is now extension-owned.** The rendered README
+  preview for Developer Mode is opened by the extension (`markdown.showPreview`)
   instead of a committed `workbench.startupEditor: readme` workspace setting.
   That shared setting used to also fire in the guided experience (and could
   dirty the git tree the auto-update pull relies on); the preview is now scoped
-  to standard mode only.
-  - **Installer safety net.** Because the standard-mode README preview now
+  to Developer Mode only.
+  - **Installer safety net.** Because the Developer-mode README preview now
     depends on the extension being present, both installers
     (`install-ess-adk.sh` / `Install-EssAdk.ps1`) track whether the extension
-    was confirmed installed and, in standard mode, open `README.md` directly at
+    was confirmed installed and, in Developer Mode, open `README.md` directly at
     launch when it was not — so the user always lands on the README even if the
     extension install was skipped or failed.
 

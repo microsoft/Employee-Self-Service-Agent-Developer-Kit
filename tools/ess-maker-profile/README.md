@@ -19,7 +19,7 @@ When the extension activates inside the ESS Maker workspace it:
    - **Run a flightcheck** → `/flightcheck`
    - **Generate tests** → `/evaluate` (available after setup)
    - **Push to Copilot Studio** → `/push` (available after setup)
-   - plus: *View tutorial*, *Switch to standard VS Code / lite mode*
+   - plus: *View tutorial*, *Switch to standard VS Code / Maker Mode*
 4. **Routes every button click into Copilot Chat** with its guided query pre-filled.
 5. **Provides a "View tutorial"** button that opens a custom webview panel beside chat explaining how each button works.
 
@@ -27,7 +27,7 @@ The customer never sees code, a file tree, or a menu. The whole window is: **cha
 
 ## Layout
 
-| Stock VS Code | ESS Maker (lite mode) |
+| Stock VS Code | ESS Maker (Maker Mode) |
 |---|---|
 | Menu bar, activity bar, file tree, editor tabs, status bar | Chat fills the editor area; "Quick actions" button rail on the left; everything else hidden |
 
@@ -35,7 +35,7 @@ The customer never sees code, a file tree, or a menu. The whole window is: **cha
 
 ### Via the one-shot installer (recommended)
 
-The lite mode installer installs VS Code + the Maker Profile extension:
+The Maker Mode installer installs VS Code + the Maker Profile extension:
 
 **Windows** (PowerShell):
 ```powershell
@@ -61,7 +61,7 @@ code --install-extension ess-maker-profile-*.vsix --force
 
 Or press **F5** from `tools/ess-maker-profile/extension` for an Extension Development Host.
 
-On first activation the maker layout auto-applies. To restore the standard workbench, click "Switch to standard mode" in Quick Actions or run **ESS Maker: Restore Standard Layout** from the command palette.
+On first activation the maker layout auto-applies. To restore the standard workbench, click "Switch to standard VS Code" in Quick Actions or run **ESS Maker: Restore Standard Layout** from the command palette.
 
 ## What's in the box
 

@@ -190,7 +190,7 @@
           "type": "string",
           "enum": ["lite", "standard", ""],
           "default": "",
-          "description": "Install mode set by the ESS installer. 'lite' applies chat-first layout; 'standard' uses default VS Code layout with /setup injection only."
+          "description": "Install mode set by the ESS installer. 'lite' is Maker Mode (chat-first guided layout); 'standard' is Developer Mode (default VS Code layout with /setup injection only)."
         },
         "essMaker.autoUpdateCheck": {
           "type": "boolean",
