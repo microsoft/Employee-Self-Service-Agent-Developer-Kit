@@ -7,11 +7,11 @@
     the maker the default VS Code layout (activity bar, file explorer,
     status bar visible) plus automatic /setup injection into the Copilot
     Chat side panel. This is the shortcut for makers who already know they
-    want the developer experience and want to skip the in-VS-Code mode
-    prompt on first launch.
+    want the developer experience and want to skip the Maker/Developer
+    terminal prompt.
 
-    New customers should use bootstrap.ps1, which prompts inside VS Code
-    on first launch and defaults to Maker (chat-first) mode.
+    New customers should use bootstrap.ps1, which asks in the terminal
+    which experience to install and defaults to Maker (chat-first) mode.
 
         iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-dev.ps1)
 

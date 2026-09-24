@@ -85,8 +85,8 @@ $scriptBlock = [ScriptBlock]::Create($scriptContent)
 
 $installerArgs = @{ Branch = $Branch }
 # Forward -InstallMode when the caller pinned one; otherwise leave the
-# installer to fall back to its own default (prompt), which fires the
-# in-VS-Code Maker/Developer QuickPick on first launch.
+# installer to fall back to its own default (prompt), which asks the
+# maker to pick Maker or Developer in the terminal before VS Code launches.
 if ($InstallMode) { $installerArgs.InstallMode = $InstallMode }
 if ($InstallRoot) { $installerArgs.InstallRoot = $InstallRoot }
 

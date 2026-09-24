@@ -25,7 +25,8 @@ FLIGHTCHECK_ONLY="${FLIGHTCHECK_ONLY:-false}"
 # INSTALL_MODE: maker | developer | prompt (or legacy lite | standard).
 # 'maker'    (was 'lite')     - chat-first layout, /setup after welcome wizard
 # 'developer' (was 'standard') - default VS Code layout, /setup via `code chat`
-# 'prompt'                    - let the ESS Maker Profile ask on first launch
+# 'prompt'                    - ask the maker in the terminal (defaults to
+#                               maker under a non-interactive shell)
 # Legacy env var SKIP_MAKER_PROFILE=true is still accepted and mapped to
 # INSTALL_MODE=developer for back-compat with pinned CI scripts and old docs.
 INSTALL_MODE="${INSTALL_MODE:-}"
@@ -69,9 +70,9 @@ if [[ "$INSTALL_MODE" == "prompt" ]]; then
         echo "      chat and want a focused HR/IT admin surface."
         echo ""
         echo "  [2] Developer"
-        echo "      Default VS Code layout with GitHub Copilot Chat in the side"
-        echo "      panel and /setup injected automatically. Best if you plan"
-        echo "      to inspect or edit files directly."
+        echo "      Default VS Code layout with GitHub Copilot Chat in the"
+        echo "      side panel. Best if you plan to inspect or edit files"
+        echo "      directly."
         echo ""
         while true; do
             printf "Enter 1 for Maker, 2 for Developer (default: 1): "
@@ -474,10 +475,9 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
 
         # ESS Maker Profile - installs in every mode. In maker mode it
         # applies the chat-first layout; in developer mode it only handles
-        # /setup injection (no visual changes); in prompt mode it asks the
-        # maker inside VS Code on first launch. The mode is communicated
-        # via essMaker.mode in VS Code's user settings.json (prompt maps
-        # to empty string, matching the Windows installer contract).
+        # /setup injection (no visual changes). By this point MODE_LABEL
+        # is always 'maker' or 'developer' - the CLI prompt at the top of
+        # the script resolves 'prompt' before we reach any install step.
         MODE_LABEL="$INSTALL_MODE"
         step "Installing ESS Maker Profile ($MODE_LABEL mode)"
 
@@ -501,21 +501,14 @@ if [[ "$FLIGHTCHECK_ONLY" != "true" ]]; then
         fi
 
         # Write the mode setting so the extension knows whether to apply
-        # the lite layout or inject /setup (standard mode).
+        # the maker (chat-first) layout or inject /setup (developer mode).
         SETTINGS_DIR="$HOME/Library/Application Support/Code/User"
         if [[ "$(uname)" != "Darwin" ]]; then
             SETTINGS_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/Code/User"
         fi
         mkdir -p "$SETTINGS_DIR"
         SETTINGS_FILE="$SETTINGS_DIR/settings.json"
-        # In prompt mode, write an empty string so the ESS Maker Profile
-        # extension knows to show the QuickPick on first VS Code launch
-        # (matches the Windows installer contract).
-        if [[ "$MODE_LABEL" == "prompt" ]]; then
-            SETTINGS_MODE_VALUE=""
-        else
-            SETTINGS_MODE_VALUE="$MODE_LABEL"
-        fi
+        SETTINGS_MODE_VALUE="$MODE_LABEL"
         if [[ -f "$SETTINGS_FILE" ]]; then
             # Merge into existing settings using Python (available from step 2)
             python3 -c "
@@ -779,8 +772,9 @@ if [[ -n "$CODE_CMD" ]]; then
     #   (the default Copilot Chat experience).
     # - Maker mode: just open the workspace. The ESS Maker Profile extension
     #   handles layout + /setup injection after the welcome wizard closes.
-    # - Prompt mode: open the workspace. The extension asks which experience
-    #   the maker wants on first launch, then applies the chosen mode.
+    # By this point INSTALL_MODE is always 'maker' or 'developer' - the CLI
+    # prompt at the top of the script resolves 'prompt' before we reach any
+    # launch code.
     if [[ "$INSTALL_MODE" == "developer" ]]; then
         step "Opening workspace in VS Code and requesting /setup in Copilot Chat"
         if (cd "$WORKSPACE_PATH" && "$CODE_CMD" chat "/setup"); then
@@ -793,23 +787,11 @@ if [[ -n "$CODE_CMD" ]]; then
             "$CODE_CMD" "$WORKSPACE_PATH" || warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
             echo "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent."
         fi
-    elif [[ "$INSTALL_MODE" == "maker" ]]; then
+    else
         step "Opening workspace in VS Code"
         if (cd "$WORKSPACE_PATH" && "$CODE_CMD" .); then
             ok "Launched VS Code at $WORKSPACE_PATH"
             echo -e "    ${YELLOW}The ESS Maker Profile will run /setup in Copilot Chat after the welcome screen closes.${NC}"
-            echo -e "    ${YELLOW}If VS Code prompts you to trust the workspace, accept the prompt.${NC}"
-        else
-            warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"
-            echo "Next: in VS Code, open Copilot Chat and run /setup to connect an editable DA Dev agent."
-        fi
-    else
-        # Prompt mode - extension will ask which experience to apply
-        # on first launch, then run the appropriate flow.
-        step "Opening workspace in VS Code"
-        if (cd "$WORKSPACE_PATH" && "$CODE_CMD" .); then
-            ok "Launched VS Code at $WORKSPACE_PATH"
-            echo -e "    ${YELLOW}VS Code will ask you to pick a chat-first (Maker) or default developer experience on first launch.${NC}"
             echo -e "    ${YELLOW}If VS Code prompts you to trust the workspace, accept the prompt.${NC}"
         else
             warn "Could not launch VS Code. Open manually: $WORKSPACE_PATH"

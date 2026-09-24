@@ -10,9 +10,9 @@
     were merged into a single bootstrap.ps1 and the modes were renamed
     from lite/standard to maker/developer.
 
-    New customers should use bootstrap.ps1, which prompts inside VS Code
-    on first launch to pick the experience. This shim is documented as
-    a redirect only.
+    New customers should use bootstrap.ps1, which asks in the terminal
+    which experience to install. This shim is documented as a redirect
+    only.
 
         iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-lite.ps1)
 

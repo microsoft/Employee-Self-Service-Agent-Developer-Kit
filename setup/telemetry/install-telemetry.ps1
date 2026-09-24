@@ -227,8 +227,8 @@ function Initialize-EssInstallTelemetry {
         'adk' with -InstallMode maker instead.
     .PARAMETER InstallMode  The VS Code experience the maker will land in
         after the installer completes: maker | developer | prompt (or the
-        legacy aliases 'lite' | 'standard'). 'prompt' means the ESS Maker
-        Profile extension will ask on first launch.
+        legacy aliases 'lite' | 'standard'). 'prompt' means the installer
+        will ask in the terminal before VS Code launches.
     #>
     param(
         [ValidateSet('adk', 'lite', 'flightcheck')]

@@ -94,7 +94,7 @@
           "type": "string",
           "enum": ["maker", "developer", "lite", "standard", ""],
           "default": "",
-          "description": "Install mode set by the ESS installer. 'maker' (was 'lite') applies the chat-first layout; 'developer' (was 'standard') uses the default VS Code layout with /setup injection; empty string means the consolidated installer left the choice unset and the extension will ask on first launch. The legacy 'lite'/'standard' values are still accepted and treated as 'maker'/'developer' so existing users keep their choice after the rename."
+          "description": "Install mode set by the ESS installer. 'maker' (was 'lite') applies the chat-first layout; 'developer' (was 'standard') uses the default VS Code layout with /setup injection; empty string means the installer left the choice unresolved and the extension silently defaults to maker on first activation. The legacy 'lite'/'standard' values are still accepted and treated as 'maker'/'developer' so existing users keep their choice after the rename."
         },
         "essMaker.autoUpdateCheck": {
           "type": "boolean",

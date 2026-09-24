@@ -14,15 +14,15 @@ iex (irm https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/microsoft/Employee-Self-Service-Agent-Developer-Kit/main/setup/bootstrap-mac.sh)"
 ```
 
-Once complete, VS Code opens at `solutions/ess-maker-skills/` and - on the first launch - you'll be asked to pick **Maker** (chat-first, big-button layout - recommended) or **Developer** (default VS Code view with Copilot Chat in the side panel). Maker is the recommended default and will be applied if you dismiss the prompt. `/setup` is then automatically requested in Copilot Chat. You'll be prompted to trust the workspace and sign in to GitHub/Copilot - accept these prompts and `/setup` will connect the workspace to an existing editable DA Dev agent.
+Once complete, the installer asks in the terminal which experience you want — **Maker** (chat-first, big-button layout — recommended) or **Developer** (default VS Code view with Copilot Chat in the side panel). Under a non-interactive shell (CI, piped input) the installer silently picks Maker. VS Code then opens at `solutions/ess-maker-skills/` and `/setup` is automatically requested in Copilot Chat. You'll be prompted to trust the workspace and sign in to GitHub/Copilot — accept these prompts and `/setup` will connect the workspace to an existing editable DA Dev agent.
 
 > **GitHub Copilot subscription is required** for the in-editor maker experience. This script installs the toolchain and extension scaffolding; it does not grant the Copilot entitlement.
 
 ## Maker Mode (Chat-First Layout) and Developer Mode
 
-The one-shot installer (`bootstrap.ps1` / `bootstrap-mac.sh`) asks you to choose between **Maker** and **Developer** on first VS Code launch, so mode selection is a one-click choice from the main installer - no separate command needed. Maker was previously called "Lite" and Developer was previously called "Standard"; the old names still work for pinned scripts and previously-installed users.
+The one-shot installer (`bootstrap.ps1` / `bootstrap-mac.sh`) asks you to choose between **Maker** and **Developer** in the terminal before VS Code launches, so mode selection is a one-line choice from the main installer — no separate command needed. Maker was previously called "Lite" and Developer was previously called "Standard"; the old names still work for pinned scripts and previously-installed users.
 
-For scripts and docs that need to pin the choice up front (bypassing the in-VS-Code prompt), mode-specific shortcuts are available:
+For scripts and docs that need to pin the choice up front (bypassing the terminal prompt), mode-specific shortcuts are available:
 
 **Windows** (PowerShell):
 
@@ -132,11 +132,11 @@ cd ~/source/Employee-Self-Service-Agent-Developer-Kit/solutions/ess-maker-skills
 |---|---|
 | `Install-EssAdk.ps1` | Windows orchestrator. Installs toolchain via winget, pip dependencies, clones repo, installs extensions, launches VS Code. With `-FlightCheckOnly`, installs minimal toolchain and runs FlightCheck. |
 | `install-ess-adk.sh` | macOS orchestrator. Same as above but uses Homebrew. Set `FLIGHTCHECK_ONLY=true` for FlightCheck-only mode. |
-| `bootstrap.ps1` | Windows one-liner entry point (prompts for Maker or Developer on first VS Code launch). |
+| `bootstrap.ps1` | Windows one-liner entry point (asks Maker vs Developer in the terminal before VS Code launches). |
 | `bootstrap-lite.ps1` | Windows one-liner entry point (Maker mode - chat-first layout; previously named "Lite"). |
 | `bootstrap-dev.ps1` | Windows one-liner entry point (Developer mode - default VS Code layout; previously named "Standard"). |
 | `bootstrap-flightcheck.ps1` | Windows one-liner entry point (FlightCheck only). |
-| `bootstrap-mac.sh` | macOS one-liner entry point (prompts for Maker or Developer on first VS Code launch). |
+| `bootstrap-mac.sh` | macOS one-liner entry point (asks Maker vs Developer in the terminal before VS Code launches). |
 | `bootstrap-lite-mac.sh` | macOS one-liner entry point (Maker mode - chat-first layout; previously named "Lite"). |
 | `bootstrap-dev-mac.sh` | macOS one-liner entry point (Developer mode - default VS Code layout; previously named "Standard"). |
 | `bootstrap-flightcheck-mac.sh` | macOS one-liner entry point (FlightCheck only). |
@@ -245,7 +245,7 @@ For air-gapped / locked-down environments, IT can mirror the files internally an
 From this folder:
 
 ```bash
-# Full installer (prompts for Maker or Developer on first VS Code launch):
+# Full installer (asks Maker or Developer in the terminal before VS Code launches):
 bash install-ess-adk.sh
 
 # Pin Maker mode (chat-first layout):

@@ -128,12 +128,12 @@ Test 'non-git directory detection exists' {
     }
 }
 
-Test 'extension installs in every mode (writes essMaker.mode setting; prompt -> empty)' {
+Test 'extension installs in every mode (writes essMaker.mode setting from resolved $modeLabel)' {
     if ($src -notmatch "essMaker\.mode.*\`$settingsModeValue") {
         throw 'Mode setting write logic (uses $settingsModeValue) not found'
     }
-    if ($src -notmatch "if\s*\(\`$modeLabel\s+-eq\s+'prompt'\)\s*\{\s*''") {
-        throw "prompt mode should map to '' in essMaker.mode (extension prompts on first launch)"
+    if ($src -notmatch '\$settingsModeValue\s*=\s*\$modeLabel') {
+        throw '$settingsModeValue should be assigned directly from the CLI-resolved $modeLabel (never "prompt" by this point)'
     }
 }
 
@@ -149,7 +149,7 @@ Test 'bootstrap.ps1 parses without errors' {
     if ($errors.Count -gt 0) { throw "Parse errors: $($errors[0].Message)" }
 }
 
-Test 'bootstrap.ps1 does not pin SkipMakerProfile (consolidated installer prompts in VS Code)' {
+Test 'bootstrap.ps1 does not pin SkipMakerProfile (consolidated installer resolves mode in the CLI)' {
     if ($bootstrapSrc -match 'SkipMakerProfile\s*=\s*\$true') {
         throw 'bootstrap.ps1 should not set SkipMakerProfile = $true after installer consolidation (ADO #7895603)'
     }
@@ -417,7 +417,10 @@ Test 'install-ess-adk.sh honors INSTALL_MODE (maker|developer|prompt) with legac
         throw "legacy 'standard' should be coerced to 'developer' on macOS"
     }
     if ($macInstaller -notmatch 'INSTALL_MODE"?\s*==\s*"developer"') { throw 'developer launch branch missing' }
-    if ($macInstaller -notmatch 'INSTALL_MODE"?\s*==\s*"maker"') { throw 'maker launch branch missing' }
+    # Maker is now the fall-through `else` branch of the launch block (prompt
+    # is resolved to maker|developer before any launch code runs), so we
+    # assert the maker log copy is present instead of the explicit == check.
+    if ($macInstaller -notmatch 'ESS Maker Profile will run /setup') { throw 'maker launch branch (fall-through else) missing' }
 }
 
 Test 'install-ess-adk.sh INSTALL_MODE=prompt fires a terminal Maker/Developer prompt' {

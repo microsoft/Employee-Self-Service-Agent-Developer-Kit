@@ -1580,9 +1580,12 @@ function activate(context) {
     //   normalized to 'maker'/'developer' in firstInstallDispatch.
     //   Maker mode: applies chat-only layout; user clicks Setup to run /setup.
     //   Developer mode: injects /setup into Copilot Chat automatically.
-    //   Empty ("") / "prompt": consolidated installer (ADO #7895603) left
-    //   the choice to us - show a QuickPick, default to maker, then
-    //   route into the chosen branch.
+    //   Empty ("") / "prompt": installer left the choice unresolved (e.g. a
+    //   maker double-clicked the extension into a stray VS Code window
+    //   without running the consolidated installer). firstInstallDispatch
+    //   silently defaults to maker; we never show a first-launch modal
+    //   because that surface reliably loses the race against the theme
+    //   picker and Copilot sign-in.
     // - Subsequent maker-mode activations: silently re-apply layout.
     const alreadyApplied = context.globalState.get(APPLIED_KEY, false);
     const userWantsMakerLayout = context.globalState.get(LITE_MODE_KEY, true); // default to maker layout
@@ -1592,8 +1595,8 @@ function activate(context) {
 
     if (vscode.workspace.workspaceFolders?.length) {
         if (!alreadyApplied) {
-            // First install. Resolve mode (prompting the maker if the
-            // consolidated installer didn't pin it), then dispatch.
+            // First install. Silently resolve mode (defaulting to maker if
+            // the installer left essMaker.mode blank/"prompt"), then dispatch.
             firstInstallDispatch(context, installerMode)
                 .catch(err => _log(`activate: firstInstallDispatch error: ${err && err.message}`));
         } else if (userWantsMakerLayout) {
