@@ -39,7 +39,6 @@ def test_global_gate_allows_connection_blocked_foundation() -> None:
         step in instructions
         for step in ("SETUP-01", "SETUP-02.1", "SETUP-03", "SETUP-04", "SETUP-07")
     )
-    assert "read `.local/setup/config.json` and `.local/config.json`" in instructions
-    assert "`activeAgent`" in instructions
-    assert "`botId`" in instructions
+    assert "at least one entry in its `agents` object" in instructions
+    assert "let the invoked command resolve" in instructions
     assert "`/connect servicenow` is available" in instructions

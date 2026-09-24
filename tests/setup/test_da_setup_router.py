@@ -167,9 +167,8 @@ def test_global_and_command_gates_require_canonical_da_foundation() -> None:
 
     assert "`schema_version`" in instructions
     assert "equal to `4`" in instructions
-    assert "read `.local/setup/config.json` and `.local/config.json`" in instructions
-    assert "`activeAgent`" in instructions
-    assert "`botId`" in instructions
+    assert "at least one entry in its `agents` object" in instructions
+    assert "let the invoked command resolve" in instructions
     assert "Do not require aggregate `connect_ready`" in instructions
     for step in ("SETUP-01", "SETUP-02.1", "SETUP-03", "SETUP-04", "SETUP-07"):
         assert step in instructions
@@ -212,7 +211,7 @@ def test_global_and_command_gates_require_canonical_da_foundation() -> None:
     for step in ("SETUP-01", "SETUP-02.1", "SETUP-03", "SETUP-04", "SETUP-07"):
         assert step in connect_prompt
 
-    assert "`.local/config.json`'s" in instructions
+    assert "read `.local/config.json`" in instructions
 
 
 def test_global_gate_preserves_flightcheck_only_mode() -> None:

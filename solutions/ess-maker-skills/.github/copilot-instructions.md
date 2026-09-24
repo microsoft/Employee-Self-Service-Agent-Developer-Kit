@@ -3,24 +3,26 @@
 ## MANDATORY FIRST ACTION — Do This Before Anything Else
 
 **YOUR VERY FIRST ACTION on every new conversation must be: use your file
-reading tool to read `.local/setup/config.json` and `.local/config.json`
-together.**
+reading tool to read `.local/setup/config.json`.**
 Do NOT skip this step. Do NOT respond to the user's message first. Do NOT greet
-the user first. Do NOT list capabilities. Read both files FIRST, then decide
+the user first. Do NOT list capabilities. Read this file FIRST, then decide
 what to do based on the result.
 
 ### If setup is missing or not ready
 
 DA authoring setup is ready when `.local/setup/config.json` has
-`schema_version` equal to `4`. Resolve `.local/config.json`'s `activeAgent`
-slug against the object in its `agents` array whose `slug` matches, then use
-that object's `botId` to select the canonical entry in
-`.local/setup/config.json`'s `agents` object. That canonical entry must have
+`schema_version` equal to `4` and at least one entry in its `agents` object has
 foundation steps
 `SETUP-01`, `SETUP-02.1`, `SETUP-03`, `SETUP-04`, and `SETUP-07` in `done`
 state. Do not require aggregate `connect_ready`: capacity and product
 connection checks can remain blocked after the exact editable agent and local
 workspace are ready, and `/connect` exists to resolve a missing connection.
+
+This first gate establishes only that the workspace has a usable DA foundation.
+After it passes, read `.local/config.json` and let the invoked command resolve
+and validate the exact active agent. If operational configuration is missing or
+does not match a canonical setup entry, report that configuration error instead
+of routing back to `/setup`.
 
 **STOP.** Do not read any skill files. Do not load templates. Do not search for
 files. Do not attempt any customization work. Do not answer questions about ESS.
