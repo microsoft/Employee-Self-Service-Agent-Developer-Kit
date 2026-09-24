@@ -5,20 +5,17 @@ description: "Type Enter to run a pre-deployment readiness check on your ESS age
 
 # FlightCheck
 
-**Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`.
-If canonical state does not have `schema_version: 4` and an `agents` entry
-matching the active workspace slug with `connect_ready: true`, check whether
-local config has `flightCheckOnly: true`. If so, proceed without canonical setup
-state. Otherwise, show:
+FlightCheck may diagnose incomplete DA runtime readiness before canonical setup
+has `connect_ready: true`. Read `src/skills/flightcheck/SKILL.md` and follow its
+Start section before choosing a scope. Do not send the generic `/setup` welcome
+message solely because canonical readiness is incomplete.
 
-> Welcome to the ESS Maker Kit. Before running this command, type `/setup` 
-> to set up your environment.
-
-and STOP. Otherwise proceed.
-
-This DA-only release supports only the local-files FlightCheck scope. Follow
-the skill with scope fixed to `local`. Do not offer or run Dataverse,
-integration, prerequisite, or publishing checks.
+For completed DA setup and standalone `flightCheckOnly` mode, this DA-only
+release supports only the local-files FlightCheck scope. Follow the skill with
+scope fixed to `local`. Do not offer or run Dataverse, integration,
+prerequisite, or publishing checks. For incomplete DA setup, use only the
+skill's bounded **DA setup readiness recovery** route and stop after its
+runtime-readiness report.
 
 You are a script executor. Read `src/skills/flightcheck/SKILL.md` and follow
 it. It will tell you what to do.

@@ -46,10 +46,12 @@ Respond with ONLY this exact message and nothing else:
   requests such as "edit the testsets" and "change an expected response." That
   skill discovers workspace-level sets without setup and agent-owned sets when
   configuration is available. Deleting deployed sets still requires setup.
-- If the user typed `/flightcheck`, read `.local/config.json`. If it has
-  `flightCheckOnly: true`, proceed with `src/skills/flightcheck/SKILL.md`.
-  This exception applies only to `/flightcheck`; every other command remains
-  gated.
+- If the user typed `/flightcheck` or explicitly asked to run a readiness
+  check, proceed with `src/skills/flightcheck/SKILL.md`. This includes the
+  FlightCheck trigger phrases below. FlightCheck owns the bounded distinction
+  between a missing workspace, incomplete DA runtime readiness, completed DA
+  setup, and standalone `flightCheckOnly` mode. Do not use this exception for
+  customization or any other command.
 
 **Except for the cases above, this gate applies to ALL user messages** —
 including "hello", "hi", "help",

@@ -269,7 +269,6 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
         "create.prompt.md",
         "delete.prompt.md",
         "evaluate.prompt.md",
-        "flightcheck.prompt.md",
         "push.prompt.md",
         "restore-template-configs.prompt.md",
         "review.prompt.md",
@@ -298,13 +297,17 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
     assert "`.local/config.json`'s" in instructions
 
 
-def test_global_gate_preserves_flightcheck_only_mode() -> None:
+def test_global_gate_allows_bounded_flightcheck_diagnostics() -> None:
     instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
     normalized = " ".join(instructions.split())
 
-    assert "typed `/flightcheck`" in normalized
-    assert "`flightCheckOnly: true`" in normalized
-    assert "This exception applies only to `/flightcheck`" in normalized
+    assert (
+        "typed `/flightcheck` or explicitly asked to run a readiness check"
+        in normalized
+    )
+    assert "This includes the FlightCheck trigger phrases below" in normalized
+    assert "incomplete DA runtime readiness" in normalized
+    assert "Do not use this exception for customization" in normalized
 
 
 def test_maker_profile_requires_only_canonical_completion() -> None:
@@ -1240,8 +1243,24 @@ def test_da_local_capabilities_remain_available() -> None:
 def test_flightcheck_preserves_standalone_and_local_only_modes() -> None:
     prompt = (_PROMPTS / "flightcheck.prompt.md").read_text(encoding="utf-8")
     normalized = " ".join(prompt.split())
+    skill = (
+        _SOLUTION / "src" / "skills" / "flightcheck" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    normalized_skill = " ".join(skill.split())
 
-    assert "flightCheckOnly: true" in normalized
-    assert "proceed without canonical setup state" in normalized
-    assert "only the local-files FlightCheck scope" in normalized
+    assert "diagnose incomplete DA runtime readiness" in normalized
+    assert "generic `/setup` welcome message" in normalized
+    assert "DA setup readiness recovery" in normalized
     assert "scope fixed to `local`" in normalized
+    assert "`flightCheckOnly: true`" in normalized_skill
+    assert "`agent.workspace_slug` matches local config's `activeAgent`" in normalized_skill
+    assert "`connect_ready` is `false`" in normalized_skill
+    assert "Run all four setup-owned checkpoints" in normalized_skill
+    assert (
+        "agent access, environment capacity, native connections, and agent content"
+        in normalized_skill
+    )
+    assert (
+        "Do not rerun attachment, materialization, import, or agent selection"
+        in normalized_skill
+    )

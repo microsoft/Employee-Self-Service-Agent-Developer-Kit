@@ -11,19 +11,51 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 
 ## Start
 
-Read `.local/config.json` to confirm setup is complete and get the agent context.
+Read `.local/setup/config.json` and `.local/config.json`.
 
-If setup is not complete, show:
+Proceed to the normal FlightCheck scope when either:
+
+- local config has `flightCheckOnly: true`; or
+- canonical state has `schema_version: 4` and an `agents` entry whose
+  `agent.workspace_slug` matches local config's `activeAgent` and whose
+  `connect_ready` is `true`.
+
+When no matching canonical agent exists, or its workspace does not have both
+`folder` and `agent_path`, show:
 
 **Message:**
 
-You need to run `/setup` first before running a readiness check.
+Setup needs to finish establishing your local agent workspace before I can run
+the readiness checks. Run `/setup` to continue from where setup stopped.
 
 **End message.**
 
-Stop here.
+Stop here. Do not replace this with the generic setup welcome message.
 
-If setup is complete, proceed.
+When the matching canonical agent has both workspace fields but
+`connect_ready` is `false`, follow **DA setup readiness recovery** below instead
+of the normal scope flow.
+
+### DA setup readiness recovery
+
+This is a bounded diagnostic path, not permission to customize an agent before
+setup is ready. Do not offer the normal FlightCheck scope picker.
+
+Read `src/skills/foundation-setup/da-existing-dev.md`. Follow only **Maintain
+native FlightCheck evidence** and **Interpret results** for the active canonical
+agent:
+
+1. Run all four setup-owned checkpoints whose prerequisites remain available:
+   agent access, environment capacity, native connections, and agent content.
+2. Apply every result to canonical setup state, including failed results.
+3. Render the five-row runtime-readiness table from the fresh evidence.
+4. Explain the specific observed blocker and its supported remediation in
+   maker-facing language.
+
+Do not rerun attachment, materialization, import, or agent selection. Do not
+mark readiness complete from conversation history. Stop after the
+runtime-readiness report; customization remains gated unless the final
+maintenance result has `connectReady: true`.
 
 Treat a config with `releaseLine: "da"` and no `dataverseEndpoint` as a native
 no-Dataverse agent. Its supported scopes are `full`, `environment`,
