@@ -11,10 +11,10 @@ This skill owns the maker interaction and the handoff into existing-Dev setup.
 
 ## Identify the target
 
-Accept an environment URL and infer its environment ID. The URL should have a
-segment denoting the service ring, such as `test` or `preprod`; when neither
-segment is present, confirm the `prod` ring with the user. Ask the maker only
-when the environment ID is unclear.
+Accept an environment URL and infer its environment ID and service ring. When
+the URL does not identify the ring, use **Resolve the service ring** in
+`src/skills/foundation-setup/da-environment-target.md` exactly. Ask the maker
+only when the environment ID is unclear.
 
 Pass the resolved environment ID and ring to the import command.
 
@@ -52,8 +52,10 @@ Parse `DA_ALM_IMPORT_JSON:` even when the command exits nonzero.
 
 When `kind` is `success`, use the returned environment, tenant, host, ring, API
 version, and agent identity only as internal command inputs. Do not display
-those identifiers. Mark **Verify access and agent identity** and **Establish an
-editable Dev agent** complete, then show:
+those identifiers. The successful native import verification is authoritative
+DA-GA evidence, so run the parent's selected-agent product-line reconciliation
+with `--native-da-ga`. Mark **Verify access and agent identity** and **Establish
+an editable Dev agent** complete, then show:
 
 > Agent package imported and verified as an editable Dev agent. Preparing its
 > local authoring workspace...
@@ -109,7 +111,7 @@ Offer exactly:
 - **Replace an existing agent with this package**
 - **Cancel setup**
 
-Do not preselect a choice or recommend replacement. For either existing-agent choice, run `setup_existing_da.py list-agents` for the target environment, show the visible Dev agent names, and let the maker choose one exact agent. For **Choose an existing agent in this environment**, validate the selected agent and continue through `da-existing-dev.md`.
+Do not preselect a choice or recommend replacement. For either existing-agent choice, run `setup_existing_da.py list-agents` for the target environment, show the visible Dev agent names, and let the maker choose one exact agent. The native candidate result is authoritative DA-GA evidence; run the parent's selected-agent product-line reconciliation with `--native-da-ga` before validation or replacement. For **Choose an existing agent in this environment**, validate the selected agent and continue through `da-existing-dev.md`.
 
 Before replacement, validate the exact selected Dev agent:
 

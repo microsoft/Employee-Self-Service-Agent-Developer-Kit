@@ -1538,6 +1538,7 @@ def test_parser_exposes_only_composable_setup_operations() -> None:
         "attach",
         "cached-accounts",
         "inspect-agent",
+        "list-environments",
         "list-agents",
         "maintain-flightcheck",
         "select-agent",
@@ -1555,6 +1556,192 @@ def test_parser_exposes_only_composable_setup_operations() -> None:
         ]
     )
     assert parsed.account == "test.user@example.test"
+    inspect_help = " ".join(
+        subparsers.choices["inspect-agent"].format_help().split()
+    )
+    assert (
+        "Microsoft account sign-in name used to access the target Power "
+        "Platform environment"
+        in inspect_help
+    )
+    with pytest.raises(SystemExit):
+        parser.parse_args(["list-environments"])
+
+
+def test_list_environments_emits_visible_non_dataverse_targets(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_authentication_from_args",
+        lambda _args, _ring: ("token", TENANT_ID),
+    )
+    monkeypatch.setattr(
+        setup_existing_da,
+        "list_environments",
+        lambda token, ring, *, api_version: [
+            {
+                "id": ENVIRONMENT_ID,
+                "displayName": "No Database Environment",
+                "type": "Sandbox",
+                "state": "Ready",
+                "geo": "unitedstates",
+                "url": "",
+                "futureServiceField": {"preserved": True},
+            }
+        ],
+    )
+
+    assert setup_existing_da.main(
+        [
+            "list-environments",
+            "--ring",
+            "test",
+            "--account",
+            "test.user@example.test",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 0
+
+    result = json.loads(
+        capsys.readouterr().out.removeprefix(
+            "DA_ENVIRONMENT_LIST_JSON:"
+        )
+    )
+    evidence_path = (
+        tmp_path / ".local" / "setup" / "environment-list-test.json"
+    )
+    assert result == {
+        "tenantId": TENANT_ID,
+        "ring": "test",
+        "evidencePath": str(evidence_path.resolve()),
+        "environments": [
+            {
+                "id": ENVIRONMENT_ID,
+                "name": "No Database Environment",
+                "type": "Sandbox",
+                "state": "Ready",
+                "region": "unitedstates",
+            }
+        ],
+    }
+    assert json.loads(evidence_path.read_text(encoding="utf-8")) == {
+        "tenantId": TENANT_ID,
+        "ring": "test",
+        "environments": [
+            {
+                "id": ENVIRONMENT_ID,
+                "displayName": "No Database Environment",
+                "type": "Sandbox",
+                "state": "Ready",
+                "geo": "unitedstates",
+                "url": "",
+                "futureServiceField": {"preserved": True},
+            }
+        ],
+    }
+
+
+def test_list_environments_preserves_empty_result(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_authentication_from_args",
+        lambda _args, _ring: ("token", TENANT_ID),
+    )
+    monkeypatch.setattr(
+        setup_existing_da,
+        "list_environments",
+        lambda token, ring, *, api_version: [],
+    )
+
+    assert setup_existing_da.main(
+        [
+            "list-environments",
+            "--ring",
+            "prod",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 0
+    result = json.loads(
+        capsys.readouterr().out.removeprefix(
+            "DA_ENVIRONMENT_LIST_JSON:"
+        )
+    )
+    assert result["environments"] == []
+    assert result["ring"] == "prod"
+
+
+@pytest.mark.parametrize("status_code", [401, 403])
+def test_list_environments_preserves_authorization_failure(
+    status_code: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        setup_existing_da,
+        "_authentication_from_args",
+        lambda _args, _ring: ("token", TENANT_ID),
+    )
+    response = SimpleNamespace(
+        json=lambda: {"error": {"code": "AuthorizationFailed"}},
+        text="forbidden",
+    )
+
+    def deny_listing(
+        _token: str,
+        _ring: str,
+        *,
+        api_version: str,
+    ) -> list[dict[str, Any]]:
+        raise setup_existing_da.AgentBuilderHTTPError(
+            "Environment listing",
+            status_code,
+            error_code="AuthorizationFailed",
+            request_id="request-123",
+            response=response,
+        )
+
+    monkeypatch.setattr(
+        setup_existing_da,
+        "list_environments",
+        deny_listing,
+    )
+
+    assert setup_existing_da.main(
+        [
+            "list-environments",
+            "--ring",
+            "prod",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    ) == 1
+    captured = capsys.readouterr()
+    error_result = json.loads(
+        next(
+            line.removeprefix("DA_ENVIRONMENT_LIST_ERROR_JSON:")
+            for line in captured.out.splitlines()
+            if line.startswith("DA_ENVIRONMENT_LIST_ERROR_JSON:")
+        )
+    )
+    assert error_result == {
+        "statusCode": status_code,
+        "errorCode": "AuthorizationFailed",
+        "requestId": "request-123",
+        "authorizationFailure": True,
+    }
+    assert "DA_ENVIRONMENT_LIST_ERROR_RESPONSE_JSON:" in captured.out
+    assert "DA_ENVIRONMENT_LIST_JSON:" not in captured.out
+    assert f"HTTP {status_code}" in captured.err
 
 
 def test_maintain_flightcheck_command_updates_local_state(
