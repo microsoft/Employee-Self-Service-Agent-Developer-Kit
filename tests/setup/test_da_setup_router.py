@@ -167,7 +167,9 @@ def test_global_and_command_gates_require_canonical_da_foundation() -> None:
 
     assert "`schema_version`" in instructions
     assert "equal to `4`" in instructions
-    assert "`agents` entry matching `.local/config.json`" in instructions
+    assert "read `.local/setup/config.json` and `.local/config.json`" in instructions
+    assert "`activeAgent`" in instructions
+    assert "`botId`" in instructions
     assert "Do not require aggregate `connect_ready`" in instructions
     for step in ("SETUP-01", "SETUP-02.1", "SETUP-03", "SETUP-04", "SETUP-07"):
         assert step in instructions

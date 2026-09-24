@@ -23,6 +23,8 @@ def test_da_servicenow_connect_routes_to_prototype_skill() -> None:
         step in prompt
         for step in ("SETUP-01", "SETUP-02.1", "SETUP-03", "SETUP-04", "SETUP-07")
     )
+    assert "`activeAgent` slug" in prompt
+    assert "`botId`" in prompt
     assert "src/skills/connect/servicenow-da/SKILL.md" in router
     assert "releaseLine" in router
 
@@ -37,4 +39,7 @@ def test_global_gate_allows_connection_blocked_foundation() -> None:
         step in instructions
         for step in ("SETUP-01", "SETUP-02.1", "SETUP-03", "SETUP-04", "SETUP-07")
     )
+    assert "read `.local/setup/config.json` and `.local/config.json`" in instructions
+    assert "`activeAgent`" in instructions
+    assert "`botId`" in instructions
     assert "`/connect servicenow` is available" in instructions
