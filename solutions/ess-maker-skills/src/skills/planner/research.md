@@ -1,9 +1,23 @@
-# Planner — Phase 1: Research Microsoft Learn (grounding)
+# Planner — Phase 1: Research (grounding) — Microsoft Learn *and* the kit's own skills
 
 Ground the Plan in **what ESS actually supports today** by researching the live
 Microsoft Learn ESS section. This is a primary planning step, not a fallback.
 The vendored snapshot under `src/reference/ess-docs/` is a seed hint and an
 offline safety net only — the ESS docs have moved before, so read them live.
+
+Research runs on **two grounding axes — do both before you model tasks (Phase 3):**
+
+1. **Microsoft Learn — *what* ESS supports** (the TOC crawl below): capabilities,
+   prerequisites, the responsible role each names, and the outputs each produces.
+2. **The kit's own skills — *how this kit builds each piece*** (*Also research
+   across the kit's own skills*, below): the exact command an assignee runs, the
+   role boundaries a setup splits on, and the deterministic step→task
+   decomposition a shipped setup checklist encodes.
+
+Neither axis alone is enough: Learn tells you a Workday connection is a
+prerequisite; the kit's Workday setup skill tells you that one prerequisite is
+**25 steps across 6 role boundaries**, decomposed deterministically. Fold both
+into one research context.
 
 ## How the crawl works (Table-of-Contents first)
 
@@ -64,8 +78,56 @@ For every page you read, pull out (each stamped with its source URL):
 Cite the file/URL you used so the sponsor can verify. If the vendored snapshot
 disagrees with live Learn, live wins for planning; note the drift.
 
-When you have a grounded picture — supported scenarios, their prerequisites,
-each prerequisite's role/how/produces — go to Phase 2.
+## Also research across the kit's own skills (grounding axis 2)
+
+Microsoft Learn says *what* to build; the **kit's own skills** say *how this kit
+does it* — the command to run, the role boundaries, and the exact task
+decomposition. Research these too, and record the findings next to the Learn
+findings in the research context.
+
+1. **Inventory the commands an assignee will run.** The kit ships one skill per
+   verb — `/setup`, `/connect`, `/create`, `/evaluate`, `/flightcheck`, `/push`
+   (routing table: `.github/copilot-instructions.md`). Every prerequisite you
+   found on Learn maps to **one** of these, or to a portal/manual step. Name that
+   command in the Task **description** (Phase 3) — it's what Flow 2 hands off to.
+
+2. **Read the setup checklist for every captured system, and decompose it
+   deterministically.** A system with a `src/skills/setup/<system>/tasks.md`
+   ships a canonical, role-gated checklist — the information-complete source the
+   setup orchestrator (`src/skills/setup/SKILL.md`) and `/connect` sequence.
+   **Discover them** by listing `src/skills/setup/*/tasks.md` (today: `workday`).
+   For each captured system that has one, **do not hand-write the tasks** — run
+   the extractor, which groups every step by its role boundary and maps each
+   grounded role to its attestable id:
+
+   ```
+   python scripts/planner/cli.py setup-tasks --system <system> --commands
+   ```
+
+   For `workday` that yields **25 steps / 6 groups → 7 role-boundary Tasks across
+   5 roles** (PP Admin, Env Maker, Cloud App Admin, Workday Admin, Network Admin),
+   each with its `--produces`/`--consumes` already set. Emit those lines verbatim
+   (Phase 3, `model.md` → *Don't hand-decompose a system that ships a setup
+   checklist*).
+
+3. **Read the role gating.** `src/reference/ess-docs/setup/role-gating.md` is the
+   role × gate matrix every checklist item cites — use it to confirm the
+   attestable role each Task pools to (the grounded→attestable map lives in
+   `model.md`).
+
+4. **Note the produces/consumes each skill implies.** A setup checklist's outputs
+   (an Entra app, a tenant config, a connection, a network allowlist, a topic) are
+   the `--produces` keys of its Tasks; a downstream skill that needs one declares
+   it as `--consumes`. This ledger is what sequences the plan (`model.md` →
+   *Sequence the tasks*).
+
+A captured system with **no** native kit skill (no extension pack — ADP, Jira, a
+custom HTTP API) has no `setup-tasks` decomposition: model it as a `/create`
+custom-flow Task instead (`model.md` → *Native connector vs. custom flow*).
+
+When you have a grounded picture from **both axes** — supported scenarios, their
+prerequisites, each prerequisite's role/how/produces, and the deterministic setup
+decomposition for every system that ships a checklist — go to Phase 2.
 
 > **Where the research context lives (today).** It is held in your working notes
 > for this planning session — there is **no** persisted `research-context.json`

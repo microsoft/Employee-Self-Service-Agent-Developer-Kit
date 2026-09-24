@@ -87,16 +87,20 @@ already mirror.
 After you've built the plan locally through the phases (research → interview →
 model → assign), publish it in **one** create call rather than task-by-task:
 
-1. **Name the configuring agent.** Pick the enum that matches the agent the
-   sponsor is configuring and set it:
-   `python scripts/planner/cli.py set-agent-name --name <AgentName>`
-   where `<AgentName>` is one of:
+1. **Ask the sponsor which configuring agent this plan targets — don't guess.**
+   The create body's `configuringAgentName` is a required, **sponsor-owned**
+   choice; it is **not** inferable from the plan, so **ask and confirm the exact
+   enum before setting it** — never silently default to one (e.g. don't assume
+   `EmployeeSelfServiceHRCEA`). Present the four options and let the sponsor pick:
    - `EmployeeSelfServiceHRCEA` — HR, custom engine agent
    - `EmployeeSelfServiceHRDA` — HR, declarative agent
    - `EmployeeSelfServiceITCEA` — IT, custom engine agent
    - `EmployeeSelfServiceITDA` — IT, declarative agent
-   If it isn't obvious from the interview (HR vs IT, custom-engine vs
-   declarative), ask the sponsor in plain language ("Is this for HR or IT?").
+   HR-vs-IT may be clear from the interview, but **custom-engine vs declarative is
+   an agent-build fact the interview rarely captures**, so confirm *both* axes in
+   plain language ("Is this for HR or IT?" and "custom-engine or declarative
+   agent?"). Only once the sponsor has chosen, set it:
+   `python scripts/planner/cli.py set-agent-name --name <AgentName>`
 2. **Build the create body:**
    `python scripts/planner/cli.py export-remote-plan` — this prints the JSON body
    (configuring agent, acceptance criteria, context, and every task inline).

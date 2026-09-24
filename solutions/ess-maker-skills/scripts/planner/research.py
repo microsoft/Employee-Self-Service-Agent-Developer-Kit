@@ -67,6 +67,11 @@ DEFAULT_ROLE_LEXICON: tuple[str, ...] = (
     "SharePoint administrator",
     "security administrator",
     "Entra administrator",
+    "Environment Maker",
+    "Cloud Application Administrator",
+    "Application Administrator",
+    "Network Administrator",
+    "Workday administrator",
     "maker",
 )
 DEFAULT_OUTPUT_LEXICON: tuple[str, ...] = (

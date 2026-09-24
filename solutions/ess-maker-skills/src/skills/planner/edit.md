@@ -44,6 +44,12 @@ download and re-upload. Offer the two ways to change it:
 Speak in terms of the plan and its tasks — never mention `plan.json`, the CLI, or
 which files you read.
 
+> **Editing our view vs. importing their plan.** This file reconciles a re-upload
+> of the kit's **own** `ESS-scenario-plan.md` (diffed by task id) into a plan that
+> **already exists**. A maker attaching a plan in **their own** shape when no plan
+> exists yet is the other bookend — make sense of it and create the plan from it
+> (`src/skills/planner/import.md`), then continue the phases.
+
 ## Reconcile a direct Markdown edit back into the plan
 
 When the editor says they edited the Markdown (or re-uploads it), reconcile it —
