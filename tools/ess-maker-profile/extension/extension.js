@@ -1571,7 +1571,9 @@ function activate(context) {
     //   written by the installer. Legacy values 'lite'/'standard' are
     //   normalized to 'maker'/'developer' in firstInstallDispatch.
     //   Maker mode: applies chat-only layout; user clicks Setup to run /setup.
-    //   Developer mode: injects /setup into Copilot Chat automatically.
+    //   Developer mode: the installer already dispatched /setup before VS Code
+    //   launched, so the extension only records the mode and does not inject
+    //   a second /setup here.
     //   Empty ("") / "prompt": installer left the choice unresolved (e.g. a
     //   maker double-clicked the extension into a stray VS Code window
     //   without running the consolidated installer). firstInstallDispatch
