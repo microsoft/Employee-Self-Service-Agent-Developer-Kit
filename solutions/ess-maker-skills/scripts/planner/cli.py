@@ -97,6 +97,84 @@ def cmd_init(args: argparse.Namespace) -> int:
     return 0
 
 
+def _print_gaps(gaps: dict) -> None:
+    """Human-readable rendering of :meth:`Plan.missing_slots` — the questions the
+    skill still needs to ask. Printed to stdout so the skill can read it back."""
+    required = gaps.get("required") or []
+    recommended = gaps.get("recommended") or []
+    if not required and not recommended:
+        print("Nothing missing — the plan has the objective, scenarios, and a system for each.")
+        return
+    if required:
+        print("Still needed (blocks building the plan) — ask the maker:")
+        for gap in required:
+            print(f"  - [{gap['slot']}] {gap['prompt']}")
+    if recommended:
+        if required:
+            print()
+        print("Nice to confirm (improves the plan, not blocking):")
+        for gap in recommended:
+            print(f"  - [{gap['slot']}] {gap['prompt']}")
+
+
+def cmd_ingest_upload(args: argparse.Namespace) -> int:
+    """Build a plan from a maker-authored **uploaded** plan in one atomic write.
+
+    The skill parses the attached plan document — whatever shape the maker wrote
+    it in — into the normalized payload (see ``Plan.ingest_upload``) and hands it
+    here so the structured write stays atomic and validated. After ingesting, it
+    prints what was captured and the remaining gaps (``missing_slots``) so the
+    skill knows exactly which questions to ask instead of re-interviewing from
+    scratch. Refuses to clobber an existing plan unless ``--force`` (an edit to a
+    plan that already exists is the reconcile path, src/skills/planner/edit.md).
+    """
+    if os.path.exists(args.plan) and not args.force:
+        print(
+            f"A plan already exists at {args.plan}. Use --force to replace it from "
+            "the upload, or reconcile an edit into the existing plan instead.",
+            file=sys.stderr,
+        )
+        return 1
+    try:
+        payload = json.loads(_read_input(args.input))
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Could not read the uploaded plan payload: {exc}", file=sys.stderr)
+        return 1
+    if not isinstance(payload, dict):
+        print("The uploaded plan payload must be a JSON object.", file=sys.stderr)
+        return 1
+    plan = Plan.new()
+    try:
+        counts = plan.ingest_upload(payload)
+    except (ValueError, KeyError) as exc:
+        print(f"Could not ingest the uploaded plan: {exc}", file=sys.stderr)
+        return 1
+    _save(plan, args)
+    gaps = plan.missing_slots()
+    if args.json:
+        print(json.dumps({"ingested": counts, "gaps": gaps}, indent=2))
+        return 0
+    captured = ", ".join(f"{k}={v}" for k, v in counts.items() if v)
+    print(f"Ingested the uploaded plan into {args.plan}.")
+    if captured:
+        print(f"Captured: {captured}")
+    print()
+    _print_gaps(gaps)
+    return 0
+
+
+def cmd_gaps(args: argparse.Namespace) -> int:
+    """Show the intent slots the plan still lacks (``missing_slots``) — the
+    questions to ask. Read-only; re-run after filling a slot to see fewer gaps."""
+    plan = _load(args)
+    gaps = plan.missing_slots()
+    if args.json:
+        print(json.dumps(gaps, indent=2))
+        return 0
+    _print_gaps(gaps)
+    return 0
+
+
 def cmd_set_context(args: argparse.Namespace) -> int:
     plan = _load(args)
     plan.set_context(
@@ -610,6 +688,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--objective")
     p.add_argument("--force", action="store_true")
     p.set_defaults(func=cmd_init)
+
+    p = sub.add_parser("ingest-upload",
+                       help="build a plan from a maker-authored uploaded plan (normalized JSON payload)")
+    p.add_argument("--input", default="-",
+                   help="path to the normalized plan JSON, or '-' for stdin (default)")
+    p.add_argument("--force", action="store_true",
+                   help="replace an existing plan with the upload")
+    p.add_argument("--json", action="store_true",
+                   help="print {ingested, gaps} as JSON instead of prose")
+    p.set_defaults(func=cmd_ingest_upload)
+
+    p = sub.add_parser("gaps",
+                       help="list the intent slots the plan still lacks (questions the skill should ask)")
+    p.add_argument("--json", action="store_true",
+                   help="print {required, recommended} as JSON instead of prose")
+    p.set_defaults(func=cmd_gaps)
 
     p = sub.add_parser("set-context", help="add or overwrite an intent context entry")
     p.add_argument("--key", required=True)
