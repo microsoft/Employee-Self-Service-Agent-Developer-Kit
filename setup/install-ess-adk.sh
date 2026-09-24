@@ -51,11 +51,10 @@ esac
 
 # When the caller didn't pin a mode (the default one-liner path via
 # bootstrap-mac.sh), prompt the maker in the terminal for their preference.
-# Historically we tried to prompt from inside VS Code via a QuickPick, but
-# that surface competes with the theme picker + GitHub Copilot sign-in on
-# first launch and reliably loses the race - the maker never sees it.
-# Prompting here in the CLI, before we hand off to VS Code, means the
-# choice is applied deterministically before any editor UI appears.
+# Doing it here in the CLI, before we hand off to VS Code, makes the
+# choice deterministic: the answer is applied to essMaker.mode before
+# any editor UI appears, so there's no race with the theme picker or
+# GitHub Copilot sign-in that VS Code renders on first launch.
 if [[ "$INSTALL_MODE" == "prompt" ]]; then
     if [[ -n "${CI:-}" || -n "${TF_BUILD:-}" || -n "${GITHUB_ACTIONS:-}" ]] || [[ ! -t 0 ]]; then
         echo ""

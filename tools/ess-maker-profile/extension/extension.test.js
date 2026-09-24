@@ -202,13 +202,16 @@ test('exposes the essMaker.autoUpdateCheck opt-out setting', () => {
 
 console.log('\nfirst-install mode dispatch (ADO #7895603):');
 
-test('extension source does NOT declare an in-VS-Code mode QuickPick', () => {
-    // The mode is now resolved in the installer CLI before VS Code launches
-    // (setup/Install-EssAdk.ps1 + install-ess-adk.sh prompt there). A VS Code
-    // QuickPick on first launch reliably loses the race against the theme
-    // picker + Copilot sign-in, so it was removed.
-    assert.ok(!/async function promptForInstallMode/.test(src), 'promptForInstallMode should be gone; the installer prompts in the CLI');
-    assert.ok(!/showQuickPick\([\s\S]{0,200}?Maker \(recommended\)/.test(src), 'in-VS-Code Maker/Developer QuickPick should be removed');
+test('extension does not prompt for mode inside VS Code', () => {
+    // The mode is resolved in the installer CLI before VS Code launches
+    // (setup/Install-EssAdk.ps1 + install-ess-adk.sh prompt there), so
+    // essMaker.mode is already written to settings.json by the time the
+    // extension activates. If the extension prompted here on first
+    // launch, its picker would race the theme picker + Copilot sign-in
+    // that VS Code renders on first launch, so we guard against a mode
+    // picker regressing into the extension.
+    assert.ok(!/async function promptForInstallMode/.test(src), 'promptForInstallMode should not exist; the installer prompts in the CLI');
+    assert.ok(!/showQuickPick\([\s\S]{0,200}?Maker \(recommended\)/.test(src), 'in-VS-Code Maker/Developer picker should not exist');
 });
 
 test('firstInstallDispatch defaults blank / "prompt" installer values to maker', () => {

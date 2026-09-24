@@ -70,12 +70,11 @@ Test 'legacy InstallMode values (lite/standard) are coerced to maker/developer' 
     }
 }
 
-Test 'InstallMode=prompt fires a terminal Maker/Developer prompt (not a VS Code QuickPick)' {
-    # Historically we tried to ask the mode question from inside VS Code
-    # via a QuickPick, but that surface competes with the theme picker and
-    # Copilot sign-in on first launch and reliably loses the race. The
-    # installer now asks the question in the terminal before handing off
-    # to VS Code so the answer is deterministic.
+Test 'InstallMode=prompt fires a Maker/Developer prompt in the installer terminal' {
+    # The installer resolves the mode in the terminal before handing off
+    # to VS Code so essMaker.mode is written to settings.json before any
+    # editor UI appears - the answer never races with the theme picker
+    # or GitHub Copilot sign-in that VS Code renders on first launch.
     if ($src -notmatch "if\s*\(\`$InstallMode\s+-eq\s+'prompt'\)") {
         throw 'no prompt branch guarding InstallMode=prompt'
     }
