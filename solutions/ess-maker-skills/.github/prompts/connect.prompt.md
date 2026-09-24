@@ -5,7 +5,12 @@ description: "Check DA-GA product extension setup availability"
 
 # Connect
 
-**Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`. If canonical state does not have `schema_version: 4` and an `agents` entry matching the active workspace slug with `connect_ready: true`, show:
+**Setup-state check.** Read `.local/setup/config.json` and `.local/config.json`.
+If canonical state does not have `schema_version: 4` and an `agents` entry
+matching the active workspace slug with foundation steps `SETUP-01`,
+`SETUP-02.1`, `SETUP-03`, `SETUP-04`, and `SETUP-07` in `done` state, show the
+message below and STOP. Do not require aggregate `connect_ready`; capacity and
+the product connection itself may still need attention.
 
 > Welcome to the ESS Maker Kit. Before running `/connect`, type `/setup` to set up your environment.
 

@@ -10,11 +10,13 @@ to do based on the result.
 
 ### If setup is missing or not ready
 
-DA setup is ready only when `.local/setup/config.json` has `schema_version`
-equal to `4` and its `agents` entry matching `.local/config.json`'s
-`activeAgent` workspace slug has `connect_ready` equal to `true`. Setup writes
-that per-agent marker only after all eight foundation steps for that agent have
-reached `done`.
+DA authoring setup is ready when `.local/setup/config.json` has
+`schema_version` equal to `4` and its `agents` entry matching `.local/config.json`'s
+`activeAgent` workspace slug has foundation steps
+`SETUP-01`, `SETUP-02.1`, `SETUP-03`, `SETUP-04`, and `SETUP-07` in `done`
+state. Do not require aggregate `connect_ready`: capacity and product
+connection checks can remain blocked after the exact editable agent and local
+workspace are ready, and `/connect` exists to resolve a missing connection.
 
 **STOP.** Do not read any skill files. Do not load templates. Do not search for
 files. Do not attempt any customization work. Do not answer questions about ESS.
@@ -79,8 +81,9 @@ After canonical DA setup is complete:
   available;
 - Dataverse push and server-backed validation are permitted in this
   workspace; run the push pipeline when the maker asks to push local changes;
-- `/connect` and integration troubleshooting require the corresponding DA-GA
-  product extension guidance, which is not yet available;
+- `/connect servicenow` is available for the DA-GA HR prototype through its
+  product-specific guidance; other integrations require their corresponding
+  DA-GA product extension guidance;
 - `/backup-template-configs` and `/restore-template-configs` are no longer
   supported because they belonged to the retired Dataverse-based agent model;
 - `/flightcheck` may run only its local-files scope.

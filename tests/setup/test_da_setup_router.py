@@ -162,23 +162,23 @@ def test_public_setup_does_not_configure_mcp() -> None:
     assert "materialize-defaults" not in prompt
 
 
-def test_global_and_command_gates_require_canonical_da_completion() -> None:
+def test_global_and_command_gates_require_canonical_da_foundation() -> None:
     instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
 
     assert "`schema_version`" in instructions
     assert "equal to `4`" in instructions
     assert "`agents` entry matching `.local/config.json`" in instructions
-    assert "`connect_ready` equal to `true`" in instructions
+    assert "Do not require aggregate `connect_ready`" in instructions
+    for step in ("SETUP-01", "SETUP-02.1", "SETUP-03", "SETUP-04", "SETUP-07"):
+        assert step in instructions
     assert '`status` equal to `"complete"`' not in instructions
 
     gated_prompts = (
         "backup-template-configs.prompt.md",
-        "connect.prompt.md",
         "create.prompt.md",
         "delete.prompt.md",
         "evaluate.prompt.md",
         "flightcheck.prompt.md",
-        "push.prompt.md",
         "restore-template-configs.prompt.md",
         "review.prompt.md",
         "run.prompt.md",
@@ -202,6 +202,13 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
             '`.local/config.json` is missing or `setup` is not `"complete"`'
             not in normalized
         ), path
+
+    connect_prompt = (_PROMPTS / "connect.prompt.md").read_text(encoding="utf-8")
+    assert ".local/setup/config.json" in connect_prompt
+    assert "schema_version: 4" in connect_prompt
+    assert "Do not require aggregate `connect_ready`" in connect_prompt
+    for step in ("SETUP-01", "SETUP-02.1", "SETUP-03", "SETUP-04", "SETUP-07"):
+        assert step in connect_prompt
 
     assert "`.local/config.json`'s" in instructions
 
