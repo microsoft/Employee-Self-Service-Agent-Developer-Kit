@@ -74,7 +74,10 @@ from flightcheck import telemetry as _fc  # noqa: E402
 # 1.1.0: added derived ``tenant_class`` (internal vs customer) — ADO 7558661.
 # 1.3.0: defines the Vorpal bridge schema-v2 ``client_*`` field projection,
 #        including batch, source chronology, host context, and operation IDs.
-SCHEMA_VERSION = "1.3.0"
+# 1.4.0: added ``toolkit_git_sha`` + ``toolkit_git_branch`` common
+#        dimensions for precise upgrade-posture reporting and CA-vs-DA
+#        attribution — ADO 7943642.
+SCHEMA_VERSION = "1.4.0"
 
 # Surfaces the ADK emits from (spec enum: sdk | cli | studio | docs). The
 # Python skill scripts are the CLI surface.
@@ -567,6 +570,8 @@ def common_dimensions(
         "session_id": session_id,
         "surface": surface,
         "adk_version": _fc.get_adk_version(),
+        "toolkit_git_sha": _fc.get_toolkit_git_sha(),
+        "toolkit_git_branch": _fc.get_toolkit_git_branch(),
         "timestamp": _fc._iso_ms(_fc._now()),
     }
 

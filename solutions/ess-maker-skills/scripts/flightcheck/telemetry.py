@@ -98,7 +98,9 @@ EVENT_CHECK = "ESSMakerKit.FlightCheck.Check"
 
 # Bump when the emitted field set changes so dashboards can version-gate.
 # 1.1: added derived ``tenantClass`` (internal vs customer) — ADO 7558661.
-TELEMETRY_SCHEMA_VERSION = "1.1"
+# 1.2: added ``toolkitGitSha`` + ``toolkitGitBranch`` for precise
+# upgrade-posture and CA-vs-DA attribution — ADO 7943642.
+TELEMETRY_SCHEMA_VERSION = "1.2"
 
 # Short, fail-open timeout (connect, read) seconds. Telemetry runs at the
 # very end of a FlightCheck; we never want it to hang the CLI.
@@ -492,6 +494,156 @@ def get_adk_version() -> str:
     return "unknown"
 
 
+def _find_git_dir() -> str:
+    """Walk up from this file until a ``.git`` directory (or file) is
+    found. Returns the absolute path of the ``.git`` entry, or ``""`` if
+    no repo is found within a safe walk depth.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    cur = here
+    for _ in range(10):
+        candidate = os.path.join(cur, ".git")
+        if os.path.exists(candidate):
+            return candidate
+        parent = os.path.dirname(cur)
+        if parent == cur:
+            break
+        cur = parent
+    return ""
+
+
+@lru_cache(maxsize=1)
+def get_toolkit_git_sha() -> str:
+    """Best-effort short git SHA of the ADK clone (System Metadata).
+
+    Precise upgrade-posture signal: ``adk_version`` (extension package.json
+    version) can lag the actual toolkit state — for example a hotfix on the
+    same extension version, or an install that was cloned before the version
+    bump landed. The short SHA lets dashboards distinguish "install is on
+    latest bits" from "install is on last-week's tree at the same version".
+
+    Order: ``ESS_ADK_GIT_SHA`` env override (used by CI to inject a known
+    build SHA) -> ``.git/HEAD`` + ref file read (no subprocess) -> ``"unknown"``.
+
+    Fail-open: any error (missing repo, malformed HEAD, unreadable file)
+    resolves to ``"unknown"`` so telemetry never blocks the CLI.
+    """
+    override = os.environ.get("ESS_ADK_GIT_SHA", "").strip()
+    if override:
+        # 7-char short SHA to match ``git rev-parse --short HEAD``. Any
+        # override is truncated to avoid an oversized-string surprise in
+        # the emitted event.
+        return override[:40]
+    git_dir = _find_git_dir()
+    if not git_dir:
+        return "unknown"
+    try:
+        # ``.git`` can be a file (worktrees / submodules) pointing at the
+        # real dir with ``gitdir: <path>``.
+        if os.path.isfile(git_dir):
+            with open(git_dir, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            prefix = "gitdir:"
+            if content.startswith(prefix):
+                real = content[len(prefix):].strip()
+                if not os.path.isabs(real):
+                    real = os.path.normpath(
+                        os.path.join(os.path.dirname(git_dir), real)
+                    )
+                git_dir = real
+            else:
+                return "unknown"
+        head_path = os.path.join(git_dir, "HEAD")
+        if not os.path.exists(head_path):
+            return "unknown"
+        with open(head_path, "r", encoding="utf-8") as f:
+            head = f.read().strip()
+        if head.startswith("ref:"):
+            ref = head.split(":", 1)[1].strip()
+            # Resolve the ref file. Fall back to packed-refs if unpacked.
+            ref_path = os.path.join(git_dir, ref)
+            if os.path.exists(ref_path):
+                with open(ref_path, "r", encoding="utf-8") as f:
+                    sha = f.read().strip()
+            else:
+                packed = os.path.join(git_dir, "packed-refs")
+                if not os.path.exists(packed):
+                    return "unknown"
+                sha = ""
+                with open(packed, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line.endswith(" " + ref):
+                            sha = line.split(" ", 1)[0].strip()
+                            break
+                if not sha:
+                    return "unknown"
+        else:
+            # Detached HEAD: HEAD contains the SHA directly.
+            sha = head
+        # Validate: 40-hex lowercase; truncate to short SHA to match
+        # ``git rev-parse --short HEAD`` (7 chars is the git default) and
+        # keep the emitted string small.
+        sha = sha.lower()
+        if len(sha) < 7 or any(c not in "0123456789abcdef" for c in sha[:40]):
+            return "unknown"
+        return sha[:7]
+    except (OSError, ValueError, UnicodeDecodeError):
+        return "unknown"
+
+
+@lru_cache(maxsize=1)
+def get_toolkit_git_branch() -> str:
+    """Best-effort git branch name of the ADK clone (System Metadata).
+
+    Used for CA vs DA attribution (``main-ca`` vs ``main``; see ADO
+    #7830949) and for detecting installs off a personal / fork branch.
+
+    Order: ``ESS_ADK_GIT_BRANCH`` env override -> ``.git/HEAD`` ref
+    parse -> ``"unknown"``. Detached HEAD returns ``"detached"`` (not the
+    SHA — the SHA already lives in ``toolkit_git_sha``).
+
+    Fail-open: any error resolves to ``"unknown"``.
+    """
+    override = os.environ.get("ESS_ADK_GIT_BRANCH", "").strip()
+    if override:
+        return override[:120]
+    git_dir = _find_git_dir()
+    if not git_dir:
+        return "unknown"
+    try:
+        if os.path.isfile(git_dir):
+            with open(git_dir, "r", encoding="utf-8") as f:
+                content = f.read().strip()
+            prefix = "gitdir:"
+            if content.startswith(prefix):
+                real = content[len(prefix):].strip()
+                if not os.path.isabs(real):
+                    real = os.path.normpath(
+                        os.path.join(os.path.dirname(git_dir), real)
+                    )
+                git_dir = real
+            else:
+                return "unknown"
+        head_path = os.path.join(git_dir, "HEAD")
+        if not os.path.exists(head_path):
+            return "unknown"
+        with open(head_path, "r", encoding="utf-8") as f:
+            head = f.read().strip()
+        if head.startswith("ref:"):
+            ref = head.split(":", 1)[1].strip()
+            # ``refs/heads/<branch>`` -> ``<branch>``. Anything else
+            # (tag ref, remote-tracking) falls through to unknown.
+            prefix = "refs/heads/"
+            if ref.startswith(prefix):
+                return ref[len(prefix):][:120] or "unknown"
+            return "unknown"
+        # Detached HEAD.
+        return "detached"
+    except (OSError, ValueError, UnicodeDecodeError):
+        return "unknown"
+
+
 def _build_event(name: str, ikey_envelope: str, data: dict[str, Any]) -> dict[str, Any]:
     """Build a minimal Common Schema 4.0 envelope.
 
@@ -593,6 +745,8 @@ def _run_data(
         "agentId": agent_id,         # OII
         "agentCount": agent_count,
         "adkVersion": get_adk_version(),
+        "toolkitGitSha": get_toolkit_git_sha(),
+        "toolkitGitBranch": get_toolkit_git_branch(),
         "scope": scope,
         "invocationSource": invocation_source,
         "overall": getattr(run_result, "overall", ""),
@@ -754,6 +908,8 @@ def selftest() -> int:
             "runId": str(uuid.uuid4()),
             "instanceId": get_instance_id(),
             "adkVersion": get_adk_version(),
+            "toolkitGitSha": get_toolkit_git_sha(),
+            "toolkitGitBranch": get_toolkit_git_branch(),
         },
     )
     print(f"Posting selftest event to env='{env}' "
