@@ -663,7 +663,11 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
     assert "Do not ask the maker to classify the product before loading the catalog" in normalized
     assert "infer a concise user-friendly product name" in normalized
     assert (
-        "Render `Employee Self-Service IT` or `Employee Self-Service (IT)` as "
+        "Render `Employee Self-Service` as `Employee Self-Service (Hub)`"
+        in normalized
+    )
+    assert (
+        "render `Employee Self-Service IT` or `Employee Self-Service (IT)` as "
         "`Employee Self-Service (IT)`"
         in normalized
     )
@@ -685,18 +689,18 @@ def test_mos_starter_reference_composes_durable_boundaries() -> None:
         in normalized
     )
     assert (
-        "Use this product if you want to organize HR, IT, or other domain "
-        "agents as connected agents behind one unified employee experience."
+        "Use this product if you want to organize HR, IT, or other agents as "
+        "connected agents behind one unified employee experience."
         in normalized
     )
     assert (
-        "Create an HR domain agent that helps employees get HR answers and "
-        "complete requests."
+        "Create an HR agent that helps employees get HR answers and complete "
+        "requests."
         in normalized
     )
     assert (
-        "Create an IT domain agent that helps employees resolve technical "
-        "issues and access support."
+        "Create an IT agent that helps employees resolve technical issues and "
+        "access support."
         in normalized
     )
     assert (

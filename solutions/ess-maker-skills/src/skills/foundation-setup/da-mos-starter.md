@@ -44,15 +44,15 @@ python scripts/setup_mos_starter.py list \
 
 Parse `DA_MOS_STARTER_PACKAGES_JSON:`. Preserve every service row as operation evidence. Group rows by exact `packageId` and present one picker option per exact ID, using the service-provided name, version, and description as authoritative inputs. Never show the internal `packageId` to the maker. Do not describe products as remaining, uninstalled, or eligible; the create response is the service-owned decision for the selected package.
 
-For each picker row, infer a concise user-friendly product name only when the service-provided name or description makes the meaning unambiguous. Render `Employee Self-Service IT` or `Employee Self-Service (IT)` as `Employee Self-Service (IT)`, and render `Employee Self-Service HR` or `Employee Self-Service (HR)` as `Employee Self-Service (HR)`. If a friendly form is not clear, use the exact service-provided product name unchanged. This display-only inference must not change the underlying `packageId`, backend name, or create request.
+For each picker row, infer a concise user-friendly product name only when the service-provided name or description makes the meaning unambiguous. Render `Employee Self-Service` as `Employee Self-Service (Hub)`, render `Employee Self-Service IT` or `Employee Self-Service (IT)` as `Employee Self-Service (IT)`, and render `Employee Self-Service HR` or `Employee Self-Service (HR)` as `Employee Self-Service (HR)`. If a friendly form is not clear, use the exact service-provided product name unchanged. This display-only inference must not change the underlying `packageId`, backend name, or create request.
 
 For the three recognized ESS products, render the following friendly product name and supporting description exactly as written. Do not paraphrase, shorten, or combine this copy with the service-provided description.
 
-| Friendly product name        | Supporting description                                                                                                              |
-| ---------------------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
-| `Employee Self-Service`      | Use this product if you want to organize HR, IT, or other domain agents as connected agents behind one unified employee experience. |
-| `Employee Self-Service (HR)` | Create an HR domain agent that helps employees get HR answers and complete requests.                                                |
-| `Employee Self-Service (IT)` | Create an IT domain agent that helps employees resolve technical issues and access support.                                         |
+| Friendly product name         | Supporting description                                                                                                       |
+| ----------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `Employee Self-Service (Hub)` | Use this product if you want to organize HR, IT, or other agents as connected agents behind one unified employee experience. |
+| `Employee Self-Service (HR)`  | Create an HR agent that helps employees get HR answers and complete requests.                                                |
+| `Employee Self-Service (IT)`  | Create an IT agent that helps employees resolve technical issues and access support.                                         |
 
 For every other product, use its exact service-provided name unchanged and use `shortDescription`, then `description`, as the supporting text.
 
