@@ -142,6 +142,31 @@ jobs:
         node extension.test.js
         npm run validate
 
+  org-announcements:
+    name: Org Announcements configuration
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v6
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.11'
+
+    - name: Install Python dependencies
+      run: >-
+        pip install
+        -r requirements-dev.txt
+        -r solutions/ess-maker-skills/src/mcp/agentconfig_org_announcements/requirements.txt
+
+    - name: Run Org Announcements tests
+      run: >-
+        python -m pytest
+        tests/mcp/agentconfig_org_announcements/test_authoring_client.py
+        tests/mcp/agentconfig_org_announcements/test_drafts.py
+        -q
+
   flightcheck-tests:
     name: FlightCheck offline test suite
     runs-on: ubuntu-latest
