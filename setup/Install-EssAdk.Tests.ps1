@@ -52,19 +52,19 @@ Test 'known VS Code path fallback exists' {
     }
 }
 
-Test 'code CLI fallback is used in extension install section' {
-    # Check that section 4 (extensions) has the fallback
-    if ($src -notmatch 'knownCodeCmd.*=.*LOCALAPPDATA.*Programs.*Microsoft VS Code') {
-        throw 'Extension section does not use known-path fallback'
+Test 'shared code CLI resolver is used in extension install section' {
+    $extensionSection = ($src -split '# 4\. VS Code extensions')[1] -split '# 5\. Clone repo' | Select-Object -First 1
+    if (-not $extensionSection) { throw 'Could not find section 4' }
+    if ($extensionSection -notmatch '\$code\s*=\s*Resolve-CodeCommand') {
+        throw 'Extension section does not use Resolve-CodeCommand'
     }
 }
 
-Test 'code CLI fallback is used in launch section' {
-    # The launch section (section 7) should also have the fallback
+Test 'shared code CLI resolver is used in launch section' {
     $launchSection = ($src -split '# 7\. Launch')[1]
     if (-not $launchSection) { throw 'Could not find section 7' }
-    if ($launchSection -notmatch 'knownCodeCmd') {
-        throw 'Launch section does not use known-path fallback'
+    if ($launchSection -notmatch '\$code\s*=\s*Resolve-CodeCommand') {
+        throw 'Launch section does not use Resolve-CodeCommand'
     }
 }
 
