@@ -419,6 +419,13 @@ capabilities are used and where they fail, so we can improve the product. It is
   lower sensitivity than the tenant ID it is derived from.
 - Non-identifying context: ADK version, surface, session ID, event name, and
   per-event enums/metrics (e.g. FlightCheck verdicts, durations, check categories).
+- A short **toolkit git SHA** (7-char) and a **toolkit branch classification** —
+  System Metadata that lets us distinguish "install is on latest bits" from
+  "install is on an older tree at the same extension version". The SHA is
+  validated as hex before emission (non-SHA overrides become `unknown`). The
+  branch is collapsed to a **bounded set** — one of `main`, `main-ca`, `detached`,
+  `other`, or `unknown` — so raw branch names (which could otherwise carry
+  personal / customer labels) are never emitted.
 - Scrubbed, non-sensitive **error categories** when something fails.
 - During **installation**, the one-shot installers (which run before Python is
   available) emit the same kind of event natively from PowerShell/bash: an
