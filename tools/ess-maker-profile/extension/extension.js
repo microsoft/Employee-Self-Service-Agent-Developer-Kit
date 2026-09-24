@@ -1430,45 +1430,24 @@ async function maybePromptReinstall(repoRoot) {
 }
 
 // --- First-install dispatch (ADO #7895603 consolidated installer) ---------
-// When the consolidated installer leaves essMaker.mode unset ("" or
-// "prompt"), we prompt the maker on their first VS Code launch to pick
-// maker (chat-first) vs developer (default VS Code view) and persist the
-// choice to the essMaker.mode global setting so subsequent launches skip
-// the prompt. This exists so the consolidated Windows installer doesn't
-// need to interrupt the CLI with a mode question - the choice surfaces in
-// VS Code where the maker can preview the two options as they read them.
+// The consolidated installer (setup/Install-EssAdk.ps1 / install-ess-adk.sh)
+// prompts the maker for maker vs developer in the terminal BEFORE VS Code
+// launches, and writes the resolved mode to essMaker.mode in settings.json.
+// So by the time this extension activates, essMaker.mode is always one of
+// 'maker' | 'developer' | 'lite' (legacy) | 'standard' (legacy).
+//
+// If the installer left the value blank ('' or 'prompt') - e.g. a maker
+// double-clicked the extension into a stray VS Code window without
+// running the installer, or an older non-interactive install flow slipped
+// through - we default to 'maker' silently rather than pop a modal on
+// first launch. First-launch modals reliably lose the race against the
+// theme picker and Copilot sign-in prompts and are never seen by makers.
+// The mode can always be changed later via the Quick Actions toggle or
+// the essMaker.mode setting.
 //
 // Legacy value migration: the pre-rename installer wrote 'lite'/'standard'
 // to essMaker.mode. Reads here normalize those to the new 'maker'/'developer'
 // values so existing users keep the mode they picked.
-async function promptForInstallMode() {
-    const picks = [
-        {
-            label: 'Maker (recommended)',
-            description: 'Hides file tree, tabs, and status bar; big-button Quick Actions rail',
-            detail: 'Best if you mostly work in chat and want a focused HR/IT admin surface.',
-            mode: 'maker',
-        },
-        {
-            label: 'Developer',
-            description: 'Default VS Code layout with GitHub Copilot Chat in the side panel',
-            detail: 'Best if you plan to inspect or edit files directly. /setup runs automatically.',
-            mode: 'developer',
-        },
-    ];
-    try {
-        const pick = await vscode.window.showQuickPick(picks, {
-            placeHolder: 'Choose your ESS Maker experience (you can change this later from the Command Palette)',
-            ignoreFocusOut: true,
-            matchOnDescription: true,
-            matchOnDetail: true,
-        });
-        return pick ? pick.mode : 'maker';
-    } catch (err) {
-        _log(`promptForInstallMode: error ${err && err.message}`);
-        return 'maker';
-    }
-}
 
 // Normalize legacy essMaker.mode values ('lite', 'standard') written by
 // the pre-rename installer to the new canonical names, so existing users
@@ -1482,7 +1461,11 @@ function normalizeInstallerMode(mode) {
 async function firstInstallDispatch(context, installerMode) {
     let effectiveMode = normalizeInstallerMode(installerMode);
     if (!effectiveMode || effectiveMode === 'prompt') {
-        effectiveMode = await promptForInstallMode();
+        // Installer didn't resolve a mode (blank or literal 'prompt'). Fall
+        // back to maker silently and persist so we don't fall through here
+        // on every activation.
+        _log(`firstInstallDispatch: installer mode was "${installerMode}"; defaulting to maker`);
+        effectiveMode = 'maker';
         try {
             await vscode.workspace.getConfiguration().update(
                 'essMaker.mode',

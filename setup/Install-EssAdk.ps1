@@ -110,6 +110,49 @@ if ($SkipMakerProfile) { $InstallMode = 'developer' }
 if ($InstallMode -eq 'lite')     { $InstallMode = 'maker' }
 if ($InstallMode -eq 'standard') { $InstallMode = 'developer' }
 
+# When the caller didn't pin a mode (the default one-liner path via
+# bootstrap.ps1), prompt the maker in the terminal for their preference.
+# Historically we tried to prompt from inside VS Code via a QuickPick,
+# but that surface competes with the theme picker + GitHub Copilot
+# sign-in on first launch and reliably loses the race - the maker never
+# sees it. Prompting here in the CLI, before we hand off to VS Code,
+# means the choice is applied deterministically before any editor UI
+# appears.
+if ($InstallMode -eq 'prompt') {
+    $nonInteractive = $env:CI -or $env:TF_BUILD -or $env:GITHUB_ACTIONS -or [Console]::IsInputRedirected
+    if ($nonInteractive) {
+        Write-Host ""
+        Write-Host "Non-interactive environment detected. Defaulting to Maker mode." -ForegroundColor Yellow
+        $InstallMode = 'maker'
+    } else {
+        Write-Host ""
+        Write-Host "==> Choose your ESS Maker experience" -ForegroundColor Cyan
+        Write-Host "  [1] Maker (recommended)"
+        Write-Host "      Chat-first layout; hides file tree, tabs, and status bar;"
+        Write-Host "      big-button Quick Actions rail. Best if you mostly work in"
+        Write-Host "      chat and want a focused HR/IT admin surface."
+        Write-Host ""
+        Write-Host "  [2] Developer"
+        Write-Host "      Default VS Code layout with GitHub Copilot Chat in the side"
+        Write-Host "      panel and /setup injected automatically. Best if you plan"
+        Write-Host "      to inspect or edit files directly."
+        Write-Host ""
+        $choice = $null
+        while ($null -eq $choice) {
+            $answer = Read-Host "Enter 1 for Maker, 2 for Developer (default: 1)"
+            $answer = ($answer ?? '').Trim()
+            switch -Regex ($answer) {
+                '^(1|maker|m|)$'      { $choice = 'maker' }
+                '^(2|developer|dev|d)$' { $choice = 'developer' }
+                default { Write-Host "Please enter 1 or 2." -ForegroundColor Yellow }
+            }
+        }
+        $InstallMode = $choice
+        Write-Host "  Selected: $InstallMode" -ForegroundColor Green
+        Write-Host ""
+    }
+}
+
 # Canonical mode label used throughout this script for both telemetry and
 # the VS Code settings write. Kept in $modeLabel so all downstream
 # references (5c extension install, launch, telemetry) share one source

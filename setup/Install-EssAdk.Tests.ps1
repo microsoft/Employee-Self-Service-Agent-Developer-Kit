@@ -70,6 +70,30 @@ Test 'legacy InstallMode values (lite/standard) are coerced to maker/developer' 
     }
 }
 
+Test 'InstallMode=prompt fires a terminal Maker/Developer prompt (not a VS Code QuickPick)' {
+    # Historically we tried to ask the mode question from inside VS Code
+    # via a QuickPick, but that surface competes with the theme picker and
+    # Copilot sign-in on first launch and reliably loses the race. The
+    # installer now asks the question in the terminal before handing off
+    # to VS Code so the answer is deterministic.
+    if ($src -notmatch "if\s*\(\`$InstallMode\s+-eq\s+'prompt'\)") {
+        throw 'no prompt branch guarding InstallMode=prompt'
+    }
+    if ($src -notmatch 'Read-Host') { throw 'terminal prompt must use Read-Host' }
+    if ($src -notmatch 'Maker \(recommended\)') { throw 'Maker option label missing from prompt copy' }
+    if ($src -notmatch '\[2\] Developer') { throw 'Developer option label missing from prompt copy' }
+}
+
+Test 'InstallMode=prompt defaults to maker under non-interactive stdin / CI' {
+    if ($src -notmatch 'IsInputRedirected') {
+        throw 'non-interactive detection (Console::IsInputRedirected) missing'
+    }
+    if ($src -notmatch '\$env:CI') { throw 'CI env-var non-interactive guard missing' }
+    if ($src -notmatch 'Defaulting to Maker mode') {
+        throw 'non-interactive branch should default to Maker mode with a visible message'
+    }
+}
+
 Test 'script declares SkipLaunch parameter' {
     if ($src -notmatch '\[switch\]\s*\$SkipLaunch') {
         throw 'SkipLaunch switch parameter not found'
@@ -394,6 +418,24 @@ Test 'install-ess-adk.sh honors INSTALL_MODE (maker|developer|prompt) with legac
     }
     if ($macInstaller -notmatch 'INSTALL_MODE"?\s*==\s*"developer"') { throw 'developer launch branch missing' }
     if ($macInstaller -notmatch 'INSTALL_MODE"?\s*==\s*"maker"') { throw 'maker launch branch missing' }
+}
+
+Test 'install-ess-adk.sh INSTALL_MODE=prompt fires a terminal Maker/Developer prompt' {
+    if ($macInstaller -notmatch 'INSTALL_MODE"?\s*==\s*"prompt"') { throw 'no prompt branch guarding INSTALL_MODE=prompt' }
+    if ($macInstaller -notmatch 'read -r answer') { throw 'terminal read for maker/developer answer missing' }
+    if ($macInstaller -notmatch '/dev/tty') {
+        throw '/dev/tty read fallback required so the prompt works when the script is piped through bash from a curl one-liner'
+    }
+    if ($macInstaller -notmatch 'Maker \(recommended\)') { throw 'Maker option label missing from prompt copy' }
+    if ($macInstaller -notmatch '\[2\] Developer') { throw 'Developer option label missing from prompt copy' }
+}
+
+Test 'install-ess-adk.sh INSTALL_MODE=prompt defaults to maker under non-interactive / CI' {
+    if ($macInstaller -notmatch '\$\{CI:-\}') { throw 'CI env-var non-interactive guard missing' }
+    if ($macInstaller -notmatch '! -t 0') { throw 'stdin-is-a-tty non-interactive guard missing' }
+    if ($macInstaller -notmatch 'Defaulting to Maker mode') {
+        throw 'non-interactive branch should default to Maker mode with a visible message'
+    }
 }
 
 Test 'bootstrap-dev-mac.sh exists and pins INSTALL_MODE=developer' {

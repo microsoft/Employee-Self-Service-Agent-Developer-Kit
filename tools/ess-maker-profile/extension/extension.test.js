@@ -200,36 +200,31 @@ test('exposes the essMaker.autoUpdateCheck opt-out setting', () => {
     assert.strictEqual(prop.default, true);
 });
 
-console.log('\nfirst-install mode prompt (ADO #7895603):');
+console.log('\nfirst-install mode dispatch (ADO #7895603):');
 
-test('extension source declares promptForInstallMode helper', () => {
-    assert.ok(/async function promptForInstallMode\s*\(/.test(src), 'promptForInstallMode not declared');
+test('extension source does NOT declare an in-VS-Code mode QuickPick', () => {
+    // The mode is now resolved in the installer CLI before VS Code launches
+    // (setup/Install-EssAdk.ps1 + install-ess-adk.sh prompt there). A VS Code
+    // QuickPick on first launch reliably loses the race against the theme
+    // picker + Copilot sign-in, so it was removed.
+    assert.ok(!/async function promptForInstallMode/.test(src), 'promptForInstallMode should be gone; the installer prompts in the CLI');
+    assert.ok(!/showQuickPick\([\s\S]{0,200}?Maker \(recommended\)/.test(src), 'in-VS-Code Maker/Developer QuickPick should be removed');
 });
 
-test('mode prompt offers Maker and Developer choices', () => {
-    assert.ok(/Maker \(recommended\)/.test(src), 'Maker option label missing');
-    assert.ok(/label:\s*'Developer'/.test(src), 'Developer option label missing');
-    assert.ok(/mode:\s*'maker'/.test(src), "mode value 'maker' missing");
-    assert.ok(/mode:\s*'developer'/.test(src), "mode value 'developer' missing");
+test('firstInstallDispatch defaults blank / "prompt" installer values to maker', () => {
+    assert.ok(/if\s*\(!effectiveMode \|\| effectiveMode === 'prompt'\)/.test(src), 'fallback branch should still guard blank / prompt');
+    assert.ok(/effectiveMode = 'maker'/.test(src), 'fallback should default to maker without a modal');
 });
 
-test('mode prompt defaults to maker when the maker dismisses the QuickPick', () => {
-    assert.ok(/return pick \? pick\.mode : 'maker'/.test(src), 'Dismiss-defaults-to-maker fallback missing');
-});
-
-test('firstInstallDispatch prompts when installerMode is empty or "prompt"', () => {
-    assert.ok(/if\s*\(!effectiveMode \|\| effectiveMode === 'prompt'\)/.test(src), 'promptForInstallMode should be invoked when installer setting is unset');
-});
-
-test('firstInstallDispatch persists the chosen mode to global settings', () => {
-    assert.ok(/'essMaker\.mode',[\s\S]*?ConfigurationTarget\.Global/.test(src), 'chosen mode should be persisted with ConfigurationTarget.Global');
+test('firstInstallDispatch persists the resolved mode to global settings', () => {
+    assert.ok(/'essMaker\.mode',[\s\S]*?ConfigurationTarget\.Global/.test(src), 'resolved mode should be persisted with ConfigurationTarget.Global');
 });
 
 test('legacy essMaker.mode values are normalized (lite -> maker, standard -> developer)', () => {
     assert.ok(/function normalizeInstallerMode/.test(src), 'normalizeInstallerMode helper missing');
     assert.ok(/if\s*\(mode === 'lite'\)\s*return 'maker'/.test(src), "'lite' should be normalized to 'maker'");
     assert.ok(/if\s*\(mode === 'standard'\)\s*return 'developer'/.test(src), "'standard' should be normalized to 'developer'");
-    assert.ok(/normalizeInstallerMode\(installerMode\)/.test(src), 'firstInstallDispatch should normalize before checking prompt');
+    assert.ok(/normalizeInstallerMode\(installerMode\)/.test(src), 'firstInstallDispatch should normalize before checking fallback');
 });
 
 test('essMaker.mode config schema accepts the new maker/developer values', () => {

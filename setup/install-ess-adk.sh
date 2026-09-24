@@ -47,6 +47,56 @@ case "$INSTALL_MODE" in
         INSTALL_MODE="prompt"
         ;;
 esac
+
+# When the caller didn't pin a mode (the default one-liner path via
+# bootstrap-mac.sh), prompt the maker in the terminal for their preference.
+# Historically we tried to prompt from inside VS Code via a QuickPick, but
+# that surface competes with the theme picker + GitHub Copilot sign-in on
+# first launch and reliably loses the race - the maker never sees it.
+# Prompting here in the CLI, before we hand off to VS Code, means the
+# choice is applied deterministically before any editor UI appears.
+if [[ "$INSTALL_MODE" == "prompt" ]]; then
+    if [[ -n "${CI:-}" || -n "${TF_BUILD:-}" || -n "${GITHUB_ACTIONS:-}" ]] || [[ ! -t 0 ]]; then
+        echo ""
+        echo "Non-interactive environment detected. Defaulting to Maker mode."
+        INSTALL_MODE="maker"
+    else
+        echo ""
+        echo "==> Choose your ESS Maker experience"
+        echo "  [1] Maker (recommended)"
+        echo "      Chat-first layout; hides file tree, tabs, and status bar;"
+        echo "      big-button Quick Actions rail. Best if you mostly work in"
+        echo "      chat and want a focused HR/IT admin surface."
+        echo ""
+        echo "  [2] Developer"
+        echo "      Default VS Code layout with GitHub Copilot Chat in the side"
+        echo "      panel and /setup injected automatically. Best if you plan"
+        echo "      to inspect or edit files directly."
+        echo ""
+        while true; do
+            printf "Enter 1 for Maker, 2 for Developer (default: 1): "
+            # Read from the terminal directly so this works even when the
+            # bootstrap piped install-ess-adk.sh through bash (stdin is the
+            # script, not the tty).
+            if [[ -r /dev/tty ]]; then
+                read -r answer </dev/tty || answer=""
+            else
+                read -r answer || answer=""
+            fi
+            answer="$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]' | tr -d '[:space:]')"
+            case "$answer" in
+                ''|1|m|maker)
+                    INSTALL_MODE="maker"; break ;;
+                2|d|dev|developer)
+                    INSTALL_MODE="developer"; break ;;
+                *)
+                    echo "Please enter 1 or 2." ;;
+            esac
+        done
+        echo "  Selected: $INSTALL_MODE"
+        echo ""
+    fi
+fi
 REPO_URL="https://github.com/microsoft/Employee-Self-Service-Agent-Developer-Kit.git"
 REPO_NAME="Employee-Self-Service-Agent-Developer-Kit"
 OBJECT_MODEL_INSTALLER_PATH="$INSTALL_ROOT/$REPO_NAME/solutions/ess-maker-skills/scripts/install_agentbuilder_object_model.py"

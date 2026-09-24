@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.4.28 (POC)
+
+- **Mode prompt moved from VS Code to the installer CLI.** The 0.4.27
+  first-launch Maker/Developer QuickPick reliably lost the race against
+  the theme picker and Copilot sign-in on first VS Code launch, so
+  makers never actually saw it and were silently landed in Maker mode
+  regardless of intent. The consolidated installer
+  (`setup/Install-EssAdk.ps1` on Windows, `setup/install-ess-adk.sh` on
+  macOS) now asks the question in the terminal before it launches VS
+  Code, and writes the resolved mode to `essMaker.mode` in
+  `settings.json`. The extension trusts that value; the in-VS-Code
+  QuickPick and `promptForInstallMode()` helper are removed. Blank /
+  `prompt` values still default silently to Maker (no first-launch
+  modal), preserving deterministic behavior for stray VS Code windows
+  that never went through the installer.
+
 ## 0.4.27 (POC)
 
 - **Modes renamed: Lite -> Maker (default), Standard -> Developer.**
