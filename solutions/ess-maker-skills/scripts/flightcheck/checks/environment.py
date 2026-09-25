@@ -20,7 +20,6 @@ from ._maker_urls import (
 from .connections import get_connection_status
 from .licensing import (
     _CAPACITY_DOC,
-    _CAPACITY_PORTAL,
     _env_mcs_allocation,
     classify_copilot_studio_capacity,
 )
@@ -377,6 +376,28 @@ def run_preferred_solution_check(runner) -> list[CheckResult]:
     return _check_preferred_solution(runner)
 
 
+_POWER_PLATFORM_ADMIN_ORIGIN_BY_RING = {
+    "prod": "https://admin.powerplatform.microsoft.com",
+    "preprod": "https://admin.preprod.powerplatform.microsoft.com",
+    "test": "https://admin.test.powerplatform.microsoft.com",
+}
+_CAPACITY_PORTAL_PATH = "/billing/licenses/copilotStudio/overview"
+
+
+def _capacity_portal(runner) -> str:
+    """Return the ring-matched Power Platform capacity portal link."""
+    ring = getattr(runner, "ring", None)
+    if ring not in _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING:
+        raise ValueError(
+            "Power Platform environment ring is unavailable or unsupported."
+        )
+    origin = _POWER_PLATFORM_ADMIN_ORIGIN_BY_RING[ring]
+    return (
+        "[Power Platform Admin Center > Licensing > Copilot Studio > "
+        f"Manage capacity]({origin}{_CAPACITY_PORTAL_PATH})"
+    )
+
+
 def run_capacity_check(runner) -> list[CheckResult]:
     """Run ENV-CAPACITY-001 without requiring other environment clients."""
     return _check_copilot_studio_capacity_provisioned(runner)
@@ -404,9 +425,9 @@ def _check_copilot_studio_capacity_provisioned(runner) -> list[CheckResult]:
     it asks only whether the environment has any dedicated Copilot Studio
     capacity (``population=None``).
 
-    Capacity is a hard setup gate. When allocation cannot be read
-    programmatically or allocation is zero, the row fails rather than allowing
-    a billing selection or manual attestation to bypass the check.
+    Capacity is a hard setup gate. A known zero allocation fails. When the
+    allocation cannot be read, the row requires explicit manual confirmation
+    rather than presenting the unknown result as a known failure.
     """
     env_id = getattr(runner, "env_id", None)
     if not env_id:
@@ -418,26 +439,27 @@ def _check_copilot_studio_capacity_provisioned(runner) -> list[CheckResult]:
     payg_flag = getattr(runner, "_payg_configured", None)
     status, reason = classify_copilot_studio_capacity(
         allocated, population=None, payg_flag=payg_flag)
+    capacity_portal = _capacity_portal(runner)
 
     if reason == "unreadable":
-        return [_env_capacity(Status.FAILED.value,
-            "This environment's Copilot Studio message capacity allocation could not be verified because the Power Platform Licensing API was unavailable or permission was denied.",
-            f"Sign in with the Power Platform Administrator role, verify capacity in {_CAPACITY_PORTAL}, then rerun this checkpoint. Setup cannot continue until the automated check succeeds.")]
+        return [_env_capacity(Status.MANUAL.value,
+            "The Power Platform Licensing API was unavailable or permission was denied, so FlightCheck could not verify this environment's Copilot Studio message capacity allocation programmatically.",
+            f"Verify in {capacity_portal} that Copilot Studio message capacity is allocated to this environment. If it is allocated, explicitly attest that result during setup; otherwise allocate capacity before continuing.")]
     if reason == "covered":
         return [_env_capacity(Status.PASSED.value,
             f"{allocated} Copilot Studio message credit(s) are allocated to this environment.")]
     if reason == "zero_with_payg":
         return [_env_capacity(Status.FAILED.value,
             "No Copilot Studio message capacity is allocated to this environment. Pay-as-you-go billing does not satisfy the foundation setup capacity gate.",
-            f"Allocate Copilot Studio message capacity to this environment in {_CAPACITY_PORTAL}, then rerun this checkpoint.")]
+            f"Allocate Copilot Studio message capacity to this environment in {capacity_portal}, then rerun this checkpoint.")]
     if reason == "zero_payg_unknown":
         return [_env_capacity(Status.FAILED.value,
             "No Copilot Studio message capacity is allocated to this environment, and Pay-as-you-go status was not determined in this run.",
-            f"Allocate Copilot Studio message capacity to this environment in {_CAPACITY_PORTAL}, then rerun this checkpoint. Setup cannot continue without allocated capacity.")]
+            f"Allocate Copilot Studio message capacity to this environment in {capacity_portal}, then rerun this checkpoint. Setup cannot continue without allocated capacity.")]
     # reason == "zero_no_payg"
     return [_env_capacity(Status.FAILED.value,
         "No Copilot Studio message capacity is allocated to this environment and Pay-as-you-go billing is not configured, so the ESS agent will have no message capacity to consume at runtime.",
-        f"Allocate Copilot Studio message capacity to this environment in {_CAPACITY_PORTAL}, then rerun this checkpoint.")]
+        f"Allocate Copilot Studio message capacity to this environment in {capacity_portal}, then rerun this checkpoint.")]
 
 
 # ---------------------------------------------------------------------------

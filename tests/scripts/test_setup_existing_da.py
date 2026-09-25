@@ -15,6 +15,7 @@ from typing import Any
 import pytest
 import yaml
 
+import da_product_registry
 import setup_existing_da
 
 
@@ -24,6 +25,7 @@ OTHER_AGENT_ID = "00000000-0000-4000-8000-000000006666"
 TENANT_ID = "00000000-0000-4000-8000-000000009999"
 FAMILY_ID = "00000000-0000-4000-8000-000000003333"
 SCHEMA_NAME = "gptagent_copilotforemployeeselfservicehr"
+IT_SCHEMA_NAME = "gptagent_copilotforemployeeselfserviceit"
 HOST = (
     "https://0000000000004000800000000000111."
     "1.environment.api.test.powerplatform.com"
@@ -390,7 +392,6 @@ def _complete_setup_flightchecks(root: Path) -> None:
     for checkpoint, statuses in (
         ("DA-AGENT-001", ("Passed",)),
         ("ENV-CAPACITY-001", ("Passed",)),
-        ("DA-CONN-*", ("Passed", "Warning")),
         ("DA-CONTENT-001", ("Passed",)),
     ):
         setup_existing_da.maintain_setup_flightcheck(
@@ -612,6 +613,7 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
         (tmp_path / ".local" / "config.json").read_text(encoding="utf-8")
     )
     assert config["setup"] == "complete"
+    assert config["ring"] == "test"
     assert config["agent"]["botId"] == AGENT_ID
 
     canonical_state = _setup_state(tmp_path)
@@ -626,9 +628,14 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
     assert setup_state["steps"]["SETUP-01"]["mode"] == "automated"
     assert setup_state["steps"]["SETUP-03"]["mode"] == "automated"
     assert setup_state["steps"]["SETUP-07"]["mode"] == "automated"
-    for step_id in ("SETUP-02.1", "SETUP-02.2", "SETUP-05", "SETUP-06"):
+    for step_id in ("SETUP-02.1", "SETUP-02.2", "SETUP-06"):
         assert setup_state["steps"][step_id]["state"] == "pending"
         assert setup_state["steps"][step_id]["mode"] is None
+    assert setup_state["steps"]["SETUP-05"]["state"] == "done"
+    assert setup_state["steps"]["SETUP-05"]["mode"] == "skipped"
+    assert "declares no foundation connection requirement" in (
+        setup_state["steps"]["SETUP-05"]["note"]
+    )
     assert setup_state["steps"]["SETUP-04"]["mode"] == "skipped"
     assert "does not apply" in setup_state["steps"]["SETUP-04"]["note"]
     assert setup_state["workspace"]["agent_path"] == "agent.mcs.yml"
@@ -1107,7 +1114,8 @@ def test_flightcheck_maintenance_completes_setup(tmp_path: Path) -> None:
         loaded_agent["steps"]["SETUP-02.2"]["checkpoint"]
         == "ENV-CAPACITY-001"
     )
-    assert loaded_agent["steps"]["SETUP-05"]["checkpoint"] == "DA-CONN-*"
+    assert loaded_agent["steps"]["SETUP-05"]["checkpoint"] is None
+    assert loaded_agent["steps"]["SETUP-05"]["mode"] == "skipped"
     assert (
         loaded_agent["steps"]["SETUP-06"]["checkpoint"]
         == "DA-CONTENT-001"
@@ -1153,38 +1161,146 @@ def test_setup_rerun_requires_fresh_flightcheck_evidence(
         )
 
 
-def test_not_configured_connection_blocks_setup(tmp_path: Path) -> None:
+def test_broad_connection_diagnostic_is_not_a_setup_gate(
+    tmp_path: Path,
+) -> None:
     _attach(FakeClient(), tmp_path)
-    results_path = _write_flightcheck_results(
-        tmp_path,
-        "DA-CONN-*",
-        "NotConfigured",
-    )
-    payload = json.loads(results_path.read_text(encoding="utf-8"))
-    payload["overall"] = "READY"
-    results_path.write_text(json.dumps(payload), encoding="utf-8")
-    step_started = datetime.fromisoformat(
-        _agent_setup_state(tmp_path)["steps"]["SETUP-05"]["updated_at"]
-    ).timestamp()
-    fresh_time = max(results_path.stat().st_mtime, step_started + 1)
-    os.utime(results_path, (fresh_time, fresh_time))
 
-    result = setup_existing_da.maintain_setup_flightcheck(
+    assert "DA-CONN-*" not in setup_existing_da.SETUP_FLIGHTCHECK_STEPS
+    setup_step = _agent_setup_state(tmp_path)["steps"]["SETUP-05"]
+    assert setup_step["state"] == "done"
+    assert setup_step["failure_causes"] == []
+
+
+def _write_required_connection_results(
+    root: Path,
+    *,
+    self_help_status: str,
+    service_now_status: str = "NotConfigured",
+) -> Path:
+    path = root / "DA-CONN-family.json"
+    rows = [
+        {
+            "checkpoint_id": "DA-CONN-001",
+            "status": "NotConfigured",
+            "description": "Native agent connection readiness",
+            "result": "Two logical references were observed.",
+        },
+        {
+            "checkpoint_id": "DA-CONN-002",
+            "status": self_help_status,
+            "description": "Native connection reference: shared_alchemy",
+            "result": f"Self-Help returned {self_help_status}.",
+        },
+        {
+            "checkpoint_id": "DA-CONN-003",
+            "status": service_now_status,
+            "description": "Native connection reference: shared_service-now",
+            "result": f"ServiceNow returned {service_now_status}.",
+        },
+    ]
+    path.write_text(
+        json.dumps(
+            {
+                "scope": "checkpoint:DA-CONN-*",
+                "failed": sum(
+                    row["status"] == "Failed" for row in rows
+                ),
+                "errors": sum(
+                    row["status"] == "Error" for row in rows
+                ),
+                "results": rows,
+            }
+        ),
+        encoding="utf-8",
+    )
+    step_started = datetime.fromisoformat(
+        _agent_setup_state(root)["steps"]["SETUP-05"]["updated_at"]
+    ).timestamp()
+    fresh_time = max(path.stat().st_mtime, step_started + 1)
+    os.utime(path, (fresh_time, fresh_time))
+    return path
+
+
+def test_registry_required_connection_conditionally_gates_setup(
+    tmp_path: Path,
+) -> None:
+    client = FakeClient(
+        agent_name="Employee Self-Service IT",
+        schema_name=IT_SCHEMA_NAME,
+        changeset=_changeset(
+            schema_name=IT_SCHEMA_NAME,
+            display_name="Employee Self-Service IT",
+        ),
+    )
+    _attach(client, tmp_path)
+
+    requirement = _agent_setup_state(tmp_path)["steps"]["SETUP-05"][
+        "requirement"
+    ]
+    assert requirement == {
+        "productKey": "employee-self-service-it",
+        "matchedBy": ["agent-schema-name", "catalog-name"],
+        "displayName": "Microsoft 365 Self-Help",
+        "connectorApiName": "shared_alchemy",
+    }
+
+    blocked = setup_existing_da.maintain_setup_flightcheck(
         tmp_path,
         agent_id=AGENT_ID,
         checkpoint="DA-CONN-*",
-        results_path=results_path,
+        results_path=_write_required_connection_results(
+            tmp_path,
+            self_help_status="NotConfigured",
+        ),
     )
 
-    assert result["state"] == "blocked"
-    assert result["evidenceStatuses"] == ["NotConfigured"]
-    assert result["failureCauses"] == [
-        "DA-CONN-* returned NotConfigured"
+    assert blocked["state"] == "blocked"
+    assert blocked["failureCauses"] == [
+        "Self-Help returned NotConfigured."
     ]
-    assert result["connectReady"] is False
-    loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
-    assert loaded is not None
-    assert loaded["agents"][AGENT_ID]["steps"]["SETUP-05"]["failure_causes"]
+
+    ready = setup_existing_da.maintain_setup_flightcheck(
+        tmp_path,
+        agent_id=AGENT_ID,
+        checkpoint="DA-CONN-*",
+        results_path=_write_required_connection_results(
+            tmp_path,
+            self_help_status="Passed",
+            service_now_status="Failed",
+        ),
+    )
+
+    assert ready["state"] == "done"
+    assert ready["evidenceStatuses"] == ["Passed"]
+    setup_step = _agent_setup_state(tmp_path)["steps"]["SETUP-05"]
+    assert setup_step["mode"] == "automated"
+    assert "Microsoft 365 Self-Help satisfies" in setup_step["note"]
+
+
+def test_product_registry_resolves_exact_it_requirement() -> None:
+    product = da_product_registry.resolve_product_setup(
+        agent_schema_name=IT_SCHEMA_NAME,
+    )
+
+    assert product is not None
+    assert product["productKey"] == "employee-self-service-it"
+    assert product["requiredConnection"] == {
+        "displayName": "Microsoft 365 Self-Help",
+        "connectorApiName": "shared_alchemy",
+    }
+    assert (
+        da_product_registry.resolve_product_setup(
+            catalog_name="Employee Self-Service (HR)",
+        )["requiredConnection"]
+        is None
+    )
+    assert (
+        da_product_registry.resolve_product_setup(
+            catalog_name="Unknown product",
+        )
+        is None
+    )
 
 
 def test_connect_ready_rejects_incomplete_steps(tmp_path: Path) -> None:
@@ -1773,6 +1889,133 @@ def test_maintain_flightcheck_command_updates_local_state(
     output = capsys.readouterr().out
     assert "DA_SETUP_FLIGHTCHECK_JSON:" in output
     assert '"state": "done"' in output
+
+
+def test_maintain_flightcheck_command_accepts_connection_family(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    client = FakeClient(
+        agent_name="Employee Self-Service IT",
+        schema_name=IT_SCHEMA_NAME,
+        changeset=_changeset(
+            schema_name=IT_SCHEMA_NAME,
+            display_name="Employee Self-Service IT",
+        ),
+    )
+    _attach(client, tmp_path)
+    results_path = _write_required_connection_results(
+        tmp_path,
+        self_help_status="Passed",
+        service_now_status="NotConfigured",
+    )
+
+    exit_code = setup_existing_da.main(
+        [
+            "maintain-flightcheck",
+            "--checkpoint",
+            "DA-CONN-*",
+            "--agent-id",
+            AGENT_ID,
+            "--results",
+            str(results_path),
+            "--kit-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "DA_SETUP_FLIGHTCHECK_JSON:" in output
+    assert '"step": "SETUP-05"' in output
+    assert '"state": "done"' in output
+
+
+def test_capacity_manual_result_requires_explicit_attestation(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        "ENV-CAPACITY-001",
+        "Manual",
+    )
+
+    blocked = setup_existing_da.maintain_setup_flightcheck(
+        tmp_path,
+        agent_id=AGENT_ID,
+        checkpoint="ENV-CAPACITY-001",
+        results_path=results_path,
+    )
+
+    assert blocked["state"] == "blocked"
+    assert blocked["evidenceStatuses"] == ["Manual"]
+    assert blocked["mode"] is None
+
+
+def test_capacity_manual_result_accepts_explicit_attestation(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        "ENV-CAPACITY-001",
+        "Manual",
+    )
+
+    exit_code = setup_existing_da.main(
+        [
+            "maintain-flightcheck",
+            "--checkpoint",
+            "ENV-CAPACITY-001",
+            "--agent-id",
+            AGENT_ID,
+            "--results",
+            str(results_path),
+            "--manual-attested",
+            "--kit-root",
+            str(tmp_path),
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert '"state": "done"' in output
+    assert '"mode": "manual-attested"' in output
+    step = _agent_setup_state(tmp_path)["steps"]["SETUP-02.2"]
+    assert step["state"] == "done"
+    assert step["mode"] == "manual-attested"
+
+
+@pytest.mark.parametrize(
+    ("checkpoint", "status"),
+    [
+        ("ENV-CAPACITY-001", "Failed"),
+        ("ENV-CAPACITY-001", "Passed"),
+        ("DA-AGENT-001", "Manual"),
+    ],
+)
+def test_manual_attestation_rejects_unsupported_evidence(
+    tmp_path: Path,
+    checkpoint: str,
+    status: str,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        checkpoint,
+        status,
+    )
+
+    with pytest.raises(setup_existing_da.ExistingDASetupError):
+        setup_existing_da.maintain_setup_flightcheck(
+            tmp_path,
+            agent_id=AGENT_ID,
+            checkpoint=checkpoint,
+            results_path=results_path,
+            manual_attested=True,
+        )
 
 
 def test_authentication_uses_workspace_cache_and_account_hint(
