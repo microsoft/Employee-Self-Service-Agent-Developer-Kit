@@ -73,13 +73,26 @@ def _bot_connection_references(client, bot_id: str) -> list[dict[str, Any]]:
 
     refs: list[dict[str, Any]] = []
     for change in changes:
-        item = (
-            change.get("connectionReference")
-            if isinstance(change, dict)
-            else None
-        )
-        if not isinstance(item, dict):
+        # Surface a malformed individual entry instead of silently skipping it
+        # (PR #304 review): a non-dict change, or a ``connectionReference`` that
+        # is present but not an object, no longer matches the validated
+        # contract, so raise and let the owning check degrade to a WARNING. An
+        # absent or null ``connectionReference`` is tolerated (a non-connection
+        # change) and skipped.
+        if not isinstance(change, dict):
+            raise ValueError(
+                "Component fetch returned a malformed "
+                "connectionReferenceChanges entry."
+            )
+        if "connectionReference" not in change:
             continue
+        item = change.get("connectionReference")
+        if item is None:
+            continue
+        if not isinstance(item, dict):
+            raise ValueError(
+                "Component fetch returned a malformed connectionReference entry."
+            )
         refs.append(
             {
                 "botid": bot_id,

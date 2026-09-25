@@ -106,6 +106,41 @@ def test_read_active_malformed_change_set_raises():
         reader.read_active_agent_connection_references(runner)
 
 
+def test_read_active_non_dict_change_entry_raises():
+    # An individual change that is not an object is surfaced, not skipped.
+    runner = _FakeRunner(
+        _FakeClient({"BOT": {"connectionReferenceChanges": ["oops"]}}),
+        {"agent": {"botId": "BOT"}},
+    )
+    with pytest.raises(ValueError):
+        reader.read_active_agent_connection_references(runner)
+
+
+def test_read_active_malformed_individual_reference_raises():
+    # connectionReference present but not an object -> surfaced, not "not found".
+    payload = {
+        "connectionReferenceChanges": [
+            {"changeType": "Insert", "connectionReference": "not-an-object"}
+        ]
+    }
+    runner = _FakeRunner(_FakeClient({"BOT": payload}), {"agent": {"botId": "BOT"}})
+    with pytest.raises(ValueError):
+        reader.read_active_agent_connection_references(runner)
+
+
+def test_read_active_change_without_reference_is_tolerated():
+    # A change carrying no (or null) connectionReference is a non-connection
+    # change: skipped, not raised.
+    payload = {
+        "connectionReferenceChanges": [
+            {"changeType": "Delete"},
+            {"changeType": "Insert", "connectionReference": None},
+        ]
+    }
+    runner = _FakeRunner(_FakeClient({"BOT": payload}), {"agent": {"botId": "BOT"}})
+    assert reader.read_active_agent_connection_references(runner) == []
+
+
 # --------------------------------------------------------------------------
 # read_all_agents_connection_references (ENV-004 surface: env-wide, de-duped)
 # --------------------------------------------------------------------------
