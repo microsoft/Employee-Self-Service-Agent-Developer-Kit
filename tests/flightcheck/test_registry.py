@@ -207,6 +207,17 @@ class TestTransitiveRequirements:
             "Native Agent"
         ]
 
+    def test_ess_soln_uses_agentbuilder_without_dataverse(self):
+        spec = registry.resolve("ESS-SOLN-001")
+        assert spec is not None and spec.key == "ESS-SOLN-001"
+        assert spec.clients == frozenset({registry.AGENTBUILDER})
+        assert spec.requires_dataverse_endpoint is False
+
+        plan = registry.transitive_requirements("ESS-SOLN-001")
+        assert plan.clients == frozenset({registry.AGENTBUILDER})
+        assert plan.requires_config is True
+        assert plan.requires_dataverse_endpoint is False
+
     def test_env009_is_individually_targetable_with_dataverse_only(self):
         spec = registry.resolve("ENV-009")
         assert spec is not None and spec.key == "ENV-009"
@@ -216,24 +227,19 @@ class TestTransitiveRequirements:
         assert plan.requires_dataverse_endpoint is True
         assert len(plan.ordered_fns) == 1
 
-    def test_ess_soln_001_resolves_and_pulls_env_prereqs(self):
+    def test_ess_soln_001_resolves_to_agentbuilder_configure_read(self):
         spec = registry.resolve("ESS-SOLN-001")
         assert spec is not None and spec.key == "ESS-SOLN-001"
         assert spec.category_label == "Solution"
         assert spec.category_fn is run_solution_checks
-        # Solution presence is a pure Dataverse read.
-        assert spec.clients == frozenset({registry.DATAVERSE})
-        assert spec.prereqs == ("ENV-002",)
+        assert spec.clients == frozenset({registry.AGENTBUILDER})
+        assert spec.prereqs == ()
         plan = registry.transitive_requirements("ESS-SOLN-001")
-        assert registry.DATAVERSE in plan.clients
+        assert plan.clients == frozenset({registry.AGENTBUILDER})
         assert plan.requires_config is True
-        assert plan.requires_dataverse_endpoint is True
-        # Own fn (run_solution_checks) plus the shared run_environment_checks
-        # that ENV-001+ENV-002 pull in -> exactly two, environment first.
+        assert plan.requires_dataverse_endpoint is False
         fns = [fn for _label, fn in plan.ordered_fns]
-        assert run_solution_checks in fns
-        assert len(fns) == 2
-        assert fns.index(run_solution_checks) == len(fns) - 1
+        assert fns == [run_solution_checks]
 
 
 class TestListCheckpoints:
@@ -294,7 +300,7 @@ class TestWorkdayExtensionCheckpoints:
     """skill-5 mints five checkpoints, all sharing
     checks/workday_extension.run_workday_extension_checks, category
     "Workday Extension". Two are always-MANUAL echoes/attestations, three are
-    programmatic (one Dataverse read + two pure-local)."""
+    programmatic (one minimalBots components read + two pure-local)."""
 
     _ALL = (
         "WD-CONN-AUTH-001",
@@ -329,10 +335,12 @@ class TestWorkdayExtensionCheckpoints:
         assert registry.resolve("WD-CONN-AUTH-001").key == "WD-CONN-AUTH-001"
         assert registry.resolve("WD-CONN-AUTH-001").is_family is False
 
-    def test_dv_conn_spec_declares_dataverse_and_pp_admin(self):
+    def test_dv_conn_spec_declares_agentbuilder_and_pp_admin(self):
         spec = registry.resolve("DV-CONN-001")
-        assert spec.clients == frozenset({registry.DATAVERSE, registry.PP_ADMIN})
-        assert spec.requires_dataverse_endpoint is True
+        assert spec.clients == frozenset(
+            {registry.AGENTBUILDER, registry.PP_ADMIN}
+        )
+        assert spec.requires_dataverse_endpoint is False
         assert spec.prereqs == ()
         assert Role.ESS_MAKER.value in spec.roles
 
@@ -354,7 +362,7 @@ class TestWorkdayExtensionCheckpoints:
 
     def test_dv_conn_plan_unions_clients(self):
         plan = registry.transitive_requirements("DV-CONN-001")
-        assert registry.DATAVERSE in plan.clients
+        assert registry.AGENTBUILDER in plan.clients
         assert registry.PP_ADMIN in plan.clients
 
     def test_all_five_are_listable(self):

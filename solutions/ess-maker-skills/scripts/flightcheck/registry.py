@@ -249,22 +249,16 @@ _SPECS: list[CheckpointSpec] = [
         roles=(Role.POWER_PLATFORM_ADMIN.value,),
     ),
     # ---- Solution: ESS-SOLN-001 (skill-2 install-ess) ----
-    # ESS-SOLN-001: the base ESS agent solution (msdyn_copilotforemployeeselfservice*)
-    # is installed in the target env. Queries the Dataverse `solutions` table
-    # (DATAVERSE client, already wired in cli.py's single-checkpoint path — no
-    # new client init). Prereq ENV-002 (Dataverse provisioned) transitively
-    # pulls ENV-001 (environment exists). Environment Maker owns the fix; the
-    # AppSource install itself is a manual portal action, but this check
-    # definitively verifies the outcome, so the S2.1 checklist row auto-completes
-    # (`prog` gate) on a PASSED result.
+    # ESS-SOLN-001: the base ESS DA package is present in the agent's GRS/ALM
+    # state. Reads the AgentBuilder minimalBots ALM configure API instead of
+    # Dataverse solution-table state.
     CheckpointSpec(
         key="ESS-SOLN-001",
         category_fn=run_solution_checks,
         category_label="Solution",
-        clients=frozenset({DATAVERSE}),
+        clients=frozenset({AGENTBUILDER}),
         requires_config=True,
-        requires_dataverse_endpoint=True,
-        prereqs=("ENV-002",),
+        requires_dataverse_endpoint=False,
         priority=Priority.CRITICAL.value,
         roles=(Role.ESS_MAKER.value,),
     ),
@@ -540,15 +534,16 @@ _SPECS: list[CheckpointSpec] = [
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
     ),
-    # DV-CONN-001 — self-contained Dataverse read (its own connectionreferences
-    # query) plus a best-effort BAP owner echo.
+    # DV-CONN-001 — reads the Workday SOAP connection reference from the
+    # Declarative Agent minimalBots components API (AGENTBUILDER), plus a
+    # best-effort BAP owner echo (PP_ADMIN).
     CheckpointSpec(
         key="DV-CONN-001",
         category_fn=run_workday_extension_checks,
         category_label="Workday Extension",
-        clients=frozenset({DATAVERSE, PP_ADMIN}),
+        clients=frozenset({AGENTBUILDER, PP_ADMIN}),
         requires_config=True,
-        requires_dataverse_endpoint=True,
+        requires_dataverse_endpoint=False,
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
     ),

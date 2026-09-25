@@ -270,24 +270,6 @@ class TestGates:
             cli._run_single_checkpoint(_args("ESS-SOLN-001", tmp_path))
         assert exc.value.code == 1
 
-    def test_missing_dataverse_endpoint_exits_1(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
-        # Config present (so the config gate passes) but no dataverseEndpoint,
-        # and ESS-SOLN-001 requires one -> the endpoint gate fires, still
-        # before any auth.
-        plan = registry.transitive_requirements("ESS-SOLN-001")
-        assert plan.requires_dataverse_endpoint, (
-            "test assumes ESS-SOLN-001 requires a Dataverse endpoint"
-        )
-        local = tmp_path / ".local"
-        local.mkdir()
-        (local / "config.json").write_text("{}", encoding="utf-8")
-        monkeypatch.chdir(tmp_path)
-        with pytest.raises(SystemExit) as exc:
-            cli._run_single_checkpoint(_args("ESS-SOLN-001", tmp_path))
-        assert exc.value.code == 1
-
     def test_capacity_uses_explicit_environment_id_without_dataverse(
         self,
         tmp_path: Path,
