@@ -322,7 +322,7 @@ After a successful push, `.baseline/` is updated to match the new state.
 | Restore Workday HCM template configs after a package update | `src/skills/restore-template-configs/SKILL.md` |
 | Re-apply / put back Workday reference-data customisations | `src/skills/restore-template-configs/SKILL.md` |
 | View or configure ESS landing-page branding, quick links, starter prompts, insight cards, name, or icon | `src/skills/landing-page-config/SKILL.md` |
-| Invoke a landing-page configuration tool | `src/skills/landing-page-config/SKILL.md` |
+| Invoke any tool from the `ess-landing-page-config` MCP server | `src/skills/landing-page-config/SKILL.md` |
 | Create, edit, republish, archive, or manage organization announcements or bulletins | `src/skills/org-announcements/SKILL.md` |
 | Invoke any tool from the `ess-org-announcements` MCP server | `src/skills/org-announcements/SKILL.md` |
 
