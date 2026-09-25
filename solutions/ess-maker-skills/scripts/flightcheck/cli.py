@@ -782,6 +782,17 @@ def _run_single_checkpoint(args):
         print("ERROR: No dataverseEndpoint in .local/config.json.")
         sys.exit(1)
 
+    resolved_ring = None
+    if target == "ENV-CAPACITY-001":
+        try:
+            resolved_ring = _resolve_environment_ring(
+                config,
+                explicit_ring=getattr(args, "ring", None),
+            )
+        except ValueError as exc:
+            print(f"ERROR: {exc}")
+            sys.exit(1)
+
     quiet_auth = getattr(args, "quiet_auth", False)
     if not quiet_auth:
         print()
@@ -943,15 +954,8 @@ def _run_single_checkpoint(args):
         target_matcher=lambda cid: registry.matches(target, cid),
     )
     runner.config = config
-    try:
-        runner.ring = _resolve_environment_ring(
-            config,
-            explicit_ring=getattr(args, "ring", None),
-        )
-    except ValueError as exc:
-        if target == "ENV-CAPACITY-001":
-            print(f"ERROR: {exc}")
-            sys.exit(1)
+    if resolved_ring is not None:
+        runner.ring = resolved_ring
     runner.env_url = env_url
     runner.dv_token = dv_token
     runner.env_id = env_id
@@ -1239,6 +1243,16 @@ def main():
         native_no_dataverse
         and args.scope in NATIVE_NO_DATAVERSE_SCOPE_MAP
     )
+    resolved_ring = None
+    if args.scope in {"full", "environment"}:
+        try:
+            resolved_ring = _resolve_environment_ring(
+                config,
+                explicit_ring=args.ring,
+            )
+        except ValueError as exc:
+            print(f"ERROR: {exc}")
+            sys.exit(1)
     native_supported_scopes = (
         set(NATIVE_NO_DATAVERSE_SCOPE_MAP)
         | set(NATIVE_NO_DATAVERSE_LOCAL_SCOPES)
@@ -1546,15 +1560,8 @@ def main():
     # --- Build runner ---
     runner = FlightCheckRunner(scope=args.scope)
     runner.config = config
-    try:
-        runner.ring = _resolve_environment_ring(
-            config,
-            explicit_ring=args.ring,
-        )
-    except ValueError as exc:
-        if args.scope in {"full", "environment"}:
-            print(f"ERROR: {exc}")
-            sys.exit(1)
+    if resolved_ring is not None:
+        runner.ring = resolved_ring
     runner.env_url = env_url
     runner.dv_token = dv_token
     runner.env_id = env_id

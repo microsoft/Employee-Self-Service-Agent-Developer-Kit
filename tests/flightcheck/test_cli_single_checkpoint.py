@@ -227,6 +227,13 @@ class TestGates:
         capsys: pytest.CaptureFixture[str],
     ) -> None:
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            cli,
+            "PowerPlatformClient",
+            lambda _tenant_id: pytest.fail(
+                "ring validation must complete before authentication"
+            ),
+        )
 
         with pytest.raises(SystemExit) as exc:
             cli._run_single_checkpoint(
@@ -267,6 +274,13 @@ class TestGates:
             encoding="utf-8",
         )
         monkeypatch.chdir(tmp_path)
+        monkeypatch.setattr(
+            cli,
+            "PowerPlatformClient",
+            lambda _tenant_id: pytest.fail(
+                "ring validation must complete before authentication"
+            ),
+        )
 
         with pytest.raises(SystemExit) as exc:
             cli._run_single_checkpoint(
