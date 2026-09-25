@@ -34,6 +34,8 @@ def validate_bulletin_id(bulletin_id: str) -> str:
         raise ValueError("bulletinId must be a non-empty string")
     if bulletin_id != bulletin_id.strip():
         raise ValueError("bulletinId must not have surrounding whitespace")
+    if bulletin_id in {".", ".."}:
+        raise ValueError("bulletinId must not be a URL dot-segment")
     if len(bulletin_id) > _MAX_BULLETIN_ID_LENGTH:
         raise ValueError(
             f"bulletinId must not exceed {_MAX_BULLETIN_ID_LENGTH} characters"

@@ -171,7 +171,7 @@ def test_title_id_is_a_required_route_key_not_a_query_filter(monkeypatch) -> Non
 
 @pytest.mark.parametrize(
     "bad_id",
-    ["", " a", "a/b", "a\\b", "a?b", "a#b", "a%2Fb", "a\x01b"],
+    ["", " a", ".", "..", "a/b", "a\\b", "a?b", "a#b", "a%2Fb", "a\x01b"],
 )
 def test_rejects_ids_that_could_reshape_the_route(monkeypatch, bad_id) -> None:
     client = _make_client(

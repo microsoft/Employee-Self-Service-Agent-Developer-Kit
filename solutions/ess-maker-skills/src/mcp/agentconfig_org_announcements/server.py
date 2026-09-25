@@ -1053,6 +1053,8 @@ async def save_bulletin(
     scope = {"titleId": titleId}
     try:
         validate_title_id(titleId)
+        if id is not None:
+            validate_bulletin_id(id)
         request = SaveBulletinRequest.model_validate(
             {
                 "id": id,
@@ -1143,6 +1145,7 @@ async def transition_bulletin(
     scope = {"titleId": titleId}
     try:
         validate_title_id(titleId)
+        validate_bulletin_id(id)
         client = await get_client()
         scope = {"tenantId": client.tenant_id, "titleId": titleId}
         changed = await client.transition_bulletin(
@@ -1210,6 +1213,7 @@ async def duplicate_bulletin(
     scope = {"titleId": titleId}
     try:
         validate_title_id(titleId)
+        validate_bulletin_id(id)
         client = await get_client()
         scope = {"tenantId": client.tenant_id, "titleId": titleId}
         source = await client.get_bulletin(titleId, id)

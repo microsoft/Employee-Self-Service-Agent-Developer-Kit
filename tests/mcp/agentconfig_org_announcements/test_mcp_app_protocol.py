@@ -2058,6 +2058,30 @@ def test_invalid_title_never_acquires_a_client(monkeypatch, title_id, tool, argu
     assert payload.get("code") == "InvalidRequest" or payload["errors"][0]["code"] == "InvalidRequest"
 
 
+@pytest.mark.parametrize("bulletin_id", [".", "..", "a/b", "a%2Fb"])
+@pytest.mark.parametrize("tool", ["save_bulletin", "transition_bulletin", "duplicate_bulletin"])
+def test_invalid_mutation_id_never_acquires_a_client(
+    monkeypatch, bulletin_id, tool
+) -> None:
+    async def forbidden_client():
+        pytest.fail("invalid bulletin ID attempted authentication")
+
+    arguments = {
+        "save_bulletin": _save_arguments(id=bulletin_id),
+        "transition_bulletin": {"id": bulletin_id, "transition": "archive"},
+        "duplicate_bulletin": {"id": bulletin_id},
+    }
+    monkeypatch.setattr(org_server, "get_client", forbidden_client)
+
+    payload = _structured(_call(tool, arguments[tool]))
+
+    assert payload["errors"][0]["code"] == "InvalidRequest"
+    assert payload["titleId"] == TITLE_ID
+    assert "tenantId" not in payload
+    assert "item" not in payload
+    assert "manager" not in payload
+
+
 @pytest.mark.parametrize(
     ("tool", "arguments"),
     [
