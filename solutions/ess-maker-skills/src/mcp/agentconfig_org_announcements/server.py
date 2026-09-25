@@ -72,6 +72,7 @@ from telemetry import (
     SOURCE_BACKEND,
     SOURCE_GRAPH,
     SOURCE_MCP,
+    normalize_error_code,
     record_operation,
 )
 from validation import validate_bulletin_id, validate_title_id
@@ -164,6 +165,9 @@ _MODEL_VISIBLE_BACKEND_MESSAGES = {
     "NotFound": "The announcement was not found.",
     "ServiceError": "The Org Announcements service could not complete the request.",
 }
+_BACKEND_DIAGNOSTIC_CODES = frozenset(
+    {*_MODEL_VISIBLE_BACKEND_MESSAGES, "CommittedRefreshFailed"}
+)
 
 # Identity and audit fields the backend owns. A duplicate strips them from the
 # copied content so the copy is created as a fresh Draft rather than silently
@@ -491,6 +495,16 @@ class _FailureResult(Exception):
         return [self.as_error()]
 
 
+def _diagnostic_code(failure: _FailureResult) -> str:
+    """Return a content-free code for logs and telemetry."""
+    if (
+        failure.source == SOURCE_BACKEND
+        and failure.code not in _BACKEND_DIAGNOSTIC_CODES
+    ):
+        return "BackendValidationError"
+    return normalize_error_code(failure.code)
+
+
 def _validation_failure(error: BulletinValidationError) -> _FailureResult:
     """Adapt an HTTP-200 ``EssBulletinSaveResult`` rejection.
 
@@ -814,12 +828,13 @@ def _open_failure(
     started: float,
     scope: dict[str, str],
 ) -> CallToolResult:
-    _LOGGER.warning("open_org_announcements failed: %s", failure.code)
+    diagnostic_code = _diagnostic_code(failure)
+    _LOGGER.warning("open_org_announcements failed: %s", diagnostic_code)
     record_operation(
         "open_org_announcements",
         outcome="failure",
         latency_ms=_elapsed_ms(started),
-        error_code=failure.code,
+        error_code=diagnostic_code,
         error_source=failure.source,
     )
     return _open_error_payload(request, failure, scope)
@@ -1005,11 +1020,12 @@ def _fail(
     operation: str, failure: _FailureResult, started: float, scope: dict[str, str]
 ) -> CallToolResult:
     """Emit the content-free failure event and build the tool result."""
+    diagnostic_code = _diagnostic_code(failure)
     record_operation(
         operation,
         outcome="failure",
         latency_ms=_elapsed_ms(started),
-        error_code=failure.code,
+        error_code=diagnostic_code,
         error_source=failure.source,
     )
     return _mutation_failure(failure, scope)
@@ -1178,7 +1194,7 @@ async def save_bulletin(
                 # would create a second announcement.
                 _LOGGER.warning(
                     "save_bulletin refresh failed after commit: %s",
-                    error.cause.code,
+                    _diagnostic_code(error.cause),
                 )
                 return _fail(
                     "save_bulletin",
@@ -1196,7 +1212,9 @@ async def save_bulletin(
     except _MUTATION_ERRORS as error:
         failure = await _failure_from(error, client)
         _LOGGER.warning(
-            "save_bulletin failed: %s (create=%s)", failure.code, id is None
+            "save_bulletin failed: %s (create=%s)",
+            _diagnostic_code(failure),
+            id is None,
         )
         return _fail("save_bulletin", failure, started, scope)
 
@@ -1256,7 +1274,7 @@ async def transition_bulletin(
                 cause = await _failure_from(error, client)
                 _LOGGER.warning(
                     "transition_bulletin refresh failed after commit: %s (%s)",
-                    cause.code,
+                    _diagnostic_code(cause),
                     transition,
                 )
                 return _fail(
@@ -1287,7 +1305,9 @@ async def transition_bulletin(
     except _MUTATION_ERRORS as error:
         failure = await _failure_from(error, client)
         _LOGGER.warning(
-            "transition_bulletin failed: %s (%s)", failure.code, transition
+            "transition_bulletin failed: %s (%s)",
+            _diagnostic_code(failure),
+            transition,
         )
         return _fail("transition_bulletin", failure, started, scope)
 
@@ -1345,7 +1365,10 @@ async def duplicate_bulletin(
                 created = await client.save_bulletin(titleId, payload)
             except _MUTATION_ERRORS as error:
                 failure = await _failure_from(error, client)
-                _LOGGER.warning("duplicate_bulletin failed: %s", failure.code)
+                _LOGGER.warning(
+                    "duplicate_bulletin failed: %s",
+                    _diagnostic_code(failure),
+                )
                 return _fail("duplicate_bulletin", failure, started, scope)
 
             try:
@@ -1360,7 +1383,7 @@ async def duplicate_bulletin(
                 # second copy; report the committed partial success instead.
                 _LOGGER.warning(
                     "duplicate_bulletin refresh failed after commit: %s",
-                    error.cause.code,
+                    _diagnostic_code(error.cause),
                 )
                 return _fail(
                     "duplicate_bulletin",
@@ -1377,7 +1400,10 @@ async def duplicate_bulletin(
             return result
     except _MUTATION_ERRORS as error:
         failure = await _failure_from(error, client)
-        _LOGGER.warning("duplicate_bulletin source load failed: %s", failure.code)
+        _LOGGER.warning(
+            "duplicate_bulletin source load failed: %s",
+            _diagnostic_code(failure),
+        )
         return _fail("duplicate_bulletin", failure, started, scope)
 
 
@@ -1408,12 +1434,13 @@ async def search_audience_groups(query: str) -> CallToolResult:
                 result = await graph_client.search_groups(query)
     except (_FailureResult, GraphDirectoryError, AgentConfigApiError, httpx.RequestError) as error:
         failure = await _failure_from(error, authoring_client)
-        _LOGGER.warning("search_audience_groups failed: %s", failure.code)
+        diagnostic_code = _diagnostic_code(failure)
+        _LOGGER.warning("search_audience_groups failed: %s", diagnostic_code)
         record_operation(
             "search_audience_groups",
             outcome="failure",
             latency_ms=_elapsed_ms(started),
-            error_code=failure.code,
+            error_code=diagnostic_code,
             error_source=failure.source,
         )
         return CallToolResult(
