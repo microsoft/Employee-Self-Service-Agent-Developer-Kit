@@ -1,7 +1,27 @@
+---
+name: connect-workday-da
+description: >-
+  Connect Workday to an Employee Self-Service Declarative Agent HR deployment.
+  Use for package installation, Entra SSO, Workday tenant setup, Power Platform
+  connections and flows, authorization, resume, drift repair, and readiness validation.
+---
+
 <!-- Copyright (c) Microsoft Corporation. Licensed under the MIT License. -->
 # Workday Connect (DA) — Orchestrator
 
-Every **Message** block is the exact text to show the user. Copy it verbatim. Do
+Every **Message** block is the exact text to show the user.
+
+## Playbook map
+
+- Package: [`install-extension.md`](install-extension.md)
+- Microsoft Entra: [`provision-entra-app.md`](provision-entra-app.md)
+- Workday tenant: [`configure-tenant.md`](configure-tenant.md)
+- Power Platform and agent: [`configure-power-platform.md`](configure-power-platform.md)
+- Readiness: [`verify-connection.md`](verify-connection.md)
+- State transitions: [`shared/checklist-updater.md`](shared/checklist-updater.md)
+- Permission gates: [`shared/permission-gate.md`](shared/permission-gate.md)
+- Persisted state: [`shared/config-schema.md`](shared/config-schema.md)
+- Executable definition: [`workday-da.definition.json`](workday-da.definition.json) Copy it verbatim. Do
 not rephrase, add commentary, or tell the user what tools you are calling or what
 files you are reading.
 

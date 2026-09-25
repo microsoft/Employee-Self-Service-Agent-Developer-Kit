@@ -77,6 +77,37 @@ def test_state_contract_requires_immediate_durable_updates() -> None:
     assert "FAILED` or `ERROR` always produces `blocked`" in updater
 
 
+def test_workday_skills_have_discovery_metadata_and_direct_navigation() -> None:
+    da_skill = (_WORKDAY_DA / "SKILL.md").read_text(encoding="utf-8")
+    cea_skill = (
+        _REPO_ROOT
+        / "solutions"
+        / "ess-maker-skills"
+        / "src"
+        / "skills"
+        / "connect"
+        / "workday"
+        / "SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    assert da_skill.startswith("---\nname: connect-workday-da\n")
+    assert "description: >-" in da_skill
+    assert "## Playbook map" in da_skill
+    for reference in (
+        "install-extension.md",
+        "provision-entra-app.md",
+        "configure-tenant.md",
+        "configure-power-platform.md",
+        "verify-connection.md",
+        "shared/checklist-updater.md",
+        "shared/permission-gate.md",
+        "shared/config-schema.md",
+        "workday-da.definition.json",
+    ):
+        assert f"]({reference})" in da_skill
+    assert cea_skill.startswith("---\nname: connect-workday\n")
+
+
 def test_entra_setup_pins_tenant_and_exact_app_identity() -> None:
     entra = (_WORKDAY_DA / "provision-entra-app.md").read_text(encoding="utf-8")
     gate = (_SHARED / "permission-gate.md").read_text(encoding="utf-8")
