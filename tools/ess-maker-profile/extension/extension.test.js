@@ -269,6 +269,12 @@ test('landing-page package prompts existing 0.4.24 installs to reinstall', () =>
     assert.ok(ACTIONS.some((action) => action.id === 'landingPage'));
 });
 
+test('announcement package prompts existing 0.4.25 installs to reinstall', () => {
+    assert.strictEqual(compareVersions(pkg.version, '0.4.25'), 1);
+    assert.strictEqual(extensionIsStale('0.4.25', pkg.version), true);
+    assert.ok(ACTIONS.some((action) => action.id === 'announcements'));
+});
+
 test('extensionIsStale false when a version is missing', () => {
     assert.strictEqual(extensionIsStale(undefined, '0.4.24'), false);
     assert.strictEqual(extensionIsStale('0.4.24', null), false);
