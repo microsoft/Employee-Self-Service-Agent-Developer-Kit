@@ -49,8 +49,6 @@ from client import (
     OrgAnnouncementsClient,
     build_manager_state,
     is_deleted_item,
-    _validate_title_id,
-    _validate_bulletin_id,
 )
 from drafts import (
     AnnouncementEditorDraft,
@@ -75,9 +73,18 @@ from telemetry import (
     SOURCE_MCP,
     record_operation,
 )
+from validation import validate_bulletin_id, validate_title_id
 
 
 DEFAULT_WIDGET_ORIGIN = "https://workforceinsights.m365.cloud.microsoft"
+ALLOWED_WIDGET_ORIGINS = frozenset(
+    {
+        "https://workforceinsights.m365.cloud.dev.microsoft",
+        "https://df.workforceinsights.m365.cloud.microsoft",
+        DEFAULT_WIDGET_ORIGIN,
+    }
+)
+DEVELOPMENT_WIDGET_ORIGIN_ENV = "VORPAL_WIDGET_ALLOW_DEVELOPMENT_ORIGIN"
 WIDGET_MIME_TYPE = "text/html;profile=mcp-app"
 ORG_ANNOUNCEMENTS_RESOURCE_URI = (
     "ui://widget/org-announcements/OrgAnnouncements.html"
@@ -167,7 +174,11 @@ _COPY_STRIPPED_FIELDS = frozenset(
 )
 
 
-def _resolve_widget_origin(value: Optional[str] = None) -> str:
+def _resolve_widget_origin(
+    value: Optional[str] = None,
+    *,
+    allow_development: Optional[bool] = None,
+) -> str:
     origin = (
         value or os.environ.get("VORPAL_WIDGET_ORIGIN") or DEFAULT_WIDGET_ORIGIN
     ).rstrip("/")
@@ -185,7 +196,28 @@ def _resolve_widget_origin(value: Optional[str] = None) -> str:
             "VORPAL_WIDGET_ORIGIN must be an HTTPS origin without credentials, "
             "a path, a query, or a fragment."
         )
-    return origin
+
+    normalized_origin = f"https://{parsed.netloc.lower()}"
+    if normalized_origin in ALLOWED_WIDGET_ORIGINS:
+        return normalized_origin
+
+    if allow_development is None:
+        allow_development = (
+            os.environ.get(DEVELOPMENT_WIDGET_ORIGIN_ENV, "").strip() == "1"
+        )
+    hostname = parsed.hostname.lower()
+    is_local_development_origin = (
+        hostname in {"localhost", "127.0.0.1", "::1"}
+        or hostname.endswith(".devtunnels.ms")
+    )
+    if allow_development and is_local_development_origin:
+        return normalized_origin
+
+    raise ValueError(
+        "VORPAL_WIDGET_ORIGIN must use an approved Vorpal deployment origin. "
+        f"Set {DEVELOPMENT_WIDGET_ORIGIN_ENV}=1 for localhost, loopback, or "
+        "*.devtunnels.ms development origins."
+    )
 
 
 WIDGET_ORIGIN = _resolve_widget_origin()
@@ -800,9 +832,9 @@ async def open_org_announcements(
     # combination before entering the recoverable widget-error path: an invalid
     # request is not safe retry state and cannot be rendered as an error view.
     try:
-        _validate_title_id(titleId)
+        validate_title_id(titleId)
         if bulletinId is not None:
-            _validate_bulletin_id(bulletinId)
+            validate_bulletin_id(bulletinId)
         validated = OpenAnnouncementsRequest(
             titleId=titleId, view=view, mode=mode,
             bulletinId=bulletinId, suggestedDraft=suggestedDraft,
@@ -1020,7 +1052,7 @@ async def save_bulletin(
     started = time.monotonic()
     scope = {"titleId": titleId}
     try:
-        _validate_title_id(titleId)
+        validate_title_id(titleId)
         request = SaveBulletinRequest.model_validate(
             {
                 "id": id,
@@ -1110,7 +1142,7 @@ async def transition_bulletin(
     started = time.monotonic()
     scope = {"titleId": titleId}
     try:
-        _validate_title_id(titleId)
+        validate_title_id(titleId)
         client = await get_client()
         scope = {"tenantId": client.tenant_id, "titleId": titleId}
         changed = await client.transition_bulletin(
@@ -1177,7 +1209,7 @@ async def duplicate_bulletin(
     started = time.monotonic()
     scope = {"titleId": titleId}
     try:
-        _validate_title_id(titleId)
+        validate_title_id(titleId)
         client = await get_client()
         scope = {"tenantId": client.tenant_id, "titleId": titleId}
         source = await client.get_bulletin(titleId, id)

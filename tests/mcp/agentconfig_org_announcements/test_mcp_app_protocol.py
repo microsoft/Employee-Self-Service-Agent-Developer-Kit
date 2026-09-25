@@ -304,11 +304,69 @@ def test_the_resource_shell_loads_the_hosted_bundle_from_the_origin() -> None:
     )
 
 
-def test_widget_origin_override_is_validated() -> None:
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://workforceinsights.m365.cloud.dev.microsoft",
+        "https://df.workforceinsights.m365.cloud.microsoft",
+        "https://workforceinsights.m365.cloud.microsoft",
+    ],
+)
+def test_widget_origin_accepts_known_vorpal_deployment_rings(origin) -> None:
+    assert org_server._resolve_widget_origin(origin) == origin
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://example.com",
+        "https://workforceinsights.m365.cloud.microsoft.evil.example",
+        "https://vorpal.devtunnels.ms.evil.example",
+    ],
+)
+def test_widget_origin_rejects_unapproved_https_hosts(origin) -> None:
+    for allow_development in [False, True]:
+        with pytest.raises(ValueError, match="approved Vorpal deployment origin"):
+            org_server._resolve_widget_origin(
+                origin,
+                allow_development=allow_development,
+            )
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://localhost:4200",
+        "https://127.0.0.1:4200",
+        "https://[::1]:4200",
+        "https://vorpal-sophie-5173.euw.devtunnels.ms",
+    ],
+)
+def test_widget_origin_allows_local_hosts_only_under_the_development_gate(
+    origin,
+) -> None:
+    with pytest.raises(ValueError, match="approved Vorpal deployment origin"):
+        org_server._resolve_widget_origin(origin, allow_development=False)
+
     assert (
-        org_server._resolve_widget_origin("https://localhost:4200")
-        == "https://localhost:4200"
+        org_server._resolve_widget_origin(origin, allow_development=True) == origin
     )
+
+
+def test_widget_origin_development_gate_can_be_enabled_by_environment(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv(org_server.DEVELOPMENT_WIDGET_ORIGIN_ENV, "1")
+
+    assert (
+        org_server._resolve_widget_origin(
+            "https://vorpal-sophie-5173.euw.devtunnels.ms"
+        )
+        == "https://vorpal-sophie-5173.euw.devtunnels.ms"
+    )
+
+
+def test_widget_origin_shape_is_validated() -> None:
     for bad in [
         "http://localhost:4200",
         "https://user:pw@example.com",

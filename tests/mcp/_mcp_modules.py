@@ -48,6 +48,7 @@ MCP_ROOT = REPO_ROOT / "solutions" / "ess-maker-skills" / "src" / "mcp"
 # so its siblings are already registered under their plain names when it runs.
 LANDING_PAGE_MODULES = ("client", "drafts", "server")
 ORG_ANNOUNCEMENTS_MODULES = (
+    "validation",
     "client",
     "drafts",
     "graph_directory_client",
@@ -132,7 +133,7 @@ def load_org_announcements_client_modules() -> dict[str, ModuleType]:
     """Load contract/client tests without importing optional runtime modules."""
     return load_mcp_modules(
         MCP_ROOT / "agentconfig_org_announcements",
-        ("client", "drafts"),
+        ("validation", "client", "drafts"),
         "ess_mcp_org_announcements",
     )
 
@@ -141,7 +142,7 @@ def load_org_announcements_directory_modules() -> dict[str, ModuleType]:
     """Load directory tests without depending on MCP tools or telemetry."""
     return load_mcp_modules(
         MCP_ROOT / "agentconfig_org_announcements",
-        ("client", "drafts", "graph_directory_client"),
+        ("validation", "client", "drafts", "graph_directory_client"),
         "ess_mcp_org_announcements",
     )
 
