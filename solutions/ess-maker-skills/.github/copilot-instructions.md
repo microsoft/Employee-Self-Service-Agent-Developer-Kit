@@ -12,11 +12,11 @@ what to do based on the result.
 
 DA authoring setup is ready when `.local/setup/config.json` has
 `schema_version` equal to `4` and at least one entry in its `agents` object has
-foundation steps
-`SETUP-01`, `SETUP-02.1`, `SETUP-03`, `SETUP-04`, and `SETUP-07` in `done`
-state. Do not require aggregate `connect_ready`: capacity and product
-connection checks can remain blocked after the exact editable agent and local
-workspace are ready, and `/connect` exists to resolve a missing connection.
+`authoring_ready` equal to `true`. This is the only readiness marker used by
+this first gate. Ignore `connect_ready`, `active_step`, blocked capacity, and
+blocked connection steps here: they describe runtime readiness after the exact
+editable agent and local workspace are already usable, and `/connect` exists
+to resolve a missing connection.
 
 This first gate establishes only that the workspace has a usable DA foundation.
 After it passes, read `.local/config.json` and let the invoked command resolve

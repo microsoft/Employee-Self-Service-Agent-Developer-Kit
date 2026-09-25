@@ -618,6 +618,7 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
     setup_state = _agent_setup_state(tmp_path)
     assert canonical_state["schema_version"] == 4
     assert canonical_state["environment"]["id"] == ENVIRONMENT_ID
+    assert setup_state["authoring_ready"] is False
     assert setup_state["connect_ready"] is False
     assert setup_state["active_step"] == "SETUP-02.1"
     assert set(setup_state["steps"]) == set(
@@ -658,7 +659,9 @@ def test_same_environment_agents_keep_independent_state_and_folders(
     canonical = _setup_state(tmp_path)
     assert set(canonical["agents"]) == {AGENT_ID, OTHER_AGENT_ID}
     assert canonical["agents"][AGENT_ID] == first_ready
+    assert canonical["agents"][AGENT_ID]["authoring_ready"] is True
     assert canonical["agents"][AGENT_ID]["connect_ready"] is True
+    assert canonical["agents"][OTHER_AGENT_ID]["authoring_ready"] is False
     assert canonical["agents"][OTHER_AGENT_ID]["connect_ready"] is False
     second_slug = canonical["agents"][OTHER_AGENT_ID]["agent"]["workspace_slug"]
     assert second_slug == "employee-self-service-hr-00000000"
@@ -1074,6 +1077,7 @@ def test_skipped_flightcheck_steps_reopen_on_attach(
             recorded_at=agent_state["created_at"],
         )
     agent_state["active_step"] = "SETUP-07"
+    agent_state["authoring_ready"] = True
     agent_state["connect_ready"] = True
     agent_state["completed_at"] = agent_state["created_at"]
     state_path.write_text(json.dumps(state), encoding="utf-8")
@@ -1100,6 +1104,7 @@ def test_flightcheck_maintenance_completes_setup(tmp_path: Path) -> None:
     loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
     assert loaded is not None
     loaded_agent = loaded["agents"][AGENT_ID]
+    assert loaded_agent["authoring_ready"] is True
     assert loaded_agent["connect_ready"] is True
     assert loaded_agent["completed_at"]
     assert loaded_agent["steps"]["SETUP-02.1"]["checkpoint"] == "DA-AGENT-001"
@@ -1185,6 +1190,47 @@ def test_not_configured_connection_blocks_setup(tmp_path: Path) -> None:
     loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
     assert loaded is not None
     assert loaded["agents"][AGENT_ID]["steps"]["SETUP-05"]["failure_causes"]
+
+
+def test_authoring_ready_allows_connection_blocked_setup(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    results_path = _write_flightcheck_results(
+        tmp_path,
+        "DA-AGENT-001",
+        "Passed",
+    )
+    result = setup_existing_da.maintain_setup_flightcheck(
+        tmp_path,
+        agent_id=AGENT_ID,
+        checkpoint="DA-AGENT-001",
+        results_path=results_path,
+    )
+
+    assert result["authoringReady"] is True
+    assert result["connectReady"] is False
+    loaded = setup_existing_da._load_canonical_setup_state(tmp_path)
+    assert loaded is not None
+    agent_state = loaded["agents"][AGENT_ID]
+    assert agent_state["authoring_ready"] is True
+    assert agent_state["steps"]["SETUP-05"]["state"] == "pending"
+
+
+def test_sync_authoring_readiness_migrates_schema_v4_state(
+    tmp_path: Path,
+) -> None:
+    _attach(FakeClient(), tmp_path)
+    state_path = tmp_path / setup_existing_da.CANONICAL_SETUP_STATE
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    del state["agents"][AGENT_ID]["authoring_ready"]
+    state_path.write_text(json.dumps(state), encoding="utf-8")
+
+    result = setup_existing_da.sync_authoring_readiness(tmp_path)
+
+    assert result["schemaVersion"] == 4
+    persisted = json.loads(state_path.read_text(encoding="utf-8"))
+    assert persisted["agents"][AGENT_ID]["authoring_ready"] is False
 
 
 def test_connect_ready_rejects_incomplete_steps(tmp_path: Path) -> None:
@@ -1541,6 +1587,7 @@ def test_parser_exposes_only_composable_setup_operations() -> None:
         "list-agents",
         "maintain-flightcheck",
         "select-agent",
+        "sync-authoring-readiness",
         "validate-agent",
     }
 

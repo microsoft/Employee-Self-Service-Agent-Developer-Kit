@@ -167,11 +167,10 @@ def test_global_and_command_gates_require_canonical_da_foundation() -> None:
 
     assert "`schema_version`" in instructions
     assert "equal to `4`" in instructions
-    assert "at least one entry in its `agents` object" in instructions
+    assert "`authoring_ready` equal to `true`" in instructions
     assert "let the invoked command resolve" in instructions
-    assert "Do not require aggregate `connect_ready`" in instructions
-    for step in ("SETUP-01", "SETUP-02.1", "SETUP-03", "SETUP-04", "SETUP-07"):
-        assert step in instructions
+    assert "This is the only readiness marker" in instructions
+    assert "Ignore `connect_ready`" in instructions
     assert '`status` equal to `"complete"`' not in instructions
 
     gated_prompts = (
@@ -207,9 +206,8 @@ def test_global_and_command_gates_require_canonical_da_foundation() -> None:
     connect_prompt = (_PROMPTS / "connect.prompt.md").read_text(encoding="utf-8")
     assert ".local/setup/config.json" in connect_prompt
     assert "schema_version: 4" in connect_prompt
-    assert "Do not require aggregate `connect_ready`" in connect_prompt
-    for step in ("SETUP-01", "SETUP-02.1", "SETUP-03", "SETUP-04", "SETUP-07"):
-        assert step in connect_prompt
+    assert "`authoring_ready: true`" in connect_prompt
+    assert "`connect_ready`" in connect_prompt
 
     assert "read `.local/config.json`" in instructions
 

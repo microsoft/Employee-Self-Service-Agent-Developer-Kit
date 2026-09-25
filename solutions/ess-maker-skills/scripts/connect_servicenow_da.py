@@ -298,6 +298,21 @@ def summarize_components(components: dict[str, Any]) -> dict[str, Any]:
                 flow_ids.add(flow_id)
 
     parameters = _shared_parameters(reference)
+    topic_summaries = sorted(
+        (
+            {
+                "id": change["component"].get("id"),
+                "version": change["component"].get("version"),
+                "displayName": change["component"].get("displayName"),
+                "schemaName": change["component"].get("schemaName"),
+                "state": change["component"].get("state"),
+                "status": change["component"].get("status"),
+            }
+            for change in service_now_topics
+            if isinstance(change.get("component"), dict)
+        ),
+        key=lambda item: str(item.get("displayName") or ""),
+    )
     return {
         "botComponentCount": len(components.get("botComponentChanges") or []),
         "serviceNowTopicCount": len(service_now_topics),
@@ -307,6 +322,7 @@ def summarize_components(components: dict[str, Any]) -> dict[str, Any]:
             if isinstance(change.get("component"), dict)
             and change["component"].get("state") == "Active"
         ),
+        "serviceNowTopics": topic_summaries,
         "connectionReferenceCount": len(
             components.get("connectionReferenceChanges") or []
         ),
@@ -504,26 +520,95 @@ def connection_summary(record: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_reference_update_payload(
+def find_servicenow_topic(
     components: dict[str, Any],
-    connection_id: str,
+    topic_id: str,
 ) -> dict[str, Any]:
-    normalized_connection_id = uuid.UUID(connection_id).hex
+    normalized_topic_id = str(uuid.UUID(topic_id))
+    for change in components.get("botComponentChanges") or []:
+        component = change.get("component")
+        if (
+            isinstance(component, dict)
+            and str(component.get("id") or "").casefold()
+            == normalized_topic_id.casefold()
+            and "ServiceNowHRSD" in str(component.get("schemaName") or "")
+        ):
+            return component
+    raise ServiceNowConnectError(
+        "The requested ServiceNow topic was not found in the active agent."
+    )
+
+
+def build_topic_state_update_payload(
+    components: dict[str, Any],
+    topic_id: str,
+    target_state: str,
+) -> dict[str, Any]:
+    if target_state not in {"Active", "Inactive"}:
+        raise ServiceNowConnectError(
+            "Topic state must be Active or Inactive."
+        )
     change_token = components.get("changeToken")
     if not isinstance(change_token, str) or not change_token:
         raise ServiceNowConnectError(
             "MinimalBot component state has no concurrency change token."
         )
-    reference = copy.deepcopy(find_servicenow_reference(components))
-    reference["connectionId"] = normalized_connection_id
+    component = copy.deepcopy(find_servicenow_topic(components, topic_id))
+    if component.get("$kind") != "DialogComponent":
+        raise ServiceNowConnectError(
+            "The requested ServiceNow component is not a dialog topic."
+        )
+    if not component.get("id") or not isinstance(component.get("version"), int):
+        raise ServiceNowConnectError(
+            "The requested ServiceNow topic lacks identity or version evidence."
+        )
+    component["state"] = target_state
+    component["status"] = target_state
     return {
         "changeToken": change_token,
-        "connectionReferenceChanges": [
+        "botComponentChanges": [
             {
-                "$kind": "ConnectionReferenceUpdate",
-                "connectionReference": reference,
+                "$kind": "BotComponentUpdate",
+                "component": component,
             }
         ],
+    }
+
+
+def build_enable_all_topics_payload(
+    components: dict[str, Any],
+) -> dict[str, Any]:
+    change_token = components.get("changeToken")
+    if not isinstance(change_token, str) or not change_token:
+        raise ServiceNowConnectError(
+            "MinimalBot component state has no concurrency change token."
+        )
+    changes = []
+    for change in components.get("botComponentChanges") or []:
+        component = change.get("component")
+        if (
+            not isinstance(component, dict)
+            or "ServiceNowHRSD" not in str(component.get("schemaName") or "")
+            or (
+                component.get("state") == "Active"
+                and component.get("status") == "Active"
+            )
+        ):
+            continue
+        topic_id = component.get("id")
+        if not topic_id:
+            raise ServiceNowConnectError(
+                "A ServiceNow topic lacks identity evidence."
+            )
+        topic_payload = build_topic_state_update_payload(
+            components,
+            str(topic_id),
+            "Active",
+        )
+        changes.extend(topic_payload["botComponentChanges"])
+    return {
+        "changeToken": change_token,
+        "botComponentChanges": changes,
     }
 
 
@@ -596,6 +681,143 @@ def _state_base(
     }
 
 
+def _state_for_components(
+    context: dict[str, Any],
+    components: dict[str, Any],
+) -> dict[str, Any]:
+    state_path = _state_path(context["agent"]["id"])
+    state = _load_json(state_path) if state_path.exists() else {}
+    state.update(_state_base(context, components))
+    return state
+
+
+def _inspection_progress(
+    state: dict[str, Any],
+    result: dict[str, Any],
+) -> dict[str, dict[str, str]]:
+    components = result["components"]
+    connections = result.get("connectivity", {}).get("connections", [])
+    connected = {
+        str(connection.get("connectionId")): connection
+        for connection in connections
+        if connection.get("status") == "Connected"
+        and connection.get("authMode") == "entraIDUserLogin"
+    }
+    steps = state.get("steps")
+    if not isinstance(steps, dict):
+        steps = {}
+
+    total_topics = components["serviceNowTopicCount"]
+    active_topics = components["activeServiceNowTopicCount"]
+    topics_done = (
+        total_topics > 0 and active_topics == total_topics
+    ) or steps.get("topics") == "done"
+
+    attestation = state.get("agentConnection")
+    if not isinstance(attestation, dict):
+        attestation = {}
+    attested_connection_id = str(attestation.get("connectionId") or "")
+    agent_connection_done = (
+        attestation.get("makerAttested") is True
+        and attested_connection_id in connected
+    )
+
+    publish_record = state.get("publish")
+    if not isinstance(publish_record, dict):
+        publish_record = {}
+    published_hash = publish_record.get("componentHash")
+    current_hash = state.get("componentHash")
+    publish_done = (
+        steps.get("publish") == "done"
+        and (
+            published_hash == current_hash
+            or published_hash is None
+        )
+    )
+
+    test_record = state.get("test")
+    if not isinstance(test_record, dict):
+        test_record = {}
+    test_result = test_record.get("result")
+
+    parameter_record = state.get("parameterSharing")
+    if not isinstance(parameter_record, dict):
+        parameter_record = {}
+    parameter_status = parameter_record.get("status")
+    return {
+        "topics": {
+            "status": "done" if topics_done else "pending",
+            "message": (
+                f"{active_topics}/{total_topics} ServiceNow HRSD topics are "
+                f"active."
+            ),
+        },
+        "credential": {
+            "status": "done" if connected else "pending",
+            "message": (
+                f"{len(connected)} Connected Entra user-login ServiceNow "
+                "credential(s) found."
+            ),
+        },
+        "agentConnection": {
+            "status": (
+                "confirmation-required"
+                if connected
+                else "pending"
+            ),
+            "message": (
+                "A prior maker attestation is recorded and the selected "
+                "credential is still Connected, but the current agent UI "
+                "binding requires maker confirmation."
+                if agent_connection_done
+                else (
+                    "Maker confirmation of the agent's ServiceNow row is "
+                    "required."
+                )
+            ),
+        },
+        "parameterSharing": {
+            "status": (
+                "confirmation-required"
+                if parameter_status in {"enabled", "not-exposed"}
+                else "pending"
+            ),
+            "message": (
+                f"Parameter sharing was recorded as {parameter_status}; "
+                "the current UI state requires maker confirmation."
+                if parameter_status
+                else "Parameter-sharing availability has not been recorded."
+            ),
+        },
+        "publish": {
+            "status": "done" if publish_done else "pending",
+            "message": (
+                "The current component revision is recorded as published."
+                if publish_done
+                else "The current component revision is not recorded as published."
+            ),
+        },
+        "test": {
+            "status": (
+                "confirmation-required"
+                if test_result in {"pass", "fail"}
+                else "pending"
+            ),
+            "message": (
+                "A passing Test pane result was previously recorded; a "
+                "current functional result requires maker confirmation."
+                if test_result == "pass"
+                else (
+                    "A failing Test pane result was previously recorded; a "
+                    "current functional result requires maker confirmation."
+                )
+                if test_result == "fail"
+                else "Functional Test pane validation has not been recorded."
+            ),
+        },
+    }
+
+
 def inspect(context: dict[str, Any], *, offline: bool = False) -> dict[str, Any]:
     if offline:
         components = _load_json(context["snapshotPath"])
@@ -620,16 +842,6 @@ def inspect(context: dict[str, Any], *, offline: bool = False) -> dict[str, Any]
             connection_summary(record)
             for record in connectivity.list_connections()
         ]
-        referenced_connection = None
-        referenced_error = None
-        referenced_id = summary["reference"].get("connectionId")
-        if referenced_id:
-            try:
-                referenced_connection = connection_summary(
-                    connectivity.get_connection(referenced_id)
-                )
-            except ServiceNowConnectError as exc:
-                referenced_error = str(exc)
         result["connectivity"] = {
             "connector": {
                 "displayName": connector_properties.get("displayName"),
@@ -637,10 +849,14 @@ def inspect(context: dict[str, Any], *, offline: bool = False) -> dict[str, Any]
                 "isCustomApi": connector_properties.get("isCustomApi"),
             },
             "connections": connections,
-            "referencedConnection": referenced_connection,
-            "referencedConnectionError": referenced_error,
+            "userConnectionBinding": {
+                "mode": "maker-ui",
+                "automationAvailable": False,
+                "requiredDelegatedScope": "PowerVirtualAgents.Tokens.Read",
+            },
         }
-        state = _state_base(context, components)
+        state = _state_for_components(context, components)
+        result["progress"] = _inspection_progress(state, result)
         state["lastInspection"] = result
         _write_json_atomic(_state_path(context["agent"]["id"]), state)
     return result
@@ -661,10 +877,27 @@ def prepare_manual_connection(
     instance_name = instance_name or reference.get("instanceName")
     resource_uri = resource_uri or reference.get("resourceUri")
     if not instance_name or not resource_uri:
-        raise ServiceNowConnectError(
-            "Instance name and Entra resource URI are required."
-        )
-    state = _state_base(context, components)
+        missing_fields = []
+        if not instance_name:
+            missing_fields.append("instanceName")
+        if not resource_uri:
+            missing_fields.append("resourceUri")
+        return {
+            "status": "input-required",
+            "creationMode": "manual",
+            "agentId": context["agent"]["id"],
+            "environmentId": context["environment"]["id"],
+            "missingFields": missing_fields,
+            "knownValues": {
+                "instanceName": instance_name,
+                "resourceUri": resource_uri,
+            },
+            "message": (
+                "The installed connection reference does not contain every "
+                "value required to create the ServiceNow connection."
+            ),
+        }
+    state = _state_for_components(context, components)
     state["connection"] = {
         "connectionId": None,
         "displayName": (
@@ -676,13 +909,13 @@ def prepare_manual_connection(
         "resourceUri": resource_uri,
         "createdBySkill": False,
     }
-    state["steps"] = {
-        "connection": "maker-action-required",
-        "signIn": "maker-action-required",
-        "referenceBinding": "pending",
-        "publish": "pending",
-        "test": "pending",
-    }
+    steps = state.setdefault("steps", {})
+    steps.setdefault("connection", "maker-action-required")
+    steps.setdefault("signIn", "maker-action-required")
+    steps.setdefault("agentConnection", "maker-action-required")
+    steps.setdefault("parameterSharing", "pending")
+    steps.setdefault("publish", "pending")
+    steps.setdefault("test", "pending")
     _write_json_atomic(_state_path(context["agent"]["id"]), state)
     return {
         "status": "maker-action-required",
@@ -699,28 +932,25 @@ def prepare_manual_connection(
             "Choose Microsoft Entra ID User Login.",
             "Enter the Instance Name and Resource URI shown in this output.",
             "Select Sign in, complete authentication, then select Submit.",
-            "Wait until the status is Connected, then return to VS Code.",
+            "Wait until the credential status is Connected.",
+            "Return to Connection settings and select Connect for ServiceNow.",
+            "Choose the new connection and save the agent connection.",
+            "Return to VS Code after the ServiceNow row shows Connected.",
         ],
         "afterCompletion": {
             "command": "python scripts/connect_servicenow_da.py inspect",
             "expected": (
-                "A ServiceNow connection with status Connected and auth mode "
-                "entraIDUserLogin."
+                "A ServiceNow credential with status Connected, followed by "
+                "maker confirmation that it was connected to the agent."
             ),
         },
     }
 
 
-def bind_reference(
+def record_agent_connection_attestation(
     context: dict[str, Any],
     connection_id: str,
-    *,
-    confirmed: bool,
 ) -> dict[str, Any]:
-    if not confirmed:
-        raise ServiceNowConnectError(
-            "Reference binding requires explicit confirmation (--yes)."
-        )
     connectivity = _connectivity_client(context)
     physical = connection_summary(connectivity.get_connection(connection_id))
     if physical.get("status") != "Connected":
@@ -728,42 +958,219 @@ def bind_reference(
             "The physical ServiceNow connection is not Connected."
         )
 
+    normalized_connection_id = uuid.UUID(connection_id).hex
+    state_path = _state_path(context["agent"]["id"])
+    if state_path.exists():
+        state = _load_json(state_path)
+    else:
+        components = _agentbuilder_client(context).fetch_components(
+            context["agent"]["id"]
+        )
+        state = _state_base(context, components)
+    state["agentConnection"] = {
+        "mode": "maker-ui",
+        "connectionId": normalized_connection_id,
+        "displayName": physical.get("displayName"),
+        "physicalStatus": physical.get("status"),
+        "authMode": physical.get("authMode"),
+        "makerAttested": True,
+        "recordedAt": _utc_now(),
+    }
+    state.setdefault("steps", {})["agentConnection"] = "done"
+    state["updatedAt"] = _utc_now()
+    _write_json_atomic(state_path, state)
+    return state["agentConnection"]
+
+
+def record_parameter_sharing(
+    context: dict[str, Any],
+    status: str,
+) -> dict[str, Any]:
+    if status not in {"enabled", "not-exposed"}:
+        raise ServiceNowConnectError(
+            "Parameter-sharing status must be enabled or not-exposed."
+        )
+    state_path = _state_path(context["agent"]["id"])
+    if state_path.exists():
+        state = _load_json(state_path)
+    else:
+        components = _agentbuilder_client(context).fetch_components(
+            context["agent"]["id"]
+        )
+        state = _state_base(context, components)
+    result = {
+        "status": status,
+        "makerAttested": True,
+        "recordedAt": _utc_now(),
+    }
+    state["parameterSharing"] = result
+    state.setdefault("steps", {})["parameterSharing"] = "done"
+    state["updatedAt"] = _utc_now()
+    _write_json_atomic(state_path, state)
+    return result
+
+
+def set_topic_state(
+    context: dict[str, Any],
+    topic_id: str,
+    target_state: str,
+    *,
+    confirmed: bool,
+) -> dict[str, Any]:
+    if not confirmed:
+        raise ServiceNowConnectError(
+            "Topic state mutation requires explicit confirmation (--yes)."
+        )
+    agentbuilder = _agentbuilder_client(context)
+    before = agentbuilder.fetch_components(context["agent"]["id"])
+    before_topic = find_servicenow_topic(before, topic_id)
+    before_state = before_topic.get("state")
+    before_status = before_topic.get("status")
+    changed = (
+        before_state != target_state
+        or before_status != target_state
+    )
+    if changed:
+        payload = build_topic_state_update_payload(
+            before,
+            topic_id,
+            target_state,
+        )
+        agentbuilder.update_components(context["agent"]["id"], payload)
+    after = agentbuilder.fetch_components(context["agent"]["id"])
+    after_topic = find_servicenow_topic(after, topic_id)
+    if (
+        after_topic.get("state") != target_state
+        or after_topic.get("status") != target_state
+    ):
+        raise ServiceNowConnectError(
+            "MinimalBot update completed without the expected topic state."
+        )
+    return {
+        "topicId": str(uuid.UUID(topic_id)),
+        "displayName": after_topic.get("displayName"),
+        "schemaName": after_topic.get("schemaName"),
+        "previousState": before_state,
+        "previousStatus": before_status,
+        "state": after_topic.get("state"),
+        "status": after_topic.get("status"),
+        "previousVersion": before_topic.get("version"),
+        "version": after_topic.get("version"),
+        "changed": changed,
+        "published": False,
+    }
+
+
+def enable_all_servicenow_topics(
+    context: dict[str, Any],
+    *,
+    confirmed: bool,
+) -> dict[str, Any]:
+    if not confirmed:
+        raise ServiceNowConnectError(
+            "Enabling all ServiceNow topics requires explicit confirmation "
+            "(--yes)."
+        )
     agentbuilder = _agentbuilder_client(context)
     before = agentbuilder.fetch_components(context["agent"]["id"])
     before_summary = summarize_components(before)
-    normalized_connection_id = uuid.UUID(connection_id).hex
-    if before_summary["reference"].get("connectionId") == normalized_connection_id:
-        after = before
-        changed = False
-    else:
-        payload = build_reference_update_payload(before, normalized_connection_id)
+    inactive = [
+        topic
+        for topic in before_summary["serviceNowTopics"]
+        if topic.get("state") != "Active"
+        or topic.get("status") != "Active"
+    ]
+    if inactive:
+        payload = build_enable_all_topics_payload(before)
         agentbuilder.update_components(context["agent"]["id"], payload)
-        after = agentbuilder.fetch_components(context["agent"]["id"])
-        changed = True
+    after = agentbuilder.fetch_components(context["agent"]["id"])
     after_summary = summarize_components(after)
-    if after_summary["reference"].get("connectionId") != normalized_connection_id:
-        raise ServiceNowConnectError(
-            "MinimalBot update completed without the expected connection binding."
+    not_active = [
+        topic
+        for topic in after_summary["serviceNowTopics"]
+        if topic.get("state") != "Active"
+        or topic.get("status") != "Active"
+    ]
+    if not_active:
+        names = ", ".join(
+            str(topic.get("displayName") or topic.get("id"))
+            for topic in not_active
         )
-
+        raise ServiceNowConnectError(
+            "MinimalBot update completed, but these ServiceNow topics "
+            f"remained inactive: {names}."
+        )
+    result = {
+        "status": "updated" if inactive else "already-active",
+        "customerChoice": "enable-all",
+        "before": {
+            "total": before_summary["serviceNowTopicCount"],
+            "active": before_summary["activeServiceNowTopicCount"],
+            "inactive": len(inactive),
+        },
+        "changedTopics": [
+            {
+                "id": topic.get("id"),
+                "displayName": topic.get("displayName"),
+                "previousState": topic.get("state"),
+                "previousStatus": topic.get("status"),
+            }
+            for topic in inactive
+        ],
+        "after": {
+            "total": after_summary["serviceNowTopicCount"],
+            "active": after_summary["activeServiceNowTopicCount"],
+            "inactive": len(not_active),
+        },
+        "published": False,
+    }
     state_path = _state_path(context["agent"]["id"])
     state = _load_json(state_path) if state_path.exists() else _state_base(
         context,
         before,
     )
-    state["referenceBinding"] = {
-        "referenceId": after_summary["reference"].get("id"),
-        "previousConnectionId": before_summary["reference"].get("connectionId"),
-        "connectionId": normalized_connection_id,
-        "changedBySkill": changed,
-        "verifiedAt": _utc_now(),
-    }
-    steps = state.setdefault("steps", {})
-    steps["referenceBinding"] = "done"
+    state["topicEnablement"] = result
+    state.setdefault("steps", {})["topics"] = "done"
     state["componentHash"] = _component_hash(after)
     state["updatedAt"] = _utc_now()
     _write_json_atomic(state_path, state)
-    return state
+    return result
+
+
+def record_keep_current_topic_choice(
+    context: dict[str, Any],
+) -> dict[str, Any]:
+    components = _agentbuilder_client(context).fetch_components(
+        context["agent"]["id"]
+    )
+    summary = summarize_components(components)
+    counts = {
+        "total": summary["serviceNowTopicCount"],
+        "active": summary["activeServiceNowTopicCount"],
+        "inactive": (
+            summary["serviceNowTopicCount"]
+            - summary["activeServiceNowTopicCount"]
+        ),
+    }
+    result = {
+        "status": "recorded",
+        "customerChoice": "keep-current",
+        "before": counts,
+        "changedTopics": [],
+        "after": counts,
+        "published": False,
+    }
+    state_path = _state_path(context["agent"]["id"])
+    state = _load_json(state_path) if state_path.exists() else _state_base(
+        context,
+        components,
+    )
+    state["topicEnablement"] = result
+    state.setdefault("steps", {})["topics"] = "done"
+    state["componentHash"] = _component_hash(components)
+    state["updatedAt"] = _utc_now()
+    _write_json_atomic(state_path, state)
+    return result
 
 
 def publish(
@@ -775,17 +1182,14 @@ def publish(
         raise ServiceNowConnectError(
             "Publishing requires explicit confirmation (--yes)."
         )
-    response = _agentbuilder_client(context).publish_agent(
-        context["agent"]["id"]
-    )
+    agentbuilder = _agentbuilder_client(context)
+    components = agentbuilder.fetch_components(context["agent"]["id"])
+    response = agentbuilder.publish_agent(context["agent"]["id"])
     state_path = _state_path(context["agent"]["id"])
-    state = _load_json(state_path) if state_path.exists() else {
-        "schemaVersion": 1,
-        "agentId": context["agent"]["id"],
-        "environmentId": context["environment"]["id"],
-    }
+    state = _state_for_components(context, components)
     state["publish"] = {
         "completedAt": _utc_now(),
+        "componentHash": _component_hash(components),
         "responseKeys": sorted(response.keys()),
     }
     steps = state.setdefault("steps", {})
@@ -793,6 +1197,42 @@ def publish(
     state["updatedAt"] = _utc_now()
     _write_json_atomic(state_path, state)
     return state
+
+
+def record_test_attestation(
+    context: dict[str, Any],
+    *,
+    prompt: str,
+    result: str,
+    details: str | None,
+) -> dict[str, Any]:
+    prompt = prompt.strip()
+    if not prompt:
+        raise ServiceNowConnectError("A Test pane prompt is required.")
+    if result not in {"pass", "fail"}:
+        raise ServiceNowConnectError(
+            "Test pane result must be pass or fail."
+        )
+    state_path = _state_path(context["agent"]["id"])
+    state = _load_json(state_path) if state_path.exists() else {
+        "schemaVersion": 1,
+        "intent": "DA-GA ServiceNow HRSD connection",
+        "agentId": context["agent"]["id"],
+        "environmentId": context["environment"]["id"],
+    }
+    attestation = {
+        "prompt": prompt,
+        "result": result,
+        "details": details.strip() if details else None,
+        "recordedAt": _utc_now(),
+    }
+    state["test"] = attestation
+    state.setdefault("steps", {})["test"] = (
+        "done" if result == "pass" else "failed"
+    )
+    state["updatedAt"] = _utc_now()
+    _write_json_atomic(state_path, state)
+    return attestation
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -819,18 +1259,66 @@ def build_parser() -> argparse.ArgumentParser:
     create_parser.add_argument("--resource-uri")
     create_parser.add_argument("--display-name")
 
-    bind_parser = subparsers.add_parser(
-        "bind",
-        help="Bind a Connected physical connection to the DA reference.",
+    agent_connection_parser = subparsers.add_parser(
+        "record-agent-connection",
+        help="Record the maker's manual Connect action after health validation.",
     )
-    bind_parser.add_argument("--connection-id", required=True)
-    bind_parser.add_argument("--yes", action="store_true")
+    agent_connection_parser.add_argument("--connection-id", required=True)
+    parameter_parser = subparsers.add_parser(
+        "record-parameter-sharing",
+        help="Record the maker-observed parameter-sharing state.",
+    )
+    parameter_parser.add_argument(
+        "--status",
+        required=True,
+        choices=("enabled", "not-exposed"),
+    )
+
+    topic_state_parser = subparsers.add_parser(
+        "set-topic-state",
+        help="Set one ServiceNow topic to Active or Inactive.",
+    )
+    topic_state_parser.add_argument("--topic-id", required=True)
+    topic_state_parser.add_argument(
+        "--state",
+        choices=("active", "inactive"),
+        required=True,
+    )
+    topic_state_parser.add_argument("--yes", action="store_true")
+
+    enable_all_parser = subparsers.add_parser(
+        "enable-all-topics",
+        help="Enable every ServiceNow HRSD topic after customer confirmation.",
+    )
+    enable_all_parser.add_argument("--yes", action="store_true")
+
+    topic_choice_parser = subparsers.add_parser(
+        "record-topic-choice",
+        help="Record the customer's decision to keep current topic states.",
+    )
+    topic_choice_parser.add_argument(
+        "--choice",
+        choices=("keep-current",),
+        required=True,
+    )
 
     publish_parser = subparsers.add_parser(
         "publish",
         help="Publish the active Dev agent.",
     )
     publish_parser.add_argument("--yes", action="store_true")
+
+    test_parser = subparsers.add_parser(
+        "record-test",
+        help="Record the maker's ServiceNow HRSD Test pane attestation.",
+    )
+    test_parser.add_argument("--prompt", required=True)
+    test_parser.add_argument(
+        "--result",
+        choices=("pass", "fail"),
+        required=True,
+    )
+    test_parser.add_argument("--details")
     return parser
 
 
@@ -847,14 +1335,36 @@ def main(argv: list[str] | None = None) -> int:
                 resource_uri=args.resource_uri,
                 display_name=args.display_name,
             )
-        elif args.command == "bind":
-            result = bind_reference(
+        elif args.command == "record-agent-connection":
+            result = record_agent_connection_attestation(
                 context,
                 args.connection_id,
+            )
+        elif args.command == "record-parameter-sharing":
+            result = record_parameter_sharing(context, args.status)
+        elif args.command == "set-topic-state":
+            result = set_topic_state(
+                context,
+                args.topic_id,
+                args.state.title(),
                 confirmed=args.yes,
             )
+        elif args.command == "enable-all-topics":
+            result = enable_all_servicenow_topics(
+                context,
+                confirmed=args.yes,
+            )
+        elif args.command == "record-topic-choice":
+            result = record_keep_current_topic_choice(context)
         elif args.command == "publish":
             result = publish(context, confirmed=args.yes)
+        elif args.command == "record-test":
+            result = record_test_attestation(
+                context,
+                prompt=args.prompt,
+                result=args.result,
+                details=args.details,
+            )
         else:  # pragma: no cover
             raise ServiceNowConnectError("Unsupported command.")
     except (ServiceNowConnectError, AgentBuilderError, ValueError) as exc:
