@@ -224,6 +224,13 @@ longer dropped silently: every one is **detected and reported** under *Re-create
 these in the agent's settings* (with its configuration reproduced) or, where the DA
 has no equivalent yet, as *not supported yet*.
 
+**Connected agents** (the hub's `TaskDialog` delegations to the HR/IT/Facilities
+agents — CA type-9 `InvokeConnectedAgentTaskAction`) are handled the same way. The
+DA wires connected agents up in the agent's *Agents* settings, not in the importable
+package, so the tool reports each delegation as a reconnect task that **names the
+target agent** (and its DA schema name when the agent ships in this release) rather
+than crashing or dropping it.
+
 The agent's own **display name and description** migrate too. If the customer
 renamed or re-described the agent on the CA, the new name is written to the emitted
 config (`botName`/`gptDisplayName`) and the new description to `agent.yml`
