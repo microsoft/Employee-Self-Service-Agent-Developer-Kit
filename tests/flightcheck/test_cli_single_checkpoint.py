@@ -67,6 +67,66 @@ def _row(checkpoint_id: str, status: str) -> CheckResult:
     )
 
 
+@pytest.mark.parametrize(
+    ("config", "explicit_ring", "expected"),
+    [
+        ({}, "test", "test"),
+        (
+            {
+                "ring": "preprod",
+                "powerPlatformApiEndpoint": (
+                    "https://0000000000000000000000000000000.0."
+                    "environment.api.preprod.powerplatform.com"
+                ),
+            },
+            None,
+            "preprod",
+        ),
+    ],
+)
+def test_resolve_environment_ring(
+    config: dict,
+    explicit_ring: str | None,
+    expected: str,
+) -> None:
+    assert (
+        cli._resolve_environment_ring(
+            config,
+            explicit_ring=explicit_ring,
+        )
+        == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("config", "explicit_ring", "message"),
+    [
+        ({}, None, "ring is unavailable"),
+        (
+            {
+                "ring": "prod",
+                "powerPlatformApiEndpoint": (
+                    "https://0000000000000000000000000000000.0."
+                    "environment.api.test.powerplatform.com"
+                ),
+            },
+            None,
+            "do not identify the same",
+        ),
+    ],
+)
+def test_resolve_environment_ring_rejects_inconclusive_state(
+    config: dict,
+    explicit_ring: str | None,
+    message: str,
+) -> None:
+    with pytest.raises(ValueError, match=message):
+        cli._resolve_environment_ring(
+            config,
+            explicit_ring=explicit_ring,
+        )
+
+
 @pytest.fixture
 def _silence_output(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stub the summary printer and results writer so the run-reaching tests
@@ -248,47 +308,6 @@ class TestGates:
 
         assert exc.value.code == 1
         assert "Confirm whether the environment uses" in capsys.readouterr().out
-
-    def test_capacity_rejects_configured_ring_endpoint_mismatch(
-        self,
-        tmp_path: Path,
-        monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str],
-    ) -> None:
-        local_dir = tmp_path / ".local"
-        local_dir.mkdir()
-        (local_dir / "config.json").write_text(
-            json.dumps(
-                {
-                    "releaseLine": "da",
-                    "environmentId": (
-                        "00000000-0000-4000-8000-000000001111"
-                    ),
-                    "ring": "prod",
-                    "powerPlatformApiEndpoint": (
-                        "https://0000000000000000000000000000000.0."
-                        "environment.api.test.powerplatform.com"
-                    ),
-                }
-            ),
-            encoding="utf-8",
-        )
-        monkeypatch.chdir(tmp_path)
-        monkeypatch.setattr(
-            cli,
-            "PowerPlatformClient",
-            lambda _tenant_id: pytest.fail(
-                "ring validation must complete before authentication"
-            ),
-        )
-
-        with pytest.raises(SystemExit) as exc:
-            cli._run_single_checkpoint(
-                _args("ENV-CAPACITY-001", tmp_path)
-            )
-
-        assert exc.value.code == 1
-        assert "do not identify the same" in capsys.readouterr().out
 
 
 class TestHermeticRun:
