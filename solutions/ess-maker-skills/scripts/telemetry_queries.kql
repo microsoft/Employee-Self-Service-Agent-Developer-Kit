@@ -184,6 +184,64 @@ essmakerkit_flightcheck_run
 
 
 // -----------------------------------------------------------------------------
+// 9) CONNECTOR ATTRIBUTION (ADO 7943641)
+//    Split Connect + FlightCheck usage/reliability by connector so PMs can
+//    report Workday vs ServiceNow adoption and reliability separately.
+//
+//    Dim: connector = { "workday", "servicenow", "legacy", "unknown", "" }
+//      * "" (empty) = the event is not connector-scoped (topic authoring,
+//        workflow deletion, cross-cutting FlightCheck runs with scope="full",
+//        cross-cutting check categories like Environment/Authentication).
+//      * "legacy"  = pre-attribution "connect" events (schema < 1.4.0).
+//      * "unknown" = caller passed an out-of-taxonomy value; investigate.
+//
+//    NOTE: for FlightCheck the "connector" dim is DERIVED on the emit side,
+//    not passed by the maker: run event uses scope ("workday" / "servicenow"),
+//    check event uses category prefix. Cross-cutting categories emit "".
+// -----------------------------------------------------------------------------
+
+// 9a) Connect starts by connector (Workday vs ServiceNow adoption).
+adk_capability_use
+| where EventInfo_Time > ago(30d)
+| where adk_capability == "connect"
+| summarize Starts = count(), Tenants = dcount(tenantId) by connector
+| order by Starts desc
+
+// 9b) FlightCheck runs by connector — dedicated Workday / ServiceNow scopes
+//     surface separately from cross-cutting "full" runs (connector="").
+essmakerkit_flightcheck_run
+| where EventInfo_Time > ago(30d)
+| summarize Runs = count(),
+            Tenants = dcount(tenantId),
+            SuccessPct = round(100.0 * countif(overall == "READY") / count(), 1)
+    by connector
+| order by Runs desc
+
+// 9c) Per-check reliability split by connector — the fine-grained view.
+//     "" is expected on cross-cutting categories (Environment / Auth /
+//     Prerequisites / etc.).
+essmakerkit_flightcheck_check
+| where EventInfo_Time > ago(30d)
+| where status in ("Passed", "Failed", "Error")
+| summarize Total = count(),
+            Passed = countif(status == "Passed"),
+            SuccessPct = round(100.0 * countif(status == "Passed") / count(), 1)
+    by connector, category
+| order by connector asc, SuccessPct asc
+
+// 9d) Legacy-vs-attributed rollout: watch "legacy" go to zero over time as
+//     old ADK installs upgrade past 1.4.0.
+adk_capability_use
+| where EventInfo_Time > ago(30d)
+| where adk_capability == "connect"
+| summarize Events = count() by bin(EventInfo_Time, 1d),
+                                bucket = case(connector == "", "unattributed",
+                                              connector == "legacy", "legacy",
+                                              "attributed")
+| order by EventInfo_Time asc
+
+
+// -----------------------------------------------------------------------------
 // 8) VORPAL CLIENT EVENTS (schemaVersion 2)
 // -----------------------------------------------------------------------------
 // Vorpal supplies the source chronology. ADK's EventInfo_Time remains the
