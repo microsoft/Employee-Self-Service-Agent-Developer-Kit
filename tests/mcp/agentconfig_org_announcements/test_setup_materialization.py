@@ -19,7 +19,10 @@ SERVER_NAME = "ess-org-announcements"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(SOLUTION / "scripts"))
 
-from _mcp_modules import load_org_announcements_directory_modules  # noqa: E402
+from _mcp_modules import (  # noqa: E402
+    load_org_announcements_directory_modules,
+    load_org_announcements_modules,
+)
 
 import mcp_config  # noqa: E402
 
@@ -239,12 +242,18 @@ def test_the_announcements_server_introduces_no_third_token_cache() -> None:
     A third cache is not a cosmetic duplication: it is a second interactive
     sign-in for a maker who already authenticated through /setup.
     """
-    import base_client  # noqa: PLC0415 — imported for its constant
+    modules = load_org_announcements_modules()
+    server = modules["server"]
+    client = modules["client"]
+    assert server.OrgAnnouncementsClient is client.OrgAnnouncementsClient
 
-    locations = {
-        Path(graph_directory_client.GRAPH_TOKEN_CACHE_PATH),
-        Path(base_client._TOKEN_CACHE_PATH),
-    }
+    base_class = next(
+        candidate
+        for candidate in server.OrgAnnouncementsClient.__mro__
+        if candidate.__name__ == "AgentConfigBaseClient"
+    )
+    cache = Path(base_class.__init__.__globals__["_TOKEN_CACHE_PATH"])
+    locations = {Path(graph_directory_client.GRAPH_TOKEN_CACHE_PATH), cache}
 
     assert locations == {
         SOLUTION / ".local" / ".token_cache.bin",

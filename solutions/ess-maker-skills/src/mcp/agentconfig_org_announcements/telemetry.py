@@ -39,8 +39,10 @@ _LOGGER = logging.getLogger("ess-org-announcements.telemetry")
 # new dimension value (and cannot smuggle caller-controlled text into Aria).
 _OPERATIONS = frozenset(
     {
+        "list_agent_configs",
         "open_org_announcements",
         "save_bulletin",
+        "search_agents",
         "transition_bulletin",
         "duplicate_bulletin",
         "search_audience_groups",

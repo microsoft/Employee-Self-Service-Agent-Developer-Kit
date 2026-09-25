@@ -22,6 +22,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
+import anyio
 import pytest
 
 
@@ -40,12 +41,20 @@ org_client = _ORG_MODULES["client"]
 def _reset_globals():
     """Never leak a fake client between tests or into another module."""
     org_server._client = None
+    org_server._client_construction_task = None
     org_server._client_users.clear()
     org_server._retired_clients.clear()
+    org_server._client_lock = asyncio.Lock()
+    org_server._graph_client = None
+    org_server._graph_client_users.clear()
     yield
     org_server._client = None
+    org_server._client_construction_task = None
     org_server._client_users.clear()
     org_server._retired_clients.clear()
+    org_server._client_lock = asyncio.Lock()
+    org_server._graph_client = None
+    org_server._graph_client_users.clear()
 
 
 class _FakeAuthoringClient:
@@ -145,6 +154,99 @@ def test_concurrent_first_calls_share_one_construction(monkeypatch) -> None:
     assert clients[0] is clients[1] is clients[2]
 
 
+def test_cancelled_first_waiter_does_not_duplicate_construction(
+    monkeypatch,
+) -> None:
+    """Request cancellation must not cancel shared interactive sign-in."""
+    started = threading.Event()
+    unblock = threading.Event()
+    built: list[_FakeAuthoringClient] = []
+
+    def _construct() -> _FakeAuthoringClient:
+        client = _FakeAuthoringClient()
+        built.append(client)
+        started.set()
+        assert unblock.wait(timeout=5)
+        return client
+
+    monkeypatch.setattr(org_server, "OrgAnnouncementsClient", _construct)
+
+    async def run() -> None:
+        first_scope = anyio.CancelScope()
+        second_clients: list[_FakeAuthoringClient] = []
+
+        async def first_waiter() -> None:
+            with first_scope:
+                await org_server.get_client()
+
+        async def second_waiter() -> None:
+            second_clients.append(await org_server.get_client())
+
+        async with anyio.create_task_group() as task_group:
+            task_group.start_soon(first_waiter)
+            with anyio.fail_after(5):
+                await anyio.to_thread.run_sync(started.wait)
+            first_scope.cancel()
+            await anyio.sleep(0)
+            task_group.start_soon(second_waiter)
+            await anyio.sleep(0.05)
+            assert len(built) == 1
+            unblock.set()
+
+        assert len(second_clients) == 1
+        assert org_server._client is second_clients[0] is built[0]
+        await org_server.release_client(second_clients[0])
+        assert org_server._client_users == {}
+
+    anyio.run(run, backend="asyncio")
+
+    assert len(built) == 1
+    assert not built[0].closed
+
+
+def test_cancelled_construction_is_disposed_and_retried(monkeypatch) -> None:
+    """A cancelled shared task cannot wedge later uncancelled callers."""
+    first_started = threading.Event()
+    first_unblock = threading.Event()
+    built: list[_FakeAuthoringClient] = []
+
+    def _construct() -> _FakeAuthoringClient:
+        client = _FakeAuthoringClient()
+        built.append(client)
+        if len(built) == 1:
+            first_started.set()
+            assert first_unblock.wait(timeout=5)
+        return client
+
+    monkeypatch.setattr(org_server, "OrgAnnouncementsClient", _construct)
+
+    async def run() -> None:
+        acquired: list[_FakeAuthoringClient] = []
+
+        async def waiter() -> None:
+            acquired.append(await org_server.get_client())
+
+        async with anyio.create_task_group() as task_group:
+            task_group.start_soon(waiter)
+            with anyio.fail_after(5):
+                await anyio.to_thread.run_sync(first_started.wait)
+            async with org_server._client_lock:
+                first_unblock.set()
+                await anyio.sleep(0.05)
+                construction = org_server._client_construction_task
+                assert construction is not None
+                construction.cancel()
+
+        assert len(built) == 2
+        assert built[0].closed
+        assert acquired == [built[1]]
+        assert org_server._client is built[1]
+        assert org_server._client_construction_task is None
+        await org_server.release_client(acquired[0])
+
+    anyio.run(run, backend="asyncio")
+
+
 # --------------------------------------------------------------------------
 # Reauthentication after a 401
 # --------------------------------------------------------------------------
@@ -166,6 +268,93 @@ def test_reset_defers_close_until_the_final_lease_is_released(monkeypatch) -> No
     client = asyncio.run(run())
 
     assert client.closed, "the stale client was dropped without being closed"
+
+
+def test_cancelled_operation_still_releases_a_retired_client(
+    monkeypatch,
+) -> None:
+    """FastMCP's AnyIO cancellation cannot interrupt lease bookkeeping."""
+    client = _FakeAuthoringClient()
+    monkeypatch.setattr(org_server, "_client", client)
+
+    async def run() -> None:
+        leased = anyio.Event()
+        scope_ready = anyio.Event()
+        scopes: list[anyio.CancelScope] = []
+
+        async def operation() -> None:
+            with anyio.CancelScope() as scope:
+                scopes.append(scope)
+                scope_ready.set()
+                async with org_server.get_client_lease():
+                    leased.set()
+                    await anyio.sleep_forever()
+
+        async def retire_while_holding_lock() -> None:
+            await leased.wait()
+            await scope_ready.wait()
+            async with org_server._client_lock:
+                org_server._client = None
+                org_server._retired_clients.add(client)
+                scopes[0].cancel()
+                await anyio.sleep(0.05)
+
+        async with anyio.create_task_group() as task_group:
+            task_group.start_soon(operation)
+            task_group.start_soon(retire_while_holding_lock)
+
+        assert client not in org_server._client_users
+        assert client not in org_server._retired_clients
+        assert client.closed
+
+    anyio.run(run, backend="asyncio")
+
+
+def test_cancelled_graph_operation_closes_a_replaced_client() -> None:
+    """Graph cleanup follows the same cancellation-safe resource rule."""
+
+    class _FakeGraphClient:
+        def __init__(self, name: str) -> None:
+            self.name = name
+            self.tenant_id = "tenant"
+            self.object_id = "object"
+            self.closed = False
+
+        async def aclose(self) -> None:
+            self.closed = True
+
+    original = _FakeGraphClient("original")
+    replacement = _FakeGraphClient("replacement")
+    org_server._graph_client = original
+
+    async def run() -> None:
+        leased = anyio.Event()
+        scope_ready = anyio.Event()
+        scopes: list[anyio.CancelScope] = []
+
+        async def operation() -> None:
+            with anyio.CancelScope() as scope:
+                scopes.append(scope)
+                scope_ready.set()
+                async with org_server.get_graph_client("tenant", "object"):
+                    leased.set()
+                    await anyio.sleep_forever()
+
+        async def replace_and_cancel() -> None:
+            await leased.wait()
+            await scope_ready.wait()
+            org_server._graph_client = replacement
+            scopes[0].cancel()
+
+        async with anyio.create_task_group() as task_group:
+            task_group.start_soon(operation)
+            task_group.start_soon(replace_and_cancel)
+
+        assert original not in org_server._graph_client_users
+        assert original.closed
+        assert not replacement.closed
+
+    anyio.run(run, backend="asyncio")
 
 
 def test_the_call_after_a_reset_builds_a_fresh_client(monkeypatch) -> None:
