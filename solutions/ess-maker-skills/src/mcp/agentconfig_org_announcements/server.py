@@ -141,6 +141,22 @@ _FEATURE_DISABLED_CODES = frozenset(
 # reported to the maker as if they had typed something wrong.
 _FALLBACK_BACKEND_CODE = "HttpError"
 
+# Backend failure copy safe for the model-visible opener. The opener rebuilds
+# even recognized failures from this local map rather than trusting the message
+# paired with a familiar backend code. Every other backend code/detail remains
+# available only to app-visible mutation tools.
+_MODEL_VISIBLE_BACKEND_MESSAGES = {
+    "AuthenticationRequired": "Sign in again to author organization announcements.",
+    "AuthorizationDenied": (
+        "This account is not authorized to author organization "
+        "announcements in this tenant."
+    ),
+    "FeatureUnavailable": "Organization announcements are not enabled for this tenant.",
+    "NetworkError": "The Org Announcements service is temporarily unavailable.",
+    "NotFound": "The announcement was not found.",
+    "ServiceError": "The Org Announcements service could not complete the request.",
+}
+
 # Identity and audit fields the backend owns. A duplicate strips them from the
 # copied content so the copy is created as a fresh Draft rather than silently
 # updating its source or inheriting its history. The wrapper-level audit fields
@@ -669,16 +685,33 @@ def _open_error_payload(
     The request is response-only retry state, including the original suggestion.
     It is never logged or sent to telemetry.
     """
+    visible_failure = failure
+    if failure.source == SOURCE_BACKEND:
+        safe_message = _MODEL_VISIBLE_BACKEND_MESSAGES.get(failure.code)
+        if safe_message is None:
+            visible_failure = _FailureResult(
+                "InvalidRequest",
+                "The Org Announcements service rejected the request.",
+                source=SOURCE_BACKEND,
+            )
+        else:
+            visible_failure = _FailureResult(
+                failure.code,
+                safe_message,
+                retryable=failure.retryable,
+                source=SOURCE_BACKEND,
+            )
+
     payload = {
         **scope,
         "view": "error",
         "request": request,
-        "code": failure.code,
-        "message": failure.message,
-        "retryable": failure.retryable,
+        "code": visible_failure.code,
+        "message": visible_failure.message,
+        "retryable": visible_failure.retryable,
     }
     return CallToolResult(
-        content=[TextContent(type="text", text=failure.message)],
+        content=[TextContent(type="text", text=visible_failure.message)],
         structuredContent=payload,
         isError=True,
     )

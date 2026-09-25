@@ -136,7 +136,7 @@ def normalize_suggested_instant(value: str, *, boundary: str) -> str:
 class StrictModel(BaseModel):
     """Reject any field the contract does not name."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
 
 class BulletinAction(StrictModel):

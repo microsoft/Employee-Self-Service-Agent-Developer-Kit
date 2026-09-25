@@ -918,6 +918,58 @@ def test_backend_failures_map_to_discriminated_open_errors(
     assert payload["code"] == expected_code
 
 
+@pytest.mark.parametrize("http_status", [400, 409, 422])
+def test_open_errors_do_not_expose_backend_details(fake_clients, http_status) -> None:
+    sensitive_detail = "sensitive backend diagnostic with request content"
+    fake_clients(
+        _FakeClient(
+            get_error=org_client.AgentConfigApiError(
+                f"PrivateBackendCode: {sensitive_detail}",
+                http_status=http_status,
+            )
+        )
+    )
+
+    result = _call(
+        "open_org_announcements",
+        {"view": "editor", "mode": "edit", "bulletinId": "b"},
+    )
+    payload = _structured(result)
+
+    assert payload["code"] == "InvalidRequest"
+    assert payload["message"] == "The Org Announcements service rejected the request."
+    assert sensitive_detail not in json.dumps(payload)
+    content = result[0] if isinstance(result, tuple) else result.content
+    assert sensitive_detail not in content[0].text
+
+
+def test_open_errors_rebuild_messages_for_recognized_backend_codes(
+    fake_clients,
+) -> None:
+    sensitive_detail = "sensitive detail paired with a familiar code"
+    fake_clients(
+        _FakeClient(
+            get_error=org_client.AgentConfigApiError(
+                f"ServiceError: {sensitive_detail}",
+                http_status=400,
+            )
+        )
+    )
+
+    payload = _structured(
+        _call(
+            "open_org_announcements",
+            {"view": "editor", "mode": "edit", "bulletinId": "b"},
+        )
+    )
+
+    assert payload["code"] == "ServiceError"
+    assert payload["message"] == (
+        "The Org Announcements service could not complete the request."
+    )
+    assert sensitive_detail not in json.dumps(payload)
+
+
 @pytest.mark.parametrize("backend_code", ["FeatureDisabled", "FeatureNotEnabled"])
 def test_a_feature_gated_tenant_reports_feature_unavailable(
     fake_clients, backend_code
@@ -1066,6 +1118,30 @@ def test_a_draft_with_blank_dates_sends_no_empty_string_to_the_api(
     assert "endDate" not in sent["bulletin"]
     # Asserted against the serialized form too: the wire is what binds.
     assert '""' not in json.dumps(sent)
+
+
+def test_save_validation_errors_do_not_echo_invalid_input(fake_clients) -> None:
+    sensitive_value = "sensitive draft value that must not be echoed"
+    client, _ = fake_clients()
+
+    payload = _structured(
+        _call(
+            "save_bulletin",
+            _save_arguments(
+                bulletin={
+                    "type": "standard",
+                    "title": "Quarterly update",
+                    "description": "Read this",
+                    "internalNote": sensitive_value,
+                }
+            ),
+        )
+    )
+
+    assert payload["status"] == "failure"
+    assert payload["errors"][0]["code"] == "InvalidRequest"
+    assert sensitive_value not in json.dumps(payload)
+    assert client.saves == []
 
 
 def test_a_published_save_with_blank_dates_still_reaches_the_backend(
