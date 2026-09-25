@@ -48,10 +48,11 @@ Respond with ONLY this exact message and nothing else:
   configuration is available. Deleting deployed sets still requires setup.
 - If the user typed `/flightcheck` or explicitly asked to run a readiness
   check, proceed with `src/skills/flightcheck/SKILL.md`. This includes the
-  FlightCheck trigger phrases below. FlightCheck owns the bounded distinction
-  between a missing workspace, incomplete DA runtime readiness, completed DA
-  setup, and standalone `flightCheckOnly` mode. Do not use this exception for
-  customization or any other command.
+  FlightCheck trigger phrases below. FlightCheck owns readiness diagnosis for
+  standalone installations, missing workspaces, materialized workspaces with
+  outstanding runtime readiness, and completed setup. FlightCheck also owns the
+  maker-facing response for each of those states. Authoring and customization
+  continue to use their canonical readiness requirements.
 - If the user typed `/connect` or `/connect-workday`, allow the command after
   **local workspace materialization**, even when runtime `connect_ready` is
   false. Require
@@ -95,8 +96,7 @@ After canonical DA setup is complete:
   boundary;
 - `/backup-template-configs` and `/restore-template-configs` are no longer
   supported because they belonged to the retired Dataverse-based agent model;
-- `/flightcheck` uses the scopes supported for the active agent; standalone
-  `flightCheckOnly` installations remain limited to local files.
+- `/flightcheck` uses the scopes supported by the active configuration.
 
 Do not infer availability from a missing Dataverse endpoint and do not add
 capability fields to setup state.

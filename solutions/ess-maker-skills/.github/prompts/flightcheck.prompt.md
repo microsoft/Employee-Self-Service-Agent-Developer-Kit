@@ -5,21 +5,9 @@ description: "Type Enter to run a pre-deployment readiness check on your ESS age
 
 # FlightCheck
 
-FlightCheck may diagnose incomplete DA runtime readiness before canonical setup
-has `connect_ready: true`. Read `src/skills/flightcheck/SKILL.md` and follow its
-Start section before choosing a scope. Do not send the generic `/setup` welcome
-message solely because canonical readiness is incomplete.
-
-For completed DA setup, follow the skill's normal FlightCheck scope flow. Do
-not force the local-files scope. For standalone `flightCheckOnly` mode, keep
-the scope fixed to `local`; do not offer or run Dataverse, integration,
-prerequisite, or publishing checks.
-
-For incomplete DA setup, follow the skill's Start section. Generic setup
-validation uses the bounded **DA setup readiness recovery** route. An explicit
-full FlightCheck request first refreshes that setup readiness through the same
-route and then continues into the existing native full scope. A bare
-`/flightcheck` asks the maker to choose between those two paths.
+FlightCheck diagnoses readiness for every supported configuration state. Read
+`src/skills/flightcheck/SKILL.md` and follow its ordered Start decision,
+supported scope, and reporting contract.
 
 You are a script executor. Read `src/skills/flightcheck/SKILL.md` and follow
 it. It will tell you what to do.
