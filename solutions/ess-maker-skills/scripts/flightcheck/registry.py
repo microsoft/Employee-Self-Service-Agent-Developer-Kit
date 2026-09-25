@@ -50,6 +50,7 @@ from flightcheck.checks.environment import (
     run_preferred_solution_check,
 )
 from flightcheck.checks.native_agent import run_native_agent_checks
+from flightcheck.checks.publishing import run_publishing_checks
 from flightcheck.checks.external_systems import run_external_systems_checks
 from flightcheck.checks.solution import run_solution_checks
 from flightcheck.checks.workday import run_workday_checks
@@ -237,6 +238,26 @@ _SPECS: list[CheckpointSpec] = [
             Role.POWER_PLATFORM_ADMIN.value,
         ),
         is_family=True,
+    ),
+    CheckpointSpec(
+        key="PUB-001",
+        category_fn=run_publishing_checks,
+        category_label="Publishing",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.CRITICAL.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
+    CheckpointSpec(
+        key="PUB-002",
+        category_fn=run_publishing_checks,
+        category_label="Publishing",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.CRITICAL.value,
+        roles=(Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value),
     ),
     CheckpointSpec(
         key="ENV-009",
@@ -540,15 +561,16 @@ _SPECS: list[CheckpointSpec] = [
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
     ),
-    # DV-CONN-001 — self-contained Dataverse read (its own connectionreferences
-    # query) plus a best-effort BAP owner echo.
+    # DV-CONN-001 — reads the Workday SOAP connection reference from the
+    # Declarative Agent minimalBots components API (AGENTBUILDER), plus a
+    # best-effort BAP owner echo (PP_ADMIN).
     CheckpointSpec(
         key="DV-CONN-001",
         category_fn=run_workday_extension_checks,
         category_label="Workday Extension",
-        clients=frozenset({DATAVERSE, PP_ADMIN}),
+        clients=frozenset({AGENTBUILDER, PP_ADMIN}),
         requires_config=True,
-        requires_dataverse_endpoint=True,
+        requires_dataverse_endpoint=False,
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
     ),
@@ -664,6 +686,7 @@ OWNED_PREFIXES: tuple = (
     "WD-REST",
     "WD-NET",
     "DV-CONN",
+    "PUB",
     "TOPIC-TRIGGER",
     "TOPIC-INTEGRATION",
 )

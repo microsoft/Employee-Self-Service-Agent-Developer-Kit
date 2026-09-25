@@ -147,10 +147,12 @@ NATIVE_NO_DATAVERSE_SCOPE_MAP = {
         ("Native Agent", run_native_agent_checks),
         ("Environment", run_capacity_check),
         ("Local Files", run_local_file_checks),
+        ("Publishing", run_publishing_checks),
     ],
     "environment": [("Environment", run_capacity_check)],
     "servicenow": [("Native Agent", run_native_agent_checks)],
     "workday": [("Native Agent", run_native_agent_checks)],
+    "publishing": [("Publishing", run_publishing_checks)],
 }
 NATIVE_CONNECTOR_FILTERS = {
     "servicenow": ("shared_service-now",),
@@ -1399,7 +1401,12 @@ def main():
             )
             sys.exit(1)
 
-        needs_agent_readiness = args.scope in {"full", "servicenow", "workday"}
+        needs_agent_readiness = args.scope in {
+            "full",
+            "servicenow",
+            "workday",
+            "publishing",
+        }
         if needs_agent_readiness:
             environment_host = str(
                 config.get("powerPlatformApiEndpoint") or ""

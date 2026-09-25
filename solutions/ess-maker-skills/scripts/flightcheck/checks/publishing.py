@@ -4,20 +4,27 @@
 """
 ESS FlightCheck — Publishing & QA Validation (PUB-xxx, QA-xxx)
 
-These checks are organizational/process gates that the kit cannot
+Most checks are organizational/process gates that the kit cannot
 verify by reading an API (test sets live in Copilot Studio behind the
-Analytics surface; managed-solution exports happen in the Power Apps
-maker; UAT sign-off lives in the operator's change-management
-system; M365 admin approval lives in the Microsoft 365 admin center).
+Analytics surface; UAT sign-off lives in the operator's
+change-management system; M365 admin approval lives in the Microsoft
+365 admin center). PUB-001 and PUB-002 use the Copilot Studio
+AgentBuilder ALM APIs when the required client is available.
 
-Each check therefore emits ``Status.MANUAL`` — meaning "the kit has
-nothing to check; the operator must confirm this themselves" — and
-the remediation provides the concrete steps + best available deep
-link for that specific action.
+Rows that the kit cannot verify still emit ``Status.MANUAL`` — meaning
+"the operator must confirm this themselves" — and the remediation provides
+the concrete steps plus best available deep link for that specific action.
 
 Bucketing: MANUAL routes to the "Needs manual verification" section
-of the FlightCheck report. These checks never fail readiness.
+of the FlightCheck report. PUB-001/PUB-002 can pass or fail readiness
+when their API probes run.
 """
+
+import tempfile
+import zipfile
+from pathlib import Path
+
+from agentbuilder import AgentBuilderHTTPError
 
 from ..runner import CheckResult, Role, Status
 
@@ -26,6 +33,7 @@ STUDIO_BASE = "https://copilotstudio.microsoft.com"
 M365_INTEGRATED_APPS_URL = (
     "https://admin.microsoft.com/Adminportal/Home#/Settings/IntegratedApps"
 )
+ALM_NOT_OPTED_IN_CODE = "4003"
 
 
 def _studio_agent_url(runner) -> str | None:
@@ -61,6 +69,386 @@ def _maker_solutions_url(runner) -> str | None:
     return f"https://make.powerapps.com/environments/{env_id}/solutions"
 
 
+def _configured_bot_id(runner) -> str | None:
+    config = getattr(runner, "config", None) or {}
+    for agent in config.get("agents", []) or []:
+        bot_id = agent.get("botId")
+        if bot_id:
+            return str(bot_id)
+    bot_id = (config.get("agent") or {}).get("botId")
+    return str(bot_id) if bot_id else None
+
+
+def _api_result(
+    *,
+    checkpoint_id: str,
+    row: dict,
+    status: Status,
+    result: str,
+    remediation: str,
+) -> CheckResult:
+    return CheckResult(
+        checkpoint_id=checkpoint_id,
+        category="Publishing",
+        priority=row["p"],
+        status=status.value,
+        description=row["desc"],
+        result=result,
+        remediation=remediation,
+        doc_link=row["doc_link"],
+        roles=row["roles"],
+    )
+
+
+def _agentbuilder_unavailable(checkpoint_id: str, row: dict) -> CheckResult:
+    fallback = (
+        f" Manual fallback: {row['remediation']}"
+        if row.get("remediation")
+        else ""
+    )
+    return _api_result(
+        checkpoint_id=checkpoint_id,
+        row=row,
+        status=Status.SKIPPED,
+        result="Copilot Studio AgentBuilder ALM client is unavailable for this run.",
+        remediation=(
+            "Re-run FlightCheck in a scope that authenticates the Copilot Studio "
+            "AgentBuilder Power Platform API client, and make sure the "
+            f"environment ID can be resolved.{fallback}"
+        ),
+    )
+
+
+def _bot_id_missing(checkpoint_id: str, row: dict) -> CheckResult:
+    return _api_result(
+        checkpoint_id=checkpoint_id,
+        row=row,
+        status=Status.SKIPPED,
+        result="No configured agent botId was found in .local/config.json.",
+        remediation=(
+            "Run /setup or update .local/config.json so the active ESS agent has "
+            "a botId, then re-run FlightCheck."
+        ),
+    )
+
+
+def _is_alm_not_opted_in(error: Exception) -> bool:
+    if not isinstance(error, AgentBuilderHTTPError):
+        return False
+    code = str(error.error_code or "").strip()
+    if code == ALM_NOT_OPTED_IN_CODE:
+        return True
+    response = error.response
+    if response is None:
+        return False
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    return ALM_NOT_OPTED_IN_CODE in str(body)
+
+
+def _invalid_archive_reason(path: Path) -> str | None:
+    try:
+        with zipfile.ZipFile(path, "r") as archive:
+            names = archive.namelist()
+            if not names:
+                return "the package archive has no entries"
+            for name in names:
+                entry = Path(name)
+                if (
+                    name.startswith(("/", "\\"))
+                    or entry.is_absolute()
+                    or ".." in entry.parts
+                ):
+                    return f"the package archive contains unsafe entry {name!r}"
+            first_bad = archive.testzip()
+            if first_bad is not None:
+                return f"CRC validation failed for {first_bad!r}"
+    except zipfile.BadZipFile:
+        return "the response is not a valid zip archive"
+    return None
+
+
+def _check_pub_001_export(runner, row: dict) -> CheckResult:
+    client = getattr(runner, "agentbuilder", None)
+    if client is None:
+        return _agentbuilder_unavailable("PUB-001", row)
+
+    bot_id = _configured_bot_id(runner)
+    if not bot_id:
+        return _bot_id_missing("PUB-001", row)
+
+    with tempfile.TemporaryDirectory(prefix="flightcheck-pub001-") as tmp:
+        package_path = Path(tmp) / "agent.zip"
+        try:
+            client.export_package(bot_id, package_path)
+        except Exception as exc:  # noqa: BLE001 - report as a verdict row
+            if _is_alm_not_opted_in(exc):
+                return _api_result(
+                    checkpoint_id="PUB-001",
+                    row=row,
+                    status=Status.FAILED,
+                    result=(
+                        f"AgentBuilder ALM export returned {ALM_NOT_OPTED_IN_CODE} "
+                        f"for configured agent {bot_id}; the agent is not enrolled "
+                        "in ALM."
+                    ),
+                    remediation=(
+                        "Open the agent in Copilot Studio, go to Settings > ALM, "
+                        "enroll the agent, then re-run PUB-001."
+                    ),
+                )
+            return _api_result(
+                checkpoint_id="PUB-001",
+                row=row,
+                status=Status.WARNING,
+                result=(
+                    f"AgentBuilder ALM export failed for configured agent {bot_id}: "
+                    f"{exc}"
+                ),
+                remediation=(
+                    "Confirm the signed-in maker can export this agent through "
+                    "Copilot Studio ALM, then re-run PUB-001."
+                ),
+            )
+
+        if not package_path.exists() or package_path.stat().st_size == 0:
+            return _api_result(
+                checkpoint_id="PUB-001",
+                row=row,
+                status=Status.FAILED,
+                result=(
+                    f"AgentBuilder ALM export returned an empty package for {bot_id}."
+                ),
+                remediation=(
+                    "Open the agent in Copilot Studio and confirm it can be "
+                    "exported. If export still returns no bytes, fix the "
+                    "agent/package issue before promotion."
+                ),
+            )
+
+        invalid_reason = _invalid_archive_reason(package_path)
+        if invalid_reason is not None:
+            return _api_result(
+                checkpoint_id="PUB-001",
+                row=row,
+                status=Status.FAILED,
+                result=(
+                    f"AgentBuilder ALM export returned {package_path.stat().st_size} "
+                    f"bytes for {bot_id}, but {invalid_reason}."
+                ),
+                remediation=(
+                    "Re-run export from Copilot Studio. The promotion artifact "
+                    "must be a readable .zip package whose central directory and "
+                    "CRC checks pass."
+                ),
+            )
+
+        return _api_result(
+            checkpoint_id="PUB-001",
+            row=row,
+            status=Status.PASSED,
+            result=(
+                f"AgentBuilder ALM export returned a valid zip package for {bot_id} "
+                f"({package_path.stat().st_size} bytes)."
+            ),
+            remediation="",
+        )
+
+
+def _pub_002_requires_opt_in(row: dict) -> CheckResult:
+    return _api_result(
+        checkpoint_id="PUB-002",
+        row=row,
+        status=Status.SKIPPED,
+        result=(
+            "PUB-002 did not run because the AgentBuilder ALM import probe was "
+            "not explicitly enabled. FlightCheck stayed read-only and did not "
+            "create anything."
+        ),
+        remediation=(
+            "Run PUB-002 only against a throwaway environment where ALM import "
+            "is safe, then enable the import probe in the caller. Manual "
+            f"fallback: {row['remediation']}"
+        ),
+    )
+
+
+def _check_pub_002_import(runner, row: dict) -> CheckResult:
+    if not bool(getattr(runner, "alm_import_probe", False)):
+        return _pub_002_requires_opt_in(row)
+
+    client = getattr(runner, "agentbuilder", None)
+    if client is None:
+        return _agentbuilder_unavailable("PUB-002", row)
+
+    bot_id = _configured_bot_id(runner)
+    if not bot_id:
+        return _bot_id_missing("PUB-002", row)
+
+    with tempfile.TemporaryDirectory(prefix="flightcheck-pub002-") as tmp:
+        package_path = Path(tmp) / "agent.zip"
+        try:
+            client.export_package(bot_id, package_path)
+        except Exception as exc:  # noqa: BLE001 - report as a verdict row
+            if _is_alm_not_opted_in(exc):
+                return _api_result(
+                    checkpoint_id="PUB-002",
+                    row=row,
+                    status=Status.FAILED,
+                    result=(
+                        f"AgentBuilder ALM export returned {ALM_NOT_OPTED_IN_CODE} "
+                        f"for configured agent {bot_id}; PUB-002 could not obtain "
+                        "an import package."
+                    ),
+                    remediation=(
+                        "Open the source agent in Copilot Studio, go to "
+                        "Settings > ALM, enroll the agent, then re-run PUB-002 "
+                        "against a throwaway environment."
+                    ),
+                )
+            return _api_result(
+                checkpoint_id="PUB-002",
+                row=row,
+                status=Status.WARNING,
+                result=(
+                    f"AgentBuilder ALM export failed before import for {bot_id}: "
+                    f"{exc}"
+                ),
+                remediation=(
+                    "Fix PUB-001 first. PUB-002 needs the source agent's exported "
+                    ".zip package before it can test import."
+                ),
+            )
+
+        invalid_reason = _invalid_archive_reason(package_path)
+        if invalid_reason is not None:
+            return _api_result(
+                checkpoint_id="PUB-002",
+                row=row,
+                status=Status.FAILED,
+                result=(
+                    f"PUB-002 could not use the exported ALM package because "
+                    f"{invalid_reason}."
+                ),
+                remediation=(
+                    "Fix PUB-001 first. PUB-002 imports the same exported .zip "
+                    "package and requires the archive validation to pass."
+                ),
+            )
+
+        try:
+            outcome = client.import_package(package_path)
+        except Exception as exc:  # noqa: BLE001 - report as a verdict row
+            if _is_alm_not_opted_in(exc):
+                return _api_result(
+                    checkpoint_id="PUB-002",
+                    row=row,
+                    status=Status.FAILED,
+                    result=(
+                        f"AgentBuilder ALM import returned {ALM_NOT_OPTED_IN_CODE}; "
+                        "the target agent/environment is not enrolled in ALM."
+                    ),
+                    remediation=(
+                        "Use a throwaway environment with ALM enabled, then "
+                        "re-run PUB-002. Do not run the import probe against a "
+                        "production environment."
+                    ),
+                )
+            if isinstance(exc, AgentBuilderHTTPError) and exc.status_code == 409:
+                return _api_result(
+                    checkpoint_id="PUB-002",
+                    row=row,
+                    status=Status.FAILED,
+                    result=(
+                        "AgentBuilder ALM import returned HTTP 409. The package "
+                        "appears to conflict with an agent/schema already present "
+                        "in the target environment."
+                    ),
+                    remediation=(
+                        "Run PUB-002 in a throwaway environment that does not "
+                        "already contain this exported agent, or clear the "
+                        "conflicting test import before retrying."
+                    ),
+                )
+            return _api_result(
+                checkpoint_id="PUB-002",
+                row=row,
+                status=Status.WARNING,
+                result=f"AgentBuilder ALM import failed: {exc}",
+                remediation=(
+                    "Confirm the maker has import permission and the target "
+                    "throwaway environment has AgentBuilder ALM enabled."
+                ),
+            )
+
+        if not isinstance(outcome, dict):
+            return _api_result(
+                checkpoint_id="PUB-002",
+                row=row,
+                status=Status.FAILED,
+                result="AgentBuilder ALM import returned a non-object response.",
+                remediation=(
+                    "Retry the import after confirming the AgentBuilder ALM API "
+                    "is returning the documented import response shape."
+                ),
+            )
+
+        if outcome.get("responseStatus") != "valid":
+            reason = str(outcome.get("reason") or "unknown")
+            return _api_result(
+                checkpoint_id="PUB-002",
+                row=row,
+                status=Status.FAILED,
+                result=f"AgentBuilder ALM import returned invalid response: {reason}.",
+                remediation=(
+                    "Treat the import as failed. The API must return a valid "
+                    "imported agent identity before promotion."
+                ),
+            )
+
+        imported = outcome.get("result")
+        if not isinstance(imported, dict):
+            return _api_result(
+                checkpoint_id="PUB-002",
+                row=row,
+                status=Status.FAILED,
+                result="AgentBuilder ALM import did not return imported agent details.",
+                remediation=(
+                    "Treat the import as failed. The API must return cdsBotId "
+                    "and schemaName for the imported agent."
+                ),
+            )
+        imported_bot_id = str(imported.get("cdsBotId") or "").strip()
+        schema_name = str(imported.get("schemaName") or "").strip()
+        if not imported_bot_id or not schema_name:
+            return _api_result(
+                checkpoint_id="PUB-002",
+                row=row,
+                status=Status.FAILED,
+                result=(
+                    "AgentBuilder ALM import did not return both cdsBotId and "
+                    "schemaName for the imported agent."
+                ),
+                remediation=(
+                    "Treat the import as failed. The API must return the "
+                    "imported agent identity before promotion."
+                ),
+            )
+
+        return _api_result(
+            checkpoint_id="PUB-002",
+            row=row,
+            status=Status.PASSED,
+            result=(
+                f"AgentBuilder ALM import created agent {imported_bot_id} "
+                f"with schema {schema_name}."
+            ),
+            remediation="",
+        )
+
+
 def _qa_remediation(runner, action: str, doc_anchor: str) -> str:
     """Build a QA-* remediation that points at Copilot Studio Analytics
     when the deep link is available, falling back to documentation."""
@@ -83,7 +471,6 @@ def _build_checks(runner) -> list[dict]:
     """Per-check authored content. Constructed at call-time so deep
     links can incorporate the runner's environment / agent IDs."""
     studio = _studio_agent_url(runner)
-    solutions = _maker_solutions_url(runner)
     publish_doc = f"{DOC_BASE}/publish"
     deploy_doc = f"{DOC_BASE}/deploy-overview-alm"
     evaluations_doc = f"{DOC_BASE}/evaluations"
@@ -91,10 +478,6 @@ def _build_checks(runner) -> list[dict]:
     # Studio link as a markdown fragment ready to splice into prose,
     # or the literal phrase "Copilot Studio" when no deep link exists.
     studio_md = f"[Copilot Studio]({studio})" if studio else "Copilot Studio"
-    solutions_md = (
-        f"[Power Apps → Solutions]({solutions})"
-        if solutions else "Power Apps → Solutions"
-    )
 
     return [
         {
@@ -162,18 +545,17 @@ def _build_checks(runner) -> list[dict]:
             "id": "PUB-001",
             "p": "Critical",
             "roles": [Role.ESS_MAKER.value],
-            "desc": "Export your customization solution as a managed solution",
+            "desc": "Export the agent's ALM package as a .zip from AgentBuilder",
             "result": (
-                "The kit can't inspect maker-portal solution exports — "
-                "confirm a managed (.zip) export exists for promotion to test/UAT/prod."
+                "The kit can't inspect AgentBuilder ALM package downloads — "
+                "confirm the agent's ALM package .zip exists for promotion to test/UAT/prod."
             ),
             "remediation": (
-                f"In {solutions_md} → select the solution that contains your "
-                f"agent customizations → ⋯ → **Export solution** → **Publish** "
-                f"(publish all customizations first) → **Next** → choose "
-                f"**Managed** → **Export** → **Download**. Keep the .zip — "
-                f"it's the artifact you import into test/UAT/prod. See the "
-                f"[publish guide]({publish_doc}) for the full deployment flow."
+                f"In {studio_md}, open the agent → **Settings** → **ALM**. "
+                f"Enroll the agent if prompted, then export and download the "
+                f"agent's ALM package .zip. Keep the .zip — it's the artifact "
+                f"you import into test/UAT/prod. See the [publish guide]"
+                f"({publish_doc}) for the full deployment flow."
             ),
             "doc_link": publish_doc,
         },
@@ -181,18 +563,18 @@ def _build_checks(runner) -> list[dict]:
             "id": "PUB-002",
             "p": "Critical",
             "roles": [Role.ESS_MAKER.value, Role.POWER_PLATFORM_ADMIN.value],
-            "desc": "Import the managed solution into a test environment",
+            "desc": "Import the agent's ALM package into a test environment",
             "result": (
                 "The kit only sees the configured environment — "
-                "confirm the managed solution was imported into a non-production environment and smoke-tested."
+                "confirm the agent's ALM package was imported into a non-production environment and smoke-tested."
             ),
             "remediation": (
-                "Switch to your test environment in the Power Apps maker → "
-                "**Solutions** → **Import solution** → upload the managed .zip "
-                "from PUB-001 → install any prompted dependencies (the ESS "
-                "agent itself plus any connector solutions) → open the agent "
-                f"and smoke-test a handful of representative prompts. See the "
-                f"[publish guide]({publish_doc}) for the full deployment flow."
+                "Switch to your test environment in Copilot Studio, open "
+                "**Settings** → **ALM**, then import the agent's ALM package "
+                ".zip from PUB-001. Install any prompted dependencies, open "
+                "the imported agent, and smoke-test a handful of representative "
+                f"prompts. See the [publish guide]({publish_doc}) for the full "
+                f"deployment flow."
             ),
             "doc_link": publish_doc,
         },
@@ -259,24 +641,30 @@ def _build_checks(runner) -> list[dict]:
 
 
 def run_publishing_checks(runner) -> list[CheckResult]:
-    """Return the publishing/QA checklist as MANUAL results.
+    """Return publishing/QA checks, using AgentBuilder ALM where available.
 
-    None of these checks reads an API — they're organizational gates
-    or actions on portals the kit doesn't traverse. Emitting them as
-    MANUAL (not NOT_CONFIGURED) keeps the report honest: nothing is
-    misconfigured, the operator just has work the kit can't witness.
+    PUB-001 validates export without mutating the environment. PUB-002 is
+    explicitly gated because import creates an agent in the target environment.
     """
-    return [
-        CheckResult(
-            checkpoint_id=c["id"],
-            category="Publishing",
-            priority=c["p"],
-            status=Status.MANUAL.value,
-            description=c["desc"],
-            result=c["result"],
-            remediation=c["remediation"],
-            doc_link=c["doc_link"],
-            roles=c["roles"],
+    results: list[CheckResult] = []
+    for c in _build_checks(runner):
+        if c["id"] == "PUB-001":
+            results.append(_check_pub_001_export(runner, c))
+            continue
+        if c["id"] == "PUB-002":
+            results.append(_check_pub_002_import(runner, c))
+            continue
+        results.append(
+            CheckResult(
+                checkpoint_id=c["id"],
+                category="Publishing",
+                priority=c["p"],
+                status=Status.MANUAL.value,
+                description=c["desc"],
+                result=c["result"],
+                remediation=c["remediation"],
+                doc_link=c["doc_link"],
+                roles=c["roles"],
+            )
         )
-        for c in _build_checks(runner)
-    ]
+    return results
