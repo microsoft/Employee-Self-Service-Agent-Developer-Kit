@@ -71,11 +71,32 @@ Did the scenario complete successfully?
 
 **End message.**
 
-On success, record the scenario, test user category (never credentials), time,
-and result as evidence. First merge provider `status: "ready"` into the
-provider config, then update **DA5.1** with `GATE="manual"`, `ACK=true`. This
-write order ensures an interruption cannot leave a completed row while the
-public readiness signal is missing. Return to the orchestrator.
+On success, update **DA5.1** with `GATE="manual"`, `ACK=true` and structured
+`ROW_EVIDENCE` in this shape:
+
+```json
+{
+  "outcome": "PASSED",
+  "provenance": "user-acknowledgement",
+  "note": "Signed-in employee scenario completed with real Workday data.",
+  "capturedAt": "<current UTC timestamp>",
+  "scenario": {
+    "scenarioName": "<safe category, for example vacation balance>",
+    "testUserCategory": "<safe category, for example assigned test employee>",
+    "signedInUserConfirmed": true,
+    "realWorkdayDataConfirmed": true,
+    "unexpectedSignIn": false,
+    "completedAt": "<current UTC timestamp>"
+  }
+}
+```
+
+Never record the employee's name, email, Workday ID, credentials, prompt
+contents, or returned Workday data. Do not write provider `status` directly.
+The deterministic state helper fingerprints the current agent/environment
+scope and derives `status: "ready"` only when every blocking row is done,
+revalidation is complete, and this scenario evidence is valid. Return to the
+orchestrator.
 
 On failure, leave DA5.1 `in-progress`. Run
 `python scripts/flightcheck/cli.py --scope workdayda --connect-config ".local/connect/workday-da/config.json"`

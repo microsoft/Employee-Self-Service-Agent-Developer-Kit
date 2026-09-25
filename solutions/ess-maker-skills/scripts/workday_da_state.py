@@ -459,6 +459,33 @@ class WorkdayDAStateStore:
             return "done" if ack and evidence is not None else "in-progress"
         raise WorkdayDAStateError(f"Unsupported gate for {step['id']}: {gate}")
 
+    def _validate_readiness_evidence(
+        self,
+        step_id: str,
+        *,
+        ack: bool,
+        evidence: dict[str, Any] | None,
+    ) -> None:
+        final_step_id = self.definition["completion"]["finalStepId"]
+        if step_id != final_step_id or not ack or evidence is None:
+            return
+        scenario = evidence.get("scenario")
+        if not isinstance(scenario, dict):
+            raise WorkdayDAStateError(
+                "Final Workday readiness evidence must include a structured "
+                "scenario record."
+            )
+        required_truth = (
+            scenario.get("signedInUserConfirmed") is True
+            and scenario.get("realWorkdayDataConfirmed") is True
+            and scenario.get("unexpectedSignIn") is False
+        )
+        if not required_truth:
+            raise WorkdayDAStateError(
+                "Final Workday readiness requires a signed-in employee, real "
+                "Workday data, and no unexpected additional sign-in."
+            )
+
     def _dependent_ids(self, step_id: str) -> set[str]:
         dependents: set[str] = set()
         changed = True
@@ -635,6 +662,11 @@ class WorkdayDAStateStore:
             step=step,
             result=result,
             result_source=result_source,
+        )
+        self._validate_readiness_evidence(
+            step_id,
+            ack=ack,
+            evidence=evidence,
         )
         resulting_state = self._resulting_state(
             step=step,

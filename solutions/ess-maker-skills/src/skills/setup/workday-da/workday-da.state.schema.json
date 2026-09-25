@@ -101,6 +101,44 @@
         "scopeFingerprint": {
           "type": "string",
           "pattern": "^[a-f0-9]{64}$"
+        },
+        "scenario": {
+          "$ref": "#/$defs/readinessScenario"
+        }
+      }
+    },
+    "readinessScenario": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "scenarioName",
+        "testUserCategory",
+        "signedInUserConfirmed",
+        "realWorkdayDataConfirmed",
+        "unexpectedSignIn",
+        "completedAt"
+      ],
+      "properties": {
+        "scenarioName": {
+          "type": "string",
+          "minLength": 1
+        },
+        "testUserCategory": {
+          "type": "string",
+          "minLength": 1
+        },
+        "signedInUserConfirmed": {
+          "const": true
+        },
+        "realWorkdayDataConfirmed": {
+          "const": true
+        },
+        "unexpectedSignIn": {
+          "const": false
+        },
+        "completedAt": {
+          "type": "string",
+          "format": "date-time"
         }
       }
     },

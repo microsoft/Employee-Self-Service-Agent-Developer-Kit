@@ -454,3 +454,56 @@ def test_unchanged_manual_scope_preserves_completion(tmp_path) -> None:
         for action in plan["actions"]
     )
     assert plan["config"]["setupStatus"]["DA2.1"]["state"] == "done"
+
+
+def test_final_readiness_requires_structured_current_scenario_evidence(
+    tmp_path,
+) -> None:
+    store = WorkdayDAStateStore(tmp_path)
+    store.initialize()
+    prerequisite_ids = [
+        step_id
+        for step_id in store.step_by_id
+        if step_id != "DA5.1"
+    ]
+    _mark_done(store, *prerequisite_ids)
+
+    with pytest.raises(
+        WorkdayDAStateError,
+        match="structured scenario record",
+    ):
+        store.update_row(
+            "DA5.1",
+            checkpoint_result="Manual",
+            result_source="user-acknowledgement",
+            ack=True,
+            evidence=_evidence("Generic acknowledgement is insufficient."),
+        )
+
+    ready = store.update_row(
+        "DA5.1",
+        checkpoint_result="Manual",
+        result_source="user-acknowledgement",
+        ack=True,
+        evidence={
+            **_evidence(
+                "Signed-in employee scenario returned real Workday data."
+            ),
+            "scenario": {
+                "scenarioName": "vacation balance",
+                "testUserCategory": "assigned test employee",
+                "signedInUserConfirmed": True,
+                "realWorkdayDataConfirmed": True,
+                "unexpectedSignIn": False,
+                "completedAt": "2026-09-25T12:00:00Z",
+            },
+        },
+    )
+
+    assert ready["setupStatus"]["DA5.1"]["state"] == "done"
+    assert ready["status"] == "ready"
+    scenario = ready["setupStatus"]["DA5.1"]["evidence"]["scenario"]
+    assert scenario["realWorkdayDataConfirmed"] is True
+    assert len(
+        ready["setupStatus"]["DA5.1"]["evidence"]["scopeFingerprint"]
+    ) == 64
