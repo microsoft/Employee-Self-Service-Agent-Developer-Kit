@@ -69,8 +69,8 @@ Describe the announcement in chat and the kit opens a pre-filled editor for you
 to review — nothing is saved until you publish or save a draft in that editor.
 
 Org Announcements are **scoped to the authenticated tenant and selected agent's
-`titleId`**, not shared across agents. The current100 limit and latest50 archive
-window apply per tenant-and-agent pair. There is no tenant-wide fallback.
+`titleId`**, not shared across agents. The current 100 limit and latest 50
+archive window apply per tenant-and-agent pair. There is no tenant-wide fallback.
 The title is resolved using `list_agent_configs` and `search_agents` on the
 `ess-org-announcements` provider. Discovery shares neutral Python code with the
 landing-page provider, but does not require its MCP process or initialize its

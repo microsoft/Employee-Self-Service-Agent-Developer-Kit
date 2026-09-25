@@ -16,9 +16,16 @@ SOLUTION = REPO_ROOT / "solutions" / "ess-maker-skills"
 MCP_DEFAULTS_PATH = SOLUTION / ".vscode" / "mcp.defaults.json"
 SERVER_NAME = "ess-org-announcements"
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(SOLUTION / "scripts"))
 
+from _mcp_modules import load_org_announcements_directory_modules  # noqa: E402
+
 import mcp_config  # noqa: E402
+
+
+_ORG_MODULES = load_org_announcements_directory_modules()
+graph_directory_client = _ORG_MODULES["graph_directory_client"]
 
 
 def test_defaults_register_the_org_announcements_server() -> None:
@@ -178,9 +185,6 @@ def test_the_graph_cache_the_server_uses_is_the_ignored_shared_cache() -> None:
     writing somewhere else, which is exactly the regression that produced a
     third, unignored cache.
     """
-    sys.path.insert(0, str(SOLUTION / "src" / "mcp" / "agentconfig_org_announcements"))
-    import graph_directory_client  # noqa: PLC0415 — imported for its constant
-
     cache = Path(graph_directory_client.GRAPH_TOKEN_CACHE_PATH)
 
     assert cache == SOLUTION / ".local" / ".token_cache.bin"
@@ -235,9 +239,7 @@ def test_the_announcements_server_introduces_no_third_token_cache() -> None:
     A third cache is not a cosmetic duplication: it is a second interactive
     sign-in for a maker who already authenticated through /setup.
     """
-    sys.path.insert(0, str(SOLUTION / "src" / "mcp" / "agentconfig_org_announcements"))
     import base_client  # noqa: PLC0415 — imported for its constant
-    import graph_directory_client  # noqa: PLC0415 — imported for its constant
 
     locations = {
         Path(graph_directory_client.GRAPH_TOKEN_CACHE_PATH),
