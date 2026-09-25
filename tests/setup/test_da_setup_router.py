@@ -311,7 +311,6 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
         "create.prompt.md",
         "delete.prompt.md",
         "evaluate.prompt.md",
-        "flightcheck.prompt.md",
         "push.prompt.md",
         "restore-template-configs.prompt.md",
         "review.prompt.md",
@@ -343,16 +342,58 @@ def test_global_and_command_gates_require_canonical_da_completion() -> None:
     assert "Do not require\n`connect_ready: true`" in connect_prompt
     assert "workspace evidence" in connect_prompt
 
+    flightcheck_prompt = (_PROMPTS / "flightcheck.prompt.md").read_text(
+        encoding="utf-8"
+    )
+    assert "FlightCheck entry contract" in flightcheck_prompt
+    assert "Standalone FlightCheck" in flightcheck_prompt
+    assert "Canonical setup ready" in flightcheck_prompt
+
     assert "`.local/config.json`'s" in instructions
 
 
-def test_global_gate_preserves_flightcheck_only_mode() -> None:
+def test_global_gate_routes_flightcheck_through_setup_evidence() -> None:
     instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
     normalized = " ".join(instructions.split())
+    prompt = (_PROMPTS / "flightcheck.prompt.md").read_text(encoding="utf-8")
+    normalized_prompt = " ".join(prompt.split())
+    skill = (
+        _SOLUTION / "src" / "skills" / "flightcheck" / "SKILL.md"
+    ).read_text(encoding="utf-8")
+    normalized_skill = " ".join(skill.split())
 
-    assert "typed `/flightcheck`" in normalized
+    assert "typed `/flightcheck` or explicitly asked to validate setup" in normalized
+    assert "FlightCheck entry contract" in instructions
     assert "`flightCheckOnly: true`" in normalized
-    assert "This exception applies only to `/flightcheck`" in normalized
+    assert "Apply the first matching state" in normalized
+    assert "**Standalone FlightCheck:**" in instructions
+    assert "**Canonical setup ready:**" in instructions
+    assert "**Setup readiness outstanding:**" in instructions
+    assert "**Workspace preparation required:**" in instructions
+    assert "exact maker-facing copy" in normalized
+    assert "FlightCheck is available when setup prepares the local agent workspace" in (
+        normalized
+    )
+    assert "Collect every non-empty `failure_causes` entry" in normalized
+    assert "**Environment capacity**" in instructions
+    assert "**Connections**" in instructions
+    assert "**Agent content**" in instructions
+    assert "keep the canonical setup IDs internal" in normalized
+    assert "{READINESS_ISSUES}" in instructions
+    assert "{READINESS_ITEM}" in instructions
+    assert "{READINESS_DETAIL}" in instructions
+    assert "Setup readiness requires attention:" in instructions
+    assert "performs the next readiness run" in normalized
+
+    assert "Follow the **FlightCheck entry contract**" in normalized_prompt
+    assert "Standalone FlightCheck" in normalized_prompt
+    assert "Canonical setup ready" in normalized_prompt
+    assert "complete maker-facing response" in normalized_skill
+
+    entry_contract = instructions.split("#### FlightCheck entry contract", 1)[1]
+    entry_contract = entry_contract.split("### If canonical setup is ready", 1)[0]
+    assert entry_contract.count("**Message:**") == 2
+    assert entry_contract.count("**End message.**") == 2
 
 
 def test_maker_profile_requires_only_canonical_completion() -> None:
@@ -1298,11 +1339,15 @@ def test_da_local_capabilities_remain_available() -> None:
         assert "unchanged deployed" in normalized, name
 
 
-def test_flightcheck_preserves_standalone_and_local_only_modes() -> None:
+def test_flightcheck_preserves_standalone_and_configured_scope_modes() -> None:
+    instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
     prompt = (_PROMPTS / "flightcheck.prompt.md").read_text(encoding="utf-8")
     normalized = " ".join(prompt.split())
+    skill = (
+        _SOLUTION / "src" / "skills" / "flightcheck" / "SKILL.md"
+    ).read_text(encoding="utf-8")
 
-    assert "flightCheckOnly: true" in normalized
-    assert "proceed without canonical setup state" in normalized
-    assert "only the local-files FlightCheck scope" in normalized
-    assert "scope fixed to `local`" in normalized
+    assert "flightCheckOnly: true" in instructions
+    assert "scope selection supported by the active configuration" in normalized
+    assert "supported scopes are `full`, `environment`" in skill
+    assert "scope fixed to `local`" not in normalized

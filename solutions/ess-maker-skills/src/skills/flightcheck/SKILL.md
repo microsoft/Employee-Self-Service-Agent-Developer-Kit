@@ -11,19 +11,13 @@ Do not rephrase, add commentary, or tell the user what tools you are calling.
 
 ## Start
 
-Read `.local/config.json` to confirm setup is complete and get the agent context.
+The calling prompt applies the **FlightCheck entry contract** in
+`.github/copilot-instructions.md`. When this skill is invoked directly, apply
+that contract before continuing.
 
-If setup is not complete, show:
-
-**Message:**
-
-You need to run `/setup` first before running a readiness check.
-
-**End message.**
-
-Stop here.
-
-If setup is complete, proceed.
+Continue with this skill for the contract's **Standalone FlightCheck** and
+**Canonical setup ready** states. The contract supplies the complete
+maker-facing response for its other states.
 
 Treat a config with `releaseLine: "da"` and no `dataverseEndpoint` as a native
 no-Dataverse agent. Its supported scopes are `full`, `environment`,
