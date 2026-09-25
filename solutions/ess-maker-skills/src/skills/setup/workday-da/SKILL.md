@@ -110,12 +110,33 @@ ID, App ID URI) are safe to capture in chat — see
    status markers or provider state. After a successful legacy move, the old
    path is no longer used.
 
-3. **Resume point.** Read `setupStatus` in `.local/connect/workday-da/config.json`
+3. **Revalidate saved completion.** Before selecting a resume row, create the
+   deterministic live-revalidation plan:
+
+   ```powershell
+   python scripts/workday_da_state.py --root . revalidation-plan
+   ```
+
+   Complete every returned action before claiming readiness:
+   - `checkpoint` — rerun the listed checkpoint and persist its current result
+     through the checklist updater.
+   - `external-verification` — dispatch to the owning playbook's existing
+     read-only/post-write verification and persist that current result.
+   - `manual-evidence-stale` — the helper already regressed that row and its
+     dependents because the selected agent, tenant, endpoint, app, or
+     environment scope changed. Resume normally and request fresh evidence
+     when that row is reached.
+
+   Do not show internal IDs from the plan. While programmatic revalidation is
+   outstanding, provider status remains `in-progress` even when saved rows are
+   still checked.
+
+4. **Resume point.** Read `setupStatus` in `.local/connect/workday-da/config.json`
    (the durable source of truth; the tasks file is only the view). If the file or
    the `setupStatus` key is missing, treat every row as `pending`. A row counts as
    complete only when `setupStatus["{Step}"].state` is `"done"`.
 
-4. **Show the checklist, then find where to resume.** Determine each item's state
+5. **Show the checklist, then find where to resume.** Determine each item's state
    from `setupStatus`: ✅ = `done`, 🔄 = `in-progress`, ⛔ = `blocked`, ⬜ =
    `pending` or unset. Show the checklist **grouped exactly as in the template** —
    the group headings and item titles below are verbatim from
@@ -169,7 +190,7 @@ ID, App ID URI) are safe to capture in chat — see
    rehydrate in-memory state — follow the playbook's stated build order rather
    than jumping straight into it.
 
-5. If **every** item is `done`, also require provider `status` to be `"ready"`
+6. If **every** item is `done`, also require provider `status` to be `"ready"`
    before showing **All done**. If every row is done but status is not ready,
    treat DA5.1 as `in-progress` and dispatch to DA-5 to reconcile readiness;
    never claim success from checklist state alone.

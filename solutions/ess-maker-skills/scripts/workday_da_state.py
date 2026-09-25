@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -135,6 +136,7 @@ class WorkdayDAStateStore:
             for path in state["legacyChecklistPaths"]
         ]
         self.lock_path = self.config_path.with_name("state.lock")
+        self.foundation_config_path = self.workspace_root / ".local" / "config.json"
         self.template_path = DEFINITION_ROOT / "tasks.md"
         self.step_by_id = {
             step["id"]: step for step in self.definition["steps"]
@@ -490,7 +492,18 @@ class WorkdayDAStateStore:
         required = self.definition["completion"]["requiredStepIds"]
         final_step = self.definition["completion"]["finalStepId"]
         setup_status = config["setupStatus"]
-        if all(setup_status[step_id]["state"] == "done" for step_id in required):
+        revalidation = config.get("revalidation")
+        revalidation_pending = bool(
+            isinstance(revalidation, dict)
+            and revalidation.get("requiredStepIds")
+        )
+        if (
+            not revalidation_pending
+            and all(
+                setup_status[step_id]["state"] == "done"
+                for step_id in required
+            )
+        ):
             config["status"] = self.definition["completion"]["providerStatus"]
         elif all(
             setup_status[step_id]["state"] == "done"
@@ -500,6 +513,99 @@ class WorkdayDAStateStore:
             config["status"] = "configured"
         else:
             config["status"] = "in-progress"
+
+    def _scope_fingerprint(
+        self,
+        step: dict[str, Any],
+        config: dict[str, Any],
+    ) -> str:
+        foundation = _read_json_object(self.foundation_config_path)
+        scope = {}
+        for field in step["scopeFields"]:
+            if field in config:
+                value = config.get(field)
+            else:
+                value = foundation.get(field)
+            scope[field] = value
+        serialized = json.dumps(
+            scope,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+    def revalidation_plan(self) -> dict[str, Any]:
+        """Create a durable resume plan and regress scope-stale manual rows."""
+        with self._locked():
+            config, _ = self._load_for_mutation()
+            actions = []
+            required_programmatic = []
+            stale_manual: set[str] = set()
+            for step in self.definition["steps"]:
+                step_id = step["id"]
+                row = config["setupStatus"][step_id]
+                if row["state"] != "done":
+                    continue
+                evidence = row.get("evidence")
+                saved_fingerprint = (
+                    evidence.get("scopeFingerprint")
+                    if isinstance(evidence, dict)
+                    else None
+                )
+                current_fingerprint = self._scope_fingerprint(step, config)
+                if step["gate"] == "prog":
+                    required_programmatic.append(step_id)
+                    actions.append(
+                        {
+                            "stepId": step_id,
+                            "owner": step["owner"],
+                            "mode": (
+                                "checkpoint"
+                                if step["checkpoints"]
+                                else "external-verification"
+                            ),
+                            "checkpoints": step["checkpoints"],
+                            "reason": (
+                                "scope-changed"
+                                if saved_fingerprint != current_fingerprint
+                                else "live-recheck"
+                            ),
+                        }
+                    )
+                elif saved_fingerprint != current_fingerprint:
+                    stale_manual.add(step_id)
+                    actions.append(
+                        {
+                            "stepId": step_id,
+                            "owner": step["owner"],
+                            "mode": "manual-evidence-stale",
+                            "checkpoints": step["checkpoints"],
+                            "reason": "scope-changed",
+                        }
+                    )
+
+            if stale_manual:
+                affected = set(stale_manual)
+                for step_id in stale_manual:
+                    affected.update(self._dependent_ids(step_id))
+                for step_id in affected:
+                    row = config["setupStatus"][step_id]
+                    row["state"] = "in-progress"
+                    row["verifiedBy"] = None
+                    row.pop("evidence", None)
+
+            if required_programmatic:
+                config["revalidation"] = {
+                    "requiredStepIds": required_programmatic,
+                    "createdAt": _utc_now(),
+                }
+            else:
+                config.pop("revalidation", None)
+            self._recompute_provider_status(config)
+            self._write_config(config)
+            self._write_checklist(config)
+            return {"actions": actions, "config": config}
 
     def update_row(
         self,
@@ -566,6 +672,10 @@ class WorkdayDAStateStore:
                     "advisory": "reviewed",
                 }[step["gate"]]
                 if evidence is not None:
+                    evidence = dict(evidence)
+                    evidence["scopeFingerprint"] = self._scope_fingerprint(
+                        step, config
+                    )
                     row["evidence"] = evidence
             else:
                 row["verifiedBy"] = None
@@ -574,6 +684,18 @@ class WorkdayDAStateStore:
                     row["evidence"] = evidence
             if gate_evidence is not None:
                 row["gateEvidence"] = gate_evidence
+
+            revalidation = config.get("revalidation")
+            if isinstance(revalidation, dict):
+                required = revalidation.get("requiredStepIds")
+                if isinstance(required, list) and step_id in required:
+                    revalidation["requiredStepIds"] = [
+                        candidate
+                        for candidate in required
+                        if candidate != step_id
+                    ]
+                    if not revalidation["requiredStepIds"]:
+                        config.pop("revalidation", None)
 
             if resulting_state != "done" and existing_state == "done":
                 self._regress_rows(
@@ -642,6 +764,7 @@ def _parser() -> argparse.ArgumentParser:
     subparsers.add_parser("initialize")
     subparsers.add_parser("reconcile")
     subparsers.add_parser("validate")
+    subparsers.add_parser("revalidation-plan")
 
     update = subparsers.add_parser("update-row")
     update.add_argument("--step-id", required=True)
@@ -676,6 +799,10 @@ def main() -> int:
             config = store.reconcile()
         elif args.command == "validate":
             config = store.validate()
+        elif args.command == "revalidation-plan":
+            plan = store.revalidation_plan()
+            print(json.dumps(plan["actions"], sort_keys=True))
+            return 0
         elif args.command == "update-row":
             config = store.update_row(
                 args.step_id,

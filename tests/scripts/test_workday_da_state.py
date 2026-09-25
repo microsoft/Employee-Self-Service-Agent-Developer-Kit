@@ -181,6 +181,7 @@ def test_programmatic_pass_completes_row_and_updates_view(tmp_path) -> None:
     assert row["state"] == "done"
     assert row["verifiedBy"] == "programmatic"
     assert row["evidence"]["provenance"] == "flightcheck"
+    assert len(row["evidence"]["scopeFingerprint"]) == 64
     checklist = store.checklist_path.read_text(encoding="utf-8")
     assert "- [x] **Install the Workday extension package**" in checklist
     assert "id: DA1.1" in checklist
@@ -363,3 +364,93 @@ def test_regress_row_clears_completion_and_derived_readiness(tmp_path) -> None:
     assert regressed["setupStatus"]["DA4.1"]["state"] == "in-progress"
     assert regressed["setupStatus"]["DA5.1"]["state"] == "in-progress"
     assert regressed["status"] == "in-progress"
+
+
+def test_resume_requires_fresh_programmatic_verification(tmp_path) -> None:
+    store = WorkdayDAStateStore(tmp_path)
+    store.initialize()
+    store.update_row("DA1.1", checkpoint_result="Passed")
+
+    plan = store.revalidation_plan()
+
+    assert plan["actions"] == [
+        {
+            "stepId": "DA1.1",
+            "owner": "da-1",
+            "mode": "checkpoint",
+            "checkpoints": ["WD-DA-PKG-001"],
+            "reason": "live-recheck",
+        }
+    ]
+    assert plan["config"]["revalidation"]["requiredStepIds"] == ["DA1.1"]
+    assert plan["config"]["status"] == "in-progress"
+
+    refreshed = store.update_row("DA1.1", checkpoint_result="Passed")
+    assert "revalidation" not in refreshed
+
+
+def test_scope_change_regresses_manual_evidence_and_dependents(tmp_path) -> None:
+    store = WorkdayDAStateStore(tmp_path)
+    store.initialize()
+    store.update_row("DA1.1", checkpoint_result="Passed")
+    config = _config(tmp_path)
+    config["tenant"] = "tenant-one"
+    state_module._atomic_write_text(
+        store.config_path, json.dumps(config, indent=2) + "\n"
+    )
+    store.update_row(
+        "DA2.1",
+        checkpoint_result="Manual",
+        result_source="user-acknowledgement",
+        ack=True,
+        evidence=_evidence(),
+    )
+    config = _config(tmp_path)
+    config["tenant"] = "tenant-two"
+    config["setupStatus"]["DA5.1"].update(
+        {
+            "state": "done",
+            "verifiedBy": "attested",
+            "evidence": {
+                **_evidence("Final scenario passed."),
+                "scopeFingerprint": "0" * 64,
+            },
+        }
+    )
+    state_module._atomic_write_text(
+        store.config_path, json.dumps(config, indent=2) + "\n"
+    )
+
+    plan = store.revalidation_plan()
+
+    stale = {
+        action["stepId"]
+        for action in plan["actions"]
+        if action["mode"] == "manual-evidence-stale"
+    }
+    assert "DA2.1" in stale
+    assert plan["config"]["setupStatus"]["DA2.1"]["state"] == "in-progress"
+    assert plan["config"]["setupStatus"]["DA5.1"]["state"] == "in-progress"
+    assert plan["config"]["status"] == "in-progress"
+
+
+def test_unchanged_manual_scope_preserves_completion(tmp_path) -> None:
+    store = WorkdayDAStateStore(tmp_path)
+    store.initialize()
+    store.update_row("DA1.1", checkpoint_result="Passed")
+    store.update_row(
+        "DA2.1",
+        checkpoint_result="Manual",
+        result_source="user-acknowledgement",
+        ack=True,
+        evidence=_evidence(),
+    )
+
+    plan = store.revalidation_plan()
+
+    assert not any(
+        action["stepId"] == "DA2.1"
+        and action["mode"] == "manual-evidence-stale"
+        for action in plan["actions"]
+    )
+    assert plan["config"]["setupStatus"]["DA2.1"]["state"] == "done"

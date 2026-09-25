@@ -46,6 +46,29 @@
           "$ref": "#/$defs/stepState"
         }
       }
+    },
+    "revalidation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "requiredStepIds",
+        "createdAt"
+      ],
+      "properties": {
+        "requiredStepIds": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^DA[1-5]\\.[1-9][0-9]*$"
+          },
+          "minItems": 1,
+          "uniqueItems": true
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
     }
   },
   "$defs": {
