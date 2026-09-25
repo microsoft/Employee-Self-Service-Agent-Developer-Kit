@@ -339,8 +339,15 @@ def test_emit_noop_when_disabled(monkeypatch, tmp_path):
     ("workday", "workday"),
     ("workdaytenant", "workday"),
     ("workdayextension", "workday"),
+    # ADO 7943641 review — SCOPE_MAP also defines these Workday-only scopes;
+    # earlier revisions left them attributing to "" which under-counted real
+    # Workday runs on the connector-adoption rollups.
+    ("workdayda", "workday"),
+    ("topics", "workday"),          # SCOPE_MAP label: "Workday Topics"
     ("Workday", "workday"),
     (" workday ", "workday"),
+    ("WORKDAYDA", "workday"),       # case-insensitive
+    (" topics ", "workday"),        # whitespace-tolerant
     ("servicenow", "servicenow"),
     ("ServiceNow", "servicenow"),
 ])

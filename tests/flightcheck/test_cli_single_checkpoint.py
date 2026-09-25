@@ -316,6 +316,7 @@ class TestCheckpointTelemetry:
             )
         assert captured["called"] is False
 
+
     def test_tenant_name_falls_back_to_cache_when_graph_unavailable(
         self,
         tmp_path: Path,
@@ -394,3 +395,93 @@ class TestCheckpointTelemetry:
         # consulted so a previously-seen tenant still gets its display name.
         assert captured["kwargs"]["tenant_name"] == "Contoso Cached"
         assert captured["kwargs"]["tenant_id"] == cached_tid
+
+
+class TestCheckpointAdkConnector:
+    """Single-checkpoint runs on the CLI runtime path must derive the
+    connector from the owning check's category and forward it to the ADK
+    ``emit_flightcheck_run`` / ``emit_flightcheck_result`` calls (ADO 7943641
+    review, finding 1). Without this, only the legacy
+    ``ESSMakerKit.FlightCheck.*`` events were attributed and the ADK
+    ``adk.flightcheck.*`` event family emitted an empty connector for real
+    runs even though the standalone helper tests exercised the kwarg.
+    """
+
+    @staticmethod
+    def _row_with_category(
+        checkpoint_id: str, category: str, status: str = Status.PASSED.value
+    ) -> CheckResult:
+        return CheckResult(
+            checkpoint_id=checkpoint_id,
+            category=category,
+            priority=Priority.MEDIUM.value,
+            status=status,
+            description="fake",
+            result="fake",
+        )
+
+    @staticmethod
+    def _capture(monkeypatch: pytest.MonkeyPatch) -> dict:
+        from flightcheck import telemetry as _tele_mod
+        import adk_telemetry as _adk_mod
+
+        captured: dict = {"run_kwargs": None, "result_kwargs": None}
+
+        def _fake_run(**kwargs):
+            captured["run_kwargs"] = kwargs
+
+        def _fake_result(**kwargs):
+            captured["result_kwargs"] = kwargs
+
+        monkeypatch.setattr(
+            _tele_mod,
+            "emit_flightcheck_telemetry",
+            lambda *_a, **_k: {"sent": False, "events": 0, "status": None,
+                               "env": "dev", "reason": "test"},
+        )
+        monkeypatch.setattr(_adk_mod, "set_identity", lambda *a, **k: None)
+        monkeypatch.setattr(_adk_mod, "next_run_index", lambda *a, **k: 1)
+        monkeypatch.setattr(_adk_mod, "emit_flightcheck_run", _fake_run)
+        monkeypatch.setattr(_adk_mod, "emit_flightcheck_result", _fake_result)
+        monkeypatch.setattr(_adk_mod, "flush", lambda *a, **k: None)
+        return captured
+
+    def test_workday_category_row_forwards_workday_connector(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        TestHermeticRun._install_fake_plan(
+            monkeypatch, [self._row_with_category("WD-CFG-001", "Workday")],
+        )
+        captured = self._capture(monkeypatch)
+        with pytest.raises(SystemExit):
+            cli._run_single_checkpoint(_args("WD-CFG-001", tmp_path, no_telemetry=False))
+        assert captured["run_kwargs"] is not None
+        assert captured["run_kwargs"]["connector"] == "workday"
+        assert captured["result_kwargs"]["connector"] == "workday"
+
+    def test_servicenow_subcategory_row_forwards_servicenow_connector(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        TestHermeticRun._install_fake_plan(
+            monkeypatch, [self._row_with_category("SN-HRSD-001", "ServiceNow HRSD")],
+        )
+        captured = self._capture(monkeypatch)
+        with pytest.raises(SystemExit):
+            cli._run_single_checkpoint(_args("SN-HRSD-001", tmp_path, no_telemetry=False))
+        assert captured["run_kwargs"]["connector"] == "servicenow"
+        assert captured["result_kwargs"]["connector"] == "servicenow"
+
+    def test_cross_cutting_category_row_forwards_empty_connector(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _silence_output: None,
+    ) -> None:
+        monkeypatch.chdir(tmp_path)
+        TestHermeticRun._install_fake_plan(
+            monkeypatch, [self._row_with_category("ENV-001", "Environment")],
+        )
+        captured = self._capture(monkeypatch)
+        with pytest.raises(SystemExit):
+            cli._run_single_checkpoint(_args("ENV-001", tmp_path, no_telemetry=False))
+        assert captured["run_kwargs"]["connector"] == ""
+        assert captured["result_kwargs"]["connector"] == ""
