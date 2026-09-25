@@ -645,6 +645,26 @@ def test_attach_materializes_complete_workspace(tmp_path: Path) -> None:
     }
 
 
+def test_unregistered_product_preserves_registry_uncertainty(
+    tmp_path: Path,
+) -> None:
+    _attach(
+        FakeClient(
+            agent_name="Future Employee Agent",
+            schema_name="gptagent_futureemployeeagent",
+        ),
+        tmp_path,
+    )
+
+    connection_step = _agent_setup_state(tmp_path)["steps"]["SETUP-05"]
+    assert connection_step["state"] == "done"
+    assert connection_step["mode"] == "skipped"
+    assert connection_step["note"] == (
+        "This agent's product identity is not registered in the product "
+        "setup registry; no foundation connection requirement was applied."
+    )
+
+
 def test_same_environment_agents_keep_independent_state_and_folders(
     tmp_path: Path,
 ) -> None:

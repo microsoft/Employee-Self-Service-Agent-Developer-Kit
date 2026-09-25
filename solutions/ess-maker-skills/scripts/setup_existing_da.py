@@ -664,9 +664,9 @@ def _remove_directory(path: Path, label: str) -> str | None:
     return None
 
 
-def _setup_connection_requirement(
+def _setup_connection_policy(
     connection: dict[str, Any],
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, bool]:
     try:
         product = resolve_product_setup(
             catalog_name=connection["agent"].get("name"),
@@ -674,27 +674,41 @@ def _setup_connection_requirement(
         )
     except DAProductRegistryError as exc:
         raise ExistingDASetupError(str(exc)) from exc
-    if product is None or product["requiredConnection"] is None:
-        return None
-    return {
-        "productKey": product["productKey"],
-        "matchedBy": product["matchedBy"],
-        **product["requiredConnection"],
-    }
+    if product is None:
+        return None, False
+    if product["requiredConnection"] is None:
+        return None, True
+    return (
+        {
+            "productKey": product["productKey"],
+            "matchedBy": product["matchedBy"],
+            **product["requiredConnection"],
+        },
+        True,
+    )
 
 
 def _setup_connection_step(
     requirement: dict[str, Any] | None,
     now: str,
+    *,
+    product_recognized: bool,
 ) -> dict[str, Any]:
     if requirement is None:
+        note = (
+            "The product registry declares no foundation connection "
+            "requirement for this agent."
+            if product_recognized
+            else (
+                "This agent's product identity is not registered in the "
+                "product setup registry; no foundation connection "
+                "requirement was applied."
+            )
+        )
         return _step_record(
             "done",
             mode="skipped",
-            note=(
-                "The product registry declares no foundation connection "
-                "requirement for this agent."
-            ),
+            note=note,
             recorded_at=now,
         )
     return _step_record(
@@ -707,6 +721,8 @@ def _setup_connection_step(
 def _setup_steps_in_progress(
     now: str,
     connection_requirement: dict[str, Any] | None,
+    *,
+    product_recognized: bool,
 ) -> dict[str, dict[str, Any]]:
     steps = {
         step_id: _step_record()
@@ -739,6 +755,7 @@ def _setup_steps_in_progress(
     steps["SETUP-05"] = _setup_connection_step(
         connection_requirement,
         now,
+        product_recognized=product_recognized,
     )
     steps["SETUP-07"] = _step_record(
         "in-progress",
@@ -751,6 +768,8 @@ def _begin_flightcheck_maintenance(
     steps: dict[str, dict[str, Any]],
     now: str,
     connection_requirement: dict[str, Any] | None,
+    *,
+    product_recognized: bool,
 ) -> None:
     """Require fresh setup-owned FlightCheck evidence after every attachment."""
     for step_id in SETUP_FLIGHTCHECK_STEPS.values():
@@ -758,6 +777,7 @@ def _begin_flightcheck_maintenance(
     steps["SETUP-05"] = _setup_connection_step(
         connection_requirement,
         now,
+        product_recognized=product_recognized,
     )
 
 
@@ -768,17 +788,24 @@ def _build_canonical_setup_progress(
     reopen_flightchecks: bool,
 ) -> dict[str, Any]:
     now = _utc_now()
-    connection_requirement = _setup_connection_requirement(connection)
+    connection_requirement, product_recognized = _setup_connection_policy(
+        connection
+    )
     steps = (
         copy.deepcopy(existing["steps"])
         if existing
-        else _setup_steps_in_progress(now, connection_requirement)
+        else _setup_steps_in_progress(
+            now,
+            connection_requirement,
+            product_recognized=product_recognized,
+        )
     )
     if reopen_flightchecks:
         _begin_flightcheck_maintenance(
             steps,
             now,
             connection_requirement,
+            product_recognized=product_recognized,
         )
     if all(
         steps[step_id]["state"] == "done"

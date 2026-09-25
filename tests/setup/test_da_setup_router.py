@@ -1153,6 +1153,14 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
     assert "keep canonical `connectReady` false" in normalized
     assert "keep `SETUP-05` skipped" in normalized
     assert (
+        "no foundation connection requirement was applied because the "
+        "product identity is not registered"
+    ) in normalized
+    assert (
+        "do not claim that the registry declares no requirement for that "
+        "product"
+    ) in normalized
+    assert (
         "run the three setup-readiness FlightChecks and the broad connection "
         "diagnostic"
     ) in normalized
