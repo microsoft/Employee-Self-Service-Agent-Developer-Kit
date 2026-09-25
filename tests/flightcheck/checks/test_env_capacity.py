@@ -50,10 +50,23 @@ def _mcs(allocated: int) -> list[dict]:
     return [{"currencyType": "MCSMessages", "allocated": allocated}]
 
 
-def _runner(*, powerplatform, payg=None, env_id="env-guid"):
-    runner = SimpleNamespace(powerplatform=powerplatform, env_id=env_id)
+def _runner(
+    *,
+    powerplatform,
+    payg=None,
+    env_id="env-guid",
+    ring=None,
+    host=None,
+):
+    runner = SimpleNamespace(
+        powerplatform=powerplatform,
+        env_id=env_id,
+        config={"powerPlatformApiEndpoint": host} if host else {},
+    )
     if payg is not None:
         runner._payg_configured = payg
+    if ring is not None:
+        runner.ring = ring
     return runner
 
 
@@ -110,6 +123,35 @@ def test_requires_manual_confirmation_when_allocation_read_denied():
     r = _run(_runner(powerplatform=pp_denied, payg=False))
     assert r.status == "Manual"
     assert "could not verify" in r.result
+
+
+@pytest.mark.parametrize(
+    ("ring", "expected_origin"),
+    [
+        ("prod", "https://admin.powerplatform.microsoft.com"),
+        ("preprod", "https://admin.preprod.powerplatform.microsoft.com"),
+        ("test", "https://admin.test.powerplatform.microsoft.com"),
+    ],
+)
+def test_capacity_remediation_uses_ring_admin_center(
+    ring: str,
+    expected_origin: str,
+) -> None:
+    r = _run(_runner(powerplatform=None, ring=ring))
+    assert expected_origin in r.remediation
+
+
+def test_capacity_remediation_derives_test_ring_from_environment_host():
+    r = _run(
+        _runner(
+            powerplatform=None,
+            host=(
+                "https://00000000000000000000000000000000.0."
+                "environment.api.test.powerplatform.com"
+            ),
+        )
+    )
+    assert "https://admin.test.powerplatform.microsoft.com" in r.remediation
 
 
 def test_fails_when_no_env_id():

@@ -1182,6 +1182,13 @@ def test_existing_dev_completion_remains_evidence_driven() -> None:
         "message capacity allocated to this environment?"
     ) in text
     assert "Complete this check to finish foundation readiness" not in text
+    assert "https://admin.powerplatform.microsoft.com" in text
+    assert "https://admin.preprod.powerplatform.microsoft.com" in text
+    assert "https://admin.test.powerplatform.microsoft.com" in text
+    assert (
+        "Do not send a maker from a non-production setup ring to the "
+        "production admin center."
+    ) in normalized
     assert "--manual-attested" in text
     assert "never overrides a known zero allocation" in normalized
     assert "When it is false after materialization" in normalized

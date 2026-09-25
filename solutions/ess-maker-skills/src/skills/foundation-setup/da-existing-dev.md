@@ -124,7 +124,7 @@ We weren’t able to automatically verify capacity for this environment. Your ag
 
 #### Copilot Studio message capacity
 
-1. Open [Power Platform Admin Center](https://admin.powerplatform.microsoft.com/billing/licenses/copilotStudio/overview).
+1. Open [Power Platform Admin Center]({POWER_PLATFORM_ADMIN_ORIGIN}/billing/licenses/copilotStudio/overview).
 2. Find the selected environment.
 3. Confirm that Copilot Studio message capacity is allocated to it.
 
@@ -146,6 +146,8 @@ python scripts/setup_existing_da.py maintain-flightcheck --agent-id "{AGENT_ID}"
 ```
 
 For **Not yet**, apply the result without `--manual-attested`. Leave capacity blocked, preserve the manual verification guidance, and return control to the maker.
+
+Resolve `{POWER_PLATFORM_ADMIN_ORIGIN}` from the selected service ring: `prod` is `https://admin.powerplatform.microsoft.com`, `preprod` is `https://admin.preprod.powerplatform.microsoft.com`, and `test` is `https://admin.test.powerplatform.microsoft.com`. Do not send a maker from a non-production setup ring to the production admin center.
 
 When canonical `SETUP-05` contains a registry-declared `requirement`, also apply the broad connection result:
 
