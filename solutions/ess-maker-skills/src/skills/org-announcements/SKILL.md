@@ -145,9 +145,11 @@ or creation is needed to open announcements.
    authorization to publish. Say what will open, not what was saved.
 7. Never manufacture a bulletin ID, a status, an audit field, or a version. Only
    the tools produce canonical state.
-8. Never claim an announcement was created, saved, published, archived, or
-   deleted. The widget reports every outcome. Chat must not duplicate the
-   widget's success message.
+8. Never infer that an announcement was created, saved, published, archived, or
+   deleted from the request or opener alone. The widget reports normal success,
+   and chat must not duplicate its success message. The only exceptions are the
+   explicit `IndeterminateWrite` and `CommittedRefreshFailed` results described
+   below; report those outcomes exactly as instructed.
 9. Use the announcement tools for server access. Do not call the backing REST
    API directly.
 10. Pass the resolved `titleId` on every opener. Only the widget may call

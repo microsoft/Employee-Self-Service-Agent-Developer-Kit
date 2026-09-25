@@ -469,7 +469,11 @@ def test_org_announcements_skill_permits_one_opener_and_no_model_write() -> None
         "Do not issue any further `search_audience_groups` call once the "
         "widget is open" in skill
     )
-    assert "Never claim an announcement was created, saved, published" in skill
+    assert "Never infer that an announcement was created, saved, published" in skill
+    assert (
+        "The only exceptions are the explicit `IndeterminateWrite` and "
+        "`CommittedRefreshFailed` results" in skill
+    )
 
 
 def test_org_announcements_skill_maps_priority_labels() -> None:
@@ -511,7 +515,7 @@ def test_org_announcements_resolves_title_without_initializing_landing_config() 
     assert "Never call `create_agent_config` or `update_agent_config`" in skill
     assert "Also update `agent.titleId`" in skill
     assert "Reread to verify both copies" in skill
-    assert "force `get_agent_config` before each opener" in skill
+    assert "do not force `get_agent_config` before each opener" in skill
     assert "Audience search remains `{query}`" in skill
 
 
@@ -519,11 +523,15 @@ def test_org_announcements_is_registered_across_entry_points() -> None:
     menu = _MENU_PROMPT.read_text(encoding="utf-8")
     instructions = _INSTRUCTIONS.read_text(encoding="utf-8")
     onboarding_step2 = _ONBOARDING_STEP2.read_text(encoding="utf-8")
+    foundation = _FOUNDATION.read_text(encoding="utf-8")
+    handoff = _HANDOFF.read_text(encoding="utf-8")
 
     assert "`/org-announcements`" in menu
     assert "src/skills/org-announcements/SKILL.md" in instructions
     assert "`ess-org-announcements` MCP server" in instructions
     assert "`/org-announcements`" in onboarding_step2
+    assert "`/org-announcements`" in foundation
+    assert "`/org-announcements`" in handoff
 
 
 def test_setup_installs_org_announcements_runtime_dependencies() -> None:
