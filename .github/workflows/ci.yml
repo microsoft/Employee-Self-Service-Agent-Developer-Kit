@@ -165,6 +165,7 @@ jobs:
         python -m pytest
         tests/mcp/agentconfig_org_announcements/test_authoring_client.py
         tests/mcp/agentconfig_org_announcements/test_drafts.py
+        tests/mcp/agentconfig_org_announcements/test_graph_directory.py
         -q
 
   flightcheck-tests:
