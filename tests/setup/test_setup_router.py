@@ -14,7 +14,7 @@ _BOUNDARY = _SOLUTION / "src" / "skills" / "setup" / "SKILL.md"
 _CONNECT_STEP1 = _SOLUTION / "src" / "skills" / "connect" / "step1.md"
 _CONNECT_SKILL = _SOLUTION / "src" / "skills" / "connect" / "SKILL.md"
 _OLD_PROMPT = _SOLUTION / ".github" / "prompts" / "setup-workday.prompt.md"
-_MONOLITH_DIR = _SOLUTION / "src" / "skills" / "connect" / "workday"
+_WORKDAY_PROVIDER_DIR = _SOLUTION / "src" / "skills" / "connect" / "workday"
 _WORKDAY_PLAYBOOKS = (
     "provision-power-platform-environment.md",
     "install-ess.md",
@@ -26,15 +26,17 @@ _WORKDAY_PLAYBOOKS = (
 )
 
 
-def test_connect_workday_routes_to_hybrid_boundary() -> None:
+def test_connect_workday_routes_installed_cea_packages_to_lifecycle() -> None:
     step1 = _CONNECT_STEP1.read_text(encoding="utf-8")
     connect = _CONNECT_SKILL.read_text(encoding="utf-8")
-    normalized_step1 = " ".join(step1.split())
 
-    assert "src/skills/setup/SKILL.md" in step1
-    assert "hybrid-extension availability boundary" in normalized_step1
+    assert "src/skills/connect/workday/SKILL.md" in step1
+    assert "--checkpoint WD-PKG-001" in step1
+    assert "Passed` + simplified-install result" in step1
+    assert "Declarative Agent isn't supported" in step1
     assert "connect/workday/step" not in step1
     assert "connect/workday/step" not in connect
+    assert "connect/shared/lifecycle-runner.md" in connect
     assert "src/skills/connect/servicenow/" in connect
 
 
@@ -63,4 +65,6 @@ def test_retained_workday_playbooks_are_not_publicly_routed() -> None:
 
 def test_retired_workday_entry_points_remain_absent() -> None:
     assert not _OLD_PROMPT.exists()
-    assert not _MONOLITH_DIR.exists()
+    assert (_WORKDAY_PROVIDER_DIR / "SKILL.md").is_file()
+    assert (_WORKDAY_PROVIDER_DIR / "contract.json").is_file()
+    assert not list(_WORKDAY_PROVIDER_DIR.glob("step*.md"))

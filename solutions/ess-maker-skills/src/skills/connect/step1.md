@@ -11,9 +11,11 @@ Build a list of connected integrations (if any):
 
 - **ServiceNow** — connected if `.local/connect/servicenow/steps.md` exists and
   all items are checked.
-- **Workday** — connected if `.local/connect/workday/config.json` exists and its
-  `setupStatus` shows every setup row (`S1.1` … `S6.2`) in state `done` (the
-  setup orchestrator owns this state).
+- **Workday** — connected only if
+  `.local/connect/workday/agents/{active-agent-slug}/lifecycle.json` exists,
+  its `agentSlug` exactly matches the active agent, and every phase is `done`.
+  Shared provider setup state is not agent connection state and must not make
+  a sibling or newly selected agent appear connected.
 
 ---
 
@@ -206,8 +208,58 @@ Now read `src/skills/connect/servicenow/step1.md` and follow it.
 
 ### If the user chose Workday (2 or "workday")
 
-Now read `src/skills/setup/SKILL.md` and follow its hybrid-extension
-availability boundary. Do not run the retained Workday playbooks directly.
+Read `.local/config.json` and resolve the active agent from `activeAgent` and
+the matching `agents` entry, falling back to the legacy `agent` object only
+when needed. Retain its slug, schema name, and release line. Never select the
+first agent in a multi-agent workspace.
+
+If no concrete active agent can be resolved, show:
+
+**Message:**
+
+Select the Employee Self-Service agent you want to connect, then run
+`/connect workday` again.
+
+**End message.**
+
+Stop without creating integration state.
+
+If the active agent has `releaseLine: "da"` or its schema name identifies a
+Declarative Agent, show:
+
+**Message:**
+
+Workday integration with an ESS Declarative Agent isn't supported in this
+release. Please contact your administrator.
+
+**End message.**
+
+Stop immediately. Do not create CEA Workday lifecycle state or run its package
+check.
+
+For a CEA agent, check the currently installed Workday extension before
+honoring lifecycle state:
+
+```
+python scripts/flightcheck/cli.py --checkpoint WD-PKG-001
+```
+
+Read the `WD-PKG-001` row from `workspace/flightcheck/results.json` and route
+by both its status and detected flavor:
+
+- **`Passed` + simplified-install result** — read
+  `src/skills/connect/workday/SKILL.md` and follow it, whether or not a
+  lifecycle state file already exists.
+- **`Passed` + full / legacy result** — do not run the simplified V2 lifecycle.
+  Explain that this installation requires the legacy CEA setup experience and
+  stop without changing state.
+- **`NotConfigured`** — fresh CEA Workday installation is not available from
+  the current boundary. Stop without changing state.
+- **`Failed`** — show the checkpoint remediation and stop; do not treat a
+  partial install as a fresh environment.
+- **`Warning` / `Skipped` / `Error`**, or a `Passed` result whose flavor cannot
+  be determined — show the result and stop. Never start a lifecycle from an
+  inconclusive package check.
 
 ### If the user said something else
 
