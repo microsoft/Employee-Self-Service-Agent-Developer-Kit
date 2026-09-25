@@ -7,6 +7,13 @@ cite this file so they agree on field names, owners, and types.
 
 **Canonical data file:** `.local/connect/workday-da/config.json`
 
+The executable persisted-state contract is
+[`../workday-da.state.schema.json`](../workday-da.state.schema.json). New or
+migrated state records `definitionVersion` and `stateSchemaVersion` from
+[`../workday-da.definition.json`](../workday-da.definition.json). Legacy files
+without those fields are migrated by the deterministic state helper before
+schema validation; they are not discarded or treated as fresh setup.
+
 Forked from the CEA `setup/shared/config-schema.md`. The field shapes are the
 same; only the file path and the owning steps differ — DA has five steps
 (DA-1 install, DA-2 Entra, DA-3 tenant, DA-4 Power Platform integration,

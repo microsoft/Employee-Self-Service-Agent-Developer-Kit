@@ -3,7 +3,10 @@
 
 The single, trackable checklist spanning the five Workday connect steps for the
 **ESS HR agent**. This file is the
-**canonical row source**: on first run the skill renders it to the working copy
+human-readable template for the versioned machine contract in
+[`workday-da.definition.json`](workday-da.definition.json). Contract tests keep
+the visible rows and hidden metadata synchronized. On first run the skill
+renders this template to the working copy
 `.local/connect/workday-da/tasks.md` and then updates **only its own items**
 through the shared
 [`shared/checklist-updater.md`](shared/checklist-updater.md). The durable
