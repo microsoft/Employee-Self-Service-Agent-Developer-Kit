@@ -5531,7 +5531,14 @@ def _resolve_workday_metadata(runner) -> tuple[str, str, str]:
 
     # --- Source 5: Test employee ID (prompt + cache in config) ---
     if not test_employee and sys.stdin.isatty() and _interactive_workday_prompts_allowed(runner):
-        test_employee = input("  Test Employee ID (e.g. 21508): ").strip()
+        try:
+            test_employee = input("  Test Employee ID (e.g. 21508): ").strip()
+        except EOFError:
+            # isatty() can report True on a wrapped/non-interactive stdin (a
+            # piped subprocess or an automation harness) where the read EOFs
+            # immediately. Degrade to empty so the caller records a clean SKIP
+            # instead of crashing the whole Workday category with an EOFError.
+            test_employee = ""
         if test_employee:
             _cache_test_employee_id(test_employee)
 
@@ -5553,13 +5560,19 @@ def _resolve_workday_credentials(runner, tenant: str) -> tuple[str, str]:
     if (not username or not password) and sys.stdin.isatty() and _interactive_workday_prompts_allowed(runner):
         print("\n  Workday SOAP workflow tests need ISU credentials.")
         print("  (Credentials are used for this run only - never saved to disk)\n")
-        if not username:
-            username = input("  ISU Username (without @tenant): ").strip()
-            if username and "@" not in username:
-                # Tenant suffix appended via concatenation - never logged.
-                username = username + "@" + tenant
-        if not password:
-            password = getpass.getpass("  ISU Password: ")
+        try:
+            if not username:
+                username = input("  ISU Username (without @tenant): ").strip()
+                if username and "@" not in username:
+                    # Tenant suffix appended via concatenation - never logged.
+                    username = username + "@" + tenant
+            if not password:
+                password = getpass.getpass("  ISU Password: ")
+        except EOFError:
+            # See _resolve_workday_metadata: a non-interactive stdin that reports
+            # isatty()=True EOFs on read. Degrade to empty credentials so
+            # _check_workflows SKIPs cleanly instead of the category crashing.
+            pass
 
     return username, password
 
