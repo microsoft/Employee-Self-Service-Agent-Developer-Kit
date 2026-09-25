@@ -412,8 +412,20 @@ _SPECS: list[CheckpointSpec] = [
         roles=(Role.WORKDAY_ADMIN.value,),
         is_family=True,
     ),
+    # WD-ENV-001 — Workday tenant/OAuth configuration read from the
+    # Declarative Agent components payload (AGENTBUILDER), no Dataverse.
+    CheckpointSpec(
+        key="WD-ENV-001",
+        category_fn=run_workday_checks,
+        category_label="Workday",
+        clients=frozenset({AGENTBUILDER}),
+        requires_config=True,
+        requires_dataverse_endpoint=False,
+        priority=Priority.CRITICAL.value,
+        roles=(Role.ESS_MAKER.value,),
+    ),
     # WD-ENV-* — legacy Workday environment-variable checks (banned on the
-    # simplified flavor; registered so the family resolves).
+    # simplified flavor; registered so the remaining family resolves).
     CheckpointSpec(
         key="WD-ENV",
         category_fn=run_workday_checks,
@@ -540,24 +552,26 @@ _SPECS: list[CheckpointSpec] = [
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
     ),
-    # DV-CONN-001 — self-contained Dataverse read (its own connectionreferences
-    # query) plus a best-effort BAP owner echo.
+    # DV-CONN-001 — reads the Workday SOAP connection reference from the
+    # Declarative Agent minimalBots components API (AGENTBUILDER), plus a
+    # best-effort BAP owner echo (PP_ADMIN).
     CheckpointSpec(
         key="DV-CONN-001",
         category_fn=run_workday_extension_checks,
         category_label="Workday Extension",
-        clients=frozenset({DATAVERSE, PP_ADMIN}),
+        clients=frozenset({AGENTBUILDER, PP_ADMIN}),
         requires_config=True,
-        requires_dataverse_endpoint=True,
+        requires_dataverse_endpoint=False,
         priority=Priority.HIGH.value,
         roles=(Role.ESS_MAKER.value,),
     ),
-    # WD-REST-001 — pure config check (restBaseUrl trimmed to /api), no client.
+    # WD-REST-001 — Workday REST base URI read from DA components
+    # sharedConnectionParameters (AGENTBUILDER), no Dataverse.
     CheckpointSpec(
         key="WD-REST-001",
         category_fn=run_workday_extension_checks,
         category_label="Workday Extension",
-        clients=frozenset(),
+        clients=frozenset({AGENTBUILDER}),
         requires_config=True,
         requires_dataverse_endpoint=False,
         priority=Priority.HIGH.value,
