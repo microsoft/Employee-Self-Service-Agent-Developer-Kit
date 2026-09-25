@@ -5415,7 +5415,14 @@ def _resolve_workday_metadata(runner) -> tuple[str, str, str]:
 
     # --- Source 5: Test employee ID (prompt + cache in config) ---
     if not test_employee and sys.stdin.isatty() and _interactive_workday_prompts_allowed(runner):
-        test_employee = input("  Test Employee ID (e.g. 21508): ").strip()
+        # isatty() can report True on a wrapped/non-interactive stdin (a piped
+        # subprocess, a harness), where reading immediately raises EOFError.
+        # Treat "cannot read" as "no value" so the whole Workday category does
+        # not crash — the caller already degrades an empty ID to a SKIP.
+        try:
+            test_employee = input("  Test Employee ID (e.g. 21508): ").strip()
+        except EOFError:
+            test_employee = ""
         if test_employee:
             _cache_test_employee_id(test_employee)
 
@@ -5437,13 +5444,19 @@ def _resolve_workday_credentials(runner, tenant: str) -> tuple[str, str]:
     if (not username or not password) and sys.stdin.isatty() and _interactive_workday_prompts_allowed(runner):
         print("\n  Workday SOAP workflow tests need ISU credentials.")
         print("  (Credentials are used for this run only - never saved to disk)\n")
-        if not username:
-            username = input("  ISU Username (without @tenant): ").strip()
-            if username and "@" not in username:
-                # Tenant suffix appended via concatenation - never logged.
-                username = username + "@" + tenant
-        if not password:
-            password = getpass.getpass("  ISU Password: ")
+        # isatty() can be True on a non-interactive stdin (piped subprocess /
+        # harness) where reading raises EOFError. Degrade to "no credentials"
+        # so the workflow tests SKIP instead of crashing the Workday category.
+        try:
+            if not username:
+                username = input("  ISU Username (without @tenant): ").strip()
+                if username and "@" not in username:
+                    # Tenant suffix appended via concatenation - never logged.
+                    username = username + "@" + tenant
+            if not password:
+                password = getpass.getpass("  ISU Password: ")
+        except EOFError:
+            pass
 
     return username, password
 
