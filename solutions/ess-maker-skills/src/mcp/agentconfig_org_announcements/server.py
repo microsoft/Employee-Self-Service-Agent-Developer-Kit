@@ -45,12 +45,13 @@ from pydantic import ValidationError
 from client import (
     AgentConfigApiError,
     BulletinValidationError,
+    CommittedCanonicalReloadError,
     IndeterminateWriteError,
     OrgAnnouncementsClient,
     build_manager_state,
     is_deleted_item,
-    _validate_title_id,
-    _validate_bulletin_id,
+    validate_bulletin_id,
+    validate_title_id,
 )
 from drafts import (
     AnnouncementEditorDraft,
@@ -634,8 +635,7 @@ async def _resolve_manager_metadata(
 
     metadata: dict[str, list[dict[str, Any]]] = {}
     for config in visible:
-        bulletin = config.get("bulletin")
-        bulletin_id = bulletin.get("id") if isinstance(bulletin, dict) else None
+        bulletin_id = config.get("id")
         audience = config.get("audience")
         metadata[bulletin_id or ""] = build_audience_metadata(
             [group_id for group_id in audience if isinstance(group_id, str)]
@@ -800,9 +800,9 @@ async def open_org_announcements(
     # combination before entering the recoverable widget-error path: an invalid
     # request is not safe retry state and cannot be rendered as an error view.
     try:
-        _validate_title_id(titleId)
+        validate_title_id(titleId)
         if bulletinId is not None:
-            _validate_bulletin_id(bulletinId)
+            validate_bulletin_id(bulletinId)
         validated = OpenAnnouncementsRequest(
             titleId=titleId, view=view, mode=mode,
             bulletinId=bulletinId, suggestedDraft=suggestedDraft,
@@ -1020,7 +1020,7 @@ async def save_bulletin(
     started = time.monotonic()
     scope = {"titleId": titleId}
     try:
-        _validate_title_id(titleId)
+        validate_title_id(titleId)
         request = SaveBulletinRequest.model_validate(
             {
                 "id": id,
@@ -1042,6 +1042,14 @@ async def save_bulletin(
         client = await get_client()
         scope = {"tenantId": client.tenant_id, "titleId": titleId}
         saved = await client.save_bulletin(titleId, payload)
+    except CommittedCanonicalReloadError as error:
+        failure = await _failure_from(error.cause)
+        _LOGGER.warning(
+            "save_bulletin canonical reload failed after commit: %s", failure.code
+        )
+        return _fail(
+            "save_bulletin", _committed_refresh_failure(failure), started, scope
+        )
     except _MUTATION_ERRORS as error:
         failure = await _failure_from(error)
         _LOGGER.warning(
@@ -1110,11 +1118,24 @@ async def transition_bulletin(
     started = time.monotonic()
     scope = {"titleId": titleId}
     try:
-        _validate_title_id(titleId)
+        validate_title_id(titleId)
         client = await get_client()
         scope = {"tenantId": client.tenant_id, "titleId": titleId}
         changed = await client.transition_bulletin(
             titleId, id, TRANSITION_STATUS[transition]
+        )
+    except CommittedCanonicalReloadError as error:
+        failure = await _failure_from(error.cause)
+        _LOGGER.warning(
+            "transition_bulletin canonical reload failed after commit: %s (%s)",
+            failure.code,
+            transition,
+        )
+        return _fail(
+            "transition_bulletin",
+            _committed_refresh_failure(failure),
+            started,
+            scope,
         )
     except _MUTATION_ERRORS as error:
         failure = await _failure_from(error)
@@ -1146,15 +1167,14 @@ async def transition_bulletin(
         outcome="success",
         latency_ms=_elapsed_ms(started),
     )
-    # The canonical changed row is included alongside the manager state. It is
-    # additive: the widget's existing manager-shaped contract is untouched, so a
-    # host that strips unknown fields simply ignores ``item`` and still gets a
-    # correct refresh.
+    # Non-delete transitions include the canonical changed row. Delete creates a
+    # tombstone that keyed GET intentionally cannot read, so only the refreshed
+    # manager is returned for that transition.
+    payload = {**scope, "status": "success", "manager": manager}
+    if changed is not None:
+        payload["item"] = {"config": changed}
     return _text_result(
-        {
-            **scope, "status": "success",
-            "item": {"config": changed}, "manager": manager,
-        },
+        payload,
         "Updated the organization announcement.",
     )
 
@@ -1177,7 +1197,7 @@ async def duplicate_bulletin(
     started = time.monotonic()
     scope = {"titleId": titleId}
     try:
-        _validate_title_id(titleId)
+        validate_title_id(titleId)
         client = await get_client()
         scope = {"tenantId": client.tenant_id, "titleId": titleId}
         source = await client.get_bulletin(titleId, id)
@@ -1210,6 +1230,18 @@ async def duplicate_bulletin(
 
     try:
         created = await client.save_bulletin(titleId, payload)
+    except CommittedCanonicalReloadError as error:
+        failure = await _failure_from(error.cause)
+        _LOGGER.warning(
+            "duplicate_bulletin canonical reload failed after commit: %s",
+            failure.code,
+        )
+        return _fail(
+            "duplicate_bulletin",
+            _committed_refresh_failure(failure),
+            started,
+            scope,
+        )
     except _MUTATION_ERRORS as error:
         failure = await _failure_from(error)
         _LOGGER.warning("duplicate_bulletin failed: %s", failure.code)

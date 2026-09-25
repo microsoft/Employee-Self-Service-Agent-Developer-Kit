@@ -388,7 +388,7 @@ def build_editor_draft_from_config(
     if not isinstance(bulletin, dict):
         raise ValueError("bulletin configuration is missing its bulletin content")
 
-    bulletin_id = bulletin.get("id")
+    bulletin_id = config.get("id")
     if not isinstance(bulletin_id, str) or not bulletin_id:
         raise ValueError("bulletin configuration is missing its id")
 

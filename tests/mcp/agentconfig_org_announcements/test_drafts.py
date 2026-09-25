@@ -287,7 +287,6 @@ def test_blank_audience_ids_are_rejected() -> None:
 
 def _config(**overrides) -> dict:
     bulletin = {
-        "id": "bulletin-1",
         "type": "standard",
         "priority": 0,
         "title": "Quarterly update",
@@ -307,6 +306,7 @@ def _config(**overrides) -> dict:
     }
     bulletin.update(overrides)
     return {
+        "id": "22222222-2222-2222-2222-222222222222",
         "bulletin": bulletin,
         "audience": ["g1"],
         "status": "published",
@@ -321,7 +321,7 @@ def test_edit_projection_preserves_canonical_content_and_identity() -> None:
 
     result = drafts.build_editor_draft_from_config(_config(), metadata)
 
-    assert result.id == "bulletin-1"
+    assert result.id == "22222222-2222-2222-2222-222222222222"
     assert result.startDate == "2026-09-01T00:00:00.000Z"
     assert result.endDate == "2026-10-01T23:59:59.999Z"
     assert result.standardPriority == 0
@@ -338,13 +338,14 @@ def test_missing_stored_schedule_uses_empty_strings_not_null() -> None:
 
     assert result.startDate == ""
     assert result.endDate == ""
-    assert result.id == "bulletin-1"
+    assert result.id == "22222222-2222-2222-2222-222222222222"
     assert result.title == "Quarterly update"
 
 
 def test_missing_optional_content_falls_back_to_editor_defaults() -> None:
     config = {
-        "bulletin": {"id": "bulletin-1", "type": "standard", "title": "Only title"},
+        "id": "22222222-2222-2222-2222-222222222222",
+        "bulletin": {"type": "standard", "title": "Only title"},
         "audience": [],
         "status": "draft",
     }
@@ -578,8 +579,8 @@ def test_stored_schedules_are_not_re_normalized() -> None:
     change a stored schedule.
     """
     config = {
+        "id": "22222222-2222-2222-2222-222222222222",
         "bulletin": {
-            "id": "b1",
             "type": "standard",
             "title": "t",
             "description": "d",
@@ -707,8 +708,8 @@ def test_save_request_parsing_delegates_present_action_validity_to_backend(actio
 def test_a_stored_incomplete_action_still_projects_into_the_editor() -> None:
     """Opening an existing unfinished Draft must not fail validation."""
     config = {
+        "id": "22222222-2222-2222-2222-222222222222",
         "bulletin": {
-            "id": "b1",
             "type": "standard",
             "title": "t",
             "description": "d",
